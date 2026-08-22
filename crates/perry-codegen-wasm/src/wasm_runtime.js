@@ -2603,6 +2603,8 @@ function uiGet(h) { return uiHandles.get(h); }
 
 // Helper: call a WASM closure — accepts either a raw NaN-boxed f64 handle,
 // or a JS closure object ({funcIdx, captures}) from toJsValue conversion.
+// Extra args must be plain JS values: this function owns their one conversion
+// to i64 bits. Pre-boxing a string as f64 lets JS canonicalize its NaN payload.
 // WASM functions use i64 (BigInt) params/returns.
 function callWasmClosure(closureVal, ...extraArgs) {
   let closure;
@@ -2766,7 +2768,7 @@ function perry_ui_textfield_create(placeholder, callback) {
   el.placeholder = placeholder || "";
   el._perryCallback = callback;
   el.addEventListener("input", () => {
-    if (el._perryCallback !== undefined) callWasmClosure(el._perryCallback, fromJsValue(el.value));
+    if (el._perryCallback !== undefined) callWasmClosure(el._perryCallback, el.value);
   });
   return uiAlloc(el);
 }
@@ -2775,7 +2777,7 @@ function perry_ui_securefield_create(placeholder, callback) {
   el.placeholder = placeholder || "";
   el._perryCallback = callback;
   el.addEventListener("input", () => {
-    if (el._perryCallback !== undefined) callWasmClosure(el._perryCallback, fromJsValue(el.value));
+    if (el._perryCallback !== undefined) callWasmClosure(el._perryCallback, el.value);
   });
   return uiAlloc(el);
 }
@@ -2935,7 +2937,7 @@ function perry_ui_textarea_create(placeholder, callback) {
   el.placeholder = placeholder || "";
   el._perryCallback = callback;
   el.addEventListener("input", () => {
-    if (el._perryCallback !== undefined) callWasmClosure(el._perryCallback, fromJsValue(el.value));
+    if (el._perryCallback !== undefined) callWasmClosure(el._perryCallback, el.value);
   });
   return uiAlloc(el);
 }
@@ -3164,7 +3166,7 @@ function perry_ui_state_get(h) { return uiStateGet(h); }
 function perry_ui_state_set(h, v) { uiStateSet(h, v); }
 function perry_ui_state_on_change(stateH, callback) {
   const s = uiStates.get(stateH);
-  if (s) s.subscribers.push((val) => callWasmClosure(callback, fromJsValue(val)));
+  if (s) s.subscribers.push((val) => callWasmClosure(callback, val));
 }
 function perry_ui_state_bind_text(stateH, widgetH) {
   const el = uiGet(widgetH), s = uiStates.get(stateH);
@@ -3585,13 +3587,13 @@ function perry_ui_clipboard_write(text) { try { navigator.clipboard.writeText(te
 // ---------- Dialog ----------
 function perry_ui_open_file_dialog(callback) {
   const input = document.createElement("input"); input.type = "file";
-  input.addEventListener("change", () => { if (input.files.length) callWasmClosure(callback, fromJsValue(input.files[0].name)); });
+  input.addEventListener("change", () => { if (input.files.length) callWasmClosure(callback, input.files[0].name); });
   input.click();
 }
 function perry_ui_open_folder_dialog(callback) { perry_ui_open_file_dialog(callback); }
 function perry_ui_save_file_dialog(callback, defaultName) {
   const name = prompt("Save as:", defaultName || "file.txt");
-  if (name) callWasmClosure(callback, fromJsValue(name));
+  if (name) callWasmClosure(callback, name);
 }
 function perry_ui_alert(title, message, buttons, callback) {
   alert((title || "") + "\n" + (message || ""));
@@ -3889,7 +3891,7 @@ function _perry_media_flush_state(handle) {
   const e = _perry_media_get(handle);
   if (!e || e.onStateChange === undefined || e.onStateChange === null) return;
   try {
-    callWasmClosure(e.onStateChange, fromJsValue(e.state));
+    callWasmClosure(e.onStateChange, e.state);
   } catch (err) { console.warn("perry/media onStateChange threw:", err); }
 }
 

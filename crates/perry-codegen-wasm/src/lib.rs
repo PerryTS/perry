@@ -101,3 +101,25 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::WASM_RUNTIME_JS;
+
+    #[test]
+    fn text_input_callbacks_pass_plain_js_strings_to_wasm_closures() {
+        assert_eq!(
+            WASM_RUNTIME_JS
+                .matches("callWasmClosure(el._perryCallback, el.value)")
+                .count(),
+            3,
+            "TextField, SecureField, and TextArea must pass their DOM strings directly"
+        );
+        assert!(
+            !WASM_RUNTIME_JS
+                .lines()
+                .any(|line| { line.contains("callWasmClosure") && line.contains("fromJsValue") }),
+            "callWasmClosure owns JS-value conversion; callers must not pre-box arguments"
+        );
+    }
+}
