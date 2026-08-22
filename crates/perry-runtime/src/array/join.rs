@@ -122,8 +122,17 @@ unsafe fn well_formed_join_size(
         }
         let value = JSValue::from_bits(bits);
         let (byte_len, utf16_len) = if value.is_short_string() {
-            let len = value.short_string_len() as u64;
-            (len, len)
+            // SSO length counts BYTES. JSON.parse emits SSO values for
+            // non-ASCII payloads (including WTF-8 lone-surrogate halves),
+            // where the UTF-16 length is shorter than the byte length, so
+            // the exact-size proof below would record a wrong utf16_len.
+            // Send those to the canonicalizing builder path instead.
+            let len = value.short_string_len();
+            let payload = (bits & SHORT_STRING_DATA_MASK).to_le_bytes();
+            if payload[..len].iter().any(|&byte| byte >= 0x80) {
+                return None;
+            }
+            (len as u64, len as u64)
         } else if let Some(string) = unsafe { direct_string(bits) } {
             if unsafe { (*string).flags } & STRING_FLAG_HAS_LONE_SURROGATES != 0 {
                 return None;
@@ -457,9 +466,56 @@ impl<'scope> DirectJoinBuilder<'scope> {
     fn append_sso(&mut self, bits: u64) {
         let value = JSValue::from_bits(bits);
         let len = value.short_string_len() as u32;
+        let bytes = (bits & SHORT_STRING_DATA_MASK).to_le_bytes();
+        let payload = &bytes[..len as usize];
+        // SSO length counts BYTES; JSON.parse emits non-ASCII (and WTF-8
+        // lone-surrogate) SSO payloads. Derive the true UTF-16 unit count,
+        // and flag surrogate halves so write_prepared_piece canonicalizes
+        // them against adjacent pieces.
+        let (utf16_len, flags) = if payload.iter().all(|&byte| byte < 0x80) {
+            (len, 0)
+        } else {
+            (
+                crate::string::compute_utf16_len_wtf8(payload),
+                if crate::string::bytes_have_lone_surrogate(payload) {
+                    STRING_FLAG_HAS_LONE_SURROGATES
+                } else {
+                    0
+                },
+            )
+        };
+        self.check_utf16_growth(utf16_len);
+        self.reserve(len);
+        unsafe { self.write_prepared_piece(bytes.as_ptr(), len, utf16_len, flags) };
+    }
+
+    /// Append one number's canonical JS text. Number formatting cannot run
+    /// user code, so this never collects and needs no re-rooting. Without it
+    /// every numeric element paid a per-element handle scope plus a GC string
+    /// allocation in `element_to_string` (measured 2.7x the retired
+    /// instructions of the buffered join on a numbers-only sweep).
+    fn append_number(&mut self, n: f64) {
+        let mut itoa_buf = itoa::Buffer::new();
+        let text: &str = if n == 0.0 {
+            "0"
+        } else if n.fract() == 0.0 && n.abs() < 1e15 {
+            itoa_buf.format(n as i64)
+        } else {
+            // NaN / Infinity / fractional / extreme magnitudes: the shared
+            // formatter, so join output matches String(n) exactly.
+            let owned = crate::string::js_format_f64(n);
+            self.append_ascii_text(owned.as_bytes());
+            return;
+        };
+        self.append_ascii_text(text.as_bytes());
+    }
+
+    /// Append pure-ASCII bytes owned outside the GC heap.
+    fn append_ascii_text(&mut self, bytes: &[u8]) {
+        debug_assert!(bytes.iter().all(|&byte| byte < 0x80));
+        let len = bytes.len() as u32;
         self.check_utf16_growth(len);
         self.reserve(len);
-        let bytes = (bits & SHORT_STRING_DATA_MASK).to_le_bytes();
         unsafe { self.write_prepared_piece(bytes.as_ptr(), len, len, 0) };
     }
 
@@ -654,6 +710,14 @@ fn join_values(
             }
         } else if value.is_bool() {
             result.append_static(if value.as_bool() { b"true" } else { b"false" });
+        } else if value.is_number() {
+            result.append_number(value.as_number());
+        } else if value.is_int32()
+            && !crate::object::is_class_id_registered((element_bits & 0xFFFF_FFFF) as u32)
+        {
+            // A registered class id shares the INT32 encoding (ClassRef);
+            // those need the spec ToString below for function-source text.
+            result.append_number(value.as_int32() as f64);
         } else {
             crate::builtins::reject_symbol_to_string(f64::from_bits(element_bits));
             let string = arr_handle.with_const_ptr(|arr| element_to_string(arr, element_bits));
@@ -763,6 +827,47 @@ mod tests {
             assert_eq!((*result).utf16_len, 2);
             assert_eq!((*result).flags & STRING_FLAG_HAS_LONE_SURROGATES, 0);
             assert_eq!(result_bytes(result), "😀".as_bytes());
+        }
+    }
+
+    #[test]
+    fn join_sizes_non_ascii_sso_payloads_by_utf16_units() {
+        // JSON.parse emits SSO values for non-ASCII payloads: "\u{e9}" is 2
+        // bytes / 1 UTF-16 unit, so the exact-size path's byte_len ==
+        // utf16_len assumption does not hold and must defer to the builder.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr = js_array_alloc(2);
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        let sso = crate::value::JSValue::try_short_string("\u{e9}".as_bytes()).expect("fits SSO");
+        let arr = arr_handle.with_mut_ptr(|arr| js_array_push_f64(arr, f64::from_bits(sso.bits())));
+        let arr = js_array_push_f64(arr, f64::from_bits(sso.bits()));
+        arr_handle.with_mut_ptr(|current| assert_eq!(arr, current));
+        let separator = crate::string::js_string_from_bytes(b"-".as_ptr(), 1);
+        let result = arr_handle.with_const_ptr(|arr| js_array_join(arr, separator));
+        unsafe {
+            assert_eq!(result_bytes(result), "\u{e9}-\u{e9}".as_bytes());
+            assert_eq!((*result).utf16_len, 3);
+            assert_eq!((*result).flags & STRING_FLAG_HAS_LONE_SURROGATES, 0);
+        }
+    }
+
+    #[test]
+    fn join_canonicalizes_surrogate_halves_held_in_sso_payloads() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let arr = js_array_alloc(2);
+        let arr_handle = scope.root_raw_mut_ptr(arr);
+        let high = crate::value::JSValue::try_short_string(&[0xED, 0xA0, 0xBD]).expect("fits SSO");
+        let low = crate::value::JSValue::try_short_string(&[0xED, 0xB8, 0x80]).expect("fits SSO");
+        let arr =
+            arr_handle.with_mut_ptr(|arr| js_array_push_f64(arr, f64::from_bits(high.bits())));
+        let arr = js_array_push_f64(arr, f64::from_bits(low.bits()));
+        arr_handle.with_mut_ptr(|current| assert_eq!(arr, current));
+        let empty = crate::string::js_string_from_bytes(ptr::null(), 0);
+        let result = arr_handle.with_const_ptr(|arr| js_array_join(arr, empty));
+        unsafe {
+            assert_eq!(result_bytes(result), "\u{1f600}".to_string().as_bytes());
+            assert_eq!((*result).utf16_len, 2);
+            assert_eq!((*result).flags & STRING_FLAG_HAS_LONE_SURROGATES, 0);
         }
     }
 
