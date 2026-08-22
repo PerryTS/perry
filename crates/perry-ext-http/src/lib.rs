@@ -173,6 +173,10 @@ pub(crate) enum PendingHttpEvent {
     /// listeners when any exist; falls back to the Error surface
     /// otherwise.
     Timeout { request_handle: Handle },
+    /// The legacy `ClientRequest.abort()` edge. Node schedules `'abort'`
+    /// after the caller returns instead of invoking listeners from inside
+    /// `abort()`; `'close'` follows it in the same queued drain.
+    Abort { request_handle: Handle },
     /// #4909 — the request body was handed to the transport at `end()`.
     /// Drains the queued `write(chunk, cb)` callbacks, then `'finish'`,
     /// then the `end(..., cb)` callback — Node's flush ordering.
@@ -444,6 +448,13 @@ pub struct ClientRequestHandle {
     /// connection pool whose `keepAlive` / `maxFreeSockets` /
     /// `keepAliveMsecs` come from the Agent's stored options.
     agent_handle: Handle,
+    /// Agent pool bookkeeping. Exactly one of these is true after `end()`
+    /// admits the request; terminal events clear `agent_active`, while a
+    /// maxSockets waiter stays queued until the active request releases it.
+    agent_active: bool,
+    agent_queued: bool,
+    /// Whether this request consumed an idle Agent slot.
+    reused_socket: bool,
     /// Client-side TLS options (#4906): `rejectUnauthorized` / `ca` /
     /// `checkServerIdentity`. Default = no customization (pooled client).
     tls: tls_client::TlsOptions,
@@ -622,11 +633,31 @@ fn make_request_handle(
         timeout_fired: false,
         close_emitted: false,
         agent_handle,
+        agent_active: false,
+        agent_queued: false,
+        reused_socket: false,
         tls: tls_client::TlsOptions::default(),
         incoming_handle: 0,
         expects_continue: false,
         continue_body_tx: None,
     });
+    // Node assigns an Agent socket slot (or queues the request) during
+    // ClientRequest construction, before `end()` is called. This makes the
+    // public `agent.sockets` / `agent.requests` maps immediately observable.
+    if agent_handle != 0 {
+        let key = with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+            agent::request_key(&request.url)
+        })
+        .unwrap_or_else(|| "localhost::".to_string());
+        let admission = agent::admit_request(agent_handle, &key, handle);
+        with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| match admission {
+            agent::PoolAdmission::Active { reused } => {
+                request.agent_active = true;
+                request.reused_socket = reused;
+            }
+            agent::PoolAdmission::Queued => request.agent_queued = true,
+        });
+    }
     // #4909 — `options.timeout` arms the inactivity timer as soon as the
     // socket exists in Node, not at `end()`; a request that is never
     // dispatched (or whose server never answers) still gets `'timeout'`.
@@ -854,7 +885,7 @@ unsafe fn invoke_create_socket(
 
     let cb_val = f64::from_bits(POINTER_TAG | (cb as usize as u64 & PTR_MASK));
     let req_val = f64::from_bits(POINTER_TAG | (request_handle as u64 & PTR_MASK));
-    let options = agent::build_connect_options(host, port, path);
+    let options = agent::build_connect_options(agent_handle, host, port, path);
 
     let closure = JsClosure::from_raw(cs as *const RawClosureHeader);
     closure.call3(req_val, options, cb_val);
@@ -1289,6 +1320,35 @@ type RequestSnapshot = (
 unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
     let (method, url, headers, body, timeout_ms, agent_handle, tls) = snapshot;
 
+    if agent_handle != 0 {
+        let (already_active, already_queued) =
+            with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+                (request.agent_active, request.agent_queued)
+            })
+            .unwrap_or((false, false));
+        if already_queued {
+            return;
+        }
+        if !already_active {
+            let key = agent::request_key(&url);
+            match agent::admit_request(agent_handle, &key, handle) {
+                agent::PoolAdmission::Active { reused } => {
+                    with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+                        request.agent_active = true;
+                        request.agent_queued = false;
+                        request.reused_socket = reused;
+                    });
+                }
+                agent::PoolAdmission::Queued => {
+                    with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+                        request.agent_queued = true;
+                    });
+                    return;
+                }
+            }
+        }
+    }
+
     // #2154 — if the agent supplied a `createConnection` / `createSocket`
     // override, invoke it here on the main thread (JS closure calls must not
     // run on a tokio worker) and run the HTTP exchange over the socket it
@@ -1332,6 +1392,58 @@ unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
         agent_handle,
         tls,
     );
+}
+
+/// Move a completed request out of its Agent's active pool and resume the
+/// oldest per-origin waiter, skipping requests that were aborted while queued.
+/// Successful responses may leave one observable idle slot when keepAlive is
+/// enabled; error/abort/destroy paths always release without retaining it.
+pub(crate) unsafe fn finish_agent_request(request_handle: Handle, keep_alive: bool) {
+    let Some((agent_handle, key, was_active)) =
+        with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |request| {
+            let active = request.agent_active;
+            request.agent_active = false;
+            (
+                request.agent_handle,
+                agent::request_key(&request.url),
+                active,
+            )
+        })
+    else {
+        return;
+    };
+    if agent_handle == 0 || !was_active {
+        return;
+    }
+
+    let mut next = agent::release_request(agent_handle, &key, keep_alive);
+    while let Some((next_handle, reused)) = next {
+        let next_snapshot = with_handle_mut::<ClientRequestHandle, _, _>(next_handle, |request| {
+            request.agent_active = true;
+            request.agent_queued = false;
+            request.reused_socket = reused;
+            (request.ended && !request.completed).then(|| {
+                (
+                    request.method.clone(),
+                    request.url.clone(),
+                    request.headers.clone(),
+                    request.body.clone(),
+                    request.timeout_ms,
+                    request.agent_handle,
+                    request.tls.clone(),
+                )
+            })
+        })
+        .flatten();
+        if let Some(snapshot) = next_snapshot {
+            dispatch_request_snapshot(next_handle, snapshot);
+            break;
+        }
+        with_handle_mut::<ClientRequestHandle, _, _>(next_handle, |request| {
+            request.agent_active = false;
+        });
+        next = agent::release_request(agent_handle, &key, false);
+    }
 }
 
 /// Parse a request URL into the `(host, port, path)` an
@@ -1822,6 +1934,11 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
             }
             PendingHttpEvent::Timeout { request_handle } => {
                 client_events::handle_timeout_event(request_handle);
+            }
+            PendingHttpEvent::Abort { request_handle } => {
+                client_events::fire_request_event_listeners(request_handle, "abort");
+                client_events::fire_request_close_once(request_handle);
+                finish_agent_request(request_handle, false);
             }
             PendingHttpEvent::Flushed { request_handle } => {
                 client_events::handle_flushed_event(request_handle);

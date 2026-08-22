@@ -602,6 +602,38 @@ const ASSERT_PROTOTYPE_METHODS: &[&str] = &[
     "doesNotMatch",
 ];
 
+/// Materialize Node's CommonJS `assert` export: a callable alias for `ok`
+/// carrying the rest of the assert namespace as properties. Static ESM
+/// namespace imports stay ordinary namespace objects; this shape is used by
+/// dynamic `require` / `module.createRequire` resolution (#4975).
+pub(crate) fn assert_cjs_export_value(module_name: &str) -> f64 {
+    let module_name = if module_name == "assert/strict" {
+        "assert/strict"
+    } else {
+        "assert"
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callable = scope.root_nanbox_f64(bound_native_callable_export_value(module_name, "ok"));
+
+    for method in ASSERT_PROTOTYPE_METHODS {
+        let method_value = bound_native_callable_export_value(module_name, method);
+        let closure = crate::value::JSValue::from_bits(callable.get_nanbox_f64().to_bits())
+            .as_pointer::<crate::closure::ClosureHeader>() as usize;
+        crate::closure::closure_set_dynamic_prop(closure, method, method_value);
+    }
+
+    let strict = if module_name == "assert/strict" {
+        callable.get_nanbox_f64()
+    } else {
+        assert_cjs_export_value("assert/strict")
+    };
+    let closure = crate::value::JSValue::from_bits(callable.get_nanbox_f64().to_bits())
+        .as_pointer::<crate::closure::ClosureHeader>() as usize;
+    crate::closure::closure_set_dynamic_prop(closure, "strict", strict);
+    crate::closure::closure_set_dynamic_prop(closure, "default", callable.get_nanbox_f64());
+    callable.get_nanbox_f64()
+}
+
 fn attach_assert_prototype(constructor_value: f64) {
     let constructor_js = JSValue::from_bits(constructor_value.to_bits());
     if !constructor_js.is_pointer() {

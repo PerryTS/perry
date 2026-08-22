@@ -59,6 +59,87 @@ unsafe fn try_dispatch_external_zlib_stream(
     ))
 }
 
+/// Route external `Agent`, `ClientRequest`, and client-side `IncomingMessage`
+/// methods before this dispatcher creates owned copies of the method name and
+/// arguments. Well-known wrapper archives carry a private allocator shim;
+/// returning from an external HTTP call and then dropping those temporary
+/// copies can otherwise free them through the wrapper's allocator copy instead
+/// of the stdlib's (#4975).
+///
+/// These methods either consume their arguments synchronously or only return
+/// the receiver, so borrowing the caller-provided slices for the duration of
+/// the call is sufficient. This mirrors the allocation-free external-zlib
+/// fast path above.
+#[cfg(feature = "external-http-client-pump")]
+unsafe fn try_dispatch_external_http_client(
+    handle: i64,
+    method_name_ptr: *const u8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if method_name_ptr.is_null() || method_name_len == 0 {
+        return None;
+    }
+    let method_name =
+        std::str::from_utf8(std::slice::from_raw_parts(method_name_ptr, method_name_len)).ok()?;
+
+    extern "C" {
+        fn js_ext_http_agent_is_handle(handle: i64) -> i32;
+        fn js_ext_http_agent_dispatch_method(
+            handle: i64,
+            method_ptr: *const u8,
+            method_len: usize,
+            args_ptr: *const f64,
+            args_len: usize,
+        ) -> f64;
+    }
+    if matches!(
+        method_name,
+        "getName" | "destroy" | "keepSocketAlive" | "reuseSocket" | "createConnection"
+    ) && js_ext_http_agent_is_handle(handle) != 0
+    {
+        return Some(js_ext_http_agent_dispatch_method(
+            handle,
+            method_name_ptr,
+            method_name_len,
+            args_ptr,
+            args_len,
+        ));
+    }
+
+    let args = if args_len > 0 && !args_ptr.is_null() {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    } else {
+        &[]
+    };
+    if let Some(value) =
+        super::super::dispatch_http::dispatch_client_request_method(handle, method_name, args)
+    {
+        return Some(value);
+    }
+
+    if !matches!(
+        method_name,
+        "setEncoding" | "on" | "addListener" | "pipe" | "pause" | "resume"
+    ) {
+        return None;
+    }
+
+    extern "C" {
+        fn js_ext_http_client_incoming_message_is_handle(handle: i64) -> i32;
+    }
+    if js_ext_http_client_incoming_message_is_handle(handle) == 0 {
+        return None;
+    }
+
+    if matches!(method_name, "pause" | "resume") {
+        return Some(nanbox_handle_value(handle));
+    }
+
+    super::super::dispatch_http::dispatch_client_incoming_method(handle, method_name, args)
+}
+
 /// Dispatch a method call on a handle-based object.
 #[no_mangle]
 pub unsafe extern "C" fn js_handle_method_dispatch(
@@ -70,6 +151,17 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 ) -> f64 {
     #[cfg(feature = "external-zlib-pump")]
     if let Some(value) = try_dispatch_external_zlib_stream(
+        handle,
+        method_name_ptr,
+        method_name_len,
+        args_ptr,
+        args_len,
+    ) {
+        return value;
+    }
+
+    #[cfg(feature = "external-http-client-pump")]
+    if let Some(value) = try_dispatch_external_http_client(
         handle,
         method_name_ptr,
         method_name_len,

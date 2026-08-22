@@ -186,7 +186,9 @@ fn state_bool(handle: Handle, property: &str) -> f64 {
         "aborted" => state.map(|s| s.aborted).unwrap_or(false),
         "destroyed" => state.map(|s| s.destroyed).unwrap_or(false),
         "finished" | "writableEnded" | "writableFinished" => ended,
-        "reusedSocket" => false,
+        "reusedSocket" => get_handle_mut::<ClientRequestHandle>(handle)
+            .map(|request| request.reused_socket)
+            .unwrap_or(false),
         _ => false,
     })
 }
@@ -266,14 +268,14 @@ pub extern "C" fn js_http_client_request_abort(handle: Handle) -> f64 {
         if !already {
             // Node: `abort()` tears the exchange down — a later `end()`
             // must not dispatch, no `'error'` fires, and the (legacy)
-            // `'abort'` event precedes the once-only `'close'`.
+            // `'abort'` event precedes the once-only `'close'`. Both edges
+            // are deferred until after the current JS callback returns.
             with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
                 req.completed = true;
             });
-            unsafe {
-                client_events::fire_request_event_listeners(handle, "abort");
-            }
-            client_events::fire_request_close_once(handle);
+            push_event(PendingHttpEvent::Abort {
+                request_handle: handle,
+            });
         }
     }
     undefined_value()
@@ -316,6 +318,9 @@ pub extern "C" fn js_http_client_request_destroy(handle: Handle, _error: f64) ->
         }
     }
     client_events::fire_request_close_once(handle);
+    unsafe {
+        finish_agent_request(handle, false);
+    }
     handle
 }
 

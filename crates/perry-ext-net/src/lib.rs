@@ -56,6 +56,7 @@ mod ip;
 // `BytesMut` per read. See `buffer_pool.rs` for the rationale.
 mod buffer_pool;
 mod tls;
+pub use tls::js_tls_connect;
 // #2131 — lifecycle / EventEmitter surface for `net.Socket` + `net.Server`
 // (once / off / removeAllListeners / listenerCount / eventNames /
 // resetAndDestroy, plus `socket.address()`). Re-exports keep the

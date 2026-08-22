@@ -8,9 +8,8 @@
 //! - **Argument validation** — `new Agent({ maxSockets: -1 })` and
 //!   friends now throw `RangeError [ERR_OUT_OF_RANGE]` with Node's
 //!   exact message shape. Closes `test-http-agent-maxtotalsockets.js`.
-//! - **`sockets` / `freeSockets` / `requests` accessors** — return
-//!   `{}` (empty object) instead of `undefined`, matching Node's
-//!   behaviour for an Agent that hasn't dispatched any requests yet.
+//! - **`sockets` / `freeSockets` / `requests` accessors** — expose the
+//!   per-origin active, idle, and queued counts used by maxSockets admission.
 //! - **Per-agent reqwest client** — `options.agent = new Agent({...})`
 //!   now actually routes requests through a per-agent `reqwest::Client`
 //!   whose connection pool honors the agent's `keepAlive` /
@@ -104,9 +103,8 @@ pub struct AgentHandle {
     /// is implicit (the reqwest::Client gets dropped when the handle is
     /// dropped).
     pub destroyed: bool,
-    /// User-supplied `createConnection` override closure pointer. Stored
-    /// (and GC-rooted) so reads of `agent.createConnection` round-trip;
-    /// the request-path callback dispatch is a follow-up off #2154.
+    /// User-supplied `createConnection` override closure pointer. Stored and
+    /// GC-rooted; the request path invokes it before falling back to reqwest.
     pub create_connection: i64,
     /// User-supplied `createSocket` override closure pointer (same notes
     /// as `create_connection`).
@@ -115,13 +113,15 @@ pub struct AgentHandle {
     /// Incremented at dispatch, decremented when the response or error
     /// pump fires on the main thread.
     pub sockets: HashMap<String, u32>,
-    /// Idle (keep-alive) sockets per host. reqwest owns the real pool,
-    /// so this stays empty today — but the accessor returns `{}` so
-    /// user code that does `Object.keys(agent.freeSockets)` works.
+    /// Idle keep-alive connection count per host. reqwest owns the actual
+    /// transport sockets; this mirrors their Agent-visible lifecycle.
     pub free_sockets: HashMap<String, u32>,
-    /// Queued requests per host. Always 0 today (we have no semaphore
-    /// that would block over `maxSockets`); kept for API shape.
+    /// Queued request count per host, mirrored by `queued_requests` below.
     pub requests: HashMap<String, u32>,
+    /// Request handles waiting for a per-origin `maxSockets` slot. Kept
+    /// separately from the public counts so the next request can be resumed
+    /// when the active response reaches a terminal edge.
+    pub queued_requests: HashMap<String, Vec<Handle>>,
 }
 
 impl Default for AgentHandle {
@@ -142,6 +142,7 @@ impl Default for AgentHandle {
             sockets: HashMap::new(),
             free_sockets: HashMap::new(),
             requests: HashMap::new(),
+            queued_requests: HashMap::new(),
         }
     }
 }
@@ -407,6 +408,134 @@ fn empty_object_f64() -> f64 {
     f64::from_bits(v.bits())
 }
 
+fn count_map_object_f64(counts: &HashMap<String, u32>) -> f64 {
+    let mut entries: Vec<(&str, u32)> = counts
+        .iter()
+        .filter(|(_, count)| **count > 0)
+        .map(|(key, count)| (key.as_str(), *count))
+        .collect();
+    entries.sort_by_key(|(key, _)| *key);
+    if entries.is_empty() {
+        return empty_object_f64();
+    }
+
+    let keys: Vec<&str> = entries.iter().map(|(key, _)| *key).collect();
+    let (packed, shape_id) = perry_ffi::build_object_shape(&keys);
+    let object = unsafe {
+        perry_ffi::js_object_alloc_with_shape(
+            shape_id,
+            keys.len() as u32,
+            packed.as_ptr(),
+            packed.len() as u32,
+        )
+    };
+    if object.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    for (index, (_, count)) in entries.iter().enumerate() {
+        let mut array = unsafe { perry_ffi::js_array_alloc(*count) };
+        for _ in 0..*count {
+            array = unsafe { perry_ffi::js_array_push(array, JsValue::from_bits(TAG_UNDEFINED)) };
+        }
+        unsafe {
+            perry_ffi::js_object_set_field(
+                object,
+                index as u32,
+                JsValue::from_object_ptr(array as *mut u8),
+            );
+        }
+    }
+    f64::from_bits(JsValue::from_object_ptr(object as *mut u8).bits())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PoolAdmission {
+    Active { reused: bool },
+    Queued,
+}
+
+/// Convert a request URL into Node's per-origin Agent key.
+pub(crate) fn request_key(url: &str) -> String {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return "localhost::".to_string();
+    };
+    let host = parsed.host_str().unwrap_or("localhost");
+    let port = parsed
+        .port_or_known_default()
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    format!("{host}:{port}:")
+}
+
+/// Acquire an Agent slot or append the request to the per-origin queue.
+pub(crate) fn admit_request(handle: Handle, key: &str, request_handle: Handle) -> PoolAdmission {
+    let Some(agent) = get_handle_mut::<AgentHandle>(handle) else {
+        return PoolAdmission::Active { reused: false };
+    };
+
+    if let Some(free) = agent.free_sockets.get_mut(key) {
+        *free = free.saturating_sub(1);
+        if *free == 0 {
+            agent.free_sockets.remove(key);
+        }
+        *agent.sockets.entry(key.to_string()).or_default() += 1;
+        return PoolAdmission::Active { reused: true };
+    }
+
+    let active_for_key = agent.sockets.get(key).copied().unwrap_or(0);
+    let active_total: u32 = agent.sockets.values().copied().sum();
+    if (active_for_key as f64) < agent.max_sockets
+        && (active_total as f64) < agent.max_total_sockets
+    {
+        *agent.sockets.entry(key.to_string()).or_default() += 1;
+        return PoolAdmission::Active { reused: false };
+    }
+
+    let queue = agent.queued_requests.entry(key.to_string()).or_default();
+    queue.push(request_handle);
+    agent.requests.insert(key.to_string(), queue.len() as u32);
+    PoolAdmission::Queued
+}
+
+/// Release one active slot. A queued request, when present, inherits the slot
+/// and is returned for dispatch; otherwise successful keep-alive exchanges
+/// become one observable idle pooled socket.
+pub(crate) fn release_request(
+    handle: Handle,
+    key: &str,
+    keep_alive: bool,
+) -> Option<(Handle, bool)> {
+    let agent = get_handle_mut::<AgentHandle>(handle)?;
+    if let Some(active) = agent.sockets.get_mut(key) {
+        *active = active.saturating_sub(1);
+        if *active == 0 {
+            agent.sockets.remove(key);
+        }
+    }
+
+    let next = agent
+        .queued_requests
+        .get_mut(key)
+        .and_then(|queue| (!queue.is_empty()).then(|| queue.remove(0)));
+    if let Some(next_handle) = next {
+        let remaining = agent.queued_requests.get(key).map(Vec::len).unwrap_or(0);
+        if remaining == 0 {
+            agent.queued_requests.remove(key);
+            agent.requests.remove(key);
+        } else {
+            agent.requests.insert(key.to_string(), remaining as u32);
+        }
+        *agent.sockets.entry(key.to_string()).or_default() += 1;
+        return Some((next_handle, keep_alive));
+    }
+
+    if keep_alive && agent.keep_alive && !agent.destroyed {
+        let free = agent.free_sockets.entry(key.to_string()).or_default();
+        *free = (*free + 1).min(agent.max_free_sockets.max(0.0) as u32);
+    }
+    None
+}
+
 // ------------------------------------------------------------------
 // GC scanner — call from lib.rs's scan_http_roots
 // ------------------------------------------------------------------
@@ -462,6 +591,7 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_property(
         "maxSockets" => js_http_agent_max_sockets(handle),
         "maxFreeSockets" => js_http_agent_max_free_sockets(handle),
         "maxTotalSockets" => js_http_agent_max_total_sockets(handle),
+        "totalSocketCount" => js_http_agent_total_socket_count(handle),
         "keepAliveMsecs" => js_http_agent_keep_alive_msecs(handle),
         "agentKeepAliveTimeoutBuffer" => js_http_agent_keep_alive_timeout_buffer(handle),
         "keepAlive" => js_http_agent_keep_alive(handle),
@@ -545,6 +675,28 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_method(
         }
         "destroy" => handle_value(js_http_agent_destroy(handle)),
         "keepSocketAlive" | "reuseSocket" => handle_value(js_http_agent_noop_self(handle)),
+        // Node's default implementation is `net.createConnection`. Keeping
+        // this as a real socket factory matters when user code wraps the
+        // method, inspects the options, and delegates with `.call(agent, ...)`.
+        "createConnection" => {
+            let undefined = f64::from_bits(TAG_UNDEFINED);
+            let arg = |index: usize| {
+                if !args_ptr.is_null() && index < args_len {
+                    *args_ptr.add(index)
+                } else {
+                    undefined
+                }
+            };
+            let is_https = agent_field(handle, false, |agent| {
+                agent.protocol.as_deref() == Some("https:")
+            });
+            let socket = if is_https {
+                perry_ext_net::js_tls_connect(arg(0), arg(1), arg(2), arg(3))
+            } else {
+                perry_ext_net::js_net_socket_connect(arg(0), arg(1), arg(2))
+            };
+            handle_value(socket)
+        }
         _ => f64::from_bits(TAG_UNDEFINED),
     }
 }
@@ -857,6 +1009,10 @@ pub extern "C" fn js_http_agent_noop_self(handle: Handle) -> Handle {
 pub extern "C" fn js_http_agent_destroy(handle: Handle) -> Handle {
     if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
         agent.destroyed = true;
+        agent.sockets.clear();
+        agent.free_sockets.clear();
+        agent.requests.clear();
+        agent.queued_requests.clear();
     }
     invalidate_agent_client(handle);
     handle
@@ -888,6 +1044,14 @@ pub extern "C" fn js_http_agent_max_free_sockets(handle: Handle) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_http_agent_max_total_sockets(handle: Handle) -> f64 {
     agent_field(handle, f64::INFINITY, |a| a.max_total_sockets)
+}
+
+#[no_mangle]
+pub extern "C" fn js_http_agent_total_socket_count(handle: Handle) -> f64 {
+    agent_field(handle, 0u32, |agent| {
+        agent.sockets.values().copied().sum::<u32>()
+            + agent.free_sockets.values().copied().sum::<u32>()
+    }) as f64
 }
 
 #[no_mangle]
@@ -927,24 +1091,24 @@ pub extern "C" fn js_http_agent_default_port(handle: Handle) -> f64 {
     }
 }
 
-/// `agent.sockets` — `{}` (Node default for an idle agent). Returns a
-/// NaN-boxed object pointer (bits as f64). #2154.
+/// `agent.sockets` — per-origin arrays sized to the active connection count.
+/// Returns a NaN-boxed object pointer (bits as f64). #2154 / #4975.
 #[no_mangle]
 pub extern "C" fn js_http_agent_sockets(handle: Handle) -> f64 {
-    let _ = handle;
-    empty_object_f64()
+    let counts = agent_field(handle, HashMap::new(), |agent| agent.sockets.clone());
+    count_map_object_f64(&counts)
 }
 
 #[no_mangle]
 pub extern "C" fn js_http_agent_free_sockets(handle: Handle) -> f64 {
-    let _ = handle;
-    empty_object_f64()
+    let counts = agent_field(handle, HashMap::new(), |agent| agent.free_sockets.clone());
+    count_map_object_f64(&counts)
 }
 
 #[no_mangle]
 pub extern "C" fn js_http_agent_requests(handle: Handle) -> f64 {
-    let _ = handle;
-    empty_object_f64()
+    let counts = agent_field(handle, HashMap::new(), |agent| agent.requests.clone());
+    count_map_object_f64(&counts)
 }
 
 // ------------------------------------------------------------------
@@ -1098,7 +1262,7 @@ pub(crate) unsafe fn try_create_connection_socket(
     if cc == 0 {
         return None;
     }
-    let options = build_connect_options(host, port, path);
+    let options = build_connect_options(handle, host, port, path);
     let closure = JsClosure::from_raw(cc as *const RawClosureHeader);
     let ret = closure.call1(options);
 
@@ -1125,11 +1289,19 @@ pub(crate) fn create_socket_override(handle: Handle) -> i64 {
     agent_field(handle, 0i64, |a| a.create_socket)
 }
 
-/// Build the `{ host, port, path }` options object handed to a
-/// `createConnection` / `createSocket` override. Returns a NaN-boxed object
-/// pointer as `f64`, or NaN-boxed `undefined` on allocation failure.
-pub(crate) unsafe fn build_connect_options(host: &str, port: u16, path: &str) -> f64 {
-    let keys = ["host", "port", "path"];
+/// Build the connection options handed to a `createConnection` /
+/// `createSocket` override. Node also copies the Agent's TCP keep-alive
+/// settings onto this object; wrappers commonly inspect those fields before
+/// delegating to the original `createConnection` implementation.
+/// Returns a NaN-boxed object pointer as `f64`, or NaN-boxed `undefined` on
+/// allocation failure.
+pub(crate) unsafe fn build_connect_options(
+    handle: Handle,
+    host: &str,
+    port: u16,
+    path: &str,
+) -> f64 {
+    let keys = ["host", "port", "path", "keepAlive", "keepAliveInitialDelay"];
     let (packed, shape_id) = perry_ffi::build_object_shape(&keys);
     let obj: *mut perry_ffi::ObjectHeader = perry_ffi::js_object_alloc_with_shape(
         shape_id,
@@ -1147,6 +1319,11 @@ pub(crate) unsafe fn build_connect_options(host: &str, port: u16, path: &str) ->
     perry_ffi::js_object_set_field(obj, 1, JsValue::from_bits((port as f64).to_bits()));
     let path_s = alloc_string(path);
     perry_ffi::js_object_set_field(obj, 2, JsValue::from_string_ptr(path_s.as_raw()));
+    let (keep_alive, keep_alive_msecs) = agent_field(handle, (false, 1000.0), |agent| {
+        (agent.keep_alive, agent.keep_alive_msecs)
+    });
+    perry_ffi::js_object_set_field(obj, 3, JsValue::from_bits(bool_f64(keep_alive).to_bits()));
+    perry_ffi::js_object_set_field(obj, 4, JsValue::from_bits(keep_alive_msecs.to_bits()));
     let v = JsValue::from_object_ptr(obj as *mut u8);
     f64::from_bits(v.bits())
 }
@@ -1224,6 +1401,32 @@ mod tests {
             let upper = v.to_bits() >> 48;
             assert_eq!(upper, 0x7FFD, "expected POINTER_TAG, got {:#x}", upper);
         }
+        drop_handle(handle);
+    }
+
+    #[test]
+    fn max_sockets_queues_and_resumes_fifo() {
+        let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
+        js_http_agent_set_max_sockets(handle, 1.0);
+        let key = "localhost:8080:";
+
+        assert_eq!(
+            admit_request(handle, key, 101),
+            PoolAdmission::Active { reused: false }
+        );
+        assert_eq!(admit_request(handle, key, 102), PoolAdmission::Queued);
+        let agent = get_handle::<AgentHandle>(handle).unwrap();
+        assert_eq!(agent.sockets.get(key), Some(&1));
+        assert_eq!(agent.requests.get(key), Some(&1));
+
+        assert_eq!(release_request(handle, key, false), Some((102, false)));
+        let agent = get_handle::<AgentHandle>(handle).unwrap();
+        assert_eq!(agent.sockets.get(key), Some(&1));
+        assert!(!agent.requests.contains_key(key));
+
+        assert_eq!(release_request(handle, key, false), None);
+        let agent = get_handle::<AgentHandle>(handle).unwrap();
+        assert!(!agent.sockets.contains_key(key));
         drop_handle(handle);
     }
 

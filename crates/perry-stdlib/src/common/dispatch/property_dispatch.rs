@@ -165,6 +165,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "maxSockets"
                 | "maxFreeSockets"
                 | "maxTotalSockets"
+                | "totalSocketCount"
                 | "keepAliveMsecs"
                 | "agentKeepAliveTimeoutBuffer"
                 | "keepAlive"

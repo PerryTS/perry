@@ -252,6 +252,7 @@ pub(crate) unsafe fn handle_response_event(
     // Node emits `'close'` on the request once the response has fully
     // ended (#4905).
     fire_request_close_once(request_handle);
+    finish_agent_request(request_handle, true);
 }
 
 /// Drain handler for `PendingHttpEvent::ResponseHead` (streaming path):
@@ -430,6 +431,7 @@ pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
     }
 
     fire_request_close_once(request_handle);
+    finish_agent_request(request_handle, true);
 }
 
 /// Drain handler for `PendingHttpEvent::Error`: `'error'` listeners then
@@ -452,6 +454,7 @@ pub(crate) unsafe fn handle_error_event(request_handle: Handle, error_message: &
     fire_request_error_listeners(request_handle, error_event_arg(error_message));
     // Node emits `'close'` on the request after `'error'` (#4905).
     fire_request_close_once(request_handle);
+    finish_agent_request(request_handle, false);
 }
 
 /// Drain handler for `PendingHttpEvent::TransportError`: fire `'error'`
@@ -481,6 +484,7 @@ pub(crate) unsafe fn handle_transport_error_event(
     let err = perry_ffi::system_error_value(message, code, syscall, errno);
     fire_request_error_listeners(request_handle, f64::from_bits(err.bits()));
     fire_request_close_once(request_handle);
+    finish_agent_request(request_handle, false);
 }
 
 /// #4905 / #4909 — drain handler for `PendingHttpEvent::Timeout`.
@@ -519,6 +523,7 @@ pub(crate) unsafe fn handle_timeout_event(request_handle: Handle) {
             // `'timeout'` listener — keep the legacy error surface.
             fire_request_error_listeners(request_handle, error_event_arg("request timed out"));
             fire_request_close_once(request_handle);
+            finish_agent_request(request_handle, false);
         }
         return;
     }
@@ -533,6 +538,7 @@ pub(crate) unsafe fn handle_timeout_event(request_handle: Handle) {
     // fire `'close'` so waiters still finish — nothing else will arrive.
     if ended && !client_request_surface::request_destroyed(request_handle) {
         fire_request_close_once(request_handle);
+        finish_agent_request(request_handle, false);
     }
 }
 

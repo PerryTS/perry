@@ -637,6 +637,7 @@ fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
 
 pub(crate) fn cjs_default_export_value(module_name: &str) -> Option<f64> {
     match module_name {
+        "assert" | "assert/strict" => Some(callable_exports::assert_cjs_export_value(module_name)),
         "events" => Some(bound_native_callable_export_value("events", "EventEmitter")),
         // #3687: `node:cluster` default import is a distinct EventEmitter-shaped
         // `cluster.default` namespace (its `on`/`emit`/… reads diverge from the

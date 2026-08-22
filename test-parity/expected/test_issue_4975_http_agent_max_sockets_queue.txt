@@ -1,0 +1,5 @@
+initial 0
+active 1 0
+queued 1 1
+aborted 1 1
+released 0 0

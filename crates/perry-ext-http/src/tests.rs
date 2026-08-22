@@ -89,6 +89,9 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         timeout_fired: false,
         close_emitted: false,
         agent_handle: 0,
+        agent_active: false,
+        agent_queued: false,
+        reused_socket: false,
         tls: crate::tls_client::TlsOptions::default(),
         incoming_handle: 0,
         expects_continue: false,
@@ -152,6 +155,9 @@ fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
         timeout_fired: false,
         close_emitted: false,
         agent_handle: 0,
+        agent_active: false,
+        agent_queued: false,
+        reused_socket: false,
         tls: crate::tls_client::TlsOptions::default(),
         incoming_handle: 0,
         expects_continue: false,
@@ -278,6 +284,9 @@ fn dispatch_request_stays_visible_to_exit_gate_until_response_queued() {
         timeout_fired: false,
         close_emitted: false,
         agent_handle: 0,
+        agent_active: false,
+        agent_queued: false,
+        reused_socket: false,
         tls: crate::tls_client::TlsOptions::default(),
         incoming_handle: 0,
         expects_continue: false,
@@ -360,7 +369,8 @@ fn dispatch_request_stays_visible_to_exit_gate_until_response_queued() {
                 | PendingHttpEvent::ResponseEnd { request_handle: h }
                 | PendingHttpEvent::Error { request_handle: h, .. }
                 | PendingHttpEvent::TransportError { request_handle: h, .. }
-                | PendingHttpEvent::Timeout { request_handle: h } if *h == request_handle
+                | PendingHttpEvent::Timeout { request_handle: h }
+                | PendingHttpEvent::Abort { request_handle: h } if *h == request_handle
             )
         });
     }
