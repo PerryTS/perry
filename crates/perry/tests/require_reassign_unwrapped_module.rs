@@ -1,20 +1,24 @@
-//! Regression test: a genuinely top-level (unwrapped) CJS module that does
-//! `let x = require("<native module>"); x = someHelper.__toESM(x);` must keep
-//! a real runtime binding for `x`.
+//! Contract test: a CJS dependency that does `let x = require("<native
+//! module>"); x = someHelper.__toESM(x);` must keep a real runtime binding
+//! for `x`, so the reassignment (and every later `x.default.*` read) resolves
+//! instead of throwing `ReferenceError: x is not defined`.
 //!
 //! This is the exact shape of `@socketsecurity/lib`'s rolldown-bundled
-//! `dist/bin/trusted.js`: a plain CJS file (no enclosing `cjs_wrap` IIFE, no
-//! synthetic `require`) whose top level reassigns the `require()` result to
-//! wrap it in a `.default` shape, then reads `x.default.*` further down.
+//! `dist/bin/trusted.js` and `dist/process/spawn/child.js`, which crashed on
+//! startup at the perry commit `@socketsecurity/lib` was pinned to
+//! (`06137858d`, before this fix): `register_native_fetch_and_streams`
+//! treated ANY `let/const/var x = require("<native>")` as an immutable
+//! namespace binding and emitted no runtime variable for `x` at all — correct
+//! for a `const` that's never reassigned, wrong here.
 //!
-//! Pre-fix, `register_native_fetch_and_streams` treated ANY `let/const/var
-//! x = require("<native>")` as an immutable namespace binding and emitted no
-//! runtime variable for `x` at all — correct for a `const` that's never
-//! reassigned, wrong here: the very next statement's `x = require_runtime
-//! .__toESM(x)` then referenced a binding that was never created, and the
-//! compiled binary threw `ReferenceError: node_process is not defined` on
-//! every invocation even though the compile itself reported success. The fix
-//! gates the optimization on the declaration actually being `const`.
+//! `#8342`'s CJS-wrap shadow check (already on `main`) independently protects
+//! this exact shape when the module goes through the `compilePackages` wrap,
+//! which is why this specific minimized reproduction no longer reproduces the
+//! crash in isolation on top of the current tree — the two fixes overlap for
+//! the common case. This test locks down the observable contract (the
+//! reassignment resolves correctly) regardless of which of the two checks is
+//! providing it, since `register_native_fetch_and_streams`'s own gate is the
+//! only protection for a module reached outside the CJS-wrap path.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -126,10 +130,8 @@ exports.currentPlatform = currentPlatform;
     std::fs::write(
         root.join("main.ts"),
         r#"
-import { createRequire } from "node:module";
-const require = createRequire(import.meta.url);
-const trusted = require("trusted-pkg");
-console.log("platform:", trusted.currentPlatform());
+import { currentPlatform } from "trusted-pkg";
+console.log("platform:", currentPlatform());
 "#,
     )
     .expect("write entry");
