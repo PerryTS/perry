@@ -154,11 +154,14 @@ fn imported_class_return_types_pull_in_transitive_dispatch_metadata() {
         dir.path(),
         "returned.ts",
         "export class Returned {\n\
+           value: number;\n\
+           constructor(value = 0) { this.value = value; }\n\
            methodPing() { return 41; }\n\
            getterPing() { return 42; }\n\
            staticPing() { return 43; }\n\
+           valuePing() { return this.value; }\n\
          }\n\
-         export function makeReturned() { return new Returned(); }\n",
+         export function makeReturned(value = 0) { return new Returned(value); }\n",
     );
     write(
         dir.path(),
@@ -170,6 +173,18 @@ fn imported_class_return_types_pull_in_transitive_dispatch_metadata() {
            make(): Result { return makeReturned(); }\n\
            get result(): Result { return makeReturned(); }\n\
            static create(): Result { return makeReturned(); }\n\
+           static defaulted(value = 45): Result {\n\
+             return makeReturned(value);\n\
+           }\n\
+           static rested(head: number, ...tail: number[]): Result {\n\
+             return makeReturned(head + tail.length);\n\
+           }\n\
+           static argumentsBacked(head: number): Result {\n\
+             return makeReturned(head + arguments.length);\n\
+           }\n\
+           static restAndArguments(head: number, ...tail: number[]): Result {\n\
+             return makeReturned(head + tail.length + arguments.length);\n\
+           }\n\
            hidden(): Hidden { return new Hidden(); }\n\
          }\n",
     );
@@ -184,15 +199,20 @@ fn imported_class_return_types_pull_in_transitive_dispatch_metadata() {
            new Factory().result.getterPing(),\n\
            Factory.create().staticPing(),\n\
            new Factory().hidden().pong(),\n\
+           Factory.defaulted().valuePing(),\n\
+           Factory.rested(45, 1, 2).valuePing(),\n\
+           Factory.argumentsBacked(45, 1, 2).valuePing(),\n\
+           Factory.restAndArguments(40, 1, 2).valuePing(),\n\
          );\n",
     );
 
     let (stdout, entry_ir) = compile_and_run_with_llvm_trace(dir.path(), "main.ts");
-    assert_eq!(stdout, "99 42 43 44\n");
+    assert_eq!(stdout, "99 42 43 44 45 47 48 45\n");
     for symbol in [
         "perry_method_returned_ts__Returned__methodPing",
         "perry_method_returned_ts__Returned__getterPing",
         "perry_method_returned_ts__Returned__staticPing",
+        "perry_method_returned_ts__Returned__valuePing",
         "perry_method_factory_ts__Hidden__pong",
     ] {
         assert!(

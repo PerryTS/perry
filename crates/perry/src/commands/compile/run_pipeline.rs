@@ -283,6 +283,36 @@ fn imported_class_from_hir(
             .iter()
             .map(|method| method.return_type.clone())
             .collect(),
+        static_method_param_counts: class
+            .static_methods
+            .iter()
+            .map(|method| method.params.len())
+            .collect(),
+        static_method_has_rest: class
+            .static_methods
+            .iter()
+            .map(|method| method.params.iter().any(|param| param.is_rest))
+            .collect(),
+        static_method_has_user_rest: class
+            .static_methods
+            .iter()
+            .map(|method| {
+                method
+                    .params
+                    .iter()
+                    .any(|param| param.is_rest && param.arguments_object.is_none())
+            })
+            .collect(),
+        static_method_has_synthetic_arguments: class
+            .static_methods
+            .iter()
+            .map(|method| {
+                method
+                    .params
+                    .last()
+                    .is_some_and(|param| param.arguments_object.is_some())
+            })
+            .collect(),
         getter_names: class.getters.iter().map(|(name, _)| name.clone()).collect(),
         getter_return_types: class
             .getters

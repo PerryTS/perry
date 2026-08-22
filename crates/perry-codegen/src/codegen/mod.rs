@@ -719,25 +719,87 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 .static_method_names
                 .iter()
                 .enumerate()
-                .map(|(index, name)| perry_hir::Function {
-                    id: 0,
-                    name: name.clone(),
-                    type_params: Vec::new(),
-                    params: Vec::new(),
-                    return_type: ic
-                        .static_method_return_types
+                .map(|(index, name)| {
+                    // The body/default expressions remain in the producer,
+                    // but imported static dispatch still needs the declared
+                    // width and trailing rest/`arguments` shape to forward
+                    // arguments with the producer's ABI. Synthetic params are
+                    // sufficient because no imported stub body is compiled.
+                    let declared = ic
+                        .static_method_param_counts
                         .get(index)
-                        .cloned()
-                        .unwrap_or(perry_hir::types::Type::Any),
-                    body: Vec::new(),
-                    is_async: false,
-                    is_generator: false,
-                    is_strict: true,
-                    was_plain_async: false,
-                    was_unrolled: false,
-                    is_exported: false,
-                    captures: Vec::new(),
-                    decorators: Vec::new(),
+                        .copied()
+                        .unwrap_or(0);
+                    let has_rest = ic
+                        .static_method_has_rest
+                        .get(index)
+                        .copied()
+                        .unwrap_or(false);
+                    let has_user_rest = ic
+                        .static_method_has_user_rest
+                        .get(index)
+                        .copied()
+                        .unwrap_or(false);
+                    let last_is_synthetic_arguments = ic
+                        .static_method_has_synthetic_arguments
+                        .get(index)
+                        .copied()
+                        .unwrap_or(false);
+                    let params = (0..declared)
+                        .map(|param_index| {
+                            let is_last = param_index + 1 == declared;
+                            let is_user_rest = has_user_rest
+                                && if last_is_synthetic_arguments {
+                                    param_index + 2 == declared
+                                } else {
+                                    is_last
+                                };
+                            let is_synthetic_rest = is_last
+                                && last_is_synthetic_arguments
+                                && has_rest
+                                && !has_user_rest;
+                            let is_legacy_rest = is_last
+                                && !last_is_synthetic_arguments
+                                && has_rest
+                                && !has_user_rest;
+                            perry_hir::Param {
+                                id: param_index as perry_hir::types::LocalId,
+                                name: format!("arg{param_index}"),
+                                ty: perry_hir::types::Type::Any,
+                                default: None,
+                                decorators: Vec::new(),
+                                is_rest: is_user_rest || is_synthetic_rest || is_legacy_rest,
+                                arguments_object: (is_last && last_is_synthetic_arguments).then(
+                                    || perry_hir::ArgumentsObjectMeta {
+                                        strict: true,
+                                        simple_parameters: false,
+                                        mapped_parameter_ids: Vec::new(),
+                                        restricted_callee: true,
+                                    },
+                                ),
+                            }
+                        })
+                        .collect();
+                    perry_hir::Function {
+                        id: 0,
+                        name: name.clone(),
+                        type_params: Vec::new(),
+                        params,
+                        return_type: ic
+                            .static_method_return_types
+                            .get(index)
+                            .cloned()
+                            .unwrap_or(perry_hir::types::Type::Any),
+                        body: Vec::new(),
+                        is_async: false,
+                        is_generator: false,
+                        is_strict: true,
+                        was_plain_async: false,
+                        was_unrolled: false,
+                        is_exported: false,
+                        captures: Vec::new(),
+                        decorators: Vec::new(),
+                    }
                 })
                 .collect(),
             computed_members: Vec::new(),
@@ -1505,6 +1567,33 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 if effective_name != ic.name {
                     method_has_synthetic_arguments
                         .insert((effective_name.clone(), mname.clone()), true);
+                }
+            }
+        }
+        for (i, method_name) in ic.static_method_names.iter().enumerate() {
+            let registry_name = static_method_registry_key(method_name);
+            let count = ic.static_method_param_counts.get(i).copied().unwrap_or(0);
+            method_param_counts.insert((ic.name.clone(), registry_name.clone()), count);
+            if effective_name != ic.name {
+                method_param_counts.insert((effective_name.clone(), registry_name.clone()), count);
+            }
+            if ic.static_method_has_rest.get(i).copied().unwrap_or(false) {
+                method_has_rest.insert((ic.name.clone(), registry_name.clone()), true);
+                if effective_name != ic.name {
+                    method_has_rest.insert((effective_name.clone(), registry_name.clone()), true);
+                }
+            }
+            if ic
+                .static_method_has_synthetic_arguments
+                .get(i)
+                .copied()
+                .unwrap_or(false)
+            {
+                method_has_synthetic_arguments
+                    .insert((ic.name.clone(), registry_name.clone()), true);
+                if effective_name != ic.name {
+                    method_has_synthetic_arguments
+                        .insert((effective_name.clone(), registry_name), true);
                 }
             }
         }
