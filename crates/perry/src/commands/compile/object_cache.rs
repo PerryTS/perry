@@ -841,9 +841,11 @@ fn compute_object_cache_key_with_env(
         "env_ll_size_opt",
         env_var("PERRY_LL_SIZE_OPT").as_deref().unwrap_or(""),
     );
+    // #8583: the post-RS4GC instruction budget decides whether a unit is
+    // refused; two settings must never share a cached object.
     h.field(
-        "env_ll_preopt_optnone_instrs",
-        env_var("PERRY_LL_PREOPT_OPTNONE_INSTRS")
+        "env_ll_rs4gc_max_instrs",
+        env_var("PERRY_LL_RS4GC_MAX_INSTRS")
             .as_deref()
             .unwrap_or(""),
     );

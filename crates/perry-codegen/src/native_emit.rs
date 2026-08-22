@@ -291,10 +291,11 @@ pub fn compile_module_units_native(
     let target_triple = llmod.target_triple.clone();
     let owned_module = std::mem::replace(llmod, LlModule::new(target_triple));
     let parts = owned_module.into_codegen_unit_parts(n);
+    let unit_timings = std::env::var("PERRY_CODEGEN_UNIT_TIMINGS").is_ok();
     let show_progress = matches!(
         std::env::var("PERRY_CODEGEN_PROGRESS").as_deref(),
         Ok("1" | "all")
-    ) || std::env::var("PERRY_CODEGEN_UNIT_TIMINGS").is_ok();
+    ) || unit_timings;
     let unit_total = parts.len();
     // Root lowering was selected while the module was produced. Preserve that
     // exact backend choice across the worker boundary instead of re-reading
@@ -322,13 +323,39 @@ pub fn compile_module_units_native(
             .map_err(|e| anyhow!("unit {i}: {e:#}"))?;
         debug_dump(&module, &format!("{module_prefix}.unit{i}"));
         let (effective_target, args) = crate::linker::native_plan_args(target, native_roots);
-        let unit_bytes = crate::inprocess::optimize_and_emit_module(
+        let mut stats = crate::inprocess::UnitCodegenStats::default();
+        let unit_bytes = crate::inprocess::optimize_and_emit_module_with_stats(
             &module,
             &effective_target,
             &args,
             native_roots,
+            unit_timings.then_some(&mut stats),
         )
         .map_err(|e| anyhow!("unit {i}: {e:#}"))?;
+        if unit_timings {
+            let widest = |w: &Option<(String, usize)>| {
+                w.as_ref()
+                    .map(|(name, n)| format!("{name} {n}"))
+                    .unwrap_or_else(|| "-".to_string())
+            };
+            let growth = if stats.pre_rewrite_instructions > 0 {
+                stats.post_rewrite_instructions as f64 / stats.pre_rewrite_instructions as f64
+            } else {
+                0.0
+            };
+            eprintln!(
+                "[perry] codegen: {module_prefix}: unit {}/{unit_total}: {} fns; pre-RS4GC {} instrs (widest {}); post-RS4GC {} instrs (x{growth:.1}; widest {}); rs4gc {:.1}s, opt {:.1}s, emit {:.1}s",
+                i + 1,
+                stats.functions,
+                stats.pre_rewrite_instructions,
+                widest(&stats.pre_rewrite_widest),
+                stats.post_rewrite_instructions,
+                widest(&stats.post_rewrite_widest),
+                stats.rewrite_secs,
+                stats.optimize_secs,
+                stats.emit_secs,
+            );
+        }
         let obj = crate::linker::finish_native_emission(unit_bytes, &effective_target, &args)
             .map_err(|e| anyhow!("unit {i}: {e:#}"))?;
         log::debug!(
@@ -420,6 +447,22 @@ pub fn compile_module_units_native(
         // dropping that multi-gigabyte graph afterwards added a several-minute
         // single-threaded destructor tail on the full Claude Code bundle.
         for (i, part) in parts.into_iter().enumerate() {
+            if unit_timings {
+                // Name the widest body before LLVM ever sees it: the one
+                // irreducible function in a bundle is the one that sets the
+                // unit's time and memory, and a stuck unit number alone does
+                // not say which (#8583).
+                if let Some(widest) = part.funcs.iter().max_by_key(|f| f.estimated_ir_bytes()) {
+                    eprintln!(
+                        "[perry] codegen: {module_prefix}: unit {}/{unit_total}: {} fns, ~{:.1} MiB estimated IR, widest {} (~{:.1} MiB)",
+                        i + 1,
+                        part.funcs.len(),
+                        part.funcs.iter().map(|f| f.estimated_ir_bytes()).sum::<usize>() as f64 / 1_048_576.0,
+                        widest.name,
+                        widest.estimated_ir_bytes() as f64 / 1_048_576.0
+                    );
+                }
+            }
             let unit = freeze_unit(part, &external_declarations);
             if sender.send((i, unit)).is_err() {
                 break;
@@ -670,6 +713,46 @@ mod tests {
                 "{arm} arm did not relocate the live dynamic root:\n{rewritten}"
             );
         }
+    }
+
+    /// #8583: `optnone` stamped BEFORE `rewrite-statepoints-for-gc` is not a
+    /// compile-time escape hatch, it is a rooting bug. The new pass manager
+    /// skips `mem2reg`/`sccp` on an `optnone` function while RS4GC (a module
+    /// pass keyed on the `gc` attribute) still runs, so the root allocas are
+    /// never promoted and the collector never sees them: no `gc-live` operand
+    /// bundle, no relocation. This is why the pre-rewrite
+    /// `PERRY_LL_PREOPT_OPTNONE_INSTRS` knob was removed rather than
+    /// calibrated, and why any future size policy must run AFTER the rewrite.
+    #[test]
+    fn optnone_before_rs4gc_hides_every_root_from_the_collector() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let module = precise_root_fixture(false);
+        let target = crate::codegen::default_target_triple();
+        let text_ir = module.to_ir();
+        assert!(
+            text_ir.contains("gc \"statepoint-example\" {"),
+            "fixture must carry the GC strategy:\n{text_ir}"
+        );
+        // Control: the same fixture without optnone roots and relocates.
+        assert_dynamic_root_survives_rs4gc(&module, "optnone_control");
+
+        let demoted = text_ir.replace(
+            "gc \"statepoint-example\" {",
+            "optnone noinline gc \"statepoint-example\" {",
+        );
+        let rewritten =
+            crate::inprocess::statepoint_rewritten_ir(&demoted, &target, "optnone_before_rs4gc")
+                .expect("optnone fixture must still run RS4GC");
+        assert!(
+            !rewritten.contains("\"gc-live\"(ptr addrspace(1)"),
+            "an optnone function kept its roots visible to RS4GC, so the pre-rewrite \
+             demotion would be sound after all and this test (and the knob's removal) \
+             needs revisiting:\n{rewritten}"
+        );
+        assert!(
+            rewritten.contains("= alloca ptr addrspace(1)"),
+            "the root allocas should survive unpromoted under optnone:\n{rewritten}"
+        );
     }
 
     /// #8121, emission half. The sibling pair in `inprocess::tests` proves the

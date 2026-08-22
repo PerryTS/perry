@@ -21,7 +21,6 @@ use std::ffi::CString;
 use std::sync::Once;
 
 use anyhow::{anyhow, Result};
-use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::passes::PassBuilderOptions;
@@ -205,6 +204,7 @@ pub fn compile_ll_to_object_inprocess(
         &mllvm,
         emit_asm,
         native_roots,
+        None,
     )
 }
 
@@ -315,6 +315,24 @@ pub(crate) fn optimize_and_emit_module(
     clang_style_args: &[String],
     native_roots: bool,
 ) -> Result<Vec<u8>> {
+    optimize_and_emit_module_with_stats(
+        module,
+        effective_target,
+        clang_style_args,
+        native_roots,
+        None,
+    )
+}
+
+/// [`optimize_and_emit_module`] that also fills `stats` (sizes before and
+/// after RS4GC, widest functions, phase times) for the per-unit report.
+pub(crate) fn optimize_and_emit_module_with_stats(
+    module: &inkwell::module::Module<'_>,
+    effective_target: &str,
+    clang_style_args: &[String],
+    native_roots: bool,
+    stats: Option<&mut UnitCodegenStats>,
+) -> Result<Vec<u8>> {
     let (opt, mcpu_native, explicit_cpu, mllvm, emit_asm) = interpret_plan_args(clang_style_args)?;
     optimize_and_emit(
         module,
@@ -325,92 +343,191 @@ pub(crate) fn optimize_and_emit_module(
         &mllvm,
         emit_asm,
         native_roots,
+        stats,
     )
 }
 
-/// Optional pre-optimization escape hatch for unusually large generated
-/// functions.
-///
-/// Dense generated bundles often contain one parser/table initializer that is
-/// large enough to make the `-O1+` middle-end super-linear, alongside hundreds
-/// of ordinary functions that benefit substantially from `-Os`. Routing the
-/// whole codegen unit to `-O0` keeps compilation bounded but also bloats every
-/// ordinary sibling. When this cap is non-zero, only functions above it are
-/// stamped `optnone`+`noinline` before the module pipeline runs. This makes
-/// `PERRY_LL_SIZE_OPT=1` a practical hybrid mode instead of an all-or-nothing
-/// gamble on the largest function in each unit.
-///
-/// Disabled by default while the threshold is calibrated across the bundle
-/// corpus. `PERRY_LL_PREOPT_OPTNONE_INSTRS=N` enables it; `0` disables it.
-const DEFAULT_PREOPT_OPTNONE_INSTRS: usize = 0;
-
-fn preopt_optnone_instr_cap() -> usize {
-    std::env::var("PERRY_LL_PREOPT_OPTNONE_INSTRS")
-        .ok()
-        .and_then(|s| s.trim().parse::<usize>().ok())
-        .unwrap_or(DEFAULT_PREOPT_OPTNONE_INSTRS)
+/// Per-unit facts the backend learns while it works: instruction totals and
+/// the widest function before and after `rewrite-statepoints-for-gc`, and the
+/// time each phase took. `native_emit` prints one line per unit from these
+/// under `PERRY_CODEGEN_UNIT_TIMINGS`, so a build that is stuck in LLVM names
+/// the function it is stuck on instead of a unit number (#8583).
+#[derive(Debug, Default, Clone)]
+pub struct UnitCodegenStats {
+    pub functions: usize,
+    pub pre_rewrite_instructions: usize,
+    pub pre_rewrite_widest: Option<(String, usize)>,
+    pub post_rewrite_instructions: usize,
+    pub post_rewrite_widest: Option<(String, usize)>,
+    pub rewrite_secs: f64,
+    pub optimize_secs: f64,
+    pub emit_secs: f64,
 }
 
-fn stamp_function_optnone(function: inkwell::values::FunctionValue<'_>) {
-    let context = function.get_type().get_context();
-    let optnone_kind = Attribute::get_named_enum_kind_id("optnone");
-    let noinline_kind = Attribute::get_named_enum_kind_id("noinline");
-    // `alwaysinline` and `noinline` are verifier-incompatible. Generated
-    // functions do not normally carry it, but the opt-in must remain safe for
-    // imported/generated IR that does.
-    function.remove_enum_attribute(
-        AttributeLoc::Function,
-        Attribute::get_named_enum_kind_id("alwaysinline"),
-    );
-    function.remove_enum_attribute(
-        AttributeLoc::Function,
-        Attribute::get_named_enum_kind_id("inlinehint"),
-    );
-    function.add_attribute(
-        AttributeLoc::Function,
-        context.create_enum_attribute(optnone_kind, 0),
-    );
-    function.add_attribute(
-        AttributeLoc::Function,
-        context.create_enum_attribute(noinline_kind, 0),
-    );
-}
-
-fn function_instruction_count(function: inkwell::values::FunctionValue<'_>, cap: usize) -> usize {
+fn function_instruction_count(function: inkwell::values::FunctionValue<'_>) -> usize {
     let mut instrs = 0usize;
-    'body: for bb in function.get_basic_blocks() {
+    for bb in function.get_basic_blocks() {
         let mut inst = bb.get_first_instruction();
         while let Some(i) = inst {
             instrs += 1;
-            if instrs > cap {
-                break 'body;
-            }
             inst = i.get_next_instruction();
         }
     }
     instrs
 }
 
-/// Demote large functions before the ordinary optimization pipeline while
-/// leaving every smaller sibling eligible for the unit's requested opt level.
-fn demote_preoptimization_bloated_functions(module: &inkwell::module::Module<'_>, cap: usize) {
-    if cap == 0 {
-        return;
-    }
+/// (defined functions, total instructions, widest function) for a module.
+/// One linear walk through the C API; a few milliseconds per ordinary unit.
+fn module_instruction_census(
+    module: &inkwell::module::Module<'_>,
+) -> (usize, usize, Option<(String, usize)>) {
+    let mut functions = 0usize;
+    let mut total = 0usize;
+    let mut widest: Option<(String, usize)> = None;
     let mut function = module.get_first_function();
     while let Some(f) = function {
-        if function_instruction_count(f, cap) > cap {
-            stamp_function_optnone(f);
-            eprintln!(
-                "perry: `{}` exceeds {} pre-optimization instructions; compiling only this \
-                 function unoptimized (optnone) while its siblings keep the module's size \
-                 optimization. Override with PERRY_LL_PREOPT_OPTNONE_INSTRS.",
-                f.get_name().to_string_lossy(),
-                cap,
+        if f.count_basic_blocks() > 0 {
+            functions += 1;
+            let n = function_instruction_count(f);
+            total += n;
+            if widest.as_ref().is_none_or(|(_, w)| n > *w) {
+                widest = Some((f.get_name().to_string_lossy().into_owned(), n));
+            }
+        }
+        function = f.get_next_function();
+    }
+    (functions, total, widest)
+}
+
+/// Instruction budget for ONE function after `rewrite-statepoints-for-gc`.
+///
+/// This is an assertion about the estimate that keeps relocation fan-out out
+/// of LLVM's input (#8583), not an optimization policy: a function past it is
+/// refused loudly, never demoted. The #8421 contract — every function is
+/// optimized at the level the plan asked for — stays intact; what this adds
+/// is that an estimator miss fails in seconds with the function's name and
+/// sizes instead of hanging the build for hours.
+///
+/// Calibrated between the two measured points of #8128 on the Next 16.3.0
+/// production bundle: the largest post-rewrite function that finished
+/// comfortably at `-Os` was ~413k instructions, and the one that ran more
+/// than 65 CPU-minutes without finishing was ~2.1M. 1.5 Mi sits between them
+/// with margin on both sides. `PERRY_LL_RS4GC_MAX_INSTRS=<n>` raises or
+/// lowers it, `warn:<n>` only warns, and `0`/`off` disables the check.
+const DEFAULT_RS4GC_MAX_INSTRS: usize = 1_572_864;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RewriteBudget {
+    Off,
+    Error(usize),
+    Warn(usize),
+}
+
+fn parse_rewrite_budget(value: Option<&str>) -> RewriteBudget {
+    match value.map(str::trim) {
+        None | Some("") => RewriteBudget::Error(DEFAULT_RS4GC_MAX_INSTRS),
+        Some("0") | Some("off") | Some("false") => RewriteBudget::Off,
+        Some(v) => {
+            if let Some(n) = v.strip_prefix("warn:") {
+                match n.trim().parse::<usize>() {
+                    Ok(0) => RewriteBudget::Off,
+                    Ok(n) => RewriteBudget::Warn(n),
+                    Err(_) => RewriteBudget::Warn(DEFAULT_RS4GC_MAX_INSTRS),
+                }
+            } else {
+                match v.parse::<usize>() {
+                    Ok(n) => RewriteBudget::Error(n),
+                    Err(_) => RewriteBudget::Error(DEFAULT_RS4GC_MAX_INSTRS),
+                }
+            }
+        }
+    }
+}
+
+fn rs4gc_instruction_budget() -> RewriteBudget {
+    parse_rewrite_budget(std::env::var("PERRY_LL_RS4GC_MAX_INSTRS").ok().as_deref())
+}
+
+/// Every defined function whose post-rewrite body exceeds `cap`.
+fn rs4gc_budget_violations(
+    module: &inkwell::module::Module<'_>,
+    cap: usize,
+) -> Vec<(String, usize)> {
+    let mut over = Vec::new();
+    let mut function = module.get_first_function();
+    while let Some(f) = function {
+        if f.count_basic_blocks() > 0 {
+            let n = function_instruction_count(f);
+            if n > cap {
+                over.push((f.get_name().to_string_lossy().into_owned(), n));
+            }
+        }
+        function = f.get_next_function();
+    }
+    over
+}
+
+fn rewrite_budget_message(name: &str, post: usize, cap: usize, pre: Option<usize>) -> String {
+    let before = pre
+        .map(|n| format!(" (it was {n} before the rewrite)"))
+        .unwrap_or_default();
+    format!(
+        "rewrite-statepoints-for-gc grew `{name}` to {post} instructions{before}; the \
+         per-function budget is {cap}. LLVM's optimizer is super-linear on statepoint \
+         relocation fan-out of this size and the compile would not finish in practical \
+         time, so the unit is refused instead of being left to hang. Perry does not lower \
+         the optimization level for it: the fix is to keep this function's GC roots out \
+         of the relocation set or to split it (#8583). Override with \
+         PERRY_LL_RS4GC_MAX_INSTRS=<n> (raise), =warn:<n> (warn only) or =0 (disable)."
+    )
+}
+
+/// Apply [`RewriteBudget`] to a rewritten module. `pre` gives each function's
+/// pre-rewrite size for the message, when the caller took a census.
+fn enforce_rs4gc_instruction_budget(
+    module: &inkwell::module::Module<'_>,
+    budget: RewriteBudget,
+    pre: &std::collections::HashMap<String, usize>,
+) -> Result<()> {
+    let (cap, fatal) = match budget {
+        RewriteBudget::Off => return Ok(()),
+        RewriteBudget::Error(cap) => (cap, true),
+        RewriteBudget::Warn(cap) => (cap, false),
+    };
+    let over = rs4gc_budget_violations(module, cap);
+    if over.is_empty() {
+        return Ok(());
+    }
+    let messages: Vec<String> = over
+        .iter()
+        .map(|(name, post)| rewrite_budget_message(name, *post, cap, pre.get(name).copied()))
+        .collect();
+    if fatal {
+        return Err(anyhow!("{}", messages.join("\n")));
+    }
+    for m in messages {
+        eprintln!("perry: warning: {m}");
+    }
+    Ok(())
+}
+
+/// Per-function pre-rewrite sizes, for the budget message. Only the names
+/// are retained, so this is a few bytes per function, not per instruction.
+fn pre_rewrite_sizes(
+    module: &inkwell::module::Module<'_>,
+) -> std::collections::HashMap<String, usize> {
+    let mut sizes = std::collections::HashMap::new();
+    let mut function = module.get_first_function();
+    while let Some(f) = function {
+        if f.count_basic_blocks() > 0 {
+            sizes.insert(
+                f.get_name().to_string_lossy().into_owned(),
+                function_instruction_count(f),
             );
         }
         function = f.get_next_function();
     }
+    sizes
 }
 
 fn optimize_and_emit(
@@ -422,6 +539,7 @@ fn optimize_and_emit(
     mllvm: &[String],
     emit_asm: bool,
     native_roots: bool,
+    mut stats: Option<&mut UnitCodegenStats>,
 ) -> Result<Vec<u8>> {
     global_init(mllvm);
     announce();
@@ -473,12 +591,6 @@ fn optimize_and_emit(
     module.set_triple(&triple);
     module.set_data_layout(&tm.get_target_data().get_data_layout());
 
-    // Opt-in hybrid size optimization for generated bundles: protect only the
-    // pathological bodies before entering the requested module pipeline.
-    if opt != '0' {
-        demote_preoptimization_bloated_functions(module, preopt_optnone_instr_cap());
-    }
-
     // RS4GC must run BEFORE the optimization pipeline, and — critically — in
     // this process, against this LLVM.
     //
@@ -496,6 +608,23 @@ fn optimize_and_emit(
     // `try` is one — 26% of the gap suite (128 of 479 files) contains a `try`,
     // which the explicit bridge refuses outright (#7327/#7330).
     if native_roots {
+        // Sizes before the rewrite: the budget message below names them, and
+        // the per-unit report compares them with the post-rewrite census.
+        let budget = rs4gc_instruction_budget();
+        let pre_sizes = if budget == RewriteBudget::Off && stats.is_none() {
+            std::collections::HashMap::new()
+        } else {
+            pre_rewrite_sizes(module)
+        };
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.functions = pre_sizes.len();
+            stats.pre_rewrite_instructions = pre_sizes.values().sum();
+            stats.pre_rewrite_widest = pre_sizes
+                .iter()
+                .max_by_key(|(_, n)| **n)
+                .map(|(name, n)| (name.clone(), *n));
+        }
+        let rewrite_started = std::time::Instant::now();
         module
             .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
             .map_err(|e| {
@@ -518,6 +647,14 @@ fn optimize_and_emit(
                 e.to_string()
             )
         })?;
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.rewrite_secs = rewrite_started.elapsed().as_secs_f64();
+            let (_, total, widest) = module_instruction_census(module);
+            stats.post_rewrite_instructions = total;
+            stats.post_rewrite_widest = widest;
+        }
+        // The relocation-fan-out assertion (#8583): refuse, never demote.
+        enforce_rs4gc_instruction_budget(module, budget, &pre_sizes)?;
     }
 
     let pipeline = match opt {
@@ -528,18 +665,26 @@ fn optimize_and_emit(
         'z' => "default<Oz>",
         _ => "default<O3>",
     };
+    let optimize_started = std::time::Instant::now();
     module
         .run_passes(pipeline, &tm, PassBuilderOptions::create())
         .map_err(|e| anyhow!("pass pipeline `{pipeline}` failed:\n{}", e.to_string()))?;
+    if let Some(stats) = stats.as_deref_mut() {
+        stats.optimize_secs = optimize_started.elapsed().as_secs_f64();
+    }
 
     let kind = if emit_asm {
         FileType::Assembly
     } else {
         FileType::Object
     };
+    let emit_started = std::time::Instant::now();
     let obj = tm
-        .write_to_memory_buffer(&module, kind)
+        .write_to_memory_buffer(module, kind)
         .map_err(|e| anyhow!("{kind:?} emission failed:\n{}", e.to_string()))?;
+    if let Some(stats) = stats {
+        stats.emit_secs = emit_started.elapsed().as_secs_f64();
+    }
     Ok(obj.as_slice().to_vec())
 }
 
@@ -608,44 +753,123 @@ mod tests {
     }
 
     #[test]
-    fn preoptimization_bloated_function_is_demoted_without_demoting_its_sibling() {
-        global_init(&[]);
-        let context = Context::create();
-        let ir = "define i64 @big(i64 %a) {\n\
-                  entry:\n\
-                  \x20 %x1 = add i64 %a, 1\n\
-                  \x20 %x2 = add i64 %x1, 1\n\
-                  \x20 %x3 = add i64 %x2, 1\n\
-                  \x20 %x4 = add i64 %x3, 1\n\
-                  \x20 %x5 = add i64 %x4, 1\n\
-                  \x20 ret i64 %x5\n\
-                  }\n\
-                  define i64 @small(i64 %a) {\n\
-                  entry:\n\
-                  \x20 %x1 = add i64 %a, 1\n\
-                  \x20 ret i64 %x1\n\
-                  }\n";
-        let module =
-            parse_ir_text(&context, ir, "preopt_optnone_demotion").expect("fixture parses");
-        demote_preoptimization_bloated_functions(&module, 4);
+    fn rewrite_budget_spellings() {
+        assert_eq!(
+            parse_rewrite_budget(None),
+            RewriteBudget::Error(DEFAULT_RS4GC_MAX_INSTRS)
+        );
+        assert_eq!(parse_rewrite_budget(Some("0")), RewriteBudget::Off);
+        assert_eq!(parse_rewrite_budget(Some("off")), RewriteBudget::Off);
+        assert_eq!(
+            parse_rewrite_budget(Some(" 250000 ")),
+            RewriteBudget::Error(250_000)
+        );
+        assert_eq!(
+            parse_rewrite_budget(Some("warn:4096")),
+            RewriteBudget::Warn(4096)
+        );
+        assert_eq!(parse_rewrite_budget(Some("warn:0")), RewriteBudget::Off);
+        // Unparsable values keep the default rather than silently disabling.
+        assert_eq!(
+            parse_rewrite_budget(Some("lots")),
+            RewriteBudget::Error(DEFAULT_RS4GC_MAX_INSTRS)
+        );
+    }
 
-        let optnone_kind = Attribute::get_named_enum_kind_id("optnone");
-        let big = module.get_function("big").expect("big exists");
-        let small = module.get_function("small").expect("small exists");
-        assert!(
-            big.get_enum_attribute(AttributeLoc::Function, optnone_kind)
-                .is_some(),
-            "a function past the pre-optimization cap must be stamped optnone"
+    /// Six gc values live across forty safepoints: ~60 instructions before
+    /// `rewrite-statepoints-for-gc`, a few hundred after (each statepoint
+    /// relocates every live value). A budget between the two is exceeded
+    /// only by the post-rewrite module — which is the property the
+    /// assertion exists for. Counting BEFORE the rewrite (the #8421
+    /// replacement knob's mistake) would make `after` empty and fail here.
+    fn relocation_fanout_fixture() -> String {
+        let mut ir = String::from(
+            "declare i64 @may_collect()\n\n\
+             define i64 @f(i64 %a0, i64 %a1, i64 %a2, i64 %a3, i64 %a4, i64 %a5) gc \"statepoint-example\" {\n\
+             entry:\n",
         );
-        assert!(
-            small
-                .get_enum_attribute(AttributeLoc::Function, optnone_kind)
-                .is_none(),
-            "an ordinary sibling must keep the module optimization pipeline"
+        for i in 0..6 {
+            ir.push_str(&format!(
+                "  %p{i} = inttoptr i64 %a{i} to ptr addrspace(1)\n"
+            ));
+        }
+        for c in 0..40 {
+            ir.push_str(&format!("  %c{c} = call i64 @may_collect()\n"));
+        }
+        for i in 0..6 {
+            ir.push_str(&format!(
+                "  %b{i} = ptrtoint ptr addrspace(1) %p{i} to i64\n"
+            ));
+        }
+        ir.push_str(
+            "  %s0 = add i64 %b0, %b1\n  %s1 = add i64 %s0, %b2\n  %s2 = add i64 %s1, %b3\n\
+             \x20 %s3 = add i64 %s2, %b4\n  %s4 = add i64 %s3, %b5\n  %s5 = add i64 %s4, %c0\n\
+             \x20 %s6 = add i64 %s5, %c39\n  ret i64 %s6\n}\n",
         );
-        module
-            .verify()
-            .expect("optnone+noinline must remain verifier-valid");
+        ir
+    }
+
+    #[test]
+    fn rs4gc_budget_fires_only_on_the_rewritten_module() {
+        global_init(&[]);
+        let target = "arm64-apple-darwin";
+        let fixture = relocation_fanout_fixture();
+        let rewritten = statepoint_rewritten_ir(&fixture, target, "fanout_budget")
+            .expect("fan-out fixture must run RS4GC");
+
+        let context = Context::create();
+        let before = parse_ir_text(&context, &fixture, "fanout_before").expect("fixture parses");
+        let after = parse_ir_text(&context, &rewritten, "fanout_after").expect("rewritten parses");
+        let pre = pre_rewrite_sizes(&before);
+        let pre_f = pre["f"];
+        let (_, post_total, post_widest) = module_instruction_census(&after);
+        let post_f = post_widest.as_ref().map(|(_, n)| *n).unwrap_or(0);
+        assert!(
+            post_f > 3 * pre_f,
+            "fixture must grow under relocation fan-out (pre {pre_f}, post {post_f}):\n{rewritten}"
+        );
+        assert_eq!(post_total, post_f, "one defined function");
+        let cap = pre_f + (post_f - pre_f) / 2;
+
+        assert!(
+            rs4gc_budget_violations(&before, cap).is_empty(),
+            "the pre-rewrite module is under the budget by construction"
+        );
+        let over = rs4gc_budget_violations(&after, cap);
+        assert_eq!(
+            over.len(),
+            1,
+            "exactly the rewritten body is over: {over:?}"
+        );
+        assert_eq!(over[0].0, "f");
+        assert_eq!(over[0].1, post_f);
+
+        let err = enforce_rs4gc_instruction_budget(&after, RewriteBudget::Error(cap), &pre)
+            .expect_err("the default spelling refuses the unit");
+        let msg = format!("{err:#}");
+        for needle in [
+            "`f`",
+            &format!("to {post_f} instructions"),
+            &format!("it was {pre_f} before"),
+            &format!("budget is {cap}"),
+            "PERRY_LL_RS4GC_MAX_INSTRS",
+            "#8583",
+        ] {
+            assert!(
+                msg.contains(needle),
+                "message must carry {needle:?}:\n{msg}"
+            );
+        }
+        assert!(
+            !msg.contains("optnone"),
+            "the budget is an assertion, never a demotion:\n{msg}"
+        );
+        enforce_rs4gc_instruction_budget(&after, RewriteBudget::Warn(cap), &pre)
+            .expect("warn spelling does not refuse");
+        enforce_rs4gc_instruction_budget(&after, RewriteBudget::Off, &pre)
+            .expect("off spelling does not refuse");
+        enforce_rs4gc_instruction_budget(&after, RewriteBudget::Error(post_f), &pre)
+            .expect("a budget at the exact size is not exceeded");
     }
 
     fn constant_fold_order_fixture(folded: bool) -> String {
