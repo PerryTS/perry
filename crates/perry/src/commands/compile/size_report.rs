@@ -1,5 +1,5 @@
 //! `--report-size`: attribute the final linked binary's size to the crates
-//! that produced it.
+//! that produced it, and surface concrete, actionable findings.
 //!
 //! Same core technique as `cargo-bsize` (see `../../../cargo-bsize/src/symbols.rs`
 //! for the reference implementation this borrows from), applied directly to
@@ -11,31 +11,39 @@
 //! within a section and taking the distance to the next one (an upper
 //! bound — it also counts any anonymous padding between them).
 //!
-//! Deliberately does not attempt cargo-bsize's monomorphization/trait/LTO
-//! provenance analysis: that requires driving a `cargo build` with
-//! instrumentation flags, which Perry's own two-stage build (static-archive
-//! compile, then a raw `cc`/`ld` link of those archives plus LLVM-emitted
-//! object code) has no hook for. This is a symbol-table-only view of
-//! whatever made it into the final link.
+//! Deliberately does not attempt cargo-bsize's DWARF/LTO-provenance analysis
+//! (type layout, source-line attribution, assembly instruction patterns):
+//! those need either a `cargo build` rebuild with instrumentation flags or a
+//! disassembler, neither of which fits Perry's own two-stage build
+//! (static-archive compile, then a raw `cc`/`ld` link of those archives plus
+//! LLVM-emitted object code). This is a symbol-table-only view of whatever
+//! made it into the final link — code/data attribution, duplicate function
+//! bodies, duplicate crate versions, generic-monomorphization cost, and a
+//! few named cost patterns (panics, `Debug`/`Display` formatting, vtables).
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use object::{Object, ObjectSection, ObjectSymbol, SectionKind, SymbolKind};
+use serde::Serialize;
 
 use crate::OutputFormat;
 
 const REPORT_TOP_CRATES: usize = 20;
 const REPORT_TOP_SYMBOLS: usize = 30;
+const REPORT_TOP_FAMILIES: usize = 15;
+const REPORT_TOP_DUPLICATES: usize = 15;
+const REPORT_TOP_SUGGESTIONS: usize = 10;
 
-#[derive(Default)]
+#[derive(Default, Serialize)]
 struct CrateTotals {
     code_bytes: u64,
     data_bytes: u64,
     symbol_count: usize,
 }
 
+#[derive(Serialize)]
 struct RankedSymbol {
     demangled: String,
     crate_name: String,
@@ -43,21 +51,69 @@ struct RankedSymbol {
     exact: bool,
 }
 
+#[derive(Serialize)]
+struct GenericFamily {
+    crate_name: String,
+    family: String,
+    instantiations: usize,
+    total_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct DuplicateBody {
+    size: u64,
+    copies: usize,
+    wasted_bytes: u64,
+    symbols: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DuplicateCrateVersion {
+    crate_name: String,
+    /// The v0-mangling disambiguator hash for each distinct build of this
+    /// crate name actually linked into the binary — proof, not inference,
+    /// that more than one copy is present (unlike reading `Cargo.lock`,
+    /// which only proves more than one version is *resolvable*).
+    hashes: Vec<String>,
+    total_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct PatternTotal {
+    name: &'static str,
+    bytes: u64,
+    count: usize,
+}
+
+#[derive(Serialize)]
+struct Suggestion {
+    kind: &'static str,
+    summary: String,
+    estimated_bytes: u64,
+}
+
+#[derive(Serialize)]
 struct SizeReport {
+    binary: String,
     file_bytes: u64,
     code_section_bytes: u64,
     data_section_bytes: u64,
     code_attributed_bytes: u64,
     data_attributed_bytes: u64,
     symbol_count: usize,
-    by_crate: BTreeMap<String, CrateTotals>,
+    by_crate: Vec<(String, CrateTotals)>,
     largest: Vec<RankedSymbol>,
+    generic_families: Vec<GenericFamily>,
+    duplicate_bodies: Vec<DuplicateBody>,
+    duplicate_crate_versions: Vec<DuplicateCrateVersion>,
+    patterns: Vec<PatternTotal>,
+    suggestions: Vec<Suggestion>,
 }
 
-/// Write `<exe_path>.size-report.md`. Best-effort and silent unless
-/// `--report-size` was actually passed: a read/parse failure here must
-/// never fail the build, the report is a diagnostic extra, not a build
-/// product.
+/// Write `<exe_path>.size-report.md` and `<exe_path>.size-report.json`.
+/// Best-effort and silent unless `--report-size` was actually passed: a
+/// read/parse failure here must never fail the build, the report is a
+/// diagnostic extra, not a build product.
 pub(super) fn emit_size_report(format: OutputFormat, exe_path: &Path, requested: bool) {
     if !requested {
         return;
@@ -71,31 +127,61 @@ pub(super) fn emit_size_report(format: OutputFormat, exe_path: &Path, requested:
             return;
         }
     };
-    let report_path = report_path_for(exe_path);
-    let markdown = render_markdown(exe_path, &report);
-    if let Err(e) = fs::write(&report_path, markdown) {
+
+    let md_path = report_path_for(exe_path, "md");
+    let markdown = render_markdown(&report);
+    if let Err(e) = fs::write(&md_path, markdown) {
         if let OutputFormat::Text = format {
             eprintln!("warning: failed to write size report: {e}");
         }
         return;
     }
+
+    let json_path = report_path_for(exe_path, "json");
+    match serde_json::to_string_pretty(&report) {
+        Ok(json) => {
+            if let Err(e) = fs::write(&json_path, json) {
+                if let OutputFormat::Text = format {
+                    eprintln!("warning: failed to write size-report.json: {e}");
+                }
+            }
+        }
+        Err(e) => {
+            if let OutputFormat::Text = format {
+                eprintln!("warning: failed to serialize size-report.json: {e}");
+            }
+        }
+    }
+
     if let OutputFormat::Text = format {
         let unattributed = (report.code_section_bytes + report.data_section_bytes)
             .saturating_sub(report.code_attributed_bytes + report.data_attributed_bytes);
-        println!("Wrote size report: {}", report_path.display());
+        println!("Wrote size report: {}", md_path.display());
+        println!("Wrote size report data: {}", json_path.display());
         println!(
             "  {} attributed across {} symbols, {} unattributed (inlined/no-symbol bytes)",
             human_bytes(report.code_attributed_bytes + report.data_attributed_bytes),
             report.symbol_count,
             human_bytes(unattributed),
         );
+        if !report.suggestions.is_empty() {
+            println!("  Top suggestion: {}", report.suggestions[0].summary);
+        }
     }
 }
 
-fn report_path_for(exe_path: &Path) -> PathBuf {
+fn report_path_for(exe_path: &Path, ext: &str) -> PathBuf {
     let mut s = exe_path.as_os_str().to_owned();
-    s.push(".size-report.md");
+    s.push(format!(".size-report.{ext}"));
     PathBuf::from(s)
+}
+
+struct RawSymbol<'a> {
+    section: u64,
+    address: u64,
+    name: &'a str,
+    size: u64,
+    exact: bool,
 }
 
 fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
@@ -127,8 +213,7 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
         ) else {
             continue;
         };
-        let kind = symbol.kind();
-        let bucket = match kind {
+        let bucket = match symbol.kind() {
             SymbolKind::Text => &mut code_syms,
             SymbolKind::Data => &mut data_syms,
             _ => continue,
@@ -146,7 +231,7 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
         .sections()
         .map(|s| (s.index().0 as u64, s.address() + s.size()))
         .collect();
-    let mut ranked = Vec::new();
+    let mut raw: Vec<RawSymbol> = Vec::new();
     for syms in [&mut code_syms, &mut data_syms] {
         syms.sort_by_key(|&(section, address, _)| (section, address));
         for i in 0..syms.len() {
@@ -164,54 +249,324 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
             if size == 0 {
                 continue;
             }
-            ranked.push((section, name, size, exact));
+            raw.push(RawSymbol {
+                section,
+                address,
+                name,
+                size,
+                exact,
+            });
         }
     }
 
-    let mut by_crate: BTreeMap<String, CrateTotals> = BTreeMap::new();
-    let mut largest: Vec<RankedSymbol> = Vec::new();
-    let mut code_attributed_bytes = 0u64;
-    let mut data_attributed_bytes = 0u64;
     let code_section_indices: std::collections::HashSet<u64> = file
         .sections()
         .filter(|s| s.kind() == SectionKind::Text)
         .map(|s| s.index().0 as u64)
         .collect();
 
-    for (section, name, size, exact) in ranked {
-        let demangled = demangle(name);
-        let crate_name = crate_of(&demangled);
+    let mut by_crate: BTreeMap<String, CrateTotals> = BTreeMap::new();
+    let mut largest_all: Vec<RankedSymbol> = Vec::new();
+    let mut code_attributed_bytes = 0u64;
+    let mut data_attributed_bytes = 0u64;
+    let mut family_totals: BTreeMap<(String, String), (usize, u64)> = BTreeMap::new();
+    let mut crate_hashes: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
+    let mut crate_hash_bytes: BTreeMap<(String, String), u64> = BTreeMap::new();
+    let mut body_hashes: BTreeMap<u64, Vec<(String, u64)>> = BTreeMap::new(); // hash -> [(symbol, size)]
+    let mut pattern_totals: BTreeMap<&'static str, (u64, usize)> = BTreeMap::new();
+
+    for sym in &raw {
+        let demangled = demangle(sym.name);
+        let (crate_name, hash) = crate_and_hash(&demangled);
+        let is_code = code_section_indices.contains(&sym.section);
+
         let totals = by_crate.entry(crate_name.clone()).or_default();
         totals.symbol_count += 1;
-        if code_section_indices.contains(&section) {
-            totals.code_bytes += size;
-            code_attributed_bytes += size;
+        if is_code {
+            totals.code_bytes += sym.size;
+            code_attributed_bytes += sym.size;
         } else {
-            totals.data_bytes += size;
-            data_attributed_bytes += size;
+            totals.data_bytes += sym.size;
+            data_attributed_bytes += sym.size;
         }
-        largest.push(RankedSymbol {
+
+        if let Some(hash) = &hash {
+            crate_hashes
+                .entry(crate_name.clone())
+                .or_default()
+                .insert(hash.clone());
+            *crate_hash_bytes
+                .entry((crate_name.clone(), hash.clone()))
+                .or_insert(0) += sym.size;
+        }
+
+        if crate_name != "native/other" {
+            let family = generic_family(&demangled);
+            if family != demangled {
+                let entry = family_totals
+                    .entry((crate_name.clone(), family))
+                    .or_insert((0, 0));
+                entry.0 += 1;
+                entry.1 += sym.size;
+            }
+        }
+
+        for (pattern_name, matches) in PATTERNS {
+            if matches(&demangled) {
+                let entry = pattern_totals.entry(pattern_name).or_insert((0, 0));
+                entry.0 += sym.size;
+                entry.1 += 1;
+            }
+        }
+
+        if let Ok(section) = file.section_by_index(object::SectionIndex(sym.section as usize)) {
+            if let Ok(Some(bytes)) = section.data_range(sym.address, sym.size) {
+                // FNV-1a: fast, dependency-free, and collisions here only cost
+                // a false "these might be duplicates" that the exact byte
+                // slices grouped under the same hash would still need to
+                // agree on — good enough for a diagnostic report.
+                let hash = fnv1a(bytes);
+                body_hashes
+                    .entry(hash)
+                    .or_default()
+                    .push((demangled.clone(), sym.size));
+            }
+        }
+
+        largest_all.push(RankedSymbol {
             demangled,
             crate_name,
-            size,
-            exact,
+            size: sym.size,
+            exact: sym.exact,
         });
     }
 
-    largest.sort_by(|a, b| b.size.cmp(&a.size));
-    largest.truncate(REPORT_TOP_SYMBOLS);
+    largest_all.sort_by_key(|a| std::cmp::Reverse(a.size));
     let symbol_count: usize = by_crate.values().map(|t| t.symbol_count).sum();
 
+    let mut generic_families: Vec<GenericFamily> = family_totals
+        .into_iter()
+        .filter(|(_, (count, _))| *count > 1)
+        .map(
+            |((crate_name, family), (instantiations, total_bytes))| GenericFamily {
+                crate_name,
+                family,
+                instantiations,
+                total_bytes,
+            },
+        )
+        .collect();
+    generic_families.sort_by_key(|a| std::cmp::Reverse(a.total_bytes));
+    generic_families.truncate(REPORT_TOP_FAMILIES);
+
+    let mut duplicate_bodies: Vec<DuplicateBody> = body_hashes
+        .into_values()
+        .filter(|group| group.len() > 1)
+        // Same-hash groups can still differ in size if two DIFFERENT-length
+        // symbols' byte ranges happened to collide in the (rare) FNV-1a sense;
+        // require the sizes to actually match before calling it a duplicate.
+        .filter(|group| group.iter().all(|(_, size)| *size == group[0].1))
+        .map(|group| {
+            let size = group[0].1;
+            let copies = group.len();
+            DuplicateBody {
+                size,
+                copies,
+                wasted_bytes: size * (copies as u64 - 1),
+                symbols: group.into_iter().map(|(name, _)| name).collect(),
+            }
+        })
+        .collect();
+    duplicate_bodies.sort_by_key(|a| std::cmp::Reverse(a.wasted_bytes));
+    duplicate_bodies.truncate(REPORT_TOP_DUPLICATES);
+
+    let mut duplicate_crate_versions: Vec<DuplicateCrateVersion> = crate_hashes
+        .into_iter()
+        .filter(|(_, hashes)| hashes.len() > 1)
+        .map(|(crate_name, hashes)| {
+            let total_bytes = hashes
+                .iter()
+                .map(|h| {
+                    crate_hash_bytes
+                        .get(&(crate_name.clone(), h.clone()))
+                        .copied()
+                        .unwrap_or(0)
+                })
+                .sum();
+            DuplicateCrateVersion {
+                crate_name,
+                hashes: hashes.into_iter().collect(),
+                total_bytes,
+            }
+        })
+        .collect();
+    duplicate_crate_versions.sort_by_key(|a| std::cmp::Reverse(a.total_bytes));
+
+    let mut patterns: Vec<PatternTotal> = pattern_totals
+        .into_iter()
+        .map(|(name, (bytes, count))| PatternTotal { name, bytes, count })
+        .collect();
+    patterns.sort_by_key(|a| std::cmp::Reverse(a.bytes));
+
+    let suggestions = build_suggestions(
+        &duplicate_crate_versions,
+        &generic_families,
+        &duplicate_bodies,
+        &patterns,
+    );
+
+    let by_crate_sorted: Vec<(String, CrateTotals)> = {
+        let mut v: Vec<(String, CrateTotals)> = by_crate.into_iter().collect();
+        v.sort_by_key(|a| std::cmp::Reverse(a.1.code_bytes + a.1.data_bytes));
+        v
+    };
+
+    largest_all.truncate(REPORT_TOP_SYMBOLS);
+
     Ok(SizeReport {
+        binary: exe_path.file_name().map_or_else(
+            || exe_path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
         file_bytes,
         code_section_bytes,
         data_section_bytes,
         code_attributed_bytes,
         data_attributed_bytes,
         symbol_count,
-        by_crate,
-        largest,
+        by_crate: by_crate_sorted,
+        largest: largest_all,
+        generic_families,
+        duplicate_bodies,
+        duplicate_crate_versions,
+        patterns,
+        suggestions,
     })
+}
+
+fn build_suggestions(
+    duplicate_crate_versions: &[DuplicateCrateVersion],
+    generic_families: &[GenericFamily],
+    duplicate_bodies: &[DuplicateBody],
+    patterns: &[PatternTotal],
+) -> Vec<Suggestion> {
+    let mut out = Vec::new();
+
+    for dup in duplicate_crate_versions {
+        out.push(Suggestion {
+            kind: "duplicate-crate-instance",
+            summary: format!(
+                "`{}` is linked {} times under different builds ({}) — Cargo.lock likely already \
+                 agrees on one version; this is `perry-runtime`/`perry-stdlib` each independently \
+                 compiling their own copy as separate `cargo build` invocations, so identical code \
+                 doesn't dedupe across the resulting `.a` archives. Extending Perry's existing \
+                 archive-dedup pass (today scoped to `dedup_runtime_for_tier3`/`dedup_stdlib_for_tier3`) \
+                 to the default build path would recover up to {}",
+                dup.crate_name,
+                dup.hashes.len(),
+                dup.hashes.join(", "),
+                human_bytes(dup.total_bytes),
+            ),
+            estimated_bytes: dup.total_bytes,
+        });
+    }
+
+    for family in generic_families {
+        if family.total_bytes < 2048 {
+            continue;
+        }
+        out.push(Suggestion {
+            kind: "generic-monomorphization",
+            summary: format!(
+                "`{}::{}` is monomorphized {} times, {} total — consider a dynamic-dispatch (`dyn Trait`) or type-erased path if the call sites don't need static dispatch",
+                family.crate_name,
+                family.family,
+                family.instantiations,
+                human_bytes(family.total_bytes),
+            ),
+            estimated_bytes: family.total_bytes,
+        });
+    }
+
+    for dup in duplicate_bodies {
+        if dup.wasted_bytes < 512 {
+            continue;
+        }
+        out.push(Suggestion {
+            kind: "duplicate-function-body",
+            summary: format!(
+                "{} symbols share one identical body ({} each, {} wasted): {}",
+                dup.copies,
+                human_bytes(dup.size),
+                human_bytes(dup.wasted_bytes),
+                dup.symbols.first().map(String::as_str).unwrap_or(""),
+            ),
+            estimated_bytes: dup.wasted_bytes,
+        });
+    }
+
+    for pattern in patterns {
+        if pattern.bytes < 8192 {
+            continue;
+        }
+        let advice = match pattern.name {
+            "panic-path" => {
+                "panic=abort is already the default for compiled programs; this is what remains \
+                 after that (formatted panic messages, bounds-check panic sites) — reducing \
+                 `.unwrap()`/indexing in hot paths shrinks it further"
+            }
+            "fmt-debug-display" => {
+                "Debug/Display formatting code for types that are never actually printed can be \
+                 dropped by removing the derive or gating it behind a debug-only feature"
+            }
+            "vtable" => {
+                "trait-object dispatch tables — expected if `dyn Trait` is used deliberately"
+            }
+            _ => "",
+        };
+        out.push(Suggestion {
+            kind: pattern.name,
+            summary: format!(
+                "{} across {} symbols in `{}`: {advice}",
+                human_bytes(pattern.bytes),
+                pattern.count,
+                pattern.name,
+            ),
+            estimated_bytes: pattern.bytes,
+        });
+    }
+
+    out.sort_by_key(|a| std::cmp::Reverse(a.estimated_bytes));
+    out.truncate(REPORT_TOP_SUGGESTIONS);
+    out
+}
+
+type PatternMatcher = (&'static str, fn(&str) -> bool);
+
+/// Named cost patterns the size-reduction literature keeps naming. These
+/// overlap by design (a function can be both a panic path and behind a
+/// generic) — each just points at code worth looking at, not a partition.
+const PATTERNS: &[PatternMatcher] = &[
+    ("panic-path", |d| {
+        d.contains("core::panicking") || d.contains("::panic_fmt") || d.contains("panic::Location")
+    }),
+    ("fmt-debug-display", |d| {
+        d.contains("as core::fmt::Debug>::fmt") || d.contains("as core::fmt::Display>::fmt")
+    }),
+    ("vtable", |d| {
+        d.contains("{vtable}") || d.contains("vtable_for")
+    }),
+];
+
+/// FNV-1a — fast, dependency-free, good enough to bucket candidate duplicate
+/// bodies before the exact-size check in `build_report` confirms them.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 /// Demangle a Rust symbol name. `rustc_demangle` returns non-Rust input
@@ -221,13 +576,17 @@ fn demangle(name: &str) -> String {
     rustc_demangle::demangle(name).to_string()
 }
 
-/// The crate a demangled Rust path belongs to — its first `::`-delimited
-/// segment, with the compiler's disambiguating hash suffix (`::h<16 hex>`)
-/// dropped. Non-Rust names (no `::`, or containing characters a Rust path
-/// segment can't) bucket as `native/other`.
-fn crate_of(demangled: &str) -> String {
-    // `<Type as Trait>::method` / `<Type>::method` associated-fn forms put
-    // the crate name one level in; strip the leading `<` before reading it.
+/// The crate a demangled Rust path belongs to (its first `::`-delimited
+/// segment) and, when present, the v0-mangling disambiguator hash right
+/// after it (`crate_name[16 hex digits]`). Two symbols from the SAME crate
+/// NAME but DIFFERENT hashes are proof two separate builds of that crate
+/// both made it into the final link — see `DuplicateCrateVersion`.
+///
+/// `<Type as Trait>::method` / `<Type>::method` associated-fn forms put the
+/// crate name one level in; the leading `<` is stripped before reading it.
+/// Non-Rust names (no `::`, or containing characters a Rust path segment
+/// can't) bucket as `native/other`.
+fn crate_and_hash(demangled: &str) -> (String, Option<String>) {
     let trimmed = demangled.trim_start_matches('<');
     let ident_end = trimmed
         .find(|c: char| !(c.is_alphanumeric() || c == '_'))
@@ -237,29 +596,75 @@ fn crate_of(demangled: &str) -> String {
         .chars()
         .next()
         .is_some_and(|c| c.is_alphabetic() || c == '_');
-    // v0 mangling embeds the crate's disambiguating hash right after its
-    // name as `crate_name[16 hex digits]`; legacy mangling has none and
-    // goes straight to `::`. Either is proof `candidate` is a crate name
-    // rather than an identifier that merely starts the same way a mangled
-    // name would (a bare C symbol, `main`, `<str>`-as-printed generic self
-    // types with no path after them, …).
     let rest = &trimmed[ident_end..];
-    if starts_like_ident && (rest.starts_with('[') || rest.starts_with("::")) {
-        candidate.to_string()
+    if starts_like_ident && rest.starts_with('[') {
+        let hash = rest.find(']').map(|end| rest[1..end].to_string());
+        (candidate.to_string(), hash)
+    } else if starts_like_ident && rest.starts_with("::") {
+        (candidate.to_string(), None)
     } else {
-        "native/other".to_string()
+        ("native/other".to_string(), None)
     }
 }
 
-fn render_markdown(exe_path: &Path, report: &SizeReport) -> String {
+/// The crate a demangled Rust path belongs to — thin wrapper over
+/// `crate_and_hash` for call sites that don't need the hash.
+#[cfg(test)]
+fn crate_of(demangled: &str) -> String {
+    crate_and_hash(demangled).0
+}
+
+/// Collapse every identifier-attached `<...>` generic-argument list into a
+/// single `<_>` placeholder, so `foo::<ConcreteA>` and `foo::<ConcreteB>` —
+/// two monomorphizations of the same generic code — group under one family
+/// key. A bare (non-attached) `<` — `<Type as Trait>::method`'s receiver
+/// wrapper — is passed through unchanged rather than treated as an argument
+/// list, so `<HashMap<K, V> as Trait>::method` still blanks to
+/// `<HashMap<_> as Trait>::method`, not to nothing.
+fn generic_family(demangled: &str) -> String {
+    let chars: Vec<char> = demangled.chars().collect();
+    let mut result = String::with_capacity(demangled.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        // `Name<Args>` (preceded by an identifier char or the v0 hash's `]`)
+        // or turbofish `path::<Args>` (preceded by `:`) — an argument list,
+        // blanked to a single placeholder. A BARE `<` (preceded by nothing,
+        // whitespace, or another bracket — `<Type as Trait>::method`'s
+        // receiver wrapper) is not an argument list itself, so it is pushed
+        // through like any other character; scanning then continues INSIDE
+        // it and still finds — and blanks — any attached generic args the
+        // wrapped type carries (`<HashMap<_> as Trait>::method`, not the
+        // wrapped type's name disappearing along with its own arguments).
+        let attached = i > 0
+            && (chars[i - 1].is_alphanumeric()
+                || chars[i - 1] == '_'
+                || chars[i - 1] == ']'
+                || chars[i - 1] == ':');
+        if c == '<' && attached {
+            let mut depth = 1i32;
+            let mut j = i + 1;
+            while j < chars.len() && depth > 0 {
+                match chars[j] {
+                    '<' => depth += 1,
+                    '>' => depth -= 1,
+                    _ => {}
+                }
+                j += 1;
+            }
+            result.push_str("<_>");
+            i = j;
+            continue;
+        }
+        result.push(c);
+        i += 1;
+    }
+    result
+}
+
+fn render_markdown(report: &SizeReport) -> String {
     let mut out = String::new();
-    out.push_str(&format!(
-        "# Size report: {}\n\n",
-        exe_path.file_name().map_or_else(
-            || exe_path.display().to_string(),
-            |n| n.to_string_lossy().into_owned()
-        )
-    ));
+    out.push_str(&format!("# Size report: {}\n\n", report.binary));
     out.push_str(&format!(
         "- Total file size: {}\n",
         human_bytes(report.file_bytes)
@@ -277,20 +682,31 @@ fn render_markdown(exe_path: &Path, report: &SizeReport) -> String {
     ));
     out.push_str(
         "Built from the linked binary's own symbol table (`object` + `rustc-demangle`), \
-         the same technique [cargo-bsize](https://github.com/boshen/cargo-bsize) uses on a \
+         the same core technique [cargo-bsize](https://github.com/boshen/cargo-bsize) uses on a \
          `cargo build` rebuild — applied here directly to what Perry actually links, since \
          Perry's static-archive-then-`cc`/`ld` build has no `cargo build` for cargo-bsize to \
          drive. Sizes for symbols without a real size (Mach-O) are an upper bound: the \
          distance to the next symbol in the same section, which also counts any anonymous \
-         padding between them.\n\n",
+         padding between them. Machine-readable data alongside this file: \
+         `<output>.size-report.json`.\n\n",
     );
+
+    if !report.suggestions.is_empty() {
+        out.push_str("## Suggestions\n\n");
+        for s in &report.suggestions {
+            out.push_str(&format!(
+                "- **{}** (~{}): {}\n",
+                s.kind,
+                human_bytes(s.estimated_bytes),
+                s.summary
+            ));
+        }
+        out.push('\n');
+    }
 
     out.push_str("## By crate\n\n");
     out.push_str("| Code | Data | Symbols | Crate |\n|---|---|---|---|\n");
-    let mut crates: Vec<(&String, &CrateTotals)> = report.by_crate.iter().collect();
-    crates
-        .sort_by(|a, b| (b.1.code_bytes + b.1.data_bytes).cmp(&(a.1.code_bytes + a.1.data_bytes)));
-    for (name, totals) in crates.into_iter().take(REPORT_TOP_CRATES) {
+    for (name, totals) in report.by_crate.iter().take(REPORT_TOP_CRATES) {
         out.push_str(&format!(
             "| {} | {} | {} | `{}` |\n",
             human_bytes(totals.code_bytes),
@@ -298,6 +714,64 @@ fn render_markdown(exe_path: &Path, report: &SizeReport) -> String {
             totals.symbol_count,
             name,
         ));
+    }
+
+    if !report.duplicate_crate_versions.is_empty() {
+        out.push_str("\n## Duplicate crate versions\n\n");
+        out.push_str(
+            "Same crate name linked more than once under a different build (proven from the \
+             symbol table's own disambiguator hash, not inferred from `Cargo.lock`).\n\n",
+        );
+        out.push_str("| Total | Copies | Crate |\n|---|---|---|\n");
+        for dup in &report.duplicate_crate_versions {
+            out.push_str(&format!(
+                "| {} | {} | `{}` |\n",
+                human_bytes(dup.total_bytes),
+                dup.hashes.len(),
+                dup.crate_name,
+            ));
+        }
+    }
+
+    if !report.generic_families.is_empty() {
+        out.push_str("\n## Generic monomorphization\n\n");
+        out.push_str("| Total | Instantiations | Crate | Family |\n|---|---|---|---|\n");
+        for f in &report.generic_families {
+            out.push_str(&format!(
+                "| {} | {} | `{}` | `{}` |\n",
+                human_bytes(f.total_bytes),
+                f.instantiations,
+                f.crate_name,
+                f.family,
+            ));
+        }
+    }
+
+    if !report.duplicate_bodies.is_empty() {
+        out.push_str("\n## Duplicate function/data bodies\n\n");
+        out.push_str("| Wasted | Copies | Each | Example symbol |\n|---|---|---|---|\n");
+        for dup in &report.duplicate_bodies {
+            out.push_str(&format!(
+                "| {} | {} | {} | `{}` |\n",
+                human_bytes(dup.wasted_bytes),
+                dup.copies,
+                human_bytes(dup.size),
+                dup.symbols.first().map(String::as_str).unwrap_or(""),
+            ));
+        }
+    }
+
+    if !report.patterns.is_empty() {
+        out.push_str("\n## Named cost patterns\n\n");
+        out.push_str("| Bytes | Symbols | Pattern |\n|---|---|---|\n");
+        for p in &report.patterns {
+            out.push_str(&format!(
+                "| {} | {} | {} |\n",
+                human_bytes(p.bytes),
+                p.count,
+                p.name,
+            ));
+        }
     }
 
     out.push_str("\n## Largest symbols\n\n");
@@ -342,11 +816,15 @@ mod tests {
     }
 
     #[test]
-    fn crate_of_strips_the_v0_disambiguator_hash() {
-        // v0 mangling's real shape: `crate_name[16-hex-digit-hash]::path`.
+    fn crate_and_hash_extracts_the_v0_disambiguator() {
         assert_eq!(
-            crate_of("perry_runtime[bf1fb6611b4368e2]::object::class_meta_registry::PARENT_DENSE"),
-            "perry_runtime"
+            crate_and_hash(
+                "perry_runtime[bf1fb6611b4368e2]::object::class_meta_registry::PARENT_DENSE"
+            ),
+            (
+                "perry_runtime".to_string(),
+                Some("bf1fb6611b4368e2".to_string())
+            )
         );
     }
 
@@ -367,6 +845,52 @@ mod tests {
     }
 
     #[test]
+    fn generic_family_collapses_a_turbofish_instantiation() {
+        assert_eq!(
+            generic_family(
+                "perry_hir::walker::expr_ref::walk_expr_children::<perry_codegen::Visitor>"
+            ),
+            "perry_hir::walker::expr_ref::walk_expr_children::<_>"
+        );
+    }
+
+    #[test]
+    fn generic_family_groups_two_different_concrete_instantiations_together() {
+        let a = generic_family("core::ptr::drop_in_place::<alloc::vec::Vec<u8>>");
+        let b = generic_family(
+            "core::ptr::drop_in_place::<alloc::vec::Vec<perry_hir::ir::expr::Expr>>",
+        );
+        assert_eq!(a, b);
+        assert_eq!(a, "core::ptr::drop_in_place::<_>");
+    }
+
+    #[test]
+    fn generic_family_is_unchanged_for_a_non_generic_symbol() {
+        let name = "perry_runtime::gc::copying::run_copied_minor_attempt";
+        assert_eq!(generic_family(name), name);
+    }
+
+    #[test]
+    fn generic_family_preserves_the_receiver_type_under_a_bare_wrapper() {
+        // The real bug this pins: a naive depth-0-only emit swallowed the
+        // whole `<hashbrown::...::HashMap<...> as Trait>` receiver, leaving
+        // a family key that started with a bare `>` and had lost which type
+        // and method it even was.
+        assert_eq!(
+            generic_family(
+                "<hashbrown::map::HashMap<u32, perry_hir::ir::expr::Expr> as hashbrown::map::HashMapExt>::reserve_rehash"
+            ),
+            "<hashbrown::map::HashMap<_> as hashbrown::map::HashMapExt>::reserve_rehash"
+        );
+    }
+
+    #[test]
+    fn fnv1a_is_deterministic_and_distinguishes_different_bytes() {
+        assert_eq!(fnv1a(b"hello"), fnv1a(b"hello"));
+        assert_ne!(fnv1a(b"hello"), fnv1a(b"world"));
+    }
+
+    #[test]
     fn human_bytes_picks_the_right_unit() {
         assert_eq!(human_bytes(512), "512 B");
         assert_eq!(human_bytes(2048), "2.0 KiB");
@@ -374,10 +898,14 @@ mod tests {
     }
 
     #[test]
-    fn report_path_appends_the_suffix() {
+    fn report_path_appends_the_extension() {
         assert_eq!(
-            report_path_for(Path::new("/tmp/hello")),
+            report_path_for(Path::new("/tmp/hello"), "md"),
             PathBuf::from("/tmp/hello.size-report.md")
+        );
+        assert_eq!(
+            report_path_for(Path::new("/tmp/hello"), "json"),
+            PathBuf::from("/tmp/hello.size-report.json")
         );
     }
 }
