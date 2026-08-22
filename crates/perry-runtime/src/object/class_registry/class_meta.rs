@@ -285,6 +285,8 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
                 Some("WeakRef")
             } else if func_ptr == promise_constructor_call_thunk as *const u8 as usize {
                 Some("Promise")
+            } else if func_ptr == regexp_constructor_call_thunk as *const u8 as usize {
+                Some("RegExp")
             } else {
                 None
             };
