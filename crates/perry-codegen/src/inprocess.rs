@@ -30,25 +30,7 @@ use inkwell::targets::{
 };
 use inkwell::OptimizationLevel;
 
-/// The pass string that inserts every statepoint, relocation and
-/// downstream-use rewrite — i.e. the whole native-roots lowering, after
-/// codegen has retyped its root allocas to `ptr addrspace(1)`.
-///
-/// Named rather than spelled inline because `native_root_coverage` (#7502)
-/// runs it too, and a coverage suite that spelled its own pass list would keep
-/// passing against a pipeline production had stopped using. `mem2reg` is not
-/// incidental company: RS4GC tracks `addrspace(1)` **SSA values**, not memory,
-/// so a root alloca that survives promotion is a root the collector never sees.
-// SCCP—not InstCombine—is before RS4GC deliberately (#8065). Native C-API construction
-// folds constants as instructions are built, while whole-module text parsing
-// retains the equivalent instruction graph. If RS4GC sees those two shapes
-// before canonicalization, their live-root ordering can differ and reach both
-// machine code and the compact GC map. The ordinary optimization pipeline is
-// too late: statepoints and relocations have already been assigned by then.
-// The narrower SCCP preserves dynamic pointer round trips which InstCombine
-// can erase, so the positive live-root witness remains visible to RS4GC.
-pub(crate) const STATEPOINT_REWRITE_PASSES: &str =
-    "function(mem2reg,sccp),rewrite-statepoints-for-gc";
+use crate::linker::STATEPOINT_REWRITE_PASSES;
 
 /// Test seam (#7502): parse `ll_text`, run [`STATEPOINT_REWRITE_PASSES`] for
 /// `effective_target`, and return the rewritten IR.
@@ -770,6 +752,105 @@ mod tests {
         assert_ne!(
             pre_fix_text, pre_fix_folded,
             "fixture must fail byte equality under the pre-#8065 pass order"
+        );
+    }
+
+    #[test]
+    fn rs4gc_honors_alwaysinline_before_rewriting_calls() {
+        let target = crate::codegen::default_target_triple();
+        let ir = r#"
+declare ptr addrspace(1) @alloc()
+
+define internal ptr addrspace(1) @leaf(ptr addrspace(1) %p) alwaysinline gc "statepoint-example" {
+entry:
+  %unused = call ptr addrspace(1) @alloc()
+  ret ptr addrspace(1) %p
+}
+
+define ptr addrspace(1) @caller(ptr addrspace(1) %p) gc "statepoint-example" {
+entry:
+  %result = call ptr addrspace(1) @leaf(ptr addrspace(1) %p)
+  ret ptr addrspace(1) %result
+}
+"#;
+
+        const PRE_FIX_PASSES: &str = "function(mem2reg,sccp),rewrite-statepoints-for-gc";
+        let before =
+            statepoint_rewritten_ir_with_passes(ir, &target, "alwaysinline_before", PRE_FIX_PASSES)
+                .expect("negative control rewrites the fixture");
+        assert!(
+            before.lines().any(|line| {
+                line.contains("@llvm.experimental.gc.statepoint") && line.contains("@leaf")
+            }),
+            "negative control must leave the alwaysinline call as a statepoint:\n{before}"
+        );
+
+        let after = statepoint_rewritten_ir(ir, &target, "alwaysinline_after")
+            .expect("shipped pipeline rewrites the inlined fixture");
+        assert!(
+            !after.contains("@leaf"),
+            "alwaysinline callee and call must disappear before RS4GC:\n{after}"
+        );
+        let live_bundle = after
+            .lines()
+            .find(|line| line.contains("@llvm.experimental.gc.statepoint"))
+            .unwrap_or_else(|| panic!("inlined allocation must remain a statepoint:\n{after}"));
+        assert!(
+            live_bundle.contains("\"gc-live\"") && live_bundle.contains("%p"),
+            "caller root must stay live through the inlined allocation:\n{after}"
+        );
+        assert!(
+            after.contains("@llvm.experimental.gc.relocate")
+                && after.contains("ret ptr addrspace(1)"),
+            "caller must return the relocated root after the inlined allocation:\n{after}"
+        );
+    }
+
+    #[test]
+    fn rs4gc_rewrites_inlined_invoke_and_preserves_exception_edge() {
+        let target = crate::codegen::default_target_triple();
+        let ir = r#"
+declare ptr addrspace(1) @alloc()
+declare i32 @perry_eh_personality(...)
+
+define internal ptr addrspace(1) @leaf(ptr addrspace(1) %p) alwaysinline gc "statepoint-example" personality ptr @perry_eh_personality {
+entry:
+  %unused = invoke ptr addrspace(1) @alloc()
+      to label %ok unwind label %exception
+ok:
+  ret ptr addrspace(1) %p
+exception:
+  %landing = landingpad token cleanup
+  ret ptr addrspace(1) %p
+}
+
+define ptr addrspace(1) @caller(ptr addrspace(1) %p) gc "statepoint-example" personality ptr @perry_eh_personality {
+entry:
+  %result = call ptr addrspace(1) @leaf(ptr addrspace(1) %p)
+  ret ptr addrspace(1) %result
+}
+"#;
+
+        let after = statepoint_rewritten_ir(ir, &target, "alwaysinline_invoke")
+            .expect("shipped pipeline rewrites an invoke in an inlined callee");
+        assert!(
+            !after.contains("@leaf"),
+            "alwaysinline invoke callee must disappear before RS4GC:\n{after}"
+        );
+        assert!(
+            after.lines().any(|line| {
+                line.contains("invoke token") && line.contains("@llvm.experimental.gc.statepoint")
+            }),
+            "inlined invoke must become a statepoint while retaining its unwind edge:\n{after}"
+        );
+        assert!(
+            after.contains("landingpad token")
+                && after.lines().any(|line| line.trim() == "cleanup"),
+            "statepoint invoke must retain a verifier-valid exceptional pad:\n{after}"
+        );
+        assert!(
+            after.contains("@llvm.experimental.gc.relocate"),
+            "both edges must relocate the caller root after the inlined invoke:\n{after}"
         );
     }
 

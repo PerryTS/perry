@@ -306,6 +306,9 @@ pub(super) fn compile_method(
     {
         lf.linkage = "internal".to_string();
     }
+    if is_index_clone {
+        lf.pre_statepoint_inline = true;
+    }
 
     // gh #6206 / #6081: methods were compiled WITHOUT a shadow frame — same
     // exact-roots liveness hole as closures (see compile_closure). One extra

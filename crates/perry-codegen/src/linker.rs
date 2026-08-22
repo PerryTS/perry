@@ -22,6 +22,21 @@ use linker_temp::{
     reap_stale_llvm_scratch_once, FailedScratch, FailureRetention, PROCESS_FAILURE_RETENTION,
 };
 
+/// The shared pass string that inserts every statepoint, relocation and
+/// downstream-use rewrite after codegen retypes root allocas to
+/// `ptr addrspace(1)`.
+///
+/// `always-inline` must run first. Once RS4GC rewrites a call to a statepoint,
+/// LLVM's normal optimization pipeline can no longer honor the callee's
+/// `alwaysinline` attribute. The function passes are also load-bearing:
+/// `mem2reg` exposes root allocas as SSA values for RS4GC, while SCCP converges
+/// textual and native-C-API constant folding before root liveness is assigned.
+///
+/// Both the external and in-process backends consume this constant so their
+/// native-roots correctness pipelines cannot drift.
+pub(crate) const STATEPOINT_REWRITE_PASSES: &str =
+    "always-inline,function(mem2reg,sccp),rewrite-statepoints-for-gc";
+
 /// Cached result of the pre-flight clang probe — evaluated once per process.
 /// `Some(default_triple)` if the probe succeeded, `None` if it failed.
 static CLANG_PROBE: OnceLock<Option<String>> = OnceLock::new();
@@ -499,12 +514,10 @@ fn maybe_rs4gc_preprocess(ll_text: &str, native_roots: bool) -> Result<Option<St
             "PERRY_RS4GC=1 requires an LLVM `opt` binary: set PERRY_LLVM_OPT, \
              install Homebrew LLVM, or put `opt` on PATH",
         )?;
+    let passes_arg = format!("-passes={STATEPOINT_REWRITE_PASSES}");
     let mut child = Command::new(&opt)
-        .args([
-            "-passes=function(mem2reg),rewrite-statepoints-for-gc",
-            "-S",
-            "-",
-        ])
+        .arg(&passes_arg)
+        .args(["-S", "-"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -531,12 +544,13 @@ fn maybe_rs4gc_preprocess(ll_text: &str, native_roots: bool) -> Result<Option<St
         };
         return Err(anyhow!(
             "PERRY_RS4GC: opt pipeline failed ({}).\n{}\n\
-             reproduce: {} -passes='function(mem2reg),rewrite-statepoints-for-gc' -S {}\n\
+             reproduce: {} -passes='{}' -S {}\n\
              \n\
              stderr:\n{}",
             output.status,
             ir_note,
             opt.display(),
+            STATEPOINT_REWRITE_PASSES,
             ir_path.display(),
             String::from_utf8_lossy(&output.stderr)
         ));

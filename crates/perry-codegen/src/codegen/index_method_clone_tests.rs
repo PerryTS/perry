@@ -200,11 +200,24 @@ fn function_body(ir: &str, definition_contains: &str) -> String {
 
 #[test]
 fn proven_index_routes_to_live_clone_while_unproven_index_keeps_public_fallback() {
+    let _native = crate::codegen::helpers::NativeRootsPin::native();
     let ir = emit();
     let clone_symbol = "perry_method_index_method_clone_ts__Reader__read$idx_u31_12";
     let clone = function_body(&ir, &format!("@{clone_symbol}("));
     let public_symbol = "perry_method_index_method_clone_ts__Reader__read";
     let public = function_body(&ir, &format!("@{public_symbol}("));
+
+    assert!(
+        clone.lines().next().is_some_and(|line| line.contains(" alwaysinline ")),
+        "the proven index clone must be admitted before RS4GC turns its call into a statepoint:\n{clone}"
+    );
+    assert!(
+        public
+            .lines()
+            .next()
+            .is_some_and(|line| !line.contains(" alwaysinline ")),
+        "the public fallback must not consume the scoped pre-statepoint code-size budget:\n{public}"
+    );
 
     assert!(
         clone.contains("fptosi double %arg12 to i32")

@@ -28,6 +28,12 @@ pub struct LlFunction {
     /// function at every call site, exposing integer operations to the
     /// caller's optimizer context (critical for vectorization of clamp patterns).
     pub force_inline: bool,
+    /// Admit this function to the unconditional inliner that runs before
+    /// RewriteStatepointsForGC. RS4GC turns calls into statepoints, after
+    /// which LLVM cannot honor `alwaysinline`; keeping this separate from the
+    /// general small-function policy gives the early pass an explicit code-size
+    /// budget instead of activating every historical hint at once.
+    pub pre_statepoint_inline: bool,
     /// When true, keep a small routing wrapper as an optimization boundary.
     /// Used when inlining would duplicate guarded fast/fallback call graphs.
     pub no_inline: bool,
@@ -237,6 +243,7 @@ impl LlFunction {
             params,
             linkage: String::new(),
             force_inline: false,
+            pre_statepoint_inline: false,
             no_inline: false,
             inline_hint: false,
             hot_loop_callee: false,
@@ -805,11 +812,12 @@ impl LlFunction {
             String::new()
         };
 
-        let attrs = if self.force_inline {
+        let rs4gc = crate::codegen::helpers::rs4gc_enabled();
+        let attrs = if self.pre_statepoint_inline || (self.force_inline && !rs4gc) {
             " alwaysinline"
         } else if self.no_inline {
             " noinline"
-        } else if self.inline_hint {
+        } else if self.inline_hint || self.force_inline {
             " inlinehint"
         } else {
             ""
@@ -1124,6 +1132,41 @@ mod define_header_tests {
                      (force_inline={force_inline}, personality={personality:?})"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn pre_statepoint_inline_has_an_explicit_native_roots_budget() {
+        use crate::codegen::helpers::NativeRootsPin;
+
+        {
+            let _shadow = NativeRootsPin::shadow();
+            let mut ordinary = probe();
+            ordinary.force_inline = true;
+            assert!(ordinary.define_header(false).contains(" alwaysinline"));
+        }
+
+        {
+            let _native = NativeRootsPin::native();
+            let mut ordinary = probe();
+            ordinary.force_inline = true;
+            let ordinary_header = ordinary.define_header(false);
+            assert!(ordinary_header.contains(" inlinehint"));
+            assert!(
+                !ordinary_header.contains(" alwaysinline"),
+                "the early pass must not activate every historical force-inline hint: \
+                 {ordinary_header}"
+            );
+
+            let mut admitted = probe();
+            admitted.pre_statepoint_inline = true;
+            let admitted_header = admitted.define_header(false);
+            assert!(admitted_header.contains(" alwaysinline"));
+            assert!(
+                !admitted_header.contains(" inlinehint"),
+                "an explicitly admitted function needs an unconditional attribute: \
+                 {admitted_header}"
+            );
         }
     }
 
