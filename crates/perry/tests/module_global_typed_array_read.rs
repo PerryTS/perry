@@ -117,7 +117,10 @@ fn module_global_float64array_read_is_inlined_and_bit_exact() {
     let fast = run(&dir.path().join("fast"), dir.path());
     let slow = run(&dir.path().join("slow"), dir.path());
     assert_eq!(fast, EXPECTED, "fast-path output");
-    assert_eq!(slow, fast, "fast path must be bit-exact with js_typed_array_get");
+    assert_eq!(
+        slow, fast,
+        "fast path must be bit-exact with js_typed_array_get"
+    );
 }
 
 const I32_SOURCE: &str = r#"
@@ -161,5 +164,8 @@ fn module_global_int32array_read_is_inlined_and_bit_exact() {
     let fast = run(&dir.path().join("fast32"), dir.path());
     let slow = run(&dir.path().join("slow32"), dir.path());
     assert_eq!(fast, I32_EXPECTED);
-    assert_eq!(slow, fast, "i32 fast path must be bit-exact with the runtime getter");
+    assert_eq!(
+        slow, fast,
+        "i32 fast path must be bit-exact with the runtime getter"
+    );
 }
