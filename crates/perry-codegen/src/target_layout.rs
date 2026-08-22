@@ -25,6 +25,47 @@ pub fn target_is_ilp32(target_triple: &str) -> bool {
         || target_triple.ends_with("gnux32")
 }
 
+/// Exclusive upper bound accepted by the runtime's `is_valid_obj_ptr` for a
+/// candidate GC address. Linux-family AArch64 can use the full low 48-bit VA
+/// range; every other target keeps the canonical low-half 47-bit ceiling.
+/// Inline pointer guards must use this target-derived value before touching a
+/// `GcHeader`, matching `perry-runtime/src/value/addr_class.rs`.
+pub(crate) fn heap_addr_upper_bound_exclusive(target_triple: &str) -> u64 {
+    let triple = target_triple.to_ascii_lowercase();
+    let is_aarch64 = triple.starts_with("aarch64") || triple.starts_with("arm64");
+    // HarmonyOS triples contain the spelling `linux-ohos`, but Rust exposes
+    // them as `target_os = "ohos"`; the runtime therefore keeps the 47-bit
+    // ceiling there. Android is explicitly in the full-range arm.
+    let is_linux_family =
+        triple.contains("android") || (triple.contains("linux") && !triple.contains("ohos"));
+    if is_aarch64 && is_linux_family {
+        0x1_0000_0000_0000
+    } else {
+        0x8000_0000_0000
+    }
+}
+
+/// Inclusive lower bound for a candidate GC address after excluding Perry's
+/// small-handle band. Mainstream hosted targets accept low virtual addresses,
+/// so the 1 MiB handle ceiling is the effective floor. Other targets use the
+/// runtime's conservative 2 TiB floor before any `GcHeader` dereference.
+pub(crate) fn heap_addr_lower_bound_inclusive(target_triple: &str) -> u64 {
+    let triple = target_triple.to_ascii_lowercase();
+    let mainstream_os = triple.contains("android")
+        || triple.contains("darwin")
+        || (triple.contains("linux") && !triple.contains("ohos"))
+        || triple.contains("windows")
+        || triple.contains("ios")
+        || triple.contains("tvos")
+        || triple.contains("watchos")
+        || triple.contains("visionos");
+    if mainstream_os {
+        0x10_0000
+    } else {
+        0x200_0000_0000
+    }
+}
+
 /// `std::mem::size_of::<perry_runtime::object::ObjectHeader>()` for the target.
 ///
 /// #8047: `ObjectHeader` is two `u32`s (`class_id` @0, `parent_class_id` @4 —
@@ -199,6 +240,52 @@ mod tests {
         // ILP32 stays 16 through explicit tail padding.
         assert_eq!(object_header_size_bytes("x86_64-unknown-linux-gnux32"), 16);
         assert_eq!(object_header_size_bytes("arm64_32-apple-watchos"), 16);
+    }
+
+    #[test]
+    fn heap_address_ceiling_matches_runtime_targets() {
+        assert_eq!(
+            heap_addr_upper_bound_exclusive("aarch64-unknown-linux-gnu"),
+            0x1_0000_0000_0000
+        );
+        assert_eq!(
+            heap_addr_upper_bound_exclusive("aarch64-linux-android"),
+            0x1_0000_0000_0000
+        );
+        for triple in [
+            "aarch64-apple-darwin",
+            "arm64_32-apple-watchos",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-ohos",
+            "x86_64-pc-windows-msvc",
+        ] {
+            assert_eq!(
+                heap_addr_upper_bound_exclusive(triple),
+                0x8000_0000_0000,
+                "{triple}"
+            );
+        }
+    }
+
+    #[test]
+    fn heap_address_floor_matches_runtime_targets_and_handle_band() {
+        for triple in [
+            "aarch64-apple-darwin",
+            "aarch64-apple-ios",
+            "arm64_32-apple-watchos",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-linux-android",
+            "x86_64-pc-windows-msvc",
+        ] {
+            assert_eq!(heap_addr_lower_bound_inclusive(triple), 0x10_0000);
+        }
+        for triple in ["aarch64-unknown-linux-ohos", "riscv64gc-unknown-none-elf"] {
+            assert_eq!(
+                heap_addr_lower_bound_inclusive(triple),
+                0x200_0000_0000,
+                "{triple}"
+            );
+        }
     }
 
     /// Two emitters divide the header size by 8 to get a WORD index. #8047

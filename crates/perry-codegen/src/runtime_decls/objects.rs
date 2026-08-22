@@ -29,6 +29,10 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // when it is non-zero (descriptors / typed-feedback in use). Defined in
     // perry-runtime as `PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`.
     module.add_external_global("PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED", I8);
+    // Sticky runtime flag (i8, 0 = valid) for class-prototype method guards.
+    // Direct-method lowering reads it with acquire ordering before touching a
+    // receiver header; prototype mutation stores 1 with release ordering.
+    module.add_external_global("PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED", I8);
     // #7834/#7873: process-global count of threads with per-object records.
     // `0` proves both per-object side tables are empty everywhere, so a
     // construction site can skip `js_gc_forget_object_layout` outright.

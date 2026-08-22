@@ -542,7 +542,10 @@ fn guarded_pshape_call_site_is_preceded_by_a_shape_id_guard() {
         });
         let prefix = &probe[..call_pos];
         let guarded = prefix.contains("call i32 @js_typed_feedback_method_direct_call_guard(")
-            || prefix.contains("call i32 @js_method_direct_shape_guard(");
+            || prefix.contains("call i32 @js_method_direct_shape_guard(")
+            || prefix.contains(
+                "load atomic i8, ptr @PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED acquire",
+            );
         assert!(
             guarded,
             "{target}: no ShapeId guard call precedes it in `probe` — a \
@@ -551,6 +554,60 @@ fn guarded_pshape_call_site_is_preceded_by_a_shape_id_guard() {
              unguarded:\n{probe}"
         );
     }
+}
+
+/// The single-pair shape-only arm is small enough to inline at the call site.
+/// Pin the complete safety gate: acquire the prototype-mutation latch, accept
+/// both the boxed-pointer and internal raw-pointer ABIs, reject addresses
+/// outside the target heap range before dereference, reject own descriptors,
+/// then compare the exact class/ShapeId pair. The out-of-line guard must be
+/// absent from this caller.
+#[test]
+fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
+    let ir = emit(&guarded_site_module(), false);
+    let probe = function_body(&ir, "__probe(");
+    assert!(
+        probe.contains(
+            "load atomic i8, ptr @PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED acquire, align 1",
+        ),
+        "the inline guard must acquire the runtime's release-published sticky latch:\n{probe}"
+    );
+    assert!(
+        !probe.contains("call i32 @js_method_direct_shape_guard("),
+        "a monomorphic shape-only site must not retain the out-of-line guard call:\n{probe}"
+    );
+    assert!(
+        probe.contains("icmp eq i64")
+            && probe.contains(", 32765")
+            && probe.contains(", 0"),
+        "the dereference gate must accept the 0x7FFD boxed pointer tag and the internal raw-pointer form:\n{probe}"
+    );
+    let target = crate::codegen::default_target_triple();
+    let heap_floor = crate::target_layout::heap_addr_lower_bound_inclusive(&target);
+    let heap_ceiling = crate::target_layout::heap_addr_upper_bound_exclusive(&target);
+    assert!(
+        probe.contains("icmp uge i64")
+            && probe.contains(&format!(", {heap_floor}"))
+            && probe.contains("icmp ult i64")
+            && probe.contains(&format!(", {heap_ceiling}")),
+        "the dereference gate must reject candidates outside the target heap range:\n{probe}"
+    );
+    assert!(
+        probe.contains("method_direct.inline_deref")
+            && probe.contains("getelementptr i8, ptr")
+            && probe.contains("i64 -8")
+            && probe.contains("i64 -7")
+            && probe.contains("i64 -6")
+            && probe.contains("and i16")
+            && probe.contains(", 2048")
+            && probe.contains("icmp ne i32")
+            && probe.contains("i64 4")
+            && probe.contains("add i32")
+            && probe.contains(", -2147483648")
+            && probe.contains("icmp ult i32")
+            && probe.contains(", 1073741824"),
+        "the header block must check the GC type, forwarding flag, own-descriptor bit, nonzero class id, ShapeId domain, and live ShapeId:\n{probe}"
+    );
 }
 
 /// Regression (#7128), Phase 3b guard-free site: a shape-proven LOCAL whose

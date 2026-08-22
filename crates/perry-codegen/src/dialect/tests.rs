@@ -221,6 +221,20 @@ fn compiled_module_ir_round_trips_through_the_reader() {
     assert!(n > 0, "round-tripped an empty module");
 }
 
+#[test]
+fn acquire_atomic_load_round_trips_through_the_reader() {
+    let ir = r#"
+@gate = external global i8
+
+define i8 @load_gate() {
+entry:
+  %value = load atomic i8, ptr @gate acquire, align 1
+  ret i8 %value
+}
+"#;
+    assert_eq!(roundtrip_ir(ir, "acquire_load"), 2);
+}
+
 /// The `format!` templates `expr/channel.rs` emits for its `<4 x i32>` SIMD
 /// byte-channel reduction, in emission order. The fixture below is BUILT from
 /// these strings rather than duplicating them, and each is asserted to still

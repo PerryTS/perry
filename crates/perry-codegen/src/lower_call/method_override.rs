@@ -11,7 +11,109 @@ use crate::expr::{
 };
 use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
+
+const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
+const GC_TYPE_OBJECT: &str = "2";
+const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
+const OBJ_FLAG_HAS_DESCRIPTORS_I16: &str = "2048"; // 0x0800
+const SHAPE_ID_BASE_NEG_I32: &str = "-2147483648"; // subtract 0x8000_0000
+const SHAPE_ID_RANGE_LEN: &str = "1073741824"; // 0x4000_0000
+
+/// Emit the single-arm equivalent of `js_method_direct_shape_guard` directly
+/// into the generated module. The guard remains dynamic at every call site:
+/// arbitrary callback code may replace a prototype method or mutate the
+/// receiver between loop iterations.
+///
+/// The first block proves that the value is a tagged heap pointer or the raw
+/// object-address form used by internal method ABIs before any dereference.
+/// The second block reproduces the runtime helper's production contract: the
+/// class-prototype invalidation latch is clear, the receiver is a non-forwarded
+/// ordinary object without own descriptors, and its exact `(class_id, ShapeId)`
+/// pair still matches the compiler-published pair. Any failed proof takes the
+/// unchanged dynamic method fallback.
+fn emit_inline_direct_method_shape_guard(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    expected_class_id: &str,
+    expected_shape_id: &str,
+    fast_label: &str,
+    fallback_label: &str,
+) {
+    let deref_idx = ctx.new_block("method_direct.inline_deref");
+    let deref_label = ctx.block_label(deref_idx);
+    let heap_floor =
+        crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
+    let heap_ceiling =
+        crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
+
+    {
+        let blk = ctx.block();
+        let invalidated =
+            blk.load_atomic_acquire(I8, "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED", 1);
+        let prototype_ok = blk.icmp_eq(I8, &invalidated, "0");
+        let recv_bits = blk.bitcast_double_to_i64(recv_box);
+        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
+        let tag = blk.lshr(I64, &recv_bits, "48");
+        let is_tagged_ptr = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
+        // Internal method ABIs also carry an unboxed raw object address in a
+        // double-sized slot. `normalize_raw_object_addr` accepts exactly this
+        // top-word-zero form; all other non-pointer NaN-box tags remain
+        // rejected before dereference.
+        let is_raw_ptr = blk.icmp_eq(I64, &tag, "0");
+        let is_ptr = blk.or(I1, &is_tagged_ptr, &is_raw_ptr);
+        let above_floor = blk.icmp_uge(I64, &recv_handle, &heap_floor);
+        let below_ceiling = blk.icmp_ult(I64, &recv_handle, &heap_ceiling);
+        let in_heap_range = blk.and(I1, &above_floor, &below_ceiling);
+        let ptr_safe = blk.and(I1, &is_ptr, &in_heap_range);
+        let can_deref = blk.and(I1, &prototype_ok, &ptr_safe);
+        blk.cond_br(&can_deref, &deref_label, fallback_label);
+    }
+
+    ctx.current_block = deref_idx;
+    {
+        let blk = ctx.block();
+        let recv_bits = blk.bitcast_double_to_i64(recv_box);
+        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
+        let obj_ptr = blk.inttoptr(I64, &recv_handle);
+
+        let gtype_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
+        let gtype = blk.load(I8, &gtype_ptr);
+        let gtype_ok = blk.icmp_eq(I8, &gtype, GC_TYPE_OBJECT);
+
+        let gflags_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-7")]);
+        let gflags = blk.load(I8, &gflags_ptr);
+        let forwarded = blk.and(I8, &gflags, GC_FLAG_FORWARDED_I8);
+        let not_forwarded = blk.icmp_eq(I8, &forwarded, "0");
+
+        let reserved_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
+        let reserved = blk.load(I16, &reserved_ptr);
+        let descriptor_bits = blk.and(I16, &reserved, OBJ_FLAG_HAS_DESCRIPTORS_I16);
+        let no_own_descriptors = blk.icmp_eq(I16, &descriptor_bits, "0");
+
+        let class_ptr = blk.gep(I8, &obj_ptr, &[(I64, "0")]);
+        let class_id = blk.load(I32, &class_ptr);
+        let class_valid = blk.icmp_ne(I32, &class_id, "0");
+        let class_ok = blk.icmp_eq(I32, &class_id, expected_class_id);
+
+        let shape_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
+        let shape_id = blk.load(I32, &shape_ptr);
+        // `is_shape_id` is `[0x8000_0000, 0xC000_0000)`. Subtract the base
+        // modulo i32 and compare with the range length, matching the runtime
+        // helper without a call.
+        let shape_id_rel = blk.add(I32, &shape_id, SHAPE_ID_BASE_NEG_I32);
+        let shape_valid = blk.icmp_ult(I32, &shape_id_rel, SHAPE_ID_RANGE_LEN);
+        let shape_ok = blk.icmp_eq(I32, &shape_id, expected_shape_id);
+
+        let mut pass = blk.and(I1, &gtype_ok, &not_forwarded);
+        pass = blk.and(I1, &pass, &no_own_descriptors);
+        pass = blk.and(I1, &pass, &class_valid);
+        pass = blk.and(I1, &pass, &class_ok);
+        pass = blk.and(I1, &pass, &shape_valid);
+        pass = blk.and(I1, &pass, &shape_ok);
+        blk.cond_br(&pass, fast_label, fallback_label);
+    }
+}
 
 fn typed_i1_method_signature_note(reps: &[crate::codegen::TypedParamRep]) -> String {
     let first = reps.first().map(|rep| rep.label()).unwrap_or("void");
@@ -292,9 +394,11 @@ pub(super) fn emit_guarded_direct_method_call(
     ctx.current_block = guard_idx;
     // Multi-arm form: ONE probe resolves the receiver's class id and keys
     // token (every precondition `js_method_direct_shape_guard` checks except
-    // the comparison itself), then an inline compare chain picks the arm. The
-    // single-arm form keeps its original single call.
+    // the comparison itself), then an inline compare chain picks the arm. A
+    // shape-only single-arm site emits the equivalent guard inline; other
+    // single-arm sites retain the runtime helper.
     let multi_arm = !subclass_arms.is_empty();
+    let inline_single_arm = shape_only_guard && !multi_arm;
     if multi_arm {
         let shape_slot = ctx.func.alloca_entry(I32);
         let cid = ctx.block().call(
@@ -328,9 +432,21 @@ pub(super) fn emit_guarded_direct_method_call(
         }
         ctx.current_block = guard_idx;
     }
-    let guard_ok = if multi_arm {
+    if inline_single_arm {
+        emit_inline_direct_method_shape_guard(
+            ctx,
+            recv_box,
+            &expected_class_id_str,
+            &expected_shape_id,
+            &fast_label,
+            &fallback_label,
+        );
+    }
+    let guard_ok = if multi_arm || inline_single_arm {
         // The chain above already terminated the guard block and every test
-        // block; `fast_idx` / `fallback_idx` are entered from it unchanged.
+        // block, or the inline single-arm guard terminated both its pointer
+        // gate and header block; `fast_idx` / `fallback_idx` are entered from
+        // either form unchanged.
         String::new()
     } else if shape_only_guard {
         ctx.block().call(
@@ -360,7 +476,7 @@ pub(super) fn emit_guarded_direct_method_call(
             ],
         )
     };
-    if !multi_arm {
+    if !multi_arm && !inline_single_arm {
         let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
         ctx.block()
             .cond_br(&guard_pass, &fast_label, &fallback_label);

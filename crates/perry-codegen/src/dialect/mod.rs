@@ -1379,6 +1379,17 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                             let _ = i.set_alignment(*n);
                         }
                     }
+                    LF::AtomicAcquire(n) => {
+                        if let Some(i) = v.as_instruction_value() {
+                            unsafe {
+                                llvm_sys::core::LLVMSetOrdering(
+                                    i.as_value_ref(),
+                                    llvm_sys::LLVMAtomicOrdering::LLVMAtomicOrderingAcquire,
+                                )
+                            };
+                            let _ = i.set_alignment(*n);
+                        }
+                    }
                     LF::AtomicSeqCst(n) => {
                         if let Some(i) = v.as_instruction_value() {
                             unsafe {

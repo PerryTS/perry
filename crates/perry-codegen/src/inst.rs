@@ -36,6 +36,7 @@ pub enum LoadFlavor {
     Aligned(u32),
     Volatile,
     AtomicMonotonic(u32),
+    AtomicAcquire(u32),
     AtomicSeqCst(u32),
     /// `!invariant.load !0` tagged (issue #52).
     Invariant,
@@ -217,6 +218,12 @@ impl LlInst {
                     let _ = write!(
                         out,
                         "  {dst} = load atomic {ty}, ptr {ptr} monotonic, align {n}"
+                    );
+                }
+                LoadFlavor::AtomicAcquire(n) => {
+                    let _ = write!(
+                        out,
+                        "  {dst} = load atomic {ty}, ptr {ptr} acquire, align {n}"
                     );
                 }
                 LoadFlavor::AtomicSeqCst(n) => {

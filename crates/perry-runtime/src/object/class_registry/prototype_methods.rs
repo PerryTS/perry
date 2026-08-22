@@ -52,16 +52,37 @@ crate::perry_thread_local! {
         RwLock::new(None);
 }
 
+// Production codegen reads this byte directly before entering a guarded
+// direct-method arm. Keep the test build per-thread so one mutation test cannot
+// poison unrelated tests running in parallel; generated programs link the
+// non-test symbol below.
+#[cfg(not(test))]
+#[no_mangle]
+pub static PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(0);
+
+#[cfg(test)]
 per_test_global! {
     pub(crate) static CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
 }
 
 pub(crate) fn class_prototype_fast_guards_invalidated() -> bool {
-    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.load(std::sync::atomic::Ordering::Acquire)
+    #[cfg(not(test))]
+    {
+        PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.load(std::sync::atomic::Ordering::Acquire)
+            != 0
+    }
+    #[cfg(test)]
+    {
+        CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.load(std::sync::atomic::Ordering::Acquire)
+    }
 }
 
 pub(crate) fn invalidate_class_prototype_fast_guards() {
+    #[cfg(not(test))]
+    PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(1, std::sync::atomic::Ordering::Release);
+    #[cfg(test)]
     CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(true, std::sync::atomic::Ordering::Release);
     // #7480: prototype surgery is the one event that retires an element-shape
     // proof without touching any array — the class's shape stopped being a

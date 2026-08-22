@@ -634,6 +634,19 @@ impl LlBlock {
         r
     }
 
+    /// Acquire atomic load for a sticky runtime gate whose publishing store is
+    /// release-ordered. The explicit alignment is required by LLVM atomics.
+    pub fn load_atomic_acquire(&mut self, ty: LlvmType, ptr: &str, alignment: u32) -> String {
+        let r = self.reg();
+        self.push_inst(crate::inst::LlInst::Load {
+            dst: r.clone(),
+            ty,
+            ptr: ptr.to_string(),
+            flavor: crate::inst::LoadFlavor::AtomicAcquire(alignment),
+        });
+        r
+    }
+
     /// Sequentially-consistent atomic load for globals shared with runtime
     /// atomics. The explicit alignment is required by LLVM atomic loads.
     pub fn load_atomic_seq_cst(&mut self, ty: LlvmType, ptr: &str, alignment: u32) -> String {
