@@ -656,7 +656,29 @@ fn checked_typed_array_i32_kind(
     if ctx.buffer_view_slots.contains_key(id) {
         return None;
     }
-    match crate::type_analysis::receiver_class_name(ctx, object).as_deref()? {
+    // Class proof: function-local first, then — for a MODULE-GLOBAL typed array
+    // (allocated once at module scope, read inside functions) — the
+    // module-global runtime-type proof. Sound because the load below is
+    // guard-protected (a wrong class misses the runtime KIND cache and defers
+    // to `js_typed_array_read_int32`); a reassigned binding is still excluded.
+    // Mirrors the f64 sibling (`ta_param_f64_read.rs`).
+    let class = crate::type_analysis::receiver_class_name(ctx, object).or_else(|| {
+        if ctx.reassigned_locals.contains(id) {
+            return None;
+        }
+        match ctx.module_global_proven_types.get(id) {
+            Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
+            _ => None,
+        }
+    })?;
+    i32_kind_from_class(&class)
+}
+
+/// `(kind_tag, elem_llvm_ty, signed, elem_size_bytes)` for an integer-kind
+/// typed-array class, or `None` for a non-i32-representable / non-typed-array
+/// class. Shared by the local-proof and module-global-proof arms.
+fn i32_kind_from_class(name: &str) -> Option<(u8, crate::types::LlvmType, bool, u32)> {
+    match name {
         "Int8Array" => Some((0, I8, true, 1)),
         "Uint8Array" => Some((1, I8, false, 1)),
         "Uint8ClampedArray" => Some((8, I8, false, 1)),

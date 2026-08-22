@@ -70,7 +70,32 @@ fn checked_typed_array_f64_kind(
     if ctx.buffer_view_slots.contains_key(id) {
         return None;
     }
-    match crate::type_analysis::receiver_class_name(ctx, object).as_deref()? {
+    // Class proof: first the function-local proof, then — for a MODULE-GLOBAL
+    // typed array (allocated once at module scope and read inside functions,
+    // the common bundled shape) — the module-global runtime-type proof. The
+    // load below is guard-protected (a wrong class simply misses the runtime
+    // KIND cache and defers to the safe helper), so an optimistic module-global
+    // proof can only cost a missed speedup, never correctness. Reassigned
+    // bindings are still excluded so a rebind can't make the proof stale for
+    // the local-proof case; for the module-global case the runtime guard is
+    // the safety net regardless. #8595-followup / typed-array read inlining.
+    let class = crate::type_analysis::receiver_class_name(ctx, object).or_else(|| {
+        if ctx.reassigned_locals.contains(id) {
+            return None;
+        }
+        match ctx.module_global_proven_types.get(id) {
+            Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
+            _ => None,
+        }
+    })?;
+    f64_kind_from_class(&class)
+}
+
+/// `(kind_tag, elem_llvm_ty, elem_size_bytes, conv)` for a typed-array class
+/// name, or `None` for a non-typed-array class. Shared by the local-proof and
+/// module-global-proof arms so both admit exactly the same kinds.
+fn f64_kind_from_class(name: &str) -> Option<(u8, crate::types::LlvmType, u32, F64Conv)> {
+    match name {
         "Int8Array" => Some((0, I8, 1, F64Conv::SInt)),
         "Uint8Array" => Some((1, I8, 1, F64Conv::UInt)),
         "Uint8ClampedArray" => Some((8, I8, 1, F64Conv::UInt)),
