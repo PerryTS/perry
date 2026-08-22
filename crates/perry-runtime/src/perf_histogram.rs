@@ -269,14 +269,21 @@ impl Histogram {
         let mut it = self.iter();
         while it.step() {
             if it.count != 0 {
-                // Rust 1.98's algebraic_* float methods let LLVM reassociate
-                // and vectorize this reduction (Node's own HdrHistogram-based
-                // stddev is already a bucketed approximation, not a value
-                // any spec requires bit-exact, so reordering is safe here).
-                let dev = self.median_equivalent(it.value) as f64;
-                let dev = dev.algebraic_sub(mean);
-                let sq = dev.algebraic_mul(dev).algebraic_mul(it.count as f64);
-                geometric_dev_total = geometric_dev_total.algebraic_add(sq);
+                // #8550 reached for the `algebraic_*` float methods here to let
+                // LLVM reassociate and vectorize this reduction. They are NOT
+                // stable — `float_algebraic` is still an unstable library
+                // feature (E0658), and the crate declares no `#![feature]` gate,
+                // so this failed to compile on stable AND on the pinned nightly
+                // and took `cargo-test` down on `main`. The reordering was only
+                // ever an optimization (the comment that shipped with it said
+                // as much: Node's HdrHistogram stddev is a bucketed
+                // approximation nothing requires bit-exact), so plain
+                // arithmetic is behaviour-preserving. Restore the intent behind
+                // a `#![feature(float_algebraic)]` gate if the crate ever moves
+                // to a required nightly.
+                let dev = self.median_equivalent(it.value) as f64 - mean;
+                let sq = dev * dev * it.count as f64;
+                geometric_dev_total += sq;
             }
         }
         (geometric_dev_total / self.total_count as f64).sqrt()
