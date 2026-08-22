@@ -316,7 +316,11 @@ for cold_start in $(seq 1 "$cold_starts"); do
 
     ready=false
     for _ in $(seq 1 240); do
-        if curl --fail --silent --output /dev/null \
+        # A bound listener can accept the TCP connection before its Tokio
+        # accept task has received a reactor turn. Bound each probe so a
+        # provider regression fails with the host log instead of parking this
+        # gate forever inside curl (#8381).
+        if curl --fail --silent --max-time 1 --output /dev/null \
             "http://127.0.0.1:$port/api/benchmark?id=ready&iterations=1"; then
             ready=true
             break

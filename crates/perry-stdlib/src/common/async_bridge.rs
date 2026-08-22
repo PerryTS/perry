@@ -342,16 +342,21 @@ extern "C" fn stdlib_wait_wake() {
 /// Wait-driver FAST side — a brief native drive invoked by `js_wait_for_event`
 /// when JS work is pending (a notify or queued microtasks). On the single-thread
 /// runtime, in-flight native tasks (a fetch's reqwest `send`, its h2 connection
-/// driver, sibling fetches) run ONLY inside a tick; under constant JS promise
-/// churn the fast-path is taken every iteration, so without this they are starved
-/// forever (the bundle hang). When something native IS in flight, drive one short
-/// (1 ms) tick: `block_on` drains the run queue (starts freshly-spawned sibling
-/// fetches) and parks briefly on the I/O reactor (advancing TLS/h2 round-trips),
-/// ending early if a native result is queued. No-op when nothing native is in
-/// flight, so pure-JS-async pays only an atomic load.
+/// driver, sibling fetches, or a server accept loop) run ONLY inside a tick;
+/// under constant JS promise churn the fast-path is taken every iteration, so
+/// without this they are starved forever (the bundle hang). When something
+/// native IS in flight, drive one short (1 ms) tick: `block_on` drains the run
+/// queue (starts freshly-spawned tasks) and parks briefly on the I/O reactor
+/// (advancing TLS/h2 round-trips and accepting server connections), ending early
+/// if a native result is queued. No-op when nothing native is in flight, so
+/// pure-JS-async pays only atomic loads.
 extern "C" fn stdlib_fast_drive() {
     let n = EXT_BLOCKING_TASKS_INFLIGHT.load(Ordering::Acquire);
-    let native = n > 0 || ext_http_client_inflight_fast();
+    let native = native_fast_drive_needed(
+        n,
+        ext_http_client_inflight_fast(),
+        ext_http_server_active_fast(),
+    );
     if !native {
         return;
     }
@@ -373,6 +378,27 @@ fn ext_http_client_inflight_fast() -> bool {
 #[cfg(not(feature = "external-http-client-pump"))]
 fn ext_http_client_inflight_fast() -> bool {
     false
+}
+
+#[cfg(feature = "external-http-server-pump")]
+fn ext_http_server_active_fast() -> bool {
+    extern "C" {
+        fn js_node_http_server_has_active() -> i32;
+    }
+    unsafe { js_node_http_server_has_active() != 0 }
+}
+#[cfg(not(feature = "external-http-server-pump"))]
+fn ext_http_server_active_fast() -> bool {
+    false
+}
+
+#[inline]
+fn native_fast_drive_needed(
+    blocking_tasks_inflight: usize,
+    http_client_inflight: bool,
+    http_server_active: bool,
+) -> bool {
+    blocking_tasks_inflight > 0 || http_client_inflight || http_server_active
 }
 
 /// Queue a promise resolution to be processed later
@@ -993,6 +1019,14 @@ mod tests {
     fn clear_pending() {
         PENDING_RESOLUTIONS.lock().unwrap().clear();
         PENDING_DEFERRED.lock().unwrap().clear();
+    }
+
+    #[test]
+    fn active_http_server_keeps_the_fast_wait_path_driving_native_tasks() {
+        assert!(!native_fast_drive_needed(0, false, false));
+        assert!(native_fast_drive_needed(0, false, true));
+        assert!(native_fast_drive_needed(0, true, false));
+        assert!(native_fast_drive_needed(1, false, false));
     }
 
     #[test]
