@@ -283,6 +283,25 @@ pub struct Class {
     pub specialized_from: Option<String>,
 }
 
+impl Class {
+    /// Whether evaluating this class creates any private names whose brands
+    /// must be distinct from every other evaluation of the same HIR template.
+    pub fn has_private_elements(&self) -> bool {
+        self.fields.iter().any(|field| field.is_private)
+            || self.static_fields.iter().any(|field| field.is_private)
+            || self
+                .methods
+                .iter()
+                .any(|method| method.name.starts_with('#'))
+            || self
+                .static_methods
+                .iter()
+                .any(|method| method.name.starts_with('#'))
+            || self.getters.iter().any(|(name, _)| name.starts_with('#'))
+            || self.setters.iter().any(|(name, _)| name.starts_with('#'))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClassComputedMemberKind {
     Method,

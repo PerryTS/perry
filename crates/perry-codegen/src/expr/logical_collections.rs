@@ -884,6 +884,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             object,
         } => {
             let obj = lower_expr(ctx, object)?;
+            // The rooting window between these two operands is empty:
+            // lowering `this` only reads the current binding and cannot GC.
             let brand_owner = lower_expr(ctx, &Expr::This)?;
             let class_id = ctx.class_ids.get(class_name).copied().unwrap_or(0);
             let key_label = emit_string_literal_global(ctx, field_name);
@@ -911,6 +913,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // unchanged (or throw TypeError). The enclosing PropertyGet /
             // PropertySet / method-call lowering then operates on the result.
             let obj = lower_expr(ctx, object)?;
+            // The rooting window between these two operands is empty:
+            // lowering `this` only reads the current binding and cannot GC.
             let brand_owner = lower_expr(ctx, &Expr::This)?;
             // Prefer the declaring class's unique HIR id carried on the node.
             // Resolving `class_name` through `class_ids` is ambiguous: that map

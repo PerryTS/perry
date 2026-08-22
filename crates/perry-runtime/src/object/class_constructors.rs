@@ -1120,6 +1120,11 @@ pub(crate) unsafe fn replay_class_object_constructor(
     args_ptr: *const f64,
     args_len: usize,
 ) {
+    // Callers scope their argument read with `with_mut_ptr`; establish this
+    // function's own roots before any constructor-replay path can allocate.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let classobj_handle = scope.root_nanbox_f64(classobj_value);
+    let inst_handle = scope.root_raw_mut_ptr(inst);
     // Spec: a derived class with no own `constructor` gets the implicit
     // `constructor(...args) { super(...args) }` — the nearest ancestor's ctor
     // must run with the same argument list. `lookup_class_constructor` holds
@@ -1147,7 +1152,9 @@ pub(crate) unsafe fn replay_class_object_constructor(
     let Some((ctor_ptr, total_params, sig_caps)) = found else {
         // #6469: all-implicit ctor chain to a native base — run the spec
         // default Error-init instead of silently constructing message-less.
-        default_error_init_for_implicit_chain(class_cid, inst, args_ptr, args_len);
+        inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+            default_error_init_for_implicit_chain(class_cid, inst, args_ptr, args_len);
+        });
         return;
     };
 
@@ -1158,7 +1165,7 @@ pub(crate) unsafe fn replay_class_object_constructor(
     // decl-site snapshot (CLASS_CAPTURE_VALUES) via the fallback below.
     let caps_val = if ctor_cid == class_cid {
         crate::object::js_object_get_own_field_or_undef(
-            classobj_value,
+            classobj_handle.get_nanbox_f64(),
             b"__perry_ctor_caps".as_ptr(),
             17,
         )
@@ -1248,17 +1255,19 @@ pub(crate) unsafe fn replay_class_object_constructor(
         };
         final_args.push(v);
     }
-    let _ = call_vtable_method(
-        ctor_ptr,
-        inst as i64,
-        final_args.as_ptr(),
-        final_args.len(),
-        total_params,
-        false,
-        // Capture-forwarding constructor args are materialized positionally
-        // above (including any caps), so no trailing rest re-packing here.
-        false,
-    );
+    inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+        let _ = call_vtable_method(
+            ctor_ptr,
+            inst as i64,
+            final_args.as_ptr(),
+            final_args.len(),
+            total_params,
+            false,
+            // Capture-forwarding constructor args are materialized positionally
+            // above (including any caps), so no trailing rest re-packing here.
+            false,
+        );
+    });
 }
 
 /// Replay a registered class declaration constructor for an INT32-tagged

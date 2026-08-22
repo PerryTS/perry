@@ -146,23 +146,69 @@ function makeStaticClass(): any {
     };
 }
 
-const firstStatic = makeStaticClass();
-const secondStatic = makeStaticClass();
-check("static own method", firstStatic.accessMethod() === "test262");
-check("static own getter", secondStatic.accessGetter() === "test262");
-firstStatic.accessSetter("changed");
-check("static own setter", firstStatic._written === "changed");
-check("static own in", firstStatic.hasValue(firstStatic));
-check("static cross-evaluation in", !firstStatic.hasValue(secondStatic));
-check(
-    "static cross-evaluation method",
-    throwsTypeError(() => firstStatic.accessMethod.call(secondStatic))
-);
-check(
-    "static cross-evaluation getter",
-    throwsTypeError(() => firstStatic.accessGetter.call(secondStatic))
-);
-check(
-    "static cross-evaluation setter",
-    throwsTypeError(() => firstStatic.accessSetter.call(secondStatic, "wrong"))
-);
+function makeStaticDeclarationClass(): any {
+    class StaticDeclarationC {
+        static #value = "test262";
+        static _written = "";
+
+        static #method(): string {
+            return this.#value;
+        }
+
+        static get #getter(): string {
+            return this.#value;
+        }
+
+        static set #setter(value: string) {
+            this._written = value;
+        }
+
+        static accessMethod(): string {
+            return this.#method();
+        }
+
+        static accessGetter(): string {
+            return this.#getter;
+        }
+
+        static accessSetter(value: string): void {
+            this.#setter = value;
+        }
+
+        static hasValue(other: any): boolean {
+            return #value in other;
+        }
+    }
+
+    return StaticDeclarationC;
+}
+
+function checkFreshStaticBrands(label: string, make: () => any): void {
+    const first = make();
+    const second = make();
+    check(label + " own method", first.accessMethod() === "test262");
+    check(label + " own getter", second.accessGetter() === "test262");
+    first.accessSetter("changed");
+    check(label + " own setter", first._written === "changed");
+    check(label + " own in", first.hasValue(first));
+    check(label + " cross-evaluation in", !first.hasValue(second));
+    check(
+        label + " cross-evaluation method",
+        throwsTypeError(() => first.accessMethod.call(second))
+    );
+    check(
+        label + " cross-evaluation getter",
+        throwsTypeError(() => first.accessGetter.call(second))
+    );
+    check(
+        label + " own getter after throw",
+        first.accessGetter() === "test262"
+    );
+    check(
+        label + " cross-evaluation setter",
+        throwsTypeError(() => first.accessSetter.call(second, "wrong"))
+    );
+}
+
+checkFreshStaticBrands("static expression", makeStaticClass);
+checkFreshStaticBrands("static declaration", makeStaticDeclarationClass);

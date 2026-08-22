@@ -877,11 +877,19 @@ pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, clas
     if obj.is_null() || !super::super::class_registry::is_class_object_value(class_value) {
         return;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let class_handle = scope.root_nanbox_f64(class_value);
     let key = crate::string::js_string_from_bytes(
         PRIVATE_EVALUATION_BRAND_KEY.as_ptr(),
         PRIVATE_EVALUATION_BRAND_KEY.len() as u32,
     );
-    js_object_set_field_by_name(obj, key, class_value);
+    let key_handle = scope.root_string_ptr(key);
+    obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        key_handle.with_const_ptr::<crate::StringHeader, _>(|key| {
+            js_object_set_field_by_name(obj, key, class_handle.get_nanbox_f64());
+        });
+    });
 }
 
 /// Return the per-evaluation brand carried by `value`, provided it belongs to

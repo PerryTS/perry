@@ -896,8 +896,8 @@ pub unsafe extern "C" fn js_new_function_construct(
     // initializers (literal AND captured) and the constructor body —
     // matching what the static `new ClassName()` path does inline.
     if is_class_object_value(func_value) {
-        // Root the class object across allocations; its pointer is both the
-        // constructor value and the private-brand identity for the instance.
+        // Root the class object: its pointer is both the constructor value and
+        // the private-brand identity for the instance.
         let scope = crate::gc::RuntimeHandleScope::new();
         let class_handle = scope.root_nanbox_f64(func_value);
         let obj = crate::value::JSValue::from_bits(class_handle.get_nanbox_f64().to_bits())
@@ -915,27 +915,28 @@ pub unsafe extern "C" fn js_new_function_construct(
             // address. Reproduced by `new C()` where `C = mk()` is a class
             // EXPRESSION value.
             let inst_handle = scope.root_raw_mut_ptr(inst);
-            // Every evaluation of a private class has a distinct brand even
-            // though Perry deliberately shares its compile-time class id and
-            // vtable. Store the evaluated class object as the instance's
-            // hidden brand token before replaying field initializers / the
-            // constructor, where private access may already occur.
-            super::super::field_get_set::stamp_private_evaluation_brand(
-                inst_handle.get_raw_mut_ptr(),
-                class_handle.get_nanbox_f64(),
-            );
+            // Every evaluation gets a distinct brand despite sharing its
+            // class id. Stamp it before replay, where private access may occur.
+            inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+                super::super::field_get_set::stamp_private_evaluation_brand(
+                    inst,
+                    class_handle.get_nanbox_f64(),
+                );
+            });
             // Replay the class's registered constructor (instance-field
             // initializers + body) on the fresh instance, filling the
             // capture params from the snapshotted `__perry_ctor_caps`. The
             // mechanism lives in `class_constructors` to keep this file under
             // the 2,000-line CI gate.
-            super::super::class_constructors::replay_class_object_constructor(
-                class_handle.get_nanbox_f64(),
-                class_cid,
-                inst_handle.get_raw_mut_ptr(),
-                args_ptr,
-                args_len,
-            );
+            inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+                super::super::class_constructors::replay_class_object_constructor(
+                    class_handle.get_nanbox_f64(),
+                    class_cid,
+                    inst,
+                    args_ptr,
+                    args_len,
+                );
+            });
             let inst: *mut ObjectHeader = inst_handle.get_raw_mut_ptr();
             // `class X extends Request/Response {}` constructed via the dynamic
             // (class-expression value) path: the replayed ctor's `super()`

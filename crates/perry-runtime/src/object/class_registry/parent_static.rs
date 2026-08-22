@@ -994,7 +994,6 @@ pub(crate) unsafe fn class_static_accessor_getter_value(
                 if getter == 0 {
                     return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
                 }
-                let prev_this = crate::object::js_implicit_this_set(receiver);
                 // Static accessor bodies use the same receiver-resolving
                 // prologue as static methods. In particular, a fresh class
                 // expression must expose its per-evaluation class object as
@@ -1003,7 +1002,6 @@ pub(crate) unsafe fn class_static_accessor_getter_value(
                 let f: extern "C" fn() -> f64 = std::mem::transmute(getter);
                 let result = f();
                 crate::object::static_this_disarm();
-                crate::object::js_implicit_this_set(prev_this);
                 return Some(result);
             }
         }
@@ -1037,7 +1035,6 @@ pub(crate) unsafe fn class_static_accessor_setter_apply(
         if let Some(accessors) = map.get(&cid) {
             if let Some(&(_, setter)) = accessors.get(name) {
                 if setter != 0 {
-                    let prev_this = crate::object::js_implicit_this_set(receiver);
                     // Mirror the getter path: the compiled static-accessor
                     // prologue consumes this override and binds `this` to the
                     // actual constructor value for this evaluation.
@@ -1045,7 +1042,6 @@ pub(crate) unsafe fn class_static_accessor_setter_apply(
                     let f: extern "C" fn(f64) -> f64 = std::mem::transmute(setter);
                     let _ = f(value);
                     crate::object::static_this_disarm();
-                    crate::object::js_implicit_this_set(prev_this);
                 }
                 return true;
             }

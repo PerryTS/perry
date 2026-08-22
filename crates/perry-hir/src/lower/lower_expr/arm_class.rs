@@ -95,18 +95,7 @@ pub(crate) fn lower_class_expr(
     // guard (assigning to it inside the body throws a TypeError).
     ctx.pending_class_inner_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
     let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
-    let has_private_elements = class.fields.iter().any(|field| field.is_private)
-        || class.static_fields.iter().any(|field| field.is_private)
-        || class
-            .methods
-            .iter()
-            .any(|method| method.name.starts_with('#'))
-        || class
-            .static_methods
-            .iter()
-            .any(|method| method.name.starts_with('#'))
-        || class.getters.iter().any(|(name, _)| name.starts_with('#'))
-        || class.setters.iter().any(|(name, _)| name.starts_with('#'));
+    let has_private_elements = class.has_private_elements();
     if let Some(display) = display_override {
         ctx.class_display_names.insert(class.id, display);
     }

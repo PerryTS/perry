@@ -275,9 +275,9 @@ pub(super) fn set_field_by_name_object_tail(
         // "#m" remains a separate public data property.
         if crate::object::is_class_object_ptr(obj as *const u8)
             && !key.is_null()
-            && (key as usize) > 0x10000
+            && crate::value::addr_class::is_above_handle_band(key as usize)
         {
-            let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_ptr = crate::string::string_data(key);
             let name_len = (*key).byte_len as usize;
             if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
                 if name.starts_with('#') {
