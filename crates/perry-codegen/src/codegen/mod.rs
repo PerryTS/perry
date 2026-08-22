@@ -183,7 +183,7 @@ mod ctor_arity;
 #[cfg(test)]
 mod emission_order_tests;
 mod entry;
-mod entry_outline;
+pub mod entry_outline;
 mod func_registry;
 mod function;
 #[cfg(test)]

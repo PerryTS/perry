@@ -1939,6 +1939,22 @@ fn collect_module_finish(
             ..Default::default()
         });
         transform_async_to_generator(&mut hir_module);
+        // #8595: outline an oversized module-entry body into per-chunk
+        // functions so no single function carries the whole init (which is
+        // pathological for RS4GC relocation fan-out, ISel, and regalloc alike).
+        // Self-gating and fail-safe: a no-op unless PERRY_OUTLINE_ENTRY is set,
+        // and it declines (leaving the body unchanged) unless the whole body is
+        // provably safe to relocate. See perry-codegen `codegen::entry_outline`.
+        match perry_codegen::codegen::entry_outline::outline_entry_module(&mut hir_module) {
+            perry_codegen::codegen::entry_outline::OutlineOutcome::Outlined { chunks } => {
+                log::debug!(
+                    "perry: outlined entry body of '{}' into {} chunk functions",
+                    hir_module.name,
+                    chunks
+                );
+            }
+            perry_codegen::codegen::entry_outline::OutlineOutcome::Skipped(_) => {}
+        }
         progress.record(ProgressSnapshot {
             stage: "transform-generators",
             module_path: Some(&canonical),
