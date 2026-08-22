@@ -1,5 +1,42 @@
 use super::*;
 
+/// #8546: Coop hosts each in-process deployment on its own dedicated Perry
+/// thread. The Fetch scanner registry is thread-local, so a process-global
+/// registration latch makes the first Next application safe and leaves the
+/// second application's Request / Headers roots invisible to its collector.
+///
+/// Run the two applications sequentially so this test deterministically fails
+/// with the old `Once`: app 1 consumes the process-global latch, then app 2
+/// starts with an empty thread-local scanner registry and cannot register.
+#[test]
+fn fetch_root_scanner_registers_for_each_application_thread() {
+    for application in 1..=2 {
+        let (before, after_first, after_second) = std::thread::spawn(|| {
+            let before = perry_runtime::gc::gc_named_ffi_mutable_root_scanner_count();
+            gc::ensure_gc_registered();
+            let after_first = perry_runtime::gc::gc_named_ffi_mutable_root_scanner_count();
+            gc::ensure_gc_registered();
+            let after_second = perry_runtime::gc::gc_named_ffi_mutable_root_scanner_count();
+            (before, after_first, after_second)
+        })
+        .join()
+        .expect("application thread panicked");
+
+        assert_eq!(
+            before, 0,
+            "application {application} must start with its own empty scanner registry"
+        );
+        assert_eq!(
+            after_first, 1,
+            "application {application} did not install the Fetch root scanner"
+        );
+        assert_eq!(
+            after_second, 1,
+            "application {application} registered the Fetch root scanner twice"
+        );
+    }
+}
+
 #[test]
 fn fetch_handle_ids_use_high_small_handle_range() {
     use perry_runtime::value::addr_class;

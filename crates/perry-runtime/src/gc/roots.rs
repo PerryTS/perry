@@ -192,6 +192,19 @@ pub(super) fn copy_only_root_scanner_counts() -> (usize, usize) {
     (rust_scanners, ffi_scanners)
 }
 
+/// Return the number of named native-package mutable-root scanners registered
+/// for the current Perry thread.
+///
+/// The registry is deliberately thread-local: an embedding host may run
+/// multiple independent Perry heaps in one process, and each heap's collector
+/// must see the scanners installed by its stdlib provider. This small
+/// diagnostic surface lets provider tests verify that contract without running
+/// a collection over fabricated heap pointers.
+#[doc(hidden)]
+pub fn gc_named_ffi_mutable_root_scanner_count() -> usize {
+    FFI_NAMED_MUTABLE_ROOT_SCANNERS.with(|scanners| scanners.borrow().len())
+}
+
 pub(super) fn registered_root_scanners_block_budgeted_gc() -> bool {
     let has_copy_only = ROOT_SCANNERS.with(|scanners| !scanners.borrow().is_empty())
         || FFI_ROOT_SCANNERS.with(|scanners| !scanners.borrow().is_empty());
