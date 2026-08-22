@@ -6,6 +6,25 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Once;
 
+const GC_ENV_OVERRIDES: &[&str] = &[
+    "PERRY_GEN_GC",
+    "PERRY_GC_SCAVENGE",
+    "PERRY_GC_SCAVENGE_NURSERY_MB",
+    "PERRY_GC_MOVING_SAFEPOINT",
+    "PERRY_GC_MOVING_LOOP_POLLS",
+    "PERRY_GC_FORCE_EVACUATE",
+    "PERRY_CONSERVATIVE_STACK_SCAN",
+    "PERRY_WRITE_BARRIERS",
+    "PERRY_GC_INCREMENTAL",
+    "PERRY_GC_HEAP_LIMIT",
+];
+
+fn remove_gc_env_overrides(command: &mut Command) {
+    for key in GC_ENV_OVERRIDES {
+        command.env_remove(key);
+    }
+}
+
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
@@ -303,8 +322,10 @@ fn cross_module_arrow_callback_dispatch_is_resolved_once_and_fails_closed() {
         "entry hoisting must not clone callback method bodies"
     );
 
-    let forced = Command::new(dir.path().join("main_bin"))
-        .current_dir(dir.path())
+    let mut forced_command = Command::new(dir.path().join("main_bin"));
+    forced_command.current_dir(dir.path());
+    remove_gc_env_overrides(&mut forced_command);
+    let forced = forced_command
         .env("PERRY_GC_SCAVENGE", "1")
         .env("PERRY_GC_SCAVENGE_NURSERY_MB", "1")
         .env("PERRY_GC_FORCE_EVACUATE", "1")
