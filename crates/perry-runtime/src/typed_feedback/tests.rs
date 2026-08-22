@@ -1966,6 +1966,36 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
         0
     );
 
+    // An unrelated descriptor used to poison every direct-method guard in the
+    // process through `GLOBAL_DESCRIPTORS_IN_USE`. It cannot affect this
+    // receiver or its prototype chain, so the exact compiler pair remains a
+    // valid proof.
+    let unrelated = crate::object::js_object_alloc(0, 0);
+    crate::object::descriptor_state::set_property_attrs(
+        unrelated as usize,
+        "unrelated_method_guard_descriptor".to_string(),
+        crate::object::descriptor_state::PropertyAttrs::new(false, true, true),
+    );
+    assert_eq!(
+        unsafe {
+            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id)
+        },
+        1
+    );
+
+    // Own descriptors remain fail-closed even if the ShapeId word itself is
+    // unchanged: the GcHeader bit is the authoritative per-receiver proof.
+    unsafe {
+        let gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        let original_reserved = (*gc)._reserved;
+        (*gc)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+        assert_eq!(
+            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id),
+            0
+        );
+        (*gc)._reserved = original_reserved;
+    }
+
     // The classifier returns an untrusted header token; only the exact
     // compiler-published pair licenses the direct call. A divergent stamp must
     // miss even when it remains in the process-global ShapeId range.

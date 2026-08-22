@@ -195,11 +195,16 @@ pub(crate) fn test_reset_class_field_inline_guard() {
 /// registration are recorded in [`PROTO_DESCRIPTOR_KEY_HASHES`] and
 /// retro-checked by [`note_declared_instance_field_name`] when the class
 /// arrives.
-pub(crate) fn disable_class_field_inline_guard_for_target(obj: usize, key: &str) {
-    if crate::array::object_prototype_addr_matches(obj)
+pub(crate) fn disable_inline_guards_for_descriptor_target(obj: usize, key: &str) {
+    let is_prototype_target = crate::array::object_prototype_addr_matches(obj)
         || class_registry::is_registered_class_prototype_object(obj)
-        || class_registry::class_id_for_decl_prototype_object(obj).is_some()
-    {
+        || class_registry::class_id_for_decl_prototype_object(obj).is_some();
+    if is_prototype_target {
+        // Direct method guards are not key-aware. Conservatively retire them
+        // after any user descriptor/accessor install on a prototype that can
+        // affect a class instance. Own-instance installs are rejected by the
+        // receiver's `OBJ_FLAG_HAS_DESCRIPTORS` header bit instead.
+        class_registry::invalidate_class_prototype_fast_guards();
         let hash = super::key_bytes_hash(key.as_ptr(), key.len());
         note_proto_descriptor_key_hash(hash);
         if declared_field_name_hash_exists(hash) {
@@ -218,7 +223,7 @@ static DECLARED_FIELD_NAME_HASHES: std::sync::RwLock<Option<std::collections::Ha
 /// #6759 C5a: FNV hashes of every key installed on a prototype-level
 /// descriptor target, so a class that registers AFTER such an install can
 /// retro-trigger the disable (see
-/// [`disable_class_field_inline_guard_for_target`]).
+/// [`disable_inline_guards_for_descriptor_target`]).
 static PROTO_DESCRIPTOR_KEY_HASHES: std::sync::RwLock<Option<std::collections::HashSet<u64>>> =
     std::sync::RwLock::new(None);
 
@@ -682,7 +687,7 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     let st = state();
     st.descriptors.property_attrs_in_use.set(true);
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
-    disable_class_field_inline_guard_for_target(obj, &key);
+    disable_inline_guards_for_descriptor_target(obj, &key);
     note_meta_descriptor_key(obj, &key, false);
     st.descriptors
         .property_descriptors
@@ -877,7 +882,7 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     let st = state();
     st.descriptors.accessors_in_use.set(true);
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
-    disable_class_field_inline_guard_for_target(obj, &key);
+    disable_inline_guards_for_descriptor_target(obj, &key);
     note_accessor_descriptor_key(&key);
     note_meta_descriptor_key(obj, &key, true);
     st.descriptors
@@ -1180,6 +1185,10 @@ mod c5a_tests {
             class_field_inline_guard_enabled(),
             "a prototype install keyed by a non-field name must not poison \
              the inline class-field fast path"
+        );
+        assert!(
+            class_registry::class_prototype_fast_guards_invalidated(),
+            "a prototype descriptor must retire unkeyed direct-method guards"
         );
 
         // Field-style install: key declared by a registered class.

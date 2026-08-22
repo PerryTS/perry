@@ -1033,6 +1033,13 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
 /// probe plus an inline compare chain over the base's subclass closure turns
 /// the same information into a direct call. See
 /// `perry-codegen/src/lower_call/method_override.rs`.
+///
+/// Descriptor invalidation is deliberately scoped rather than process-wide:
+/// an own descriptor sets `OBJ_FLAG_HAS_DESCRIPTORS` on this receiver, while a
+/// user descriptor on a registered class/Object prototype flips the same
+/// sticky prototype latch checked below. A descriptor on an unrelated object
+/// can affect neither method resolution nor this exact ShapeId proof and must
+/// not poison every direct-method site in the process.
 #[no_mangle]
 pub unsafe extern "C" fn js_method_direct_shape_class(
     receiver: f64,
@@ -1050,7 +1057,7 @@ pub unsafe extern "C" fn js_method_direct_shape_class(
     };
     if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
         || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || crate::object::descriptors_in_use()
+        || (*gc_header)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
         || crate::object::class_prototype_fast_guards_invalidated()
     {
         return 0;
