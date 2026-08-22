@@ -357,6 +357,74 @@ pub(crate) fn inline_hot_small_max_call_sites() -> u32 {
     })
 }
 
+/// #8583: statepoint relocation estimate above which a function keeps its GC
+/// roots in a shadow frame instead of native statepoints.
+///
+/// `rewrite-statepoints-for-gc` adds one relocation per GC value live across
+/// each safepoint, so the optimizer's post-rewrite cost scales with
+/// `live_roots × safepoints`. Past a point that fan-out makes the `-Os`/`-O3`
+/// middle-end super-linear and the compile does not finish (the Claude Code
+/// bundle's 68 MB entry body measured 795 root slots × ~106k safepoints ≈ 8.4e7
+/// and grew 439k → 6.5M instructions under RS4GC; without RS4GC the same unit
+/// optimized at `-Os` in ~5s). Real functions sit orders of magnitude below
+/// this: hundreds of call sites times tens of slots is ~1e4–1e5. The default
+/// is set well under the measured pathological point and well over ordinary
+/// code, and the post-RS4GC instruction-budget assertion (#8583, inprocess.rs)
+/// backstops any function the estimate misses.
+///
+/// `PERRY_ROOT_SPILL_RELOCATIONS=<n>` overrides it; `0` disables spilling
+/// (every function stays on native statepoints, the pre-#8583 behavior).
+const DEFAULT_ROOT_SPILL_RELOCATIONS: usize = 4_000_000;
+
+fn root_spill_relocation_threshold() -> usize {
+    std::env::var("PERRY_ROOT_SPILL_RELOCATIONS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_ROOT_SPILL_RELOCATIONS)
+}
+
+/// The relocation estimate for a function with `slot_count` GC-root slots and
+/// a body containing `safepoint_sites` call-like expressions. Saturating so a
+/// pathological product cannot wrap.
+pub(crate) fn root_relocation_estimate(slot_count: usize, safepoint_sites: usize) -> usize {
+    slot_count.saturating_mul(safepoint_sites)
+}
+
+/// Decide whether `func` should spill its roots to the shadow frame, and if so
+/// mark it (BEFORE its `enable_*_shadow_frame` call) and report it. Only
+/// meaningful under native stack-map roots — the shadow frame is already the
+/// lowering otherwise. Reporting is at default verbosity because #8421 requires
+/// that a change to how a function is compiled is never silent; the message
+/// states that the optimization level is unchanged.
+pub(super) fn maybe_spill_roots_to_shadow_frame(
+    func: &mut crate::function::LlFunction,
+    fn_name: &str,
+    slot_count: usize,
+    body: &[perry_hir::Stmt],
+) {
+    if !native_stack_roots_enabled() {
+        return;
+    }
+    let threshold = root_spill_relocation_threshold();
+    if threshold == 0 {
+        return;
+    }
+    let sites = crate::collectors::count_safepoint_sites(body);
+    let estimate = root_relocation_estimate(slot_count, sites);
+    if estimate <= threshold {
+        return;
+    }
+    func.request_shadow_frame_spill();
+    eprintln!(
+        "perry: `{fn_name}` keeps its {slot_count} GC roots in a shadow frame instead of \
+         statepoints: an estimated {estimate} relocations ({slot_count} roots × {sites} \
+         safepoints) would make rewrite-statepoints-for-gc fan-out super-linear in the \
+         optimizer (> {threshold}). The function is still compiled at the requested \
+         optimization level; only its GC-root representation changes, and its roots stay \
+         precise (#8583). Override with PERRY_ROOT_SPILL_RELOCATIONS."
+    );
+}
+
 pub(super) fn enable_module_init_shadow_frame(
     func: &mut crate::function::LlFunction,
     stmts: &[perry_hir::Stmt],
@@ -368,6 +436,10 @@ pub(super) fn enable_module_init_shadow_frame(
 
     let shadow_slot_map =
         crate::collectors::collect_pointer_typed_locals(&[], stmts, flat_const_ids);
+    // #8583: the module-entry body is the minified-bundle IIFE — the function
+    // that fans out catastrophically under RS4GC. Decide its root lowering
+    // before the frame is built.
+    maybe_spill_roots_to_shadow_frame(func, "main", shadow_slot_map.len(), stmts);
     func.enable_post_init_shadow_frame(shadow_slot_map.len() as u32);
     let shadow_slot_clears_after_stmt =
         crate::collectors::collect_shadow_slot_clear_points(stmts, &shadow_slot_map);

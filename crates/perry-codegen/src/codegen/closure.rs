@@ -612,6 +612,12 @@ pub(super) fn compile_closure(
         // which spans the body.
         let capture_root_slots =
             u32::from(captures_this || enclosing_class.is_some()) + u32::from(captures_new_target);
+        crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
+            lf,
+            &llvm_name,
+            m.len() + capture_root_slots as usize,
+            body,
+        );
         lf.enable_shadow_frame(m.len() as u32 + capture_root_slots);
         m
     } else {

@@ -319,6 +319,12 @@ pub(super) fn compile_method(
             &method.body,
             &flat_const_ids,
         );
+        crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
+            lf,
+            &llvm_name,
+            m.len() + 1,
+            &method.body,
+        );
         lf.enable_shadow_frame(m.len() as u32 + 1);
         m
     } else {
@@ -1392,6 +1398,12 @@ pub(super) fn compile_static_method(
             cross_module.flat_const_arrays.keys().copied().collect();
         let m =
             crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids);
+        crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
+            lf,
+            &llvm_name,
+            m.len() + 1,
+            &f.body,
+        );
         lf.enable_shadow_frame(m.len() as u32 + 1);
         m
     } else {
