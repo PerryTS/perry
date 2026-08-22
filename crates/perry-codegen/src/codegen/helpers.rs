@@ -367,14 +367,33 @@ pub(crate) fn inline_hot_small_max_call_sites() -> u32 {
 /// bundle's 68 MB entry body measured 795 root slots × ~106k safepoints ≈ 8.4e7
 /// and grew 439k → 6.5M instructions under RS4GC; without RS4GC the same unit
 /// optimized at `-Os` in ~5s). Real functions sit orders of magnitude below
-/// this: hundreds of call sites times tens of slots is ~1e4–1e5. The default
-/// is set well under the measured pathological point and well over ordinary
-/// code, and the post-RS4GC instruction-budget assertion (#8583, inprocess.rs)
-/// backstops any function the estimate misses.
+/// this: hundreds of call sites times tens of slots is ~1e4–1e5.
+///
+/// The default (#8620) is measured, not guessed. Synthetic entry functions with
+/// a controlled `slots × safepoints` estimate were compiled at `-Os` with
+/// spilling OFF (pure RS4GC fan-out) and the `@main` codegen unit timed:
+///
+/// | estimate | fan-out finish |
+/// |---------:|---------------:|
+/// |     8.0M |         ~325 s |
+/// |    16.0M |         ~235 s |
+/// |    32.0M |  ~511 s (8.5m) |
+/// |    40.0M |  did not finish in 20 min |
+/// |    48.0M |  did not finish in 20 min |
+///
+/// The fan-out cliff sits between 32M and 40M, so the default is the largest
+/// estimate whose fan-out still finished in bounded time. Below it fan-out is
+/// the cheaper lowering — spilling a moderate function costs more than the
+/// fan-out it avoids (an ~8M function spilled in 303 s vs 180 s fanned out,
+/// #8620) — and above it fan-out risks not finishing and the shadow frame wins.
+/// The former 4M default fired on ~8M functions that fan out fine in minutes.
+/// The post-RS4GC instruction-budget assertion (#8586, inprocess.rs) backstops
+/// any function this estimate misses: it fails loudly rather than hanging, so
+/// raising the threshold is safe.
 ///
 /// `PERRY_ROOT_SPILL_RELOCATIONS=<n>` overrides it; `0` disables spilling
 /// (every function stays on native statepoints, the pre-#8583 behavior).
-const DEFAULT_ROOT_SPILL_RELOCATIONS: usize = 4_000_000;
+const DEFAULT_ROOT_SPILL_RELOCATIONS: usize = 32_000_000;
 
 fn root_spill_relocation_threshold() -> usize {
     std::env::var("PERRY_ROOT_SPILL_RELOCATIONS")
@@ -388,6 +407,45 @@ fn root_spill_relocation_threshold() -> usize {
 /// pathological product cannot wrap.
 pub(crate) fn root_relocation_estimate(slot_count: usize, safepoint_sites: usize) -> usize {
     slot_count.saturating_mul(safepoint_sites)
+}
+
+#[cfg(test)]
+mod root_spill_default_tests {
+    use super::{root_relocation_estimate, DEFAULT_ROOT_SPILL_RELOCATIONS};
+
+    /// #8620: the default is pinned to the measured RS4GC fan-out cliff — the
+    /// largest estimate whose fan-out finished in bounded time (32M finished in
+    /// ~8.5 min; 40M/48M did not finish in 20 min). Change it only with fresh
+    /// measurement.
+    #[test]
+    fn default_sits_at_the_measured_fan_out_cliff() {
+        assert_eq!(DEFAULT_ROOT_SPILL_RELOCATIONS, 32_000_000);
+    }
+
+    /// The moderate case the old 4M default wrongly spilled (#8620): ~8M
+    /// relocations (4000 root slots × ~2001 safepoints) fans out in minutes, so
+    /// under the new default it stays on native statepoints.
+    #[test]
+    fn moderate_fan_out_stays_on_statepoints() {
+        let est = root_relocation_estimate(4000, 2001);
+        assert_eq!(est, 8_004_000);
+        assert!(
+            est <= DEFAULT_ROOT_SPILL_RELOCATIONS,
+            "moderate estimate {est} must not exceed the default (would spill)",
+        );
+    }
+
+    /// The genuinely-catastrophic case (Claude Code `cli.js` `@main`,
+    /// ~795 slots × ~106k safepoints ≈ 8.4e7, never finishes at `-Os`) must
+    /// still spill under the new default.
+    #[test]
+    fn catastrophic_fan_out_still_spills() {
+        let est = root_relocation_estimate(795, 106_000);
+        assert!(
+            est > DEFAULT_ROOT_SPILL_RELOCATIONS,
+            "catastrophic estimate {est} must exceed the default (should spill)",
+        );
+    }
 }
 
 /// Decide whether `func` should spill its roots to the shadow frame, and if so
