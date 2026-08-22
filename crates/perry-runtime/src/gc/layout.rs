@@ -1641,12 +1641,11 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
             )
         }
         GcLayoutSlotKind::ObjectMeta => {
-            // #6812: prototype (NaN-boxed / raw / sentinel) as the prefix
-            // slot, the raw spill-buffer pointer as a 1-slot range. Mirrors
-            // the rewrite descriptor arm — marking must see the same edges.
+            // Prototype is the prefix slot; spill and the private-evaluation
+            // brand are the two contiguous child slots that follow it.
             let meta = user_ptr as *mut crate::object::ObjectMeta;
             let proto_slot = Some(&mut (*meta).prototype as *mut u64);
-            let range = HeapSlotRange::new(&mut (*meta).spill as *mut u64, 1);
+            let range = HeapSlotRange::new(&mut (*meta).spill as *mut u64, 2);
             HeapChildSlotIterator::new(header, proto_slot, range)
         }
         GcLayoutSlotKind::ClosureCaptures => {

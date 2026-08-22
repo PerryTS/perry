@@ -118,6 +118,10 @@ struct ExceptionState {
     /// `resolve_inherited_field` is recursively walking; longjmp skips its
     /// guard drops, so restore the stack to this try-entry savepoint.
     prototype_resolution_depths: Box<[usize]>,
+    /// Static private-environment dispatch depth at each handler. A throw can
+    /// bypass a static method/accessor's normal pop, so catch entry restores
+    /// the stack to its handler-entry state.
+    static_private_owner_depths: Box<[usize]>,
     /// #6559: dyn-eval interpreter state (rooted-stack length + interpreter
     /// call depth, packed) captured when each `try` was pushed. A throw
     /// `longjmp`s past interpreter Rust frames without running their
@@ -143,6 +147,7 @@ impl ExceptionState {
             runtime_handle_savepoints: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             call_method_depths: vec![0u32; MAX_TRY_DEPTH].into_boxed_slice(),
             prototype_resolution_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
+            static_private_owner_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             #[cfg(feature = "dyn-eval")]
             dyn_eval_savepoints: vec![0u64; MAX_TRY_DEPTH].into_boxed_slice(),
             try_depth: 0,
@@ -202,6 +207,8 @@ fn try_push_with_kind(kind: HandlerKind) -> *mut i32 {
         (*s).call_method_depths[depth] = crate::object::call_method_depth_savepoint();
         (*s).prototype_resolution_depths[depth] =
             crate::object::prototype_chain::resolution_stack_savepoint();
+        (*s).static_private_owner_depths[depth] =
+            crate::object::static_private_owner_stack_savepoint();
         // #6559: capture the dyn-eval interpreter's rooted-stack length +
         // call depth, so a caught throw restores interpreter state exactly
         // like the shadow stack.
@@ -322,6 +329,7 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         crate::object::prototype_chain::resolution_stack_restore(
             (*s).prototype_resolution_depths[depth],
         );
+        crate::object::static_private_owner_stack_restore((*s).static_private_owner_depths[depth]);
         // #6559: restore the dyn-eval interpreter's rooted stack + call depth
         // (interpreter Rust frames unwound by this longjmp never run their
         // truncate/decrement epilogues).

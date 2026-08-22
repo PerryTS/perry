@@ -867,12 +867,10 @@ mod sso_tests_1781 {
     }
 }
 
-const PRIVATE_EVALUATION_BRAND_KEY: &[u8] = b"#<perry:class-evaluation-brand>";
-
 /// Stamp an instance constructed through a `ClassExprFresh` value with the
-/// identity of that particular class evaluation. The key starts with `#`, so
-/// the ordinary own-key/enumeration paths hide it just like user private
-/// elements while the GC still traces the class-object value in the slot.
+/// identity of that particular class evaluation. The brand lives in the
+/// object's traced metadata record so it neither shifts user field slots nor
+/// changes the instance's ShapeId / own-key enumeration.
 pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, class_value: f64) {
     if obj.is_null() || !super::super::class_registry::is_class_object_value(class_value) {
         return;
@@ -880,16 +878,15 @@ pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, clas
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let class_handle = scope.root_nanbox_f64(class_value);
-    let key = crate::string::js_string_from_bytes(
-        PRIVATE_EVALUATION_BRAND_KEY.as_ptr(),
-        PRIVATE_EVALUATION_BRAND_KEY.len() as u32,
+    let (meta, _) =
+        obj_handle.across_mut::<ObjectHeader, _>(|| crate::object::object_meta_ensure(obj));
+    let brand = class_handle.get_nanbox_f64().to_bits();
+    (*meta).private_evaluation_brand = brand;
+    crate::gc::runtime_write_barrier_slot(
+        meta as usize,
+        &(*meta).private_evaluation_brand as *const u64 as usize,
+        brand,
     );
-    let key_handle = scope.root_string_ptr(key);
-    obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
-        key_handle.with_const_ptr::<crate::StringHeader, _>(|key| {
-            js_object_set_field_by_name(obj, key, class_handle.get_nanbox_f64());
-        });
-    });
 }
 
 /// Return the per-evaluation brand carried by `value`, provided it belongs to
@@ -905,11 +902,18 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
             return Some(value.to_bits());
         }
     }
-    let brand = crate::object::js_object_get_own_field_or_undef(
-        value,
-        PRIVATE_EVALUATION_BRAND_KEY.as_ptr(),
-        PRIVATE_EVALUATION_BRAND_KEY.len(),
-    );
+    let value = JSValue::from_bits(value.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    let object = value.as_pointer::<ObjectHeader>();
+    let brand = unsafe {
+        if object.is_null() || !crate::object::object_is_shaped(object) || (*object).meta.is_null()
+        {
+            return None;
+        }
+        f64::from_bits((*(*object).meta).private_evaluation_brand)
+    };
     if !super::super::class_registry::is_class_object_value(brand) {
         return None;
     }
@@ -926,18 +930,11 @@ fn private_evaluation_brand_matches(
     brand_owner: f64,
     declaring_class_id: u32,
 ) -> Option<bool> {
-    // A fresh class object's static method is represented by a bound-method
-    // closure. Function.prototype.call/apply can replace the method body's
-    // visible `this`, but dispatch keeps the closure's captured class object in
-    // IMPLICIT_THIS while invoking the body. That captured object is the
-    // lexical ClassDefinitionEvaluation whose private names the method closes
-    // over; the explicit receiver is only the value being brand-checked.
-    //
-    // Restrict this substitution to class-object owners. Instance methods use
-    // their instance's stamped evaluation brand directly, and ordinary
-    // compile-time ClassRefs keep the existing class-id fallback below.
+    // A static method/accessor closes over the PrivateEnvironment of its class
+    // evaluation. Its visible `this` may be replaced by call/apply, so dispatch
+    // records the lexical owner separately from ambient IMPLICIT_THIS.
     let brand_owner = if super::super::class_registry::is_class_object_value(brand_owner) {
-        let captured_owner = super::super::js_implicit_this_get();
+        let captured_owner = super::super::static_private_owner_current().unwrap_or(brand_owner);
         if super::super::class_registry::is_class_object_value(captured_owner)
             && private_evaluation_brand(captured_owner, declaring_class_id).is_some()
         {
@@ -1085,6 +1082,45 @@ pub extern "C" fn js_private_guard(
         throw_private_type_error("Invalid private member operation for its kind");
     }
     obj
+}
+
+#[cfg(test)]
+mod private_evaluation_brand_tests {
+    use super::*;
+
+    #[test]
+    fn stamping_a_fresh_brand_preserves_instance_shape_and_slots() {
+        unsafe {
+            const CID: u32 = 62_441;
+            let class = crate::object::js_object_alloc(CID, 0);
+            crate::object::class_registry::js_object_mark_class(class as i64);
+            let class_value = crate::value::js_nanbox_pointer(class as i64);
+            assert!(crate::object::class_registry::is_class_object_value(
+                class_value
+            ));
+
+            let instance = crate::object::js_object_alloc(CID, 2);
+            let shape_before = crate::object::shapes::object_shape_id(instance);
+            let keys_before = crate::object::object_keys_array(instance);
+            let slots_before = crate::object::object_live_slot_count(instance);
+
+            stamp_private_evaluation_brand(instance, class_value);
+
+            assert_eq!(
+                crate::object::shapes::object_shape_id(instance),
+                shape_before
+            );
+            assert_eq!(crate::object::object_keys_array(instance), keys_before);
+            assert_eq!(
+                crate::object::object_live_slot_count(instance),
+                slots_before
+            );
+            assert_eq!(
+                private_evaluation_brand(crate::value::js_nanbox_pointer(instance as i64), CID),
+                Some(class_value.to_bits())
+            );
+        }
+    }
 }
 
 #[cfg(test)]

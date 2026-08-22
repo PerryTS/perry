@@ -935,10 +935,8 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
             }
         }
         GcRewriteDescriptorKind::ObjectMeta => {
-            // #6812: meta records expose their two child edges (prototype,
-            // spill buffer) to MARKING via GcLayoutSlotKind::ObjectMeta —
-            // the spill buffer is reachable through meta alone, so a
-            // rewrite-only descriptor would leave it invisible to liveness.
+            // Meta records expose every child edge (prototype, spill buffer,
+            // and private-evaluation brand) to marking and rewriting.
             if info.layout_slot_kind != GcLayoutSlotKind::ObjectMeta {
                 return Err("object-meta descriptor must expose its child edges to marking");
             }

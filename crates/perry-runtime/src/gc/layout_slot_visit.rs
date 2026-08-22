@@ -307,6 +307,11 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             // #6812: the object-owned overflow buffer is a raw-pointer child
             // edge (0 = none), traced and rewritten exactly like `prototype`.
             visit(fixed_slot(&mut (*meta).spill as *mut u64));
+            // A fresh class object stored as an instance's private evaluation
+            // brand is a NaN-boxed child edge and moves with the meta record.
+            visit(fixed_slot(
+                &mut (*meta).private_evaluation_brand as *mut u64,
+            ));
         }
         GcRewriteDescriptorKind::Leaf => {}
     }

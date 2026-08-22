@@ -170,6 +170,7 @@ unsafe fn dispatch_symbol_bound_method(
         // the Function.prototype call/apply arms for a static bound-method
         // value) still wins in the static-method prologue.
         let prev_this = crate::object::js_implicit_this_set(receiver);
+        crate::object::static_private_owner_push(receiver);
         let result = crate::object::call_registered_static_method(
             func_ptr,
             args.as_ptr(),
@@ -177,6 +178,7 @@ unsafe fn dispatch_symbol_bound_method(
             param_count,
             has_rest,
         );
+        crate::object::static_private_owner_pop();
         crate::object::js_implicit_this_set(prev_this);
         result
     } else {

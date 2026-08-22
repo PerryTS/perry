@@ -273,24 +273,39 @@ pub(super) fn set_field_by_name_object_tail(
         // evaluation's class object as the receiver. Private names are scoped
         // here deliberately: an ordinary string property literally named
         // "#m" remains a separate public data property.
-        if crate::object::is_class_object_ptr(obj as *const u8)
-            && !key.is_null()
-            && crate::value::addr_class::is_above_handle_band(key as usize)
-        {
-            let name_ptr = crate::string::string_data(key);
-            let name_len = (*key).byte_len as usize;
-            if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
-                if name.starts_with('#') {
-                    let receiver = crate::value::js_nanbox_pointer(obj as i64);
-                    if super::class_registry::class_static_accessor_setter_apply(
-                        obj_class_id,
-                        name,
-                        receiver,
-                        value,
-                    ) {
-                        return;
-                    }
+        // `js_string_intern` above can allocate and evacuate all three rooted
+        // operands. Refresh before the first class-object/private-name probe;
+        // every dereference and the user-visible setter call below is then
+        // dominated by the post-allocation reload.
+        let private_static = obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            key_handle.with_const_ptr::<crate::StringHeader, _>(|key| {
+                if !crate::object::is_class_object_ptr(obj as *const u8)
+                    || key.is_null()
+                    || !crate::value::addr_class::is_above_handle_band(key as usize)
+                {
+                    return None;
                 }
+                let name_ptr = crate::string::string_data(key);
+                let name_len = (*key).byte_len as usize;
+                let name =
+                    std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)).ok()?;
+                name.starts_with('#').then(|| {
+                    (
+                        (*obj).class_id,
+                        name.to_string(),
+                        crate::value::js_nanbox_pointer(obj as i64),
+                    )
+                })
+            })
+        });
+        if let Some((class_id, name, receiver)) = private_static {
+            if super::class_registry::class_static_accessor_setter_apply(
+                class_id,
+                &name,
+                receiver,
+                value_handle.get_nanbox_f64(),
+            ) {
+                return;
             }
         }
 

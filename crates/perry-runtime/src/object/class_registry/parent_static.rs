@@ -913,8 +913,10 @@ pub(crate) unsafe fn class_symbol_getter_value(
                 }
                 let result = if is_static {
                     let prev_this = crate::object::js_implicit_this_set(receiver);
+                    crate::object::static_private_owner_push(receiver);
                     let f: extern "C" fn() -> f64 = std::mem::transmute(getter);
                     let result = f();
+                    crate::object::static_private_owner_pop();
                     crate::object::js_implicit_this_set(prev_this);
                     result
                 } else {
@@ -957,8 +959,10 @@ pub(crate) unsafe fn class_symbol_setter_apply(
                 if setter != 0 {
                     if is_static {
                         let prev_this = crate::object::js_implicit_this_set(receiver);
+                        crate::object::static_private_owner_push(receiver);
                         let f: extern "C" fn(f64) -> f64 = std::mem::transmute(setter);
                         let _ = f(value);
+                        crate::object::static_private_owner_pop();
                         crate::object::js_implicit_this_set(prev_this);
                     } else {
                         let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(setter);
@@ -999,8 +1003,10 @@ pub(crate) unsafe fn class_static_accessor_getter_value(
                 // expression must expose its per-evaluation class object as
                 // `this`, not the shared compile-time ClassRef.
                 crate::object::static_this_arm_if_unarmed(receiver);
+                crate::object::static_private_owner_push(receiver);
                 let f: extern "C" fn() -> f64 = std::mem::transmute(getter);
                 let result = f();
+                crate::object::static_private_owner_pop();
                 crate::object::static_this_disarm();
                 return Some(result);
             }
@@ -1039,8 +1045,10 @@ pub(crate) unsafe fn class_static_accessor_setter_apply(
                     // prologue consumes this override and binds `this` to the
                     // actual constructor value for this evaluation.
                     crate::object::static_this_arm_if_unarmed(receiver);
+                    crate::object::static_private_owner_push(receiver);
                     let f: extern "C" fn(f64) -> f64 = std::mem::transmute(setter);
                     let _ = f(value);
+                    crate::object::static_private_owner_pop();
                     crate::object::static_this_disarm();
                 }
                 return true;
@@ -1461,6 +1469,7 @@ pub unsafe extern "C" fn js_class_static_method_call(
     }
     if let Some((func_ptr, param_count, has_rest)) = lookup_static_method_in_chain(class_id, name) {
         let prev_this = crate::object::js_implicit_this_set(receiver);
+        crate::object::static_private_owner_push(receiver);
         // Receiver-sensitive static `this`: arm the one-shot override so the
         // method prologue (`js_static_this_resolve`) sees the DYNAMIC receiver
         // (e.g. subclass `D` for an inherited `D.f()`). If an outer
@@ -1496,6 +1505,7 @@ pub unsafe extern "C" fn js_class_static_method_call(
             call_static_method(func_ptr, args_ptr, args_len, param_count)
         };
         crate::object::static_this_disarm();
+        crate::object::static_private_owner_pop();
         crate::object::js_implicit_this_set(prev_this);
         return result;
     }

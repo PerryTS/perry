@@ -3,7 +3,7 @@
 
 use super::*;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 // Implicit `this` for closure-typed class fields invoked method-style.
 //
@@ -37,6 +37,33 @@ crate::perry_thread_local! {
     // Direct compiled calls never arm it, so they keep the lexical class-ref.
     static STATIC_THIS_OVERRIDE: Cell<(bool, u64)> =
         const { Cell::new((false, crate::value::TAG_UNDEFINED)) };
+    /// Lexical ClassDefinitionEvaluation owner for static method/accessor
+    /// dispatch. Unlike IMPLICIT_THIS, this is not replaced by `.call`'s
+    /// visible receiver. A stack makes nested dispatch frame-local.
+    static STATIC_PRIVATE_OWNER_STACK: RefCell<Vec<u64>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn static_private_owner_push(value: f64) {
+    STATIC_PRIVATE_OWNER_STACK.with(|stack| stack.borrow_mut().push(value.to_bits()));
+}
+
+pub(crate) fn static_private_owner_pop() {
+    STATIC_PRIVATE_OWNER_STACK.with(|stack| {
+        stack.borrow_mut().pop();
+    });
+}
+
+pub(crate) fn static_private_owner_current() -> Option<f64> {
+    STATIC_PRIVATE_OWNER_STACK.with(|stack| stack.borrow().last().copied().map(f64::from_bits))
+}
+
+pub(crate) fn static_private_owner_stack_savepoint() -> usize {
+    STATIC_PRIVATE_OWNER_STACK.with(|stack| stack.borrow().len())
+}
+
+pub(crate) fn static_private_owner_stack_restore(depth: usize) {
+    STATIC_PRIVATE_OWNER_STACK.with(|stack| stack.borrow_mut().truncate(depth));
 }
 
 /// Arm the static-`this` override unconditionally (used by the call/apply
@@ -217,6 +244,11 @@ pub fn scan_implicit_this_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<
         let (armed, mut bits) = c.get();
         if visitor.visit_nanbox_u64_slot(&mut bits) {
             c.set((armed, bits));
+        }
+    });
+    STATIC_PRIVATE_OWNER_STACK.with(|stack| {
+        for bits in stack.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_u64_slot(bits);
         }
     });
 }

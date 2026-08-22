@@ -252,8 +252,10 @@ pub use this_binding::{
     js_static_this_resolve,
 };
 pub(crate) use this_binding::{
-    scan_implicit_this_roots_mut, static_this_arm, static_this_arm_if_unarmed, static_this_disarm,
-    IMPLICIT_THIS,
+    scan_implicit_this_roots_mut, static_private_owner_current, static_private_owner_pop,
+    static_private_owner_push, static_private_owner_stack_restore,
+    static_private_owner_stack_savepoint, static_this_arm, static_this_arm_if_unarmed,
+    static_this_disarm, IMPLICIT_THIS,
 };
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
@@ -1742,6 +1744,11 @@ pub struct ObjectMeta {
     /// pointer-keyed side state, no owner re-keying on evacuation, no
     /// per-object finalization.
     pub spill: u64,
+    /// Fresh ClassDefinitionEvaluation identity for instances constructed
+    /// from a heap class object. This is object metadata rather than an own
+    /// property: private branding must not consume a user field slot, alter
+    /// the ShapeId/key order, or become visible to enumeration.
+    pub private_evaluation_brand: u64,
 }
 
 pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;
@@ -1815,6 +1822,7 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     (*meta).accessor_key_bits = 0;
     (*meta).flags = 0;
     (*meta).spill = 0;
+    (*meta).private_evaluation_brand = 0;
     // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
     // followed by an object-slot barrier, mirroring `set_object_keys_array`.
     (*obj).meta = meta;
