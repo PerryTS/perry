@@ -59,7 +59,7 @@ unsafe fn try_dispatch_external_zlib_stream(
     ))
 }
 
-/// Route external `Agent`, `ClientRequest`, and client-side `IncomingMessage`
+/// Route external `Agent` and client-side `IncomingMessage`
 /// methods before this dispatcher creates owned copies of the method name and
 /// arguments. Well-known wrapper archives carry a private allocator shim;
 /// returning from an external HTTP call and then dropping those temporary
@@ -113,12 +113,6 @@ unsafe fn try_dispatch_external_http_client(
     } else {
         &[]
     };
-    if let Some(value) =
-        super::super::dispatch_http::dispatch_client_request_method(handle, method_name, args)
-    {
-        return Some(value);
-    }
-
     if !matches!(
         method_name,
         "setEncoding" | "on" | "addListener" | "pipe" | "pause" | "resume"
@@ -214,39 +208,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
 
     if let Some(value) = dispatch_async_local_storage_method(handle, method_name, &args) {
         return value;
-    }
-
-    #[cfg(feature = "external-http-client-pump")]
-    {
-        extern "C" {
-            fn js_ext_http_agent_is_handle(handle: i64) -> i32;
-            fn js_ext_http_agent_dispatch_method(
-                handle: i64,
-                method_ptr: *const u8,
-                method_len: usize,
-                args_ptr: *const f64,
-                args_len: usize,
-            ) -> f64;
-        }
-
-        if matches!(
-            method_name,
-            "getName" | "destroy" | "keepSocketAlive" | "reuseSocket"
-        ) && js_ext_http_agent_is_handle(handle) != 0
-        {
-            let args_ptr = if args.is_empty() {
-                std::ptr::null()
-            } else {
-                args.as_ptr()
-            };
-            return js_ext_http_agent_dispatch_method(
-                handle,
-                method_name.as_ptr(),
-                method_name.len(),
-                args_ptr,
-                args.len(),
-            );
-        }
     }
 
     // node:sqlite DatabaseSync handle. Keep this before the better-sqlite3

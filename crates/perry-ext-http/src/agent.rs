@@ -43,7 +43,8 @@ use crate::ensure_gc_scanner_registered;
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_string, get_handle, get_handle_mut, iter_handles_of_mut, register_handle, ErrorKind,
-    GcRootVisitor, Handle, JsClosure, JsString, JsValue, RawClosureHeader, StringHeader,
+    GcRootVisitor, Handle, JsClosure, JsString, JsValue, ObjectHeader, RawClosureHeader,
+    StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -432,20 +433,28 @@ fn count_map_object_f64(counts: &HashMap<String, u32>) -> f64 {
     if object.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let object = scope.root_nanbox(f64::from_bits(
+        JsValue::from_object_ptr(object as *mut u8).bits(),
+    ));
     for (index, (_, count)) in entries.iter().enumerate() {
         let mut array = unsafe { perry_ffi::js_array_alloc(*count) };
         for _ in 0..*count {
             array = unsafe { perry_ffi::js_array_push(array, JsValue::from_bits(TAG_UNDEFINED)) };
         }
+        let array = scope.root_nanbox(f64::from_bits(
+            JsValue::from_object_ptr(array as *mut u8).bits(),
+        ));
+        let object_ptr = JsValue::from_bits(object.get().to_bits()).as_pointer::<ObjectHeader>();
         unsafe {
             perry_ffi::js_object_set_field(
-                object,
+                object_ptr,
                 index as u32,
-                JsValue::from_object_ptr(array as *mut u8),
+                JsValue::from_bits(array.get().to_bits()),
             );
         }
     }
-    f64::from_bits(JsValue::from_object_ptr(object as *mut u8).bits())
+    object.get()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1011,8 +1020,10 @@ pub extern "C" fn js_http_agent_destroy(handle: Handle) -> Handle {
         agent.destroyed = true;
         agent.sockets.clear();
         agent.free_sockets.clear();
-        agent.requests.clear();
-        agent.queued_requests.clear();
+        // Node leaves maxSockets waiters queued when `destroy()` tears down
+        // the current sockets. The next released slot reconnects and serves
+        // the oldest waiter, so retain both the private queue and its public
+        // `requests` mirror instead of orphaning those ClientRequests.
     }
     invalidate_agent_client(handle);
     handle
@@ -1262,9 +1273,11 @@ pub(crate) unsafe fn try_create_connection_socket(
     if cc == 0 {
         return None;
     }
-    let options = build_connect_options(handle, host, port, path);
-    let closure = JsClosure::from_raw(cc as *const RawClosureHeader);
-    let ret = closure.call1(options);
+    let scope = perry_ffi::TransientRootScope::enter();
+    let cc = scope.root_addr(cc);
+    let options = scope.root_nanbox(build_connect_options(handle, host, port, path));
+    let closure = JsClosure::from_raw(cc.get() as *const RawClosureHeader);
+    let ret = closure.call1(options.get());
 
     // `net.connect` / `net.createConnection` return the socket id NaN-boxed
     // with POINTER_TAG; some codegen paths hand back a bare raw pointer.
@@ -1312,20 +1325,43 @@ pub(crate) unsafe fn build_connect_options(
     if obj.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let obj = scope.root_nanbox(f64::from_bits(
+        JsValue::from_object_ptr(obj as *mut u8).bits(),
+    ));
     let host_s = alloc_string(host);
-    perry_ffi::js_object_set_field(obj, 0, JsValue::from_string_ptr(host_s.as_raw()));
+    perry_ffi::js_object_set_field(
+        JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+        0,
+        JsValue::from_string_ptr(host_s.as_raw()),
+    );
     // A plain f64 number is its own NaN-box; reconstruct the JsValue from its
     // bits so the override reads `options.port` as a number.
-    perry_ffi::js_object_set_field(obj, 1, JsValue::from_bits((port as f64).to_bits()));
+    perry_ffi::js_object_set_field(
+        JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+        1,
+        JsValue::from_bits((port as f64).to_bits()),
+    );
     let path_s = alloc_string(path);
-    perry_ffi::js_object_set_field(obj, 2, JsValue::from_string_ptr(path_s.as_raw()));
+    perry_ffi::js_object_set_field(
+        JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+        2,
+        JsValue::from_string_ptr(path_s.as_raw()),
+    );
     let (keep_alive, keep_alive_msecs) = agent_field(handle, (false, 1000.0), |agent| {
         (agent.keep_alive, agent.keep_alive_msecs)
     });
-    perry_ffi::js_object_set_field(obj, 3, JsValue::from_bits(bool_f64(keep_alive).to_bits()));
-    perry_ffi::js_object_set_field(obj, 4, JsValue::from_bits(keep_alive_msecs.to_bits()));
-    let v = JsValue::from_object_ptr(obj as *mut u8);
-    f64::from_bits(v.bits())
+    perry_ffi::js_object_set_field(
+        JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+        3,
+        JsValue::from_bits(bool_f64(keep_alive).to_bits()),
+    );
+    perry_ffi::js_object_set_field(
+        JsValue::from_bits(obj.get().to_bits()).as_pointer(),
+        4,
+        JsValue::from_bits(keep_alive_msecs.to_bits()),
+    );
+    obj.get()
 }
 
 // ------------------------------------------------------------------
@@ -1442,6 +1478,25 @@ mod tests {
         assert_js_bool(js_http_agent_destroyed(handle), false);
         let _ = js_http_agent_destroy(handle);
         assert_js_bool(js_http_agent_destroyed(handle), true);
+        drop_handle(handle);
+    }
+
+    #[test]
+    fn destroy_preserves_queued_requests_for_reconnect() {
+        let handle = unsafe { js_http_agent_new(f64::from_bits(TAG_UNDEFINED)) };
+        js_http_agent_set_max_sockets(handle, 1.0);
+        let key = "localhost:8080:";
+        assert_eq!(
+            admit_request(handle, key, 101),
+            PoolAdmission::Active { reused: false }
+        );
+        assert_eq!(admit_request(handle, key, 102), PoolAdmission::Queued);
+
+        let _ = js_http_agent_destroy(handle);
+        let agent = get_handle::<AgentHandle>(handle).unwrap();
+        assert_eq!(agent.requests.get(key), Some(&1));
+        assert_eq!(agent.queued_requests.get(key), Some(&vec![102]));
+        assert_eq!(release_request(handle, key, false), Some((102, false)));
         drop_handle(handle);
     }
 

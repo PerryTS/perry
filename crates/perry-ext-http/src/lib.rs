@@ -865,6 +865,8 @@ unsafe fn invoke_create_socket(
     if cs == 0 {
         return;
     }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let cs = scope.root_addr(cs);
     // Register the continuation's arity as 2 so a 1-arg `cb(err)` pads the
     // socket slot with `undefined` (via the runtime's arity dispatch) instead
     // of reading an uninitialized register for the second parameter.
@@ -881,14 +883,16 @@ unsafe fn invoke_create_socket(
     // (still-stored) method/url/headers/body and resume dispatch. Stored as an
     // f64 (a small registry id, not a heap pointer) — pointer-free, so it
     // needs no GC layout fixup, matching `sqlite_tx_wrapper`'s db-handle slot.
+    let cb_val = scope.root_nanbox(f64::from_bits(
+        POINTER_TAG | (cb as usize as u64 & PTR_MASK),
+    ));
+    let cb = (cb_val.get().to_bits() & PTR_MASK) as *mut perry_ffi::ClosureHeader;
     perry_ffi::set_closure_capture_f64(cb, 0, request_handle as f64);
-
-    let cb_val = f64::from_bits(POINTER_TAG | (cb as usize as u64 & PTR_MASK));
     let req_val = f64::from_bits(POINTER_TAG | (request_handle as u64 & PTR_MASK));
-    let options = agent::build_connect_options(agent_handle, host, port, path);
+    let options = scope.root_nanbox(agent::build_connect_options(agent_handle, host, port, path));
 
-    let closure = JsClosure::from_raw(cs as *const RawClosureHeader);
-    closure.call3(req_val, options, cb_val);
+    let closure = JsClosure::from_raw(cs.get() as *const RawClosureHeader);
+    closure.call3(req_val, options.get(), cb_val.get());
 }
 
 /// Continuation for a `createSocket` override's `cb(err, socket)` callback.

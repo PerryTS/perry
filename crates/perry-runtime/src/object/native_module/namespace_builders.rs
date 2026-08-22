@@ -409,14 +409,29 @@ extern "C" fn global_agent_add_request_thunk(
 
         if let Some(requests) = global_agent_get_field_raw(agent_value, "requests") {
             let requests_value = f64::from_bits(requests.bits());
-            if let Some(requests_ptr) = global_agent_object_ptr(requests_value) {
-                let mut queued = crate::array::js_array_alloc_with_length(0);
-                queued = crate::array::js_array_push_f64(queued, req);
-                let queued_value = crate::value::js_nanbox_pointer(queued as i64);
+            if global_agent_object_ptr(requests_value).is_some() {
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let requests = scope.root_nanbox_f64(requests_value);
+                let req = scope.root_nanbox_f64(req);
                 let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+                let key = scope.root_string_ptr(key_ptr);
+                let requests_ptr = JSValue::from_bits(requests.get_nanbox_f64().to_bits())
+                    .as_pointer::<ObjectHeader>();
+                let existing = js_object_get_field_by_name(requests_ptr, key.get_raw_const_ptr());
+                let mut queued = if crate::array::js_array_is_array(f64::from_bits(existing.bits()))
+                    .to_bits()
+                    == crate::value::TAG_TRUE
+                {
+                    existing.as_pointer::<crate::array::ArrayHeader>() as *mut _
+                } else {
+                    crate::array::js_array_alloc_with_length(0)
+                };
+                queued = crate::array::js_array_push_f64(queued, req.get_nanbox_f64());
+                let queued_value = crate::value::js_nanbox_pointer(queued as i64);
                 js_object_set_field_by_name(
-                    requests_ptr as *mut ObjectHeader,
-                    key_ptr,
+                    JSValue::from_bits(requests.get_nanbox_f64().to_bits())
+                        .as_pointer::<ObjectHeader>() as *mut _,
+                    key.get_raw_const_ptr(),
                     queued_value,
                 );
             }
