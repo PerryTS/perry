@@ -277,7 +277,7 @@ pub use has_property::{js_in_operator, js_object_has_property};
 pub(crate) use ic_miss::primitive_proto_method_name_static;
 pub(crate) use ic_miss::{
     bind_primitive_proto_method_static, is_array_method_value_name, set_method_value_name,
-    timer_handle_method_name_static,
+    stamp_private_evaluation_brand, timer_handle_method_name_static,
 };
 pub use ic_miss::{
     js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,

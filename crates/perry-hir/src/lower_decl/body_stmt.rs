@@ -331,7 +331,20 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         .static_methods
                         .iter()
                         .any(|m| m.name.starts_with("__perry_static_init_"));
-                let fresh_binding = !captured_exprs.is_empty() && !has_static_state;
+                let has_private_elements = class.fields.iter().any(|field| field.is_private)
+                    || class.static_fields.iter().any(|field| field.is_private)
+                    || class
+                        .methods
+                        .iter()
+                        .any(|method| method.name.starts_with('#'))
+                    || class
+                        .static_methods
+                        .iter()
+                        .any(|method| method.name.starts_with('#'))
+                    || class.getters.iter().any(|(name, _)| name.starts_with('#'))
+                    || class.setters.iter().any(|(name, _)| name.starts_with('#'));
+                let fresh_binding =
+                    (!captured_exprs.is_empty() || has_private_elements) && !has_static_state;
                 // Static field initializers + static blocks for a
                 // function-nested class. The module-level path
                 // (`lower/stmt.rs`) emits these into `module.init`; here they
@@ -350,14 +363,12 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 ));
                 let template_name = class.name.clone();
                 ctx.pending_classes.push(class);
-                // #6465 (see `fresh_binding` above): bind the declared name to
-                // a per-evaluation heap class object. The local shadows the
-                // class-registry fallback for every in-scope read — including
-                // the factory's `return C` — so the escaped value carries THIS
-                // evaluation's captures instead of the registry's last-wins
-                // snapshot. `new C()` sites that statically resolve the
-                // template still pass the live captures as trailing args, so
-                // in-factory construction is per-evaluation on both paths.
+                // #6465/#5893 (see `fresh_binding` above): bind the declared
+                // name to a per-evaluation heap class object. Capturing classes
+                // carry this invocation's environment; private classes use the
+                // object's identity as their fresh brand. Because this is a
+                // real local (not an inferred static class alias), `new C()`
+                // constructs through the evaluated class VALUE.
                 if fresh_binding {
                     let class_local = ctx.define_local(class_name.clone(), Type::Any);
                     ctx.record_local_source_span(class_local, class_decl.ident.span);

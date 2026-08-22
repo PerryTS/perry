@@ -884,6 +884,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             object,
         } => {
             let obj = lower_expr(ctx, object)?;
+            let brand_owner = lower_expr(ctx, &Expr::This)?;
             let class_id = ctx.class_ids.get(class_name).copied().unwrap_or(0);
             let key_label = emit_string_literal_global(ctx, field_name);
             Ok(ctx.block().call(
@@ -891,6 +892,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_private_brand_check",
                 &[
                     (DOUBLE, &obj),
+                    (DOUBLE, &brand_owner),
                     (I32, &class_id.to_string()),
                     (PTR, &key_label),
                     (I32, &field_name.len().to_string()),
@@ -909,6 +911,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // unchanged (or throw TypeError). The enclosing PropertyGet /
             // PropertySet / method-call lowering then operates on the result.
             let obj = lower_expr(ctx, object)?;
+            let brand_owner = lower_expr(ctx, &Expr::This)?;
             // Prefer the declaring class's unique HIR id carried on the node.
             // Resolving `class_name` through `class_ids` is ambiguous: that map
             // is keyed by name (last-writer-wins), so a minified bundle that
@@ -926,6 +929,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_private_guard",
                 &[
                     (DOUBLE, &obj),
+                    (DOUBLE, &brand_owner),
                     (I32, &class_id.to_string()),
                     (PTR, &key_label),
                     (I32, &field_name.len().to_string()),

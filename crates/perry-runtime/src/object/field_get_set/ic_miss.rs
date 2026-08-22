@@ -867,9 +867,87 @@ mod sso_tests_1781 {
     }
 }
 
+const PRIVATE_EVALUATION_BRAND_KEY: &[u8] = b"#<perry:class-evaluation-brand>";
+
+/// Stamp an instance constructed through a `ClassExprFresh` value with the
+/// identity of that particular class evaluation. The key starts with `#`, so
+/// the ordinary own-key/enumeration paths hide it just like user private
+/// elements while the GC still traces the class-object value in the slot.
+pub(crate) unsafe fn stamp_private_evaluation_brand(obj: *mut ObjectHeader, class_value: f64) {
+    if obj.is_null() || !super::super::class_registry::is_class_object_value(class_value) {
+        return;
+    }
+    let key = crate::string::js_string_from_bytes(
+        PRIVATE_EVALUATION_BRAND_KEY.as_ptr(),
+        PRIVATE_EVALUATION_BRAND_KEY.len() as u32,
+    );
+    js_object_set_field_by_name(obj, key, class_value);
+}
+
+/// Return the per-evaluation brand carried by `value`, provided it belongs to
+/// `declaring_class_id`'s compile-time template. A fresh class object is its
+/// own static brand; instances carry that object in the hidden slot above.
+fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> {
+    if declaring_class_id == 0 {
+        return None;
+    }
+    if super::super::class_registry::is_class_object_value(value) {
+        let object = JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
+        if !object.is_null() && js_object_get_class_id(object) == declaring_class_id {
+            return Some(value.to_bits());
+        }
+    }
+    let brand = crate::object::js_object_get_own_field_or_undef(
+        value,
+        PRIVATE_EVALUATION_BRAND_KEY.as_ptr(),
+        PRIVATE_EVALUATION_BRAND_KEY.len(),
+    );
+    if !super::super::class_registry::is_class_object_value(brand) {
+        return None;
+    }
+    let object = JSValue::from_bits(brand.to_bits()).as_pointer::<ObjectHeader>();
+    (!object.is_null() && js_object_get_class_id(object) == declaring_class_id)
+        .then_some(brand.to_bits())
+}
+
+/// If the lexical class evaluation can be recovered from `brand_owner`,
+/// compare `obj` against that exact evaluation. `None` asks callers to retain
+/// the existing template-class check for ordinary (single-evaluation) classes.
+fn private_evaluation_brand_matches(
+    obj: f64,
+    brand_owner: f64,
+    declaring_class_id: u32,
+) -> Option<bool> {
+    // A fresh class object's static method is represented by a bound-method
+    // closure. Function.prototype.call/apply can replace the method body's
+    // visible `this`, but dispatch keeps the closure's captured class object in
+    // IMPLICIT_THIS while invoking the body. That captured object is the
+    // lexical ClassDefinitionEvaluation whose private names the method closes
+    // over; the explicit receiver is only the value being brand-checked.
+    //
+    // Restrict this substitution to class-object owners. Instance methods use
+    // their instance's stamped evaluation brand directly, and ordinary
+    // compile-time ClassRefs keep the existing class-id fallback below.
+    let brand_owner = if super::super::class_registry::is_class_object_value(brand_owner) {
+        let captured_owner = super::super::js_implicit_this_get();
+        if super::super::class_registry::is_class_object_value(captured_owner)
+            && private_evaluation_brand(captured_owner, declaring_class_id).is_some()
+        {
+            captured_owner
+        } else {
+            brand_owner
+        }
+    } else {
+        brand_owner
+    };
+    let expected = private_evaluation_brand(brand_owner, declaring_class_id)?;
+    Some(private_evaluation_brand(obj, declaring_class_id) == Some(expected))
+}
+
 #[no_mangle]
 pub extern "C" fn js_private_brand_check(
     obj: f64,
+    brand_owner: f64,
     declaring_class_id: u32,
     field_name_ptr: *const u8,
     field_name_len: u32,
@@ -880,32 +958,9 @@ pub extern "C" fn js_private_brand_check(
         return false_value;
     }
 
-    let value = JSValue::from_bits(obj.to_bits());
-    if !value.is_pointer() {
-        return false_value;
-    }
-    let obj_ptr = value.as_pointer::<ObjectHeader>();
-    if obj_ptr.is_null() {
-        return false_value;
-    }
-
-    let obj_class_id = js_object_get_class_id(obj_ptr);
-    if obj_class_id == 0 {
-        return false_value;
-    }
-
-    let mut cur = obj_class_id;
-    let mut has_declaring_brand = false;
-    for _ in 0..32 {
-        if cur == declaring_class_id {
-            has_declaring_brand = true;
-            break;
-        }
-        match super::super::class_registry::get_parent_class_id(cur) {
-            Some(parent) if parent != 0 && parent != cur => cur = parent,
-            _ => break,
-        }
-    }
+    let has_declaring_brand =
+        private_evaluation_brand_matches(obj, brand_owner, declaring_class_id)
+            .unwrap_or_else(|| unsafe { private_object_has_brand(obj, declaring_class_id) });
     if !has_declaring_brand {
         return false_value;
     }
@@ -982,6 +1037,7 @@ unsafe fn private_object_has_brand(obj: f64, declaring_class_id: u32) -> bool {
 #[no_mangle]
 pub extern "C" fn js_private_guard(
     obj: f64,
+    brand_owner: f64,
     declaring_class_id: u32,
     _field_name_ptr: *const u8,
     _field_name_len: u32,
@@ -993,13 +1049,17 @@ pub extern "C" fn js_private_guard(
     }
     let is_static = op >= 2;
     let read_write = op & 1; // 0=read, 1=write
-    let has_brand = if is_static {
-        // Static private brand: the receiver must be exactly the declaring
-        // class constructor (identity), not an instance or a subclass.
-        super::super::class_ref_id(obj) == Some(declaring_class_id)
-    } else {
-        unsafe { private_object_has_brand(obj, declaring_class_id) }
-    };
+    let has_brand = private_evaluation_brand_matches(obj, brand_owner, declaring_class_id)
+        .unwrap_or_else(|| {
+            if is_static {
+                // Static private brand: the receiver must be exactly the
+                // declaring class constructor (identity), not an instance or
+                // a subclass.
+                super::super::class_ref_id(obj) == Some(declaring_class_id)
+            } else {
+                unsafe { private_object_has_brand(obj, declaring_class_id) }
+            }
+        });
     if !has_brand {
         throw_private_type_error(
             "Cannot access private member from an object whose class did not declare it",

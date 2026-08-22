@@ -1501,11 +1501,12 @@ pub(crate) fn build_symbol_bound_method_closure(
 /// receiver (an instance or class ref). Otherwise the captured value is the real
 /// receiver and is returned unchanged. See `dispatch_bound_method`.
 /// Is `value` a bound STATIC-method value — a BOUND_METHOD closure whose
-/// captured receiver is a class constructor ref (`C.staticMethod` read as a
-/// value)? Used by the Function.prototype call/apply arms to arm the one-shot
-/// static-`this` override with the explicit thisArg, so the static method body
-/// sees the receiver (`C.m.call({})` → `this === {}`) and static private brand
-/// checks behave per spec.
+/// captured receiver is a class constructor ref or a per-evaluation class
+/// object (`C.staticMethod` read as a value)? Used by the Function.prototype
+/// call/apply arms to arm the one-shot static-`this` override with the explicit
+/// thisArg, so the static method body sees the receiver
+/// (`C.m.call({})` → `this === {}`) and static private brand checks behave per
+/// spec.
 pub(crate) fn is_static_bound_method_value(value: f64) -> bool {
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
@@ -1523,7 +1524,8 @@ pub(crate) fn is_static_bound_method_value(value: f64) -> bool {
         return false;
     }
     let captured = crate::closure::js_closure_get_capture_f64(closure, 0);
-    class_ref_id(captured).is_some() && class_prototype_ref_id(captured).is_none()
+    (class_ref_id(captured).is_some() && class_prototype_ref_id(captured).is_none())
+        || class_registry::is_class_object_value(captured)
 }
 
 pub(crate) fn canonical_bound_method_receiver(captured: f64) -> f64 {

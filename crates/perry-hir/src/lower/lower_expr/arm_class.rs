@@ -9,6 +9,7 @@ pub(crate) fn lower_class_expr(
     ctx: &mut LoweringContext,
     class_expr: &ast::ClassExpr,
 ) -> Result<Expr> {
+    let assignment_name = ctx.assignment_inferred_name.clone();
     let ident_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
     // A NAMED class EXPRESSION used as a VALUE whose name collides
     // with an existing module-scope class — a TOP-LEVEL `class X`
@@ -94,6 +95,18 @@ pub(crate) fn lower_class_expr(
     // guard (assigning to it inside the body throws a TypeError).
     ctx.pending_class_inner_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
     let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
+    let has_private_elements = class.fields.iter().any(|field| field.is_private)
+        || class.static_fields.iter().any(|field| field.is_private)
+        || class
+            .methods
+            .iter()
+            .any(|method| method.name.starts_with('#'))
+        || class
+            .static_methods
+            .iter()
+            .any(|method| method.name.starts_with('#'))
+        || class.getters.iter().any(|(name, _)| name.starts_with('#'))
+        || class.setters.iter().any(|(name, _)| name.starts_with('#'));
     if let Some(display) = display_override {
         ctx.class_display_names.insert(class.id, display);
     }
@@ -165,12 +178,13 @@ pub(crate) fn lower_class_expr(
         .map(|m| m.name.clone())
         .collect();
     ctx.pending_classes.push(class);
-    // #1772: a class EXPRESSION that carries per-evaluation static
-    // fields and is NOT a mixin (`class extends <expr>`) lowers to a
+    // #1772/#5893: a class EXPRESSION that carries per-evaluation static
+    // fields, captures, or private elements lowers to a
     // fresh heap class object per evaluation (`ClassExprFresh`), so
     // `make(a) !== make(b)` and each holds its own statics as own
-    // properties. Mixins and class expressions without statics/captures
-    // keep the historical (shared-template) path.
+    // properties. Private elements need the same path because every class
+    // evaluation creates a distinct private brand, even though Perry keeps a
+    // shared compile-time template for method dispatch.
     // A class expression evaluated at module top level runs exactly
     // once, so it needs no per-evaluation freshness — route it through
     // the shared-template `ClassRef` path (identical to a class
@@ -180,6 +194,18 @@ pub(crate) fn lower_class_expr(
     // expressions inside a function body (factories like effect's
     // `make()`), which produce a distinct class object per call.
     let at_module_top = ctx.scope_depth == 0 && ctx.inside_block_scope == 0;
+    if !at_module_top && has_private_elements {
+        // `const C = class { #x }` normally records C as an inferred static
+        // class alias, which makes `new C()` bypass the local class VALUE.
+        // A private class evaluated in a function must construct through its
+        // fresh heap class object so the instance receives this evaluation's
+        // brand token. Keep the static alias optimization for all other class
+        // expressions and for module-top expressions (which evaluate once).
+        ctx.inferred_class_bindings.remove(&synthetic_name);
+        if let Some(name) = assignment_name.as_ref() {
+            ctx.inferred_class_bindings.remove(name);
+        }
+    }
     // #6604/#6654: register this capturing class EXPRESSION with the enclosing
     // body's end-of-body capture-refresh machinery (#6037/#6052), which
     // previously scanned class DECLARATION statements only. Without the
@@ -216,7 +242,8 @@ pub(crate) fn lower_class_expr(
     if !at_module_top
         && (!named_statics.is_empty()
             || !static_symbol_registrations.is_empty()
-            || !captured_args.is_empty())
+            || !captured_args.is_empty()
+            || has_private_elements)
     {
         // #6438: a class expression WITH heritage (`class extends <expr>`) used
         // to be excluded here and fell back to the shared-template `ClassRef`
