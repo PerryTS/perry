@@ -287,6 +287,60 @@ fn string_vs_generic_key_uses_the_identity_first_dispatch() {
         ir.contains("streq.tag"),
         "string-vs-generic comparison did not enter the identity-first dispatch:\n{ir}"
     );
+    assert!(
+        !ir.contains("streq.heap.len"),
+        "generic-key equality paid the short-string checks without two proven strings:\n{ir}"
+    );
+}
+
+#[test]
+fn string_equality_inlines_short_heap_content_checks_before_the_helper() {
+    let ir = ir_for(
+        "streq_short_heap",
+        vec![
+            Stmt::Let {
+                id: X,
+                name: "left".to_string(),
+                ty: Type::String,
+                mutable: true,
+                init: Some(Expr::String("left".to_string())),
+            },
+            Stmt::Let {
+                id: Y,
+                name: "right".to_string(),
+                ty: Type::String,
+                mutable: true,
+                init: Some(Expr::String("right".to_string())),
+            },
+            Stmt::Let {
+                id: R,
+                name: "same".to_string(),
+                ty: Type::Boolean,
+                mutable: false,
+                init: Some(Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(X)),
+                    right: Box::new(Expr::LocalGet(Y)),
+                }),
+            },
+        ],
+    );
+
+    for label in [
+        "streq.heap.len",
+        "streq.heap.first",
+        "streq.heap.last",
+        "streq.heap.middle",
+    ] {
+        assert!(
+            ir.contains(label),
+            "missing {label} short-string arm:\n{ir}"
+        );
+    }
+    assert!(
+        ir.contains("call i32 @js_string_equals("),
+        "long heap strings lost their full-content fallback:\n{ir}"
+    );
 }
 
 /// The SSO immediate is hand-built here but consumed by `perry-runtime`'s
