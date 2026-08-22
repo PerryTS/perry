@@ -1078,7 +1078,7 @@ jobs:
               cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
               export PERRY_RUNTIME_DIR="$PWD/target/release"
             fi
-            find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
+            find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete 2>/dev/null || true
             # Large perry / perry-stdlib integration-test binaries: serialize
             # builds and prune linked executables between packages so the runner
             # disk doesn't exhaust mid-job.
@@ -1088,7 +1088,7 @@ jobs:
               cargo test -p "$package"
               echo "::endgroup::"
               cargo clean -p "$package" || true
-              find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete
+              find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete 2>/dev/null || true
             done
           else
             # ---- FAST per-PR run (<10 min target) ----
