@@ -44,6 +44,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // The post-RS4GC per-function instruction budget (#8583): a unit that one
     // setting refuses must not be served from a build another accepted.
     "PERRY_LL_RS4GC_MAX_INSTRS",
+    // #8583: the relocation estimate above which a function spills its GC roots
+    // to a shadow frame. It changes which functions carry statepoints, so it
+    // changes the generated code and must be a cache input.
+    "PERRY_ROOT_SPILL_RELOCATIONS",
     "PERRY_GC_SAFEPOINT_ONLY",
     "PERRY_INLINE_SHADOW_SLOT",
     "PERRY_DISABLE_BUFFER_FAST_PATH",

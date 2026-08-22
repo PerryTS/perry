@@ -158,6 +158,18 @@ pub struct LlFunction {
     /// final IR pass resolves these indices to the native allocas named by
     /// `js_shadow_slot_bind` calls, removes the calls, and emits stack maps.
     stack_map_slot_count: u32,
+    /// #8583: force this function onto the heap-backed shadow frame even when
+    /// native stack-map roots are the build default. Set for a function whose
+    /// estimated statepoint relocation count (`live_roots × safepoints`) would
+    /// make `rewrite-statepoints-for-gc` fan-out super-linear in the optimizer
+    /// (`codegen/helpers::maybe_spill_roots_to_shadow_frame`). The shadow-frame
+    /// lowering is the pre-#7370 default, walked by the same runtime root scan
+    /// as stack maps, so a spilled function's roots stay precise — it simply
+    /// carries no `gc "statepoint-example"` strategy and RS4GC skips it. The
+    /// frame pointer is unaffected (kept for every native-roots build), so the
+    /// FP-chain walker steps over the spilled frame exactly as it does the
+    /// runtime's own.
+    force_shadow_frame: bool,
     /// Runtime hooks emitted immediately before each non-pointer `ret`.
     /// Entry/module-init functions use this for process-level diagnostics
     /// that must run regardless of which block reaches the normal epilogue.
@@ -264,6 +276,7 @@ impl LlFunction {
             shadow_frame_slot_count: 0,
             stack_map_requested: false,
             stack_map_slot_count: 0,
+            force_shadow_frame: false,
             pre_return_void_calls: Vec::new(),
         }
     }
@@ -289,6 +302,19 @@ impl LlFunction {
     /// into every caller's hot loop. Skip the frame entirely; the
     /// to_ir() rewrite pass keys off `shadow_frame_slot.is_some()`,
     /// so no matching pop is emitted either.
+    /// #8583: route this function's precise roots through the heap shadow
+    /// frame instead of native statepoints. Must be called BEFORE
+    /// `enable_shadow_frame` / `enable_post_init_shadow_frame` so the frame is
+    /// built in shadow form. No effect once a frame has been emitted.
+    pub fn request_shadow_frame_spill(&mut self) {
+        self.force_shadow_frame = true;
+    }
+
+    /// Whether this function spills its roots to the shadow frame (#8583).
+    pub fn spills_roots_to_shadow_frame(&self) -> bool {
+        self.force_shadow_frame
+    }
+
     pub fn enable_shadow_frame(&mut self, slot_count: u32) {
         self.enable_shadow_frame_inner(slot_count, false);
     }
@@ -304,7 +330,7 @@ impl LlFunction {
     }
 
     fn enable_shadow_frame_inner(&mut self, slot_count: u32, post_init: bool) {
-        if crate::codegen::helpers::native_stack_roots_enabled() {
+        if crate::codegen::helpers::native_stack_roots_enabled() && !self.force_shadow_frame {
             self.shadow_frame_requested = true;
             self.shadow_frame_post_init_region = post_init;
             self.stack_map_requested = slot_count != 0;
@@ -398,7 +424,7 @@ impl LlFunction {
         if !self.shadow_frame_requested {
             return None;
         }
-        if crate::codegen::helpers::native_stack_roots_enabled() {
+        if crate::codegen::helpers::native_stack_roots_enabled() && !self.force_shadow_frame {
             let idx = self.stack_map_slot_count;
             self.stack_map_slot_count += 1;
             self.stack_map_requested = true;
@@ -834,12 +860,19 @@ impl LlFunction {
         // #7174: the `!has_try` exclusion is gone with the field. Try/catch no
         // longer lowers to setjmp/longjmp (#7302), so nothing can jump past a
         // `gc.relocate` any more and statepoints cover every function.
-        let gc_strategy =
-            if self.stack_map_requested && crate::codegen::helpers::native_stack_roots_enabled() {
-                " gc \"statepoint-example\""
-            } else {
-                ""
-            };
+        // A spilled function (#8583) keeps precise roots in the shadow frame,
+        // so it must NOT carry the statepoint strategy — RS4GC would then run
+        // on it and reintroduce the relocation fan-out the spill avoids. Its
+        // `stack_map_requested` is already false (enable_shadow_frame_inner
+        // took the shadow branch), so this is belt-and-braces.
+        let gc_strategy = if self.stack_map_requested
+            && !self.force_shadow_frame
+            && crate::codegen::helpers::native_stack_roots_enabled()
+        {
+            " gc \"statepoint-example\""
+        } else {
+            ""
+        };
         // Invoke-EH (#7302): functions containing landing/funclet pads name
         // their personality on the define line. LLVM's grammar orders these
         // `[fn attrs] [gc] [personality]`, so the strategy precedes it.
@@ -1242,6 +1275,92 @@ mod define_header_tests {
                  pass over IR that has no addrspace(1) roots to rewrite"
             );
         }
+    }
+
+    /// #8583 root spilling: under the native-roots build, a function that
+    /// requested a shadow-frame spill BEFORE `enable_shadow_frame` must take
+    /// the heap shadow lowering — no `gc "statepoint-example"` strategy (so
+    /// RS4GC skips it and cannot fan out its relocations) — while a sibling
+    /// that did not request the spill keeps native statepoints. The frame
+    /// pointer is kept regardless, so the FP-chain root walker still steps
+    /// over the spilled frame.
+    #[test]
+    fn a_spilled_function_takes_the_shadow_lowering_while_its_sibling_keeps_statepoints() {
+        use crate::codegen::helpers::NativeRootsPin;
+        use crate::types::{I64, PTR};
+        const STRATEGY: &str = "gc \"statepoint-example\"";
+        const FRAME_PTR: &str = "\"frame-pointer\"=\"non-leaf\"";
+
+        // Build a function with one bound root across a call: enough for both
+        // lowerings to have real content to render.
+        fn rooted(spill: bool) -> LlFunction {
+            let mut f = LlFunction::new("perry_fn_probe", crate::types::VOID, vec![]);
+            if spill {
+                f.request_shadow_frame_spill();
+            }
+            f.enable_shadow_frame(0);
+            let idx = f.reserve_shadow_slot().expect("a frame yields a root slot");
+            let root = f.alloca_entry(I64);
+            f.entry_allocas_push_store(I64, "0", &root);
+            f.entry_setup_call_void(
+                "js_shadow_slot_bind",
+                &[(crate::types::I32, &idx.to_string()), (PTR, &root)],
+            );
+            let entry = f.create_block("entry");
+            let _ = entry.call(I64, "may_collect", &[]);
+            entry.ret_void();
+            f
+        }
+
+        let _native = NativeRootsPin::native();
+
+        let native = rooted(false);
+        assert_eq!(
+            native.stack_map_slot_count, 1,
+            "the un-spilled sibling must take the stack-map path"
+        );
+        let native_hdr = native.define_header(false);
+        assert!(
+            native_hdr.contains(STRATEGY),
+            "the un-spilled sibling must carry the statepoint strategy:\n{native_hdr}"
+        );
+
+        let spilled = rooted(true);
+        assert!(spilled.spills_roots_to_shadow_frame());
+        assert_eq!(
+            spilled.stack_map_slot_count, 0,
+            "a spilled function must NOT take the stack-map path even under the \
+             native-roots pin — that is the whole point of the spill"
+        );
+        let spilled_hdr = spilled.define_header(false);
+        assert!(
+            !spilled_hdr.contains(STRATEGY),
+            "a spilled function must NOT claim the statepoint strategy, or RS4GC \
+             would run on it and reintroduce the relocation fan-out:\n{spilled_hdr}"
+        );
+        assert!(
+            spilled_hdr.contains(FRAME_PTR) && native_hdr.contains(FRAME_PTR),
+            "both lowerings keep the non-leaf frame pointer so the FP-chain \
+             walker can step over the frame:\nspilled: {spilled_hdr}\nnative: {native_hdr}"
+        );
+
+        // The spilled function builds the heap shadow frame (`js_shadow_frame_enter`
+        // + retained `js_shadow_slot_bind`); the native sibling has neither — its
+        // roots are stack-map slots that RS4GC lowers, and the bind calls are
+        // stripped.
+        let spilled_ir = spilled.to_ir();
+        assert!(
+            spilled_ir.contains("@js_shadow_frame_enter")
+                && spilled_ir.contains("@js_shadow_slot_bind"),
+            "a spilled function keeps the runtime shadow frame:\n{spilled_ir}"
+        );
+        let native_ir = native.to_ir();
+        assert!(
+            !native_ir.contains("@js_shadow_frame_enter")
+                && !native_ir.contains("@js_shadow_slot_bind"),
+            "the native sibling has no heap shadow frame; its roots are stack-map \
+             slots and its binds are lowered away:\n{native_ir}"
+        );
     }
 
     /// `force_external` drops only the linkage keyword. The codegen-unit path

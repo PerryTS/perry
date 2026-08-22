@@ -554,6 +554,12 @@ pub(super) fn compile_function(
             cross_module.flat_const_arrays.keys().copied().collect();
         let m =
             crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids);
+        crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
+            lf,
+            &llvm_name,
+            m.len(),
+            &f.body,
+        );
         lf.enable_shadow_frame(m.len() as u32);
         m
     } else {

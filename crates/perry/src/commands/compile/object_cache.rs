@@ -849,6 +849,13 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // #8583: root-spill threshold changes which functions carry statepoints.
+    h.field(
+        "env_root_spill_relocations",
+        env_var("PERRY_ROOT_SPILL_RELOCATIONS")
+            .as_deref()
+            .unwrap_or(""),
+    );
     // Explicit-safepoint contract: flips audited AllocNoReentry helpers
     // between statepoint and plain call. Two arms sharing a cached object
     // would make the contract's metadata reduction unmeasurable.

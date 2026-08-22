@@ -42,6 +42,7 @@ mod ptr_shape_report;
 mod ptr_shape_returns;
 mod refs;
 mod repsel_benefit;
+mod safepoint_sites;
 mod scalar_method_dispatch;
 mod scalar_methods;
 mod shadow_slots;
@@ -93,6 +94,7 @@ pub(crate) use ptr_shape_returns::collect_exported_return_shapes;
 pub(crate) use refs::{
     collect_let_ids, collect_ref_ids_in_expr, collect_ref_ids_in_stmts, is_clamp_call,
 };
+pub(crate) use safepoint_sites::count_safepoint_sites;
 pub(crate) use scalar_method_dispatch::{
     collect_module_dispatch_facts, mark_unstable_scalar_method_receivers, ModuleDispatchFacts,
 };
