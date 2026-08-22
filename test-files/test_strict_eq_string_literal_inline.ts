@@ -107,6 +107,38 @@ console.log(describe(tree));
 const dynOp: string = ["+", "-", "*"][1];
 console.log(dynOp === "-", dynOp === "+", dynOp !== "-");
 
+// ---- non-literal heap strings (the environment-lookup shape from #8591) ---
+// Keep both operands statically `string` but construct distinct heap values so
+// the no-literal equality path has to compare their contents. Lengths 0..3 are
+// settled inline; longer strings retain the runtime helper.
+function sameString(a: string, b: string): boolean {
+  return a === b;
+}
+const heapEmptyA: string = "xy".substring(1, 1);
+const heapEmptyB: string = "ab".substring(0, 0);
+const heapOneA: string = "xn".substring(1);
+const heapOneB: string = "ny".substring(0, 1);
+const heapTwoA: string = "g" + "o";
+const heapTwoB: string = "xgoy".substring(1, 3);
+const heapThreeA: string = "f" + "ib";
+const heapThreeB: string = "xfiby".substring(1, 4);
+const heapLongA: string = "long" + "name";
+const heapLongB: string = "xlongnamey".substring(1, 9);
+console.log(
+  sameString(heapEmptyA, heapEmptyB),
+  sameString(heapOneA, heapOneB),
+  sameString(heapTwoA, heapTwoB),
+  sameString(heapThreeA, heapThreeB),
+  sameString(heapLongA, heapLongB),
+);
+console.log(
+  sameString(heapOneA, "z".substring(0, 1)),
+  sameString(heapTwoA, "no".substring(0, 2)),
+  sameString(heapThreeA, "fox".substring(0, 3)),
+  sameString(heapThreeA, "fig".substring(0, 3)),
+  sameString(heapLongA, "longnames".substring(0, 9)),
+);
+
 // ---- switch/case over the same literals (a second lowering of ===) ---------
 function classify(s: string): number {
   switch (s) {

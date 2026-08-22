@@ -432,6 +432,119 @@ fn lower_strict_eq_inline_any(ctx: &mut FnCtx<'_>, l: &str, r: &str) -> String {
     )
 }
 
+/// Resolve equal-length heap strings of up to three bytes inline, and reject
+/// longer pairs on a length or endpoint mismatch before using the full helper.
+/// The caller has already proven both values carry `STRING_TAG`.
+fn lower_short_heap_string_eq(
+    ctx: &mut FnCtx<'_>,
+    lh: &str,
+    rh: &str,
+    true_l: &str,
+    false_l: &str,
+    merge_l: &str,
+) -> (String, String) {
+    let heap_valid_idx = ctx.new_block("streq.heap.valid");
+    let heap_len_idx = ctx.new_block("streq.heap.len");
+    let heap_first_idx = ctx.new_block("streq.heap.first");
+    let heap_one_idx = ctx.new_block("streq.heap.one");
+    let heap_last_idx = ctx.new_block("streq.heap.last");
+    let heap_two_idx = ctx.new_block("streq.heap.two");
+    let heap_middle_idx = ctx.new_block("streq.heap.middle");
+    let heap_middle_byte_idx = ctx.new_block("streq.heap.middle.byte");
+    let heap_slow_idx = ctx.new_block("streq.heap.slow");
+    let heap_valid_l = ctx.block_label(heap_valid_idx);
+    let heap_len_l = ctx.block_label(heap_len_idx);
+    let heap_first_l = ctx.block_label(heap_first_idx);
+    let heap_one_l = ctx.block_label(heap_one_idx);
+    let heap_last_l = ctx.block_label(heap_last_idx);
+    let heap_two_l = ctx.block_label(heap_two_idx);
+    let heap_middle_l = ctx.block_label(heap_middle_idx);
+    let heap_middle_byte_l = ctx.block_label(heap_middle_byte_idx);
+    let heap_slow_l = ctx.block_label(heap_slow_idx);
+
+    // Preserve `js_string_equals`' handling of deliberately forged low
+    // `STRING_TAG` payloads: only dereference real heap addresses here.
+    let lh_valid = ctx.block().icmp_ugt(I64, lh, "4095");
+    let rh_valid = ctx.block().icmp_ugt(I64, rh, "4095");
+    let both_valid = ctx.block().and(I1, &lh_valid, &rh_valid);
+    ctx.block()
+        .cond_br(&both_valid, &heap_valid_l, &heap_slow_l);
+
+    ctx.current_block = heap_valid_idx;
+    let lp = ctx.block().inttoptr(I64, lh);
+    let rp = ctx.block().inttoptr(I64, rh);
+    let llenp = ctx
+        .block()
+        .gep_inbounds(I8, &lp, &[(I64, STRING_HEADER_BYTE_LEN_OFFSET)]);
+    let rlenp = ctx
+        .block()
+        .gep_inbounds(I8, &rp, &[(I64, STRING_HEADER_BYTE_LEN_OFFSET)]);
+    let llen = ctx.block().load(I32, &llenp);
+    let rlen = ctx.block().load(I32, &rlenp);
+    let same_len = ctx.block().icmp_eq(I32, &llen, &rlen);
+    ctx.block().cond_br(&same_len, &heap_len_l, false_l);
+
+    ctx.current_block = heap_len_idx;
+    let empty = ctx.block().icmp_eq(I32, &llen, "0");
+    ctx.block().cond_br(&empty, true_l, &heap_first_l);
+
+    // A non-empty, same-length pair can be rejected on its first byte. For a
+    // one-byte pair that byte also settles equality.
+    ctx.current_block = heap_first_idx;
+    let data_off = STRING_HEADER_SIZE.to_string();
+    let lfirstp = ctx.block().gep_inbounds(I8, &lp, &[(I64, &data_off)]);
+    let rfirstp = ctx.block().gep_inbounds(I8, &rp, &[(I64, &data_off)]);
+    let lfirst = ctx.block().load(I8, &lfirstp);
+    let rfirst = ctx.block().load(I8, &rfirstp);
+    let same_first = ctx.block().icmp_eq(I8, &lfirst, &rfirst);
+    ctx.block().cond_br(&same_first, &heap_one_l, false_l);
+
+    ctx.current_block = heap_one_idx;
+    let one_byte = ctx.block().icmp_eq(I32, &llen, "1");
+    ctx.block().cond_br(&one_byte, true_l, &heap_last_l);
+
+    // The length checks above prove that this dynamic last-byte offset is in
+    // both payloads. Together with the first byte it settles two-byte strings.
+    ctx.current_block = heap_last_idx;
+    let llen64 = ctx.block().zext(I32, &llen, I64);
+    let last_off = ctx
+        .block()
+        .add(I64, &llen64, &(STRING_HEADER_SIZE - 1).to_string());
+    let llastp = ctx.block().gep_inbounds(I8, &lp, &[(I64, &last_off)]);
+    let rlastp = ctx.block().gep_inbounds(I8, &rp, &[(I64, &last_off)]);
+    let llast = ctx.block().load(I8, &llastp);
+    let rlast = ctx.block().load(I8, &rlastp);
+    let same_last = ctx.block().icmp_eq(I8, &llast, &rlast);
+    ctx.block().cond_br(&same_last, &heap_two_l, false_l);
+
+    ctx.current_block = heap_two_idx;
+    let two_bytes = ctx.block().icmp_eq(I32, &llen, "2");
+    ctx.block().cond_br(&two_bytes, true_l, &heap_middle_l);
+
+    // For three-byte strings the middle byte is the only byte not checked yet.
+    // Longer strings retain the full runtime content comparison.
+    ctx.current_block = heap_middle_idx;
+    let three_bytes = ctx.block().icmp_eq(I32, &llen, "3");
+    ctx.block()
+        .cond_br(&three_bytes, &heap_middle_byte_l, &heap_slow_l);
+
+    ctx.current_block = heap_middle_byte_idx;
+    let lmiddlep = ctx.block().gep_inbounds(I8, &lp, &[(I64, "21")]);
+    let rmiddlep = ctx.block().gep_inbounds(I8, &rp, &[(I64, "21")]);
+    let lmiddle = ctx.block().load(I8, &lmiddlep);
+    let rmiddle = ctx.block().load(I8, &rmiddlep);
+    let same_middle = ctx.block().icmp_eq(I8, &lmiddle, &rmiddle);
+    ctx.block().cond_br(&same_middle, true_l, false_l);
+
+    ctx.current_block = heap_slow_idx;
+    let heap_res = ctx
+        .block()
+        .call(I32, "js_string_equals", &[(I64, lh), (I64, rh)]);
+    let heap_pred = ctx.block().label.clone();
+    ctx.block().br(merge_l);
+    (heap_res, heap_pred)
+}
+
 /// Inline prefix for the `===`/`!==` string arms that have **no** literal
 /// operand — `names[i] === name` in an environment lookup, say.
 ///
@@ -444,13 +557,20 @@ fn lower_strict_eq_inline_any(ctx: &mut FnCtx<'_>, l: &str, r: &str) -> String {
 /// * both operands SSO with different bits => different content, again by
 ///   canonicality.
 ///
-/// The remaining arms are exactly what each caller emitted before, so this is
-/// behaviour-preserving. That matters most for `legacy_unified`, whose fallback
-/// keeps the `js_get_string_pointer_unified` composition — including its
-/// number-coercing behaviour for operands whose `string` annotation lies. Note
-/// that composition *materializes* an SSO operand onto the heap, so routing
-/// SSO x SSO around it removes two allocations per comparison as well as the
-/// calls.
+/// When both operands are statically proven strings, heap values first compare
+/// their lengths and up to three payload bytes inline. Besides rejecting every
+/// different-length pair, that completely settles the short identifiers that
+/// dominate environment lookup in tree-walking interpreters (`n`, `go`,
+/// `fib`, ...). Longer same-length pairs still use the old helper. Generic-key
+/// comparisons skip this larger prefix because their strings may be longer.
+///
+/// The remaining representation arms are exactly what each caller emitted
+/// before, so this is behaviour-preserving. That matters most for
+/// `legacy_unified`, whose fallback keeps the
+/// `js_get_string_pointer_unified` composition — including its number-coercing
+/// behaviour for operands whose `string` annotation lies. Note that
+/// composition *materializes* an SSO operand onto the heap, so routing SSO x
+/// SSO around it removes two allocations per comparison as well as the calls.
 ///
 /// Returns an `i32` that is 1 iff the operands are `===`.
 fn lower_string_strict_eq_inline(
@@ -458,6 +578,7 @@ fn lower_string_strict_eq_inline(
     l: &str,
     r: &str,
     legacy_unified: bool,
+    inline_short_heap: bool,
 ) -> String {
     let l_bits = ctx.block().bitcast_double_to_i64(l);
     let r_bits = ctx.block().bitcast_double_to_i64(r);
@@ -495,11 +616,16 @@ fn lower_string_strict_eq_inline(
     ctx.current_block = heap_idx;
     let lh = ctx.block().and(I64, &l_bits, POINTER_MASK_I64);
     let rh = ctx.block().and(I64, &r_bits, POINTER_MASK_I64);
-    let heap_res = ctx
-        .block()
-        .call(I32, "js_string_equals", &[(I64, &lh), (I64, &rh)]);
-    let heap_pred = ctx.block().label.clone();
-    ctx.block().br(&merge_l);
+    let (heap_res, heap_pred) = if inline_short_heap {
+        lower_short_heap_string_eq(ctx, &lh, &rh, &true_l, &false_l, &merge_l)
+    } else {
+        let heap_res = ctx
+            .block()
+            .call(I32, "js_string_equals", &[(I64, &lh), (I64, &rh)]);
+        let heap_pred = ctx.block().label.clone();
+        ctx.block().br(&merge_l);
+        (heap_res, heap_pred)
+    };
 
     ctx.current_block = sso_idx;
     let l_sso = ctx
@@ -795,7 +921,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // only `js_string_equals`. The boxed arm is byte-for-byte
                     // the old helper composition, so a lying annotation keeps
                     // its existing behaviour.
-                    let i32_eq = lower_string_strict_eq_inline(ctx, &l, &r, true);
+                    let i32_eq = lower_string_strict_eq_inline(ctx, &l, &r, true, false);
                     let blk = ctx.block();
                     let bit = blk.icmp_ne(I32, &i32_eq, "0");
                     let bit_final = if matches!(op, CompareOp::Ne | CompareOp::LooseNe) {
@@ -890,7 +1016,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         CompareOp::Eq | CompareOp::LooseEq | CompareOp::Ne | CompareOp::LooseNe
                     )
                 {
-                    let i32_eq = lower_string_strict_eq_inline(ctx, &l, &r, false);
+                    let i32_eq = lower_string_strict_eq_inline(ctx, &l, &r, false, true);
                     let blk = ctx.block();
                     let bit = blk.icmp_ne(I32, &i32_eq, "0");
                     let bit_final = if matches!(op, CompareOp::Ne | CompareOp::LooseNe) {
@@ -921,7 +1047,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // SSO x SSO are answered inline, which is what keeps a pair of
                     // short runtime strings (`charAt`, `substring`) from
                     // materializing two throwaway heap copies per comparison.
-                    let i32_eq = lower_string_strict_eq_inline(ctx, &l, &r, true);
+                    let i32_eq = lower_string_strict_eq_inline(ctx, &l, &r, true, true);
                     let blk = ctx.block();
                     let bit = blk.icmp_ne(I32, &i32_eq, "0");
                     let bit_final = if matches!(op, CompareOp::Ne | CompareOp::LooseNe) {
