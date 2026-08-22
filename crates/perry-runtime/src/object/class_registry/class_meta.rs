@@ -199,6 +199,14 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
             // bare-call thunk (which throws "Constructor WeakMap requires 'new'").
             || func_ptr == map_constructor_call_thunk as *const u8 as usize
             || func_ptr == set_constructor_call_thunk as *const u8 as usize
+            // #2889's own arm handles `new (rebound RegExp)(...)`, but this
+            // recognition step never accepted RegExp's dedicated thunk, so it
+            // never reached that arm: `const RegExpCtor = RegExp; new
+            // RegExpCtor(pattern)` (socket-lib's rolldown-bundled primordials
+            // module does exactly this) fell through to the generic
+            // empty-object path, producing an object `.source`/`.flags`
+            // readers reject as an unbranded receiver.
+            || func_ptr == regexp_constructor_call_thunk as *const u8 as usize
             || func_ptr == weak_map_constructor_call_thunk as *const u8 as usize
             || func_ptr == weak_set_constructor_call_thunk as *const u8 as usize
             || func_ptr == weak_ref_constructor_call_thunk as *const u8 as usize
