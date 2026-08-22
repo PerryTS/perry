@@ -432,6 +432,50 @@ pub(crate) fn generic_method_body_name(generic_name: &str) -> String {
     format!("{generic_name}$generic")
 }
 
+/// Internal full-body clone reached only from a call site that has already
+/// proved the selected index parameters are nonnegative i32 values.
+pub(crate) fn nonnegative_index_method_name(generic_name: &str, params: &[u32]) -> String {
+    let suffix = params
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join("_");
+    format!("{generic_name}$idx_u31_{suffix}")
+}
+
+/// Select a deliberately small method family for call-site-proven index
+/// specialization. Source `number` annotations nominate candidates but never
+/// license the clone: routing requires a separate nonnegative-i32 proof at the
+/// concrete call site, and every other caller keeps the public boxed body.
+pub(crate) fn nonnegative_index_method_params(method: &Function) -> Vec<u32> {
+    if method.is_async
+        || method.is_generator
+        || method.was_plain_async
+        || method.body.len() > 8
+        || method
+            .params
+            .iter()
+            .any(|p| p.default.is_some() || p.is_rest || p.arguments_object.is_some())
+    {
+        return Vec::new();
+    }
+
+    let index_used = crate::collectors::collect_index_used_locals(&method.body);
+    let reassigned = crate::collectors::reassigned_locals(&method.body);
+    let closure_referenced = crate::expr::collect_closure_referenced_locals(&method.body);
+    method
+        .params
+        .iter()
+        .filter(|param| {
+            matches!(param.ty, Type::Number | Type::Int32)
+                && index_used.contains(&param.id)
+                && !reassigned.contains(&param.id)
+                && !closure_referenced.contains(&param.id)
+        })
+        .map(|param| param.id)
+        .collect()
+}
+
 pub(crate) fn generic_closure_body_name(generic_name: &str) -> String {
     format!("{generic_name}$generic")
 }

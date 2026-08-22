@@ -1034,6 +1034,12 @@ pub(crate) struct FnCtx<'a> {
     pub pshape_methods:
         &'a std::collections::HashMap<(String, String), crate::collectors::PtrShapeLocal>,
 
+    /// Module-local methods whose nonnegative-index clone was actually
+    /// emitted. Call lowering gates on this registry rather than re-running
+    /// eligibility over `classes`, which also contains imported structural
+    /// stubs.
+    pub nonnegative_index_methods: &'a std::collections::HashMap<(String, String), Vec<u32>>,
+
     /// #7142: the subset of [`Self::pshape_methods`] the class-id dispatch
     /// tower may route to. A profitability filter only — see
     /// `collectors::pshape_tower_route_profitable`. Soundness at that site comes
@@ -2123,7 +2129,9 @@ mod index_get_claim_tests;
 mod masked_window;
 mod ptr_numarray_access;
 mod ta_param_f64_read;
-pub(crate) use index_get::packed_f64_loop_index_parts;
+pub(crate) use index_get::{
+    numeric_index_has_integer_array_index_proof, packed_f64_loop_index_parts,
+};
 pub(crate) use masked_window::masked_window_fact_for_index;
 /// Rooting coverage for the computed-store arms the TS corpora cannot reach
 /// (#7637, #7638, #7639) — see the module header for why they cannot.

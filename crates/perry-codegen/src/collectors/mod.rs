@@ -72,6 +72,7 @@ pub(crate) use i32_locals::{
     collect_integer_let_ids, collect_localset_ids_in_stmts, is_strictly_i32_bounded_expr,
     is_ushr_zero,
 };
+pub(crate) use index_uses::collect_index_used_locals;
 pub(crate) use int_valued_i64_locals::ceil_log2_abs;
 pub(crate) use integer_locals::{
     collect_flat_row_aliases, is_int32_producing_expr, static_index_window,

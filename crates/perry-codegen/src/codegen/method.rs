@@ -262,6 +262,7 @@ pub(super) fn compile_method(
     typed_public_trampoline: Option<TypedFunctionTrampolineKind>,
     force_generic_body: bool,
     proven_this: Option<crate::collectors::PtrShapeLocal>,
+    nonnegative_index_params: Option<&[u32]>,
 ) -> Result<()> {
     let public_llvm_name = methods
         .get(&(class.name.clone(), method.name.clone()))
@@ -279,7 +280,11 @@ pub(super) fn compile_method(
     // the typed-trampoline / generic-body split — those are emitted by the
     // primary (`proven_this: None`) invocation for this same method.
     let is_pshape_clone = proven_this.is_some();
-    let llvm_name = if is_pshape_clone {
+    let is_index_clone = nonnegative_index_params.is_some();
+    debug_assert!(!(is_pshape_clone && is_index_clone));
+    let llvm_name = if let Some(params) = nonnegative_index_params {
+        crate::codegen::nonnegative_index_method_name(&public_llvm_name, params)
+    } else if is_pshape_clone {
         crate::collectors::pshape_method_name(&public_llvm_name)
     } else if typed_public_trampoline.is_some() || force_generic_body {
         generic_method_body_name(&public_llvm_name)
@@ -297,7 +302,8 @@ pub(super) fn compile_method(
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
-    if is_pshape_clone || typed_public_trampoline.is_some() || force_generic_body {
+    if is_pshape_clone || is_index_clone || typed_public_trampoline.is_some() || force_generic_body
+    {
         lf.linkage = "internal".to_string();
     }
 
@@ -329,6 +335,12 @@ pub(super) fn compile_method(
 
     // Allocate slots for `this` and each parameter; pre-populate with
     // the incoming values.
+    let index_param_ids: HashSet<u32> = nonnegative_index_params
+        .unwrap_or_default()
+        .iter()
+        .copied()
+        .collect();
+    let mut index_i32_param_slots: HashMap<u32, String> = HashMap::new();
     let (this_slot, locals): (String, HashMap<u32, String>) = {
         let blk = lf.block_mut(0).unwrap();
         let this_slot = blk.alloca(DOUBLE);
@@ -350,6 +362,16 @@ pub(super) fn compile_method(
                 );
             }
             map.insert(p.id, slot);
+            if index_param_ids.contains(&p.id) {
+                // The clone is reachable only from a call site that proved
+                // this argument is in [0, i32::MAX]. The ordinary boxed ABI
+                // materializes such loop indices as plain doubles, so one
+                // entry conversion supplies the canonical raw index slot.
+                let raw_i32 = blk.fptosi(DOUBLE, &arg_name, I32);
+                let i32_slot = blk.alloca(I32);
+                blk.store(I32, &raw_i32, &i32_slot);
+                index_i32_param_slots.insert(p.id, i32_slot);
+            }
         }
         (this_slot, map)
     };
@@ -392,6 +414,13 @@ pub(super) fn compile_method(
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
     );
+    let mut index_clone_integer_locals = native_facts.integer_locals().clone();
+    index_clone_integer_locals.extend(index_param_ids.iter().copied());
+    let index_param_proofs: HashMap<u32, perry_hir::types::Type> = index_param_ids
+        .iter()
+        .copied()
+        .map(|id| (id, perry_hir::types::Type::Int32))
+        .collect();
 
     // Representation-selection context gates (see codegen/function.rs).
     let repsel_flags = crate::expr::RepselContextFlags::for_body(
@@ -427,7 +456,7 @@ pub(super) fn compile_method(
         native_facts: &native_facts,
         locals,
         local_types,
-        proven_local_types: std::collections::HashMap::new(),
+        proven_local_types: index_param_proofs,
         guarded_discriminant_aliases: std::collections::HashMap::new(),
         module_global_proven_types: &cross_module.module_global_proven_types,
         reassigned_locals: crate::collectors::reassigned_locals(&method.body),
@@ -507,7 +536,7 @@ pub(super) fn compile_method(
         interfaces: &cross_module.interfaces,
         try_depth: 0,
         pending_declares: Vec::new(),
-        integer_locals: native_facts.integer_locals(),
+        integer_locals: &index_clone_integer_locals,
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
         number_by_construction_locals: native_facts.number_by_construction_locals(),
@@ -532,7 +561,7 @@ pub(super) fn compile_method(
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
         class_field_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),
-        i32_counter_slots: HashMap::new(),
+        i32_counter_slots: index_i32_param_slots,
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
         // #7109 split the FIELD out of `repsel_context_allows_canonical_i32`;
@@ -549,7 +578,7 @@ pub(super) fn compile_method(
         spec_return_proofs: &cross_module.spec_return_proofs,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
         spec_ta_ready: std::collections::HashSet::new(),
-        spec_i32_params: std::collections::HashSet::new(),
+        spec_i32_params: index_param_ids.clone(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
@@ -597,6 +626,7 @@ pub(super) fn compile_method(
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
         pshape_methods: &cross_module.pshape_methods,
+        nonnegative_index_methods: &cross_module.nonnegative_index_methods,
         pshape_tower_routable: &cross_module.pshape_tower_routable,
         proven_this,
         typed_i32_methods: &cross_module.typed_i32_methods,
@@ -627,7 +657,7 @@ pub(super) fn compile_method(
         int_range_aliases: HashMap::new(),
         int_range_facts: Vec::new(),
         next_loop_proof_scope_id: 0,
-        nonnegative_integer_locals: HashSet::new(),
+        nonnegative_integer_locals: index_param_ids,
         native_rep_records: Vec::new(),
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         buffer_alias_base,
@@ -1073,10 +1103,11 @@ pub(super) fn compile_method(
     for raw in &typed_parse_rodata {
         llmod.add_raw_global(raw.clone());
     }
-    // The Phase 5a clone is purely additive: the public symbol (and its
-    // trampoline/forwarder, if any) belongs to the primary invocation. Emitting
-    // it again here would define the same symbol twice.
-    if !is_pshape_clone {
+    // The Phase 5a and nonnegative-index clones are purely additive: the
+    // public symbol (and its trampoline/forwarder, if any) belongs to the
+    // primary invocation. Emitting it again here would define that symbol
+    // twice.
+    if !is_pshape_clone && !is_index_clone {
         if let Some(kind) = typed_public_trampoline {
             emit_public_typed_method_trampoline(llmod, method, &public_llvm_name, &llvm_name, kind);
         } else if force_generic_body {
@@ -1670,6 +1701,7 @@ pub(super) fn compile_static_method(
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
         pshape_methods: &cross_module.pshape_methods,
+        nonnegative_index_methods: &cross_module.nonnegative_index_methods,
         pshape_tower_routable: &cross_module.pshape_tower_routable,
         proven_this: None,
         typed_i32_methods: &cross_module.typed_i32_methods,

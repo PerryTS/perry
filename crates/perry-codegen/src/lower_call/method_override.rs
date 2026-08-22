@@ -293,6 +293,7 @@ pub(super) fn emit_guarded_direct_method_call(
     direct_fn: &str,
     direct_arg_slices: &[(crate::types::LlvmType, &str)],
     fallback_user_args: &[String],
+    nonnegative_index_direct_fn: Option<&str>,
     typed_direct_fn: Option<(&str, Vec<crate::codegen::TypedParamRep>)>,
     typed_f64_receiver_direct_fn: Option<(&str, usize, &crate::codegen::TypedReceiverMethodInfo)>,
     typed_i32_direct_fn: Option<(&str, Vec<crate::codegen::TypedParamRep>)>,
@@ -997,7 +998,9 @@ pub(super) fn emit_guarded_direct_method_call(
             // `perry_static_` exclusion and the declaring-class argument are
             // written out) is the same clone the typed arms above now route
             // their generic fallbacks to.
-            let target = pshape_fn.as_deref().unwrap_or(direct_fn);
+            let target = nonnegative_index_direct_fn
+                .or(pshape_fn.as_deref())
+                .unwrap_or(direct_fn);
             ctx.block().call(DOUBLE, target, direct_arg_slices)
         }
     };

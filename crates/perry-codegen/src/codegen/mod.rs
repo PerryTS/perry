@@ -185,6 +185,8 @@ mod emission_order_tests;
 mod entry;
 mod func_registry;
 mod function;
+#[cfg(test)]
+mod index_method_clone_tests;
 // `pub(crate)` so `crate::linker` can read the inline-hot-small policy
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
 #[cfg(test)]
@@ -230,12 +232,13 @@ pub(crate) use param_guard::scalar_descriptor_rep;
 pub(crate) use spec_abi::{spec_abi_enabled, spec_function_name, SpecDispatch, SpecFnPlan};
 pub(crate) use typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
-    generic_function_body_name, generic_method_body_name, typed_arg_is_guard_candidate,
-    typed_f64_closure_name, typed_f64_function_name, typed_f64_method_name,
-    typed_f64_receiver_method_info, typed_f64_receiver_method_name, typed_i1_closure_name,
-    typed_i1_function_name, typed_i1_method_name, typed_i32_closure_name, typed_i32_function_name,
-    typed_i32_method_name, typed_param_reps_match_args, typed_string_closure_name,
-    typed_string_function_name, typed_string_method_name, TypedParamRep, TypedReceiverMethodInfo,
+    generic_function_body_name, generic_method_body_name, nonnegative_index_method_name,
+    typed_arg_is_guard_candidate, typed_f64_closure_name, typed_f64_function_name,
+    typed_f64_method_name, typed_f64_receiver_method_info, typed_f64_receiver_method_name,
+    typed_i1_closure_name, typed_i1_function_name, typed_i1_method_name, typed_i32_closure_name,
+    typed_i32_function_name, typed_i32_method_name, typed_param_reps_match_args,
+    typed_string_closure_name, typed_string_function_name, typed_string_method_name, TypedParamRep,
+    TypedReceiverMethodInfo,
 };
 
 use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
@@ -1607,6 +1610,16 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let mut typed_string_methods = std::collections::HashSet::new();
     let mut typed_i1_method_param_reps = std::collections::HashMap::new();
     let mut typed_f64_receiver_methods = std::collections::HashMap::new();
+    let nonnegative_index_methods: std::collections::HashMap<(String, String), Vec<u32>> = hir
+        .classes
+        .iter()
+        .flat_map(|class| {
+            class.methods.iter().filter_map(move |method| {
+                let params = typed_abi::nonnegative_index_method_params(method);
+                (!params.is_empty()).then(|| ((class.name.clone(), method.name.clone()), params))
+            })
+        })
+        .collect();
     progress.checkpoint("cross-module and typed-ABI analysis");
 
     // Module-wide dispatch/barrier facts. Hoisted above the typed-clone
@@ -2057,6 +2070,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         typed_string_methods,
         typed_i1_method_param_reps,
         typed_f64_receiver_methods,
+        nonnegative_index_methods,
         pshape_methods,
         pshape_tower_routable,
         typed_f64_closures: std::collections::HashSet::new(),

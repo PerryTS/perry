@@ -334,6 +334,42 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     },
                 )?;
             }
+            if let Some(nonnegative_index_params) = c
+                .cross_module
+                .nonnegative_index_methods
+                .get(&(class.name.clone(), method.name.clone()))
+            {
+                compile_method(
+                    llmod,
+                    class,
+                    method,
+                    func_names,
+                    strings,
+                    class_table,
+                    method_names,
+                    module_globals,
+                    module_global_types,
+                    opts.import_function_prefixes,
+                    enum_table,
+                    static_field_globals,
+                    class_ids,
+                    func_signatures,
+                    func_synthetic_arguments,
+                    module_boxed_vars,
+                    closure_rest_params,
+                    cross_module,
+                    None,
+                    false,
+                    None,
+                    Some(nonnegative_index_params),
+                )
+                .with_context(|| {
+                    format!(
+                        "lowering nonnegative-index method clone '{}::{}'",
+                        class.name, method.name
+                    )
+                })?;
+            }
             compile_method(
                 llmod,
                 class,
@@ -357,6 +393,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module
                     .typed_f64_receiver_methods
                     .contains_key(&(class.name.clone(), method.name.clone())),
+                None,
                 None,
             )
             .with_context(|| format!("lowering method '{}::{}'", class.name, method.name))?;
@@ -393,6 +430,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     None,
                     false,
                     Some(fact.clone()),
+                    None,
                 )
                 .with_context(|| {
                     format!(
@@ -428,6 +466,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
                 None,
                 false,
+                None,
                 None,
             )
             .with_context(|| {
@@ -494,6 +533,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 None,
                 false,
                 None,
+                None,
             )
             .with_context(|| format!("lowering getter '{}::{}'", class.name, prop))?;
         }
@@ -546,6 +586,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
                 None,
                 false,
+                None,
                 None,
             )
             .with_context(|| format!("lowering setter '{}::{}'", class.name, prop))?;
@@ -641,6 +682,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 cross_module,
                 None,
                 false,
+                None,
                 None,
             )
             .with_context(|| format!("lowering constructor for '{}'", class.name))?;

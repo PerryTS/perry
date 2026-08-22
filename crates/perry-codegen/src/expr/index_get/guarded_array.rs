@@ -56,6 +56,12 @@ pub(super) fn lower_guarded_array_index_get(
     let fast_label = ctx.block_label(fast_idx);
     let fallback_label = ctx.block_label(fallback_idx);
     let merge_label = ctx.block_label(merge_idx);
+    // The inline guard can heal one ordinary growth/evacuation forwarding
+    // edge before it admits the raw load. Keep the exact handle proved by
+    // each predecessor so the fast block never re-derives a stale address
+    // from the original boxed receiver.
+    let mut inline_fast_handle: Option<(String, String)> = None;
+    let mut runtime_fast_handle: Option<(String, String)> = None;
 
     if !typed_feedback_emission_enabled() {
         // Normal builds do not collect feedback. Inline the plain-array
@@ -110,9 +116,36 @@ pub(super) fn lower_guarded_array_index_get(
             let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
             let gc_flags = blk.load(I8, &gc_flags_ptr);
             let forwarded_bits = blk.and(I8, &gc_flags, "128");
-            let not_forwarded = blk.icmp_eq(I8, &forwarded_bits, "0");
+            let is_forwarded = blk.icmp_ne(I8, &forwarded_bits, "0");
 
-            let reserved_addr = blk.sub(I64, &arr_handle, "6");
+            // Array growth and GC evacuation leave the live user address in
+            // the first payload word of a forwarded array stub. Follow one
+            // edge inline, then re-brand and re-check the destination below.
+            // Longer/corrupt chains remain closed and take the boxed fallback.
+            // This mirrors the common one-edge arm of `clean_arr_ptr` without
+            // paying its allocator/registry probes on every indexed read.
+            let original_arr_ptr = blk.inttoptr(I64, &arr_handle);
+            let forwarding_target = blk.load(I64, &original_arr_ptr);
+            let follow_forwarding = blk.and(I1, &is_array, &is_forwarded);
+            let live_handle =
+                blk.select(I1, &follow_forwarding, I64, &forwarding_target, &arr_handle);
+
+            let live_top = blk.lshr(I64, &live_handle, "48");
+            let live_top_clear = blk.icmp_eq(I64, &live_top, "0");
+            let live_above_handle_band = blk.icmp_ugt(I64, &live_handle, "1048575");
+
+            let live_gc_type_addr = blk.sub(I64, &live_handle, "8");
+            let live_gc_type_ptr = blk.inttoptr(I64, &live_gc_type_addr);
+            let live_gc_type = blk.load(I8, &live_gc_type_ptr);
+            let is_array = blk.icmp_eq(I8, &live_gc_type, "1"); // GC_TYPE_ARRAY
+
+            let live_gc_flags_addr = blk.sub(I64, &live_handle, "7");
+            let live_gc_flags_ptr = blk.inttoptr(I64, &live_gc_flags_addr);
+            let live_gc_flags = blk.load(I8, &live_gc_flags_ptr);
+            let live_forwarded_bits = blk.and(I8, &live_gc_flags, "128");
+            let not_forwarded = blk.icmp_eq(I8, &live_forwarded_bits, "0");
+
+            let reserved_addr = blk.sub(I64, &live_handle, "6");
             let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
             let reserved = blk.load(I16, &reserved_ptr);
             let descriptor_bits = blk.and(I16, &reserved, "1024");
@@ -121,7 +154,7 @@ pub(super) fn lower_guarded_array_index_get(
             let invalidated = blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
             let default_prototype_chain = blk.icmp_eq(I8, &invalidated, "0");
 
-            let arr_ptr = blk.inttoptr(I64, &arr_handle);
+            let arr_ptr = blk.inttoptr(I64, &live_handle);
             let length = blk.load(I32, &arr_ptr);
             let capacity_ptr = blk.gep(I8, &arr_ptr, &[(I64, "4")]);
             let capacity = blk.load(I32, &capacity_ptr);
@@ -132,7 +165,9 @@ pub(super) fn lower_guarded_array_index_get(
             let capacity_sane = blk.icmp_ule(I32, &capacity, "16000000");
             let length_within_capacity = blk.icmp_ule(I32, &length, &capacity);
 
-            let mut guard_ok = blk.and(I1, &is_array, &not_forwarded);
+            let mut guard_ok = blk.and(I1, &live_top_clear, &live_above_handle_band);
+            guard_ok = blk.and(I1, &guard_ok, &is_array);
+            guard_ok = blk.and(I1, &guard_ok, &not_forwarded);
             guard_ok = blk.and(I1, &guard_ok, &no_descriptors);
             guard_ok = blk.and(I1, &guard_ok, &default_prototype_chain);
             guard_ok = blk.and(I1, &guard_ok, &index_nonnegative);
@@ -163,6 +198,7 @@ pub(super) fn lower_guarded_array_index_get(
                 let is_raw = blk.icmp_ne(I16, &raw_bits, "0");
                 guard_ok = blk.and(I1, &guard_ok, &is_raw);
             }
+            inline_fast_handle = Some((live_handle, blk.label.clone()));
             blk.cond_br(&guard_ok, &fast_label, &guard_fail_label);
         }
 
@@ -184,6 +220,9 @@ pub(super) fn lower_guarded_array_index_get(
             }
             let guard_ok = {
                 let blk = ctx.block();
+                let arr_bits = blk.bitcast_double_to_i64(arr_box);
+                let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                runtime_fast_handle = Some((arr_handle, blk.label.clone()));
                 let guard_i32 = blk.call(
                     I32,
                     "js_typed_feedback_numeric_array_index_get_guard",
@@ -201,6 +240,9 @@ pub(super) fn lower_guarded_array_index_get(
     } else {
         let guard_ok = {
             let blk = ctx.block();
+            let arr_bits = blk.bitcast_double_to_i64(arr_box);
+            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+            runtime_fast_handle = Some((arr_handle, blk.label.clone()));
             let guard_fn = if require_numeric_layout {
                 "js_typed_feedback_numeric_array_index_get_guard"
             } else {
@@ -278,8 +320,17 @@ pub(super) fn lower_guarded_array_index_get(
 
     ctx.current_block = fast_idx;
     let fast_blk = ctx.block();
-    let arr_bits = fast_blk.bitcast_double_to_i64(arr_box);
-    let arr_handle = fast_blk.and(I64, &arr_bits, POINTER_MASK_I64);
+    let arr_handle = match (&inline_fast_handle, &runtime_fast_handle) {
+        (Some((inline_handle, inline_pred)), Some((runtime_handle, runtime_pred))) => fast_blk.phi(
+            I64,
+            &[
+                (inline_handle.as_str(), inline_pred.as_str()),
+                (runtime_handle.as_str(), runtime_pred.as_str()),
+            ],
+        ),
+        (Some((handle, _)), None) | (None, Some((handle, _))) => handle.clone(),
+        (None, None) => unreachable!("guarded array fast block has no predecessor handle"),
+    };
     let fast_val = if require_numeric_layout {
         // The guard on the way into this block (inline tier or the runtime
         // `numeric_array_index_get_guard`) already proved: a plain,

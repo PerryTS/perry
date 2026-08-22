@@ -1284,6 +1284,40 @@ pub(crate) fn try_lower_instance_method_call(
                         .cloned()
                         .map(|reps| (name.as_str(), reps))
                 });
+                let nonnegative_index_direct_name = ctx
+                    .nonnegative_index_methods
+                    .get(&typed_method_key)
+                    .and_then(|params| {
+                        let method = ctx
+                            .classes
+                            .get(&class_name)?
+                            .methods
+                            .iter()
+                            .find(|method| method.name.as_str() == property)?;
+                        if args.len() != method.params.len()
+                            || !ctx
+                                .methods
+                                .get(&typed_method_key)
+                                .is_some_and(|name| name == &fallback_fn)
+                        {
+                            return None;
+                        }
+                        let all_proven = params.iter().all(|id| {
+                            method
+                                .params
+                                .iter()
+                                .position(|param| param.id == *id)
+                                .and_then(|position| args.get(position))
+                                .is_some_and(|arg| {
+                                    crate::expr::numeric_index_has_integer_array_index_proof(
+                                        ctx, arg,
+                                    )
+                                })
+                        });
+                        all_proven.then(|| {
+                            crate::codegen::nonnegative_index_method_name(&fallback_fn, params)
+                        })
+                    });
                 let typed_receiver_direct = match (
                     typed_receiver_direct_name.as_ref(),
                     typed_receiver_info.as_ref(),
@@ -1345,7 +1379,10 @@ pub(crate) fn try_lower_instance_method_call(
                         .pshape_methods
                         .contains_key(&(class_name.clone(), property.to_string()))
                         .then(|| crate::collectors::pshape_method_name(&fallback_fn));
-                    let generic_target = pshape_target.as_deref().unwrap_or(fallback_fn.as_str());
+                    let generic_target = nonnegative_index_direct_name
+                        .as_deref()
+                        .or(pshape_target.as_deref())
+                        .unwrap_or(fallback_fn.as_str());
                     // Prefer the typed-receiver clone (bare gep+load field
                     // access inside the body) when one exists: the receiver
                     // is proven, so only the ARGUMENT value classes need
@@ -1426,6 +1463,7 @@ pub(crate) fn try_lower_instance_method_call(
                     &fallback_fn,
                     &arg_slices,
                     &fallback_user_args,
+                    nonnegative_index_direct_name.as_deref(),
                     typed_direct,
                     typed_receiver_direct,
                     typed_i32_direct,

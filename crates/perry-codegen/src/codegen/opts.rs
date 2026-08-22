@@ -882,6 +882,12 @@ pub(crate) struct CrossModuleCtx {
     /// calling the clone.
     pub typed_f64_receiver_methods:
         std::collections::HashMap<(String, String), super::typed_abi::TypedReceiverMethodInfo>,
+    /// Module-local methods with an emitted nonnegative-index clone, mapped to
+    /// the parameter ids whose call-site proofs license that clone. Keeping an
+    /// explicit emitted-body registry prevents imported structural stubs from
+    /// manufacturing calls to clone symbols their defining module never
+    /// exported.
+    pub nonnegative_index_methods: std::collections::HashMap<(String, String), Vec<u32>>,
     /// Representation-selection Phase 5a: `(class, method)` pairs that have a
     /// generated `internal` proven-`this` clone
     /// (`collectors/proven_this.rs`). Keys are OWN declarations of
