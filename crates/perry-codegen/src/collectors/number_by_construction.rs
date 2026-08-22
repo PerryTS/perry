@@ -92,12 +92,23 @@ pub(crate) fn collect_number_by_construction_locals(
     if !enabled() {
         return HashSet::new();
     }
+    // #8619: spec-ABI `TaPtr` parameters are proven to permanently hold one
+    // specific NUMERIC-kind, non-view typed array — `spec_ta_lens` is keyed
+    // exactly by those params (its only source is `SpecParamRep::TaPtr`, which
+    // `collectors::spec_abi_sites` admits only for `spec_ta_kind_is_numeric`
+    // kinds; the BigInt kinds are never TaPtr). A read `arr[numeric_index]` off
+    // one is therefore a Number (in-bounds) or `undefined` (OOB), never a
+    // pointer/string, so the fixpoint may treat it like a compiler-visible
+    // local typed-view constructor on one side of `+` (where `undefined`
+    // becomes the Number NaN rather than selecting string concatenation).
+    let numeric_ta_views: HashSet<u32> = spec_ta_lens.keys().copied().collect();
     let mut numeric = super::ptr_shape::collect_numeric_by_construction_locals_for_type_analysis(
         stmts,
         boxed_vars,
         module_globals,
         not_bigint_locals,
         &HashMap::new(),
+        &numeric_ta_views,
     );
     numeric.extend(collect_number_at_read_after_undefined(
         stmts,
@@ -544,5 +555,82 @@ mod tests {
         ];
 
         assert!(!run(&stmts).contains(&N));
+    }
+
+    // #8619: a spec-ABI `TaPtr` parameter is proven to permanently hold one
+    // specific NUMERIC-kind, non-view typed array, so `arr[numeric_index]` is a
+    // Number (in-bounds) or `undefined` (OOB) — never a pointer. The
+    // number-by-construction fixpoint must therefore admit a fresh
+    // read-derived local `let x = arr[i] + 1.0` (whose value is a genuine
+    // Number, `NaN` at worst) and cascade to the loop-carried accumulator
+    // `s = s + x`, so both drop their GC-root slot and their arithmetic stays
+    // an inline `fadd` instead of `js_dynamic_string_or_number_add`.
+    fn ta_view_stmts(arr: u32, s_id: u32, x_id: u32) -> Vec<Stmt> {
+        vec![
+            Stmt::Let {
+                id: s_id,
+                name: "s".to_string(),
+                ty: HirType::Number,
+                mutable: true,
+                init: Some(Expr::Number(0.0)),
+            },
+            Stmt::Let {
+                id: x_id,
+                name: "x".to_string(),
+                ty: HirType::Number,
+                mutable: false,
+                init: Some(add(
+                    Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(arr)),
+                        index: Box::new(Expr::Integer(0)),
+                    },
+                    Expr::Number(1.0),
+                )),
+            },
+            Stmt::Expr(Expr::LocalSet(
+                s_id,
+                Box::new(add(Expr::LocalGet(s_id), Expr::LocalGet(x_id))),
+            )),
+        ]
+    }
+
+    fn run_fixpoint(stmts: &[Stmt], ta_views: &HashSet<u32>) -> HashSet<u32> {
+        crate::collectors::ptr_shape::collect_numeric_by_construction_locals_for_type_analysis(
+            stmts,
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            ta_views,
+        )
+    }
+
+    #[test]
+    fn spec_ta_param_view_admits_read_derived_number_locals() {
+        let (arr, s_id, x_id) = (10u32, 20u32, 21u32);
+        let stmts = ta_view_stmts(arr, s_id, x_id);
+
+        let with = run_fixpoint(&stmts, &HashSet::from([arr]));
+        assert!(
+            with.contains(&x_id),
+            "fresh `arr[i] + 1.0` local must be Number by construction"
+        );
+        assert!(
+            with.contains(&s_id),
+            "accumulator must cascade to Number by construction"
+        );
+    }
+
+    #[test]
+    fn ta_read_without_spec_proof_stays_dynamic() {
+        // Same body, but the receiver is NOT a spec-proven typed array: the read
+        // could be a string/property access on an arbitrary receiver, so neither
+        // local may be un-rooted.
+        let (arr, s_id, x_id) = (10u32, 20u32, 21u32);
+        let stmts = ta_view_stmts(arr, s_id, x_id);
+
+        let without = run_fixpoint(&stmts, &HashSet::new());
+        assert!(!without.contains(&x_id));
+        assert!(!without.contains(&s_id));
     }
 }

@@ -74,6 +74,10 @@ pub(super) fn prove_numeric_fields(
     const_local_inits: &HashMap<u32, Option<&Expr>>,
     numeric_locals: &HashSet<u32>,
 ) -> HashSet<String> {
+    // #8619: the class-field numeric proof has no specialized-entry `TaPtr`
+    // context, so no view binding is spec-proven here. Passing empty keeps this
+    // proof bit-identical to before the local `TaPtr` extension.
+    let no_ta_views: HashSet<u32> = HashSet::new();
     let mut numeric: HashSet<String> = HashSet::new();
     for class in chain {
         for field in &class.fields {
@@ -119,6 +123,7 @@ pub(super) fn prove_numeric_fields(
                                         not_bigint_locals,
                                         const_local_inits,
                                         numeric_locals,
+                                        &no_ta_views,
                                         0,
                                     )
                                 })
@@ -145,6 +150,7 @@ pub(super) fn prove_numeric_fields(
                                             not_bigint_locals,
                                             const_local_inits,
                                             numeric_locals,
+                                            &no_ta_views,
                                             0,
                                         )
                                     })
@@ -219,6 +225,7 @@ pub(super) fn prove_numeric_fields(
                 not_bigint_locals,
                 const_local_inits,
                 numeric_locals,
+                &no_ta_views,
                 0,
             )
         };
@@ -243,6 +250,7 @@ pub(super) fn prove_numeric_fields(
                         not_bigint_locals,
                         const_local_inits,
                         numeric_locals,
+                        &no_ta_views,
                         0,
                     ),
                 };
@@ -429,6 +437,9 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
     module_globals: &HashMap<u32, String>,
     not_bigint_locals: &HashSet<u32>,
     const_local_inits: &HashMap<u32, Option<&'a Expr>>,
+    // #8619: view bindings proven to hold a numeric-kind typed array (spec-ABI
+    // `TaPtr` params). Empty for the `Ptr<Shape>` type-analysis caller.
+    numeric_ta_views: &HashSet<u32>,
 ) -> HashSet<u32> {
     // ONE write walker for both fixpoints (`collect_not_bigint_locals` and
     // this one) — see its doc for why sharing is load-bearing. `None` = a
@@ -471,6 +482,7 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
                             not_bigint_locals,
                             &stable_local_inits,
                             &numeric,
+                            numeric_ta_views,
                             0,
                         ),
                     })
@@ -505,6 +517,15 @@ pub(super) fn expr_numeric_by_construction(
     not_bigint_locals: &HashSet<u32>,
     const_local_inits: &HashMap<u32, Option<&Expr>>,
     numeric_locals: &HashSet<u32>,
+    // #8619: view bindings PROVEN to permanently hold a numeric-kind typed
+    // array — a spec-ABI `TaPtr` parameter (the entry contract binds the raw
+    // header of a proven numeric non-view typed array). A read
+    // `view_id[numeric_index]` is then a Number (in-bounds) or `undefined`
+    // (OOB) by construction, never a pointer/string, which the Add rule below
+    // launders into a genuine Number. Empty on every path that is not a
+    // specialized-entry local proof (the class-field provers, the `Ptr<Shape>`
+    // pass).
+    numeric_ta_views: &HashSet<u32>,
     depth: usize,
 ) -> bool {
     if depth > 16 {
@@ -520,6 +541,7 @@ pub(super) fn expr_numeric_by_construction(
             not_bigint_locals,
             const_local_inits,
             numeric_locals,
+            numeric_ta_views,
             depth + 1,
         )
     };
@@ -537,6 +559,18 @@ pub(super) fn expr_numeric_by_construction(
         let Expr::LocalGet(view_id) = object.as_ref() else {
             return false;
         };
+        // #8619: a spec-proven numeric typed-array binding (`TaPtr` parameter)
+        // has no compiler-visible `TypedArrayNew` init in this body, but its
+        // entry contract is a STRONGER proof than an inline constructor: the
+        // call-site pre-pass proved the argument is one specific numeric-kind,
+        // non-view typed array, never reassigned. So `view_id[numeric_index]`
+        // is a Number-or-`undefined` exactly as the local-constructor case
+        // below — never a pointer. The `rec(index)` guard is retained: a
+        // non-numeric key (symbol/string) would read a property, which can be a
+        // pointer.
+        if numeric_ta_views.contains(view_id) {
+            return rec(index);
+        }
         let Some(Some(init)) = const_local_inits.get(view_id) else {
             return false;
         };
@@ -676,6 +710,7 @@ pub(super) fn expr_numeric_by_construction(
                                         not_bigint_locals,
                                         const_local_inits,
                                         numeric_locals,
+                                        numeric_ta_views,
                                         depth + 1,
                                     )
                                 }) == Some(true)
@@ -699,6 +734,7 @@ pub(super) fn expr_numeric_by_construction(
                             not_bigint_locals,
                             const_local_inits,
                             numeric_locals,
+                            numeric_ta_views,
                             depth + 1,
                         );
                     }

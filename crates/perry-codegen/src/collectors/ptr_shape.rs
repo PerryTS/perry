@@ -479,6 +479,10 @@ pub(crate) fn collect_shape_proven_ptr_locals_and_element_fields(
         module_globals,
         not_bigint_locals,
         &const_local_inits,
+        // #8619: this is the `Ptr<Shape>` provenance pass (feeds `is_numeric_expr`),
+        // not the local rooting proof; it has no specialized `TaPtr` context, so
+        // no view binding is spec-proven here.
+        &HashSet::new(),
     );
     // A spec entry has validated these parameters before entering this body.
     // Unlike a TypeScript annotation, that is runtime evidence, so derived

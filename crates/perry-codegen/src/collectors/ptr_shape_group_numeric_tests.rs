@@ -785,6 +785,7 @@ fn numeric_locals_of(stmts: &[Stmt]) -> HashSet<u32> {
         &HashMap::new(),
         &HashSet::new(),
         &HashMap::new(),
+        &HashSet::new(),
     )
 }
 
@@ -942,6 +943,7 @@ fn non_numeric_writes_and_bindings_are_excluded() {
             &HashMap::new(),
             &HashSet::new(),
             &HashMap::new(),
+            &HashSet::new(),
         )
         .contains(&7),
         "a boxed local's write set is not this region's to enumerate"
@@ -976,6 +978,7 @@ fn update_value_resolves_via_not_bigint() {
         &HashMap::new(),
         &not_bigint,
         &HashMap::new(),
+        &HashSet::new(),
     );
     assert!(with_fact.contains(&21));
     let without_fact = numeric::collect_numeric_by_construction_locals(
@@ -984,6 +987,7 @@ fn update_value_resolves_via_not_bigint() {
         &HashMap::new(),
         &HashSet::new(),
         &HashMap::new(),
+        &HashSet::new(),
     );
     assert!(
         !without_fact.contains(&22),
