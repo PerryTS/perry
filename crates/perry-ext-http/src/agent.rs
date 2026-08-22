@@ -90,6 +90,10 @@ pub struct AgentHandle {
     pub protocol: Option<String>,
     pub keep_alive: bool,
     pub keep_alive_msecs: f64,
+    /// Milliseconds subtracted from a server's advertised keep-alive timeout
+    /// before an idle socket is reused. Node retains finite, non-negative
+    /// constructor values and falls back to 1_000 for every other value.
+    pub agent_keep_alive_timeout_buffer: f64,
     pub max_sockets: f64,
     pub max_total_sockets: f64,
     pub max_free_sockets: f64,
@@ -126,6 +130,7 @@ impl Default for AgentHandle {
             protocol: Some("http:".to_string()),
             keep_alive: false,
             keep_alive_msecs: 1000.0,
+            agent_keep_alive_timeout_buffer: 1000.0,
             max_sockets: f64::INFINITY,
             max_total_sockets: f64::INFINITY,
             max_free_sockets: 256.0,
@@ -277,6 +282,13 @@ fn validate_positive(name: &str, value: f64) {
     }
 }
 
+fn normalize_agent_keep_alive_timeout_buffer(value: Option<f64>) -> f64 {
+    match value {
+        Some(value) if value.is_finite() && value >= 0.0 => value,
+        _ => 1000.0,
+    }
+}
+
 // ------------------------------------------------------------------
 // Object-field helpers (NaN-boxed reads from the options object)
 // ------------------------------------------------------------------
@@ -401,6 +413,7 @@ fn empty_object_f64() -> f64 {
 
 pub(crate) fn scan_agent_roots(visitor: &mut GcRootVisitor<'_>) {
     iter_handles_of_mut::<AgentHandle, _>(|agent| {
+        visitor.visit_nanbox_f64_slot(&mut agent.agent_keep_alive_timeout_buffer);
         if agent.create_connection != 0 {
             visitor.visit_i64_slot(&mut agent.create_connection);
         }
@@ -450,6 +463,7 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_property(
         "maxFreeSockets" => js_http_agent_max_free_sockets(handle),
         "maxTotalSockets" => js_http_agent_max_total_sockets(handle),
         "keepAliveMsecs" => js_http_agent_keep_alive_msecs(handle),
+        "agentKeepAliveTimeoutBuffer" => js_http_agent_keep_alive_timeout_buffer(handle),
         "keepAlive" => js_http_agent_keep_alive(handle),
         "destroyed" => js_http_agent_destroyed(handle),
         "defaultPort" => js_http_agent_default_port(handle),
@@ -487,6 +501,7 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_property_set(
         "maxFreeSockets" => js_http_agent_set_max_free_sockets(handle, value),
         "maxTotalSockets" => js_http_agent_set_max_total_sockets(handle, value),
         "keepAliveMsecs" => js_http_agent_set_keep_alive_msecs(handle, value),
+        "agentKeepAliveTimeoutBuffer" => js_http_agent_set_keep_alive_timeout_buffer(handle, value),
         "keepAlive" => js_http_agent_set_keep_alive(handle, value),
         "createConnection" | "createSocket" => {
             let bits = value.to_bits();
@@ -559,6 +574,9 @@ unsafe fn agent_new_with_protocol(options_f64: f64, default_protocol: &str) -> H
             }
             agent.keep_alive_msecs = v;
         }
+        agent.agent_keep_alive_timeout_buffer = normalize_agent_keep_alive_timeout_buffer(
+            read_number_field(options_f64, "agentKeepAliveTimeoutBuffer"),
+        );
         if let Some(v) = read_number_field(options_f64, "maxSockets") {
             if !(v.is_infinite() && v.is_sign_positive()) {
                 validate_positive("maxSockets", v);
@@ -878,6 +896,11 @@ pub extern "C" fn js_http_agent_keep_alive_msecs(handle: Handle) -> f64 {
 }
 
 #[no_mangle]
+pub extern "C" fn js_http_agent_keep_alive_timeout_buffer(handle: Handle) -> f64 {
+    agent_field(handle, 1000.0, |a| a.agent_keep_alive_timeout_buffer)
+}
+
+#[no_mangle]
 pub extern "C" fn js_http_agent_keep_alive(handle: Handle) -> f64 {
     bool_f64(agent_field(handle, false, |a| a.keep_alive))
 }
@@ -985,6 +1008,16 @@ pub extern "C" fn js_http_agent_set_keep_alive_msecs(handle: Handle, value: f64)
         agent.keep_alive_msecs = value;
     }
     invalidate_agent_client(handle);
+}
+
+/// `agentKeepAliveTimeoutBuffer` is an ordinary writable data property after
+/// construction. Constructor validation/defaulting therefore does not apply to
+/// later assignments; preserve the incoming JS value's raw NaN-boxed bits.
+#[no_mangle]
+pub extern "C" fn js_http_agent_set_keep_alive_timeout_buffer(handle: Handle, value: f64) {
+    if let Some(agent) = get_handle_mut::<AgentHandle>(handle) {
+        agent.agent_keep_alive_timeout_buffer = value;
+    }
 }
 
 #[no_mangle]
@@ -1134,6 +1167,7 @@ mod tests {
         assert_eq!(agent.protocol.as_deref(), Some("http:"));
         assert_eq!(agent.keep_alive, false);
         assert_eq!(agent.keep_alive_msecs, 1000.0);
+        assert_eq!(agent.agent_keep_alive_timeout_buffer, 1000.0);
         assert!(agent.max_sockets.is_infinite());
         assert_eq!(agent.max_free_sockets, 256.0);
         assert!(!agent.destroyed);
@@ -1153,6 +1187,28 @@ mod tests {
         assert_eq!(format_received_number(f64::NEG_INFINITY), "-Infinity");
         assert_eq!(format_received_number(-1.0), "-1");
         assert_eq!(format_received_number(0.5), "0.5");
+    }
+
+    #[test]
+    fn keep_alive_timeout_buffer_normalizes_constructor_values() {
+        assert_eq!(
+            normalize_agent_keep_alive_timeout_buffer(Some(1500.0)),
+            1500.0
+        );
+        assert_eq!(normalize_agent_keep_alive_timeout_buffer(Some(0.0)), 0.0);
+        assert_eq!(
+            normalize_agent_keep_alive_timeout_buffer(Some(-1.0)),
+            1000.0
+        );
+        assert_eq!(
+            normalize_agent_keep_alive_timeout_buffer(Some(f64::INFINITY)),
+            1000.0
+        );
+        assert_eq!(
+            normalize_agent_keep_alive_timeout_buffer(Some(f64::NAN)),
+            1000.0
+        );
+        assert_eq!(normalize_agent_keep_alive_timeout_buffer(None), 1000.0);
     }
 
     #[test]
@@ -1193,6 +1249,8 @@ mod tests {
         assert_eq!(js_http_agent_max_sockets(handle), 4.0);
         js_http_agent_set_keep_alive(handle, 1.0);
         assert_js_bool(js_http_agent_keep_alive(handle), true);
+        js_http_agent_set_keep_alive_timeout_buffer(handle, 250.0);
+        assert_eq!(js_http_agent_keep_alive_timeout_buffer(handle), 250.0);
         drop_handle(handle);
     }
 

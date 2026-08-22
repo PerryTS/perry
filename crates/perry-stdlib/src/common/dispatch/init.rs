@@ -90,6 +90,7 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
             | "maxFreeSockets"
             | "maxTotalSockets"
             | "keepAliveMsecs"
+            | "agentKeepAliveTimeoutBuffer"
             | "keepAlive"
             | "createConnection"
             | "createSocket"
