@@ -529,6 +529,23 @@ fn optimize_and_emit(
 mod tests {
     use super::*;
 
+    fn relocation_results(ir: &str) -> std::collections::HashSet<&str> {
+        ir.lines()
+            .filter(|line| line.contains("@llvm.experimental.gc.relocate"))
+            .filter_map(|line| line.trim().split_once(" = ").map(|(result, _)| result))
+            .collect()
+    }
+
+    fn returned_gc_pointers(ir: &str) -> Vec<&str> {
+        ir.lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("ret ptr addrspace(1) ")
+                    .and_then(|value| value.split_whitespace().next())
+            })
+            .collect()
+    }
+
     fn asm_barrier_fixture(leaf_attr: &str) -> String {
         format!(
             "declare i64 @may_collect()\n\n\
@@ -799,10 +816,16 @@ entry:
             live_bundle.contains("\"gc-live\"") && live_bundle.contains("%p"),
             "caller root must stay live through the inlined allocation:\n{after}"
         );
+        let relocation_results = relocation_results(&after);
+        let returned_pointers = returned_gc_pointers(&after);
+        assert_eq!(
+            returned_pointers.len(),
+            1,
+            "fixture must retain exactly one return edge after inlining:\n{after}"
+        );
         assert!(
-            after.contains("@llvm.experimental.gc.relocate")
-                && after.contains("ret ptr addrspace(1)"),
-            "caller must return the relocated root after the inlined allocation:\n{after}"
+            relocation_results.contains(returned_pointers[0]),
+            "caller must return the gc.relocate result, not the pre-statepoint root:\n{after}"
         );
     }
 
@@ -848,9 +871,32 @@ entry:
                 && after.lines().any(|line| line.trim() == "cleanup"),
             "statepoint invoke must retain a verifier-valid exceptional pad:\n{after}"
         );
+        let relocation_results = relocation_results(&after);
+        let returned_pointers = returned_gc_pointers(&after);
+        assert_eq!(
+            returned_pointers.len(),
+            1,
+            "inlined invoke fixture must retain one merged return edge:\n{after}"
+        );
+        assert_eq!(
+            relocation_results.len(),
+            2,
+            "normal and exceptional continuations must each relocate the root:\n{after}"
+        );
+        let return_phi = after
+            .lines()
+            .find(|line| {
+                line.trim().starts_with(returned_pointers[0])
+                    && line.contains(" = phi ptr addrspace(1) ")
+            })
+            .unwrap_or_else(|| {
+                panic!("invoke continuations must merge through the returned phi:\n{after}")
+            });
         assert!(
-            after.contains("@llvm.experimental.gc.relocate"),
-            "both edges must relocate the caller root after the inlined invoke:\n{after}"
+            relocation_results
+                .iter()
+                .all(|relocated| return_phi.contains(*relocated)),
+            "returned phi must merge both gc.relocate results, not the pre-statepoint root:\n{after}"
         );
     }
 
