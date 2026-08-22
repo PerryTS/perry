@@ -183,6 +183,7 @@ mod ctor_arity;
 #[cfg(test)]
 mod emission_order_tests;
 mod entry;
+mod entry_outline;
 mod func_registry;
 mod function;
 #[cfg(test)]
@@ -348,6 +349,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // afresh for every module — including the `false` case, to clear any prior
     // module's decision on this thread.
     set_full_outline_ic(decide_full_outline_ic(module_callable_count(hir)));
+    // #8595: report the module-entry outlining analysis when asked. Pure
+    // diagnostic — no transform yet (see codegen/entry_outline.rs).
+    entry_outline::report_entry_outlining(hir);
     // FEAT_JSCVT decision is per-target (apple-arm64 only) — same
     // set-per-module discipline as the outline gate above.
     helpers::set_jscvt_for_target(&triple);
