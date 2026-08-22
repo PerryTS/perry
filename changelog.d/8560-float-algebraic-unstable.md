@@ -16,3 +16,15 @@ The reassociation those methods enable was only ever an optimization, and the co
 If the crate later moves to a *required* nightly, the intent can be restored behind an explicit `#![feature(float_algebraic)]`; the replacement carries a comment saying so.
 
 Verified: `cargo check --workspace --tests` exits 0 with zero errors (it fails on `main`), and `cargo test -p perry-runtime perf_histogram` is 9/9.
+
+**Also: regenerate the API docs, which are drifted on `main` and are failing `check` independently.**
+
+`check` is red on `main` for a second, unrelated reason — its "Check for API docs drift" step:
+
+```
+API docs drift detected. The compile-time manifest in
+crates/perry-api-manifest/src/entries.rs changed but the
+generated artifacts under docs/ weren't regenerated.
+```
+
+`./scripts/regen_api_docs.sh` produces a 136-line diff: coverage moves from 2033 entries across 124 modules to 2051 across 134, picking up the `@parcel/watcher` facade (#8532) plus entries from #8535 and #8525, which landed without rerunning the generator. The regenerated `docs/src/api/reference.md` and `docs/api/perry.d.ts` are included here so `check` can pass; no hand edits.

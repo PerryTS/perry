@@ -2,11 +2,20 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2969 entries across 126 modules.
+Total: 2987 entries across 136 modules.
 
 ## Modules
 
 - [`@lydell/node-pty`](#lydellnode-pty)
+- [`@parcel/watcher`](#parcelwatcher)
+- [`@parcel/watcher-darwin-arm64`](#parcelwatcher-darwin-arm64)
+- [`@parcel/watcher-darwin-x64`](#parcelwatcher-darwin-x64)
+- [`@parcel/watcher-linux-arm64-glibc`](#parcelwatcher-linux-arm64-glibc)
+- [`@parcel/watcher-linux-arm64-musl`](#parcelwatcher-linux-arm64-musl)
+- [`@parcel/watcher-linux-x64-glibc`](#parcelwatcher-linux-x64-glibc)
+- [`@parcel/watcher-linux-x64-musl`](#parcelwatcher-linux-x64-musl)
+- [`@parcel/watcher-win32-arm64`](#parcelwatcher-win32-arm64)
+- [`@parcel/watcher-win32-x64`](#parcelwatcher-win32-x64)
 - [`@perryts/pdf`](#perrytspdf)
 - [`__disposable__`](#__disposable__)
 - [`argon2`](#argon2)
@@ -120,6 +129,7 @@ Total: 2969 entries across 126 modules.
 - [`tls`](#tls)
 - [`tty`](#tty)
 - [`tursodb`](#tursodb)
+- [`typescript`](#typescript)
 - [`undici`](#undici)
 - [`url`](#url)
 - [`util`](#util)
@@ -144,6 +154,64 @@ Total: 2969 entries across 126 modules.
 ### Properties
 
 - `default`
+
+## `@parcel/watcher`
+
+### Methods
+
+- `__nativeEventCount` — module
+- `getEventsSince` — module
+- `subscribe` — module
+- `unsubscribe` — module
+- `writeSnapshot` — module
+
+## `@parcel/watcher-darwin-arm64`
+
+### Methods
+
+- `subscribe` — module
+
+## `@parcel/watcher-darwin-x64`
+
+### Methods
+
+- `subscribe` — module
+
+## `@parcel/watcher-linux-arm64-glibc`
+
+### Methods
+
+- `subscribe` — module
+
+## `@parcel/watcher-linux-arm64-musl`
+
+### Methods
+
+- `subscribe` — module
+
+## `@parcel/watcher-linux-x64-glibc`
+
+### Methods
+
+- `subscribe` — module
+
+## `@parcel/watcher-linux-x64-musl`
+
+### Methods
+
+- `subscribe` — module
+
+## `@parcel/watcher-win32-arm64`
+
+### Methods
+
+- `subscribe` — module
+
+## `@parcel/watcher-win32-x64`
+
+### Methods
+
+- `subscribe` — module
 
 ## `@perryts/pdf`
 
@@ -3634,6 +3702,19 @@ Total: 2969 entries across 126 modules.
 - `open` — module
 - `queryAll` — instance
 - `queryOne` — instance
+
+## `typescript`
+
+### Methods
+
+- `flattenDiagnosticMessageText` — module
+- `transpileModule` — module
+
+### Properties
+
+- `DiagnosticCategory`
+- `ModuleKind`
+- `ScriptTarget`
 
 ## `undici`
 

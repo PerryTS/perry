@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2033 entries across 124 modules
+// Coverage: 2051 entries across 134 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -64,6 +64,59 @@ declare module "@lydell/node-pty" {
   export default _default;
   /** stdlib */
   export function spawn(...args: any[]): any;
+}
+
+declare module "@parcel/watcher" {
+  /** stdlib */
+  export function __nativeEventCount(): number;
+  /** stdlib */
+  export function getEventsSince(dir: string, snapshot: string, options: any): Promise<any>;
+  /** stdlib */
+  export function subscribe(dir: string, callback: any, options: any): Promise<any>;
+  /** stdlib */
+  export function unsubscribe(dir: string, callback: any, options: any): Promise<any>;
+  /** stdlib */
+  export function writeSnapshot(dir: string, snapshot: string, options: any): Promise<any>;
+}
+
+declare module "@parcel/watcher-darwin-arm64" {
+  /** stdlib */
+  export function subscribe(...args: any[]): any;
+}
+
+declare module "@parcel/watcher-darwin-x64" {
+  /** stdlib */
+  export function subscribe(...args: any[]): any;
+}
+
+declare module "@parcel/watcher-linux-arm64-glibc" {
+  /** stdlib */
+  export function subscribe(...args: any[]): any;
+}
+
+declare module "@parcel/watcher-linux-arm64-musl" {
+  /** stdlib */
+  export function subscribe(...args: any[]): any;
+}
+
+declare module "@parcel/watcher-linux-x64-glibc" {
+  /** stdlib */
+  export function subscribe(...args: any[]): any;
+}
+
+declare module "@parcel/watcher-linux-x64-musl" {
+  /** stdlib */
+  export function subscribe(...args: any[]): any;
+}
+
+declare module "@parcel/watcher-win32-arm64" {
+  /** stdlib */
+  export function subscribe(...args: any[]): any;
+}
+
+declare module "@parcel/watcher-win32-x64" {
+  /** stdlib */
+  export function subscribe(...args: any[]): any;
 }
 
 declare module "@perryts/pdf" {
