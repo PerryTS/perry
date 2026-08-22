@@ -18,7 +18,7 @@
 //! (static-archive compile, then a raw `cc`/`ld` link of those archives plus
 //! LLVM-emitted object code). This is a symbol-table-only view of whatever
 //! made it into the final link — code/data attribution, duplicate function
-//! bodies, duplicate crate versions, generic-monomorphization cost, and a
+//! bodies, duplicate crate instances, generic-monomorphization cost, and a
 //! few named cost patterns (panics, `Debug`/`Display` formatting, vtables).
 
 use std::collections::BTreeMap;
@@ -67,13 +67,18 @@ struct DuplicateBody {
     symbols: Vec<String>,
 }
 
+/// Same crate name compiled independently more than once (proof, not
+/// inference — a distinct v0-mangling disambiguator hash per build, unlike
+/// reading `Cargo.lock`, which only proves a version is *resolvable*).
+///
+/// This is a compile-time / intermediate-archive-size finding, not a
+/// shipped-binary-size one: a successful link proves each hash's content is
+/// linked at most once (the linker errors on a true duplicate-symbol
+/// inclusion), so `total_bytes` is real, in-use code in the final binary —
+/// not bytes recoverable by deduplicating it there.
 #[derive(Serialize)]
-struct DuplicateCrateVersion {
+struct DuplicateCrateInstance {
     crate_name: String,
-    /// The v0-mangling disambiguator hash for each distinct build of this
-    /// crate name actually linked into the binary — proof, not inference,
-    /// that more than one copy is present (unlike reading `Cargo.lock`,
-    /// which only proves more than one version is *resolvable*).
     hashes: Vec<String>,
     total_bytes: u64,
 }
@@ -105,7 +110,7 @@ struct SizeReport {
     largest: Vec<RankedSymbol>,
     generic_families: Vec<GenericFamily>,
     duplicate_bodies: Vec<DuplicateBody>,
-    duplicate_crate_versions: Vec<DuplicateCrateVersion>,
+    duplicate_crate_instances: Vec<DuplicateCrateInstance>,
     patterns: Vec<PatternTotal>,
     suggestions: Vec<Suggestion>,
 }
@@ -272,7 +277,7 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
     let mut family_totals: BTreeMap<(String, String), (usize, u64)> = BTreeMap::new();
     let mut crate_hashes: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
     let mut crate_hash_bytes: BTreeMap<(String, String), u64> = BTreeMap::new();
-    let mut body_hashes: BTreeMap<u64, Vec<(String, u64)>> = BTreeMap::new(); // hash -> [(symbol, size)]
+    let mut body_bytes: BTreeMap<&[u8], Vec<(String, u64)>> = BTreeMap::new(); // exact bytes -> [(symbol, size)]
     let mut pattern_totals: BTreeMap<&'static str, (u64, usize)> = BTreeMap::new();
 
     for sym in &raw {
@@ -321,13 +326,12 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
 
         if let Ok(section) = file.section_by_index(object::SectionIndex(sym.section as usize)) {
             if let Ok(Some(bytes)) = section.data_range(sym.address, sym.size) {
-                // FNV-1a: fast, dependency-free, and collisions here only cost
-                // a false "these might be duplicates" that the exact byte
-                // slices grouped under the same hash would still need to
-                // agree on — good enough for a diagnostic report.
-                let hash = fnv1a(bytes);
-                body_hashes
-                    .entry(hash)
+                // Keyed on the exact byte slice (`&[u8]` is `Ord`), not a
+                // hash of it — a duplicate-body finding is a claim serious
+                // enough that a hash collision must not be able to fabricate
+                // one.
+                body_bytes
+                    .entry(bytes)
                     .or_default()
                     .push((demangled.clone(), sym.size));
             }
@@ -359,13 +363,9 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
     generic_families.sort_by_key(|a| std::cmp::Reverse(a.total_bytes));
     generic_families.truncate(REPORT_TOP_FAMILIES);
 
-    let mut duplicate_bodies: Vec<DuplicateBody> = body_hashes
+    let mut duplicate_bodies: Vec<DuplicateBody> = body_bytes
         .into_values()
         .filter(|group| group.len() > 1)
-        // Same-hash groups can still differ in size if two DIFFERENT-length
-        // symbols' byte ranges happened to collide in the (rare) FNV-1a sense;
-        // require the sizes to actually match before calling it a duplicate.
-        .filter(|group| group.iter().all(|(_, size)| *size == group[0].1))
         .map(|group| {
             let size = group[0].1;
             let copies = group.len();
@@ -380,7 +380,7 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
     duplicate_bodies.sort_by_key(|a| std::cmp::Reverse(a.wasted_bytes));
     duplicate_bodies.truncate(REPORT_TOP_DUPLICATES);
 
-    let mut duplicate_crate_versions: Vec<DuplicateCrateVersion> = crate_hashes
+    let mut duplicate_crate_instances: Vec<DuplicateCrateInstance> = crate_hashes
         .into_iter()
         .filter(|(_, hashes)| hashes.len() > 1)
         .map(|(crate_name, hashes)| {
@@ -393,14 +393,14 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
                         .unwrap_or(0)
                 })
                 .sum();
-            DuplicateCrateVersion {
+            DuplicateCrateInstance {
                 crate_name,
                 hashes: hashes.into_iter().collect(),
                 total_bytes,
             }
         })
         .collect();
-    duplicate_crate_versions.sort_by_key(|a| std::cmp::Reverse(a.total_bytes));
+    duplicate_crate_instances.sort_by_key(|a| std::cmp::Reverse(a.total_bytes));
 
     let mut patterns: Vec<PatternTotal> = pattern_totals
         .into_iter()
@@ -409,7 +409,7 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
     patterns.sort_by_key(|a| std::cmp::Reverse(a.bytes));
 
     let suggestions = build_suggestions(
-        &duplicate_crate_versions,
+        &duplicate_crate_instances,
         &generic_families,
         &duplicate_bodies,
         &patterns,
@@ -438,36 +438,47 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
         largest: largest_all,
         generic_families,
         duplicate_bodies,
-        duplicate_crate_versions,
+        duplicate_crate_instances,
         patterns,
         suggestions,
     })
 }
 
 fn build_suggestions(
-    duplicate_crate_versions: &[DuplicateCrateVersion],
+    duplicate_crate_instances: &[DuplicateCrateInstance],
     generic_families: &[GenericFamily],
     duplicate_bodies: &[DuplicateBody],
     patterns: &[PatternTotal],
 ) -> Vec<Suggestion> {
     let mut out = Vec::new();
 
-    for dup in duplicate_crate_versions {
+    for dup in duplicate_crate_instances {
         out.push(Suggestion {
-            kind: "duplicate-crate-instance",
+            kind: "duplicate-compile-crate-instance",
             summary: format!(
-                "`{}` is linked {} times under different builds ({}) — Cargo.lock likely already \
-                 agrees on one version; this is `perry-runtime`/`perry-stdlib` each independently \
-                 compiling their own copy as separate `cargo build` invocations, so identical code \
-                 doesn't dedupe across the resulting `.a` archives. Extending Perry's existing \
-                 archive-dedup pass (today scoped to `dedup_runtime_for_tier3`/`dedup_stdlib_for_tier3`) \
-                 to the default build path would recover up to {}",
+                "`{}` is compiled independently {} times ({}) — once each inside \
+                 `perry-runtime`'s and `perry-stdlib`'s separate `cargo build` invocations, not \
+                 a Cargo.lock version conflict. This is redundant COMPILE work and bloats the \
+                 intermediate `.a` archives; it is NOT necessarily {} of recoverable shipped-\
+                 binary size — a successful link proves each hash's content is linked at most \
+                 once (the linker errors on a true duplicate-symbol inclusion), so every byte \
+                 attributed here is real, in-use code in this binary, not waste sitting twice in \
+                 it. Extending Perry's existing archive-dedup pass (today scoped to \
+                 `dedup_runtime_for_tier3`/`dedup_stdlib_for_tier3`) to the default build path \
+                 would speed up incremental/auto-optimize builds and shrink the intermediate \
+                 archives; whether it also shrinks a given shipped binary depends on whether that \
+                 binary's link happens to need both hash-variants — a separate, per-binary claim \
+                 this report does not make.",
                 dup.crate_name,
                 dup.hashes.len(),
                 dup.hashes.join(", "),
                 human_bytes(dup.total_bytes),
             ),
-            estimated_bytes: dup.total_bytes,
+            // Deliberately not `dup.total_bytes`: that is real, in-use code
+            // in THIS binary (see summary), not a recoverable-bytes claim —
+            // giving it a nonzero estimate here would misrank it against
+            // suggestions that genuinely shrink the shipped binary.
+            estimated_bytes: 0,
         });
     }
 
@@ -558,17 +569,6 @@ const PATTERNS: &[PatternMatcher] = &[
     }),
 ];
 
-/// FNV-1a — fast, dependency-free, good enough to bucket candidate duplicate
-/// bodies before the exact-size check in `build_report` confirms them.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for &b in bytes {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
 /// Demangle a Rust symbol name. `rustc_demangle` returns non-Rust input
 /// unchanged — the normal case for libc/system symbols — and `crate_of`
 /// below buckets those as `native/other`.
@@ -580,7 +580,7 @@ fn demangle(name: &str) -> String {
 /// segment) and, when present, the v0-mangling disambiguator hash right
 /// after it (`crate_name[16 hex digits]`). Two symbols from the SAME crate
 /// NAME but DIFFERENT hashes are proof two separate builds of that crate
-/// both made it into the final link — see `DuplicateCrateVersion`.
+/// both made it into the final link — see `DuplicateCrateInstance`.
 ///
 /// `<Type as Trait>::method` / `<Type>::method` associated-fn forms put the
 /// crate name one level in; the leading `<` is stripped before reading it.
@@ -716,14 +716,17 @@ fn render_markdown(report: &SizeReport) -> String {
         ));
     }
 
-    if !report.duplicate_crate_versions.is_empty() {
-        out.push_str("\n## Duplicate crate versions\n\n");
+    if !report.duplicate_crate_instances.is_empty() {
+        out.push_str("\n## Duplicate crate instances\n\n");
         out.push_str(
-            "Same crate name linked more than once under a different build (proven from the \
-             symbol table's own disambiguator hash, not inferred from `Cargo.lock`).\n\n",
+            "Same crate name compiled independently more than once (proven from the symbol \
+             table's own disambiguator hash, not inferred from `Cargo.lock`). This is a \
+             compile-time / intermediate-archive-size finding: a successful link proves each \
+             hash's content is linked at most once, so the `Total` column is real, in-use code \
+             in this binary — not bytes recoverable by deduplicating it here.\n\n",
         );
         out.push_str("| Total | Copies | Crate |\n|---|---|---|\n");
-        for dup in &report.duplicate_crate_versions {
+        for dup in &report.duplicate_crate_instances {
             out.push_str(&format!(
                 "| {} | {} | `{}` |\n",
                 human_bytes(dup.total_bytes),
@@ -882,12 +885,6 @@ mod tests {
             ),
             "<hashbrown::map::HashMap<_> as hashbrown::map::HashMapExt>::reserve_rehash"
         );
-    }
-
-    #[test]
-    fn fnv1a_is_deterministic_and_distinguishes_different_bytes() {
-        assert_eq!(fnv1a(b"hello"), fnv1a(b"hello"));
-        assert_ne!(fnv1a(b"hello"), fnv1a(b"world"));
     }
 
     #[test]
