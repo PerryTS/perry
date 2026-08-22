@@ -835,6 +835,17 @@ pub(super) fn compile_function(
             .then_some(*id)
         })
         .collect();
+    let spec_number_array_params: HashSet<u32> = spec_param_proofs
+        .iter()
+        .filter_map(|(id, ty)| {
+            matches!(ty, perry_hir::types::Type::Array(element)
+                if matches!(element.as_ref(), perry_hir::types::Type::Number | perry_hir::types::Type::Int32))
+            .then_some(*id)
+        })
+        .collect();
+    // Unlike source annotations, these proofs are backed by the public
+    // wrapper's `js_param_type_guard`.  The guarded-array seed collector may
+    // therefore trust that an element is Number-or-undefined in this clone.
     // `--opt-report` (#6952): attribute every representation decision the
     // collectors below make to this function. No-op when the report is off.
     //
@@ -865,6 +876,7 @@ pub(super) fn compile_function(
         &spec_ta_lens,
         &spec_i32_params,
         &spec_numeric_params,
+        &spec_number_array_params,
     );
 
     // A Number-by-construction local cannot ever hold a GC pointer, so it

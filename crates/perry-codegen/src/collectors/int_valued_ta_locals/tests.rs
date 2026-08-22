@@ -60,8 +60,26 @@ fn number_param(id: u32) -> Param {
     }
 }
 
+fn any_param(id: u32) -> Param {
+    Param {
+        id,
+        name: format!("p{id}"),
+        ty: HirType::Any,
+        default: None,
+        decorators: vec![],
+        is_rest: false,
+        arguments_object: None,
+    }
+}
+
 fn run(stmts: &[Stmt], params: &[Param]) -> HashSet<u32> {
-    collect_int_valued_ta_locals(stmts, params, &HashMap::new(), &HashMap::new())
+    collect_int_valued_ta_locals(
+        stmts,
+        params,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashSet::new(),
+    )
 }
 
 #[test]
@@ -185,6 +203,98 @@ fn returned_bitwise_result_keeps_local_eligible() {
 }
 
 #[test]
+fn guarded_number_array_seed_is_native_after_bitwise_normalization() {
+    // A specialized entry has runtime-proven `values: number[]` even though
+    // the source parameter is `any`.  The initial element may be fractional
+    // (or undefined OOB), but its first observation is `ToInt32`-coercing.
+    // After the bitwise write, a bare plain-array store observes an exact i32.
+    let params = [any_param(0)];
+    let stmts = vec![
+        let_stmt(5, HirType::Any, Some(idx_get(0, Expr::Integer(0)))),
+        set(5, xor(Expr::LocalGet(5), Expr::Integer(7))),
+        Stmt::Expr(Expr::IndexSet {
+            object: Box::new(Expr::LocalGet(0)),
+            index: Box::new(Expr::Integer(0)),
+            value: Box::new(Expr::LocalGet(5)),
+        }),
+    ];
+    let guarded = HashSet::from([0]);
+    let got =
+        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);
+    assert!(
+        got.contains(&5),
+        "guarded number-array accumulator missing: {got:?}"
+    );
+
+    let unguarded = run(&stmts, &params);
+    assert!(
+        !unguarded.contains(&5),
+        "an erasable number[] claim must not seed the proof: {unguarded:?}"
+    );
+}
+
+#[test]
+fn guarded_number_array_bare_read_before_normalization_is_rejected() {
+    let params = [any_param(0)];
+    let stmts = vec![
+        let_stmt(5, HirType::Any, Some(idx_get(0, Expr::Integer(0)))),
+        let_stmt(6, HirType::Any, Some(Expr::LocalGet(5))),
+        set(5, xor(Expr::LocalGet(5), Expr::Integer(7))),
+    ];
+    let guarded = HashSet::from([0]);
+    let got =
+        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);
+    assert!(
+        !got.contains(&5),
+        "a pre-normalization bare read must remain observable: {got:?}"
+    );
+}
+
+#[test]
+fn conditional_bitwise_normalization_does_not_dominate_later_read() {
+    let params = [any_param(0)];
+    let stmts = vec![
+        let_stmt(5, HirType::Any, Some(idx_get(0, Expr::Integer(0)))),
+        Stmt::If {
+            condition: Expr::Bool(true),
+            then_branch: vec![set(5, xor(Expr::LocalGet(5), Expr::Integer(7)))],
+            else_branch: None,
+        },
+        Stmt::Return(Some(Expr::LocalGet(5))),
+    ];
+    let guarded = HashSet::from([0]);
+    let got =
+        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);
+    assert!(
+        !got.contains(&5),
+        "one-branch normalization must not license a later bare read: {got:?}"
+    );
+}
+
+#[test]
+fn unreachable_nested_normalization_does_not_license_later_read() {
+    let params = [any_param(0)];
+    let stmts = vec![
+        let_stmt(5, HirType::Any, Some(idx_get(0, Expr::Integer(0)))),
+        Stmt::DoWhile {
+            body: vec![
+                Stmt::Break,
+                set(5, xor(Expr::LocalGet(5), Expr::Integer(7))),
+            ],
+            condition: Expr::Bool(false),
+        },
+        Stmt::Return(Some(Expr::LocalGet(5))),
+    ];
+    let guarded = HashSet::from([0]);
+    let got =
+        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);
+    assert!(
+        !got.contains(&5),
+        "a nested normalization bypassed by break must not dominate: {got:?}"
+    );
+}
+
+#[test]
 fn plain_array_store_value_excludes_local() {
     // Storing into a plain (non-typed) array does NOT coerce to ToInt32, so a
     // candidate used as such a store value is excluded. Here `arr2` is an
@@ -234,7 +344,13 @@ fn non_int_kind_typed_array_read_not_seeded() {
         let_stmt(5, HirType::Any, Some(idx_get(0, Expr::LocalGet(1)))),
         set(5, xor(Expr::LocalGet(5), Expr::Integer(3))),
     ];
-    let got = collect_int_valued_ta_locals(&stmts, &params, &binding_types, &HashMap::new());
+    let got = collect_int_valued_ta_locals(
+        &stmts,
+        &params,
+        &binding_types,
+        &HashMap::new(),
+        &HashSet::new(),
+    );
     assert!(
         !got.contains(&5),
         "float64 read wrongly seeded a candidate: {got:?}"
@@ -277,7 +393,8 @@ fn wrap_i32_additive_chain_with_proven_operands_is_admitted() {
         ),
         set(8, xor(Expr::LocalGet(8), Expr::LocalGet(9))),
     ];
-    let got = collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens);
+    let got =
+        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
     assert!(
         got.contains(&9),
         "wrap-i32 additive accumulator wrongly excluded: {got:?}"
@@ -306,7 +423,8 @@ fn wrap_i32_additive_inside_loop_is_rejected() {
             )],
         },
     ];
-    let got = collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens);
+    let got =
+        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
     assert!(
         !got.contains(&9),
         "loop-carried additive chain wrongly admitted: {got:?}"
@@ -332,7 +450,8 @@ fn wrap_i32_candidate_as_bare_index_is_rejected() {
         ),
         let_stmt(10, HirType::Any, Some(idx_get(0, Expr::LocalGet(9)))),
     ];
-    let got = collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens);
+    let got =
+        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
     assert!(
         !got.contains(&9),
         "bare-index wrap-i32 candidate wrongly admitted: {got:?}"
@@ -365,7 +484,8 @@ fn wrap_i32_additive_operand_with_possibly_undefined_value_is_rejected() {
         set(10, xor(Expr::LocalGet(10), Expr::Integer(1))),
         set(9, xor(Expr::LocalGet(9), Expr::Integer(1))),
     ];
-    let got = collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens);
+    let got =
+        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
     assert!(
         !got.contains(&10),
         "additive over possibly-undefined operand wrongly admitted: {got:?}"
@@ -402,7 +522,8 @@ fn wrap_i32_additive_operand_reset_in_bounds_is_admitted() {
         ),
         set(9, xor(Expr::LocalGet(9), Expr::Integer(1))),
     ];
-    let got = collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens);
+    let got =
+        collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &lens, &HashSet::new());
     assert!(
         got.contains(&9),
         "in-bounds-reset additive accumulator wrongly rejected: {got:?}"
@@ -427,7 +548,13 @@ fn wrap_i32_additive_without_length_proof_is_rejected() {
         ),
         set(9, xor(Expr::LocalGet(9), Expr::Integer(1))),
     ];
-    let got = collect_int_valued_ta_locals(&stmts, &params, &HashMap::new(), &HashMap::new());
+    let got = collect_int_valued_ta_locals(
+        &stmts,
+        &params,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashSet::new(),
+    );
     assert!(
         !got.contains(&9),
         "length-unproven additive operand wrongly admitted: {got:?}"

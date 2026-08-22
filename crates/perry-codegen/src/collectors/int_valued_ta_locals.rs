@@ -1,30 +1,30 @@
 //! Flow analysis: locals safe to treat as native-i32 ("integer-valued") even
 //! though (at least) one of their writes is a *possibly out-of-bounds* integer
-//! typed-array element read.
+//! typed-array element read or a runtime-guarded numeric-array element read.
 //!
 //! ## Motivation (bcryptjs `_encipher` Feistel accumulators)
 //!
 //! ```ignore
-//! function _encipher(lr: Int32Array, off: number, P: Int32Array, S: Int32Array) {
-//!   let l = lr[off], r = lr[off + 1];   // int typed-array reads (index UNBOUNDED)
+//! function _encipher(lr: any, off: number, P: Int32Array, S: Int32Array) {
+//!   let l = lr[off], r = lr[off + 1];   // lr is guarded as number[] in the clone
 //!   l ^= P[0];                          // only ever bitwise-updated
 //!   ... S[l >>> 24] ... S[l & 0xff] ...  // only ever read in bitwise / index ctx
-//!   lr[off + 1] = l;                    // stored back into an int typed array
+//!   lr[off + 1] = l;                    // exact i32 after the first ^= write
 //! }
 //! ```
 //!
 //! `l` / `r` are logically int32, but their declared type is erased to `Any`
 //! (the `let l = lr[off]` inference does not propagate the element type). The
-//! existing `collect_integer_locals` only admits a typed-array element read as
-//! integer-valued when the index is *statically proven in-bounds*
-//! (`collect_int_ta_load_let_ids`); an unbounded `lr[off]` is rejected, so `l`
-//! never enters `integer_locals`, never gets an i32 shadow slot, and every
-//! `l ^ x` / `S[l >>> 24]` pays an `fptosi`/`sitofp` round-trip.
+//! specialized entry proves `lr` is a numeric array at runtime, but the local
+//! representation collector previously ignored that proof. An unbounded
+//! `lr[off]` was therefore rejected, so `l` never got an i32 shadow slot and
+//! the Feistel loop repeatedly called `js_number_coerce`.
 //!
 //! ## The soundness trap
 //!
-//! An `Int32Array` element read is int32 **only in-bounds**. An OOB / negative /
-//! fractional index yields **`undefined`** (a NaN-boxed value), NOT an integer.
+//! An integer typed-array or guarded numeric-array element read is numeric only
+//! **in-bounds**. An OOB / negative / fractional index yields **`undefined`**
+//! (a NaN-boxed value), NOT an integer.
 //! (`Uint8ArrayGet` is safely integer-valued because its accessor returns `0`
 //! OOB — a general typed-array read does not.) So marking such a local i32
 //! unconditionally would let `let x = S[oob]; console.log(x)` print a number
@@ -36,7 +36,9 @@
 //!
 //! 1. **Every write** produces an i32-representable value OR is an int-kind
 //!    typed-array element read (`Int8/Uint8/Uint8Clamped/Int16/Uint16/Int32` —
-//!    NOT `Uint32`, NOT the float / bigint kinds, NOT a plain-array `[]`):
+//!    NOT `Uint32`, NOT the float / bigint kinds), or a numeric-array read
+//!    backed by the specialized entry's runtime guard. An erasable source
+//!    `number[]` annotation alone is never evidence. Other admitted writes are:
 //!    a bitwise op (`& | ^ << >> >>>`), `~`, `Math.imul`, an i32 literal,
 //!    `undefined` (the hoisted-`var` seed — `ToInt32(undefined) == 0`, the
 //!    slot's seed value), or a `Uint8ArrayGet`/`BufferIndexGet`. NOT `*`
@@ -50,7 +52,11 @@
 //!    true f64 intermediates exactly representable.
 //! 2. **Every observation** is in an integer-coercing context — the direct
 //!    operand of a bitwise binary/unary op, or the value stored into an
-//!    int-kind typed-array / `Uint8Array` / `Buffer` element. NEVER a context
+//!    int-kind typed-array / `Uint8Array` / `Buffer` element. The sole narrow
+//!    exception is a guarded-array seed followed by a direct bitwise write in
+//!    the function's root body, when every subsequent write also produces an
+//!    exact i32. That dominating normalization licenses later bare reads.
+//!    Otherwise, NEVER a context
 //!    where `undefined`-vs-integer is distinguishable (array index, additive
 //!    operand, `%`/`/`, comparison, call argument, `return`, `console.log`,
 //!    `String()`, `typeof`, property/field/plain-array store, `+` string, …).
@@ -59,9 +65,9 @@
 //! (`ToInt32(undefined) == 0`), and the i32 slot is seeded with the same `0`
 //! for an OOB read (see the NaN-safe seed in `stmt/let_stmt.rs`), so the two
 //! representations are byte-for-byte indistinguishable — while the fast i32
-//! chain is unlocked. As soon as a value passes through one bitwise op the
-//! `undefined`→`0` collapse has already happened identically on both paths, so
-//! no transitive constraint on *downstream* locals is needed.
+//! chain is unlocked. A root-level bitwise normalization similarly makes the
+//! JavaScript value itself an exact i32; nested normalizations are deliberately
+//! ignored because abrupt control flow could bypass them.
 //!
 //! ## Under-approximation
 //!
@@ -119,9 +125,29 @@ fn receiver_is_int_kind_ta(object: &Expr, types: &HashMap<u32, HirType>) -> bool
     matches!(types.get(id), Some(HirType::Named(name)) if is_int_elem_typed_array_class(name))
 }
 
-/// A bare int-kind typed-array element read `S[idx]` (any index — possibly OOB).
-fn is_int_kind_ta_read(e: &Expr, types: &HashMap<u32, HirType>) -> bool {
-    matches!(e, Expr::IndexGet { object, .. } if receiver_is_int_kind_ta(object, types))
+/// A guarded `number[]` element read has the same property this analysis needs
+/// from an integer typed-array read: its value is either a Number or
+/// `undefined`, so its canonical i32 image is exactly `ToInt32(value)`.
+///
+/// Unlike typed arrays, a TypeScript `number[]` annotation is not runtime
+/// evidence.  Only parameters in `guarded_number_array_params` reached a
+/// specialized entry through `js_param_type_guard`, which checks the array's
+/// numeric-element descriptor before the body runs.
+fn receiver_is_guarded_number_array(
+    object: &Expr,
+    guarded_number_array_params: &HashSet<u32>,
+) -> bool {
+    matches!(object, Expr::LocalGet(id) if guarded_number_array_params.contains(id))
+}
+
+fn is_i32_image_seed_read(
+    e: &Expr,
+    types: &HashMap<u32, HirType>,
+    guarded_number_array_params: &HashSet<u32>,
+) -> bool {
+    matches!(e, Expr::IndexGet { object, .. }
+        if receiver_is_int_kind_ta(object, types)
+            || receiver_is_guarded_number_array(object, guarded_number_array_params))
 }
 
 /// #7700: `u8[k]` is a BYTE read — hence integer-valued — only when `k` is a
@@ -150,6 +176,7 @@ fn is_bitwise_binop(op: BinaryOp) -> bool {
 fn write_is_i32_producing_safe(
     e: &Expr,
     types: &HashMap<u32, HirType>,
+    guarded_number_array_params: &HashSet<u32>,
     numeric_locals: &HashSet<u32>,
 ) -> bool {
     match e {
@@ -164,10 +191,45 @@ fn write_is_i32_producing_safe(
         Expr::Uint8ArrayGet { index, .. } => uint8array_get_is_byte_read(index, numeric_locals),
         Expr::BufferIndexGet { .. } => true,
         // Int-kind typed-array element read (possibly OOB → `undefined`).
-        Expr::IndexGet { object, .. } => receiver_is_int_kind_ta(object, types),
+        Expr::IndexGet { object, .. } => {
+            receiver_is_int_kind_ta(object, types)
+                || receiver_is_guarded_number_array(object, guarded_number_array_params)
+        }
         // Bitwise ops coerce both operands to int32 and yield int32 regardless
         // of operand shapes — no operand check needed.
         Expr::Binary { op, .. } => is_bitwise_binop(*op),
+        Expr::Unary {
+            op: UnaryOp::BitNot,
+            ..
+        } => true,
+        Expr::MathImul(_, _) => true,
+        _ => false,
+    }
+}
+
+/// True when the JavaScript value produced by a write is itself an exact i32,
+/// not merely a value whose `ToInt32` image is safe to retain.  Once such a
+/// write dominates a later read, non-coercing observations are safe too: the
+/// canonical slot and the JavaScript value are then identical.
+fn write_establishes_exact_i32(
+    e: &Expr,
+    types: &HashMap<u32, HirType>,
+    ta_lens: &HashMap<u32, i64>,
+    numeric_locals: &HashSet<u32>,
+) -> bool {
+    match e {
+        Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
+        Expr::Uint8ArrayGet { index, .. } => uint8array_get_is_byte_read(index, numeric_locals),
+        Expr::BufferIndexGet { .. } => true,
+        Expr::IndexGet { object, index } => {
+            receiver_is_int_kind_ta(object, types)
+                && matches!(object.as_ref(), Expr::LocalGet(arr)
+                if matches!(
+                    (ta_lens.get(arr), super::integer_locals::static_index_window(index)),
+                    (Some(len), Some((lo, hi))) if lo >= 0 && hi < *len
+                ))
+        }
+        Expr::Binary { op, .. } if is_bitwise_binop(*op) => true,
         Expr::Unary {
             op: UnaryOp::BitNot,
             ..
@@ -187,9 +249,10 @@ struct Facts<'a> {
     /// Locals introduced by a `Stmt::Let` (candidates must be `let`-declared —
     /// params carry an unmodeled incoming-argument write).
     let_declared: HashSet<u32>,
-    /// Locals with ≥1 int-kind typed-array element read write (the seed: only
-    /// these need this analysis; a local with no such write is already handled
-    /// by `collect_integer_locals` when it qualifies).
+    /// Locals with ≥1 int-kind typed-array or guarded numeric-array element
+    /// read write (the seed: only these need this analysis; a local with no
+    /// such write is already handled by `collect_integer_locals` when it
+    /// qualifies).
     seeded: HashSet<u32>,
     /// Targets of `++`/`--` — excluded (the update's `± 1` can overflow i32 and
     /// is not modeled as a write here).
@@ -589,6 +652,7 @@ pub fn collect_int_valued_ta_locals(
     params: &[Param],
     binding_types: &HashMap<u32, HirType>,
     extra_ta_lens: &HashMap<u32, i64>,
+    guarded_number_array_params: &HashSet<u32>,
 ) -> HashSet<u32> {
     // Declared-type map (params + let bindings), used to classify typed-array
     // receivers. Params are included so `lr: Int32Array` resolves.
@@ -610,7 +674,13 @@ pub fn collect_int_valued_ta_locals(
     }
 
     let mut facts = Facts::default();
-    collect_facts(stmts, &types, false, &mut facts);
+    collect_facts(
+        stmts,
+        &types,
+        guarded_number_array_params,
+        false,
+        &mut facts,
+    );
     // Flow leg of the wrap-i32 additive extension: targets of additive-shaped
     // writes whose spine operands were not provably NUMBERS at the write site
     // (an `undefined`-able operand breaks `image == ToInt32(true)` through a
@@ -640,7 +710,7 @@ pub fn collect_int_valued_ta_locals(
         let snapshot = pool.clone();
         pool.retain(|id| {
             facts.writes[id].iter().all(|(w, in_loop)| {
-                write_is_i32_producing_safe(w, &types, &numeric_locals)
+                write_is_i32_producing_safe(w, &types, guarded_number_array_params, &numeric_locals)
                     || (!in_loop
                         && !additive_invalid.contains(id)
                         && additive_write_admissible(
@@ -668,12 +738,40 @@ pub fn collect_int_valued_ta_locals(
     // also runs to a fixpoint.
     loop {
         let mut disqualified: HashSet<u32> = HashSet::new();
+        let exact_after_root_normalization: HashSet<u32> = candidates
+            .iter()
+            .copied()
+            .filter(|id| {
+                let writes = &facts.writes[id];
+                let Some((seed, _)) = writes.first() else {
+                    return false;
+                };
+                let Expr::IndexGet { object, .. } = seed else {
+                    return false;
+                };
+                receiver_is_guarded_number_array(object, guarded_number_array_params)
+                    && !writes[1..].is_empty()
+                    && writes[1..].iter().all(|(write, _)| {
+                        write_establishes_exact_i32(write, &types, &ta_lens, &numeric_locals)
+                    })
+            })
+            .collect();
         let additive_ctx = AdditiveCtx {
             ta_lens: &ta_lens,
             pool: &candidates,
+            exact_after_root_normalization: &exact_after_root_normalization,
             numeric_locals: &numeric_locals,
         };
-        observe_stmts(stmts, &candidates, &types, &additive_ctx, &mut disqualified);
+        let mut exact_i32 = HashSet::new();
+        observe_stmts(
+            stmts,
+            &candidates,
+            &types,
+            &additive_ctx,
+            &mut exact_i32,
+            &mut disqualified,
+            true,
+        );
         if disqualified.is_empty() {
             break;
         }
@@ -686,16 +784,20 @@ pub fn collect_int_valued_ta_locals(
             let snapshot = candidates.clone();
             candidates.retain(|id| {
                 facts.writes[id].iter().all(|(w, in_loop)| {
-                    write_is_i32_producing_safe(w, &types, &numeric_locals)
-                        || (!in_loop
-                            && !additive_invalid.contains(id)
-                            && additive_write_admissible(
-                                w,
-                                &types,
-                                &ta_lens,
-                                &snapshot,
-                                &numeric_locals,
-                            ))
+                    write_is_i32_producing_safe(
+                        w,
+                        &types,
+                        guarded_number_array_params,
+                        &numeric_locals,
+                    ) || (!in_loop
+                        && !additive_invalid.contains(id)
+                        && additive_write_admissible(
+                            w,
+                            &types,
+                            &ta_lens,
+                            &snapshot,
+                            &numeric_locals,
+                        ))
                 })
             });
             changed = candidates.len() != before;
@@ -711,6 +813,10 @@ pub fn collect_int_valued_ta_locals(
 struct AdditiveCtx<'a> {
     ta_lens: &'a HashMap<u32, i64>,
     pool: &'a HashSet<u32>,
+    /// Guarded-array candidates whose first write is the possibly-undefined
+    /// seed and whose remaining writes all produce an exact i32.  Only these
+    /// may become observably exact after a direct, top-level normalization.
+    exact_after_root_normalization: &'a HashSet<u32>,
     /// #7700: locals whose declared type says they hold a number.
     numeric_locals: &'a HashSet<u32>,
 }
@@ -722,6 +828,7 @@ struct AdditiveCtx<'a> {
 fn collect_facts<'a>(
     stmts: &'a [Stmt],
     types: &HashMap<u32, HirType>,
+    guarded_number_array_params: &HashSet<u32>,
     in_loop: bool,
     facts: &mut Facts<'a>,
 ) {
@@ -730,14 +837,16 @@ fn collect_facts<'a>(
             Stmt::Let { id, init, .. } => {
                 facts.let_declared.insert(*id);
                 if let Some(e) = init {
-                    record_write(*id, e, types, in_loop, facts);
-                    collect_facts_expr(e, types, in_loop, facts);
+                    record_write(*id, e, types, guarded_number_array_params, in_loop, facts);
+                    collect_facts_expr(e, types, guarded_number_array_params, in_loop, facts);
                 }
             }
-            Stmt::Expr(e) | Stmt::Throw(e) => collect_facts_expr(e, types, in_loop, facts),
+            Stmt::Expr(e) | Stmt::Throw(e) => {
+                collect_facts_expr(e, types, guarded_number_array_params, in_loop, facts)
+            }
             Stmt::Return(opt) => {
                 if let Some(e) = opt {
-                    collect_facts_expr(e, types, in_loop, facts);
+                    collect_facts_expr(e, types, guarded_number_array_params, in_loop, facts);
                 }
             }
             Stmt::If {
@@ -745,19 +854,31 @@ fn collect_facts<'a>(
                 then_branch,
                 else_branch,
             } => {
-                collect_facts_expr(condition, types, in_loop, facts);
-                collect_facts(then_branch, types, in_loop, facts);
+                collect_facts_expr(
+                    condition,
+                    types,
+                    guarded_number_array_params,
+                    in_loop,
+                    facts,
+                );
+                collect_facts(
+                    then_branch,
+                    types,
+                    guarded_number_array_params,
+                    in_loop,
+                    facts,
+                );
                 if let Some(eb) = else_branch {
-                    collect_facts(eb, types, in_loop, facts);
+                    collect_facts(eb, types, guarded_number_array_params, in_loop, facts);
                 }
             }
             Stmt::While { condition, body } => {
-                collect_facts_expr(condition, types, true, facts);
-                collect_facts(body, types, true, facts);
+                collect_facts_expr(condition, types, guarded_number_array_params, true, facts);
+                collect_facts(body, types, guarded_number_array_params, true, facts);
             }
             Stmt::DoWhile { body, condition } => {
-                collect_facts(body, types, true, facts);
-                collect_facts_expr(condition, types, true, facts);
+                collect_facts(body, types, guarded_number_array_params, true, facts);
+                collect_facts_expr(condition, types, guarded_number_array_params, true, facts);
             }
             Stmt::For {
                 init,
@@ -766,42 +887,66 @@ fn collect_facts<'a>(
                 body,
             } => {
                 if let Some(i) = init {
-                    collect_facts(std::slice::from_ref(i.as_ref()), types, in_loop, facts);
+                    collect_facts(
+                        std::slice::from_ref(i.as_ref()),
+                        types,
+                        guarded_number_array_params,
+                        in_loop,
+                        facts,
+                    );
                 }
                 if let Some(c) = condition {
-                    collect_facts_expr(c, types, true, facts);
+                    collect_facts_expr(c, types, guarded_number_array_params, true, facts);
                 }
                 if let Some(u) = update {
-                    collect_facts_expr(u, types, true, facts);
+                    collect_facts_expr(u, types, guarded_number_array_params, true, facts);
                 }
-                collect_facts(body, types, true, facts);
+                collect_facts(body, types, guarded_number_array_params, true, facts);
             }
             Stmt::Labeled { body, .. } => {
-                collect_facts(std::slice::from_ref(body.as_ref()), types, in_loop, facts);
+                collect_facts(
+                    std::slice::from_ref(body.as_ref()),
+                    types,
+                    guarded_number_array_params,
+                    in_loop,
+                    facts,
+                );
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
-                collect_facts(body, types, in_loop, facts);
+                collect_facts(body, types, guarded_number_array_params, in_loop, facts);
                 if let Some(c) = catch {
-                    collect_facts(&c.body, types, in_loop, facts);
+                    collect_facts(&c.body, types, guarded_number_array_params, in_loop, facts);
                 }
                 if let Some(f) = finally {
-                    collect_facts(f, types, in_loop, facts);
+                    collect_facts(f, types, guarded_number_array_params, in_loop, facts);
                 }
             }
             Stmt::Switch {
                 discriminant,
                 cases,
             } => {
-                collect_facts_expr(discriminant, types, in_loop, facts);
+                collect_facts_expr(
+                    discriminant,
+                    types,
+                    guarded_number_array_params,
+                    in_loop,
+                    facts,
+                );
                 for case in cases {
                     if let Some(t) = &case.test {
-                        collect_facts_expr(t, types, in_loop, facts);
+                        collect_facts_expr(t, types, guarded_number_array_params, in_loop, facts);
                     }
-                    collect_facts(&case.body, types, in_loop, facts);
+                    collect_facts(
+                        &case.body,
+                        types,
+                        guarded_number_array_params,
+                        in_loop,
+                        facts,
+                    );
                 }
             }
             Stmt::Break
@@ -819,11 +964,12 @@ fn record_write<'a>(
     id: u32,
     rhs: &'a Expr,
     types: &HashMap<u32, HirType>,
+    guarded_number_array_params: &HashSet<u32>,
     in_loop: bool,
     facts: &mut Facts<'a>,
 ) {
     facts.writes.entry(id).or_default().push((rhs, in_loop));
-    if is_int_kind_ta_read(rhs, types) {
+    if is_i32_image_seed_read(rhs, types, guarded_number_array_params) {
         facts.seeded.insert(id);
     }
 }
@@ -831,12 +977,13 @@ fn record_write<'a>(
 fn collect_facts_expr<'a>(
     e: &'a Expr,
     types: &HashMap<u32, HirType>,
+    guarded_number_array_params: &HashSet<u32>,
     in_loop: bool,
     facts: &mut Facts<'a>,
 ) {
     match e {
         Expr::LocalSet(id, rhs) => {
-            record_write(*id, rhs, types, in_loop, facts);
+            record_write(*id, rhs, types, guarded_number_array_params, in_loop, facts);
         }
         Expr::Update { id, .. } => {
             facts.update_targets.insert(*id);
@@ -847,13 +994,15 @@ fn collect_facts_expr<'a>(
             // Still descend to record nested `Update` targets on ENCLOSING
             // locals (defensive; those ids are already in `closure_refs`).
             perry_hir::walker::walk_expr_children(e, &mut |c| {
-                collect_facts_expr(c, types, in_loop, facts)
+                collect_facts_expr(c, types, guarded_number_array_params, in_loop, facts)
             });
             return;
         }
         _ => {}
     }
-    perry_hir::walker::walk_expr_children(e, &mut |c| collect_facts_expr(c, types, in_loop, facts));
+    perry_hir::walker::walk_expr_children(e, &mut |c| {
+        collect_facts_expr(c, types, guarded_number_array_params, in_loop, facts)
+    });
 }
 
 /// Collect every local id read or written anywhere inside `e` (used to exclude
@@ -987,7 +1136,9 @@ fn observe_stmts(
     cands: &HashSet<u32>,
     types: &HashMap<u32, HirType>,
     additive: &AdditiveCtx<'_>,
+    exact_i32: &mut HashSet<u32>,
     disq: &mut HashSet<u32>,
+    root_body: bool,
 ) {
     for s in stmts {
         match s {
@@ -1004,16 +1155,39 @@ fn observe_stmts(
                             additive.numeric_locals,
                         )
                     {
-                        observe_additive_rhs(e, cands, types, additive, disq);
+                        observe_additive_rhs(e, cands, types, additive, exact_i32, disq);
                     } else {
-                        observe(e, false, cands, types, additive, disq);
+                        observe(e, false, cands, types, additive, exact_i32, disq);
                     }
                 }
             }
-            Stmt::Expr(e) | Stmt::Throw(e) => observe(e, false, cands, types, additive, disq),
+            Stmt::Expr(e) => {
+                observe(e, false, cands, types, additive, exact_i32, disq);
+                // Deliberately narrow dominance proof for guarded `number[]`
+                // seeds.  A direct statement in the function's root body
+                // executes before every later statement.  Nested writes do
+                // not establish this fact: break/continue/throw could bypass
+                // them.  The precomputed set guarantees every write after
+                // the seed is exact, so the fact cannot subsequently be lost.
+                if root_body {
+                    if let Expr::LocalSet(id, value) = e {
+                        if additive.exact_after_root_normalization.contains(id)
+                            && write_establishes_exact_i32(
+                                value,
+                                types,
+                                additive.ta_lens,
+                                additive.numeric_locals,
+                            )
+                        {
+                            exact_i32.insert(*id);
+                        }
+                    }
+                }
+            }
+            Stmt::Throw(e) => observe(e, false, cands, types, additive, exact_i32, disq),
             Stmt::Return(opt) => {
                 if let Some(e) = opt {
-                    observe(e, false, cands, types, additive, disq);
+                    observe(e, false, cands, types, additive, exact_i32, disq);
                 }
             }
             Stmt::If {
@@ -1021,19 +1195,19 @@ fn observe_stmts(
                 then_branch,
                 else_branch,
             } => {
-                observe(condition, false, cands, types, additive, disq);
-                observe_stmts(then_branch, cands, types, additive, disq);
+                observe(condition, false, cands, types, additive, exact_i32, disq);
+                observe_stmts(then_branch, cands, types, additive, exact_i32, disq, false);
                 if let Some(eb) = else_branch {
-                    observe_stmts(eb, cands, types, additive, disq);
+                    observe_stmts(eb, cands, types, additive, exact_i32, disq, false);
                 }
             }
             Stmt::While { condition, body } => {
-                observe(condition, false, cands, types, additive, disq);
-                observe_stmts(body, cands, types, additive, disq);
+                observe(condition, false, cands, types, additive, exact_i32, disq);
+                observe_stmts(body, cands, types, additive, exact_i32, disq, false);
             }
             Stmt::DoWhile { body, condition } => {
-                observe_stmts(body, cands, types, additive, disq);
-                observe(condition, false, cands, types, additive, disq);
+                observe_stmts(body, cands, types, additive, exact_i32, disq, false);
+                observe(condition, false, cands, types, additive, exact_i32, disq);
             }
             Stmt::For {
                 init,
@@ -1047,16 +1221,18 @@ fn observe_stmts(
                         cands,
                         types,
                         additive,
+                        exact_i32,
                         disq,
+                        false,
                     );
                 }
                 if let Some(c) = condition {
-                    observe(c, false, cands, types, additive, disq);
+                    observe(c, false, cands, types, additive, exact_i32, disq);
                 }
                 if let Some(u) = update {
-                    observe(u, false, cands, types, additive, disq);
+                    observe(u, false, cands, types, additive, exact_i32, disq);
                 }
-                observe_stmts(body, cands, types, additive, disq);
+                observe_stmts(body, cands, types, additive, exact_i32, disq, false);
             }
             Stmt::Labeled { body, .. } => {
                 observe_stmts(
@@ -1064,7 +1240,9 @@ fn observe_stmts(
                     cands,
                     types,
                     additive,
+                    exact_i32,
                     disq,
+                    false,
                 );
             }
             Stmt::Try {
@@ -1072,24 +1250,24 @@ fn observe_stmts(
                 catch,
                 finally,
             } => {
-                observe_stmts(body, cands, types, additive, disq);
+                observe_stmts(body, cands, types, additive, exact_i32, disq, false);
                 if let Some(c) = catch {
-                    observe_stmts(&c.body, cands, types, additive, disq);
+                    observe_stmts(&c.body, cands, types, additive, exact_i32, disq, false);
                 }
                 if let Some(f) = finally {
-                    observe_stmts(f, cands, types, additive, disq);
+                    observe_stmts(f, cands, types, additive, exact_i32, disq, false);
                 }
             }
             Stmt::Switch {
                 discriminant,
                 cases,
             } => {
-                observe(discriminant, false, cands, types, additive, disq);
+                observe(discriminant, false, cands, types, additive, exact_i32, disq);
                 for case in cases {
                     if let Some(t) = &case.test {
-                        observe(t, false, cands, types, additive, disq);
+                        observe(t, false, cands, types, additive, exact_i32, disq);
                     }
-                    observe_stmts(&case.body, cands, types, additive, disq);
+                    observe_stmts(&case.body, cands, types, additive, exact_i32, disq, false);
                 }
             }
             _ => {}
@@ -1103,11 +1281,12 @@ fn observe(
     cands: &HashSet<u32>,
     types: &HashMap<u32, HirType>,
     additive: &AdditiveCtx<'_>,
+    exact_i32: &mut HashSet<u32>,
     disq: &mut HashSet<u32>,
 ) {
     match e {
         Expr::LocalGet(id) => {
-            if cands.contains(id) && !coercing {
+            if cands.contains(id) && !coercing && !exact_i32.contains(id) {
                 disq.insert(*id);
             }
         }
@@ -1121,8 +1300,8 @@ fn observe(
         // Bitwise binary: both operands are `ToInt32`-coerced.
         Expr::Binary { op, left, right } => {
             let c = is_bitwise_binop(*op);
-            observe(left, c, cands, types, additive, disq);
-            observe(right, c, cands, types, additive, disq);
+            observe(left, c, cands, types, additive, exact_i32, disq);
+            observe(right, c, cands, types, additive, exact_i32, disq);
         }
         // `~x` coerces its operand via `ToInt32`; `-x`/`+x`/`!x` do NOT make an
         // `undefined`-vs-integer distinction disappear.
@@ -1133,6 +1312,7 @@ fn observe(
                 cands,
                 types,
                 additive,
+                exact_i32,
                 disq,
             );
         }
@@ -1147,26 +1327,35 @@ fn observe(
             receiver,
             ..
         } => {
-            observe(target, false, cands, types, additive, disq);
-            observe(key, false, cands, types, additive, disq);
-            observe(receiver, false, cands, types, additive, disq);
+            observe(target, false, cands, types, additive, exact_i32, disq);
+            observe(key, false, cands, types, additive, exact_i32, disq);
+            observe(receiver, false, cands, types, additive, exact_i32, disq);
             let store_coercing =
                 receiver_is_int_kind_ta(receiver, types) || receiver_is_int_kind_ta(target, types);
-            observe(value, store_coercing, cands, types, additive, disq);
+            observe(
+                value,
+                store_coercing,
+                cands,
+                types,
+                additive,
+                exact_i32,
+                disq,
+            );
         }
         Expr::IndexSet {
             object,
             index,
             value,
         } => {
-            observe(object, false, cands, types, additive, disq);
-            observe(index, false, cands, types, additive, disq);
+            observe(object, false, cands, types, additive, exact_i32, disq);
+            observe(index, false, cands, types, additive, exact_i32, disq);
             observe(
                 value,
                 receiver_is_int_kind_ta(object, types),
                 cands,
                 types,
                 additive,
+                exact_i32,
                 disq,
             );
         }
@@ -1177,18 +1366,18 @@ fn observe(
             index,
             value,
         } => {
-            observe(array, false, cands, types, additive, disq);
-            observe(index, false, cands, types, additive, disq);
-            observe(value, true, cands, types, additive, disq);
+            observe(array, false, cands, types, additive, exact_i32, disq);
+            observe(index, false, cands, types, additive, exact_i32, disq);
+            observe(value, true, cands, types, additive, exact_i32, disq);
         }
         Expr::BufferIndexSet {
             buffer,
             index,
             value,
         } => {
-            observe(buffer, false, cands, types, additive, disq);
-            observe(index, false, cands, types, additive, disq);
-            observe(value, true, cands, types, additive, disq);
+            observe(buffer, false, cands, types, additive, exact_i32, disq);
+            observe(index, false, cands, types, additive, exact_i32, disq);
+            observe(value, true, cands, types, additive, exact_i32, disq);
         }
         // Assignment rhs: a bare `LocalGet(cand)` here is a copy (not modeled),
         // so it is non-coercing. Nested bitwise sub-expressions re-establish
@@ -1205,9 +1394,9 @@ fn observe(
                     additive.numeric_locals,
                 )
             {
-                observe_additive_rhs(value, cands, types, additive, disq);
+                observe_additive_rhs(value, cands, types, additive, exact_i32, disq);
             } else {
-                observe(value, false, cands, types, additive, disq);
+                observe(value, false, cands, types, additive, exact_i32, disq);
             }
         }
         // Closure-touched candidates are already excluded; do not descend.
@@ -1216,7 +1405,7 @@ fn observe(
         // so any candidate read there disqualifies it.
         _ => {
             perry_hir::walker::walk_expr_children(e, &mut |c| {
-                observe(c, false, cands, types, additive, disq)
+                observe(c, false, cands, types, additive, exact_i32, disq)
             });
         }
     }
@@ -1231,6 +1420,7 @@ fn observe_additive_rhs(
     cands: &HashSet<u32>,
     types: &HashMap<u32, HirType>,
     additive: &AdditiveCtx<'_>,
+    exact_i32: &mut HashSet<u32>,
     disq: &mut HashSet<u32>,
 ) {
     match e {
@@ -1238,38 +1428,38 @@ fn observe_additive_rhs(
         // — no constraint either way).
         Expr::LocalGet(_) | Expr::Integer(_) | Expr::Number(_) => {}
         Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
-            observe_additive_rhs(left, cands, types, additive, disq);
-            observe_additive_rhs(right, cands, types, additive, disq);
+            observe_additive_rhs(left, cands, types, additive, exact_i32, disq);
+            observe_additive_rhs(right, cands, types, additive, exact_i32, disq);
         }
         // Bitwise/`~`/`imul` operands are ToInt32/ToUint32-coerced — the
         // strict walk already treats those positions as coercing.
         Expr::Binary { op, left, right } if is_bitwise_binop(*op) => {
-            observe(left, true, cands, types, additive, disq);
-            observe(right, true, cands, types, additive, disq);
+            observe(left, true, cands, types, additive, exact_i32, disq);
+            observe(right, true, cands, types, additive, exact_i32, disq);
         }
         Expr::Unary {
             op: UnaryOp::BitNot,
             operand,
         } => {
-            observe(operand, true, cands, types, additive, disq);
+            observe(operand, true, cands, types, additive, exact_i32, disq);
         }
         Expr::MathImul(left, right) => {
-            observe(left, true, cands, types, additive, disq);
-            observe(right, true, cands, types, additive, disq);
+            observe(left, true, cands, types, additive, exact_i32, disq);
+            observe(right, true, cands, types, additive, exact_i32, disq);
         }
         // In-bounds-proven typed-array read operand: its INDEX is walked with
         // the strict (non-coercing) rule — a wrapped image used as an index
         // would be disqualifying, exactly as in ordinary code.
         Expr::IndexGet { object, index } => {
-            observe(object, false, cands, types, additive, disq);
-            observe(index, false, cands, types, additive, disq);
+            observe(object, false, cands, types, additive, exact_i32, disq);
+            observe(index, false, cands, types, additive, exact_i32, disq);
         }
         Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => {
-            observe(e, false, cands, types, additive, disq);
+            observe(e, false, cands, types, additive, exact_i32, disq);
         }
         // Anything else in an "admissible" tree would be a grammar bug —
         // fall back to the strict walk (disqualifying, never unsound).
-        _ => observe(e, false, cands, types, additive, disq),
+        _ => observe(e, false, cands, types, additive, exact_i32, disq),
     }
 }
 

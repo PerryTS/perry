@@ -448,6 +448,7 @@ pub(crate) fn collect_type_facts(
     spec_ta_lens: &HashMap<u32, i64>,
     spec_i32_params: &HashSet<u32>,
     spec_numeric_params: &HashSet<u32>,
+    spec_number_array_params: &HashSet<u32>,
 ) -> TypeFacts {
     // #7700: which locals hold a NUMBER, so a `u8[k]` keyed on one is a byte
     // read rather than a property read. Computed once here because
@@ -464,9 +465,10 @@ pub(crate) fn collect_type_facts(
         spec_i32_params,
     );
     // Native-i32 residency for integer-valued locals whose init/writes include a
-    // possibly-out-of-bounds INT typed-array element read (bcryptjs `_encipher`
-    // Feistel accumulators `l`/`r`). Sound only under a whole-function
-    // observation constraint — see `int_valued_ta_locals`. Gated by
+    // possibly-out-of-bounds INT typed-array element read or a numeric-array
+    // read backed by a specialized entry guard (bcryptjs `_encipher` Feistel
+    // accumulators `l`/`r`). Sound only under a whole-function observation
+    // constraint — see `int_valued_ta_locals`. Gated by
     // `PERRY_INT_VALUED_LOCALS` (keyed into the object cache). Boxed / module-
     // global locals are excluded (they never take the i32 shadow slot and would
     // only pollute the fact for other consumers).
@@ -477,6 +479,7 @@ pub(crate) fn collect_type_facts(
             params,
             binding_types,
             spec_ta_lens,
+            spec_number_array_params,
         );
         // `--opt-report` (#6952) / promotion census (#7106): the win column
         // for this analysis, recorded at the ONE site where a candidate
@@ -758,6 +761,7 @@ pub(crate) fn collect_native_region_fact_graph(
         &HashMap::new(),
         &HashSet::new(),
         &HashSet::new(),
+        &HashSet::new(),
     )
 }
 
@@ -780,6 +784,7 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_params(
     spec_ta_lens: &HashMap<u32, i64>,
     spec_i32_params: &HashSet<u32>,
     spec_numeric_params: &HashSet<u32>,
+    spec_number_array_params: &HashSet<u32>,
 ) -> NativeRegionFactGraph {
     collect_type_facts(
         stmts,
@@ -796,6 +801,7 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_params(
         spec_ta_lens,
         spec_i32_params,
         spec_numeric_params,
+        spec_number_array_params,
     )
 }
 
@@ -822,6 +828,7 @@ pub(crate) fn collect_hir_facts(
         // conservative default keeps it that way if one ever could.
         &super::ModuleDispatchFacts::default(),
         &HashMap::new(),
+        &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
     )

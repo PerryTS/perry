@@ -155,11 +155,6 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
         object: Box::new(Expr::LocalGet(10)),
         index: Box::new(Expr::Integer(0)),
     };
-    let xor_loaded = || Expr::Binary {
-        op: BinaryOp::BitXor,
-        left: Box::new(Expr::LocalGet(12)),
-        right: Box::new(Expr::Integer(1)),
-    };
     let encipher = Function {
         id: 1,
         name: "encipher".to_string(),
@@ -171,7 +166,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
                 id: 12,
                 name: "value".to_string(),
                 ty: Type::Any,
-                mutable: false,
+                mutable: true,
                 init: Some(loaded),
             },
             Stmt::While {
@@ -181,12 +176,42 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
                     index: Box::new(Expr::Integer(0)),
                 })],
             },
+            Stmt::Let {
+                id: 13,
+                name: "accumulator".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(3)),
+            },
+            Stmt::Expr(Expr::LocalSet(
+                13,
+                Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::LocalGet(13)),
+                    right: Box::new(Expr::Integer(1)),
+                }),
+            )),
+            Stmt::Expr(Expr::LocalSet(
+                12,
+                Box::new(Expr::Binary {
+                    op: BinaryOp::BitXor,
+                    left: Box::new(Expr::LocalGet(12)),
+                    right: Box::new(Expr::Binary {
+                        op: BinaryOp::BitXor,
+                        left: Box::new(Expr::LocalGet(13)),
+                        right: Box::new(Expr::IndexGet {
+                            object: Box::new(Expr::LocalGet(11)),
+                            index: Box::new(Expr::Integer(0)),
+                        }),
+                    }),
+                }),
+            )),
             Stmt::Expr(Expr::IndexSet {
                 object: Box::new(Expr::LocalGet(10)),
                 index: Box::new(Expr::Integer(0)),
-                value: Box::new(xor_loaded()),
+                value: Box::new(Expr::LocalGet(12)),
             }),
-            Stmt::Return(Some(xor_loaded())),
+            Stmt::Return(Some(Expr::LocalGet(12))),
         ],
         is_async: false,
         is_generator: false,
@@ -243,6 +268,10 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
     assert!(init.contains("encipher$spec_b_ta4x4("), "{init}");
     assert!(init.contains("@perry_fn_number_array_guard_ts__encipher("));
     assert!(!specialized.contains("js_dynamic_bitxor"));
+    assert!(
+        !specialized.contains("js_number_coerce"),
+        "the guarded element must enter a canonical i32 slot before the hot bitwise update:\n{specialized}"
+    );
     assert!(generic.contains("js_dynamic_bitxor"));
 }
 

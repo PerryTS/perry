@@ -2884,8 +2884,35 @@ fn lower_bitwise_operand_i32(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<
         }
     }
 
-    let Some(lowered) = lower_numeric_operand_value(ctx, expr)? else {
-        return Ok(None);
+    // Region proofs cover bounds-checked typed-array reads such as
+    // `P[++i]`.  `lower_expr_value` intentionally does not expose every such
+    // read, but the native-i32 lowering has the exact checked access path we
+    // need for a bitwise operand.
+    if can_lower_expr_as_i32_in_current_region(ctx, expr) {
+        return Ok(Some(
+            lower_expr_native(ctx, expr, ExpectedNativeRep::I32)?.value,
+        ));
+    }
+
+    let lowered = match lower_numeric_operand_value(ctx, expr)? {
+        Some(lowered) => lowered,
+        // Mutable numeric accumulators do not have a stable plain-f64 slot
+        // proof for `lower_expr_value`, even when the whole-region write proof
+        // establishes that every value is a Number.  Materialize only this
+        // non-recursive leaf and apply the bitwise operator's required
+        // ToInt32 conversion; nested bitwise expressions continue through the
+        // native structural path above.
+        None if matches!(expr, Expr::LocalGet(id)
+                if ctx.number_by_construction_locals.contains(id)) =>
+        {
+            let value = lower_expr(ctx, expr)?;
+            return Ok(Some(if is_known_finite(ctx, expr) {
+                ctx.block().toint32_fast(&value)
+            } else {
+                ctx.block().toint32_wrap(&value)
+            }));
+        }
+        None => return Ok(None),
     };
     let value = match lowered.rep {
         NativeRep::I32 | NativeRep::U32 | NativeRep::BufferLen => lowered.value,
