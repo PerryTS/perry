@@ -29,6 +29,12 @@
 # Migration order tracks #466 Phase 5 (smallest first). Each entry
 # is gated on the bundled crate actually existing in the workspace
 # — wrappers that haven't been ported yet have no entry.
+#
+# This file describes current resolver behavior, not permission to keep a
+# package-specific Rust rewrite indefinitely. Before adding or removing a
+# bundled crate, update its `migration` in `workspace-architecture.json`; CI
+# requires every ext crate and package mapping to have an explicit decision
+# (#5716).
 
 [bindings.dotenv]
 crate = "perry-ext-dotenv"

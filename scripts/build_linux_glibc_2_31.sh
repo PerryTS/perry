@@ -55,18 +55,18 @@ CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_DIST_PANIC=abort \
 cp "$abort_target_dir/$target/dist/libperry_runtime.a" \
    "$target_dir/$target/dist/libperry_runtime_abort.a"
 
-# Match the ordinary release leg's best-effort extension-library build. Keep
-# perry and both wrappers in each invocation so Cargo resolves one feature
-# union and the final linker can deduplicate their shared dependencies.
-for dir in crates/perry-ext-*; do
-  [ -d "$dir" ] || continue
-  package=$(basename "$dir")
+# Match the ordinary release leg's best-effort extension-library build. #5716:
+# enumerate the explicit governance inventory rather than every matching
+# directory. Keep perry and both wrappers in each invocation so Cargo resolves
+# one feature union and the final linker can deduplicate shared dependencies.
+governed_ext_packages=$(./scripts/release_ext_packages.sh)
+while IFS= read -r package; do
   echo "::group::build $package"
   cargo build --profile dist --target "$target" \
     -p perry -p perry-runtime-static -p perry-stdlib-static -p "$package" \
     || echo "  (skipped $package -- failed to build on the glibc 2.31 sysroot)"
   echo "::endgroup::"
-done
+done <<< "$governed_ext_packages"
 
 compiler="$target_dir/$target/dist/perry"
 max_glibc=$(

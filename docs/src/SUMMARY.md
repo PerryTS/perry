@@ -23,6 +23,7 @@
 
 - [Porting Packages (experimental)](packages/porting.md)
 - [Native Bindings — Overview](native-libraries/overview.md)
+  - [Bundled Binding Governance](native-libraries/governance.md)
   - [Authoring a Native Binding](native-libraries/authoring-guide.md)
   - [`perry-ffi` ABI Reference](native-libraries/abi.md)
   - [Manifest Schema (spec v1)](native-libraries/manifest-v1.md)

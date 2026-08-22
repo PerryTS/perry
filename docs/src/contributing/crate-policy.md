@@ -42,6 +42,10 @@ Every member is classified in `workspace-architecture.json`:
 Its `decision` records the reviewed direction: `keep`, `merge`, `externalize`,
 `remove`, or `review`. Decisions describe the architecture roadmap; they do not
 authorize deleting compatibility without the relevant migration and tests.
+Binding entries also carry a `migration` that refines the general decision:
+`core-runtime`, `compile-source`, `external-package`, or `remove`. The native
+[binding governance policy](../native-libraries/governance.md) defines those
+targets and their compatibility gates.
 
 Choose the decision by applying the same seam test consistently:
 

@@ -311,6 +311,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: node scripts/binding_pins.mjs --check
 
+      # #5716: every bundled extension needs an explicit product disposition;
+      # mappings, workspace members, crate directories, release enumeration,
+      # and the published inventory must stay in lock-step.
+      - name: Bundled binding governance
+        if: ${{ !cancelled() }}
+        run: python3 scripts/binding_governance.py --check
+
       # GC write-barrier store-site inventory: every raw heap-slot store in
       # perry-codegen / perry-runtime / perry-stdlib must be barriered or
       # carry a justified GC_STORE_AUDIT(...) marker (or a justified entry

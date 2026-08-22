@@ -13,6 +13,20 @@ Perry compiles a practical subset of TypeScript. Most pure TS/JS packages can be
 | Package's core API is built on `Proxy` (ORMs, validation DSLs, reactive stores) | **Probably not portable.** The surface Perry-users touch is the Proxy. |
 | Package is pure TS/JS but uses `Symbol`, `WeakMap`, `console.dir`, etc. | **Patchable.** See [Common gaps](#common-gaps) below. |
 
+## Compatibility policy
+
+Compiling the real package is Perry's default compatibility path. When a pure
+package fails, record the first compiler or runtime gap and fix the shared
+language, module, Node.js, or Web capability when possible. Do not add an
+in-tree `perry-ext-<package>` Rust rewrite to bypass that work.
+
+A Perry native binding is appropriate for the smallest true native or system
+boundary. Package-specific and domain-specific bindings should normally be
+published outside the Perry repository through `perry.nativeLibrary`; only
+foundational runtime APIs and explicitly approved strategic shims belong in
+core. See [Bundled native-binding governance](../native-libraries/governance.md)
+for the admission rules and current migration inventory.
+
 ## Native addon packages
 
 `compilePackages` is only for JavaScript and TypeScript packages. It
@@ -33,9 +47,10 @@ For those packages, use one of these paths instead:
 - write or install a thin Perry native binding that exposes the public
   package API through `perry.nativeLibrary`.
 
-The last option should replace only the native boundary. It should not
-rewrite a whole npm package in Rust unless the package is already just a
-small native facade.
+The last option should replace only the native boundary. Publish it as an
+external package unless it meets the in-tree admission policy; it should not
+rewrite a whole npm package in Rust unless the package is already just a small
+native facade.
 
 ### Known-working packages
 

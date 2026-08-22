@@ -6,6 +6,14 @@ in JavaScript-engine glue — it lands on a Rust function that's been
 linked into the binary as `extern "C"`. This page is the map of how
 that works end-to-end.
 
+Native bindings are an escape hatch for native and system boundaries, not
+Perry's default npm compatibility mechanism. Pure JavaScript and TypeScript
+packages should be compiled from their upstream source, and missing shared
+Node.js or Web APIs should be implemented once in the runtime. The in-tree
+well-known table still contains compatibility shims while those migrations are
+completed; see [Bundled native-binding governance](governance.md) for the
+policy and the decision recorded for every extension crate.
+
 ## The big picture
 
 There are four layers, from most stable to most flexible:
@@ -29,12 +37,12 @@ There are four layers, from most stable to most flexible:
 │       → the user installed an external binding via                │
 │         `bun add @scope/<name>`. Wins over (b) and (c).           │
 │                                                                   │
-│    b. node_modules/<name>/ without perry.nativeLibrary            │
-│       → fall through to V8/JS interpretation.                     │
+│    b. node_modules/<name>/ selected by compilePackages            │
+│       → compile the installed JavaScript/TypeScript source.        │
 │                                                                   │
 │    c. well-known table (well_known_bindings.toml)                 │
-│       → Perry ships the binding in its install. ~30 names like   │
-│         dotenv / mysql2 / axios / ws / lru-cache / commander.     │
+│       → Perry ships a runtime API or transitional compatibility  │
+│         shim. The governance inventory records its destination.  │
 │                                                                   │
 │    d. nothing matches → resolution error at compile time.         │
 └─────────────────────────────────────────────────────────────────┘
@@ -89,11 +97,10 @@ walks each search path looking for `node_modules/mysql2/`:
 - **If `node_modules/mysql2/package.json` exists with a
   `perry.nativeLibrary` block**: parse the manifest, treat the package
   as a native binding. Skip layers (c) and (d).
-- **If `node_modules/mysql2/` exists without a
-  `perry.nativeLibrary` block**: this is a JS-only npm package; fall
-  through to the V8 / JS interpretation path (separate compilation
-  flow).
-- **If `node_modules/mysql2/` doesn't exist at all**: consult the
+- **If `mysql2` is selected through `perry.compilePackages`**: compile the
+  installed JavaScript package source. This is the intended long-term path for
+  `mysql2` and other source packages.
+- **Otherwise**: consult the
   **well-known table** at
   [`crates/perry/well_known_bindings.toml`](https://github.com/PerryTS/perry/blob/main/crates/perry/well_known_bindings.toml).
   The table maps `mysql2` → `perry-ext-mysql2` (a Rust crate that
@@ -205,10 +212,9 @@ crates/
   perry-stdlib/           ← Layer 1: in-tree wrappers (perry/ui, fs,
                             crypto helpers, etc. — anything genuinely
                             coupled to runtime internals)
-  perry-ext-<name>/       ← Layer 3, well-known: mysql2, pg, ioredis,
-                            cron, decimal, dayjs, axios, ethers,
-                            commander, … (~27 today). All depend on
-                            perry-ffi only.
+  perry-ext-<name>/       ← Layer 3: selectively linked runtime APIs and
+                            compatibility shims. Their retained/migration
+                            decisions live in workspace-architecture.json.
 
 External native bindings (Layer 3, third-party — Rust + perry-ffi):
   PerryTS/tursodb-bindings    → bun add @perryts/tursodb
@@ -222,12 +228,13 @@ External pure-TypeScript drivers (compiled via compilePackages):
   PerryTS/redis               → bun add @perryts/redis
 ```
 
-The split between **well-known** in-tree wrappers and **external** is
-a packaging convention, not a technical distinction. Both depend only
-on perry-ffi; both ship `extern "C"` symbols Perry's codegen calls.
-The well-known set is the ~30 packages every JS dev expects to import
-without an `npm install` step (`dotenv`, `axios`, `mysql2`, …).
-External wrappers are everything else.
+The split between **well-known** in-tree wrappers and **external** is a
+packaging convention, not a technical distinction. Both depend only on
+perry-ffi; both ship `extern "C"` symbols Perry's codegen calls. The policy
+difference is intentional: an in-tree wrapper needs a shared runtime reason to
+remain in core. Ordinary source packages should migrate to
+`compilePackages`, while domain-specific native integrations should migrate to
+external packages with independent releases.
 
 The two existing external native wrappers (`tursodb`, `iroh`) cover
 functionality that doesn't have an in-tree perry-stdlib equivalent —
@@ -237,12 +244,13 @@ wrapper without forking Perry.
 
 ## Three paths to a database driver (postgres / mysql / mongodb / redis)
 
-Perry currently ships two parallel database-driver families. Picking
-one is a packaging trade-off, not a feature trade-off:
+Perry currently ships parallel database-driver families. The bundled native
+drivers remain compatibility bridges; compiling real JavaScript/TypeScript
+drivers is the migration target:
 
 | Path | Install | Resolver layer | What it is |
 |---|---|---|---|
-| **Well-known native binding** | nothing (bundled) | (c) | `import 'mysql2'` / `import 'pg'` / `import 'mongodb'` route to in-tree `perry-ext-mysql2` / `perry-ext-pg` / `perry-ext-mongodb`. Rust wrappers around `sqlx` / `mongodb` crates. Versioned in lockstep with Perry. |
+| **Well-known native binding** | nothing (bundled) | (c) | Compatibility path: `import 'mysql2'` / `import 'pg'` / `import 'mongodb'` route to in-tree Rust wrappers. They remain available until the source-package migration gates pass. |
 | **`@perryts/{postgres,mysql,mongodb,redis}`** | `bun add @perryts/postgres` | (a) | Pure-TypeScript wire-protocol drivers — no Rust, no native dep. Use Perry's [`compilePackages`](../packages/porting.md) to compile the TS to native via LLVM. Also run unmodified on Node.js / Bun. Independent semver. |
 | **External native binding** | `bun add @perryts/tursodb` | (a) | Third-party Rust crate using `perry-ffi`, manifest at `package.json::perry.nativeLibrary`. Today: `@perryts/tursodb`, `@perryts/iroh`. |
 
@@ -255,9 +263,9 @@ shim, just don't import `mysql2`.
 
 **When to pick which:**
 
-- **Well-known native (`mysql2` / `pg` / `mongodb`)** — zero install
-  step, fastest path to "it works"; you accept that the driver's
-  feature set tracks Perry's release cadence.
+- **Well-known native (`mysql2` / `pg` / `mongodb`)** — current zero-install
+  compatibility path; its feature set tracks Perry's release cadence and it is
+  scheduled to yield to compiled package source.
 - **`@perryts/postgres` / `@perryts/mysql` / `@perryts/mongodb` / `@perryts/redis`** —
   you want to read / fork / patch the driver in plain TypeScript;
   you want the same code running on Node.js or Bun for fallback;
@@ -270,7 +278,7 @@ shim, just don't import `mysql2`.
 
 | If you want to … | Read |
 |---|---|
-| **Use `mysql2` / `dotenv` / etc. in a Perry program** | Nothing! `import` and go — Perry ships them in the well-known set. |
+| **Use a currently bundled compatibility shim** | `import` it directly, or explicitly select the installed package in `perry.compilePackages` to exercise the preferred source path. |
 | **Use a third-party native binding** | `bun add <package>`, then `import`. Perry's resolver finds it via `node_modules/<pkg>/package.json`. |
 | **Find which packages ship out-of-the-box** | `perry native list` |
 | **Write your own native binding** | `perry native init my-bindings` scaffolds the Cargo crate + `package.json` + `release.yml` for prebuilds. Then read [`abi.md`](abi.md) for the perry-ffi surface and [`manifest-v1.md`](manifest-v1.md) for the manifest schema. |

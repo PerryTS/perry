@@ -523,20 +523,21 @@ jobs:
         # the link deduper then cannot remove the whole second copy, and the
         # HTTP accept loop reads a different async reactor from the one the JS
         # event loop drives.
-        # Best-effort per crate: a wrapper that can't build on this host must
-        # not fail the whole release — the packaging glob below ships
-        # whatever was produced.
+        # #5716: the governance inventory is the explicit shipping set; adding
+        # a crate requires a recorded retain/migration decision. Best-effort
+        # per crate: a wrapper that can't build on this host must not fail the
+        # whole release — packaging below ships whatever was produced.
         if: runner.os != 'Windows' && matrix.old_glibc_image == ''
         run: |
-          for d in crates/perry-ext-*; do
-            [ -d "$d" ] || continue
-            name=$(basename "$d")
+          set -euo pipefail
+          governed_ext_packages=$(./scripts/release_ext_packages.sh)
+          while IFS= read -r name; do
             echo "::group::build $name"
             cargo build --profile dist --target ${{ matrix.target }} \
               -p perry -p perry-runtime-static -p perry-stdlib-static -p "$name" \
               || echo "  (skipped $name — failed to build on this host)"
             echo "::endgroup::"
-          done
+          done <<< "$governed_ext_packages"
 
       # #6351: only GTK4 needs noble. Build the compiler, runtime, stdlib and
       # extension archives in a Debian 11 container so their ABI floor is

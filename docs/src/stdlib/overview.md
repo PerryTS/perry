@@ -1,6 +1,9 @@
 # Standard Library Overview
 
-Perry natively implements many popular npm packages and Node.js APIs. When you import a supported package, Perry compiles it to native code — no JavaScript runtime involved.
+Perry compiles supported npm packages and Node.js APIs to native code — no
+JavaScript runtime involved. Shared runtime APIs have native implementations;
+ordinary JavaScript and TypeScript dependencies should be compiled from their
+upstream source.
 
 ## How It Works
 
@@ -8,13 +11,16 @@ Perry natively implements many popular npm packages and Node.js APIs. When you i
 {{#include ../../examples/stdlib/overview/snippets.ts:imports}}
 ```
 
-Perry recognizes these imports at compile time and routes them to native
-Rust implementations. Most live in standalone `perry-ext-*` crates
-backed by the stable [`perry-ffi` ABI](../native-libraries/abi.md) (the
-"well-known native bindings" registry shipped in v0.5.532); a few of
-the older Node.js built-ins still live in `perry-stdlib`. Either way the
-import surface matches the original npm package, so existing code often
-works unchanged.
+Perry recognizes these imports at compile time. Today, many route to
+standalone `perry-ext-*` Rust compatibility shims backed by the stable
+[`perry-ffi` ABI](../native-libraries/abi.md); a few older Node.js built-ins
+still live in `perry-stdlib`. These shims expose documented supported surfaces
+and remain available during migration, but most ordinary packages are intended
+to move to upstream-source compilation. See the
+[binding governance inventory](../native-libraries/governance.md) for each
+crate's disposition and
+[zero-config bindings and faithfulness](../native-libraries/zero-config-and-faithfulness.md)
+for compatibility guarantees.
 
 ## Supported Packages
 

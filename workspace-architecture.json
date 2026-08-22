@@ -140,163 +140,203 @@
     },
     "perry-ext-ads": {
       "category": "binding",
-      "decision": "remove"
+      "decision": "remove",
+      "migration": "remove"
     },
     "perry-ext-argon2": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "external-package"
     },
     "perry-ext-axios": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-bcrypt": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "external-package"
     },
     "perry-ext-better-sqlite3": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "external-package"
     },
     "perry-ext-cheerio": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-commander": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-cron": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-dayjs": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-decimal": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-dotenv": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-ethers": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-events": {
       "category": "binding",
-      "decision": "keep"
+      "decision": "keep",
+      "migration": "core-runtime"
     },
     "perry-ext-exponential-backoff": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-fastify": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-fetch": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-node-forge": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-parcel-watcher": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "external-package"
     },
     "perry-ext-undici": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-http": {
       "category": "binding",
-      "decision": "keep"
+      "decision": "keep",
+      "migration": "core-runtime"
     },
     "perry-ext-ioredis": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-jsonwebtoken": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-lru-cache": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-moment": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-mongodb": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-mysql2": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-nanoid": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-net": {
       "category": "binding",
-      "decision": "keep"
+      "decision": "keep",
+      "migration": "core-runtime"
     },
     "perry-ext-nodemailer": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-pdf": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "external-package"
     },
     "perry-ext-pg": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-ratelimit": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-sharp": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "external-package"
     },
     "perry-ext-slugify": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-streams": {
       "category": "binding",
-      "decision": "keep"
+      "decision": "keep",
+      "migration": "core-runtime"
     },
     "perry-ext-typescript": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-uuid": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-validator": {
       "category": "binding",
-      "decision": "externalize"
+      "decision": "externalize",
+      "migration": "compile-source"
     },
     "perry-ext-ws": {
       "category": "binding",
-      "decision": "keep"
+      "decision": "keep",
+      "migration": "core-runtime"
     },
     "perry-ext-zlib": {
       "category": "binding",
-      "decision": "keep"
+      "decision": "keep",
+      "migration": "core-runtime"
     },
     "perry-ffi": {
       "category": "runtime-core",
