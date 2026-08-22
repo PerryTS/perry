@@ -54,7 +54,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // native-instance registration (extracted to `native_fetch`).
             // Returns true when nothing observable is bound (the `require`
             // of a resolvable native module).
-            if register_native_fetch_and_streams(ctx, decl, &name, &mut ty) {
+            if register_native_fetch_and_streams(ctx, decl, &name, &mut ty, mutable) {
                 return Ok(result);
             }
 

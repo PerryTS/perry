@@ -22,6 +22,7 @@ pub(crate) fn register_native_fetch_and_streams(
     decl: &ast::VarDeclarator,
     name: &str,
     ty: &mut Type,
+    mutable: bool,
 ) -> bool {
     // #5216: `const <name> = require("<spec>")` of a statically
     // resolvable native/Node-builtin module lowers to the same
@@ -53,19 +54,30 @@ pub(crate) fn register_native_fetch_and_streams(
         }
     }
 
-    if let Some(init_expr) = &decl.init {
-        // #8342: inside a CJS-wrapped module the wrap's synthetic
-        // `function require(...)` (with a `createRequire`-backed built-in arm)
-        // shadows the bare global `require`. Don't steal `let x =
-        // require("process")` into a native-module namespace binding here — the
-        // native namespace isn't initialized in a CJS-wrapped module, so `x`
-        // would be undefined at runtime (`ReferenceError: node_process is not
-        // defined`). Let the call flow through to the synthetic require, which
-        // resolves builtins via `createRequire` (see `cjs_wrap::wrap`).
-        if !require_is_shadowed_by_local(ctx) {
-            if let Some(module_name) = require_resolvable_native_specifier(init_expr) {
-                register_require_namespace_binding(ctx, name, &module_name);
-                return true;
+    // Gated on `!mutable` (a `const`, never `let`/`var`): a real namespace
+    // import is immutable, and this optimization emits no runtime binding at
+    // all, so a later reassignment of `name` would reference a slot that was
+    // never created. Rolldown's own ESM-interop preamble does exactly that —
+    // `let node_process = require("node:process"); node_process =
+    // __toESM(node_process);` — to wrap the require result in a `.default`
+    // shape. Applying the optimization there dropped the runtime `let`
+    // entirely, so the reassignment (and every later `node_process.default.*`
+    // read) threw `ReferenceError: node_process is not defined`.
+    if !mutable {
+        if let Some(init_expr) = &decl.init {
+            // #8342: inside a CJS-wrapped module the wrap's synthetic
+            // `function require(...)` (with a `createRequire`-backed built-in arm)
+            // shadows the bare global `require`. Don't steal `let x =
+            // require("process")` into a native-module namespace binding here — the
+            // native namespace isn't initialized in a CJS-wrapped module, so `x`
+            // would be undefined at runtime (`ReferenceError: node_process is not
+            // defined`). Let the call flow through to the synthetic require, which
+            // resolves builtins via `createRequire` (see `cjs_wrap::wrap`).
+            if !require_is_shadowed_by_local(ctx) {
+                if let Some(module_name) = require_resolvable_native_specifier(init_expr) {
+                    register_require_namespace_binding(ctx, name, &module_name);
+                    return true;
+                }
             }
         }
     }
