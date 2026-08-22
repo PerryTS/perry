@@ -1232,6 +1232,10 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
     method("worker_threads", "once", true, Some("Worker")),
     method("worker_threads", "off", true, Some("Worker")),
     method("worker_threads", "terminate", true, Some("Worker")),
+    // #8527 — global Web Worker AOT compile added the dispatch row
+    // (NativeModSig in native_table/extras.rs) without a manifest
+    // counterpart; this closes that drift.
+    method("worker_threads", "reload", true, Some("Worker")),
     // #4917 — real: `ref()`/`unref()` flip `WorkerRecord.refed`, which
     // `js_worker_threads_has_pending` checks to keep the event loop alive
     // (a live refed worker holds the process; `unref()` releases it).

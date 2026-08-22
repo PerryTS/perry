@@ -175,8 +175,11 @@ fn any_call_result_trim_emits_string_tag_dispatch() {
     assert_eq!(
         ir.matches("= call double @perry_fn_schema_ts__make(")
             .count(),
-        2,
-        "the receiver must be evaluated once in the init body (plus the generated extern wrapper):\n{ir}"
+        1,
+        "the receiver must be evaluated exactly once, in the init body — #8383 dropped the \
+         unconditional per-consumer-module `__perry_wrap_extern_*` value wrapper (imported \
+         function values now materialize lazily via js_closure_alloc_singleton), so there is \
+         no second call site to account for:\n{ir}"
     );
 }
 

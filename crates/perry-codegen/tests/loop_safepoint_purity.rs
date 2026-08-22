@@ -37,7 +37,7 @@
 
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::Type;
-use perry_hir::{BinaryOp, CompareOp, Expr, Module, ModuleInitKind, Stmt, UpdateOp};
+use perry_hir::{BinaryOp, CompareOp, Export, Expr, Module, ModuleInitKind, Stmt, UpdateOp};
 
 fn entry_opts() -> CompileOptions {
     CompileOptions {
@@ -156,6 +156,17 @@ fn ir_for_with_exported_vars(name: &str, init: Vec<Stmt>, exported: &[&str]) -> 
     enable_back_edge_polls();
     let mut m = module_with_init(name, init);
     m.exported_objects = exported.iter().map(|s| s.to_string()).collect();
+    // #8383: module-global promotion now requires a matching `Export::Named`
+    // entry (deriving it from `exported_objects` alone could globalize an
+    // unrelated local sharing the public name), so the fixture must declare
+    // one for each name to still exercise the module-global path.
+    m.exports = exported
+        .iter()
+        .map(|s| Export::Named {
+            local: s.to_string(),
+            exported: s.to_string(),
+        })
+        .collect();
     String::from_utf8(compile_module(&m, entry_opts()).unwrap()).expect("LLVM IR should be UTF-8")
 }
 

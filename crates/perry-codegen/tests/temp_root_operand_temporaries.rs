@@ -219,9 +219,17 @@ fn map_set_with_a_non_allocating_value_emits_no_rooting_calls() {
 
 // ---------------------------------------------------------------- #6971 ----
 
-/// `s.concat(x)` threads a bare `StringHeader*` accumulator through an SSA
-/// register across every argument, and each `js_string_concat` returns a NEW
-/// address — so the slot has to be written back, not just re-read.
+/// `s.concat(x)` used to thread a bare `StringHeader*` accumulator through an
+/// SSA register across every argument, written back into its own slot after
+/// each `js_string_concat` call because every call returns a NEW address.
+///
+/// #8450 replaced that iterative accumulator with a fused
+/// `js_string_concat_chain` call: the receiver and every argument are each
+/// rooted in their OWN slot (not one shared, repeatedly-written slot), then
+/// re-read into a scratch array right before the single chain call. This
+/// pins the #8450-shaped invariant directly with `assert_rooted_across`
+/// rather than counting stores into a shared accumulator that no longer
+/// exists.
 #[test]
 fn concat_accumulator_is_rooted_and_written_back() {
     let ir = ir_for(
@@ -243,36 +251,35 @@ fn concat_accumulator_is_rooted_and_written_back() {
     );
 
     let f = init_ir(&ir);
-    let slots = temp_root_slots(f);
-    assert!(
-        !slots.is_empty(),
-        "the concat accumulator must be rooted across an allocating argument \
-         (#6971):\n{f}"
-    );
-    let traffic = slot_traffic(f);
-    let written_back = slots.iter().any(|slot| {
-        traffic[slot]
-            .iter()
-            .filter(|e| matches!(e, SlotEvent::Store { .. }))
-            .count()
-            >= 2
+    let arg = first_call_result(f, "js_object_alloc").unwrap_or_else(|| {
+        panic!("the concat argument must allocate, or this proves nothing:\n{f}")
     });
-    assert!(
-        written_back,
-        "each js_string_concat yields a NEW address, so the accumulator must be \
-         written BACK into its slot — otherwise the next argument's lowering \
-         keeps the INPUT alive and sweeps the string under construction. Slot \
-         traffic: {traffic:#?}\n{f}"
-    );
-    let re_read = slots.iter().any(|slot| {
-        traffic[slot]
-            .iter()
-            .any(|e| matches!(e, SlotEvent::Load { .. }))
+    let slot = slot_holding(f, &arg).unwrap_or_else(|| {
+        panic!(
+            "the concat argument must be rooted across evaluation of later \
+             parts (#6971/#8450):\n{f}"
+        )
     });
+    let chain_line = f
+        .lines()
+        .position(|line| line.contains("@js_string_concat_chain("))
+        .expect("this test's whole point is a js_string_concat_chain call");
+    // #8450 fuses the receiver + args into a scratch array passed by pointer,
+    // so the call's own operands are just `(ptr, i32)` — the rooted re-read
+    // shows up one level removed, in the `store double %v, ptr %slot` that
+    // fills the array. Any of those stored values deriving from a load out of
+    // the rooted slot proves the fused call consumes the re-read, not the
+    // stale producer register.
+    let fed_from_reread = f
+        .lines()
+        .take(chain_line)
+        .filter_map(|line| line.trim().strip_prefix("store double ")?.split(',').next())
+        .any(|reg| derives_from_slot_load(f, reg.trim(), 6));
     assert!(
-        re_read,
-        "the accumulator must be re-read after the argument (and its ToString \
-         coercion, which also allocates):\n{f}"
+        fed_from_reread,
+        "the concat argument (rooted in {slot}) must be re-read before it is \
+         stored into the js_string_concat_chain scratch array — otherwise the \
+         array holds the stale pre-collection register (#6971/#8450):\n{f}"
     );
 }
 

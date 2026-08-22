@@ -14437,7 +14437,10 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
         "the write PIC should retain four inline entries plus a bounded outlined tail"
     );
     assert!(
-        ir.contains("@perry_ic_0_poly_tail = private global"),
+        // #8383: inline-cache globals are now source-module-prefixed
+        // (`inline_cache_global_name`) so separately compiled modules can't
+        // collide on the same `perry_ic_N` symbol at final link.
+        ir.contains("@perry_ic_static_put_value_write_pic__0_poly_tail = private global"),
         "the outlined ways must use a distinct zero-initialized cache:\n{ir}"
     );
 }

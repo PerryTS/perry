@@ -1090,6 +1090,11 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("bun", "write", false, None),
     method("bun", "pathToFileURL", false, None),
     method("bun", "fileURLToPath", false, None),
+    // #8537 — OpenCode compatibility coverage added these dispatch rows
+    // (NativeModSig in native_table/bun.rs) without manifest counterparts;
+    // this closes that drift.
+    method("bun", "Glob", false, None),
+    method("bun", "unsupported", false, None),
     property("bun", "stdin"),
     property("bun", "stdout"),
     property("bun", "stderr"),
