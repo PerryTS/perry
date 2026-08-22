@@ -134,6 +134,7 @@ pub(crate) fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
                 // path below) with the same `field_index + 1`.
                 if field_index >= (*spill).length as usize {
                     note_learned_inline_fields(
+                        obj as usize,
                         (*obj).class_id,
                         (field_index as u32).saturating_add(1),
                     );
@@ -241,7 +242,11 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         // First write at this width for this object — record the class's
         // high-water mark (the fast path only records when growing an
         // existing buffer's length).
-        note_learned_inline_fields((*obj).class_id, (field_index as u32).saturating_add(1));
+        note_learned_inline_fields(
+            obj_ptr,
+            (*obj).class_id,
+            (field_index as u32).saturating_add(1),
+        );
         // Root the owner: meta/buffer allocation below can trigger a moving
         // minor GC. Reload through the handle after every allocation.
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -385,8 +390,22 @@ fn hot_learned_inline_fields() -> &'static LearnedInlineTable {
 }
 
 #[inline]
-fn note_learned_inline_fields(class_id: u32, needed_fields: u32) {
+fn note_learned_inline_fields(obj_ptr: usize, class_id: u32, needed_fields: u32) {
     if class_id == 0 || needed_fields > LEARNED_INLINE_MAX_FIELDS {
+        return;
+    }
+    // Declared and function-class prototype objects carry the INSTANCE class
+    // id so reflection and prototype dispatch can recover their owner. Their
+    // own storage width is unrelated to an instance's field layout: a class
+    // with eight instance fields can easily have dozens of prototype methods.
+    // Learning from that spill makes later instances allocate at the
+    // prototype width and stamps a different birth ShapeId, permanently
+    // defeating exact-shape field/method guards. Both prototype registries are
+    // keyed by the same class id, so pointer equality is an exact, O(1) veto.
+    let obj = obj_ptr as *mut ObjectHeader;
+    if crate::object::class_decl_prototype_object(class_id) == obj
+        || crate::object::class_prototype_object(class_id) == obj
+    {
         return;
     }
     let slot = (class_id as usize).wrapping_mul(0x9E37_79B1) % LEARNED_INLINE_TABLE_SIZE;
@@ -445,7 +464,11 @@ pub(crate) fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
     // Learn the class's true width so FUTURE instances allocate it inline.
     unsafe {
         let hdr = obj_ptr as *const ObjectHeader;
-        note_learned_inline_fields((*hdr).class_id, (field_index as u32).saturating_add(1));
+        note_learned_inline_fields(
+            obj_ptr,
+            (*hdr).class_id,
+            (field_index as u32).saturating_add(1),
+        );
     }
     let st = crate::state::state();
     let cached_slot = unsafe {
@@ -481,4 +504,42 @@ pub(crate) fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
     }
     crate::gc::layout_note_slot(obj_ptr, field_index, vbits);
     crate::gc::runtime_write_barrier_external_slot(obj_ptr, slot_addr, vbits);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prototype_spills_do_not_teach_instance_inline_width() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const DECLARED_CID: u32 = 0x6B45_5A11;
+        const FUNCTION_CID: u32 = 0x6B45_5A12;
+
+        let declared_proto = js_object_alloc(DECLARED_CID, 0);
+        crate::object::class_decl_prototype_object_root_store(DECLARED_CID, declared_proto);
+        overflow_set(declared_proto as usize, 12, crate::value::TAG_UNDEFINED);
+        assert_eq!(
+            learned_inline_field_count(DECLARED_CID),
+            0,
+            "declared Class.prototype storage is not an instance-layout sample"
+        );
+
+        let function_proto = js_object_alloc(FUNCTION_CID, 0);
+        crate::object::class_prototype_object_root_store(FUNCTION_CID, function_proto);
+        overflow_set(function_proto as usize, 15, crate::value::TAG_UNDEFINED);
+        assert_eq!(
+            learned_inline_field_count(FUNCTION_CID),
+            0,
+            "function prototype storage is not an instance-layout sample"
+        );
+
+        let instance = js_object_alloc(DECLARED_CID, 0);
+        overflow_set(instance as usize, 12, crate::value::TAG_UNDEFINED);
+        assert_eq!(
+            learned_inline_field_count(DECLARED_CID),
+            13,
+            "a real instance overflow must still teach the class high-water mark"
+        );
+    }
 }

@@ -51,6 +51,8 @@ mod state;
 mod vm_brand;
 
 // ── state.rs ────────────────────────────────────────────────────────────────
+#[cfg(test)]
+pub(crate) use state::class_decl_prototype_object_root_store;
 pub(crate) use state::{
     class_decl_prototype_object, class_decl_prototype_value,
     class_decl_prototype_value_for_instance_class, class_delete_own_dynamic_prop,
