@@ -567,6 +567,11 @@ pub(crate) struct FnCtx<'a> {
     /// `local_closure_func_ids` for guarded direct closure calls: direct
     /// calls only fire when the static arity exactly matches the call site.
     pub local_closure_param_counts: std::collections::HashMap<u32, usize>,
+    /// Immutable local aliases of same-module function declarations.
+    /// Calling one is semantically the same as calling its `FuncRef` directly;
+    /// retain the runtime function object in the local for identity/property
+    /// observations, but bypass closure dispatch at call sites.
+    pub local_func_ref_ids: std::collections::HashMap<u32, u32>,
     /// LocalId → compile-time options object fields for immutable locals
     /// initialized from object literals / anonymous-shape literals. This lets
     /// native constructor lowering read `const init = {...}; new Request(url,

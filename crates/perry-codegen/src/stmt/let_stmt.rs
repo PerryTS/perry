@@ -93,6 +93,11 @@ pub(crate) fn lower_let(
     // class-alias chain resolution below (and any other site
     // that needs id → name) can use it.
     ctx.local_id_to_name.insert(id, name.to_string());
+    if !mutable && !ctx.reassigned_locals.contains(&id) {
+        if let Some(perry_hir::Expr::FuncRef(func_id)) = init {
+            ctx.local_func_ref_ids.insert(id, *func_id);
+        }
+    }
     // Record immutable literal metadata before the module-global and boxed
     // storage paths return. The loop/PIC matchers reason from the HIR local id,
     // so the storage representation does not change the const proof.

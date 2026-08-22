@@ -380,6 +380,13 @@ pub fn try_lower_closure_typed_local_call(
     // pointer from the closure header and invokes it with the closure
     // as the first arg followed by the user args.
     if let Expr::LocalGet(id) = callee {
+        // The HIR may erase a function alias to `Any` (for example,
+        // `const idf = identity`).  The immutable initializer still proves
+        // the call target, so give it the same lowering as the original
+        // same-module function reference before consulting the type hint.
+        if let Some(func_id) = ctx.local_func_ref_ids.get(id).copied() {
+            return super::func_ref::try_lower_func_ref_call(ctx, &Expr::FuncRef(func_id), args);
+        }
         // The checked closure-unbox path below validates the current callee;
         // the erased type only decides whether to try that guarded dispatch.
         if matches!(ctx.local_type_hint(id), Some(HirType::Function(_))) {

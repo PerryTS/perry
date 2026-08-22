@@ -16,13 +16,13 @@ pub extern "C" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
     if func_ptr.is_null() {
         return dispatch_proxy_callee_or_throw(closure, &[]);
     }
-    match resolve_strategy(func_ptr) {
-        DispatchStrategy::BoundMethod => unsafe { dispatch_bound_method(closure, &[]) },
-        DispatchStrategy::BoundFunction => unsafe { dispatch_bound_function(closure, &[]) },
-        DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
+    match resolve_strategy(func_ptr).kind() {
+        DispatchKind::BoundMethod => unsafe { dispatch_bound_method(closure, &[]) },
+        DispatchKind::BoundFunction => unsafe { dispatch_bound_function(closure, &[]) },
+        DispatchKind::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(closure, func_ptr, &[], fixed_arity, synth)
         },
-        DispatchStrategy::Arity(declared) if declared > 0 => unsafe {
+        DispatchKind::Arity(declared) if declared > 0 => unsafe {
             dispatch_with_arity(closure, func_ptr, &[], declared)
         },
         _ => {
@@ -51,13 +51,23 @@ pub extern "C" fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> 
     if func_ptr.is_null() {
         return dispatch_proxy_callee_or_throw(closure, &[arg0]);
     }
-    match resolve_strategy(func_ptr) {
-        DispatchStrategy::BoundMethod => unsafe { dispatch_bound_method(closure, &[arg0]) },
-        DispatchStrategy::BoundFunction => unsafe { dispatch_bound_function(closure, &[arg0]) },
-        DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
+    dispatch_call1_resolved(closure, func_ptr, arg0, resolve_strategy(func_ptr))
+}
+
+#[inline(always)]
+fn dispatch_call1_resolved(
+    closure: *const ClosureHeader,
+    func_ptr: *const u8,
+    arg0: f64,
+    strategy: DispatchStrategy,
+) -> f64 {
+    match strategy.kind() {
+        DispatchKind::BoundMethod => unsafe { dispatch_bound_method(closure, &[arg0]) },
+        DispatchKind::BoundFunction => unsafe { dispatch_bound_function(closure, &[arg0]) },
+        DispatchKind::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(closure, func_ptr, &[arg0], fixed_arity, synth)
         },
-        DispatchStrategy::Arity(declared) if declared > 1 => unsafe {
+        DispatchKind::Arity(declared) if declared > 1 => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0], declared)
         },
         _ => {
@@ -66,6 +76,33 @@ pub extern "C" fn js_closure_call1(closure: *const ClosureHeader, arg0: f64) -> 
             func(closure, arg0)
         }
     }
+}
+
+/// Receiverless one-argument call. Arrow functions have lexical `this`, so
+/// resetting the dynamic `IMPLICIT_THIS` cell around them is unobservable and
+/// needlessly expensive in callback pipelines. Arrow-ness is already folded
+/// into the unified dispatch cache; non-arrows retain OrdinaryCallBindThis and
+/// root the displaced receiver across arbitrary generated code.
+#[no_mangle]
+// Same unwind contract as `js_closure_call1` above: keep `extern "C"`, not
+// `extern "C-unwind"`, so raw JS exceptions can traverse this bridge.
+pub extern "C" fn js_closure_call1_receiverless(closure: *const ClosureHeader, arg0: f64) -> f64 {
+    let func_ptr = get_valid_func_ptr(closure);
+    let strategy = (!func_ptr.is_null()).then(|| resolve_strategy(func_ptr));
+    if let Some(arrow_strategy) = strategy.filter(|strategy| strategy.is_arrow()) {
+        return dispatch_call1_resolved(closure, func_ptr, arg0, arrow_strategy);
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let previous_this = crate::object::js_implicit_this_set(undefined);
+    let previous_this_handle = scope.root_nanbox_f64(previous_this);
+    let result = match strategy {
+        Some(strategy) => dispatch_call1_resolved(closure, func_ptr, arg0, strategy),
+        None => dispatch_proxy_callee_or_throw(closure, &[arg0]),
+    };
+    crate::object::js_implicit_this_set(previous_this_handle.get_nanbox_f64());
+    result
 }
 
 /// Call a closure with 2 arguments, returning f64
@@ -77,15 +114,13 @@ pub extern "C" fn js_closure_call2(closure: *const ClosureHeader, arg0: f64, arg
     if func_ptr.is_null() {
         return dispatch_proxy_callee_or_throw(closure, &[arg0, arg1]);
     }
-    match resolve_strategy(func_ptr) {
-        DispatchStrategy::BoundMethod => unsafe { dispatch_bound_method(closure, &[arg0, arg1]) },
-        DispatchStrategy::BoundFunction => unsafe {
-            dispatch_bound_function(closure, &[arg0, arg1])
-        },
-        DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
+    match resolve_strategy(func_ptr).kind() {
+        DispatchKind::BoundMethod => unsafe { dispatch_bound_method(closure, &[arg0, arg1]) },
+        DispatchKind::BoundFunction => unsafe { dispatch_bound_function(closure, &[arg0, arg1]) },
+        DispatchKind::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1], fixed_arity, synth)
         },
-        DispatchStrategy::Arity(declared) if declared > 2 => unsafe {
+        DispatchKind::Arity(declared) if declared > 2 => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1], declared)
         },
         _ => {
@@ -108,17 +143,15 @@ pub extern "C" fn js_closure_call3(
     if func_ptr.is_null() {
         return dispatch_proxy_callee_or_throw(closure, &[arg0, arg1, arg2]);
     }
-    match resolve_strategy(func_ptr) {
-        DispatchStrategy::BoundMethod => unsafe {
-            dispatch_bound_method(closure, &[arg0, arg1, arg2])
-        },
-        DispatchStrategy::BoundFunction => unsafe {
+    match resolve_strategy(func_ptr).kind() {
+        DispatchKind::BoundMethod => unsafe { dispatch_bound_method(closure, &[arg0, arg1, arg2]) },
+        DispatchKind::BoundFunction => unsafe {
             dispatch_bound_function(closure, &[arg0, arg1, arg2])
         },
-        DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
+        DispatchKind::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(closure, func_ptr, &[arg0, arg1, arg2], fixed_arity, synth)
         },
-        DispatchStrategy::Arity(declared) if declared > 3 => unsafe {
+        DispatchKind::Arity(declared) if declared > 3 => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2], declared)
         },
         _ => {
@@ -142,14 +175,14 @@ pub extern "C" fn js_closure_call4(
     if func_ptr.is_null() {
         return dispatch_proxy_callee_or_throw(closure, &[arg0, arg1, arg2, arg3]);
     }
-    match resolve_strategy(func_ptr) {
-        DispatchStrategy::BoundMethod => unsafe {
+    match resolve_strategy(func_ptr).kind() {
+        DispatchKind::BoundMethod => unsafe {
             dispatch_bound_method(closure, &[arg0, arg1, arg2, arg3])
         },
-        DispatchStrategy::BoundFunction => unsafe {
+        DispatchKind::BoundFunction => unsafe {
             dispatch_bound_function(closure, &[arg0, arg1, arg2, arg3])
         },
-        DispatchStrategy::Rest(fixed_arity, synth) => unsafe {
+        DispatchKind::Rest(fixed_arity, synth) => unsafe {
             dispatch_rest_bundled(
                 closure,
                 func_ptr,
@@ -158,7 +191,7 @@ pub extern "C" fn js_closure_call4(
                 synth,
             )
         },
-        DispatchStrategy::Arity(declared) if declared > 4 => unsafe {
+        DispatchKind::Arity(declared) if declared > 4 => unsafe {
             dispatch_with_arity(closure, func_ptr, &[arg0, arg1, arg2, arg3], declared)
         },
         _ => {
@@ -827,4 +860,32 @@ pub extern "C" fn js_closure_call16(
         closure, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12,
         arg13, arg14, arg15,
     )
+}
+
+#[cfg(test)]
+mod receiverless_tests {
+    use super::*;
+
+    extern "C" fn observe_dynamic_this(_: *const ClosureHeader, _: f64) -> f64 {
+        crate::object::js_implicit_this_get()
+    }
+
+    #[test]
+    fn one_arg_receiverless_dispatch_only_resets_this_for_non_arrows() {
+        let body = observe_dynamic_this as *const u8;
+        let closure = crate::closure::js_closure_alloc(body, 0);
+        crate::closure::js_register_closure_arity(body, 1);
+
+        let sentinel = 42.0;
+        let original = crate::object::js_implicit_this_set(sentinel);
+        let regular_result = js_closure_call1_receiverless(closure, 0.0);
+        assert_eq!(regular_result.to_bits(), crate::value::TAG_UNDEFINED);
+        assert_eq!(crate::object::js_implicit_this_get(), sentinel);
+
+        crate::closure::js_register_closure_arrow_function(body);
+        let arrow_result = js_closure_call1_receiverless(closure, 0.0);
+        assert_eq!(arrow_result, sentinel);
+        assert_eq!(crate::object::js_implicit_this_get(), sentinel);
+        crate::object::js_implicit_this_set(original);
+    }
 }

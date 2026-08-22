@@ -1517,6 +1517,12 @@ fn lower_closure_call_rooted<'a>(
         None => None,
     };
     let recv_box = group.reread(ctx, callee_slot)?;
+    // One-argument receiverless calls have a runtime arrow-aware dispatcher.
+    // It folds arrow-ness into the existing closure-strategy cache and only
+    // performs OrdinaryCallBindThis for non-arrows. Other arities retain the
+    // generated save/restore path below.
+    let receiverless_one_arg =
+        method_recv.is_none() && !matches!(callee, Expr::PropertyGet { .. }) && args.len() == 1;
 
     // #7211: the value `js_implicit_this_set` hands back is the PREVIOUS
     // implicit `this`, read straight out of the `IMPLICIT_THIS` cell — which
@@ -1556,7 +1562,7 @@ fn lower_closure_call_rooted<'a>(
     // reintroduce this by copy-paste.
     let prev_this_root = if let Some(ref this_val) = method_recv {
         Some(implicit_this_save(ctx, this_val))
-    } else if !matches!(callee, Expr::PropertyGet { .. }) {
+    } else if !matches!(callee, Expr::PropertyGet { .. }) && !receiverless_one_arg {
         // Receiverless closure-value call (`fn()`, IIFE, `curry(1)(2)`):
         // OrdinaryCallBindThis binds `this` to undefined — without the
         // reset the enclosing method dispatch's IMPLICIT_THIS leaks into
@@ -1628,7 +1634,11 @@ fn lower_closure_call_rooted<'a>(
     }
 
     let result = if lowered_args.len() <= 16 {
-        let runtime_fn = format!("js_closure_call{}", lowered_args.len());
+        let runtime_fn = if receiverless_one_arg {
+            "js_closure_call1_receiverless".to_string()
+        } else {
+            format!("js_closure_call{}", lowered_args.len())
+        };
         let blk = ctx.block();
         let mut call_args: Vec<(crate::types::LlvmType, &str)> = vec![(I64, &closure_handle)];
         for v in &lowered_args {

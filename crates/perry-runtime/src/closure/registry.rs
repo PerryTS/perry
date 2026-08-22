@@ -107,9 +107,35 @@ crate::perry_thread_local! {
 pub const CLOSURE_MAGIC: u32 = 0x434C_4F53; // "CLOS" in ASCII
 
 /// Per-call dispatch strategy for a closure body. Decided once at first
-/// call, cached in `DISPATCH_CACHE` thereafter.
+/// call, cached in `DISPATCH_CACHE` thereafter. Arrow-ness rides in the same
+/// cache entry so receiverless calls can avoid a second TLS registry lookup.
 #[derive(Clone, Copy)]
-pub enum DispatchStrategy {
+pub struct DispatchStrategy {
+    kind: DispatchKind,
+    is_arrow: bool,
+}
+
+impl DispatchStrategy {
+    const fn direct() -> Self {
+        Self {
+            kind: DispatchKind::Direct,
+            is_arrow: false,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn kind(self) -> DispatchKind {
+        self.kind
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_arrow(self) -> bool {
+        self.is_arrow
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum DispatchKind {
     /// Bound-method receiver pretending to be a closure (BOUND_METHOD_FUNC_PTR
     /// sentinel). Dispatch via `dispatch_bound_method`.
     BoundMethod,
@@ -163,7 +189,7 @@ struct DispatchCacheEntry {
 impl DispatchCacheEntry {
     const EMPTY: Self = Self {
         key: 0,
-        strategy: DispatchStrategy::Direct,
+        strategy: DispatchStrategy::direct(),
     };
 }
 
@@ -229,23 +255,35 @@ fn resolve_strategy_slow(func_ptr: *const u8) -> DispatchStrategy {
     }
     // First call for this func_ptr: compute the strategy and cache it.
     if func_ptr == BOUND_METHOD_FUNC_PTR {
+        let strategy = DispatchStrategy {
+            kind: DispatchKind::BoundMethod,
+            is_arrow: false,
+        };
         DISPATCH_CACHE.with(|c| {
-            c.borrow_mut().insert(key, DispatchStrategy::BoundMethod);
+            c.borrow_mut().insert(key, strategy);
         });
-        return DispatchStrategy::BoundMethod;
+        return strategy;
     }
     if func_ptr == BOUND_FUNCTION_FUNC_PTR {
+        let strategy = DispatchStrategy {
+            kind: DispatchKind::BoundFunction,
+            is_arrow: false,
+        };
         DISPATCH_CACHE.with(|c| {
-            c.borrow_mut().insert(key, DispatchStrategy::BoundFunction);
+            c.borrow_mut().insert(key, strategy);
         });
-        return DispatchStrategy::BoundFunction;
+        return strategy;
     }
-    let strategy = if let Some((fixed_arity, synthetic)) = lookup_closure_rest_full(func_ptr) {
-        DispatchStrategy::Rest(fixed_arity, synthetic)
+    let kind = if let Some((fixed_arity, synthetic)) = lookup_closure_rest_full(func_ptr) {
+        DispatchKind::Rest(fixed_arity, synthetic)
     } else if let Some(declared) = lookup_closure_arity(func_ptr) {
-        DispatchStrategy::Arity(declared)
+        DispatchKind::Arity(declared)
     } else {
-        DispatchStrategy::Direct
+        DispatchKind::Direct
+    };
+    let strategy = DispatchStrategy {
+        kind,
+        is_arrow: is_registered_arrow_function(func_ptr),
     };
     DISPATCH_CACHE.with(|c| {
         c.borrow_mut().insert(key, strategy);
@@ -314,13 +352,19 @@ mod dispatch_recent_tests {
         RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.set(0));
 
         for body in bodies {
-            assert!(matches!(resolve_strategy(body), DispatchStrategy::Direct));
+            assert!(matches!(
+                resolve_strategy(body).kind(),
+                DispatchKind::Direct
+            ));
         }
         assert_eq!(RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.get()), 4);
 
         RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.set(0));
         for body in bodies {
-            assert!(matches!(resolve_strategy(body), DispatchStrategy::Direct));
+            assert!(matches!(
+                resolve_strategy(body).kind(),
+                DispatchKind::Direct
+            ));
         }
         assert_eq!(
             RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.get()),
@@ -330,8 +374,8 @@ mod dispatch_recent_tests {
 
         js_register_closure_arity(body_c as *const u8, 3);
         assert!(matches!(
-            resolve_strategy(body_c as *const u8),
-            DispatchStrategy::Arity(3)
+            resolve_strategy(body_c as *const u8).kind(),
+            DispatchKind::Arity(3)
         ));
         assert_eq!(
             RESOLVE_STRATEGY_SLOW_CALLS.with(|calls| calls.get()),
@@ -471,6 +515,10 @@ pub extern "C" fn js_register_closure_arrow_function(func_ptr: *const u8) {
     CLOSURE_ARROW_FUNCTION_REGISTRY.with(|r| {
         r.borrow_mut().insert(func_ptr as usize, ());
     });
+    // A closure can be invoked during a cyclic module-init graph before its
+    // metadata batch runs. Keep arrow-ness coherent with the rest/arity data
+    // stored in the unified dispatch cache.
+    invalidate_dispatch_strategy(func_ptr);
 }
 
 #[inline(always)]

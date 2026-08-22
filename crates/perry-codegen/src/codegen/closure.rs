@@ -971,6 +971,7 @@ pub(super) fn compile_closure(
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
+        local_func_ref_ids: HashMap::new(),
         option_object_locals: HashMap::new(),
         object_literal_locals: HashSet::new(),
         namespace_imports: &cross_module.namespace_imports,

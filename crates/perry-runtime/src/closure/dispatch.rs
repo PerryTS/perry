@@ -31,9 +31,9 @@ pub use validate::{clean_closure_ptr, dispatch_proxy_callee_or_throw, get_valid_
 pub(crate) use calln::{dispatch_registered_call, dispatch_rest_or_declared_arity};
 pub use calln::{
     js_closure_call0, js_closure_call1, js_closure_call10, js_closure_call11, js_closure_call12,
-    js_closure_call13, js_closure_call14, js_closure_call15, js_closure_call16, js_closure_call2,
-    js_closure_call3, js_closure_call4, js_closure_call5, js_closure_call6, js_closure_call7,
-    js_closure_call8, js_closure_call9,
+    js_closure_call13, js_closure_call14, js_closure_call15, js_closure_call16,
+    js_closure_call1_receiverless, js_closure_call2, js_closure_call3, js_closure_call4,
+    js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
 };
 pub use direct::{DirectCall1, DirectCall2, DirectCall3, DirectCall4};
 
