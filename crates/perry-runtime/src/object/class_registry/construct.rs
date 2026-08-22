@@ -473,7 +473,8 @@ pub unsafe extern "C" fn js_new_function_construct(
                 if args.len() == 1 {
                     return crate::date::js_date_new_from_value(args[0]);
                 }
-                let mut vals = [f64::from_bits(crate::value::TAG_UNDEFINED); 7];
+                let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let mut vals = [undefined, undefined, 1.0, 0.0, 0.0, 0.0, 0.0];
                 for (i, slot) in vals.iter_mut().enumerate() {
                     if i < args.len() {
                         *slot = args[i];
@@ -482,6 +483,27 @@ pub unsafe extern "C" fn js_new_function_construct(
                 return crate::date::js_date_new_local_components(
                     vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6],
                 );
+            }
+            "Boolean" => {
+                let value = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::builtins::js_boxed_boolean_new(value);
+            }
+            "Number" => {
+                let value = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::builtins::js_boxed_number_new(value);
+            }
+            "String" => {
+                let value = args
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                return crate::builtins::js_boxed_string_new(value, (!args.is_empty()) as i32);
             }
             "Array" => {
                 if args.len() == 1 {
@@ -1366,6 +1388,8 @@ fn new_target_class_id(new_target: f64) -> Option<u32> {
     constructor_class_ref_id(new_target).or_else(|| class_object_class_id(new_target))
 }
 
+include!("construct/class_return.rs");
+
 /// True when class `cid` (or an ancestor) `extends Promise` — its registered
 /// dynamic-parent value resolves to the intrinsic `Promise` constructor. Used to
 /// run `js_promise_subclass_init` on the dynamic (runtime) `new Subclass(exec)`
@@ -1494,6 +1518,13 @@ unsafe fn construct_registered_class_ref(
 /// is an object (so a typed-array view should adopt it as its `[[Prototype]]`),
 /// or `None` when it is a primitive (so the default per-kind prototype applies).
 fn new_target_custom_object_prototype(new_target: f64) -> Option<u64> {
+    if let Some(class_id) = constructor_class_ref_id(new_target) {
+        let declared = super::class_decl_prototype_value(class_id);
+        if unsafe { super::super::value_is_object_like(declared) } {
+            return Some(declared.to_bits());
+        }
+        return Some(super::super::class_prototype_ref_value(class_id).to_bits());
+    }
     let bits = new_target.to_bits();
     if (bits >> 48) != 0x7FFD {
         return None;
@@ -1589,6 +1620,16 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     // `Object.getPrototypeOf` and `.constructor` resolve through it (test262
     // `ctors*/use-custom-proto-if-object` / `use-default-proto-if-…`).
     if let Some(ta_name) = identify_global_builtin_constructor(func_value) {
+        // Symbol and BigInt are callable conversion functions but have no
+        // [[Construct]] slot. A distinct newTarget (the subclass case) must
+        // not turn either into a generic constructable closure.
+        if matches!(ta_name, "Symbol" | "BigInt") {
+            return if ta_name == "Symbol" {
+                crate::error::js_throw_symbol_constructor_type_error()
+            } else {
+                crate::error::js_throw_bigint_constructor_type_error()
+            };
+        }
         // `Reflect.construct(Date, args, newTarget)` (#5989) — Next.js 16's
         // cacheComponents Date extension constructs through exactly this
         // shape: its installed wrapper runs
@@ -1634,6 +1675,36 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
             let result = js_new_function_construct(func_value, args_ptr, args_len);
             if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(result) {
                 if let Some(proto_bits) = proto_bits {
+                    super::super::prototype_chain::object_set_static_prototype(addr, proto_bits);
+                }
+            }
+            return result;
+        }
+        if matches!(
+            ta_name,
+            "ArrayBuffer"
+                | "SharedArrayBuffer"
+                | "DataView"
+                | "Boolean"
+                | "Number"
+                | "String"
+                | "RegExp"
+                | "Function"
+        ) {
+            let proto_bits = new_target_custom_object_prototype(nt);
+            let result = js_new_function_construct(func_value, args_ptr, args_len);
+            if let Some(proto_bits) = proto_bits {
+                let bits = result.to_bits();
+                let addr = if (bits >> 48) == 0x7FFD {
+                    (bits & crate::value::POINTER_MASK) as usize
+                } else if (bits >> 48) == 0 && bits >= 0x1000 {
+                    // ArrayBuffer and SharedArrayBuffer are represented by a
+                    // raw BufferHeader pointer rather than a NaN-boxed object.
+                    bits as usize
+                } else {
+                    0
+                };
+                if addr != 0 {
                     super::super::prototype_chain::object_set_static_prototype(addr, proto_bits);
                 }
             }
@@ -1719,80 +1790,6 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
         return result;
     }
     inst_handle.get_nanbox_f64()
-}
-
-fn constructor_return_overrides_this(value: f64) -> bool {
-    use crate::value::JSValue;
-    let jv = JSValue::from_bits(value.to_bits());
-    if !jv.is_pointer() {
-        return false;
-    }
-    if is_callable_function_value(value) {
-        return true;
-    }
-    let raw = jv.as_pointer::<u8>();
-    if raw.is_null() {
-        return false;
-    }
-    if super::super::is_arguments_object(raw as *const ObjectHeader) {
-        return true;
-    }
-    unsafe {
-        let arr = crate::array::clean_arr_ptr(raw as *const crate::array::ArrayHeader);
-        if !arr.is_null() {
-            return true;
-        }
-        if !is_valid_obj_ptr(raw as *const u8) {
-            return false;
-        }
-        let gc_header =
-            (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        matches!(
-            (*gc_header).obj_type,
-            // Per spec, a constructor returning ANY Object overrides the
-            // implicit `this`. Promises are objects — a user constructor like
-            // `function P(exec){ return new Promise(...) }` (the
-            // `NewPromiseCapability` shape exercised by the Promise-combinator
-            // test262 cases) must yield that Promise, not the empty default.
-            // GC_TYPE_TEMPORAL: `new Temporal.Duration(...)` (and every other
-            // Temporal constructor) is dispatched through this generic path —
-            // the constructor thunk allocates a Temporal cell and returns it, so
-            // that cell must override the empty default `this` (#4687).
-            crate::gc::GC_TYPE_OBJECT
-                | crate::gc::GC_TYPE_ERROR
-                | crate::gc::GC_TYPE_PROMISE
-                | crate::gc::GC_TYPE_TEMPORAL
-        )
-    }
-}
-
-/// Apply ECMAScript constructor return-override semantics for an inlined
-/// constructor body's explicit `return <value>`. Given the implicit `this`
-/// and the returned value:
-///   - returned value is an Object  → it becomes the construction result;
-///   - returned value is `undefined` → result is `this`;
-///   - returned value is any other primitive → for a derived constructor
-///     (`class X extends Y`) this is a TypeError; for a base constructor the
-///     primitive is ignored and the result is `this`.
-/// `is_derived` is 1 for a class with an `extends` clause, 0 otherwise.
-/// Refs class/subclass/derived-class-return-override-*.
-#[no_mangle]
-pub extern "C" fn js_ctor_return_override(this_val: f64, return_val: f64, is_derived: i32) -> f64 {
-    use crate::value::JSValue;
-    if constructor_return_overrides_this(return_val) {
-        return return_val;
-    }
-    let jv = JSValue::from_bits(return_val.to_bits());
-    if jv.is_undefined() {
-        return this_val;
-    }
-    if is_derived != 0 {
-        crate::collection_iter::throw_type_error(
-            "Derived constructors may only return object or undefined",
-        );
-    }
-    // Base constructor: a returned primitive is ignored.
-    this_val
 }
 
 /// Verify that a JSValue is a NaN-boxed pointer to a registered

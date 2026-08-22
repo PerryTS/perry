@@ -180,6 +180,14 @@ unsafe fn init_typed_shape_layout(
     if user_ptr < GC_HEADER_SIZE + 0x1000 {
         return;
     }
+    // Constructor return override may replace a freshly allocated instance
+    // with an exotic object represented by a registry handle (notably Proxy).
+    // Codegen still offers the completed receiver to this post-construction
+    // layout hook. Reject anything that is not an actual GC allocation before
+    // deriving and dereferencing its preceding header.
+    if crate::value::addr_class::try_read_gc_header(user_ptr).is_none() {
+        return;
+    }
     let header = header_from_user_ptr(user_ptr as *const u8);
     if gc_type_layout_slot_kind((*header).obj_type) != GcLayoutSlotKind::ObjectFields {
         return;

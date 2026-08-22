@@ -189,19 +189,10 @@ pub(super) fn try_static_method_and_instance(
                             }));
                         }
                     }
-                    // Private static method: WithPrivateStatic.#helper()
-                    ast::MemberProp::PrivateName(priv_ident) => {
-                        let method_name = format!("#{}", priv_ident.name);
-                        if ctx.has_static_method(&resolved_class, &method_name)
-                            && !static_call_has_spread
-                        {
-                            return Ok(Ok(Expr::StaticMethodCall {
-                                class_name: resolved_class,
-                                method_name,
-                                args,
-                            }));
-                        }
-                    }
+                    // Private calls must retain the runtime receiver for the
+                    // lexical brand check (notably when it is a Proxy), so
+                    // they deliberately use the generic member-call path.
+                    ast::MemberProp::PrivateName(_) => {}
                     _ => {}
                 }
             }

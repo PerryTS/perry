@@ -14,7 +14,8 @@ use crate::array::{
     ArrayHeader,
 };
 use crate::object::{
-    js_object_alloc_with_shape, js_object_get_field_by_name, js_object_set_field, ObjectHeader,
+    js_object_alloc_with_shape, js_object_get_field_by_name, js_object_set_field,
+    js_object_set_field_by_name, ObjectHeader,
 };
 use crate::value::{
     js_nanbox_get_pointer, JSValue, BIGINT_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK,
@@ -1389,6 +1390,8 @@ pub extern "C" fn js_weakmap_new() -> *mut ObjectHeader {
     }
     obj
 }
+
+include!("weakref/subclass.rs");
 
 /// `WeakMap ( [ iterable ] )`'s `AddEntriesFromIterable` step. `map` is the
 /// already-allocated (empty) WeakMap from `js_weakmap_new`; this only

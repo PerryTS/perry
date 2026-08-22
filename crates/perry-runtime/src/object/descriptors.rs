@@ -208,6 +208,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 if !obj.is_null() && !key_str.is_null() && !own_key_present(obj, key_str) {
                     let class_id = super::js_object_get_class_id(obj as *const ObjectHeader);
                     if class_id != 0
+                        && !method_name.starts_with('#')
                         && !super::class_registry::class_is_key_deleted(class_id, &method_name)
                         && super::class_registry::class_has_own_static_method(
                             class_id,
@@ -218,29 +219,6 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         let value =
                             super::js_class_method_bind(obj_value, leaked.as_ptr(), leaked.len());
                         return build_data_descriptor(value, true, false, true);
-                    }
-                }
-            }
-        }
-
-        // Private elements (`#x`) are stored on the static side / in a class
-        // instance's keys_array but are never reflectable own properties, so
-        // their descriptor is always undefined. (Plain `{"#fff": 1}` literals
-        // carry class_id 0 and are handled by the ordinary path below.)
-        {
-            let kjv = crate::JSValue::from_bits(key_value.to_bits());
-            let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-            if let Some(b) = crate::string::js_string_key_bytes(kjv, &mut buf) {
-                if b.first() == Some(&b'#') {
-                    let is_class = class_ref_id(obj_value).is_some() || {
-                        let obj = extract_obj_ptr(obj_value);
-                        !obj.is_null()
-                            && (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000
-                            && crate::object::is_valid_obj_ptr(obj as *const u8)
-                            && (*obj).class_id != 0
-                    };
-                    if is_class {
-                        return f64::from_bits(crate::value::TAG_UNDEFINED);
                     }
                 }
             }
@@ -365,6 +343,20 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                 if super::class_registry::class_is_key_deleted(class_id, &method_name) {
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }
+                // Private registry entries retain their source spelling, but
+                // a public computed static field named `"#x"` is a distinct
+                // String property and must remain reflectable.
+                if method_name.starts_with('#') {
+                    if super::class_prototype_ref_id(obj_value).is_none() {
+                        if let Some(v) = super::class_registry::class_own_static_field_value(
+                            class_id,
+                            &method_name,
+                        ) {
+                            return build_data_descriptor(v, true, true, true);
+                        }
+                    }
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
                 // `C.prototype` is a non-writable, non-enumerable, non-configurable
                 // own data property of the class constructor (ECMA-262
                 // MakeConstructor). Only the constructor ref carries it — the
@@ -423,14 +415,14 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         true,
                     );
                 }
-                if method_name == "constructor" || class_has_own_method(class_id, &method_name) {
+                if super::class_prototype_ref_id(obj_value).is_some()
+                    && (method_name == "constructor"
+                        || class_has_own_method(class_id, &method_name))
+                {
                     let value = if method_name == "constructor"
-                        && super::class_prototype_ref_id(obj_value).is_some()
-                        && class_has_own_method(class_id, &method_name)
+                        && !class_has_own_method(class_id, &method_name)
                     {
-                        class_prototype_method_value_for_name(class_id, &method_name)
-                    } else if method_name == "constructor" {
-                        obj_value
+                        super::class_constructor_ref_value(class_id)
                     } else {
                         class_prototype_method_value_for_name(class_id, &method_name)
                     };
@@ -698,6 +690,11 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         if let Some(desc) = super::arguments_object_descriptor(obj, key_str) {
             return desc;
         }
+        if crate::array::is_array_subclass_value(obj_value) && key_rust.as_deref() == Some("length")
+        {
+            let length = crate::object::js_object_get_field_by_name(obj, key_str);
+            return build_data_descriptor(f64::from_bits(length.bits()), true, false, false);
+        }
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -940,7 +937,47 @@ pub(crate) unsafe fn handle_own_names_raw_array(
 pub(crate) unsafe fn symbol_own_property_descriptor(obj_value: f64, key_value: f64) -> f64 {
     let owner = crate::symbol::obj_key_from_f64(obj_value);
     let sym_key = crate::symbol::sym_key_from_f64(key_value);
-    if owner == 0 || sym_key == 0 {
+    if sym_key == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    // Computed Symbol class members live in the class registries rather than
+    // the generic per-object Symbol table. They are nevertheless own
+    // properties of the constructor/prototype and must reflect as method or
+    // accessor descriptors.
+    let class_owner = if let Some(cid) = super::class_ref_id(obj_value) {
+        Some((cid, super::class_prototype_ref_id(obj_value).is_none()))
+    } else if owner != 0 {
+        super::class_registry::class_id_for_decl_prototype_object(owner).map(|cid| (cid, false))
+    } else {
+        None
+    };
+    if let Some((cid, is_static)) = class_owner {
+        let display_name = crate::symbol::symbol_function_name(sym_key);
+        if let Some((get, set)) =
+            super::class_registry::class_own_symbol_accessor_ptrs(cid, sym_key, is_static)
+        {
+            return build_accessor_descriptor(
+                super::class_registry::class_accessor_function_value(get, false, &display_name),
+                super::class_registry::class_accessor_function_value(set, true, &display_name),
+                false,
+                true,
+            );
+        }
+        if let Some((func_ptr, param_count, has_rest)) =
+            super::class_registry::class_own_symbol_method(cid, sym_key, is_static)
+        {
+            let value = super::build_symbol_bound_method_closure(
+                obj_value,
+                func_ptr,
+                param_count,
+                has_rest,
+                is_static,
+                &display_name,
+            );
+            return build_data_descriptor(value, true, false, true);
+        }
+    }
+    if owner == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let attrs = crate::symbol::get_symbol_property_attrs(owner, sym_key)
@@ -1191,19 +1228,25 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                                 vtable.methods.keys().cloned().collect();
                             method_names.sort();
                             for name in method_names {
-                                push_unique_name(&mut names, name);
+                                if !name.starts_with('#') {
+                                    push_unique_name(&mut names, name);
+                                }
                             }
                             let mut getter_names: Vec<String> =
                                 vtable.getters.keys().cloned().collect();
                             getter_names.sort();
                             for name in getter_names {
-                                push_unique_name(&mut names, name);
+                                if !name.starts_with('#') {
+                                    push_unique_name(&mut names, name);
+                                }
                             }
                             let mut setter_names: Vec<String> =
                                 vtable.setters.keys().cloned().collect();
                             setter_names.sort();
                             for name in setter_names {
-                                push_unique_name(&mut names, name.clone());
+                                if !name.starts_with('#') {
+                                    push_unique_name(&mut names, name);
+                                }
                             }
                         }
                     }
@@ -1215,7 +1258,9 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                         let mut method_names: Vec<String> = map.keys().cloned().collect();
                         method_names.sort();
                         for name in method_names {
-                            push_unique_name(&mut names, name);
+                            if !name.starts_with('#') {
+                                push_unique_name(&mut names, name);
+                            }
                         }
                     }
                 }
@@ -1224,7 +1269,9 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                         let mut accessor_names: Vec<String> = map.keys().cloned().collect();
                         accessor_names.sort();
                         for name in accessor_names {
-                            push_unique_name(&mut names, name);
+                            if !name.starts_with('#') {
+                                push_unique_name(&mut names, name);
+                            }
                         }
                     }
                 }
@@ -1233,15 +1280,14 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                         let mut prop_names: Vec<String> = props.keys().cloned().collect();
                         prop_names.sort();
                         for name in prop_names {
-                            push_unique_name(&mut names, name);
+                            if !super::field_get_set::is_internal_runtime_key(&name) {
+                                push_unique_name(&mut names, name);
+                            }
                         }
                     }
                 });
             }
-            // Private elements (`#x`) live on the static side / prototype
-            // vtable under `#`-prefixed keys but are never reflectable own
-            // properties of `C` or `C.prototype`.
-            names.retain(|n| !n.starts_with('#'));
+            names.retain(|n| !super::field_get_set::is_internal_runtime_key(n));
             sort_property_names_ecma(&mut names);
             let result = crate::array::js_array_alloc(names.len() as u32);
             for name in names {
@@ -1407,9 +1453,8 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                 None => j as u32,
             }
         };
-        // Private elements (`#x`) live in a class instance's keys_array but are
-        // never reflectable own properties. Drop them for class instances
-        // (class_id != 0); plain `{"#fff": 1}` literals keep class_id 0.
+        // Drop only compiler/runtime storage keys. A user String key beginning
+        // with `#` is still an ordinary reflectable property.
         let hide_private = (*obj).class_id != 0;
         let hide_wasi_state = crate::wasi::is_wasi_import_object(obj)
             || crate::wasi::is_wasi_instance(f64::from_bits(
@@ -1421,8 +1466,7 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
             let key_val = crate::array::js_array_get(keys, pos(i));
             if hide_private || hide_wasi_state {
                 if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
-                    if b.first() == Some(&b'#')
-                        || super::field_get_set::is_internal_runtime_key_bytes(b)
+                    if super::field_get_set::is_internal_runtime_key_bytes(b)
                         || (hide_wasi_state && b.starts_with(b"__wasi"))
                     {
                         continue;

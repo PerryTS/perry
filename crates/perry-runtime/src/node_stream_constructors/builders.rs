@@ -137,6 +137,40 @@ pub extern "C" fn js_array_subclass_init(this: f64, n: f64) -> f64 {
     this
 }
 
+/// Array's overloaded constructor semantics for a source-compiled subclass.
+/// One numeric argument is a length; every other argument list becomes the
+/// initial indexed elements.
+#[no_mangle]
+pub unsafe extern "C" fn js_array_subclass_init_args(
+    this: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let args = if args_ptr.is_null() || args_len == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(args_ptr, args_len)
+    };
+    if args.len() == 1 && JSValue::from_bits(args[0].to_bits()).is_number() {
+        return js_array_subclass_init(this, args[0]);
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    js_array_subclass_init(this.get_nanbox_f64(), args.len() as f64);
+    for (index, value) in args.iter().copied().enumerate() {
+        let value = scope.root_nanbox_f64(value);
+        let name = index.to_string();
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let receiver = this.get_nanbox_f64();
+        let raw = raw_ptr_from_value(receiver) as *mut ObjectHeader;
+        if !raw.is_null() {
+            js_object_set_field_by_name(raw, key, value.get_nanbox_f64());
+        }
+    }
+    this.get_nanbox_f64()
+}
+
 /// `Array.prototype.fill`-equivalent installed on an Array-subclass instance:
 /// fills the receiver's own indexed slots `0..length` with `value`. Delegates
 /// to the generic array-like fill (which reads `length` off the receiver).

@@ -332,8 +332,14 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         .iter()
                         .any(|m| m.name.starts_with("__perry_static_init_"));
                 let has_private_elements = class.has_private_elements();
-                let fresh_binding =
-                    has_private_elements || (!captured_exprs.is_empty() && !has_static_state);
+                let computed_keys = crate::lower_decl::computed_field_key_initializers(
+                    &class_decl.class.body,
+                    &class.fields,
+                    &class.static_fields,
+                );
+                let fresh_binding = has_private_elements
+                    || !computed_keys.is_empty()
+                    || (!captured_exprs.is_empty() && !has_static_state);
                 let named_statics: Vec<(String, Expr)> = if fresh_binding {
                     class
                         .static_fields
@@ -348,16 +354,18 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 } else {
                     Vec::new()
                 };
-                let symbol_statics: Vec<(Expr, Expr)> = if fresh_binding {
+                let computed_statics: Vec<(String, Expr)> = if fresh_binding {
                     class
                         .static_fields
                         .iter()
-                        .filter_map(
-                            |field| match (field.key_expr.as_ref(), field.init.as_ref()) {
-                                (Some(key), Some(value)) => Some((key.clone(), value.clone())),
-                                _ => None,
-                            },
-                        )
+                        .filter_map(|field| {
+                            field.key_expr.as_ref().map(|_| {
+                                (
+                                    field.name.clone(),
+                                    field.init.clone().unwrap_or(Expr::Undefined),
+                                )
+                            })
+                        })
                         .collect()
                 } else {
                     Vec::new()
@@ -376,6 +384,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     result.extend(crate::lower_decl::build_interleaved_static_init_stmts(
                         &class_decl.class.body,
                         &class.name,
+                        &class.fields,
                         &class.static_fields,
                         &class.static_methods,
                     ));
@@ -398,7 +407,8 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         init: Some(Expr::ClassExprFresh {
                             template: template_name,
                             named_statics,
-                            symbol_statics,
+                            computed_keys,
+                            computed_statics,
                             captured_args: captured_exprs,
                         }),
                         mutable: false,

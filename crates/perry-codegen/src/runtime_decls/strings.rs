@@ -417,12 +417,24 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function(
         "js_private_brand_check",
         DOUBLE,
-        &[DOUBLE, DOUBLE, I32, PTR, I32],
+        &[DOUBLE, DOUBLE, I32, PTR, I32, I32, I32],
     );
     module.declare_function(
         "js_private_guard",
         DOUBLE,
         &[DOUBLE, DOUBLE, I32, PTR, I32, I32, I32],
+    );
+    module.declare_function("js_private_brand_add", DOUBLE, &[DOUBLE, I32]);
+    module.declare_function(
+        "js_private_field_add",
+        DOUBLE,
+        &[DOUBLE, I32, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_class_field_add", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_class_computed_field_key",
+        DOUBLE,
+        &[DOUBLE, I32, PTR, I64],
     );
     module.declare_function("js_fs_to_unix_timestamp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_fs_write_file_sync", I32, &[DOUBLE, DOUBLE]);
@@ -1289,6 +1301,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // is non-empty. Codegen emits one call per registered class id at
     // program init, mirroring `js_register_class_id`.
     module.declare_function("js_register_class_name", VOID, &[I32, PTR, I32]);
+    module.declare_function("js_register_class_length", VOID, &[I32, I32]);
     // Anon-shape class registration so `.constructor` reads on object
     // literals (`{ x: 1 }`) return the global `Object` constructor
     // instead of the synthetic class ref. Refs #968 / date-fns

@@ -1022,13 +1022,9 @@ pub(crate) fn lower_node_stream_super_init(
 /// (mirrors `lower_node_stream_super_init` / the EventEmitter subclass init).
 pub(crate) fn lower_array_super_init(ctx: &mut FnCtx<'_>, super_args: &[Expr]) -> Result<String> {
     let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-    let n = if let Some(first) = super_args.first() {
-        lower_expr(ctx, first)?
-    } else {
-        undef_lit.clone()
-    };
-    for arg in super_args.iter().skip(1) {
-        let _ = lower_expr(ctx, arg)?;
+    let mut args = Vec::with_capacity(super_args.len());
+    for arg in super_args {
+        args.push(lower_expr(ctx, arg)?);
     }
 
     let this_box = match ctx.this_stack.last().cloned() {
@@ -1036,10 +1032,33 @@ pub(crate) fn lower_array_super_init(ctx: &mut FnCtx<'_>, super_args: &[Expr]) -
         None => undef_lit.clone(),
     };
 
+    let (args_ptr, args_len) = if args.is_empty() {
+        ("null".to_string(), "0".to_string())
+    } else {
+        let buf = ctx.func.alloca_entry_array(DOUBLE, args.len());
+        for (i, value) in args.iter().enumerate() {
+            let slot = ctx
+                .block()
+                .gep(DOUBLE, &buf, &[(crate::types::I64, &i.to_string())]);
+            ctx.block().store(DOUBLE, value, &slot);
+        }
+        let ptr = ctx.block().next_reg();
+        ctx.block().emit_raw(format!(
+            "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+            ptr,
+            args.len(),
+            buf
+        ));
+        (ptr, args.len().to_string())
+    };
     ctx.block().call(
         DOUBLE,
-        "js_array_subclass_init",
-        &[(DOUBLE, &this_box), (DOUBLE, &n)],
+        "js_array_subclass_init_args",
+        &[
+            (DOUBLE, &this_box),
+            (crate::types::PTR, &args_ptr),
+            (crate::types::I64, &args_len),
+        ],
     );
 
     Ok(undef_lit)

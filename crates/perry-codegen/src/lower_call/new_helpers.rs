@@ -34,8 +34,11 @@ use crate::types::{DOUBLE, I32};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum NativeInstanceBase {
     EventEmitter,
+    Array,
     Map,
     Set,
+    WeakMap,
+    WeakSet,
     Event,
     CustomEvent,
     DomException,
@@ -53,8 +56,11 @@ pub(crate) enum NativeInstanceBase {
 pub(crate) fn native_instance_base(name: &str) -> Option<NativeInstanceBase> {
     match name {
         "EventEmitter" => Some(NativeInstanceBase::EventEmitter),
+        "Array" | "ReadonlyArray" => Some(NativeInstanceBase::Array),
         "Map" => Some(NativeInstanceBase::Map),
         "Set" => Some(NativeInstanceBase::Set),
+        "WeakMap" => Some(NativeInstanceBase::WeakMap),
+        "WeakSet" => Some(NativeInstanceBase::WeakSet),
         "Event" => Some(NativeInstanceBase::Event),
         "CustomEvent" => Some(NativeInstanceBase::CustomEvent),
         "DOMException" => Some(NativeInstanceBase::DomException),
@@ -123,6 +129,35 @@ pub(crate) fn emit_native_instance_base_init(
             // (already lowered for their side effects) are not forwarded.
             crate::expr::lower_event_emitter_subclass_init(ctx, this_box);
         }
+        NativeInstanceBase::Array => {
+            let n = lowered_args.len();
+            let (args_ptr, args_len) = if n == 0 {
+                ("null".to_string(), "0".to_string())
+            } else {
+                let buf = ctx.func.alloca_entry_array(DOUBLE, n);
+                for (i, value) in lowered_args.iter().enumerate() {
+                    let slot =
+                        ctx.block()
+                            .gep(DOUBLE, &buf, &[(crate::types::I64, &i.to_string())]);
+                    ctx.block().store(DOUBLE, value, &slot);
+                }
+                let ptr = ctx.block().next_reg();
+                ctx.block().emit_raw(format!(
+                    "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                    ptr, n, buf
+                ));
+                (ptr, n.to_string())
+            };
+            ctx.block().call(
+                DOUBLE,
+                "js_array_subclass_init_args",
+                &[
+                    (DOUBLE, this_box),
+                    (crate::types::PTR, &args_ptr),
+                    (crate::types::I64, &args_len),
+                ],
+            );
+        }
         NativeInstanceBase::Map | NativeInstanceBase::Set => {
             let kind: i32 = if base == NativeInstanceBase::Map {
                 0
@@ -135,6 +170,23 @@ pub(crate) fn emit_native_instance_base_init(
             ctx.block().call(
                 DOUBLE,
                 "js_map_set_subclass_init",
+                &[
+                    (DOUBLE, this_box),
+                    (I32, &kind.to_string()),
+                    (DOUBLE, &iterable),
+                ],
+            );
+        }
+        NativeInstanceBase::WeakMap | NativeInstanceBase::WeakSet => {
+            let kind = if base == NativeInstanceBase::WeakMap {
+                0
+            } else {
+                1
+            };
+            let iterable = lowered_args.first().cloned().unwrap_or(undef);
+            ctx.block().call(
+                DOUBLE,
+                "js_weak_collection_subclass_init",
                 &[
                     (DOUBLE, this_box),
                     (I32, &kind.to_string()),
@@ -611,7 +663,7 @@ pub(crate) fn ctor_chain_uses_new_target(ctx: &FnCtx<'_>, class: &Class) -> bool
 /// the runtime's answer. Skipping the call cannot lose a relocation either:
 /// `js_ctor_return_override` is in `root_reload`'s no-reload set, so no live
 /// value's address depends on having made it.
-pub(super) fn emit_ctor_return_override(
+pub(crate) fn emit_ctor_return_override(
     ctx: &mut FnCtx<'_>,
     obj_box: &str,
     ctor_ret: &str,

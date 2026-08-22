@@ -27,6 +27,9 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    if let Some(value) = super::private_member_get_by_name(obj, key) {
+        return JSValue::from_bits(value.to_bits());
+    }
     // #7341: the `.size` arm below calls two helpers that allocate, and every
     // arm AFTER it dereferences `obj` again. Shadow the parameter so that arm
     // can republish the post-collection address instead of leaving from-space
@@ -1110,7 +1113,11 @@ pub extern "C" fn js_object_get_field_by_name(
                     let value = class_prototype_method_value_for_name(class_id, name);
                     return JSValue::from_bits(value.to_bits());
                 }
-                if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
+                if name == "constructor"
+                    && is_prototype_ref
+                    && class_id != 0
+                    && is_class_id_registered(class_id)
+                {
                     let value = if is_prototype_ref {
                         super::super::class_constructor_ref_value(class_id)
                     } else {
@@ -1188,6 +1195,14 @@ pub extern "C" fn js_object_get_field_by_name(
                     {
                         return JSValue::from_bits(v.to_bits());
                     }
+                    // The built-in constructor object's `constructor` value is
+                    // inherited from Function.prototype. It is therefore only
+                    // the fallback after own computed fields, static methods,
+                    // and static accessors of the same name have had a chance
+                    // to win.
+                    if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
+                        return JSValue::from_bits(class_value.to_bits());
+                    }
                 }
                 if !name.is_empty() {
                     if super::super::class_registry::class_is_key_deleted(class_id, name) {
@@ -1218,7 +1233,7 @@ pub extern "C" fn js_object_get_field_by_name(
                     // ClassDefinitionEvaluation installs it per class). Skip the
                     // chain walk so the #2059 own-name synthesis below answers
                     // with THIS class's registered name instead of an ancestor's.
-                    if name != "name" {
+                    if !matches!(name, "name" | "length") {
                         // Walk the class-object proto chain for an inherited static
                         // DATA field. At EACH level the class's pinned
                         // per-evaluation parent OBJECT is consulted BEFORE the
@@ -1325,7 +1340,7 @@ pub extern "C" fn js_object_get_field_by_name(
                     // subclass of a per-evaluation class object reported its
                     // BASE's synthesized `.name` (bundled zod:
                     // `z.string().constructor.name` gave "ZodType").
-                    if name != "name" {
+                    if !matches!(name, "name" | "length") {
                         if let Some(v) =
                             super::super::class_registry::resolve_proto_chain_field(class_id, key)
                         {
@@ -1365,6 +1380,29 @@ pub extern "C" fn js_object_get_field_by_name(
                                 cname.len() as u32,
                             );
                             return JSValue::from_bits(crate::js_nanbox_string(s as i64).to_bits());
+                        }
+                    }
+                    if name == "length"
+                        && class_id != 0
+                        && !is_prototype_ref
+                        && !super::super::class_registry::class_is_key_deleted(class_id, name)
+                    {
+                        if let Some(length) =
+                            super::super::class_registry::class_length_for_id(class_id)
+                        {
+                            return JSValue::number(length as f64);
+                        }
+                    }
+                    // A class constructor is also a Function object. Reify
+                    // inherited Function.prototype methods for value reads
+                    // (`const bind = C.bind`) just as the closure path does;
+                    // the captured ClassRef is accepted by native method
+                    // dispatch and by `js_function_bind`.
+                    if !is_prototype_ref {
+                        if let Some(method) = super::reified_function_method_name(name) {
+                            let value =
+                                crate::closure::reify_function_method_value(class_value, method);
+                            return JSValue::from_bits(value.to_bits());
                         }
                     }
                     // No own static / inherited entry resolved the name. A class

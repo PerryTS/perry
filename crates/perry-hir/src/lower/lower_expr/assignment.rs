@@ -103,13 +103,14 @@ pub(crate) fn lower_expr_assignment(
                     }
                 }
                 ast::MemberProp::PrivateName(private) => {
-                    let property = format!("#{}", private.name);
+                    let private_name = format!("#{}", private.name);
                     let object = expr_member::wrap_private_guard(
                         ctx,
                         object,
-                        &property,
+                        &private_name,
                         expr_member::PRIV_OP_WRITE,
                     );
+                    let property = expr_member::private_storage_property(ctx, &private_name);
                     Expr::PropertySet {
                         object,
                         property,

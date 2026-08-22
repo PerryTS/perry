@@ -6,6 +6,28 @@ use crate::types::Type;
 use anyhow::Result;
 use swc_ecma_ast as ast;
 
+fn class_binding_read(ctx: &LoweringContext, source_name: &str) -> Expr {
+    let class_name = ctx.resolve_class_name(source_name);
+    // Keep the normal, overwhelmingly-common class read as a ClassRef
+    // immediate. Besides preserving static class recognition downstream, it
+    // prevents the GC root pass from treating a runtime-call result containing
+    // an INT32-tagged ClassRef as a heap pointer. Only a class declaration
+    // actually reassigned from a closure needs the mutable side-table bridge.
+    if !ctx.reassigned_top_level_identifiers.contains(source_name) {
+        return Expr::ClassRef(class_name);
+    }
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_class_lexical_binding_get".to_string(),
+            param_types: vec![Type::Any],
+            return_type: Type::Any,
+        }),
+        args: vec![Expr::ClassRef(class_name)],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }
+}
+
 pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) -> Result<Expr> {
     let expr_ident = ast::Expr::Ident(ident.clone());
     let expr = &expr_ident;
@@ -37,6 +59,18 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         ctx.with_env_stack = saved_with_envs;
         return Ok(wrap_with_gets(&name, fallback?, with_envs));
     }
+    // A class body has its own immutable lexical binding for the class name.
+    // It shadows an outer local of the same name; only a parameter/local
+    // introduced inside the method body may shadow it in turn.
+    let nearer_local = ctx
+        .local_decl_scope_depth(&name)
+        .zip(ctx.current_class_scope_depth)
+        .is_some_and(|(local_depth, class_depth)| local_depth > class_depth);
+    if ctx.current_class_inner_name.as_deref() == Some(name.as_str()) && !nearer_local {
+        if let Some(current) = ctx.current_class.clone() {
+            return Ok(Expr::ClassRef(current));
+        }
+    }
     // A class declared in the current function body lexically shadows a
     // same-named binding from an OUTER scope. Resolution normally checks
     // `lookup_local` (which finds outer-scope locals) before the class,
@@ -65,7 +99,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
     // (`forward_class_shadows_local` is shared with the `new <Ident>` arm; see
     // #8040 for what happened while the two disagreed.)
     if ctx.forward_class_shadows_local(&name) {
-        return Ok(Expr::ClassRef(ctx.resolve_class_name(&name)));
+        return Ok(class_binding_read(ctx, &name));
     }
     // Chained-assignment class self-alias referenced from inside one of the
     // class's own method/getter/setter bodies. tsc's decorator-capture form
@@ -138,14 +172,14 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         })
     } else if ctx.lookup_class(&name).is_some() {
         // Class used as a first-class value (e.g., { Point: Point })
-        Ok(Expr::ClassRef(ctx.resolve_class_name(&name)))
+        Ok(class_binding_read(ctx, &name))
     } else if ctx.forward_class_names.contains(&name) {
         // Forward reference to a sibling class declared LATER in the
         // same function body (vendored zod: ZodType.optional() →
         // ZodOptional.create(...)). JS resolves this at call time;
         // emit a ClassRef by name — codegen resolves it from the
         // class registry, which has every pending class by then.
-        Ok(Expr::ClassRef(ctx.resolve_class_name(&name)))
+        Ok(class_binding_read(ctx, &name))
     } else if name == "undefined" {
         // Global undefined identifier
         Ok(Expr::Undefined)

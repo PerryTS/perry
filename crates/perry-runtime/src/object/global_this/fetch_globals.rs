@@ -544,6 +544,7 @@ fn is_uncallable_builtin_super_parent(name: &str) -> bool {
             | "Uint16Array"
             | "Int32Array"
             | "Uint32Array"
+            | "Float16Array"
             | "Float32Array"
             | "Float64Array"
             | "BigInt64Array"
@@ -581,6 +582,7 @@ fn is_uncallable_builtin_super_parent_class_id(class_id: u32) -> bool {
         "Uint16Array",
         "Int32Array",
         "Uint32Array",
+        "Float16Array",
         "Float32Array",
         "Float64Array",
         "BigInt64Array",
@@ -610,6 +612,14 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
     args_len: usize,
 ) -> f64 {
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    // `extends null` is valid at ClassDefinitionEvaluation time, but its
+    // derived constructor has no super-constructor to invoke.  An explicit or
+    // synthesized `super()` therefore throws TypeError.
+    if crate::value::JSValue::from_bits(parent_val.to_bits()).is_null() {
+        crate::object::object_ops::throw_object_type_error(
+            b"Super constructor null is not a constructor",
+        );
+    }
     let wasi_parent = super::super::native_module::bound_native_callable_module_and_method(
         parent_val,
     )
@@ -776,13 +786,23 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                 _ => None,
             }
         });
-    // #5657: a native builtin base that can't be called as a function (incl.
-    // ALIASED parents — `const AB = ArrayBuffer; class X extends AB {}` — which
-    // the codegen name guard can't see). No-op rather than throwing
-    // "X is not a function" / "Constructor X requires 'new'".
+    // A native builtin base that cannot be called as a function still has to
+    // perform its [[Construct]] work for `super()`. Construct it with the
+    // current subclass as newTarget so the result carries the builtin's real
+    // internal slots while inheriting from the subclass prototype.
     if let Some(name) = kind {
         if is_uncallable_builtin_super_parent(name) {
-            return undef;
+            let Some(obj) = subclass_this_object_ptr(this_box) else {
+                return undef;
+            };
+            let cid = crate::object::js_object_get_class_id(obj);
+            if cid == 0 {
+                return undef;
+            }
+            let new_target = crate::object::class_constructor_ref_value(cid);
+            return crate::object::js_new_function_construct_with_new_target(
+                parent_val, args_ptr, args_len, new_target,
+            );
         }
     }
     match kind {
@@ -998,6 +1018,27 @@ pub(crate) extern "C" fn global_this_eval_thunk(
             let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             crate::value::js_nanbox_string(ptr as i64)
         }
-        _ => f64::from_bits(crate::value::TAG_UNDEFINED),
+        _ => {
+            #[cfg(feature = "dyn-eval")]
+            {
+                let body = body.to_string();
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let global = scope.root_nanbox_f64(js_get_global_this());
+                let lexical = scope.root_nanbox_f64(crate::dyn_eval::script_environment(
+                    global.get_nanbox_f64(),
+                    &[],
+                ));
+                crate::dyn_eval::eval_script_in(
+                    &body,
+                    global.get_nanbox_f64(),
+                    global.get_nanbox_f64(),
+                    lexical.get_nanbox_f64(),
+                )
+            }
+            #[cfg(not(feature = "dyn-eval"))]
+            {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            }
+        }
     }
 }

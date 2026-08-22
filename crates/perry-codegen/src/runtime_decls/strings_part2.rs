@@ -1245,6 +1245,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, PTR, I64],
     );
+    module.declare_function(
+        "js_builtin_subclass_construct",
+        DOUBLE,
+        &[I32, PTR, I64, PTR, I64],
+    );
 
     // ──────────────────────────────────────────────────────────────────
     // AbortController / AbortSignal — perry-runtime/src/url.rs.

@@ -36,6 +36,14 @@ pub unsafe extern "C" fn js_native_call_value(
 
     let jsval = JSValue::from_bits(func_value.to_bits());
 
+    // ES class constructors have [[Construct]] but no [[Call]]. ClassRefs use
+    // Perry's INT32-tagged constructor representation, so letting one fall
+    // into the legacy raw-pointer path below reinterprets the tag bits as a
+    // ClosureHeader address. A direct `C()` must instead throw TypeError.
+    if (func_value.to_bits() >> 48) == 0x7FFE {
+        throw_not_callable();
+    }
+
     // #3656: a Proxy value invoked as a function dispatches through its `apply`
     // trap (or, absent a trap, forwards to the target). The compiler emits a
     // `ProxyApply` node when it can statically prove the callee is a proxy, but

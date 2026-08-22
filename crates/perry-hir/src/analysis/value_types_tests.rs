@@ -1179,7 +1179,8 @@ fn infers_class_prototype_and_super_meta_value_shapes() {
             &Expr::ClassExprFresh {
                 template: "Widget".to_string(),
                 named_statics: Vec::new(),
-                symbol_statics: Vec::new(),
+                computed_keys: Vec::new(),
+                computed_statics: Vec::new(),
                 captured_args: Vec::new(),
             },
             &env,

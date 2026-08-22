@@ -47,6 +47,14 @@ pub(crate) enum FnCtorShape {
     #[allow(dead_code)]
     // payload retained for the planned `f.constructor` kind resolution; matched only via `_` today
     FnLiteral(DynFnCtorKind),
+    /// A single-assignment helper of the form
+    /// `function (_eval) { return [new] _eval(sourceName); }`.  Calls that pass
+    /// the unshadowed global `eval` can lower the constant source AOT while
+    /// preserving a fresh class evaluation at every call site.
+    IndirectEvalFactory {
+        source_name: String,
+        construct: bool,
+    },
 }
 
 /// Which dynamic-function intrinsic a `<fn literal>.constructor` read names.
@@ -379,7 +387,15 @@ pub(crate) fn build_fn_ctor_env(module: &ast::Module) -> FnCtorEnv {
                 env.entries.insert(name.clone(), FnCtorShape::UndefinedVar);
             }
             Some(expr) if write_count == 0 => {
-                if let Some(s) = wrapper_const_string(expr) {
+                if let Some((source_name, construct)) = indirect_eval_factory_shape(expr) {
+                    env.entries.insert(
+                        name.clone(),
+                        FnCtorShape::IndirectEvalFactory {
+                            source_name,
+                            construct,
+                        },
+                    );
+                } else if let Some(s) = wrapper_const_string(expr) {
                     env.entries.insert(name.clone(), FnCtorShape::Str(s));
                 } else if let Some(kind) = dyn_fn_ctor_kind_of(expr, &fn_literal_vars) {
                     env.entries.insert(name.clone(), FnCtorShape::DynCtor(kind));
@@ -416,6 +432,60 @@ pub(crate) fn build_fn_ctor_env(module: &ast::Module) -> FnCtorEnv {
     }
 
     env
+}
+
+fn indirect_eval_factory_shape(expr: &ast::Expr) -> Option<(String, bool)> {
+    let mut expr = expr;
+    while let ast::Expr::Paren(paren) = expr {
+        expr = paren.expr.as_ref();
+    }
+    let ast::Expr::Fn(function) = expr else {
+        return None;
+    };
+    if function.function.params.len() != 1 {
+        return None;
+    }
+    let ast::Pat::Ident(eval_param) = &function.function.params[0].pat else {
+        return None;
+    };
+    let body = function.function.body.as_ref()?;
+    let [ast::Stmt::Return(ret)] = body.stmts.as_slice() else {
+        return None;
+    };
+    let returned = ret.arg.as_deref()?;
+    let (call, construct) = match returned {
+        ast::Expr::Call(call) => (call, false),
+        ast::Expr::New(new_expr) => {
+            if new_expr.args.as_ref().is_some_and(|args| !args.is_empty()) {
+                return None;
+            }
+            let mut callee = new_expr.callee.as_ref();
+            while let ast::Expr::Paren(paren) = callee {
+                callee = paren.expr.as_ref();
+            }
+            let ast::Expr::Call(call) = callee else {
+                return None;
+            };
+            (call, true)
+        }
+        _ => return None,
+    };
+    if call.args.len() != 1 || call.args[0].spread.is_some() {
+        return None;
+    }
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let ast::Expr::Ident(callee) = callee.as_ref() else {
+        return None;
+    };
+    if callee.sym != eval_param.id.sym {
+        return None;
+    }
+    let ast::Expr::Ident(source) = call.args[0].expr.as_ref() else {
+        return None;
+    };
+    Some((source.sym.to_string(), construct))
 }
 
 fn numeric_literal_of(expr: &ast::Expr) -> Option<f64> {

@@ -320,6 +320,9 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             for _ in 0..ctx.try_depth {
                 ctx.block().call_void("js_try_end", &[]);
             }
+            if ctx.shared_super_scope_active {
+                ctx.block().call_void("js_derived_super_scope_pop", &[]);
+            }
             ctx.block().ret(DOUBLE, &final_v);
             Ok(())
         }
@@ -354,11 +357,17 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 for _ in 0..ctx.try_depth {
                     ctx.block().call_void("js_try_end", &[]);
                 }
+                if ctx.shared_super_scope_active {
+                    ctx.block().call_void("js_derived_super_scope_pop", &[]);
+                }
                 ctx.block().ret(DOUBLE, &boxed);
             } else {
                 // Pop open try frames first (see above).
                 for _ in 0..ctx.try_depth {
                     ctx.block().call_void("js_try_end", &[]);
+                }
+                if ctx.shared_super_scope_active {
+                    ctx.block().call_void("js_derived_super_scope_pop", &[]);
                 }
                 ctx.block().ret(DOUBLE, &undef);
             }

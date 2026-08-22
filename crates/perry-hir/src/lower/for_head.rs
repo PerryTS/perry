@@ -172,13 +172,15 @@ pub(crate) fn for_head_binding_stmts(
                     // private field, brand-guarding the receiver (write op) so a
                     // receiver without the field throws TypeError per spec
                     // (test262 elements/privatefieldset-typeerror-6/7).
-                    let property = format!("#{}", p.name);
+                    let private_name = format!("#{}", p.name);
                     let object = crate::lower::expr_member::wrap_private_guard(
                         ctx,
                         object,
-                        &property,
+                        &private_name,
                         crate::lower::expr_member::PRIV_OP_WRITE,
                     );
+                    let property =
+                        crate::lower::expr_member::private_storage_property(ctx, &private_name);
                     Expr::PropertySet {
                         object,
                         property,

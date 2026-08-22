@@ -877,6 +877,13 @@ pub fn try_lower_native_method_str_dispatch(
                 | "isPrototypeOf"
                 | "toLocaleString"
                 | "valueOf"
+                // Function.prototype operations on a class constructor.
+                // ClassRefs are statically known classes, so without this
+                // carve-out `C.call/apply/bind(...)` skips runtime method
+                // dispatch and falls into the generic property-call path.
+                | "call"
+                | "apply"
+                | "bind"
                 // Annex B §B.2.2 Object.prototype accessor helpers — handled
                 // by `js_native_call_method`; the static class-dispatch tower
                 // would read them as a non-callable property and throw

@@ -90,6 +90,14 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
     // and Event-shaped dispatch gates. Builtins without a class id keep the
     // parentless baseline (no throw — they ARE constructors).
     if let Some(name) = identify_global_builtin_constructor(parent_value) {
+        // `%Proxy%` is constructable but intentionally has no usable
+        // `prototype` property, so it fails ClassDefinitionEvaluation's
+        // prototype-object-or-null check.
+        if name == "Proxy" {
+            super::super::object_ops::throw_object_type_error(
+                b"Class extends value has invalid prototype property",
+            );
+        }
         let parent_cid = super::super::instanceof::global_builtin_constructor_class_id(name);
         if parent_cid != 0 && parent_cid != class_id {
             register_class(class_id, parent_cid);
@@ -811,6 +819,8 @@ pub(crate) fn lookup_class_symbol_method_in_chain(
     })
 }
 
+include!("parent_static/private_and_dynamic.rs");
+
 /// Presence-only check (`[[HasProperty]]`, never `[[Get]]`) for a Symbol-keyed
 /// METHOD or ACCESSOR declared on `class_id` or any ancestor. These computed
 /// members register into `CLASS_SYMBOL_METHODS` / `CLASS_SYMBOL_ACCESSORS`, which
@@ -988,12 +998,12 @@ pub(crate) unsafe fn class_static_accessor_getter_value(
     name: &str,
     receiver: f64,
 ) -> Option<f64> {
-    let guard = CLASS_STATIC_ACCESSORS.read().ok()?;
-    let map = guard.as_ref()?;
+    let guard = CLASS_STATIC_ACCESSORS.read().ok();
+    let map = guard.as_ref().and_then(|guard| guard.as_ref());
     let mut cid = class_id;
     let mut depth = 0usize;
     while cid != 0 && depth < 32 {
-        if let Some(accessors) = map.get(&cid) {
+        if let Some(accessors) = map.and_then(|map| map.get(&cid)) {
             if let Some(&(getter, _)) = accessors.get(name) {
                 if getter == 0 {
                     return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
@@ -1010,6 +1020,9 @@ pub(crate) unsafe fn class_static_accessor_getter_value(
                 crate::object::static_this_disarm();
                 return Some(result);
             }
+        }
+        if let Some(result) = class_dynamic_static_accessor_getter_value(cid, name, receiver) {
+            return Some(result);
         }
         match get_parent_class_id(cid) {
             Some(p) if p != 0 && p != cid => {
@@ -1028,17 +1041,12 @@ pub(crate) unsafe fn class_static_accessor_setter_apply(
     receiver: f64,
     value: f64,
 ) -> bool {
-    let guard = match CLASS_STATIC_ACCESSORS.read() {
-        Ok(g) => g,
-        Err(_) => return false,
-    };
-    let Some(map) = guard.as_ref() else {
-        return false;
-    };
+    let guard = CLASS_STATIC_ACCESSORS.read().ok();
+    let map = guard.as_ref().and_then(|guard| guard.as_ref());
     let mut cid = class_id;
     let mut depth = 0usize;
     while cid != 0 && depth < 32 {
-        if let Some(accessors) = map.get(&cid) {
+        if let Some(accessors) = map.and_then(|map| map.get(&cid)) {
             if let Some(&(_, setter)) = accessors.get(name) {
                 if setter != 0 {
                     // Mirror the getter path: the compiled static-accessor
@@ -1053,6 +1061,11 @@ pub(crate) unsafe fn class_static_accessor_setter_apply(
                 }
                 return true;
             }
+        }
+        if let Some(applied) =
+            class_dynamic_static_accessor_setter_apply(cid, name, receiver, value)
+        {
+            return applied;
         }
         match get_parent_class_id(cid) {
             Some(p) if p != 0 && p != cid => {
@@ -1448,10 +1461,17 @@ pub unsafe extern "C" fn js_class_static_method_call(
     if name_ptr.is_null() || name_len == 0 {
         return receiver;
     }
-    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+    let storage_name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
         Ok(s) => s,
         Err(_) => return receiver,
     };
+    let private_name = if storage_name.starts_with("#<perry:private-member:") {
+        super::super::field_get_set::take_private_method_call_hint(storage_name)
+            .and_then(|(_, is_static, name)| is_static.then(|| name.to_string()))
+    } else {
+        None
+    };
+    let name = private_name.as_deref().unwrap_or(storage_name);
     // Resolve the receiver's class_id: INT32 ClassRef payload, or the
     // class_id stamped on a POINTER class object's ObjectHeader.
     let bits = receiver.to_bits();
@@ -1638,16 +1658,25 @@ pub unsafe extern "C" fn js_class_static_method_call(
         }
     }
     // True miss: no static method and no callable static field resolved on the
-    // class chain. We hand back the receiver (load-bearing for effect's
-    // `.pipe()`-during-init chains, #687) — but that silent class-ref is exactly
-    // what surfaces downstream as a stray `1`. Surface it at the call site.
+    // class chain. Keep the two compatibility no-ops introduced for Effect's
+    // schema initialization (#687), but otherwise follow JavaScript semantics:
+    // calling an absent member throws instead of silently returning the class.
+    // In particular, this is observable when code deliberately probes a class
+    // with an unknown method inside `assert.throws`.
     report_dispatch_miss(
         "static-member-call",
         receiver,
         name,
-        "the receiver (class ref)",
+        if matches!(name, "pipe" | "annotations") {
+            "the receiver (compatibility no-op)"
+        } else {
+            "TypeError"
+        },
     );
-    receiver
+    if matches!(name, "pipe" | "annotations") {
+        return receiver;
+    }
+    crate::error::js_throw_type_error_not_a_function(std::ptr::null(), 0, name.as_ptr(), name.len())
 }
 
 // `get_parent_class_id` now lives in `object::class_meta_registry` next to the

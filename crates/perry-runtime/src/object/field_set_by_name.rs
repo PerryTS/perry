@@ -27,6 +27,7 @@ pub use attr_variants::{
 };
 pub use fast_paths::js_object_set_field_by_name_transition_fast;
 pub(crate) use fast_paths::try_existing_own_data_overwrite;
+pub(crate) use tail::set_field_by_name_object_tail;
 pub(crate) use write_helpers::nm_field_set_override;
 use write_helpers::string_key_eq;
 
@@ -39,6 +40,26 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    if super::private_member_set_by_name(obj, key, value) {
+        return;
+    }
+    // A heap class value is an exotic constructor object. Its own
+    // `prototype` property is non-writable, so both ordinary assignment and
+    // a computed static field whose PropertyKey resolves to "prototype" must
+    // fail instead of appending an ordinary shape slot.
+    if !key.is_null()
+        && ((obj as u64) >> 48) == 0
+        && crate::value::addr_class::is_above_handle_band(obj as usize)
+        && crate::object::class_registry::is_class_object_ptr(obj.cast())
+    {
+        unsafe {
+            let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_len = (*key).byte_len as usize;
+            if std::slice::from_raw_parts(name_ptr, name_len) == b"prototype" {
+                crate::error::throw_immutable_write((*obj).class_id, "prototype");
+            }
+        }
+    }
     // Aliased `process.env` writes must update the OS environment, not only the
     // materialized object's field bag. The helper declines internal cache
     // mirror writes so those can proceed through the ordinary setter below.
@@ -551,6 +572,13 @@ pub extern "C" fn js_object_set_field_by_name(
         }
     }
     unsafe {
+        if string_key_eq(key, b"length") {
+            let receiver = crate::value::js_nanbox_pointer(obj as i64);
+            if crate::array::is_array_subclass_value(receiver) {
+                crate::array::array_object_set_length(receiver, value);
+                return;
+            }
+        }
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 && string_key_eq(key, b"length") {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;

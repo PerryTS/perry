@@ -367,6 +367,17 @@ pub(crate) fn try_lower_static_dispatch(
         // class_id registries. `resolve_static_dispatch_cls` already gated
         // these on known-class membership, so reaching here means the receiver
         // really is a class.
+        // These are inherited Function/Object prototype operations, not class
+        // statics. Let the normal method-call tower route them to
+        // `js_native_call_method`; the class-static miss helper deliberately
+        // returns its receiver unchanged, which made `C.call()` silently
+        // succeed and made `C.bind()` lose its bound arguments.
+        if matches!(
+            property,
+            "bind" | "call" | "apply" | "isPrototypeOf" | "toString"
+        ) {
+            return Ok(None);
+        }
         let receiver_is_dispatchable_class = matches!(object, Expr::ClassRef(_))
             || matches!(object, Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name))
             || matches!(object, Expr::PropertyGet { object: inner, property, .. }

@@ -368,6 +368,8 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // dispatch through CLASS_VTABLE_REGISTRY instead of returning undefined.
     module.declare_function("js_class_method_bind", DOUBLE, &[DOUBLE, I64, I64]);
     module.declare_function("js_class_method_bind_by_id", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_class_lexical_binding_get", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_class_lexical_binding_set", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_class_prototype_method_value", DOUBLE, &[DOUBLE, DOUBLE]);
     // #519: read the implicit `this` thread-local set by
     // `js_native_call_method`'s field-scan dispatch when invoking a
@@ -385,6 +387,10 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_ctor_return_override", DOUBLE, &[DOUBLE, DOUBLE, I32]);
     module.declare_function("js_new_target_get", DOUBLE, &[]);
     module.declare_function("js_new_target_set", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_derived_super_scope_push", VOID, &[PTR]);
+    module.declare_function("js_derived_super_scope_pop", VOID, &[]);
+    module.declare_function("js_derived_super_bind_current", DOUBLE, &[]);
+    module.declare_function("js_derived_this_check_current", DOUBLE, &[]);
 
     // ========== Runtime init / module loader ==========
     module.declare_function("js_get_export", DOUBLE, &[I64, I64, I64]);

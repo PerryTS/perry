@@ -906,15 +906,18 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         }
         Expr::ClassExprFresh {
             named_statics,
-            symbol_statics,
+            computed_keys,
+            computed_statics,
             captured_args,
             ..
         } => {
             for (_, v) in named_statics {
                 walk(v, out);
             }
-            for (k, v) in symbol_statics {
-                walk(k, out);
+            for (_, key) in computed_keys {
+                walk(key, out);
+            }
+            for (_, v) in computed_statics {
                 walk(v, out);
             }
             for a in captured_args {

@@ -246,16 +246,22 @@ pub(crate) use descriptor_state::{
     PropertyAttrs,
 };
 pub(crate) use field_get_set::FieldLookupCaches;
-pub use this_binding::{
-    js_implicit_this_get, js_implicit_this_get_sloppy, js_implicit_this_set, js_new_target_get,
-    js_new_target_set, js_static_this_arm_classref, js_static_this_arm_value,
-    js_static_this_resolve,
+pub(crate) use field_get_set::{
+    private_evaluation_brand_value, private_lexical_brand_pop, private_lexical_brand_push,
+    private_lexical_brand_stack_restore, private_lexical_brand_stack_savepoint,
+    scan_private_lexical_brand_roots_mut,
 };
 pub(crate) use this_binding::{
+    derived_super_binding_stack_restore, derived_super_binding_stack_savepoint,
     scan_implicit_this_roots_mut, static_private_owner_current, static_private_owner_pop,
     static_private_owner_push, static_private_owner_stack_restore,
     static_private_owner_stack_savepoint, static_this_arm, static_this_arm_if_unarmed,
     static_this_disarm, IMPLICIT_THIS,
+};
+pub use this_binding::{
+    js_implicit_this_get, js_implicit_this_get_sloppy, js_implicit_this_set, js_new_target_get,
+    js_new_target_set, js_static_this_arm_classref, js_static_this_arm_value,
+    js_static_this_resolve,
 };
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
@@ -1723,7 +1729,7 @@ pub struct ObjectMeta {
     /// authoritative: no `property_descriptors` entry `(owner, key)` can
     /// exist for a key whose bit is clear, so the hot paths skip the
     /// side-table probe (and its per-call `String` build) entirely. POD —
-    /// the GC trace arm visits only `prototype`.
+    /// the GC trace arm visits the record's three child edges explicitly.
     pub attr_key_bits: u64,
     /// Same summary for accessor descriptors (`get`/`set` installs) — the
     /// `accessor_descriptors` table twin of `attr_key_bits`.

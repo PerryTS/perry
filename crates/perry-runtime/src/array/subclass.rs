@@ -336,5 +336,5 @@ pub(crate) fn array_object_set_length(recv: f64, new_length: f64) {
     }
     let raw = (handle.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
     let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-    crate::object::js_object_set_field_by_name(raw, key, new_length);
+    crate::object::set_field_by_name_object_tail(raw, key, new_length);
 }

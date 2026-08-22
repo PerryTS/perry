@@ -738,7 +738,7 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         let key_ptr =
             crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
         if let Some(k) = unsafe { super::super::has_own_helpers::str_from_string_header(key_ptr) } {
-            if k.starts_with('#') {
+            if super::is_internal_runtime_key(k) {
                 return nanbox_false;
             }
         }
@@ -996,11 +996,12 @@ unsafe fn object_string_key_has_property(
 
     let class_id = (*obj_ptr).class_id;
     if class_id != 0 {
-        // `#name`-prefixed string keys on class instances are private elements —
-        // invisible to ordinary [[HasProperty]] (mirrors the slow-path arm).
+        // Compiler/runtime-only private storage keys are invisible to ordinary
+        // [[HasProperty]], while a public computed key such as `"#name"` is a
+        // normal String property.
         let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso) {
-            if b.first() == Some(&b'#') {
+            if super::is_internal_runtime_key_bytes(b) {
                 return nanbox_false;
             }
         }

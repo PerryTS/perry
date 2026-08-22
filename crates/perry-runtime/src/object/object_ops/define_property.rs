@@ -538,6 +538,37 @@ pub extern "C" fn js_object_define_property(
                 return obj_value;
             }
             if let Some(name) = super::super::metadata_key_to_string(key_value) {
+                let has_get = desc_has_field(descriptor_value, b"get");
+                let has_set = desc_has_field(descriptor_value, b"set");
+                if super::super::class_prototype_ref_id(obj_value).is_none() && (has_get || has_set)
+                {
+                    let get_field = desc_read_field(descriptor_value, b"get");
+                    let set_field = desc_read_field(descriptor_value, b"set");
+                    let get_bits = if has_get && !get_field.is_undefined() {
+                        get_field.bits()
+                    } else {
+                        0
+                    };
+                    let set_bits = if has_set && !set_field.is_undefined() {
+                        set_field.bits()
+                    } else {
+                        0
+                    };
+                    super::super::class_registry::register_class_dynamic_static_accessor(
+                        target_cid, &name, get_bits, set_bits,
+                    );
+                    super::super::class_registry::class_static_set_defined_attrs(
+                        target_cid,
+                        &name,
+                        false,
+                        descriptor_enumerable(descriptor_value),
+                        desc_has_field(descriptor_value, b"configurable")
+                            && crate::value::js_is_truthy(f64::from_bits(
+                                desc_read_field(descriptor_value, b"configurable").bits(),
+                            )) != 0,
+                    );
+                    return obj_value;
+                }
                 let desc_ptr = extract_obj_ptr(descriptor_value);
                 if !desc_ptr.is_null() {
                     let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);

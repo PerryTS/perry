@@ -1055,6 +1055,41 @@ pub(super) fn emit_string_pool(
             ],
         );
     }
+    // Class refs are immediate values, not heap Function objects. Register
+    // each constructor's visible arity so the field-get path can reify the
+    // Function-compatible own `length` property.
+    let mut class_lengths: Vec<(u32, u32)> = classes
+        .iter()
+        .filter(|(class_name, class)| *class_name == &class.name && class.id != 0)
+        .filter_map(|(class_name, class)| {
+            let cid = class_ids.get(class_name).copied()?;
+            let length = class
+                .constructor
+                .as_ref()
+                .map(|ctor| {
+                    ctor.params
+                        .iter()
+                        .take_while(|p| {
+                            !p.is_rest && p.default.is_none() && !p.name.starts_with("__perry_cap_")
+                        })
+                        .count() as u32
+                })
+                .unwrap_or(0);
+            Some((cid, length))
+        })
+        .collect();
+    class_lengths.sort_unstable_by_key(|(cid, _)| *cid);
+    class_lengths.dedup_by_key(|(cid, _)| *cid);
+    for (cid, length) in class_lengths {
+        chunker.roll_if_full();
+        chunker.current_block().call_void(
+            "js_register_class_length",
+            &[
+                (crate::types::I32, &cid.to_string()),
+                (crate::types::I32, &length.to_string()),
+            ],
+        );
+    }
 
     // Refs #486 (hono logger middleware): also register every class
     // getter in the runtime VTABLE_REGISTRY. Without this, cross-module

@@ -191,7 +191,14 @@ unsafe fn set_property_key_resolved(obj_value: f64, key: f64, value: f64) -> f64
     // get side already passes the raw NaN-boxed bits into the by-name dispatch
     // (which has a dedicated 0x7FFE class-ref branch); mirror that on the set
     // side so static-accessor and prototype instance-setter dispatch run.
-    if super::class_ref_id(obj_value).is_some() {
+    if let Some(class_id) = super::class_ref_id(obj_value) {
+        if super::class_prototype_ref_id(obj_value).is_none() {
+            let name_ptr = crate::string::string_data(key_str);
+            let name_len = (*key_str).byte_len as usize;
+            if std::slice::from_raw_parts(name_ptr, name_len) == b"prototype" {
+                crate::error::throw_immutable_write(class_id, "prototype");
+            }
+        }
         js_object_set_field_by_name(obj_value.to_bits() as *mut ObjectHeader, key_str, value);
         return value;
     }
@@ -382,6 +389,15 @@ pub unsafe extern "C" fn js_super_accessor_get(
                     }
                 }
             }
+            if let Some(result) =
+                crate::object::class_registry::class_dynamic_static_accessor_getter_value(
+                    parent_class_id,
+                    key_name,
+                    receiver,
+                )
+            {
+                return result;
+            }
             // (b) parent static data field (CLASS_DYNAMIC_PROPS), same walk.
             let mut cid = parent_class_id;
             let mut depth = 0usize;
@@ -398,6 +414,28 @@ pub unsafe extern "C" fn js_super_accessor_get(
                     }
                     _ => break,
                 }
+            }
+        }
+        // A function-valued superclass has no Perry class id, but its
+        // constructor value was captured by `js_register_class_parent_dynamic`
+        // under the child class id. Resolve `super.x` against that function's
+        // own properties with the child constructor as Receiver.
+        if let Some(child_id) = super::class_ref_id(receiver) {
+            let parent = crate::object::js_get_dynamic_parent_value(child_id);
+            let pv = crate::value::JSValue::from_bits(parent.to_bits());
+            if !pv.is_undefined() && !pv.is_null() {
+                if let Some(key_name) = key_name.as_ref() {
+                    if pv.is_pointer() {
+                        let ptr = pv.as_pointer::<u8>() as usize;
+                        if crate::closure::is_closure_ptr(ptr) {
+                            let own = crate::closure::closure_get_dynamic_prop(ptr, key_name);
+                            if own.to_bits() != crate::value::TAG_UNDEFINED {
+                                return own;
+                            }
+                        }
+                    }
+                }
+                return crate::proxy::js_reflect_get(parent, key_handle.get_nanbox_f64(), receiver);
             }
         }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -441,6 +479,14 @@ pub unsafe extern "C" fn js_super_accessor_get(
     // class declaration (test262 super/prop-{dot,expr}-cls-val). Falls back to
     // the older table for synthetic-prototype sources that lack a decl entry.
     let mut proto = crate::object::class_decl_prototype_object(parent_class_id);
+    if proto.is_null() {
+        let materialized =
+            crate::object::class_registry::class_decl_prototype_value(parent_class_id);
+        if crate::value::JSValue::from_bits(materialized.to_bits()).is_pointer() {
+            proto = crate::value::JSValue::from_bits(materialized.to_bits())
+                .as_pointer::<crate::object::ObjectHeader>() as *mut _;
+        }
+    }
     if proto.is_null() {
         proto = crate::object::class_prototype_object(parent_class_id);
     }

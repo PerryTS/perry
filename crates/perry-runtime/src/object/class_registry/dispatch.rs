@@ -402,6 +402,50 @@ pub(crate) unsafe fn call_vtable_method(
     has_synthetic_arguments: bool,
     has_rest: bool,
 ) -> f64 {
+    call_vtable_method_inner(
+        func_ptr,
+        this,
+        args_ptr,
+        args_len,
+        param_count,
+        has_synthetic_arguments,
+        has_rest,
+        None,
+    )
+}
+
+pub(crate) unsafe fn call_vtable_method_with_private_brand(
+    func_ptr: usize,
+    this: i64,
+    args_ptr: *const f64,
+    args_len: usize,
+    param_count: u32,
+    has_synthetic_arguments: bool,
+    has_rest: bool,
+    private_brand: f64,
+) -> f64 {
+    call_vtable_method_inner(
+        func_ptr,
+        this,
+        args_ptr,
+        args_len,
+        param_count,
+        has_synthetic_arguments,
+        has_rest,
+        Some(private_brand),
+    )
+}
+
+unsafe fn call_vtable_method_inner(
+    func_ptr: usize,
+    this: i64,
+    args_ptr: *const f64,
+    args_len: usize,
+    param_count: u32,
+    has_synthetic_arguments: bool,
+    has_rest: bool,
+    explicit_private_brand: Option<f64>,
+) -> f64 {
     // (`arg_or_undefined` — the spec-correct missing-argument padding — is a
     // module-level helper now, shared with `call_fn_with_this_and_args`.)
 
@@ -490,13 +534,21 @@ pub(crate) unsafe fn call_vtable_method(
         param_count,
         MAX_VTABLE_DISPATCH_ARITY
     );
-    call_fn_with_this_and_args(
+    let private_brand = explicit_private_brand
+        .or_else(|| crate::object::private_evaluation_brand_value(this_f64))
+        .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+    let derived_super_depth = crate::object::derived_super_binding_stack_savepoint();
+    crate::object::private_lexical_brand_push(private_brand);
+    let result = call_fn_with_this_and_args(
         func_ptr,
         this_f64,
         call_args_ptr,
         call_args_len,
         param_count_usize,
-    )
+    );
+    crate::object::private_lexical_brand_pop();
+    crate::object::derived_super_binding_stack_restore(derived_super_depth);
+    result
 }
 
 /// Walk the class parent chain looking for a recorded fetch-builtin parent

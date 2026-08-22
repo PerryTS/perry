@@ -600,7 +600,9 @@ fn resolve_fn_ctor_arg(
                 FnCtorShape::ObjToString(body) => eval_tostring(&mut ctx.fn_ctor_env, &body),
                 // A dynamic-function ctor VALUE used as a ToString-able arg
                 // isn't a constant string.
-                FnCtorShape::DynCtor(_) | FnCtorShape::FnLiteral(_) => None,
+                FnCtorShape::DynCtor(_)
+                | FnCtorShape::FnLiteral(_)
+                | FnCtorShape::IndirectEvalFactory { .. } => None,
             };
         }
         // A constant EXPRESSION over env entries — `Function(p + "," + p,
@@ -1301,6 +1303,9 @@ pub(crate) fn try_eval_function_call_fold(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
 ) -> Result<Option<Expr>> {
+    if let Some(expr) = try_indirect_eval_factory_call(ctx, call)? {
+        return Ok(Some(expr));
+    }
     if let Some(expr) = try_indirect_eval_globalthis(ctx, call) {
         return Ok(Some(expr));
     }
@@ -1361,6 +1366,68 @@ pub(crate) fn try_eval_function_call_fold(
         }
     }
     Ok(None)
+}
+
+fn try_indirect_eval_factory_call(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+) -> Result<Option<Expr>> {
+    if call.args.len() != 1 || call.args[0].spread.is_some() {
+        return Ok(None);
+    }
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return Ok(None);
+    };
+    let ast::Expr::Ident(factory) = callee.as_ref() else {
+        return Ok(None);
+    };
+    let ast::Expr::Ident(eval_arg) = call.args[0].expr.as_ref() else {
+        return Ok(None);
+    };
+    if eval_arg.sym.as_ref() != "eval"
+        || ctx.lookup_local("eval").is_some()
+        || ctx.lookup_func("eval").is_some()
+        || ctx.lookup_imported_func("eval").is_some()
+    {
+        return Ok(None);
+    }
+    let Some(super::fn_ctor_env::FnCtorShape::IndirectEvalFactory {
+        source_name,
+        construct,
+    }) = ctx.fn_ctor_env.entries.get(factory.sym.as_str()).cloned()
+    else {
+        return Ok(None);
+    };
+    let Some(super::fn_ctor_env::FnCtorShape::Str(source)) =
+        ctx.fn_ctor_env.entries.get(&source_name).cloned()
+    else {
+        return Ok(None);
+    };
+    let module = match perry_parser::parse_typescript(&source, "<indirect eval body>.cjs") {
+        Ok(module) => module,
+        Err(_) => return Ok(None),
+    };
+    let [ast::ModuleItem::Stmt(ast::Stmt::Expr(statement))] = module.body.as_slice() else {
+        return Ok(None);
+    };
+
+    // The evaluated class lives in eval's own execution context, not at the
+    // surrounding module top.  Raising the synthetic scope depth selects the
+    // ClassExprFresh lowering used for function/factory evaluations, so a
+    // repeated call site creates a distinct private brand each time.
+    ctx.scope_depth += 1;
+    let lowered = super::lower_expr(ctx, &statement.expr);
+    ctx.scope_depth -= 1;
+    let lowered = lowered?;
+    if construct {
+        Ok(Some(Expr::NewDynamic {
+            callee: Box::new(lowered),
+            args: Vec::new(),
+            byte_offset: 0,
+        }))
+    } else {
+        Ok(Some(lowered))
+    }
 }
 
 /// Fold `Function.call(thisArg, ...ctorArgs)` / `Function.apply(thisArg,

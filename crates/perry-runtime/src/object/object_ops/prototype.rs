@@ -285,6 +285,15 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
         None
     };
     let buffer_backed_prototype = |addr: usize| -> Option<f64> {
+        // A native ArrayBuffer/SharedArrayBuffer constructed with a distinct
+        // newTarget (subclassing / Reflect.construct) records that custom
+        // [[Prototype]] in the same side table as typed arrays. Honor it before
+        // falling back to the intrinsic buffer prototype.
+        if let Some(proto_bits) = super::super::prototype_chain::object_static_prototype(addr) {
+            if proto_bits != crate::value::TAG_NULL {
+                return Some(f64::from_bits(proto_bits));
+            }
+        }
         let name = if crate::buffer::is_array_buffer(addr) {
             "ArrayBuffer"
         } else if crate::buffer::is_shared_array_buffer(addr) {
@@ -338,6 +347,17 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     };
     if top16 == 0x7FFE {
         let class_id = (bits & 0xFFFF_FFFF) as u32;
+        if super::super::class_prototype_ref_id(obj_value).is_none() {
+            // A class whose heritage is a runtime function value has no Perry
+            // parent class id. Its constructor's [[Prototype]] is that exact
+            // function object (not Function.prototype), as observed by
+            // Object.getPrototypeOf(D) and static `super` lookup.
+            let dynamic_parent = super::super::js_get_dynamic_parent_value(class_id);
+            let parent_value = crate::value::JSValue::from_bits(dynamic_parent.to_bits());
+            if !parent_value.is_undefined() && !parent_value.is_null() {
+                return dynamic_parent;
+            }
+        }
         if let Some(parent_id) = get_parent_class_id(class_id) {
             // #8343 followup: `NATIVE_MODULE_CLASS_ID` (0xFFFFFFFE) is a
             // sentinel, not a real class. A prior `Object.create(proto)` whose

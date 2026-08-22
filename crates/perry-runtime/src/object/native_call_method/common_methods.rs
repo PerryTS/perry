@@ -26,8 +26,7 @@ pub(super) unsafe fn dispatch_common(
         // the runtime bind helper; non-closure receivers fall back to the
         // prior conservative behavior of returning the receiver unchanged.
         "bind" => {
-            let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-            if jsval.is_pointer() && crate::closure::is_closure_ptr(raw_ptr) {
+            if crate::object::value_is_callable(object) {
                 return Some(crate::closure::js_function_bind(object, args_ptr, args_len));
             }
             // #3662: a non-callable `this` (primitive or recognized plain
@@ -499,6 +498,12 @@ pub(super) unsafe fn dispatch_common(
         // `fn.apply(this, arguments)` / `fn.call(this, x)`, so without these
         // arms ramda fails immediately on the first curried export.
         "call" => {
+            // Class constructors have no [[Call]] slot. `C.call(...)` must
+            // reject instead of treating the INT32-tagged ClassRef payload as
+            // a closure pointer in the generic Function.prototype path.
+            if super::class_ref_id(object).is_some() {
+                throw_fn_proto_not_callable("call");
+            }
             // Proxy receiver (#3656): `p.call(thisArg, ...args)` routes through
             // the proxy `apply` trap (or, absent a trap, forwards to the target).
             if crate::proxy::js_proxy_is_proxy(object) == 1 {
@@ -583,6 +588,9 @@ pub(super) unsafe fn dispatch_common(
         // but for the `Function.prototype.apply` path rather than the
         // dynamic-spread method-call codegen path.
         "apply" => {
+            if super::class_ref_id(object).is_some() {
+                throw_fn_proto_not_callable("apply");
+            }
             // Proxy receiver (#3656): `p.apply(thisArg, argsArray)` routes
             // through the proxy `apply` trap (or forwards to the target).
             if crate::proxy::js_proxy_is_proxy(object) == 1 {

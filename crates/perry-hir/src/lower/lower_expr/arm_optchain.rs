@@ -87,13 +87,14 @@ pub(crate) fn lower_opt_chain_expr(
                     }
                 }
                 ast::MemberProp::PrivateName(private) => {
-                    let property = format!("#{}", private.name);
+                    let private_name = format!("#{}", private.name);
                     let object = expr_member::wrap_private_guard(
                         ctx,
                         Box::new(obj_expr.clone()),
-                        &property,
+                        &private_name,
                         expr_member::PRIV_OP_READ,
                     );
+                    let property = expr_member::private_storage_property(ctx, &private_name);
                     Expr::PropertyGet {
                         byte_offset: 0,
                         object,
@@ -187,13 +188,15 @@ pub(crate) fn lower_opt_chain_expr(
                             }
                         }
                         ast::MemberProp::PrivateName(private) => {
-                            let property = format!("#{}", private.name);
+                            let private_name = format!("#{}", private.name);
                             let guarded = expr_member::wrap_private_guard(
                                 ctx,
                                 Box::new(obj.clone()),
-                                &property,
+                                &private_name,
                                 expr_member::PRIV_OP_READ,
                             );
+                            let property =
+                                expr_member::private_storage_property(ctx, &private_name);
                             Expr::PropertyGet {
                                 byte_offset: 0,
                                 object: guarded,

@@ -620,15 +620,18 @@ where
         }
         Expr::ClassExprFresh {
             named_statics,
-            symbol_statics,
+            computed_keys,
+            computed_statics,
             captured_args,
             ..
         } => {
             for (_, v) in named_statics {
                 f(v);
             }
-            for (k, v) in symbol_statics {
-                f(k);
+            for (_, key) in computed_keys {
+                f(key);
+            }
+            for (_, v) in computed_statics {
                 f(v);
             }
             for a in captured_args {

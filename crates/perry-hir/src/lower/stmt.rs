@@ -711,33 +711,27 @@ pub(crate) fn lower_stmt(
                                 // that would conflict, and the binding name isn't
                                 // already a class (no shadow).
                                 if ctx.lookup_class(&bind_name).is_none() {
-                                    // Refs #486: `var X = class _X { ... new _X() ... }` —
-                                    // the inner self-binding name `_X` references the same
-                                    // class as the outer binding `X`. Pre-register the inner
-                                    // name as a class alias BEFORE lowering the class body
-                                    // so any `Ident("_X")` inside method bodies (e.g.
-                                    // `new _X()`) lowers to `Expr::ClassRef("_X")` instead
-                                    // of falling through to ExternFuncRef. The HIR `new`
-                                    // ident path keys off `lookup_class`. Hono's
-                                    // `var Node = class _Node { ... }` and similar npm dist
-                                    // shapes hit this.
+                                    // `var X = class _X { ... new _X() ... }` gives `_X`
+                                    // a lexical binding only inside the class body. Allocate
+                                    // the class id under the outer binding here; the lowering
+                                    // context's `current_class_inner_name` handling resolves
+                                    // `_X` while lowering methods and initializers. Registering
+                                    // `_X` globally as an alias leaks it outside the class
+                                    // expression (`typeof _X` must remain `"undefined"`).
                                     let inner_name_for_register = class_expr
                                         .ident
                                         .as_ref()
                                         .map(|i| i.sym.to_string())
                                         .filter(|n| n != &bind_name);
-                                    if let Some(ref inner_name) = inner_name_for_register {
-                                        // Allocate the class id eagerly so we can register
-                                        // it under both names; lower_class_from_ast picks up
-                                        // the same id via lookup_class(bind_name).
+                                    if inner_name_for_register.is_some() {
+                                        // Allocate the class id eagerly so
+                                        // lower_class_from_ast picks up the same id via
+                                        // lookup_class(bind_name).
                                         let class_id = ctx.fresh_class();
                                         ctx.register_class(bind_name.clone(), class_id);
-                                        ctx.register_class(inner_name.clone(), class_id);
                                         // The bind-name local holds ITS OWN
                                         // class (see inferred_class_bindings).
                                         ctx.inferred_class_bindings.insert(bind_name.clone());
-                                        ctx.class_expr_aliases
-                                            .insert(inner_name.clone(), bind_name.clone());
                                     }
                                     // The inner (const) binding visible inside the
                                     // body is the class expression's own source ident
@@ -750,7 +744,7 @@ pub(crate) fn lower_stmt(
                                         .map(|i| i.sym.to_string());
                                     // Lower the class with the binding name so
                                     // `new BindName(...)` works unchanged.
-                                    let mut lowered_class =
+                                    let lowered_class =
                                         crate::lower_decl::lower_class_from_ast(
                                             ctx,
                                             &class_expr.class,
@@ -775,7 +769,6 @@ pub(crate) fn lower_stmt(
                                         // `bind_name` registration key.
                                         ctx.class_display_names
                                             .insert(lowered_class.id, inner_name.clone());
-                                        lowered_class.aliases.push(inner_name);
                                     }
                                     // Computed member keys (`static get [expr]()`,
                                     // `[expr]() {}`) register at runtime against the
@@ -837,6 +830,7 @@ pub(crate) fn lower_stmt(
                                         crate::lower_decl::build_interleaved_static_init_stmts(
                                             &class_expr.class.body,
                                             &bind_name,
+                                            &lowered_class.fields,
                                             &lowered_class.static_fields,
                                             &lowered_class.static_methods,
                                         );
@@ -1159,6 +1153,27 @@ pub(crate) fn lower_stmt(
                             }
                         }
                         module.init.extend(stmts);
+                        // Script `var` bindings are properties of the global
+                        // object. Perry normally keeps module locals in stack
+                        // slots, so the runtime global-eval interpreter could
+                        // not observe a preceding `var arguments = 1` from a
+                        // nested indirect eval. Publish simple top-level vars
+                        // in global-script mode at their source position; CJS
+                        // modules retain their isolated locals.
+                        if is_var && super::lower_expr::global_script_this_enabled() {
+                            if let ast::Pat::Ident(ident) = &decl.name {
+                                let name = ident.id.sym.to_string();
+                                if let Some(id) = ctx.lookup_local(&name) {
+                                    module.init.push(Stmt::Expr(Expr::PutValueSet {
+                                        target: Box::new(Expr::GlobalThisExpr),
+                                        key: Box::new(Expr::String(name)),
+                                        value: Box::new(Expr::LocalGet(id)),
+                                        receiver: Box::new(Expr::GlobalThisExpr),
+                                        strict: false,
+                                    }));
+                                }
+                            }
+                        }
                     }
                 }
                 ast::Decl::Class(class_decl) => {
@@ -1247,6 +1262,7 @@ pub(crate) fn lower_stmt(
                         crate::lower_decl::build_interleaved_static_init_stmts(
                             &class_decl.class.body,
                             &class.name,
+                            &class.fields,
                             &class.static_fields,
                             &class.static_methods,
                         ),

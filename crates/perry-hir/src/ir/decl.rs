@@ -284,21 +284,37 @@ pub struct Class {
 }
 
 impl Class {
-    /// Whether evaluating this class creates any private names whose brands
-    /// must be distinct from every other evaluation of the same HIR template.
-    pub fn has_private_elements(&self) -> bool {
+    /// Whether construction installs any instance-private element.
+    pub fn has_private_instance_elements(&self) -> bool {
         self.fields.iter().any(|field| field.is_private)
-            || self.static_fields.iter().any(|field| field.is_private)
             || self
                 .methods
                 .iter()
                 .any(|method| method.name.starts_with('#'))
+            || self.getters.iter().any(|(name, _)| name.starts_with('#'))
+            || self.setters.iter().any(|(name, _)| name.starts_with('#'))
+    }
+
+    /// Whether construction installs the shared brand used by private
+    /// instance methods and accessors. Private fields carry their own
+    /// presence and duplicate-initialization check.
+    pub fn has_private_instance_brand(&self) -> bool {
+        self.methods
+            .iter()
+            .any(|method| method.name.starts_with('#'))
+            || self.getters.iter().any(|(name, _)| name.starts_with('#'))
+            || self.setters.iter().any(|(name, _)| name.starts_with('#'))
+    }
+
+    /// Whether evaluating this class creates any private names whose brands
+    /// must be distinct from every other evaluation of the same HIR template.
+    pub fn has_private_elements(&self) -> bool {
+        self.has_private_instance_elements()
+            || self.static_fields.iter().any(|field| field.is_private)
             || self
                 .static_methods
                 .iter()
                 .any(|method| method.name.starts_with('#'))
-            || self.getters.iter().any(|(name, _)| name.starts_with('#'))
-            || self.setters.iter().any(|(name, _)| name.starts_with('#'))
     }
 }
 

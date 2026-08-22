@@ -90,6 +90,8 @@ pub(crate) fn callee_is_nothrow(name: &str) -> bool {
                 | "js_get_exception"
                 | "js_clear_exception"
                 | "js_has_exception"
+                | "js_derived_super_scope_push"
+                | "js_derived_super_scope_pop"
         )
         || !crate::module::helper_decl_attrs(name).is_empty()
 }

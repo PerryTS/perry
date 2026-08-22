@@ -360,6 +360,7 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                     param_count,
                     has_rest,
                     !is_proto_ref,
+                    &crate::symbol::symbol_function_name(sym_key),
                 );
             }
         }
@@ -636,6 +637,7 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                                 param_count,
                                 has_rest,
                                 false,
+                                &crate::symbol::symbol_function_name(sym_key),
                             );
                         }
                     }

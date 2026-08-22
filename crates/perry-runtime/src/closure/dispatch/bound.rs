@@ -11,6 +11,8 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
     let mut namespace_obj = js_closure_get_capture_f64(closure, 0);
     let method_name_ptr = js_closure_get_capture_ptr(closure, 1) as *const i8;
     let method_name_len = js_closure_get_capture_ptr(closure, 2) as usize;
+    let private_brand = (crate::closure::real_capture_count((*closure).capture_count) >= 4)
+        .then(|| js_closure_get_capture_f64(closure, 3));
 
     // #6173: a SYMBOL-keyed class method read as a value — there is no name to
     // re-resolve; the captures carry the already-resolved func_ptr + arity
@@ -46,15 +48,45 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
                         // private method body runs against — for `f.call(o)` it is
                         // `o`, for a bare `f()` it is undefined.
                         let call_this = crate::object::js_implicit_this_get();
-                        return crate::object::call_vtable_method(
-                            func_ptr,
-                            call_this.to_bits() as i64,
+                        return if let Some(brand) = private_brand {
+                            crate::object::call_vtable_method_with_private_brand(
+                                func_ptr,
+                                call_this.to_bits() as i64,
+                                args.as_ptr(),
+                                args.len(),
+                                param_count,
+                                has_synth_args,
+                                has_rest,
+                                brand,
+                            )
+                        } else {
+                            crate::object::call_vtable_method(
+                                func_ptr,
+                                call_this.to_bits() as i64,
+                                args.as_ptr(),
+                                args.len(),
+                                param_count,
+                                has_synth_args,
+                                has_rest,
+                            )
+                        };
+                    }
+                }
+                if crate::object::class_prototype_ref_id(namespace_obj).is_none() {
+                    if let (Some(owner_id), Some(brand)) =
+                        (crate::object::class_ref_id(namespace_obj), private_brand)
+                    {
+                        let call_this = crate::object::js_implicit_this_get();
+                        if let Some(result) = crate::object::call_private_static_method_for_owner(
+                            owner_id,
+                            name,
+                            call_this,
+                            brand,
                             args.as_ptr(),
                             args.len(),
-                            param_count,
-                            has_synth_args,
-                            has_rest,
-                        );
+                        ) {
+                            return result;
+                        }
                     }
                 }
             }
@@ -95,15 +127,28 @@ pub unsafe fn dispatch_bound_method(closure: *const ClosureHeader, args: &[f64])
                 if let Some((func_ptr, param_count, has_synth_args, has_rest)) =
                     crate::object::lookup_class_method_in_chain(owner_id, name)
                 {
-                    return crate::object::call_vtable_method(
-                        func_ptr,
-                        call_receiver.to_bits() as i64,
-                        args.as_ptr(),
-                        args.len(),
-                        param_count,
-                        has_synth_args,
-                        has_rest,
-                    );
+                    return if let Some(brand) = private_brand {
+                        crate::object::call_vtable_method_with_private_brand(
+                            func_ptr,
+                            call_receiver.to_bits() as i64,
+                            args.as_ptr(),
+                            args.len(),
+                            param_count,
+                            has_synth_args,
+                            has_rest,
+                            brand,
+                        )
+                    } else {
+                        crate::object::call_vtable_method(
+                            func_ptr,
+                            call_receiver.to_bits() as i64,
+                            args.as_ptr(),
+                            args.len(),
+                            param_count,
+                            has_synth_args,
+                            has_rest,
+                        )
+                    };
                 }
             }
         }
@@ -382,13 +427,27 @@ pub unsafe extern "C" fn js_function_bind(
         let err = crate::error::js_typeerror_new(msg);
         crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
     }
-    if !target_jv.is_pointer() {
+    let target_class_id = crate::object::class_ref_id(target_value).or_else(|| {
+        ((target_value.to_bits() >> 48) == 0x7FFE
+            && crate::object::class_prototype_ref_id(target_value).is_none())
+        .then_some((target_value.to_bits() & 0xFFFF_FFFF) as u32)
+    });
+    let target_closure = if target_jv.is_pointer() {
+        let ptr = target_jv.as_pointer::<ClosureHeader>();
+        if ptr.is_null() || (*ptr).type_tag != CLOSURE_MAGIC {
+            // Preserve the existing conservative pass-through for callable
+            // native handles that do not use the closure representation.
+            return target_value;
+        }
+        Some(ptr)
+    } else if target_class_id.is_some() {
+        // ClassRefs are callable/constructable INT32-tagged values rather
+        // than heap closures. They still need a real BoundFunction wrapper
+        // so `new C.bind(_, ...args)()` prepends its captured arguments.
+        None
+    } else {
         return target_value;
-    }
-    let target_closure = target_jv.as_pointer::<ClosureHeader>();
-    if target_closure.is_null() || (*target_closure).type_tag != CLOSURE_MAGIC {
-        return target_value;
-    }
+    };
 
     let bound_this = if args_len >= 1 && !args_ptr.is_null() {
         coerce_call_this(target_value, *args_ptr)
@@ -419,7 +478,7 @@ pub unsafe extern "C" fn js_function_bind(
     // boundArgs.length). An `Object.defineProperty(fn, "length", {value})`
     // override (own dynamic prop) wins over the registered declared length,
     // and the value may be NaN (→ 0), ±Infinity, or beyond int32.
-    let target_len_f =
+    let target_len_f = if let Some(target_closure) = target_closure {
         match crate::closure::closure_get_own_dynamic_prop(target_closure as usize, "length") {
             Some(v) => {
                 let jv = JSValue::from_bits(v.to_bits());
@@ -432,7 +491,13 @@ pub unsafe extern "C" fn js_function_bind(
                 }
             }
             None => crate::closure::closure_length(target_closure).unwrap_or(0) as f64,
-        };
+        }
+    } else {
+        // Constructor arity is not currently retained in the class registry.
+        // This is still the spec default for a synthesized constructor and is
+        // independent of bound-argument forwarding/constructibility.
+        0.0
+    };
     let target_len_f = if target_len_f.is_nan() {
         0.0
     } else {
@@ -458,9 +523,15 @@ pub unsafe extern "C" fn js_function_bind(
     // `f.bind().bind().name` chains to `"bound bound …"`). Fall back to the
     // declared name from the func-ptr registry for plain named functions, which
     // don't materialize a `name` data property.
-    let target_name = read_function_name_property(target_closure as usize)
-        .or_else(|| crate::builtins::function_name_for_ptr((*target_closure).func_ptr as usize))
-        .unwrap_or_default();
+    let target_name = if let Some(target_closure) = target_closure {
+        read_function_name_property(target_closure as usize)
+            .or_else(|| crate::builtins::function_name_for_ptr((*target_closure).func_ptr as usize))
+            .unwrap_or_default()
+    } else {
+        target_class_id
+            .and_then(crate::object::class_name_for_id)
+            .unwrap_or_default()
+    };
     let bound_name = format!("bound {target_name}");
     let name_ptr =
         crate::string::js_string_from_bytes(bound_name.as_ptr(), bound_name.len() as u32);

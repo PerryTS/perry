@@ -54,7 +54,7 @@ mod vm_brand;
 #[cfg(test)]
 pub(crate) use state::class_decl_prototype_object_root_store;
 pub(crate) use state::{
-    class_decl_prototype_object, class_decl_prototype_value,
+    class_decl_prototype_method_names, class_decl_prototype_object, class_decl_prototype_value,
     class_decl_prototype_value_for_instance_class, class_delete_own_dynamic_prop,
     class_dynamic_prop_root_store, class_has_own_dynamic_prop, class_id_for_decl_prototype_object,
     class_is_key_deleted, class_mark_key_deleted, class_object_value_for_cid,
@@ -88,10 +88,11 @@ pub(crate) use class_meta::test_text_encoding_stream_new_with_constructor;
 #[cfg(feature = "global-text")]
 pub(crate) use class_meta::text_decoder_bool_option;
 pub use class_meta::{
-    class_name_for_id, is_anon_shape_class_id, js_compression_stream_new,
+    class_length_for_id, class_name_for_id, is_anon_shape_class_id, js_compression_stream_new,
     js_decompression_stream_new, js_register_anon_shape_class_id, js_register_class_id,
-    js_register_class_name, js_text_decoder_stream_new, js_text_encoder_stream_new,
-    js_text_encoding_stream_new, ANON_SHAPE_CLASS_IDS, CLASS_NAMES,
+    js_register_class_length, js_register_class_name, js_text_decoder_stream_new,
+    js_text_encoder_stream_new, js_text_encoding_stream_new, ANON_SHAPE_CLASS_IDS, CLASS_LENGTHS,
+    CLASS_NAMES,
 };
 pub(crate) use class_meta::{
     identify_global_builtin_constructor, report_dispatch_miss,
@@ -159,19 +160,23 @@ pub use registration::{
 #[cfg(test)]
 pub(crate) use dispatch::test_bump_vtable_generation;
 pub(crate) use dispatch::{
-    call_vtable_method, fetch_parent_kind_in_chain, obj_dispatch_ic_insert, obj_dispatch_ic_lookup,
-    vtable_generation, vtable_ic_insert, vtable_ic_lookup, VTABLE_GEN,
+    call_vtable_method, call_vtable_method_with_private_brand, fetch_parent_kind_in_chain,
+    obj_dispatch_ic_insert, obj_dispatch_ic_lookup, vtable_generation, vtable_ic_insert,
+    vtable_ic_lookup, VTABLE_GEN,
 };
 
 // ── parent_static.rs ────────────────────────────────────────────────────────
 pub(crate) use parent_static::{
-    call_registered_static_method, call_static_method, class_chain_has_instance_accessor,
+    call_private_static_method_for_owner, call_registered_static_method, call_static_method,
+    class_chain_has_instance_accessor, class_dynamic_static_accessor_getter_value,
     class_has_instance_getter, class_has_own_static_method, class_has_symbol_member_in_chain,
     class_instance_setter_apply, class_method_bind_length, class_object_own_field_bytes,
-    class_object_pinned_parent, class_own_symbol_member_keys, class_static_accessor_getter_value,
+    class_object_pinned_parent, class_own_symbol_accessor_ptrs, class_own_symbol_member_keys,
+    class_own_symbol_method, class_private_instance_getter_value,
+    class_private_instance_setter_apply, class_static_accessor_getter_value,
     class_static_accessor_setter_apply, class_symbol_getter_value, class_symbol_setter_apply,
     get_parent_class_id, lookup_class_symbol_method_in_chain, lookup_static_method_in_chain,
-    register_class,
+    register_class, register_class_dynamic_static_accessor,
 };
 pub use parent_static::{
     is_class_object_ptr, is_class_object_value, is_registered_class_prototype_object,

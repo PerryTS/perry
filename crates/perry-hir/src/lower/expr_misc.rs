@@ -103,6 +103,18 @@ pub(super) fn lower_super_prop(
                 })
             } else if let Some(key) = match computed.expr.as_ref() {
                 ast::Expr::Lit(ast::Lit::Str(s)) => s.value.as_str().map(|s| s.to_string()),
+                ast::Expr::Lit(ast::Lit::Num(n))
+                    if n.value.is_finite()
+                        && n.value.fract() == 0.0
+                        && n.value >= i64::MIN as f64
+                        && n.value <= i64::MAX as f64 =>
+                {
+                    Some(if n.value == 0.0 {
+                        "0".to_string()
+                    } else {
+                        (n.value as i64).to_string()
+                    })
+                }
                 _ => None,
             } {
                 // `super['fromA']` in a CLASS method with a string-literal key:
@@ -240,9 +252,23 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                     })
                 }
                 ast::MemberProp::PrivateName(priv_name) => {
-                    let property = format!("#{}", priv_name.name);
+                    let private_name = format!("#{}", priv_name.name);
+                    let object = crate::lower::expr_member::wrap_private_guard(
+                        ctx,
+                        Box::new(object),
+                        &private_name,
+                        crate::lower::expr_member::PRIV_OP_READ,
+                    );
+                    let object = crate::lower::expr_member::wrap_private_guard(
+                        ctx,
+                        object,
+                        &private_name,
+                        crate::lower::expr_member::PRIV_OP_WRITE,
+                    );
+                    let property =
+                        crate::lower::expr_member::private_storage_property(ctx, &private_name);
                     Ok(Expr::PropertyUpdate {
-                        object: Box::new(object),
+                        object,
                         property,
                         op: binary_op,
                         prefix: update.prefix,

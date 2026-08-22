@@ -75,12 +75,16 @@ pub(crate) fn lower_destructuring_assignment(
                                         // `[this.#field] = arr` — brand-guard the
                                         // receiver so a wrong-receiver write throws.
                                         ast::MemberProp::PrivateName(private) => {
-                                            let property = format!("#{}", private.name);
+                                            let private_name = format!("#{}", private.name);
                                             let object = crate::lower::wrap_private_guard(
                                                 ctx,
                                                 object,
-                                                &property,
+                                                &private_name,
                                                 crate::lower::PRIV_OP_WRITE,
+                                            );
+                                            let property = crate::lower::private_storage_property(
+                                                ctx,
+                                                &private_name,
                                             );
                                             exprs.push(Expr::PropertySet {
                                                 object,
