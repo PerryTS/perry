@@ -1315,14 +1315,14 @@ mod c3c_pic_tests {
         let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
         let key = scope.root_string_ptr(key);
         obj.with_mut_ptr(|o| {
-                key.with_const_ptr(|k| {
-                    crate::object::js_object_set_field_by_name(o, k, 42.0)
-                })
-            });
+            key.with_const_ptr(|k| crate::object::js_object_set_field_by_name(o, k, 42.0))
+        });
 
         let mut cache = [0i64; super::PIC_CACHE_WORDS];
         assert_eq!(
-            obj.with_mut_ptr(|o| key.with_const_ptr(|k| super::js_object_get_field_ic_miss(o, k, &mut cache))),
+            obj.with_mut_ptr(
+                |o| key.with_const_ptr(|k| super::js_object_get_field_ic_miss(o, k, &mut cache))
+            ),
             42.0
         );
         assert_ne!(
@@ -1345,10 +1345,8 @@ mod c3c_pic_tests {
         let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
         let key = scope.root_string_ptr(key);
         obj.with_mut_ptr(|o| {
-                key.with_const_ptr(|k| {
-                    crate::object::js_object_set_field_by_name(o, k, 17.0)
-                })
-            });
+            key.with_const_ptr(|k| crate::object::js_object_set_field_by_name(o, k, 17.0))
+        });
         crate::object::set_accessor_descriptor(
             obj.with_mut_ptr(|o: *mut crate::object::ObjectHeader| o as usize),
             "pic_guarded_data".to_string(),
@@ -1356,9 +1354,11 @@ mod c3c_pic_tests {
         );
 
         let mut cache = [0i64; super::PIC_CACHE_WORDS];
-        let via_pic = obj.with_mut_ptr(|o| key.with_const_ptr(|k| super::js_object_get_field_ic_miss(o, k, &mut cache)));
-        let via_ladder =
-            obj.with_mut_ptr(|o| key.with_const_ptr(|k| super::js_object_get_field_by_name_f64(o, k)));
+        let via_pic = obj.with_mut_ptr(|o| {
+            key.with_const_ptr(|k| super::js_object_get_field_ic_miss(o, k, &mut cache))
+        });
+        let via_ladder = obj
+            .with_mut_ptr(|o| key.with_const_ptr(|k| super::js_object_get_field_by_name_f64(o, k)));
         assert_eq!(
             via_pic.to_bits(),
             via_ladder.to_bits(),
