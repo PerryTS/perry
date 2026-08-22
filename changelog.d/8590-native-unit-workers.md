@@ -1,0 +1,3 @@
+### Changed
+
+- The default number of concurrent native LLVM codegen-unit workers is now CPU-aware on non-Windows: half the machine's logical CPUs, clamped to `[2, 8]`, instead of a hard-coded `2` (#8583). The `2` default (#8017) was chosen for Windows pagefile pressure and applied everywhere; on a large real bundle (the Claude Code `cli.js` lowers to ~84 units) it left most cores idle while dozens of ~7-minute units ran two at a time. With the giant entry function's roots spilled (#8583) no unit carries an unbounded RS4GC fan-out, so per-unit peak RSS is a bounded ~1-2 GiB and the two-worker cap — not memory — was the wall. Windows keeps the conservative `2`. `PERRY_CODEGEN_UNIT_JOBS` still overrides on every platform.
