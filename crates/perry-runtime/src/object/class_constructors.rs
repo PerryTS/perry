@@ -1205,16 +1205,21 @@ pub(crate) unsafe fn replay_class_object_constructor(
             f64::from_bits(crate::value::TAG_UNDEFINED)
         };
     let caps_jv = crate::value::JSValue::from_bits(caps_val.to_bits());
-    let (caps_arr, n_caps): (*const crate::array::ArrayHeader, u32) = if caps_jv.is_pointer() {
+    let caps_arr_handle = if caps_jv.is_pointer() {
         let arr = caps_jv.as_pointer::<crate::array::ArrayHeader>();
         if arr.is_null() {
-            (std::ptr::null(), 0)
+            None
         } else {
-            (arr, crate::array::js_array_length(arr))
+            Some(scope.root_raw_const_ptr(arr))
         }
     } else {
-        (std::ptr::null(), 0)
+        None
     };
+    let n_caps = caps_arr_handle.as_ref().map_or(0, |handle| {
+        handle.with_const_ptr::<crate::array::ArrayHeader, _>(|arr| {
+            crate::array::js_array_length(arr)
+        })
+    });
 
     // A class DECLARATION reached as a heap class object (webpack interop:
     // `t["default"] = PQueue` read back cross-module) has no per-evaluation
@@ -1279,7 +1284,12 @@ pub(crate) unsafe fn replay_class_object_constructor(
     // (class DECLARATIONS reached as heap values), undefined last.
     for slot in 0..sig_caps as usize {
         let v = if (slot as u32) < n_caps {
-            crate::array::js_array_get_f64(caps_arr, slot as u32)
+            caps_arr_handle
+                .as_ref()
+                .expect("non-empty capture array should have a runtime handle")
+                .with_const_ptr::<crate::array::ArrayHeader, _>(|caps_arr| {
+                    crate::array::js_array_get_f64(caps_arr, slot as u32)
+                })
         } else if let Some(bits) = snapshot_caps.get(slot) {
             f64::from_bits(*bits)
         } else {

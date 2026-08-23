@@ -91,6 +91,10 @@ function checkFreshBrands(label: string, make: () => any): void {
     check(label + " own getter", second.readGetter(second) === "test262");
     first.writeSetter(first, "changed");
     check(label + " own setter", first.readGetter(first) === "changed");
+    check(
+        label + " setter isolation",
+        second.readGetter(second) === "test262"
+    );
     check(label + " own in", first.hasValue(first));
     check(label + " cross-evaluation in", !first.hasValue(second));
 
@@ -105,6 +109,14 @@ function checkFreshBrands(label: string, make: () => any): void {
     check(
         label + " cross-evaluation setter",
         throwsTypeError(() => first.writeSetter(second, "wrong"))
+    );
+    check(
+        label + " failed setter isolation",
+        second.readGetter(second) === "test262"
+    );
+    check(
+        label + " own state after throw",
+        first.readGetter(first) === "changed"
     );
 }
 
@@ -190,6 +202,7 @@ function checkFreshStaticBrands(label: string, make: () => any): void {
     check(label + " own getter", second.accessGetter() === "test262");
     first.accessSetter("changed");
     check(label + " own setter", first._written === "changed");
+    check(label + " setter isolation", second._written === "");
     check(label + " own in", first.hasValue(first));
     check(label + " cross-evaluation in", !first.hasValue(second));
     check(
@@ -208,6 +221,8 @@ function checkFreshStaticBrands(label: string, make: () => any): void {
         label + " cross-evaluation setter",
         throwsTypeError(() => first.accessSetter.call(second, "wrong"))
     );
+    check(label + " failed setter isolation", second._written === "");
+    check(label + " own state after throw", first._written === "changed");
 }
 
 checkFreshStaticBrands("static expression", makeStaticClass);
@@ -243,13 +258,51 @@ function makeOrderedStatics(label: string): any {
     check(label + " static block this", C.fromBlock === label);
     check(
         label + " uninitialized static own",
-        Object.prototype.hasOwnProperty.call(C, "missing") &&
-            C.missing === undefined
+        Object.prototype.hasOwnProperty.call(C, "missing")
     );
+    check(label + " uninitialized static value", C.missing === undefined);
     return C;
 }
 
 makeOrderedStatics("fresh order");
+
+function makeOrderedDeclarationStatics(label: string): any {
+    const events: string[] = [];
+    const key = (name: string): string => {
+        events.push("key-" + name);
+        return name;
+    };
+    class C {
+        static #brand = 0;
+
+        [key("method")](): void {}
+
+        static [key("first")] = (events.push("init-first"), 1);
+
+        static {
+            events.push("block");
+            (this as any).fromBlock = label;
+        }
+
+        static tail = (events.push("init-tail"), 2);
+        static missing;
+    }
+
+    check(
+        label + " computed/static order",
+        events.join(",") ===
+            "key-method,key-first,init-first,block,init-tail"
+    );
+    check(label + " static block this", C.fromBlock === label);
+    check(
+        label + " uninitialized static own",
+        Object.prototype.hasOwnProperty.call(C, "missing")
+    );
+    check(label + " uninitialized static value", C.missing === undefined);
+    return C;
+}
+
+makeOrderedDeclarationStatics("fresh declaration order");
 
 function makeDynamicAccessor(tag: string): any {
     return class {

@@ -411,11 +411,18 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // real local (not an inferred static class alias), `new C()`
                 // constructs through the evaluated class VALUE.
                 if fresh_binding {
-                    let class_local = ctx.define_local(class_name.clone(), Type::Any);
+                    // `class_name` is the collision-safe template key (`C$0`),
+                    // but the lexical binding remains the source identifier
+                    // (`C`). Binding the local under the template key makes
+                    // later `C` reads miss it and fall back to `ClassRef(C$0)`,
+                    // bypassing this evaluation's private brand and own static
+                    // fields whenever another nested class already claimed C.
+                    let binding_name = class_decl.ident.sym.to_string();
+                    let class_local = ctx.define_local(binding_name.clone(), Type::Any);
                     ctx.record_local_source_span(class_local, class_decl.ident.span);
                     result.push(Stmt::Let {
                         id: class_local,
-                        name: class_name.clone(),
+                        name: binding_name,
                         ty: Type::Any,
                         init: Some(Expr::ClassExprFresh {
                             template: template_name,
