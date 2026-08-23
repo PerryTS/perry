@@ -427,6 +427,13 @@ pub(crate) unsafe fn typed_array_define_own_property(
                     "Cannot define property {key_name}, object is not extensible"
                 ));
             }
+            let existing = typed_array_has_ordinary_own_prop(owner, key_name);
+            let current_attrs = existing
+                .then(|| crate::object::get_property_attrs(owner, key_name))
+                .flatten()
+                .unwrap_or(crate::object::PropertyAttrs::new(
+                    existing, existing, existing,
+                ));
             let has_get = descriptor_has(desc_ptr, b"get");
             let has_set = descriptor_has(desc_ptr, b"set");
             let has_accessor = has_get || has_set;
@@ -467,9 +474,15 @@ pub(crate) unsafe fn typed_array_define_own_property(
                 };
                 upsert_typed_array_own_prop(owner, key_name.to_string(), value, true);
             }
-            let writable = descriptor_bool(desc_ptr, b"writable").unwrap_or(has_accessor);
-            let enumerable = descriptor_bool(desc_ptr, b"enumerable").unwrap_or(false);
-            let configurable = descriptor_bool(desc_ptr, b"configurable").unwrap_or(false);
+            let writable = if has_accessor {
+                false
+            } else {
+                descriptor_bool(desc_ptr, b"writable").unwrap_or(current_attrs.writable())
+            };
+            let enumerable =
+                descriptor_bool(desc_ptr, b"enumerable").unwrap_or(current_attrs.enumerable());
+            let configurable =
+                descriptor_bool(desc_ptr, b"configurable").unwrap_or(current_attrs.configurable());
             crate::object::set_property_attrs(
                 owner,
                 key_name.to_string(),
@@ -1077,6 +1090,7 @@ pub(crate) fn typed_array_own_set_descriptor(
 /// `Some(primitive)` when a patched method produced a non-object; `None` when
 /// no own patch applies (caller falls back to its default coercion).
 pub(crate) unsafe fn typed_array_own_to_primitive_number(owner: usize, value: f64) -> Option<f64> {
+    let mut non_primitive_calls = 0u8;
     for name in ["valueOf", "toString"] {
         let Some(m) = typed_array_get_property_value_by_name(owner, name) else {
             continue;
@@ -1096,6 +1110,13 @@ pub(crate) unsafe fn typed_array_own_to_primitive_number(owner: usize, value: f6
         if !is_object {
             return Some(r);
         }
+        non_primitive_calls += 1;
+    }
+    if non_primitive_calls >= 2 {
+        let msg = b"Cannot convert object to primitive value";
+        let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        let err = crate::error::js_typeerror_new(s);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
     }
     None
 }

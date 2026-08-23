@@ -138,6 +138,23 @@ extern "C" fn arguments_throw_type_error(_closure: *const crate::closure::Closur
 fn thrower_closure_value() -> f64 {
     let closure =
         crate::closure::js_closure_alloc_singleton(arguments_throw_type_error as *const u8);
+    crate::closure::js_register_closure_arity(arguments_throw_type_error as *const u8, 0);
+    super::native_module::set_bound_native_closure_name(closure, "");
+    super::native_module::set_builtin_closure_length(closure as usize, 0);
+    super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    let frozen = PropertyAttrs::new(false, false, false);
+    set_property_attrs(closure as usize, "name".to_string(), frozen);
+    set_property_attrs(closure as usize, "length".to_string(), frozen);
+    if !closure.is_null() {
+        unsafe {
+            if let Some(gc) = crate::value::addr_class::try_read_tracked_gc_header(closure as usize)
+            {
+                (*gc.as_ptr())._reserved |= crate::gc::OBJ_FLAG_FROZEN
+                    | crate::gc::OBJ_FLAG_SEALED
+                    | crate::gc::OBJ_FLAG_NO_EXTEND;
+            }
+        }
+    }
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
@@ -557,6 +574,39 @@ pub(crate) unsafe fn arguments_object_to_vec(obj: *const ObjectHeader) -> Option
         out.push(value);
     }
     Some(out)
+}
+
+/// Live `length` read used by the Arguments Array iterator.
+pub(crate) unsafe fn arguments_object_length(obj: *const ObjectHeader) -> u32 {
+    if !is_arguments_object(obj) {
+        return 0;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_const_ptr(obj);
+    let key = intern_key("length");
+    let value = obj_h
+        .with_const_ptr(|obj| arguments_object_get_field(obj, key))
+        .map(|v| f64::from_bits(v.bits()))
+        .unwrap_or(0.0);
+    if value.is_finite() && value > 0.0 {
+        value.floor().min(u32::MAX as f64) as u32
+    } else {
+        0
+    }
+}
+
+/// Live indexed read used by the Arguments Array iterator.
+pub(crate) unsafe fn arguments_object_index_value(obj: *const ObjectHeader, index: u32) -> f64 {
+    if !is_arguments_object(obj) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_const_ptr(obj);
+    let key = intern_key(&index.to_string());
+    obj_h
+        .with_const_ptr(|obj| arguments_object_get_field(obj, key))
+        .map(|v| f64::from_bits(v.bits()))
+        .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
 pub(crate) unsafe fn arguments_object_to_array(

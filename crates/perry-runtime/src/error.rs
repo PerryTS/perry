@@ -822,6 +822,20 @@ pub(crate) unsafe fn js_error_has_own_property(error: *mut ErrorHeader, key: &st
     }
 }
 
+/// Clear an Error instance's spec-visible own-slot presence after a
+/// successful configurable-property deletion.
+pub(crate) unsafe fn js_error_delete_builtin_own_property(error: *mut ErrorHeader, key: &str) {
+    if error.is_null() {
+        return;
+    }
+    match key {
+        "message" => (*error).flags &= !ERROR_FLAG_HAS_MESSAGE,
+        "cause" => (*error).flags &= !ERROR_FLAG_HAS_CAUSE,
+        "errors" => (*error).flags &= !ERROR_FLAG_HAS_ERRORS,
+        _ => {}
+    }
+}
+
 pub(crate) unsafe fn js_error_builtin_own_property_is_enumerable(
     error: *mut ErrorHeader,
     key: &str,

@@ -570,6 +570,19 @@ pub(crate) fn install_builtin_constructor_statics(
         "Symbol" => {
             install_constructor_static(ctor, "for", symbol_for_thunk as *const u8, 1, false);
             install_constructor_static(ctor, "keyFor", symbol_key_for_thunk as *const u8, 1, false);
+            for name in ["iterator", "asyncIterator"] {
+                let symbol = crate::symbol::well_known_symbol(name);
+                crate::closure::closure_set_dynamic_prop(
+                    ctor as usize,
+                    name,
+                    crate::value::js_nanbox_pointer(symbol as i64),
+                );
+                super::super::set_builtin_property_attrs(
+                    ctor as usize,
+                    name.to_string(),
+                    super::super::PropertyAttrs::new(false, false, false),
+                );
+            }
         }
         "String" => {
             // #4627: reify the variadic `String.fromCharCode` / `fromCodePoint`

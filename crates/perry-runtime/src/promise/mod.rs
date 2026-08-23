@@ -39,8 +39,8 @@ pub(crate) mod then_probe;
 
 pub use async_step::{
     js_array_from_async, js_async_first_call, js_async_step_chain, js_async_step_done,
-    js_get_current_step_closure, js_promise_resolved, js_promise_resolved_then,
-    scan_async_step_thunk_cache, scan_async_step_thunk_cache_mut,
+    js_get_current_step_closure, js_promise_resolved, js_promise_resolved_catching,
+    js_promise_resolved_then, scan_async_step_thunk_cache, scan_async_step_thunk_cache_mut,
 };
 pub use checked_dispatch::{
     js_promise_catch_checked, js_promise_closure_arg, js_promise_finally_checked,

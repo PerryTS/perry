@@ -42,7 +42,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if numeric {
                         Ok(v)
                     } else {
-                        Ok(blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &v)]))
+                        Ok(blk.call(DOUBLE, "js_dynamic_pos", &[(DOUBLE, &v)]))
                     }
                 }
                 UnaryOp::Not => {

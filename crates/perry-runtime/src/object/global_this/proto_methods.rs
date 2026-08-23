@@ -246,7 +246,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
         }
         "ArrayBuffer" => {
-            install_noop_proto_methods(proto_obj, &[("slice", 2)]);
+            install_proto_method(proto_obj, "slice", array_buffer_slice_thunk as *const u8, 2);
             unsafe {
                 crate::closure::js_register_closure_arity(
                     array_buffer_byte_length_getter_thunk as *const u8,
@@ -509,11 +509,15 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // #4100: mirror `Symbol` — brand-checking `toString`(radix)/`valueOf`
             // re-dispatched to the canonical BigInt logic (`(5n).toString(2)`
             // → `"101"`). After OBJECT_PROTO_METHODS so the brand `valueOf` wins.
-            install_proto_method(
+            let to_string = install_proto_method(
                 proto_obj,
                 "toString",
                 primitive_proto_thunks::bigint_proto_to_string_thunk as *const u8,
                 1,
+            );
+            super::super::native_module::set_builtin_closure_length(
+                crate::value::js_nanbox_get_pointer(to_string) as usize,
+                0,
             );
             install_proto_method(
                 proto_obj,

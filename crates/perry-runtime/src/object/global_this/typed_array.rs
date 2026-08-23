@@ -95,6 +95,105 @@ pub(crate) extern "C" fn shared_array_buffer_slice_thunk(
     }
 }
 
+pub(crate) extern "C" fn array_buffer_slice_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    start: f64,
+    end: f64,
+) -> f64 {
+    match array_buffer_receiver_addr() {
+        Some(addr) => unsafe {
+            let args = [start, end];
+            super::super::buffer_dispatch::dispatch_buffer_method(addr, "slice", args.as_ptr(), 2)
+        },
+        None => super::super::object_ops::throw_object_type_error(
+            b"Method ArrayBuffer.prototype.slice called on incompatible receiver",
+        ),
+    }
+}
+
+pub(crate) unsafe fn validate_array_buffer_species_constructor(addr: usize) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(addr as i64));
+    let receiver_value = || receiver.get_nanbox_f64();
+    let receiver_addr = || crate::value::js_nanbox_get_pointer(receiver_value()) as usize;
+
+    // SpeciesConstructor starts with ordinary Get(O, "constructor"). Buffer
+    // own data/accessor properties live in side tables; absent own state falls
+    // through the receiver's recorded custom prototype chain before using the
+    // intrinsic constructor.
+    let value = if let Some(accessor) =
+        super::super::get_accessor_descriptor(receiver_addr(), "constructor")
+    {
+        if accessor.get == 0 {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        } else {
+            f64::from_bits(
+                super::super::invoke_accessor_getter(accessor.get, receiver_value()).bits(),
+            )
+        }
+    } else if let Some(value) = crate::buffer::buffer_get_own_prop(receiver_addr(), "constructor") {
+        value
+    } else {
+        let inherited =
+            if super::super::prototype_chain::object_static_prototype(receiver_addr()).is_some() {
+                let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+                super::super::prototype_chain::resolve_inherited_field(receiver_addr(), key)
+                    .map(|value| f64::from_bits(value.bits()))
+            } else {
+                None
+            };
+        inherited.unwrap_or_else(|| {
+            let name: &[u8] = if crate::buffer::is_shared_array_buffer(receiver_addr()) {
+                b"SharedArrayBuffer"
+            } else {
+                b"ArrayBuffer"
+            };
+            super::js_get_global_this_builtin_value(name.as_ptr(), name.len())
+        })
+    };
+    let value = JSValue::from_bits(value.to_bits());
+    // `null` is NaN-boxed in the pointer-shaped value family, but it is not
+    // an Object and therefore cannot supply @@species.
+    if !value.is_undefined()
+        && (value.is_null()
+            || (!value.is_pointer()
+                && !super::super::js_value_is_constructor(f64::from_bits(value.bits())))
+            // Symbols use the pointer-shaped NaN-box family, but remain
+            // primitives for SpeciesConstructor's Type(C) check.
+            || crate::symbol::js_is_symbol(f64::from_bits(value.bits())) != 0)
+    {
+        super::super::object_ops::throw_object_type_error(
+            b"ArrayBuffer species constructor is not an object",
+        );
+    }
+    if value.is_undefined() {
+        return;
+    }
+
+    // Complete SpeciesConstructor validation: Get(C, @@species), accept
+    // undefined/null as the default constructor, otherwise require an actual
+    // constructable value. The constructor is rooted because a species getter
+    // can execute arbitrary user code and collect.
+    let constructor = scope.root_nanbox_f64(f64::from_bits(value.bits()));
+    let species = crate::symbol::well_known_symbol("species");
+    if species.is_null() {
+        return;
+    }
+    let species_value = crate::symbol::js_object_get_symbol_property(
+        constructor.get_nanbox_f64(),
+        f64::from_bits(JSValue::pointer(species as *const u8).bits()),
+    );
+    let species_value = JSValue::from_bits(species_value.to_bits());
+    if species_value.is_undefined() || species_value.is_null() {
+        return;
+    }
+    if !super::super::js_value_is_constructor(f64::from_bits(species_value.bits())) {
+        super::super::object_ops::throw_object_type_error(
+            b"ArrayBuffer species is not a constructor",
+        );
+    }
+}
+
 pub(crate) extern "C" fn array_buffer_is_view_thunk(
     _closure: *const crate::closure::ClosureHeader,
     value: f64,
@@ -111,6 +210,7 @@ pub(crate) extern "C" fn array_buffer_is_view_thunk(
         && !crate::buffer::is_any_array_buffer(addr)
         && (crate::buffer::is_uint8array_buffer(addr) || crate::buffer::is_data_view(addr)))
         || jsvalue_extends_data_view(value)
+        || jsvalue_extends_typed_array(value)
         || crate::typedarray::lookup_typed_array_kind(addr).is_some();
     f64::from_bits(crate::value::JSValue::bool(is_view).bits())
 }
@@ -121,17 +221,38 @@ fn jsvalue_extends_data_view(value: f64) -> bool {
         return false;
     }
     let ptr = v.as_pointer::<u8>();
-    if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr) {
+    let Some(gc_header) =
+        (unsafe { crate::value::addr_class::try_read_tracked_gc_header(ptr as usize) })
+    else {
         return false;
-    }
+    };
     unsafe {
-        let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if (*gc_header.as_ptr()).obj_type != crate::gc::GC_TYPE_OBJECT {
             return false;
         }
         let obj = ptr as *const ObjectHeader;
         let class_id = (*obj).class_id;
         class_id != 0 && crate::object::extends_builtin_data_view(class_id)
+    }
+}
+
+fn jsvalue_extends_typed_array(value: f64) -> bool {
+    let v = JSValue::from_bits(value.to_bits());
+    if !v.is_pointer() {
+        return false;
+    }
+    let ptr = v.as_pointer::<u8>();
+    let Some(gc_header) =
+        (unsafe { crate::value::addr_class::try_read_tracked_gc_header(ptr as usize) })
+    else {
+        return false;
+    };
+    unsafe {
+        if (*gc_header.as_ptr()).obj_type != crate::gc::GC_TYPE_OBJECT {
+            return false;
+        }
+        let class_id = (*(ptr as *const ObjectHeader)).class_id;
+        class_id != 0 && crate::object::extends_builtin_typed_array(class_id)
     }
 }
 
@@ -396,6 +517,11 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
                 iter_value,
                 f64::from_bits(values.bits()),
             );
+            crate::symbol::set_symbol_property_attrs(
+                proto_obj as usize,
+                iter as usize,
+                crate::object::PropertyAttrs::new(true, false, true),
+            );
         }
     }
 }
@@ -461,6 +587,17 @@ pub(crate) fn ensure_typed_array_intrinsic(
         ctor as usize,
         "prototype".to_string(),
         super::super::PropertyAttrs::new(false, false, false),
+    );
+    let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+    js_object_set_field_by_name(
+        proto,
+        constructor_key,
+        crate::value::js_nanbox_pointer(ctor as i64),
+    );
+    super::super::set_builtin_property_attrs(
+        proto as usize,
+        "constructor".to_string(),
+        super::super::PropertyAttrs::new(true, false, true),
     );
     // #2060: the four reflectable `length`/`byteLength`/`byteOffset`/`buffer`
     // accessor descriptors are own properties of `%TypedArray%.prototype` per

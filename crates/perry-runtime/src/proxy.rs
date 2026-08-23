@@ -756,6 +756,20 @@ fn reflect_value_is_object(value: f64) -> bool {
         return true;
     }
     let bits = value.to_bits();
+    // BufferHeader-backed values are objects even when they are not GC heap
+    // allocations. In particular, SharedArrayBuffer uses a process-global,
+    // never-moved backing from `alloc_zeroed`; depending on the surrounding
+    // allocation history its address can fail the generic heap-address test
+    // below. Consult the authoritative registries before that heuristic so
+    // receiver-aware Set reaches CreateDataProperty and records named
+    // expandos such as an own `constructor`.
+    let raw = extract_pointer(bits) as usize;
+    if raw != 0
+        && (crate::buffer::is_registered_buffer(raw)
+            || crate::typedarray::lookup_typed_array_kind(raw).is_some())
+    {
+        return true;
+    }
     let top16 = bits >> 48;
     if top16 == (POINTER_TAG >> 48) {
         let lower48 = bits & POINTER_MASK;
@@ -1552,6 +1566,63 @@ fn call_setter_with_receiver(setter_bits: u64, receiver: f64, value: f64) -> boo
     let _ = js_closure_call1(closure, value);
     crate::object::js_implicit_this_set(prev);
     true
+}
+
+/// Ordinary named-property Set for the BufferHeader-backed objects that are
+/// not integer-indexed exotics (ArrayBuffer, SharedArrayBuffer, DataView).
+///
+/// These values have no ObjectHeader/GcHeader. The generic Set tail eventually
+/// asks whether the receiver is a GC heap object before CreateDataProperty;
+/// a process-global SharedArrayBuffer can therefore be rejected even though
+/// the buffer registries authoritatively classify it as an Object. Walk the
+/// descriptors normally, but materialize the final own data property in the
+/// buffer expando table instead of the ObjectHeader store.
+fn set_nonindexed_buffer_named_self(target: f64, key: f64, value: f64) -> Option<bool> {
+    if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+        return None;
+    }
+    let raw = raw_ptr_from_value(target)?;
+    if !crate::buffer::is_non_indexed_buffer_view(raw) {
+        return None;
+    }
+    let name = key_to_rust_string(key)?;
+
+    // Existing own accessor/data descriptors take the same precedence as in
+    // OrdinarySetWithOwnDescriptor. Buffer expandos live in side tables, so
+    // inspect those tables without treating the BufferHeader as ObjectHeader.
+    if let Some(accessor) = crate::object::get_accessor_descriptor(raw, &name) {
+        return Some(call_setter_with_receiver(accessor.set, target, value));
+    }
+    if crate::buffer::buffer_has_own_prop(raw, &name) {
+        if crate::object::get_property_attrs(raw, &name).is_some_and(|attrs| !attrs.writable()) {
+            return Some(false);
+        }
+        crate::buffer::buffer_set_own_prop(raw, &name, value);
+        return Some(true);
+    }
+
+    // A descriptor on the prototype can reject the write or invoke a setter.
+    // A writable inherited data descriptor (including the standard
+    // `.constructor`) creates an own property on the original receiver.
+    let mut current = prototype_of_for_set(target);
+    for _ in 0..64 {
+        let Some(proto) = current else {
+            break;
+        };
+        if let Some(desc) = own_set_descriptor(proto, key) {
+            match desc {
+                OwnSetDescriptor::Data { writable: false } => return Some(false),
+                OwnSetDescriptor::Data { writable: true } => break,
+                OwnSetDescriptor::Accessor { setter_bits } => {
+                    return Some(call_setter_with_receiver(setter_bits, target, value));
+                }
+            }
+        }
+        current = prototype_of_for_set(proto);
+    }
+
+    crate::buffer::buffer_set_own_prop(raw, &name, value);
+    Some(true)
 }
 
 /// #5129: build a fresh data property descriptor

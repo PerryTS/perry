@@ -184,6 +184,9 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
         }
         return promise;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_h = scope.root_nanbox_f64(value);
+
     // Issue #2823: `Promise.resolve(p)` MUST return `p` itself when `p` is
     // already a native Promise (constructor === Promise). The spec defines
     // Promise.resolve to short-circuit and return the argument unchanged in
@@ -192,10 +195,36 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
     // `Promise` instances, so a GC_TYPE_PROMISE value always satisfies the
     // "constructor is Promise" check. Return the existing pointer directly
     // instead of allocating a fresh wrapper and chaining to it.
-    if js_value_is_promise(value) != 0 {
-        let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
+    if js_value_is_promise(value_h.get_nanbox_f64()) != 0 {
+        let inner = crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64()) as *mut Promise;
         if !inner.is_null() {
-            return inner;
+            // PromiseResolve(%Promise%, x) performs Get(x, "constructor")
+            // before its identity short-cut.  An own accessor can throw, and
+            // an own non-intrinsic constructor prevents returning x itself.
+            let addr = inner as usize;
+            let same_intrinsic_constructor = if super::promise_has_own_constructor(addr) {
+                let ctor = unsafe {
+                    crate::object::exotic_expando::exotic_get_own_property(
+                        addr,
+                        crate::object::exotic_expando::ExoticKind::Promise,
+                        "constructor",
+                        value_h.get_nanbox_f64(),
+                    )
+                }
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                let ctor_h = scope.root_nanbox_f64(ctor);
+                let intrinsic = crate::object::js_get_global_this_builtin_value(
+                    b"Promise".as_ptr(),
+                    b"Promise".len(),
+                );
+                ctor_h.get_nanbox_f64().to_bits() == intrinsic.to_bits()
+            } else {
+                true
+            };
+            if same_intrinsic_constructor {
+                return crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64())
+                    as *mut Promise;
+            }
         }
     }
     let promise = js_promise_new();
@@ -213,8 +242,25 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
     // steady state is untouched; only real thenables (drizzle's `QueryPromise`,
     // object literals with `then`) defer by one microtask — which the await
     // loop drains, leaving the resolved value identical.
-    super::assimilate::promise_resolve_assimilating(promise, value);
+    super::assimilate::promise_resolve_assimilating(promise, value_h.get_nanbox_f64());
     promise
+}
+
+/// Run the spec PromiseResolve path behind an exception boundary.  Async
+/// iterator/generator algorithms turn an abrupt constructor getter into a
+/// rejected result promise instead of throwing synchronously to their caller.
+pub fn js_promise_resolved_catching(value: f64) -> Result<*mut Promise, f64> {
+    let trap_buf = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut std::os::raw::c_int) };
+    let result = if jumped == 0 {
+        Ok(js_promise_resolved(value))
+    } else {
+        let reason = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        Err(reason)
+    };
+    crate::exception::js_try_end();
+    result
 }
 
 /// Fused fast path for `Promise.resolve(value).then(cb_f, cb_e)` —

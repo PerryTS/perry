@@ -146,16 +146,10 @@ pub(super) unsafe fn dispatch_primitive(
             let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
         }
-        let raw = crate::value::js_nanbox_get_pointer(object) as *const u8;
-        if !raw.is_null() && crate::object::is_valid_obj_ptr(raw) {
-            unsafe {
-                let gc = raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                if (*gc).obj_type == crate::gc::GC_TYPE_ERROR {
-                    let s = crate::error::js_error_to_string(raw as *mut crate::error::ErrorHeader);
-                    return Some(f64::from_bits(JSValue::string_ptr(s).bits()));
-                }
-            }
-        }
+        // Error instances continue through ordinary method lookup. Their
+        // prototype's `toString` is replaceable, so hard-wiring the native
+        // formatter here would ignore `Error.prototype.toString =
+        // Object.prototype.toString`.
     }
 
     // Primitive-wrapper prototypes (`Number.prototype`, `Boolean.prototype`,
@@ -213,7 +207,7 @@ pub(super) unsafe fn dispatch_primitive(
                     (own.to_bits() & crate::value::POINTER_MASK) as usize,
                 )
             {
-                return None;
+                return super::call_primitive_closure_value(object, own_jsv, args_ptr, args_len);
             }
         }
         match method_name {

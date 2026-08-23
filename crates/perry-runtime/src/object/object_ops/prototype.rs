@@ -87,6 +87,20 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
         return f64::from_bits((obj as u64) | POINTER_TAG);
     }
 
+    // Integer-indexed exotic objects are valid prototypes even though their
+    // TypedArrayHeader cannot be modeled as an ObjectHeader-backed synthetic
+    // class prototype.  Preserve the exact object identity in the ordinary
+    // per-instance prototype side table so its [[Set]] intercepts canonical
+    // numeric keys on descendants.
+    if crate::typedarray_props::typed_array_addr_from_value(proto_value).is_some() {
+        let obj = js_object_alloc(0, 0);
+        crate::object::prototype_chain::object_set_static_prototype(
+            obj as usize,
+            proto_value.to_bits(),
+        );
+        return f64::from_bits((obj as u64) | POINTER_TAG);
+    }
+
     let mut class_id: u32 = 0;
     let proto_bits = proto_value.to_bits();
     if (proto_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {

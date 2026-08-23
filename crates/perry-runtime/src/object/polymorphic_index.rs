@@ -177,6 +177,12 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     if raw < 0x1000 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    // Symbols share GC_TYPE_STRING storage for tracing, but they are primitive
+    // values, not String exotic objects. A numeric property access boxes the
+    // Symbol transiently and therefore observes no indexed property.
+    if crate::symbol::is_registered_symbol(raw as usize) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     // #5525 fast path: cached typed-array kind lookup + inline load, ahead of
     // the thread-local `typed_array_get_numeric_index` registry dispatch.
     // `typed_array_fast_index_get` returns `Some(value)` for an in-bounds read

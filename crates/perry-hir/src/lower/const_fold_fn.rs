@@ -36,6 +36,9 @@ use super::global_eval_hoist::{
 use super::lower_expr::lower_expr;
 use super::LoweringContext;
 
+mod param_early_error;
+use param_early_error::fn_ctor_kind_param_early_error;
+
 /// Lower an expression that throws a `SyntaxError` when the enclosing call
 /// site is evaluated — a throwing IIFE in value position. Used when a folded
 /// `new Function(...)` / `Function(...)` body is not syntactically valid JS,
@@ -311,37 +314,6 @@ pub(crate) fn try_const_fold_function_construct_kind(
         None => (String::new(), String::new()),
     };
 
-    // CSP capability-probe handling (`PERRY_EVAL_CSP`). A trivial no-op
-    // `new Function("")` / `Function("")` is the canonical runtime-codegen
-    // feature-test (`try { new Function(""), true } catch { false }`). perry is
-    // ahead-of-time compiled and cannot generate code from a runtime string, so
-    // under CSP mode this probe must report "unavailable" — throw at
-    // *construction* (not when called), exactly as a CSP `unsafe-eval`-blocked
-    // environment does — so probing callers (e.g. zod 4's validator JIT) take
-    // their non-codegen interpreter fallback. Only the trivial empty-body no-op
-    // is refused; real literal bodies (`return 42`, the `return this` globalThis
-    // polyfill) still fold, preserving spec behavior by default.
-    //
-    // The probe passes AT LEAST ONE string argument (`new Function("")`). A
-    // ZERO-argument `new Function()` is not a codegen request at all — it
-    // constructs the empty function `anonymous() {}` — so it must NEVER throw,
-    // even under the default CSP mode (#5835 Intl-ctor test regressed here:
-    // `new Function()` used purely as a constructable-with-settable-prototype
-    // scaffold for `Reflect.construct` began throwing). Gate the refusal on
-    // there actually being an argument.
-    if !consts.is_empty()
-        && body_src.trim().is_empty()
-        && crate::eval_classifier::eval_csp_probe_unavailable()
-    {
-        return synth_throwing_iife(
-            ctx,
-            "throw new TypeError(\"Function: runtime dynamic code generation is \
-             unavailable in this ahead-of-time compiled binary\");",
-            span,
-        )
-        .map(Some);
-    }
-
     // Assemble the exact source text the spec's CreateDynamicFunction
     // prescribes: newlines around the body and *before the closing paren*
     // so a `//` comment in the params or body can't swallow a delimiter.
@@ -374,8 +346,47 @@ pub(crate) fn try_const_fold_function_construct_kind(
     // prologue makes duplicate or `eval`/`arguments` parameter names a
     // SyntaxError, and a private name (`o.#f`) outside any class body is a
     // SyntaxError regardless of mode (AllPrivateIdentifiersValid).
-    if fn_ctor_strict_param_early_error(fn_expr) || fn_body_has_stray_private_name(fn_expr) {
+    if fn_ctor_kind_param_early_error(fn_expr, kind)
+        || fn_ctor_strict_param_early_error(fn_expr)
+        || fn_body_has_stray_private_name(fn_expr)
+    {
         return synth_function_syntax_error(ctx, surface, span).map(Some);
+    }
+
+    // CSP capability-probe handling (`PERRY_EVAL_CSP`). A trivial no-op
+    // `new Function("")` / `Function("")` is the canonical runtime-codegen
+    // feature-test (`try { new Function(""), true } catch { false }`). perry is
+    // ahead-of-time compiled and cannot generate code from a runtime string, so
+    // under CSP mode this probe must report "unavailable" — throw at
+    // *construction* (not when called), exactly as a CSP `unsafe-eval`-blocked
+    // environment does — so probing callers (e.g. zod 4's validator JIT) take
+    // their non-codegen interpreter fallback. Only the trivial empty-body no-op
+    // is refused; real literal bodies (`return 42`, the `return this` globalThis
+    // polyfill) still fold, preserving spec behavior by default.
+    //
+    // Parameter/body syntax and CreateDynamicFunction early errors take
+    // precedence over this Perry-specific capability signal. In particular,
+    // `GeneratorFunction("x = yield", "")` must throw SyntaxError rather than
+    // being mistaken for a valid empty-body capability probe.
+    //
+    // The probe passes AT LEAST ONE string argument (`new Function("")`). A
+    // ZERO-argument `new Function()` is not a codegen request at all — it
+    // constructs the empty function `anonymous() {}` — so it must NEVER throw,
+    // even under the default CSP mode (#5835 Intl-ctor test regressed here:
+    // `new Function()` used purely as a constructable-with-settable-prototype
+    // scaffold for `Reflect.construct` began throwing). Gate the refusal on
+    // there actually being an argument.
+    if !consts.is_empty()
+        && body_src.trim().is_empty()
+        && crate::eval_classifier::eval_csp_probe_unavailable()
+    {
+        return synth_throwing_iife(
+            ctx,
+            "throw new TypeError(\"Function: runtime dynamic code generation is \
+             unavailable in this ahead-of-time compiled binary\");",
+            span,
+        )
+        .map(Some);
     }
 
     let outer_strict = ctx.current_strict;
@@ -1352,7 +1363,7 @@ pub(crate) fn try_eval_function_call_fold(
     }
     // `var AsyncFunction = (async function(){}).constructor; AsyncFunction(...)`
     // — a single-assignment module var recorded as a dynamic-function ctor.
-    if ctx.scope_depth == 0 {
+    if ctx.local_decl_scope_depth(id.sym.as_str()) == Some(0) {
         if let Some(super::fn_ctor_env::FnCtorShape::DynCtor(kind)) =
             ctx.fn_ctor_env.entries.get(id.sym.as_str()).cloned()
         {

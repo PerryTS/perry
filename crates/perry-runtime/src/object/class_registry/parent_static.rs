@@ -109,7 +109,7 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
         match name {
             "Request" => super::super::register_fetch_parent_kind(class_id, 1),
             "Response" => super::super::register_fetch_parent_kind(class_id, 2),
-            _ => {}
+            _ => super::super::data_view_registry::register_builtin_view_parent(class_id, name),
         }
         return;
     }

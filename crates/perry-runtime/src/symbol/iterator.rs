@@ -264,11 +264,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
         if jsv.is_pointer() {
             let ptr = jsv.as_pointer::<crate::object::ObjectHeader>();
             if crate::object::is_arguments_object(ptr) {
-                if let Some(arr) = unsafe { crate::object::arguments_object_to_array(ptr) } {
-                    let arr_f64 =
-                        f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits());
-                    return crate::array::array_values_iter(arr_f64);
-                }
+                return crate::array::arguments_values_iter(ptr);
             }
         }
     }
