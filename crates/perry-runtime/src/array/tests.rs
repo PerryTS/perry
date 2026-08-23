@@ -591,6 +591,43 @@ fn stale_array_reference_survives_three_growths_and_forced_minor_gc() {
 }
 
 #[test]
+fn growth_of_old_array_keeps_forwarding_target_out_of_copying_nursery() {
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let capacity = MIN_ARRAY_CAPACITY;
+    let initial = crate::arena::arena_alloc_gc_old_born_tenured(
+        array_byte_size(capacity as usize),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+
+    unsafe {
+        (*initial).length = 0;
+        (*initial).capacity = capacity;
+        let elements = (initial as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+        for i in 0..capacity as usize {
+            // GC_STORE_AUDIT(INIT): initialize unpublished fresh array storage
+            // with the non-pointer hole sentinel before exposing the array.
+            ptr::write(elements.add(i), crate::value::TAG_HOLE);
+        }
+        set_array_numeric_layout(initial, NumericArrayLayout::RawF64);
+        crate::gc::layout_init_pointer_free(initial as *mut u8);
+    }
+
+    let mut head = initial;
+    for i in 0..=capacity {
+        head = js_array_push_f64(head, i as f64);
+    }
+
+    assert_ne!(head, initial, "the capacity-crossing push must grow");
+    assert_eq!(clean_arr_ptr_mut(initial), head);
+    assert_eq!(
+        crate::arena::classify_heap_generation(head as usize),
+        crate::arena::HeapGeneration::Old,
+        "an old forwarding stub must not point into resetting copying-nursery space"
+    );
+}
+
+#[test]
 fn install_array_growth_forwarding_with_installs_stub_for_injected_header() {
     // Actual low-address classification is covered by
     // value::addr_class::tests::tracked_gc_classifier_accepts_injected_low_arena_membership.
