@@ -54,13 +54,14 @@ mod segmenter;
 use canon_aliases::canonicalize_unicode_extension_types;
 
 pub(crate) use date_collator::{
-    collator_bound_compare_thunk, collator_bound_resolved_options_thunk, collator_compare_thunk,
-    collator_resolved_options_thunk, date_time_format_bound_format_thunk,
-    date_time_format_bound_range_thunk, date_time_format_bound_range_to_parts_thunk,
-    date_time_format_bound_resolved_options_thunk, date_time_format_bound_to_parts_thunk,
-    date_time_format_format_getter_thunk, date_time_format_range_thunk,
-    date_time_format_range_to_parts_thunk, date_time_format_resolved_options_thunk,
-    date_time_format_to_parts_thunk, temporal_locale_string, TemporalLocaleCtx,
+    collator_bound_compare_thunk, collator_bound_resolved_options_thunk,
+    collator_compare_getter_thunk, collator_resolved_options_thunk,
+    date_time_format_bound_format_thunk, date_time_format_bound_range_thunk,
+    date_time_format_bound_range_to_parts_thunk, date_time_format_bound_resolved_options_thunk,
+    date_time_format_bound_to_parts_thunk, date_time_format_format_getter_thunk,
+    date_time_format_range_thunk, date_time_format_range_to_parts_thunk,
+    date_time_format_resolved_options_thunk, date_time_format_to_parts_thunk,
+    temporal_locale_string, TemporalLocaleCtx,
 };
 pub(crate) use list_relative_plural::{
     canonicalize_calendar_id, canonicalize_offset_time_zone, is_valid_offset_time_zone,
@@ -163,12 +164,13 @@ const KEY_NF_ROUNDING_INCREMENT: &str = "__intlNfRoundingIncrement";
 const KEY_NF_ROUNDING_MODE: &str = "__intlNfRoundingMode";
 const KEY_NF_ROUNDING_PRIORITY: &str = "__intlNfRoundingPriority";
 const KEY_NF_TRAILING_ZERO: &str = "__intlNfTrailingZero";
-// Hidden [[BoundFormat]] slots. The bound format function is also installed as an
-// own `format` property for the native dispatch fast path, but the prototype
-// `format` getter reads it from here so user mutation/deletion of the public
+// Hidden [[BoundFormat]] / [[BoundCompare]] slots. The bound function is also
+// installed as an own property for the native dispatch fast path, but the
+// prototype accessor reads it from here so user mutation/deletion of the public
 // property can't corrupt what the accessor returns.
 const KEY_NF_BOUND_FORMAT: &str = "__intlNfBoundFormat";
 const KEY_DTF_BOUND_FORMAT: &str = "__intlDtfBoundFormat";
+const KEY_COL_BOUND_COMPARE: &str = "__intlColBoundCompare";
 const KEY_COL_USAGE: &str = "__intlColUsage";
 const KEY_COL_SENSITIVITY: &str = "__intlColSensitivity";
 const KEY_COL_IGNORE_PUNCT: &str = "__intlColIgnorePunct";
@@ -1331,12 +1333,20 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             set_internal_field(obj, KEY_COL_COLLATION, string_value(&collation));
             set_internal_field(obj, KEY_COL_NUMERIC, bool_value(numeric));
             set_internal_field(obj, KEY_COL_CASE_FIRST, string_value(&case_first));
-            install_bound_instance_function(
+            let compare_fn = install_bound_instance_function(
                 obj,
                 "compare",
                 collator_bound_compare_thunk as *const u8,
                 2,
             );
+            if !compare_fn.is_null() {
+                crate::object::set_bound_native_closure_name(compare_fn, "");
+                set_internal_field(
+                    obj,
+                    KEY_COL_BOUND_COMPARE,
+                    js_nanbox_pointer(compare_fn as i64),
+                );
+            }
             install_bound_instance_function(
                 obj,
                 "resolvedOptions",
@@ -1846,15 +1856,12 @@ pub fn install_intl_namespace(ns_obj: *mut ObjectHeader) {
         "Collator",
         collator_constructor_thunk as *const u8,
         0,
-        &[
-            ("compare", collator_compare_thunk as *const u8, 2),
-            (
-                "resolvedOptions",
-                collator_resolved_options_thunk as *const u8,
-                0,
-            ),
-        ],
-        &[],
+        &[(
+            "resolvedOptions",
+            collator_resolved_options_thunk as *const u8,
+            0,
+        )],
+        &[("compare", collator_compare_getter_thunk as *const u8)],
     );
     install_constructor(
         ns_obj,
