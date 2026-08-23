@@ -444,6 +444,95 @@ pub extern "C" fn js_array_from_values(values: *const f64, n: u32) -> *mut Array
     arr
 }
 
+/// Descriptor tag bytes for [`js_value_from_const_descriptor`]. MUST match the
+/// serializer in `perry-codegen/src/expr/array_literal.rs`.
+const DESC_NUMBER: u8 = 0; // + 8 bytes little-endian f64
+const DESC_ARRAY: u8 = 1; // + 4 bytes little-endian u32 count, then `count` values
+const DESC_TRUE: u8 = 2;
+const DESC_FALSE: u8 = 3;
+const DESC_NULL: u8 = 4;
+const DESC_UNDEFINED: u8 = 5;
+
+/// #8583 follow-up: materialize a large, fully-CONSTANT array literal from a
+/// static rodata descriptor in ONE call, instead of the N per-subarray
+/// `js_array_from_values` allocations codegen otherwise emits. A minified bundle
+/// data table — a giant nested constant numeric array (the Claude Code bundle's
+/// `__33499`) — lowered to 11,104 allocations and a 245k-instruction body that
+/// made `rewrite-statepoints-for-gc` fan out; this collapses it to one call over
+/// a compact rodata blob.
+///
+/// Returns a FRESH, mutable value each call: JS array literals are mutable, so
+/// the descriptor is a template, never a shared constant. GC is suppressed for
+/// the whole build so the partially-built parent arrays held across nested child
+/// allocations cannot be collected or moved (mirrors `js_json_parse` and the
+/// lazy-array materializer). The blob is compiler-generated and trusted, but
+/// every read is bounds-checked so a malformed descriptor declines to
+/// `undefined` rather than reading out of bounds.
+#[no_mangle]
+pub extern "C" fn js_value_from_const_descriptor(ptr: *const u8, len: u32) -> f64 {
+    if ptr.is_null() || len == 0 {
+        return f64::from_bits(crate::value::JSValue::undefined().bits());
+    }
+    let _suppress = crate::gc::GcSuppressScope::new();
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    let mut pos = 0usize;
+    let bits = build_const_value(bytes, &mut pos);
+    f64::from_bits(bits)
+}
+
+/// Recursively build the JS value at `bytes[*pos]`, advancing `*pos`. Callers
+/// hold GC suppressed, so heap pointers materialized here stay live and pinned
+/// for the duration of the whole build.
+fn build_const_value(bytes: &[u8], pos: &mut usize) -> u64 {
+    use crate::value::JSValue;
+    let undefined = || JSValue::undefined().bits();
+    let Some(&tag) = bytes.get(*pos) else {
+        return undefined();
+    };
+    *pos += 1;
+    match tag {
+        DESC_NUMBER => {
+            if *pos + 8 > bytes.len() {
+                return undefined();
+            }
+            let mut b = [0u8; 8];
+            b.copy_from_slice(&bytes[*pos..*pos + 8]);
+            *pos += 8;
+            JSValue::number(f64::from_le_bytes(b)).bits()
+        }
+        DESC_ARRAY => {
+            if *pos + 4 > bytes.len() {
+                return undefined();
+            }
+            let mut c = [0u8; 4];
+            c.copy_from_slice(&bytes[*pos..*pos + 4]);
+            *pos += 4;
+            let count = u32::from_le_bytes(c);
+            let arr = js_array_alloc_literal(count);
+            // All-number rows keep the raw-f64 layout fast path; any pointer
+            // element (a nested array) is downgraded per-slot by
+            // `store_array_slot`, so gate the numeric mark on a pure-number row.
+            let mut all_number = count > 0;
+            for i in 0..count as usize {
+                if bytes.get(*pos).copied() != Some(DESC_NUMBER) {
+                    all_number = false;
+                }
+                let elem = build_const_value(bytes, pos);
+                unsafe { crate::array::store_array_slot(arr, i, elem) };
+            }
+            if all_number {
+                crate::array::js_array_mark_numeric_f64_layout(arr);
+            }
+            JSValue::pointer(arr as *const u8).bits()
+        }
+        DESC_TRUE => JSValue::bool(true).bits(),
+        DESC_FALSE => JSValue::bool(false).bits(),
+        DESC_NULL => JSValue::null().bits(),
+        DESC_UNDEFINED => undefined(),
+        _ => undefined(),
+    }
+}
+
 /// Issue #179 Phase 2: if `arr` points at a `LazyArrayHeader`
 /// (`GcHeader::obj_type == GC_TYPE_LAZY_ARRAY`), force the lazy
 /// value to materialize and return the real `ArrayHeader` pointer.
