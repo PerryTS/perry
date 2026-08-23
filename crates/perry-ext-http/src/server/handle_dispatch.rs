@@ -217,12 +217,15 @@ fn http_server_method_bytes(name: &str) -> Option<&'static [u8]> {
         "address" => Some(b"address"),
         "on" => Some(b"on"),
         "addListener" => Some(b"addListener"),
+        "once" => Some(b"once"),
+        "listeners" => Some(b"listeners"),
         "removeAllListeners" => Some(b"removeAllListeners"),
         "removeListener" => Some(b"removeListener"),
         "off" => Some(b"off"),
         "setTimeout" => Some(b"setTimeout"),
         "ref" => Some(b"ref"),
         "unref" => Some(b"unref"),
+        "setTicketKeys" => Some(b"setTicketKeys"),
         "@@__perry_wk_asyncDispose" => Some(b"@@__perry_wk_asyncDispose"),
         _ => None,
     }
@@ -327,6 +330,10 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
             }
             undef
         }
+        "setTicketKeys" => {
+            crate::agent::invalidate_all_tls_sessions();
+            self_ref
+        }
         "address" => {
             // Node returns `{ port, address, family }` or null. The FFI hands
             // back a JSON-encoded string (`"null"` when not listening); run
@@ -344,7 +351,7 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 f64::from_bits(js_json_parse(s))
             }
         }
-        "on" | "addListener" if args.len() >= 2 => {
+        "on" | "addListener" | "once" if args.len() >= 2 => {
             let event_ptr = string_arg(args[0]);
             if event_ptr.is_null() {
                 return self_ref;
@@ -359,15 +366,66 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
             }
             self_ref
         }
-        // #4973: `server.removeAllListeners([event])` — http/1 only for now
-        // (https/h2 listener registries wrap an HttpServer base; the http
-        // entry covers the plain `node:http` surface the upgrade tests use).
+        "listeners" => {
+            let event = args
+                .first()
+                .and_then(|value| read_string_header(string_arg(*value) as *mut StringHeader))
+                .unwrap_or_default();
+            let mut listeners = if is_h2 {
+                get_handle::<Http2SecureServer>(handle)
+                    .and_then(|server| server.base.listeners.get(&event).cloned())
+            } else if is_https {
+                get_handle::<HttpsServer>(handle)
+                    .and_then(|server| server.base.listeners.get(&event).cloned())
+            } else {
+                get_handle::<HttpServer>(handle)
+                    .and_then(|server| server.listeners.get(&event).cloned())
+            }
+            .unwrap_or_default();
+            if event == "request" {
+                let handler = if is_h2 {
+                    get_handle::<Http2SecureServer>(handle).map(|server| server.handler)
+                } else if is_https {
+                    get_handle::<HttpsServer>(handle).map(|server| server.handler)
+                } else {
+                    get_handle::<HttpServer>(handle).map(|server| server.handler)
+                }
+                .unwrap_or(0);
+                if handler != 0 && !listeners.contains(&handler) {
+                    listeners.push(handler);
+                }
+            }
+            let mut array = perry_ffi::js_array_alloc(listeners.len() as u32);
+            for callback in listeners {
+                array = perry_ffi::js_array_push(
+                    array,
+                    JsValue::from_bits(POINTER_TAG | (callback as u64 & PTR_MASK)),
+                );
+            }
+            f64::from_bits(JsValue::from_object_ptr(array).bits())
+        }
         "removeAllListeners" => {
             let event_ptr = args
                 .first()
                 .map(|&a| string_arg(a))
                 .unwrap_or(std::ptr::null());
-            if !is_h2 && !is_https {
+            if is_h2 {
+                if let Some(server) = get_handle_mut::<Http2SecureServer>(handle) {
+                    if event_ptr.is_null() {
+                        server.base.listeners.clear();
+                    } else if let Some(event) = read_string_header(event_ptr as *mut StringHeader) {
+                        server.base.listeners.remove(&event);
+                    }
+                }
+            } else if is_https {
+                if let Some(server) = get_handle_mut::<HttpsServer>(handle) {
+                    if event_ptr.is_null() {
+                        server.base.listeners.clear();
+                    } else if let Some(event) = read_string_header(event_ptr as *mut StringHeader) {
+                        server.base.listeners.remove(&event);
+                    }
+                }
+            } else {
                 js_node_http_server_remove_all_listeners(handle, event_ptr);
             }
             self_ref
@@ -378,7 +436,25 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 return self_ref;
             }
             let cb = closure_arg(Some(args[1]));
-            if !is_h2 && !is_https {
+            if is_h2 {
+                if let (Some(event), Some(server)) = (
+                    read_string_header(event_ptr as *mut StringHeader),
+                    get_handle_mut::<Http2SecureServer>(handle),
+                ) {
+                    if let Some(listeners) = server.base.listeners.get_mut(&event) {
+                        listeners.retain(|listener| *listener != cb);
+                    }
+                }
+            } else if is_https {
+                if let (Some(event), Some(server)) = (
+                    read_string_header(event_ptr as *mut StringHeader),
+                    get_handle_mut::<HttpsServer>(handle),
+                ) {
+                    if let Some(listeners) = server.base.listeners.get_mut(&event) {
+                        listeners.retain(|listener| *listener != cb);
+                    }
+                }
+            } else {
                 js_node_http_server_remove_listener(handle, event_ptr, cb);
             }
             self_ref
@@ -456,6 +532,22 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_property(
     let is_h2 = get_handle::<Http2SecureServer>(handle).is_some();
     match property.as_str() {
         "listening" => bool_value(server_is_listening(handle, is_https, is_h2)),
+        "ALPNProtocols" if is_https => get_handle::<HttpsServer>(handle)
+            .and_then(|server| server.alpn_protocols.as_ref())
+            .map(|protocols| {
+                let buffer = perry_ffi::alloc_buffer(protocols);
+                f64::from_bits(JsValue::from_object_ptr(buffer).bits())
+            })
+            .unwrap_or(undef),
+        "ALPNCallback" if is_https => get_handle::<HttpsServer>(handle)
+            .map(|server| {
+                if server.alpn_callback == 0 {
+                    undef
+                } else {
+                    f64::from_bits(POINTER_TAG | (server.alpn_callback as u64 & PTR_MASK))
+                }
+            })
+            .unwrap_or(undef),
         // #4974: `server[kConnectionsCheckingInterval]` — the
         // `_http_server` introspection key resolves to Node's
         // connections-checking interval timer; tests assert on its
@@ -568,6 +660,15 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
             js_node_http_im_destroy(handle);
             self_ref
         }
+        "unref" => self_ref,
+        "getSession" => {
+            let buffer = perry_ffi::alloc_buffer(&[]);
+            f64::from_bits(POINTER_TAG | (buffer as u64 & PTR_MASK))
+        }
+        "isSessionReused" => bool_value(false),
+        "getPeerCertificate" => json_string_value(
+            crate::server::request::incoming_peer_certificate_json(handle),
+        ),
         "read" => js_node_http_im_read(handle),
         "method" | "__get_method" => string_ptr_value(js_node_http_im_method(handle)),
         "url" | "__get_url" => string_ptr_value(js_node_http_im_url(handle)),
@@ -922,6 +1023,17 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         "signal" => js_node_http_im_signal(handle),
         "remoteAddress" => string_ptr_value(js_node_http_im_remote_address(handle)),
         "remotePort" => js_node_http_im_remote_port(handle),
+        "encrypted" => {
+            bool_value(get_handle::<IncomingMessage>(handle).is_some_and(|message| message.is_tls))
+        }
+        "authorized" => bool_value(false),
+        "servername" => get_handle::<IncomingMessage>(handle)
+            .and_then(|message| message.tls_servername.clone())
+            .map(|value| string_ptr_value(alloc_string(&value).as_raw()))
+            .unwrap_or_else(|| bool_value(false)),
+        "bytesWritten" => get_handle::<IncomingMessage>(handle)
+            .map(|message| message.connection_bytes_written as f64)
+            .unwrap_or(0.0),
         "rawBody" => js_node_http_im_raw_body(handle),
         "constructor" => constructor_object("IncomingMessage"),
         _ => undef,
@@ -1195,6 +1307,10 @@ fn incoming_method_bytes(name: &str) -> Option<&'static [u8]> {
         "resume" => Some(b"resume"),
         "destroy" => Some(b"destroy"),
         "read" => Some(b"read"),
+        "unref" => Some(b"unref"),
+        "getSession" => Some(b"getSession"),
+        "isSessionReused" => Some(b"isSessionReused"),
+        "getPeerCertificate" => Some(b"getPeerCertificate"),
         // #4904: internal-by-convention header-merge API, exercised
         // directly by Node's own tests on standalone IncomingMessages.
         "_addHeaderLine" => Some(b"_addHeaderLine"),

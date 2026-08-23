@@ -90,8 +90,19 @@ crate::perry_thread_local! {
     /// subsequent property reads instead of throwing read-only.
     static NATIVE_NAMESPACE_PROP_OVERRIDES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
+    /// EventEmitter-compatible listeners for the two built-in global Agent
+    /// objects. They live here (rather than in ext-http) because the namespace
+    /// objects and their prototype methods are runtime-owned GC objects.
+    static GLOBAL_AGENT_LISTENERS: RefCell<HashMap<(bool, String), Vec<GlobalAgentListener>>> =
+        RefCell::new(HashMap::new());
     static NATIVE_ESM_EXPORT_VALUES: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
+}
+
+#[derive(Clone, Copy)]
+struct GlobalAgentListener {
+    callback_bits: u64,
+    once: bool,
 }
 
 /// Store a user override for a native-module namespace property
@@ -148,6 +159,13 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         let mut cache = cache.borrow_mut();
         for value_bits in cache.values_mut() {
             visitor.visit_nanbox_u64_slot(value_bits);
+        }
+    });
+    GLOBAL_AGENT_LISTENERS.with(|listeners| {
+        for callbacks in listeners.borrow_mut().values_mut() {
+            for listener in callbacks {
+                visitor.visit_nanbox_u64_slot(&mut listener.callback_bits);
+            }
         }
     });
     NATIVE_ESM_EXPORT_VALUES.with(|cache| {

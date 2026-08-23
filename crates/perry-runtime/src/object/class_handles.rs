@@ -106,6 +106,8 @@ pub type EventEmitterSetDomainFn = unsafe extern "C" fn(handle: i64, domain: i64
 /// Probe for stdlib `net.Socket` handles. Socket instances are represented as
 /// pointer-tagged small integer handles, not heap objects with class ids.
 pub type NetSocketHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
+/// Probe for external `http.Agent` / `https.Agent` registry handles.
+pub type HttpAgentHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
 
 /// Probe for live `perry-ffi` registry handles. `register_handle`-issued ids
 /// and Node timer ids both occupy the pointer-tagged small-integer band and
@@ -159,6 +161,7 @@ static EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR: AtomicPtr<()> =
 static EVENT_EMITTER_GET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_SET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static NET_SOCKET_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static HTTP_AGENT_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static FFI_HANDLE_EXISTS_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_ON_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
@@ -519,6 +522,21 @@ pub fn net_socket_handle_probe() -> Option<NetSocketHandleProbeFn> {
 #[no_mangle]
 pub unsafe extern "C" fn js_register_net_socket_handle_probe(f: NetSocketHandleProbeFn) {
     NET_SOCKET_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[inline]
+pub fn http_agent_handle_probe() -> Option<HttpAgentHandleProbeFn> {
+    let p = HTTP_AGENT_HANDLE_PROBE_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), HttpAgentHandleProbeFn>(p) })
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_http_agent_handle_probe(f: HttpAgentHandleProbeFn) {
+    HTTP_AGENT_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
 }
 
 /// Query the registered bundled/external net.Socket probe without creating a

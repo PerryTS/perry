@@ -327,32 +327,26 @@ unsafe extern "C" fn js_node_http_native_dispatch(
             fn js_http_agent_new(options_f64: f64) -> i64;
             fn js_https_agent_new(options_f64: f64) -> i64;
             fn js_http_client_request_standalone_new(options_f64: f64) -> i64;
-            fn js_http_get(arg_f64: f64, callback_i64: i64) -> i64;
-            fn js_https_get(arg_f64: f64, callback_i64: i64) -> i64;
-            fn js_http_request(opts_f64: f64, callback_i64: i64) -> i64;
-            fn js_https_request(opts_f64: f64, callback_i64: i64) -> i64;
+            fn js_http_get_overload(args_array: i64) -> i64;
+            fn js_https_get_overload(args_array: i64) -> i64;
+            fn js_http_request_overload(args_array: i64) -> i64;
+            fn js_https_request_overload(args_array: i64) -> i64;
         }
-        // #4904: captured / aliased `get` / `request` (`const { get } =
-        // require('http')`). The first non-closure arg is the options/url,
-        // the first closure-valued arg is the response callback.
+        // #4904/#4975: captured / aliased `get` / `request` (`const { get } =
+        // require('http')`). Preserve the complete argument list and route it
+        // through the same overload normalizer as a statically-known call.
+        // Picking only the first non-closure argument lost `(url, options,
+        // callback)` and treated WHATWG URL objects as plain option bags.
         if matches!(method, "get" | "request") && matches!(module, "http" | "https") {
-            let mut options = undefined;
-            let mut callback: i64 = 0;
-            for n in 0..args_len.min(3) {
-                let a = arg(n);
-                if callback == 0 && js_value_is_closure(a.to_bits() as i64) != 0 {
-                    callback = perry_runtime::js_nanbox_get_pointer(a);
-                } else if JSValue::from_bits(a.to_bits()).is_undefined() {
-                    continue;
-                } else if options.to_bits() == undefined.to_bits() {
-                    options = a;
-                }
+            let mut overload_args = perry_runtime::js_array_alloc(args_len as u32);
+            for n in 0..args_len {
+                overload_args = perry_runtime::js_array_push_f64(overload_args, arg(n));
             }
             let handle = match (module, method) {
-                ("http", "get") => js_http_get(options, callback),
-                ("http", "request") => js_http_request(options, callback),
-                ("https", "get") => js_https_get(options, callback),
-                _ => js_https_request(options, callback),
+                ("http", "get") => js_http_get_overload(overload_args as i64),
+                ("http", "request") => js_http_request_overload(overload_args as i64),
+                ("https", "get") => js_https_get_overload(overload_args as i64),
+                _ => js_https_request_overload(overload_args as i64),
             };
             return if handle == 0 {
                 undefined
@@ -637,6 +631,17 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     }
     perry_runtime::js_set_native_async_hooks_construct(async_hooks_native_construct);
     super::super::net_socket_bridge::register_net_socket_handle_probe();
+    #[cfg(feature = "external-http-client-pump")]
+    {
+        extern "C" {
+            fn js_register_http_agent_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
+            fn js_ext_http_agent_is_handle(handle: i64) -> i32;
+        }
+        unsafe extern "C" fn http_agent_probe(handle: i64) -> bool {
+            js_ext_http_agent_is_handle(handle) != 0
+        }
+        js_register_http_agent_handle_probe(http_agent_probe);
+    }
     js_register_worker_threads_namespace_getters(
         crate::worker_threads::js_worker_threads_get_worker_data,
         crate::worker_threads::js_worker_threads_is_main_thread,

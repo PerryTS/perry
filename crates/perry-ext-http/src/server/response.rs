@@ -1458,6 +1458,7 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         }
         sr.writable_ended = true;
         sr.writable_finished = true;
+        crate::server::request::mark_connection_written(sr.req_handle);
         sr.needs_drain = false;
         let finish_listeners = take_event_listeners(sr, "finish");
         let close_listeners = take_event_listeners(sr, "close");
@@ -1491,6 +1492,7 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         let _ = tx.send(shape);
     }
     sr.writable_finished = true;
+    crate::server::request::mark_connection_written(sr.req_handle);
     Some((finish_listeners, close_listeners))
 }
 

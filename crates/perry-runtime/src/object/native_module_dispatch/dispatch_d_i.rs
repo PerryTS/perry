@@ -468,8 +468,10 @@ pub(crate) unsafe fn nm_dispatch_http(ctx: &NmCtx, module_name: &str, method_nam
         // `js_http_get` / `js_http_request` (and https twins).
         | ("http", "request")
         | ("http", "get")
+        | ("http", "Agent")
         | ("https", "request")
         | ("https", "get")
+        | ("https", "Agent")
         | ("https", "createServer")
         | ("https", "Server")
         | ("http2", "createServer")

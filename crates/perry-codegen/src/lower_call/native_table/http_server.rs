@@ -835,6 +835,15 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "__get_req",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_http_incoming_message_req",
+        args: &[],
+        ret: NR_F64,
+    },
     // PR #1146 belt-and-braces: bare-name dispatch for the same three
     // client-IncomingMessage properties, for sites where the HIR rewrite
     // to `__get_<prop>` doesn't fire (receiver isn't statically tagged
@@ -891,6 +900,15 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         method: "connection",
         class_filter: Some("IncomingMessage"),
         runtime: "js_http_incoming_message_socket",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "http",
+        has_receiver: true,
+        method: "req",
+        class_filter: Some("IncomingMessage"),
+        runtime: "js_http_incoming_message_req",
         args: &[],
         ret: NR_F64,
     },

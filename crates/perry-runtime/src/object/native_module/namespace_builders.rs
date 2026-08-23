@@ -351,6 +351,49 @@ extern "C" fn global_agent_reuse_socket_thunk(
     f64::from_bits(JSValue::undefined().bits())
 }
 
+extern "C" fn global_agent_listener_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    first: f64,
+    second: f64,
+    third: f64,
+) -> f64 {
+    unsafe {
+        let is_https = crate::closure::js_closure_get_capture_ptr(closure, 0) != 0;
+        let once = crate::closure::js_closure_get_capture_ptr(closure, 1) != 0;
+        let expected_agent = if is_https {
+            https_global_agent_object()
+        } else {
+            http_global_agent_object()
+        };
+        let offset = usize::from(first.to_bits() == expected_agent.to_bits());
+        let args = [first, second, third];
+        let event_value = args
+            .get(offset)
+            .copied()
+            .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+        let callback_value = args
+            .get(offset + 1)
+            .copied()
+            .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
+        let callback_bits = callback_value.to_bits();
+        let callback_ptr = (callback_bits & crate::value::POINTER_MASK) as usize;
+        if crate::closure::is_closure_ptr(callback_ptr) {
+            let event = global_agent_value_to_string(JSValue::from_bits(event_value.to_bits()));
+            GLOBAL_AGENT_LISTENERS.with(|listeners| {
+                listeners
+                    .borrow_mut()
+                    .entry((is_https, event))
+                    .or_default()
+                    .push(GlobalAgentListener {
+                        callback_bits,
+                        once,
+                    });
+            });
+        }
+        expected_agent
+    }
+}
+
 extern "C" fn global_agent_destroy_thunk(_closure: *const crate::closure::ClosureHeader) -> f64 {
     f64::from_bits(JSValue::undefined().bits())
 }
@@ -459,6 +502,18 @@ fn global_agent_method_value(
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
+fn global_agent_listener_value(is_https: bool, once: bool) -> f64 {
+    crate::closure::js_register_closure_arity(global_agent_listener_thunk as *const u8, 3);
+    let closure = crate::closure::js_closure_alloc(global_agent_listener_thunk as *const u8, 2);
+    crate::closure::js_closure_set_capture_ptr(closure, 0, i64::from(is_https));
+    crate::closure::js_closure_set_capture_ptr(closure, 1, i64::from(once));
+    let name = if once { "once" } else { "on" };
+    set_bound_native_closure_name(closure, name);
+    set_builtin_closure_length(closure as usize, 2);
+    set_builtin_closure_non_constructable(closure as usize);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
 unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f64 {
     let proto = js_object_alloc(0, 0);
     let proto_value = crate::value::js_nanbox_pointer(proto as i64);
@@ -514,12 +569,78 @@ unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f6
                 None,
             ),
         ),
+        ("on", global_agent_listener_value(is_https, false)),
+        ("once", global_agent_listener_value(is_https, true)),
     ] {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         js_object_set_field_by_name(proto, key, value);
         set_property_attrs(proto as usize, name.to_string(), attrs);
     }
     proto_value
+}
+
+/// Return the user-assigned `https.globalAgent`, if one exists. Ext-http uses
+/// this to route requests without `options.agent` through an assigned native
+/// Agent handle instead of the built-in Agent.
+#[no_mangle]
+pub extern "C" fn js_https_global_agent_override_value() -> f64 {
+    native_namespace_prop_override_get("https", "globalAgent")
+        .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()))
+}
+
+/// Replace the built-in global Agent's public lifecycle maps with the values
+/// maintained by ext-http's real pool.
+#[no_mangle]
+pub unsafe extern "C" fn js_https_global_agent_sync_maps(
+    sockets: f64,
+    free_sockets: f64,
+    requests: f64,
+) {
+    let agent = https_global_agent_object();
+    let Some(agent_ptr) = global_agent_object_ptr(agent).map(|ptr| ptr as *mut ObjectHeader) else {
+        return;
+    };
+    for (field, value) in [
+        ("sockets", sockets),
+        ("freeSockets", free_sockets),
+        ("requests", requests),
+    ] {
+        let key = crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
+        js_object_set_field_by_name(agent_ptr, key, value);
+    }
+}
+
+/// Emit one built-in global Agent event. Listener removal happens before JS is
+/// invoked so recursive emissions preserve EventEmitter `.once()` semantics.
+#[no_mangle]
+pub unsafe extern "C" fn js_https_global_agent_emit(
+    event_ptr: *const u8,
+    event_len: usize,
+    arg0: f64,
+    arg1: f64,
+) {
+    if event_ptr.is_null() {
+        return;
+    }
+    let event =
+        String::from_utf8_lossy(std::slice::from_raw_parts(event_ptr, event_len)).into_owned();
+    let callbacks = GLOBAL_AGENT_LISTENERS.with(|listeners| {
+        let mut listeners = listeners.borrow_mut();
+        let entries = listeners.entry((true, event)).or_default();
+        let callbacks = entries
+            .iter()
+            .map(|entry| entry.callback_bits)
+            .collect::<Vec<_>>();
+        entries.retain(|entry| !entry.once);
+        callbacks
+    });
+    for callback_bits in callbacks {
+        let ptr =
+            (callback_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+        if crate::closure::is_closure_ptr(ptr as usize) {
+            let _ = crate::closure::js_closure_call2(ptr, arg0, arg1);
+        }
+    }
 }
 
 pub(crate) unsafe fn https_global_agent_object() -> f64 {

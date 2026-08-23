@@ -38,10 +38,7 @@ pub(crate) fn dispatch_request(
     // pool config). #2154: otherwise pick the per-Agent client when one
     // was supplied, falling back to the global HTTP_CLIENT.
     let client: reqwest::Client = if url.starts_with("https://") && tls.needs_custom_client() {
-        let pool = (agent_handle != 0)
-            .then(|| agent::agent_pool_config(agent_handle))
-            .flatten();
-        match tls.build_client(pool) {
+        match agent::client_for_agent_tls(agent_handle, &tls) {
             Ok(custom) => custom,
             Err(error_message) => {
                 push_event(PendingHttpEvent::Error {
@@ -56,6 +53,8 @@ pub(crate) fn dispatch_request(
     } else {
         HTTP_CLIENT.clone()
     };
+    let tls_servername = tls.servername.clone();
+    let tls_peer_certificate_cn = tls.peer_certificate_cn.clone();
     spawn_blocking(move || {
         // Defeat LTO dead-stripping of tokio's CONTEXT statics — same
         // workaround perry-ext-net needs (see spawn_socket_runner).
@@ -76,7 +75,7 @@ pub(crate) fn dispatch_request(
         // program whose only other live handle just closed (in-process
         // server+client) can clean-exit before 'response' fires. Moved into
         // the task so it covers the full stream lifetime (#5779 idle-kick).
-        let inflight_guard = ClientInflightGuard::new();
+        let inflight_guard = ClientInflightGuard::new(request_handle);
         let jh = handle.spawn(async move {
             let _inflight = inflight_guard;
             if let Some(result) = dispatch_plain_http_request(
@@ -109,6 +108,19 @@ pub(crate) fn dispatch_request(
             };
             for (k, v) in &headers {
                 req = req.header(k.as_str(), v.as_str());
+            }
+            if let Some(servername) = tls_servername.as_deref() {
+                req = req.header(
+                    "x-perry-tls-servername",
+                    if servername.is_empty() {
+                        "<false>"
+                    } else {
+                        servername
+                    },
+                );
+            }
+            if let Some(common_name) = tls_peer_certificate_cn.as_deref() {
+                req = req.header("x-perry-tls-peer-cn", common_name);
             }
             // Node's default agent is keep-alive (v19+) and sends the
             // header explicitly; servers reading `req.headers.connection`

@@ -53,6 +53,9 @@ pub(crate) use in_flight::{
     finalize_or_park_request, finalize_request_handles_deferred, has_in_flight_requests,
     reap_in_flight_requests, response_writable_ended,
 };
+mod deferred_events;
+use deferred_events::{drain_deferred_close_for, drain_deferred_listen_for, server_is_active};
+pub(crate) use deferred_events::{queue_deferred_close_emit, queue_deferred_listening_emit};
 
 /// Apply a server's per-connection `noDelay` (Node's `socket.setNoDelay`
 /// default, ON) to a freshly accepted TCP stream before it is served. Node
@@ -98,6 +101,11 @@ pub struct HttpServer {
     /// listener list after the emit fires. Raw closure pointers; rooted
     /// by the GC scanner in lib.rs.
     pub deferred_listen_cbs: Vec<i64>,
+    /// `close()` is asynchronous in Node. Keep the event pending until the
+    /// next pump tick so `await once(server, 'close')` registered immediately
+    /// after `close()` observes it.
+    pub pending_close_emit: bool,
+    pub deferred_close_cbs: Vec<i64>,
     /// Sent by `.close()` to wake the accept loop.
     pub shutdown_tx: Option<oneshot::Sender<()>>,
     /// Channel main thread drains in the event loop. Hyper service
@@ -165,6 +173,8 @@ impl HttpServer {
             listening: false,
             pending_listening_emit: false,
             deferred_listen_cbs: Vec::new(),
+            pending_close_emit: false,
+            deferred_close_cbs: Vec::new(),
             shutdown_tx: None,
             request_rx: None,
             upgrade_rx: None,
@@ -1079,29 +1089,15 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
 /// exits.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_server_close(server_handle: i64, callback: i64) {
-    let close_listeners;
     if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
         s.listening = false;
         s.connections_checking_interval_destroyed = true;
         s.shutdown_tx.take();
-        close_listeners = s.listeners.get("close").cloned().unwrap_or_default();
-    } else {
-        close_listeners = Vec::new();
+        queue_deferred_close_emit(s, callback);
     }
     // Node 19+: `server.close()` destroys idle keep-alive connections
     // (active requests are allowed to finish) (#4905).
     signal_connections_close(server_handle, true);
-    // #8082: `callback` crosses the close-listener emits, which run JS.
-    let scope = perry_ffi::TransientRootScope::enter();
-    let callback_rooted = scope.root_addr(callback);
-    emit_no_arg_to_listeners(&close_listeners);
-    if callback_rooted.get() != 0 {
-        let raw = callback_rooted.get() as *const RawClosureHeader;
-        let closure = JsClosure::from_raw(raw);
-        if !closure.is_null() {
-            let _ = closure.call0();
-        }
-    }
 }
 
 /// `server.closeAllConnections()` — destroy every tracked connection
@@ -1607,82 +1603,6 @@ pub extern "C" fn js_node_http_server_has_active() -> i32 {
 /// `(req, res) => res.end(...)` shape that the load-bearing #604
 /// fixture uses works without this — the response oneshot fires
 /// synchronously from inside `js_node_http_res_end`.
-/// #4903 — record a pending `'listening'` emit on a server (http / https /
-/// http2 all share the `HttpServer` base). Node registers the
-/// `listen(port, cb)` callback as a *once* `'listening'` listener inside
-/// `listen()`, so the callback goes into the live listener list (correct
-/// emit order vs. listeners added before/after `listen()`) and into
-/// `deferred_listen_cbs`, which the pump uses to remove it again after
-/// the emit fires.
-pub(crate) fn queue_deferred_listening_emit(s: &mut HttpServer, callback: i64) {
-    s.pending_listening_emit = true;
-    if callback != 0 {
-        s.listeners
-            .entry("listening".to_string())
-            .or_default()
-            .push(callback);
-        s.deferred_listen_cbs.push(callback);
-    }
-}
-
-/// #4903 — fire a server's queued `'listening'` listeners + `listen(cb)`
-/// callbacks with implicit `this` bound to the server. Runs from the
-/// main-thread pump, never from inside `listen()` itself: Node emits
-/// `'listening'` on a later event-loop tick, so the listen callback only
-/// runs after the current synchronous script segment (including the
-/// `const server = ...` assignment) has finished, and `'listening'`
-/// listeners registered after `listen()` returned still fire. The
-/// listener snapshot is taken here at drain time for that same reason,
-/// and the queue is detached (`mem::take`) before any callback runs so
-/// a re-entrant `listen()` from a callback can't double-fire.
-pub(crate) fn drain_deferred_listen_for<T, F>(server_handle: i64, base_of: F) -> i32
-where
-    T: Send + Sync + 'static,
-    F: FnOnce(&mut T) -> &mut HttpServer,
-{
-    let cbs: Vec<i64> = match get_handle_mut::<T>(server_handle) {
-        Some(t) => {
-            let s = base_of(t);
-            if !std::mem::take(&mut s.pending_listening_emit) {
-                return 0;
-            }
-            let snapshot = s.listeners.get("listening").cloned().unwrap_or_default();
-            // The `listen(port, cb)` callbacks are once-listeners: now that
-            // this emit has snapshotted them, drop them from the live list
-            // so a future emit / listener introspection doesn't see them.
-            let once: Vec<i64> = std::mem::take(&mut s.deferred_listen_cbs);
-            if let Some(ls) = s.listeners.get_mut("listening") {
-                for cb in &once {
-                    if let Some(pos) = ls.iter().position(|x| x == cb) {
-                        ls.remove(pos);
-                    }
-                }
-            }
-            snapshot
-        }
-        None => return 0,
-    };
-    let this_val = handle_to_pointer_f64(server_handle);
-    let mut fired = 0i32;
-    // #8082: the drained snapshot crosses each callback — root it.
-    let scope = perry_ffi::TransientRootScope::enter();
-    let rooted = scope.root_addrs(&cbs);
-    for cb in &rooted {
-        let addr = cb.get();
-        if addr == 0 {
-            continue;
-        }
-        let raw = addr as *const RawClosureHeader;
-        let closure = unsafe { JsClosure::from_raw(raw) };
-        if !closure.is_null() {
-            with_implicit_this(this_val, || {
-                let _ = unsafe { closure.call0() };
-            });
-            fired += 1;
-        }
-    }
-    fired
-}
 
 #[no_mangle]
 pub extern "C" fn js_node_http_server_process_pending() -> i32 {
@@ -1740,6 +1660,7 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         // before draining requests: the listen callback is usually what
         // kicks off the client request in the first place.
         count += drain_deferred_listen_for::<HttpServer, _>(h, |s| s);
+        count += drain_deferred_close_for::<HttpServer, _>(h, |s| s);
         // Drain upgrades first so they don't get starved by a busy
         // request stream.
         while let Some(up) = try_recv_upgrade(h) {
@@ -1788,6 +1709,9 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         count += drain_deferred_listen_for::<crate::server::https_server::HttpsServer, _>(h, |s| {
             &mut s.base
         });
+        count += drain_deferred_close_for::<crate::server::https_server::HttpsServer, _>(h, |s| {
+            &mut s.base
+        });
         while let Some(p) = crate::server::https_server::try_recv_pending_https_nonblocking(h) {
             crate::server::https_server::process_pending_https(p);
             count += 1;
@@ -1803,6 +1727,10 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
             h,
             |s| &mut s.base,
         );
+        count +=
+            drain_deferred_close_for::<crate::server::http2_server::Http2SecureServer, _>(h, |s| {
+                &mut s.base
+            });
         count += crate::server::http2_server::process_pending_h2_events();
         while let Some(p) = crate::server::http2_server::try_recv_pending_h2_nonblocking(h) {
             crate::server::http2_server::process_pending_h2(p);
@@ -1827,36 +1755,6 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     count += unsafe { perry_ext_net::js_ext_net_drain_pending() };
 
     count
-}
-
-fn server_is_active(s: &HttpServer) -> bool {
-    // #5011 — an `unref()`ed server no longer keeps the event loop alive
-    // just by being bound, so a quietly-listening unref'd server lets the
-    // process exit (Node semantics). Pending listen callbacks and queued
-    // requests below still keep the loop alive long enough to flush any
-    // in-flight work.
-    if s.listening && s.refed {
-        return true;
-    }
-    // #4903 — a queued `'listening'` emit / listen callback must keep the
-    // loop alive until the pump fires it, even if `close()` already ran.
-    if s.pending_listening_emit || !s.deferred_listen_cbs.is_empty() {
-        return true;
-    }
-    // Even if the user has called close(), the channels may still
-    // hold queued items the pump needs to drain on a subsequent tick
-    // before the program can exit cleanly.
-    if let Some(rx) = s.request_rx.as_ref() {
-        if !rx.is_closed() && rx.len() > 0 {
-            return true;
-        }
-    }
-    if let Some(rx) = s.upgrade_rx.as_ref() {
-        if !rx.is_closed() && rx.len() > 0 {
-            return true;
-        }
-    }
-    false
 }
 
 fn try_recv_upgrade(server_handle: i64) -> Option<HttpPendingUpgrade> {

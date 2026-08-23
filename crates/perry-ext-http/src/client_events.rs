@@ -118,8 +118,8 @@ unsafe fn handle_incoming_transport_abort(request_handle: Handle, incoming: Hand
         perry_ext_net::js_ext_net_socket_emit(socket, event.as_raw() as i64, std::ptr::null(), 0);
         perry_ext_net::js_ext_net_destroy_socket(socket);
     }
-    fire_request_close_once(request_handle);
     finish_agent_request(request_handle, false);
+    fire_request_close_once(request_handle);
 }
 
 /// Fire a client request's `'error'` listeners with `arg`.
@@ -238,6 +238,7 @@ pub(crate) unsafe fn handle_response_event(
         encoding: None,
         pipes: Vec::new(),
         socket_handle,
+        request_handle,
     });
 
     // Hand the IncomingMessage handle to the user's `(res) => { ... }`
@@ -310,8 +311,8 @@ pub(crate) unsafe fn handle_response_event(
 
     // Node emits `'close'` on the request once the response has fully
     // ended (#4905).
-    fire_request_close_once(request_handle);
     finish_agent_request(request_handle, true);
+    fire_request_close_once(request_handle);
 }
 
 /// Drain handler for `PendingHttpEvent::ResponseHead` (streaming path):
@@ -349,6 +350,7 @@ pub(crate) unsafe fn handle_response_head_event(
         encoding: None,
         pipes: Vec::new(),
         socket_handle,
+        request_handle,
     });
     let response_callback = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
         req.incoming_handle = incoming;
@@ -494,8 +496,8 @@ pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
         forward_pipe_end(dest);
     }
 
-    fire_request_close_once(request_handle);
     finish_agent_request(request_handle, true);
+    fire_request_close_once(request_handle);
 }
 
 /// Drain handler for `PendingHttpEvent::Error`: `'error'` listeners then
@@ -525,8 +527,8 @@ pub(crate) unsafe fn handle_error_event(request_handle: Handle, error_message: &
     }
     fire_request_error_listeners(request_handle, error_event_arg(error_message));
     // Node emits `'close'` on the request after `'error'` (#4905).
-    fire_request_close_once(request_handle);
     finish_agent_request(request_handle, false);
+    fire_request_close_once(request_handle);
 }
 
 /// Drain handler for `PendingHttpEvent::TransportError`: fire `'error'`
@@ -561,8 +563,8 @@ pub(crate) unsafe fn handle_transport_error_event(
         return;
     }
     fire_request_error_listeners(request_handle, f64::from_bits(err.bits()));
-    fire_request_close_once(request_handle);
     finish_agent_request(request_handle, false);
+    fire_request_close_once(request_handle);
 }
 
 /// #4905 / #4909 — drain handler for `PendingHttpEvent::Timeout`.
@@ -600,8 +602,8 @@ pub(crate) unsafe fn handle_timeout_event(request_handle: Handle) {
             // In-flight exchange aborted by the transport deadline with no
             // `'timeout'` listener — keep the legacy error surface.
             fire_request_error_listeners(request_handle, error_event_arg("request timed out"));
-            fire_request_close_once(request_handle);
             finish_agent_request(request_handle, false);
+            fire_request_close_once(request_handle);
         }
         return;
     }
@@ -615,8 +617,8 @@ pub(crate) unsafe fn handle_timeout_event(request_handle: Handle) {
     // didn't destroy the request (destroy emits its own error + close),
     // fire `'close'` so waiters still finish — nothing else will arrive.
     if ended && !client_request_surface::request_destroyed(request_handle) {
-        fire_request_close_once(request_handle);
         finish_agent_request(request_handle, false);
+        fire_request_close_once(request_handle);
     }
 }
 

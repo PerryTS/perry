@@ -426,6 +426,8 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_net_socket_set_timeout",                   OwnerKind::WellKnown("net")),
     // #1852 — chainable no-op option setters for Socket/Server.
     ("js_net_socket_noop_self",                     OwnerKind::WellKnown("net")),
+    ("js_net_socket_ref",                           OwnerKind::WellKnown("net")),
+    ("js_net_socket_unref",                         OwnerKind::WellKnown("net")),
     ("js_net_socket_get_type_of_service",           OwnerKind::WellKnown("net")),
     ("js_net_socket_set_type_of_service",           OwnerKind::WellKnown("net")),
     ("js_net_server_noop_self",                     OwnerKind::WellKnown("net")),

@@ -84,10 +84,19 @@ pub use adopt::{adopt_upgraded_tcp_stream, ensure_adopted_socket_dispatch};
 mod option_setters;
 pub use option_setters::{
     js_net_server_noop_self, js_net_socket_get_type_of_service, js_net_socket_noop_self,
-    js_net_socket_set_encoding, js_net_socket_set_no_delay, js_net_socket_set_timeout,
-    js_net_socket_set_type_of_service,
+    js_net_socket_ref, js_net_socket_set_encoding, js_net_socket_set_no_delay,
+    js_net_socket_set_timeout, js_net_socket_set_type_of_service, js_net_socket_unref,
 };
 use option_setters::{js_net_validate_connect_port, js_net_validate_listen_port};
+mod socket_facade;
+pub(crate) use socket_facade::TlsSocketMetadata;
+pub use socket_facade::{
+    js_ext_net_has_active_handles, js_ext_net_is_socket_handle, js_ext_net_set_tls_metadata,
+    js_ext_net_socket_has_ref, js_ext_net_socket_peer_certificate_json, js_ext_net_socket_set_ref,
+    js_ext_net_socket_tls_authorized, js_ext_net_socket_tls_encrypted,
+    js_ext_net_socket_tls_servername, js_ext_net_socket_tls_session,
+    js_ext_net_socket_tls_session_reused,
+};
 
 #[cfg(test)]
 mod nodelay_tests;
@@ -284,6 +293,8 @@ pub(crate) struct SocketState {
     /// can move it into the spawned task at connect time.
     pub(crate) pending_rx: Option<mpsc::UnboundedReceiver<SocketCommand>>,
     pub(crate) is_open: bool,
+    /// Whether pending socket I/O keeps the process event loop alive.
+    pub(crate) refed: bool,
     /// Issue #2131 — the kernel-assigned local address, populated after
     /// `TcpStream::connect`/`accept`. Drives `socket.address()` so the
     /// "undefined.address" cluster reports the actual bound port/family.
@@ -304,6 +315,7 @@ pub(crate) struct SocketState {
     pub(crate) type_of_service: u8,
     pub(crate) server_id: Option<i64>,
     pub(crate) server_connection_active: bool,
+    pub(crate) tls: TlsSocketMetadata,
 }
 
 #[cfg(test)]
@@ -315,6 +327,7 @@ impl SocketState {
             cmd_tx,
             pending_rx: None,
             is_open: true,
+            refed: true,
             local_addr: None,
             raw: None,
             destroyed: false,
@@ -324,6 +337,7 @@ impl SocketState {
             type_of_service: 0,
             server_id: None,
             server_connection_active: false,
+            tls: TlsSocketMetadata::default(),
         }
     }
 }
@@ -582,6 +596,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             cmd_tx: tx,
             pending_rx: Some(rx),
             is_open: false,
+            refed: true,
             local_addr: None,
             raw: None,
             destroyed: false,
@@ -591,6 +606,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             type_of_service: 0,
             server_id: None,
             server_connection_active: false,
+            tls: TlsSocketMetadata::default(),
         },
     );
     statics::listeners()
@@ -825,6 +841,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                                     cmd_tx: tx,
                                     pending_rx: None,
                                     is_open: true,
+                                    refed: true,
                                     local_addr: accepted_local,
                                     raw: None,
                                     destroyed: false,
@@ -834,6 +851,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                                     type_of_service: 0,
                                     server_id: Some(server_id),
                                     server_connection_active: false,
+                                    tls: TlsSocketMetadata::default(),
                                 },
                             );
                             statics::listeners()
@@ -1091,6 +1109,7 @@ pub(crate) fn spawn_socket_task(
             cmd_tx: tx,
             pending_rx: None,
             is_open: false,
+            refed: true,
             local_addr: None,
             raw: None,
             destroyed: false,
@@ -1100,6 +1119,7 @@ pub(crate) fn spawn_socket_task(
             type_of_service: 0,
             server_id: None,
             server_connection_active: false,
+            tls: TlsSocketMetadata::default(),
         },
     );
     statics::listeners()
@@ -1963,16 +1983,6 @@ pub unsafe extern "C" fn js_ext_net_socket_remove_all_listeners(
     js_net_socket_remove_all_listeners(handle, event_ptr)
 }
 
-#[no_mangle]
-pub extern "C" fn js_ext_net_is_socket_handle(handle: i64) -> i32 {
-    let owned = is_net_socket_handle(handle);
-    if owned {
-        1
-    } else {
-        0
-    }
-}
-
 /// `extern "C"` form of `is_net_server_handle` for method-value/property
 /// dispatch on `net.Server` handles.
 #[no_mangle]
@@ -1982,12 +1992,6 @@ pub extern "C" fn js_ext_net_is_server_handle(handle: i64) -> i32 {
     } else {
         0
     }
-}
-
-/// Auxiliary liveness hook registered with the runtime for mixed stdlib links.
-#[no_mangle]
-pub extern "C" fn js_ext_net_has_active_handles() -> i32 {
-    server_state::has_active_handles() as i32
 }
 
 #[cfg(test)]

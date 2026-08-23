@@ -76,6 +76,8 @@ use client_dispatch::dispatch_request;
 // to stay under the 2000-line lint cap.
 mod client_abort;
 mod client_events;
+mod client_surface;
+pub(crate) use client_surface::*;
 
 // Client OutgoingMessage write/end callback + backpressure + setTimeout
 // surface (#4909) — extracted to stay under the 2000-line lint cap.
@@ -218,24 +220,33 @@ pub(crate) enum PendingHttpEvent {
 /// forever with the responses received but undelivered. This counter, exposed via
 /// [`js_ext_http_client_inflight`], lets the idle-kick + active-handle gate honor
 /// a fetch's TRUE lifetime so a stranded reqwest task gets roused.
-static CLIENT_REQUESTS_INFLIGHT: std::sync::atomic::AtomicI64 =
-    std::sync::atomic::AtomicI64::new(0);
+static CLIENT_REQUESTS_INFLIGHT: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<Handle>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
 
 /// RAII in-flight marker. Created right before the reqwest task is spawned and
 /// MOVED INTO the task, so the count tracks the task's full lifetime — including
 /// a task scheduled-but-stranded by a lost worker-unpark (its future, holding the
 /// guard, is never dropped while stranded). Drop wakes the main loop so its
 /// active-handle gate re-evaluates promptly.
-pub(crate) struct ClientInflightGuard;
+pub(crate) struct ClientInflightGuard {
+    request_handle: Handle,
+}
 impl ClientInflightGuard {
-    pub(crate) fn new() -> Self {
-        CLIENT_REQUESTS_INFLIGHT.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        ClientInflightGuard
+    pub(crate) fn new(request_handle: Handle) -> Self {
+        CLIENT_REQUESTS_INFLIGHT
+            .lock()
+            .unwrap()
+            .insert(request_handle);
+        ClientInflightGuard { request_handle }
     }
 }
 impl Drop for ClientInflightGuard {
     fn drop(&mut self) {
-        CLIENT_REQUESTS_INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        CLIENT_REQUESTS_INFLIGHT
+            .lock()
+            .unwrap()
+            .remove(&self.request_handle);
         notify_main_thread();
     }
 }
@@ -244,9 +255,23 @@ impl Drop for ClientInflightGuard {
 /// returns nonzero while any HTTP client fetch is outstanding.
 #[no_mangle]
 pub extern "C" fn js_ext_http_client_inflight() -> i32 {
-    CLIENT_REQUESTS_INFLIGHT
-        .load(std::sync::atomic::Ordering::Acquire)
-        .clamp(0, i32::MAX as i64) as i32
+    let requests: Vec<Handle> = CLIENT_REQUESTS_INFLIGHT
+        .lock()
+        .unwrap()
+        .iter()
+        .copied()
+        .collect();
+    requests
+        .into_iter()
+        .filter(|request_handle| {
+            let socket = with_handle_mut::<ClientRequestHandle, _, _>(*request_handle, |request| {
+                request.socket_handle
+            })
+            .unwrap_or(0);
+            socket == 0 || perry_ext_net::js_ext_net_socket_has_ref(socket) != 0
+        })
+        .count()
+        .min(i32::MAX as usize) as i32
 }
 
 /// Pure predicate behind [`node_env_proxy_enabled`]. Node treats its
@@ -341,6 +366,10 @@ pub(crate) fn ensure_gc_scanner_registered() {
         // for. Idempotent on the runtime side.
         extern "C" {
             fn js_register_aux_pump(f: extern "C" fn() -> i32);
+            fn js_register_http_agent_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
+        }
+        unsafe extern "C" fn http_agent_probe(handle: i64) -> bool {
+            agent::js_ext_http_agent_is_handle(handle) != 0
         }
         // `js_http_process_pending` is an `unsafe extern "C" fn`; the
         // registry takes a safe `extern "C" fn`, so route through a thin
@@ -350,6 +379,7 @@ pub(crate) fn ensure_gc_scanner_registered() {
         }
         unsafe {
             js_register_aux_pump(client_pump);
+            js_register_http_agent_handle_probe(http_agent_probe);
         }
     });
 }
@@ -375,6 +405,9 @@ fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
             for cb in cbs {
                 visitor.visit_i64_slot(cb);
             }
+        }
+        if req.tls.check_server_identity_callback != 0 {
+            visitor.visit_i64_slot(&mut req.tls.check_server_identity_callback);
         }
     });
 
@@ -468,6 +501,10 @@ pub struct ClientRequestHandle {
     /// connection pool whose `keepAlive` / `maxFreeSockets` /
     /// `keepAliveMsecs` come from the Agent's stored options.
     agent_handle: Handle,
+    /// The normalized Agent `getName(options)` key captured from the original
+    /// options object. HTTPS TLS identity fields are lost if this is
+    /// reconstructed from the URL at release time.
+    agent_key: String,
     /// Agent pool bookkeeping. Exactly one of these is true after `end()`
     /// admits the request; terminal events clear `agent_active`, while a
     /// maxSockets waiter stays queued until the active request releases it.
@@ -483,6 +520,9 @@ pub struct ClientRequestHandle {
     /// Client-side TLS options (#4906): `rejectUnauthorized` / `ca` /
     /// `checkServerIdentity`. Default = no customization (pooled client).
     tls: tls_client::TlsOptions,
+    /// Error returned by a pre-dispatch TLS identity callback. It is queued
+    /// from `end()` so callers still have time to attach an `error` listener.
+    preflight_error: Option<String>,
     /// The IncomingMessage handle created when a streamed `ResponseHead`
     /// arrived; later `ResponseChunk` / `ResponseEnd` events route to it.
     /// `0` until the head is delivered (and always for the full-buffer
@@ -524,6 +564,9 @@ pub struct IncomingMessageHandle {
     /// stream never receives data and `response.text()` never settles.
     pub pipes: Vec<u64>,
     pub socket_handle: Handle,
+    /// ClientRequest that produced this response (`res.req`). Server-side
+    /// IncomingMessages live in a separate registry and never populate this.
+    pub request_handle: Handle,
 }
 
 unsafe impl Send for IncomingMessageHandle {}
@@ -642,6 +685,7 @@ fn make_request_handle(
     timeout_ms: Option<u64>,
     callback: i64,
     agent_handle: Handle,
+    agent_key: String,
 ) -> Handle {
     let handle = register_handle(ClientRequestHandle {
         method,
@@ -659,6 +703,7 @@ fn make_request_handle(
         timeout_fired: false,
         close_emitted: false,
         agent_handle,
+        agent_key,
         agent_active: false,
         agent_queued: false,
         reused_socket: false,
@@ -666,6 +711,7 @@ fn make_request_handle(
         abort_signal_bits: 0,
         abort_listener_bits: 0,
         tls: tls_client::TlsOptions::default(),
+        preflight_error: None,
         incoming_handle: 0,
         expects_continue: false,
         continue_body_tx: None,
@@ -675,7 +721,7 @@ fn make_request_handle(
     // public `agent.sockets` / `agent.requests` maps immediately observable.
     if agent_handle != 0 {
         let key = with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
-            agent::request_key(&request.url)
+            request.agent_key.clone()
         })
         .unwrap_or_else(|| "localhost::".to_string());
         let admission = agent::admit_request(agent_handle, &key, handle);
@@ -714,9 +760,90 @@ fn make_request_handle(
 /// and store them on the freshly-built request handle. A no-op for
 /// string-URL requests / plain http (parse yields the default).
 unsafe fn attach_tls_options(handle: Handle, opts_f64: f64) {
-    let tls = tls_client::parse_tls_options(opts_f64);
-    if tls.needs_custom_client() {
-        with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| req.tls = tls);
+    let mut tls = tls_client::parse_tls_options(opts_f64);
+    let agent_handle =
+        with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| req.agent_handle).unwrap_or(0);
+    if agent_handle != 0 {
+        agent::merge_tls_defaults(agent_handle, &mut tls);
+    }
+    if tls.servername.is_none() {
+        tls.servername = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+            req.headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("host"))
+                .and_then(|(_, value)| tls_servername_from_host_header(value))
+        })
+        .flatten();
+    }
+    let snapshot = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        req.tls = tls.clone();
+        (
+            req.url.clone(),
+            req.socket_handle,
+            req.agent_handle,
+            req.agent_key.clone(),
+        )
+    });
+    let Some((url, socket, agent_handle, agent_key)) = snapshot else {
+        return;
+    };
+    if !url.starts_with("https://") || socket == 0 {
+        return;
+    }
+    let fallback_servername = reqwest::Url::parse(&url)
+        .ok()
+        .and_then(|url| url.host_str().map(String::from));
+    let callback_host = tls
+        .servername
+        .as_deref()
+        .or(fallback_servername.as_deref())
+        .unwrap_or("");
+    let (session_id, reused) = agent::tls_session_for_request(agent_handle, &agent_key);
+    if !(tls.check_server_identity_from_agent && reused) {
+        if let Some(error) = tls_client::check_server_identity_error(&tls, callback_host) {
+            with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+                req.preflight_error = Some(error);
+            });
+        }
+    }
+    let authorized = tls.reject_unauthorized != Some(false)
+        && !tls_client::node_tls_reject_unauthorized_disabled();
+    let servername = tls.servername.as_ref().or(fallback_servername.as_ref());
+    let (servername_ptr, servername_len) = servername
+        .map(|value| (value.as_ptr(), value.len()))
+        .unwrap_or((std::ptr::null(), 0));
+    perry_ext_net::js_ext_net_set_tls_metadata(
+        socket,
+        i32::from(authorized),
+        servername_ptr,
+        servername_len,
+        session_id,
+        i32::from(reused),
+    );
+    if !reused {
+        agent::emit_client_keylog(agent_handle, socket);
+    }
+}
+
+/// Node derives TLS SNI/hostname verification from an explicit Host header
+/// when `servername` is absent. IP literals deliberately produce no SNI.
+fn tls_servername_from_host_header(value: &str) -> Option<String> {
+    let value = value.trim();
+    let host = if let Some(rest) = value.strip_prefix('[') {
+        rest.split_once(']').map(|(host, _)| host).unwrap_or(rest)
+    } else if let Some((host, port)) = value.rsplit_once(':') {
+        if port.parse::<u16>().is_ok() {
+            host
+        } else {
+            value
+        }
+    } else {
+        value
+    };
+    if host.is_empty() || host.parse::<std::net::IpAddr>().is_ok() {
+        None
+    } else {
+        Some(host.to_string())
     }
 }
 
@@ -815,7 +942,7 @@ fn dispatch_request_over_socket(
         let handle = tokio::runtime::Handle::current();
         // #5779 follow-up: keep this fetch counted in-flight for its whole
         // lifetime so the idle-kick recovers a lost worker-unpark.
-        let inflight_guard = ClientInflightGuard::new();
+        let inflight_guard = ClientInflightGuard::new(request_handle);
         let jh = handle.spawn(async move {
             let _inflight = inflight_guard;
             let vtable = match perry_ffi::raw_net() {
@@ -1050,7 +1177,21 @@ unsafe fn request_common(arg_f64: f64, callback: i64, default_protocol: &str) ->
         let agent_handle = agent::agent_handle_from_options(arg_f64).unwrap_or(0);
         (method, url, headers, timeout, agent_handle)
     };
-    let handle = make_request_handle(method, url, headers, timeout, callback, agent_handle);
+    let agent_handle = if default_protocol == "https" {
+        agent::resolve_https_agent_handle(agent_handle)
+    } else {
+        agent_handle
+    };
+    let agent_key = agent::request_key_from_options(agent_handle, arg_f64, &url);
+    let handle = make_request_handle(
+        method,
+        url,
+        headers,
+        timeout,
+        callback,
+        agent_handle,
+        agent_key,
+    );
     client_abort::attach_request_signal(handle, arg_f64);
     attach_tls_options(handle, arg_f64); // #4906
     continue_client::defer_arm(handle); // #5080 (next-tick head flush)
@@ -1101,6 +1242,12 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         (url, headers, timeout, agent_handle)
     };
 
+    let agent_handle = if default_protocol == "https" {
+        agent::resolve_https_agent_handle(agent_handle)
+    } else {
+        agent_handle
+    };
+    let agent_key = agent::request_key_from_options(agent_handle, arg_f64, &url);
     let handle = make_request_handle(
         "GET".to_string(),
         url,
@@ -1108,6 +1255,7 @@ unsafe fn get_common(arg_f64: f64, callback: i64, default_protocol: &str) -> Han
         timeout,
         callback,
         agent_handle,
+        agent_key,
     );
     client_abort::attach_request_signal(handle, arg_f64);
     attach_tls_options(handle, arg_f64); // #4906
@@ -1155,7 +1303,21 @@ unsafe fn request_overload(args_array: i64, default_protocol: &str, force_get: b
     let method = method_for_overload(parsed.opts);
     let (url, headers, timeout, agent_handle) =
         merge_url_and_options(parsed.url, parsed.opts, default_protocol);
-    let handle = make_request_handle(method, url, headers, timeout, parsed.callback, agent_handle);
+    let agent_handle = if default_protocol == "https" {
+        agent::resolve_https_agent_handle(agent_handle)
+    } else {
+        agent_handle
+    };
+    let agent_key = agent::request_key_from_options(agent_handle, parsed.opts, &url);
+    let handle = make_request_handle(
+        method,
+        url,
+        headers,
+        timeout,
+        parsed.callback,
+        agent_handle,
+        agent_key,
+    );
     client_abort::attach_request_signal(handle, parsed.opts);
     attach_tls_options(handle, parsed.opts); // #4906 — TLS options ride on the options bag
     if force_get {
@@ -1229,6 +1391,25 @@ pub(crate) unsafe fn client_request_end_impl(handle: Handle, body_f64: f64) -> H
         with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
             req.body.extend_from_slice(&body);
         });
+    }
+
+    let preflight_error = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+        if req.ended {
+            return None;
+        }
+        req.preflight_error.take()
+    })
+    .flatten();
+    if let Some(error_message) = preflight_error {
+        with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| req.ended = true);
+        push_event(PendingHttpEvent::Flushed {
+            request_handle: handle,
+        });
+        push_event(PendingHttpEvent::Error {
+            request_handle: handle,
+            error_message,
+        });
+        return handle;
     }
 
     // #5080 — `end()` is a send boundary: arm the continue path now if it
@@ -1378,7 +1559,10 @@ unsafe fn dispatch_request_snapshot(handle: Handle, snapshot: RequestSnapshot) {
             return;
         }
         if !already_active {
-            let key = agent::request_key(&url);
+            let key = with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+                request.agent_key.clone()
+            })
+            .unwrap_or_else(|| agent::request_key(&url));
             match agent::admit_request(agent_handle, &key, handle) {
                 agent::PoolAdmission::Active { reused, socket } => {
                     with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
@@ -1457,7 +1641,7 @@ pub(crate) unsafe fn finish_agent_request(request_handle: Handle, keep_alive: bo
             request.agent_active = false;
             (
                 request.agent_handle,
-                agent::request_key(&request.url),
+                request.agent_key.clone(),
                 active,
                 request.socket_handle,
             )
@@ -1625,263 +1809,6 @@ unsafe fn emit_socket_timeout_overflow_warning(ms: f64) {
          Timer duration was truncated to 2147483647."
     );
     perry_ffi::emit_warning(&message, "TimeoutOverflowWarning");
-}
-
-/// `IncomingMessage.setEncoding(encoding)` for client responses. The same
-/// static `IncomingMessage` class tag is used for server requests, so a client
-/// registry miss is forwarded to the server-side handle implementation.
-#[no_mangle]
-pub unsafe extern "C" fn js_http_incoming_message_set_encoding(
-    handle: Handle,
-    encoding_ptr: *const StringHeader,
-) -> Handle {
-    let encoding = read_str(encoding_ptr).unwrap_or_else(|| "utf8".to_string());
-    let mut matched = false;
-    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
-        res.encoding = Some(encoding.clone());
-        matched = true;
-    });
-    if matched {
-        return handle;
-    }
-
-    extern "C" {
-        fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
-        fn js_node_http_im_set_encoding(handle: i64, encoding_ptr: *const StringHeader) -> i64;
-    }
-    if js_ext_http_incoming_message_is_handle(handle) != 0 {
-        js_node_http_im_set_encoding(handle, encoding_ptr);
-    }
-    handle
-}
-
-/// `res.pipe(dest)` for a client `IncomingMessage`: remember the destination
-/// writable so the body-delivery handlers forward each chunk to `dest.write()`
-/// and finish it with `dest.end()`. Returns `dest` per Node's
-/// pipe-returns-destination contract (node-fetch keeps only the return value:
-/// `const body = res.pipe(new PassThrough())`). Without this the destination
-/// never receives data and `response.text()` hangs forever.
-#[no_mangle]
-pub unsafe extern "C" fn js_http_incoming_message_pipe(handle: Handle, dest: f64) -> f64 {
-    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
-        res.pipes.push(dest.to_bits());
-    });
-    dest
-}
-
-/// Distinct external-client setter for stdlib fallback dispatch. The legacy
-/// `js_http_incoming_message_set_encoding` symbol is shared with perry-stdlib.
-#[no_mangle]
-pub unsafe extern "C" fn js_ext_http_client_incoming_message_set_encoding(
-    handle: Handle,
-    encoding_ptr: *const StringHeader,
-) -> Handle {
-    let encoding = read_str(encoding_ptr).unwrap_or_else(|| "utf8".to_string());
-    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
-        res.encoding = Some(encoding);
-    });
-    handle
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_client_request_method(handle: Handle) -> *mut StringHeader {
-    let method = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| req.method.clone())
-        .unwrap_or_default();
-    alloc_string(&method).as_raw()
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_client_request_protocol(handle: Handle) -> *mut StringHeader {
-    let protocol = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        reqwest::Url::parse(&req.url)
-            .map(|u| format!("{}:", u.scheme()))
-            .unwrap_or_default()
-    })
-    .unwrap_or_default();
-    alloc_string(&protocol).as_raw()
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_client_request_host(handle: Handle) -> *mut StringHeader {
-    let host = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        reqwest::Url::parse(&req.url)
-            .ok()
-            .and_then(|u| u.host_str().map(|s| s.to_string()))
-            .unwrap_or_default()
-    })
-    .unwrap_or_default();
-    alloc_string(&host).as_raw()
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_client_request_path(handle: Handle) -> *mut StringHeader {
-    let path = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        reqwest::Url::parse(&req.url)
-            .map(|u| {
-                let mut path = u.path().to_string();
-                if path.is_empty() {
-                    path.push('/');
-                }
-                if let Some(q) = u.query() {
-                    path.push('?');
-                    path.push_str(q);
-                }
-                path
-            })
-            .unwrap_or_default()
-    })
-    .unwrap_or_default();
-    alloc_string(&path).as_raw()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_http_client_request_listener_count(
-    handle: Handle,
-    event_ptr: *const StringHeader,
-) -> f64 {
-    let event = match read_str(event_ptr) {
-        Some(e) => e,
-        None => return 0.0,
-    };
-    with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-        let explicit = req.listeners.get(&event).map(|v| v.len()).unwrap_or(0);
-        let implicit_response = if event == "response" && req.response_callback != 0 {
-            1
-        } else {
-            0
-        };
-        (explicit + implicit_response) as f64
-    })
-    .unwrap_or(0.0)
-}
-
-// ------------------------------------------------------------------
-// FFI: IncomingMessage accessors
-// ------------------------------------------------------------------
-
-/// `1` if `handle` is registered as an `IncomingMessageHandle`,
-/// `0` otherwise. Used by perry-stdlib's `js_handle_property_dispatch`
-/// to gate the `res.statusCode` / `res.headers` arms — keeps the
-/// property-name match from accidentally returning IncomingMessage
-/// fields for an unrelated handle whose id collides.
-#[no_mangle]
-pub extern "C" fn js_http_is_incoming_message(handle: Handle) -> i32 {
-    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |_| ())
-        .map(|_| 1)
-        .unwrap_or(0)
-}
-
-/// Distinct external-client probe for stdlib fallback dispatch.
-#[no_mangle]
-pub extern "C" fn js_ext_http_client_incoming_message_is_handle(handle: Handle) -> i32 {
-    js_http_is_incoming_message(handle)
-}
-
-/// `res.statusCode`.
-#[no_mangle]
-pub extern "C" fn js_http_status_code(handle: Handle) -> f64 {
-    let mut out = 0.0;
-    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
-        out = res.status_code as f64;
-    });
-    out
-}
-
-/// `res.statusMessage`.
-#[no_mangle]
-pub extern "C" fn js_http_status_message(handle: Handle) -> *mut StringHeader {
-    let mut out: *mut StringHeader = std::ptr::null_mut();
-    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
-        out = alloc_string(&res.status_message).as_raw();
-    });
-    if out.is_null() {
-        alloc_string("").as_raw()
-    } else {
-        out
-    }
-}
-
-/// `res.headers` — returns a NaN-boxed object (bits returned as f64).
-/// The receiving codegen-side `f64`-typed slot stores the bits, so
-/// the user's TS code sees an Object as expected.
-#[no_mangle]
-pub extern "C" fn js_http_response_headers(handle: Handle) -> f64 {
-    let mut out = f64::from_bits(TAG_UNDEFINED);
-    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
-        out = build_response_headers_object(&res.headers);
-    });
-    if out.to_bits() == TAG_UNDEFINED {
-        if let Some(server_out) = server_incoming_property(handle, "headers") {
-            return server_out;
-        }
-    }
-    out
-}
-
-/// `res.trailers` — HTTP trailers populated after the body completes.
-#[no_mangle]
-pub extern "C" fn js_http_response_trailers(handle: Handle) -> f64 {
-    let mut out = f64::from_bits(TAG_UNDEFINED);
-    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
-        out = map_to_js_object(&res.trailers);
-    });
-    if out.to_bits() == TAG_UNDEFINED {
-        if let Some(server_out) = server_incoming_property(handle, "trailers") {
-            return server_out;
-        }
-    }
-    out
-}
-
-#[no_mangle]
-pub extern "C" fn js_http_incoming_message_socket(handle: Handle) -> f64 {
-    with_handle_mut::<IncomingMessageHandle, _, _>(handle, |response| {
-        if response.socket_handle == 0 {
-            f64::from_bits(TAG_UNDEFINED)
-        } else {
-            f64::from_bits(POINTER_TAG | (response.socket_handle as u64 & PTR_MASK))
-        }
-    })
-    .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
-}
-
-fn server_incoming_property(handle: Handle, property_name: &str) -> Option<f64> {
-    extern "C" {
-        fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32;
-        fn js_ext_http_incoming_message_dispatch_property(
-            handle: i64,
-            property_ptr: *const u8,
-            property_len: usize,
-        ) -> f64;
-    }
-    unsafe {
-        if js_ext_http_incoming_message_is_handle(handle) == 0 {
-            return None;
-        }
-        Some(js_ext_http_incoming_message_dispatch_property(
-            handle,
-            property_name.as_ptr(),
-            property_name.len(),
-        ))
-    }
-}
-
-pub(crate) fn body_chunk_value(body: &[u8], encoding: Option<&str>) -> f64 {
-    match encoding {
-        Some(_) => {
-            let s = String::from_utf8_lossy(body).into_owned();
-            let header = alloc_string(&s);
-            f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK))
-        }
-        None => {
-            let buf = perry_ffi::alloc_buffer(body);
-            if buf.is_null() {
-                f64::from_bits(TAG_UNDEFINED)
-            } else {
-                f64::from_bits(POINTER_TAG | (buf as u64 & PTR_MASK))
-            }
-        }
-    }
 }
 
 // ------------------------------------------------------------------

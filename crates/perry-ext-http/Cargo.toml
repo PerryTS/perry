@@ -36,6 +36,11 @@ serde_json.workspace = true
 lazy_static.workspace = true
 base64.workspace = true
 httpdate = "1"
+p12 = "0.6"
+pkcs5 = { version = "0.7", features = ["alloc", "pbes2"] }
+ring = "0.17"
+webpki-roots = "1"
+x509-cert = { version = "0.3", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 socket2.workspace = true

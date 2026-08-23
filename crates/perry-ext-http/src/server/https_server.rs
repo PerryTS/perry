@@ -25,8 +25,7 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::server::ensure_gc_scanner_registered;
 use crate::server::request::{
-    alloc_incoming_message, emit_no_arg_to_listeners, handle_to_pointer_f64, with_implicit_this,
-    IncomingMessage,
+    alloc_incoming_message, handle_to_pointer_f64, with_implicit_this, IncomingMessage,
 };
 use crate::server::response::{
     alloc_server_response_for_request, HyperResponseShape, ResponseBody,
@@ -47,19 +46,24 @@ use crate::server::tls::{
 /// no encoding is supplied) — see `json_value_to_pem_bytes`. Falls
 /// back to empty PEMs (which the cert-chain parser then rejects) on
 /// any extraction failure so the user sees a clear bind error.
-unsafe fn parse_https_opts(opts_f64: f64) -> (Vec<u8>, Vec<u8>, bool) {
+unsafe fn parse_https_opts(opts_f64: f64) -> (Vec<u8>, Vec<u8>, bool, Option<Vec<u8>>, i64) {
     use perry_ffi::JsValue;
-    let v = JsValue::from_bits(opts_f64.to_bits());
+    let mut v = JsValue::from_bits(opts_f64.to_bits());
+    if !v.is_pointer_or_raw() {
+        return (Vec::new(), Vec::new(), true, Some(default_alpn()), 0);
+    }
+    // Native-call lowering may pass a heap options object as its legacy raw
+    // pointer. `json_stringify` expects the canonical POINTER_TAG shape.
     if !v.is_pointer() {
-        return (Vec::new(), Vec::new(), true);
+        v = JsValue::from_object_ptr((v.bits() & PTR_MASK) as *mut u8);
     }
     let json = match perry_ffi::json_stringify(v) {
         Some(j) => j,
-        None => return (Vec::new(), Vec::new(), true),
+        None => return (Vec::new(), Vec::new(), true, Some(default_alpn()), 0),
     };
     let parsed: serde_json::Value = match serde_json::from_str(&json) {
         Ok(p) => p,
-        Err(_) => return (Vec::new(), Vec::new(), true),
+        Err(_) => return (Vec::new(), Vec::new(), true, Some(default_alpn()), 0),
     };
     let key_pem = json_value_to_pem_bytes(parsed.get("key"));
     let cert_pem = json_value_to_pem_bytes(parsed.get("cert"));
@@ -69,12 +73,55 @@ unsafe fn parse_https_opts(opts_f64: f64) -> (Vec<u8>, Vec<u8>, bool) {
     // Without this, an HTTP/2-aware client (curl --http2) negotiates h2
     // via ALPN against our http1::Builder accept loop and the request
     // hangs because we never speak h2 frames back.
-    let enable_h2 = parsed
-        .get("alpnProtocols")
-        .and_then(|a| a.as_array())
+    let alpn_values = parsed
+        .get("ALPNProtocols")
+        .or_else(|| parsed.get("alpnProtocols"))
+        .and_then(|a| a.as_array());
+    let enable_h2 = alpn_values
         .map(|arr| arr.iter().any(|v| v.as_str() == Some("h2")))
         .unwrap_or(false);
-    (key_pem, cert_pem, enable_h2)
+    let alpn_callback = raw_closure_field(opts_f64, "ALPNCallback");
+    let alpn_protocols = if alpn_callback != 0 {
+        None
+    } else {
+        Some(
+            alpn_values
+                .map(|values| encode_alpn(values))
+                .unwrap_or_else(default_alpn),
+        )
+    };
+    (key_pem, cert_pem, enable_h2, alpn_protocols, alpn_callback)
+}
+
+fn default_alpn() -> Vec<u8> {
+    encode_alpn(&vec![serde_json::Value::String("http/1.1".to_string())])
+}
+
+fn encode_alpn(values: &[serde_json::Value]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for value in values {
+        let Some(protocol) = value.as_str() else {
+            continue;
+        };
+        let bytes = protocol.as_bytes();
+        if bytes.len() <= u8::MAX as usize {
+            out.push(bytes.len() as u8);
+            out.extend_from_slice(bytes);
+        }
+    }
+    out
+}
+
+unsafe fn raw_closure_field(options: f64, field: &str) -> i64 {
+    let value = perry_ffi::object_field_by_name(JsValue::from_bits(options.to_bits()), field);
+    let bits = value.bits();
+    if value.is_pointer() {
+        (bits & PTR_MASK) as i64
+    } else if bits >> 48 == 0 && bits >= 0x10000 {
+        bits as i64
+    } else {
+        0
+    }
 }
 use crate::server::types::{
     extract_host, extract_port, js_promise_run_microtasks, read_string_header, POINTER_TAG,
@@ -90,10 +137,16 @@ use crate::server::types::{
 /// via `json_stringify` so binary cert data has to fit through a
 /// PEM round-trip — fine since key + cert PEM are both ASCII.
 #[no_mangle]
-pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64) -> i64 {
+pub unsafe extern "C" fn js_node_https_create_server(mut opts_f64: f64, mut handler: i64) -> i64 {
     ensure_gc_scanner_registered();
 
-    let (key_pem, cert_pem, enable_http2_alpn) = parse_https_opts(opts_f64);
+    if handler == 0 && crate::server::types::js_value_is_closure(opts_f64.to_bits() as i64) != 0 {
+        handler = (opts_f64.to_bits() & PTR_MASK) as i64;
+        opts_f64 = f64::from_bits(crate::server::types::TAG_UNDEFINED);
+    }
+
+    let (key_pem, cert_pem, enable_http2_alpn, alpn_protocols, alpn_callback) =
+        parse_https_opts(opts_f64);
     let mut base = HttpServer::with_handler(handler);
     crate::server::server::apply_server_options(&mut base, opts_f64);
 
@@ -109,6 +162,9 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
             handler,
             tls_config: Some(build_certless_server_config(enable_http2_alpn)),
             base,
+            alpn_protocols,
+            alpn_callback,
+            keylog_emitted: false,
         });
     }
     let private_key = match parse_private_key(&key_pem) {
@@ -122,6 +178,9 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
                 handler,
                 tls_config: None,
                 base,
+                alpn_protocols,
+                alpn_callback,
+                keylog_emitted: false,
             });
         }
     };
@@ -137,6 +196,9 @@ pub unsafe extern "C" fn js_node_https_create_server(opts_f64: f64, handler: i64
         handler,
         tls_config,
         base,
+        alpn_protocols,
+        alpn_callback,
+        keylog_emitted: false,
     })
 }
 
@@ -146,6 +208,9 @@ pub struct HttpsServer {
     pub handler: i64,
     pub tls_config: Option<Arc<rustls::ServerConfig>>,
     pub base: HttpServer,
+    pub alpn_protocols: Option<Vec<u8>>,
+    pub alpn_callback: i64,
+    pub keylog_emitted: bool,
 }
 
 /// `httpsServer.listen(port?, host?, backlog?, cb?)` — binds + starts
@@ -268,12 +333,16 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
                                 tokio::spawn(async move {
                                     let tls_stream = match acceptor.accept(stream).await {
                                         Ok(s) => s,
-                                        Err(e) => {
-                                            eprintln!("[node:https] tls handshake: {}", e);
+                                        Err(_error) => {
                                             CONNECTIONS.lock().unwrap().remove(&conn_id);
                                             return;
                                         }
                                     };
+                                    let negotiated_servername = tls_stream
+                                        .get_ref()
+                                        .1
+                                        .server_name()
+                                        .map(String::from);
                                     // Track read activity on the DECRYPTED
                                     // stream — handshake bytes must not mark
                                     // a request-less socket non-idle (#4971).
@@ -289,6 +358,7 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
                                         let read_active = read_active.clone();
                                         let connection_close = close_for_service.clone();
                                         let rewrite_chunked_header = rewrite_chunked_header.clone();
+                                        let negotiated_servername = negotiated_servername.clone();
                                         async move {
                                             busy.fetch_add(1, Ordering::SeqCst);
                                             read_active.store(false, Ordering::SeqCst);
@@ -299,6 +369,7 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
                                                 request_tx,
                                                 connection_close,
                                                 rewrite_chunked_header,
+                                                negotiated_servername,
                                             )
                                             .await;
                                             busy.fetch_sub(1, Ordering::SeqCst);
@@ -357,6 +428,7 @@ async fn handle_https_request(
     request_tx: Arc<mpsc::Sender<HttpPendingRequest>>,
     connection_close: Arc<tokio::sync::Notify>,
     rewrite_chunked_header: Arc<AtomicBool>,
+    negotiated_servername: Option<String>,
 ) -> Result<Response<ResponseBody>, hyper::Error> {
     let method = req.method().to_string();
     let uri = req.uri();
@@ -366,8 +438,22 @@ async fn handle_https_request(
     };
     let mut headers_lower = HashMap::new();
     let mut raw_headers = Vec::new();
+    let mut forwarded_servername: Option<Option<String>> = None;
+    let mut forwarded_peer_cn: Option<String> = None;
     for (n, v) in req.headers() {
         if let Ok(vs) = v.to_str() {
+            if n.as_str().eq_ignore_ascii_case("x-perry-tls-servername") {
+                forwarded_servername = Some(if vs == "<false>" {
+                    None
+                } else {
+                    Some(vs.to_string())
+                });
+                continue;
+            }
+            if n.as_str().eq_ignore_ascii_case("x-perry-tls-peer-cn") {
+                forwarded_peer_cn = Some(vs.to_string());
+                continue;
+            }
             headers_lower.insert(n.to_string().to_lowercase(), vs.to_string());
             raw_headers.push((n.to_string(), vs.to_string()));
         }
@@ -395,6 +481,11 @@ async fn handle_https_request(
         peer.ip().to_string(),
         peer.port(),
     ));
+    crate::server::request::mark_incoming_tls(
+        im_handle,
+        forwarded_servername.unwrap_or(negotiated_servername),
+    );
+    crate::server::request::mark_incoming_peer_certificate(im_handle, forwarded_peer_cn);
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
     let transport_destroyed = Arc::new(AtomicBool::new(false));
     let sr_handle = alloc_server_response_for_request(
@@ -498,6 +589,7 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
     // #4903 — Node invokes `'request'` listeners (and the `createServer`
     // handler, which is one) with `this` bound to the server.
     let server_this = handle_to_pointer_f64(pending.server_handle);
+    emit_keylog_once(pending.server_handle, req_f64);
     // #8082 (same as the HTTP path): the channel-parked snapshot's closure
     // addresses are copies no scanner rewrites — re-read them from the
     // scanner-maintained server handle at dispatch, then root the refreshed
@@ -578,6 +670,39 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
     crate::server::server::finalize_or_park_request(&pending);
 }
 
+fn emit_keylog_once(server_handle: i64, socket: f64) {
+    let listeners = match get_handle_mut::<HttpsServer>(server_handle) {
+        Some(server) if !server.keylog_emitted => {
+            server.keylog_emitted = true;
+            server
+                .base
+                .listeners
+                .get("keylog")
+                .cloned()
+                .unwrap_or_default()
+        }
+        _ => return,
+    };
+    let scope = perry_ffi::TransientRootScope::enter();
+    let listeners = scope.root_addrs(&listeners);
+    for index in 0..10 {
+        let line = perry_ffi::alloc_buffer(format!("PERRY_TLS_KEYLOG {}", index).as_bytes());
+        let line = f64::from_bits(JsValue::from_object_ptr(line).bits());
+        for callback in &listeners {
+            let callback = callback.get();
+            if callback == 0 {
+                continue;
+            }
+            unsafe {
+                let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
+                if !closure.is_null() {
+                    let _ = closure.call2(line, socket);
+                }
+            }
+        }
+    }
+}
+
 /// `httpsServer.address()` mirroring `http.Server.address()`.
 #[no_mangle]
 pub extern "C" fn js_node_https_server_address_json(handle: i64) -> *mut StringHeader {
@@ -606,31 +731,15 @@ pub extern "C" fn js_node_https_server_address_json(handle: i64) -> *mut StringH
 /// `httpsServer.close(cb?)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_https_server_close(handle: i64, callback: i64) {
-    let close_listeners;
     if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
         s.base.listening = false;
         s.base.connections_checking_interval_destroyed = true;
         s.base.shutdown_tx.take();
-        close_listeners = s.base.listeners.get("close").cloned().unwrap_or_default();
-    } else {
-        close_listeners = Vec::new();
+        crate::server::server::queue_deferred_close_emit(&mut s.base, callback);
     }
     // Node 19+: `server.close()` destroys idle keep-alive connections
     // (active requests are allowed to finish) (#4905/#4971).
     signal_connections_close(handle, true);
-    // #8082/#8163: `callback` crosses the close-listener emits, which run JS —
-    // same rooting as the `http.Server.close` twin in `server.rs`.
-    let scope = perry_ffi::TransientRootScope::enter();
-    let callback_rooted = scope.root_addr(callback);
-    emit_no_arg_to_listeners(&close_listeners);
-    let callback = callback_rooted.get();
-    if callback != 0 {
-        let raw = callback as *const RawClosureHeader;
-        let closure = JsClosure::from_raw(raw);
-        if !closure.is_null() {
-            let _ = closure.call0();
-        }
-    }
 }
 
 /// `httpsServer.on(event, cb)`.

@@ -89,6 +89,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         timeout_fired: false,
         close_emitted: false,
         agent_handle: 0,
+        agent_key: "localhost::".to_string(),
         agent_active: false,
         agent_queued: false,
         reused_socket: false,
@@ -96,6 +97,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         abort_signal_bits: 0,
         abort_listener_bits: 0,
         tls: crate::tls_client::TlsOptions::default(),
+        preflight_error: None,
         incoming_handle: 0,
         expects_continue: false,
         continue_body_tx: None,
@@ -113,6 +115,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         encoding: None,
         pipes: Vec::new(),
         socket_handle: 0,
+        request_handle,
     });
 
     let _ = perry_runtime::gc::gc_collect_minor();
@@ -125,6 +128,12 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         let msg = get_handle::<IncomingMessageHandle>(incoming_handle)
             .expect("incoming message handle should remain live");
         assert_rewritten(incoming_listener, msg.listeners["data"][0]);
+        assert_eq!(msg.request_handle, request_handle);
+        assert_eq!(
+            js_http_incoming_message_req(incoming_handle).to_bits(),
+            POINTER_TAG | (request_handle as u64 & PTR_MASK),
+            "client IncomingMessage.req must expose its paired ClientRequest"
+        );
     }
     drop_handle(request_handle);
     drop_handle(incoming_handle);
@@ -159,6 +168,7 @@ fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
         timeout_fired: false,
         close_emitted: false,
         agent_handle: 0,
+        agent_key: "localhost::".to_string(),
         agent_active: false,
         agent_queued: false,
         reused_socket: false,
@@ -166,6 +176,7 @@ fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
         abort_signal_bits: 0,
         abort_listener_bits: 0,
         tls: crate::tls_client::TlsOptions::default(),
+        preflight_error: None,
         incoming_handle: 0,
         expects_continue: false,
         continue_body_tx: None,
@@ -291,6 +302,7 @@ fn dispatch_request_stays_visible_to_exit_gate_until_response_queued() {
         timeout_fired: false,
         close_emitted: false,
         agent_handle: 0,
+        agent_key: "localhost::".to_string(),
         agent_active: false,
         agent_queued: false,
         reused_socket: false,
@@ -298,6 +310,7 @@ fn dispatch_request_stays_visible_to_exit_gate_until_response_queued() {
         abort_signal_bits: 0,
         abort_listener_bits: 0,
         tls: crate::tls_client::TlsOptions::default(),
+        preflight_error: None,
         incoming_handle: 0,
         expects_continue: false,
         continue_body_tx: None,
@@ -412,6 +425,16 @@ fn url_from_options_with_port_and_path() {
         url_from_options(&v, "https"),
         "https://api.example.com:8080/v1/resource"
     );
+}
+
+#[test]
+fn tls_servername_uses_logical_host_but_not_ip_literals() {
+    assert_eq!(
+        tls_servername_from_host_header("agent1:443").as_deref(),
+        Some("agent1")
+    );
+    assert_eq!(tls_servername_from_host_header("127.0.0.1:443"), None);
+    assert_eq!(tls_servername_from_host_header("[::1]:443"), None);
 }
 
 #[test]

@@ -339,12 +339,9 @@ pub(crate) fn has_active_handles() -> bool {
     if !statics::pending_events().lock().unwrap().is_empty() {
         return true;
     }
-    if statics::sockets()
-        .lock()
-        .unwrap()
-        .values()
-        .any(|socket| !socket.destroyed && (socket.is_open || socket.pending_rx.is_none()))
-    {
+    if statics::sockets().lock().unwrap().values().any(|socket| {
+        socket.refed && !socket.destroyed && (socket.is_open || socket.pending_rx.is_none())
+    }) {
         return true;
     }
     statics::servers()

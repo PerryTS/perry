@@ -13,7 +13,8 @@ use perry_ffi::{ArrayHeader, Handle, JsValue};
 
 use super::{
     agent, extract_string_value, headers_from_options, is_string_value, method_from_options,
-    parse_options_object, timeout_from_options, url_from_options, PTR_MASK, TAG_UNDEFINED,
+    parse_options_object, timeout_from_options, url_from_options, POINTER_TAG, PTR_MASK,
+    TAG_UNDEFINED,
 };
 
 // ------------------------------------------------------------------
@@ -79,13 +80,22 @@ pub(crate) unsafe fn parse_client_args(args_array: i64) -> ClientArgs {
             if out.url.to_bits() == TAG_UNDEFINED {
                 out.url = f;
             }
-        } else if !v.is_undefined() && !v.is_null() && v.is_pointer() {
+        } else if !v.is_undefined() && !v.is_null() && v.is_pointer_or_raw() {
             // #3880: a `URL` *instance* is the URL argument, not the options
             // bag. Route it to the string-URL path via its href. Otherwise it
             // falls through to `parse_options_object`, which JSON-stringifies
             // the URL and throws `Converting circular structure to JSON` on the
             // URL's `searchParams` ↔ owner back-reference.
-            let href = js_url_href_if_url(f);
+            // HIR varargs can carry heap objects either POINTER_TAG-boxed or
+            // as their legacy bare pointer. The URL runtime probe deliberately
+            // accepts only the boxed form, so normalize a raw pointer before
+            // asking for `href` (#4975, `https.get(new URL(...))`).
+            let url_value = if v.is_pointer() {
+                f
+            } else {
+                f64::from_bits(POINTER_TAG | (bits & PTR_MASK))
+            };
+            let href = js_url_href_if_url(url_value);
             if is_string_value(href) {
                 if out.url.to_bits() == TAG_UNDEFINED {
                     out.url = href;

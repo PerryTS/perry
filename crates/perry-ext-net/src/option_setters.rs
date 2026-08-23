@@ -48,6 +48,20 @@ pub extern "C" fn js_net_socket_noop_self(handle: i64) -> i64 {
     handle
 }
 
+/// Keep a socket's pending I/O referenced by the process event loop.
+#[no_mangle]
+pub extern "C" fn js_net_socket_ref(handle: i64) -> i64 {
+    crate::js_ext_net_socket_set_ref(handle, 1);
+    handle
+}
+
+/// Allow the process to exit while this socket's pending I/O continues.
+#[no_mangle]
+pub extern "C" fn js_net_socket_unref(handle: i64) -> i64 {
+    crate::js_ext_net_socket_set_ref(handle, 0);
+    handle
+}
+
 /// `socket.setTimeout(msecs, callback?)` — validates `msecs` the way Node does
 /// (number → `ERR_INVALID_ARG_TYPE`, non-negative finite → `ERR_OUT_OF_RANGE`,
 /// #2013) and then behaves as the chainable no-op (the underlying idle-timeout

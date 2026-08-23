@@ -92,6 +92,10 @@ pub struct IncomingMessage {
     /// #4904: true once `socket`/`connection` has been assigned, so
     /// server-attached requests also honor the override on reads.
     pub socket_overridden: bool,
+    pub is_tls: bool,
+    pub tls_servername: Option<String>,
+    pub connection_bytes_written: u64,
+    pub peer_certificate_cn: Option<String>,
 }
 
 impl IncomingMessage {
@@ -128,6 +132,10 @@ impl IncomingMessage {
             standalone: false,
             socket_value: f64::from_bits(crate::server::types::TAG_UNDEFINED),
             socket_overridden: false,
+            is_tls: false,
+            tls_servername: None,
+            connection_bytes_written: 0,
+            peer_certificate_cn: None,
         }
     }
 }
@@ -853,6 +861,33 @@ pub(crate) fn close_incoming_message(handle: i64) {
 /// Allocate a fresh `IncomingMessage` and return its handle id.
 pub(crate) fn alloc_incoming_message(im: IncomingMessage) -> i64 {
     register_handle(im)
+}
+
+pub(crate) fn mark_incoming_tls(handle: i64, servername: Option<String>) {
+    if let Some(message) = get_handle_mut::<IncomingMessage>(handle) {
+        message.is_tls = true;
+        message.tls_servername = servername;
+    }
+}
+
+pub(crate) fn mark_incoming_peer_certificate(handle: i64, common_name: Option<String>) {
+    if let Some(message) = get_handle_mut::<IncomingMessage>(handle) {
+        message.peer_certificate_cn = common_name;
+    }
+}
+
+pub(crate) fn mark_connection_written(handle: i64) {
+    if let Some(message) = get_handle_mut::<IncomingMessage>(handle) {
+        message.connection_bytes_written = message.connection_bytes_written.max(1);
+    }
+}
+
+pub(crate) fn incoming_peer_certificate_json(handle: i64) -> *mut StringHeader {
+    let value = get_handle::<IncomingMessage>(handle)
+        .and_then(|message| message.peer_certificate_cn.clone())
+        .map(|cn| serde_json::json!({"subject": {"CN": cn}}))
+        .unwrap_or_else(|| serde_json::json!({}));
+    alloc_string(&value.to_string()).as_raw()
 }
 
 /// Re-NaN-box a handle id with `POINTER_TAG` so JS-side method dispatch

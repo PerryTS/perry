@@ -131,6 +131,9 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
         for cb in server.deferred_listen_cbs.iter_mut() {
             visitor.visit_i64_slot(cb);
         }
+        for cb in server.deferred_close_cbs.iter_mut() {
+            visitor.visit_i64_slot(cb);
+        }
     }
 
     iter_handles_of_mut::<HttpServer, _>(|s| {
@@ -138,6 +141,9 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     });
     iter_handles_of_mut::<HttpsServer, _>(|s| {
         visitor.visit_i64_slot(&mut s.handler);
+        if s.alpn_callback != 0 {
+            visitor.visit_i64_slot(&mut s.alpn_callback);
+        }
         scan_base_server_roots(&mut s.base, visitor);
     });
     iter_handles_of_mut::<Http2SecureServer, _>(|s| {
@@ -378,6 +384,9 @@ mod tests {
                 https_base_handler,
                 listener_map("listening", https_listener),
             ),
+            alpn_protocols: Some(vec![8, b'h', b't', b't', b'p', b'/', b'1', b'.', b'1']),
+            alpn_callback: 0,
+            keylog_emitted: false,
         });
 
         let h2_handler = young_gc_root();

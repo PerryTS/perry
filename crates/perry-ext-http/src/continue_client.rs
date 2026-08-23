@@ -163,7 +163,7 @@ pub(crate) fn dispatch_expect_continue(
         // #5892 remainder: same in-flight guard as `dispatch_request` — the
         // continue exchange must stay visible to the exit gate for its whole
         // lifetime, not just until the outer spawn closure returns.
-        let inflight_guard = ClientInflightGuard::new();
+        let inflight_guard = ClientInflightGuard::new(request_handle);
         let jh = handle.spawn(async move {
             let _inflight = inflight_guard;
             if let Err(error_message) = run_exchange(

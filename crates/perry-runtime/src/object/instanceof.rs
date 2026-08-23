@@ -211,6 +211,21 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         }
         return f64::from_bits(TAG_FALSE);
     }
+    // Native http(s).Agent values carry the generic callable export's own
+    // `@@hasInstance`, whose ordinary prototype walk cannot see small native
+    // handles. Brand-check them before that generic hook consumes the request.
+    if let Some((module, method)) = unsafe { bound_native_callable_module_and_method(type_ref) } {
+        if matches!(module.as_str(), "http" | "https") && method == "Agent" {
+            let matched = small_native_handle_id(value)
+                .zip(crate::object::http_agent_handle_probe())
+                .is_some_and(|(handle, probe)| unsafe { probe(handle) });
+            return f64::from_bits(if matched {
+                crate::value::TAG_TRUE
+            } else {
+                TAG_FALSE
+            });
+        }
+    }
     // Spec step (InstanceofOperator): consult the RHS's OWN `@@hasInstance`
     // first. zod 4 builds `ZodType` as a plain FUNCTION and installs its brand
     // check via `Object.defineProperty(ZodTypeFn, Symbol.hasInstance, { value })`,

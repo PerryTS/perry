@@ -46,9 +46,16 @@ use perry_ffi::{
     GcRootVisitor, Handle, JsClosure, JsString, JsValue, ObjectHeader, RawClosureHeader,
     StringHeader,
 };
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::sync::Once;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Mutex, Once};
+
+mod tls_compat;
+pub(crate) use tls_compat::{
+    client_for_agent_tls, emit_client_keylog, invalidate_all_tls_sessions, merge_tls_defaults,
+    parsed_pfx_identity, request_key_from_options, resolve_https_agent_handle,
+    tls_session_for_request,
+};
+use tls_compat::{emit_default_https_agent, sync_default_https_agent};
 
 const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
@@ -135,6 +142,17 @@ pub struct AgentHandle {
     /// socket that has since been reused and returned to the pool again.
     pub free_socket_generations: HashMap<Handle, u64>,
     pub next_free_socket_generation: u64,
+    /// Synthetic public session identity layered over rustls' real cached
+    /// sessions. Node exposes opaque session bytes through `TLSSocket`, while
+    /// reqwest intentionally hides them; this mirror preserves the cache and
+    /// eviction semantics without exposing backend internals.
+    pub max_cached_sessions: usize,
+    pub tls_sessions: HashMap<String, u64>,
+    pub tls_session_order: VecDeque<String>,
+    pub next_tls_session: u64,
+    /// HTTPS options supplied to the Agent constructor. Request-local
+    /// options override these before verifier/session selection.
+    pub(crate) tls_defaults: crate::tls_client::TlsOptions,
 }
 
 impl Default for AgentHandle {
@@ -160,6 +178,11 @@ impl Default for AgentHandle {
             free_socket_handles: HashMap::new(),
             free_socket_generations: HashMap::new(),
             next_free_socket_generation: 0,
+            max_cached_sessions: 100,
+            tls_sessions: HashMap::new(),
+            tls_session_order: VecDeque::new(),
+            next_tls_session: 0,
+            tls_defaults: crate::tls_client::TlsOptions::default(),
         }
     }
 }
@@ -257,6 +280,7 @@ pub(crate) fn agent_pool_config(handle: Handle) -> Option<(bool, f64, f64)> {
 /// `__set_maxFreeSockets` / `__set_keepAliveMsecs` setters.
 fn invalidate_agent_client(handle: Handle) {
     let _ = AGENT_CLIENTS.lock().map(|mut c| c.remove(&handle));
+    tls_compat::invalidate_tls_client_cache(handle);
 }
 
 // ------------------------------------------------------------------
@@ -573,6 +597,7 @@ extern "C" fn agent_socket_event(handle: Handle, event_ptr: *const u8, event_len
             .retain(|_, sockets| !sockets.is_empty());
         agent.free_socket_generations.remove(&handle);
     });
+    tls_compat::sync_default_https_agent_if_initialized();
 }
 
 fn ensure_agent_socket_hook_registered() {
@@ -603,6 +628,12 @@ pub(crate) fn request_key(url: &str) -> String {
 
 /// Acquire an Agent slot or append the request to the per-origin queue.
 pub(crate) fn admit_request(handle: Handle, key: &str, request_handle: Handle) -> PoolAdmission {
+    let result = admit_request_inner(handle, key, request_handle);
+    sync_default_https_agent(handle);
+    result
+}
+
+fn admit_request_inner(handle: Handle, key: &str, request_handle: Handle) -> PoolAdmission {
     let Some(agent) = get_handle_mut::<AgentHandle>(handle) else {
         return PoolAdmission::Active {
             reused: false,
@@ -669,6 +700,28 @@ pub(crate) fn admit_request(handle: Handle, key: &str, request_handle: Handle) -
 /// and is returned for dispatch; otherwise successful keep-alive exchanges
 /// become one observable idle pooled socket.
 pub(crate) fn release_request(
+    handle: Handle,
+    key: &str,
+    socket: Handle,
+    keep_alive: bool,
+) -> Option<(Handle, bool, Handle)> {
+    let result = release_request_inner(handle, key, socket, keep_alive);
+    let became_free = get_handle_mut::<AgentHandle>(handle)
+        .and_then(|agent| agent.free_socket_handles.get(key))
+        .is_some_and(|sockets| sockets.contains(&socket));
+    sync_default_https_agent(handle);
+    if became_free {
+        emit_default_https_agent(
+            handle,
+            "free",
+            handle_value(socket),
+            f64::from_bits(TAG_UNDEFINED),
+        );
+    }
+    result
+}
+
+fn release_request_inner(
     handle: Handle,
     key: &str,
     socket: Handle,
@@ -795,6 +848,7 @@ pub(crate) fn expire_free_socket(handle: Handle, key: &str, socket: Handle, gene
     }
     perry_ext_net::js_ext_net_destroy_socket(socket);
     invalidate_agent_client(handle);
+    sync_default_https_agent(handle);
 }
 
 // ------------------------------------------------------------------
@@ -809,6 +863,9 @@ pub(crate) fn scan_agent_roots(visitor: &mut GcRootVisitor<'_>) {
         }
         if agent.create_socket != 0 {
             visitor.visit_i64_slot(&mut agent.create_socket);
+        }
+        if agent.tls_defaults.check_server_identity_callback != 0 {
+            visitor.visit_i64_slot(&mut agent.tls_defaults.check_server_identity_callback);
         }
     });
 }
@@ -869,6 +926,22 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_property(
         "sockets" => js_http_agent_sockets(handle),
         "freeSockets" => js_http_agent_free_sockets(handle),
         "requests" => js_http_agent_requests(handle),
+        "_sessionCache" => {
+            let map = empty_object_f64();
+            let (packed, shape_id) = perry_ffi::build_object_shape(&["map"]);
+            let object = perry_ffi::js_object_alloc_with_shape(
+                shape_id,
+                1,
+                packed.as_ptr(),
+                packed.len() as u32,
+            );
+            if object.is_null() {
+                f64::from_bits(TAG_UNDEFINED)
+            } else {
+                perry_ffi::js_object_set_field(object, 0, JsValue::from_bits(map.to_bits()));
+                f64::from_bits(JsValue::from_object_ptr(object as *mut u8).bits())
+            }
+        }
         _ => f64::from_bits(TAG_UNDEFINED),
     }
 }
@@ -975,6 +1048,12 @@ unsafe fn agent_new_with_protocol(options_f64: f64, default_protocol: &str) -> H
         ..AgentHandle::default()
     };
 
+    if default_protocol == "https:" {
+        agent.tls_defaults = crate::tls_client::parse_tls_options(options_f64);
+        agent.tls_defaults.check_server_identity_from_agent =
+            agent.tls_defaults.check_server_identity_callback != 0;
+    }
+
     if !raw_object_ptr_is_null(options_f64) {
         // Booleans first so `keepAlive: false` plus `maxSockets: -1`
         // still hits the maxSockets validator (test-suite expects the
@@ -1011,6 +1090,13 @@ unsafe fn agent_new_with_protocol(options_f64: f64, default_protocol: &str) -> H
         }
         if let Some(v) = read_number_field(options_f64, "timeout") {
             agent.timeout_ms = Some(v);
+        }
+        if let Some(v) = read_number_field(options_f64, "maxCachedSessions") {
+            agent.max_cached_sessions = if v.is_finite() && v > 0.0 {
+                v as usize
+            } else {
+                0
+            };
         }
         if let Some(s) = read_string_field(options_f64, "scheduling") {
             // Node throws TypeError [ERR_INVALID_ARG_VALUE] for
@@ -1077,6 +1163,10 @@ pub unsafe extern "C" fn js_http_agent_get_name(
     let mut name = build_http_agent_name(opts.as_ref());
     if is_https {
         append_https_agent_name_fields(&mut name, opts.as_ref());
+        if let Some(identity) = parsed_pfx_identity(opts.as_ref(), options_f64) {
+            name.push_str(":pfxid=");
+            name.push_str(&identity);
+        }
     }
     alloc_string(&name).as_raw()
 }
@@ -1292,6 +1382,7 @@ pub extern "C" fn js_http_agent_destroy(handle: Handle) -> Handle {
         // `requests` mirror instead of orphaning those ClientRequests.
     }
     invalidate_agent_client(handle);
+    sync_default_https_agent(handle);
     handle
 }
 
