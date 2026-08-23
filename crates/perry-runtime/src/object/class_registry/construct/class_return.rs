@@ -39,7 +39,7 @@ fn constructor_return_overrides_this(value: f64) -> bool {
     let bits = value.to_bits();
     let raw_addr = if jv.is_pointer() {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if (bits >> 48) == 0 && bits >= 0x1000 {
+    } else if (bits >> 48) == 0 {
         bits as usize
     } else {
         0
@@ -72,13 +72,12 @@ fn constructor_return_overrides_this(value: f64) -> bool {
         if !arr.is_null() {
             return true;
         }
-        if !is_valid_obj_ptr(raw as *const u8) {
+        let Some(gc_header) = crate::value::addr_class::try_read_tracked_gc_header(raw as usize)
+        else {
             return false;
-        }
-        let gc_header =
-            (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        };
         matches!(
-            (*gc_header).obj_type,
+            (*gc_header.as_ptr()).obj_type,
             // Per spec, a constructor returning ANY Object overrides the
             // implicit `this`. Promises are objects — a user constructor like
             // `function P(exec){ return new Promise(...) }` (the

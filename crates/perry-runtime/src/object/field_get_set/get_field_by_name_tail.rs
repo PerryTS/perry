@@ -593,6 +593,12 @@ pub(crate) fn get_field_by_name_object_tail(
                     if val.to_bits() != crate::value::TAG_UNDEFINED {
                         return JSValue::from_bits(val.to_bits());
                     }
+                    if matches!(name_str, "caller" | "arguments") {
+                        crate::fs::validate::throw_type_error_with_code(
+                            "Restricted function property access",
+                            "ERR_INVALID_ARG_TYPE",
+                        );
+                    }
                     // #3664: `g.constructor` for a generator/async-generator
                     // function resolves through its [[Prototype]] (`%Generator%`)
                     // to `%GeneratorFunction%` / `%AsyncGeneratorFunction%`.
@@ -602,6 +608,11 @@ pub(crate) fn get_field_by_name_object_tail(
                         if let Some(ctor) =
                             crate::object::generator_function_constructor_of(obj as usize)
                         {
+                            return JSValue::from_bits(ctor.to_bits());
+                        }
+                        let ctor =
+                            super::super::js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
+                        if !JSValue::from_bits(ctor.to_bits()).is_undefined() {
                             return JSValue::from_bits(ctor.to_bits());
                         }
                     }
@@ -703,12 +714,6 @@ pub(crate) fn get_field_by_name_object_tail(
                     b"cause" => {
                         let v = crate::error::js_error_get_cause(err_ptr);
                         return JSValue::from_bits(v.to_bits());
-                    }
-                    b"toString" => {
-                        let this_f64 =
-                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                        let result = js_class_method_bind(this_f64, b"toString".as_ptr(), 8);
-                        return JSValue::from_bits(result.to_bits());
                     }
                     b"constructor" => {
                         let name = crate::error::error_kind_constructor_name((*err_ptr).error_kind);
@@ -1209,8 +1214,11 @@ pub(crate) fn get_field_by_name_object_tail(
             let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            // `next` is an ordinary prototype method.  Do not bind it to the
+            // iterator at property-read time: `iterator.next.call(other)` must
+            // receive `other` and perform the spec brand check.  The remaining
+            // legacy synthetic methods still use the bound-method path.
             let bind_name: Option<&'static [u8]> = match key_bytes {
-                b"next" => Some(b"next"),
                 b"return" => Some(b"return"),
                 b"throw" => Some(b"throw"),
                 b"@@iterator" => Some(b"@@iterator"),
@@ -1222,7 +1230,9 @@ pub(crate) fn get_field_by_name_object_tail(
                 let result = js_class_method_bind(this_f64, name.as_ptr(), name.len());
                 return JSValue::from_bits(result.to_bits());
             }
-            return JSValue::undefined();
+            if key_bytes != b"next" {
+                return JSValue::undefined();
+            }
         }
 
         // Issue #649: native-module sub-namespace property access.

@@ -1225,6 +1225,35 @@ pub fn lower_module_full(
     crate::dynamic_import::detect_top_level_await(&mut module);
     let is_esm_entry =
         !module.imports.is_empty() || !module.exports.is_empty() || module.has_top_level_await;
+    if ctx.is_entry_module && !is_esm_entry && module.references_global_this {
+        let script_var_decl_ids: HashSet<_> = ctx
+            .script_var_decl_names
+            .iter()
+            .filter_map(|name| ctx.lookup_local(name))
+            .collect();
+        // Script `var` bindings are properties of the global object. Insert
+        // the mirror immediately after each top-level initializer so code
+        // later in the same script observes the initialized value through
+        // `globalThis` (ES modules keep their lexical/module binding only).
+        let mut reflected = Vec::with_capacity(module.init.len());
+        for stmt in std::mem::take(&mut module.init) {
+            let global_var = match &stmt {
+                Stmt::Let { id, name, .. } if script_var_decl_ids.contains(id) => {
+                    Some((*id, name.clone()))
+                }
+                _ => None,
+            };
+            reflected.push(stmt);
+            if let Some((id, name)) = global_var {
+                reflected.push(Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::GlobalThisExpr),
+                    property: name,
+                    value: Box::new(Expr::LocalGet(id)),
+                }));
+            }
+        }
+        module.init = reflected;
+    }
     if ctx.is_entry_module && !is_esm_entry {
         const RESTRICTED_GLOBAL_NAMES: [&str; 3] = ["undefined", "NaN", "Infinity"];
         let restricted_scan_stmts: Vec<ast::Stmt> = ast_module

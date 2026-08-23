@@ -516,15 +516,24 @@ pub unsafe fn dispatch_buffer_method(
             crate::buffer::array_buffer_transfer(addr, args)
         }
         "slice" | "subarray" => {
-            let len = (*buf_ptr).length as i32;
-            let (start, end) = if crate::buffer::is_array_buffer(addr)
-                || crate::buffer::is_shared_array_buffer(addr)
-            {
+            let source_is_array_buffer = crate::buffer::is_array_buffer(addr);
+            let source_is_shared_array_buffer = crate::buffer::is_shared_array_buffer(addr);
+            let source_is_any_array_buffer =
+                source_is_array_buffer || source_is_shared_array_buffer;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let buffer = scope.root_raw_mut_ptr(buf_ptr);
+            let len =
+                buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| (*buf).length as i32);
+            let (start, end) = if source_is_any_array_buffer {
+                // Instance-call lowering reaches this fused dispatch directly,
+                // bypassing the prototype thunk. The shared path therefore owns
+                // both index coercion and ArrayBufferSpeciesCreate ordering.
                 // A detached ArrayBuffer refuses slice with a TypeError
                 // (ES2024 DetachArrayBuffer; `transfer` is the only detach
                 // source in Perry).
-                if crate::buffer::is_detached_buffer(addr)
-                    && !crate::buffer::is_shared_array_buffer(addr)
+                if buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
+                    crate::buffer::is_detached_buffer(buf as usize)
+                }) && !source_is_shared_array_buffer
                 {
                     crate::collection_iter::throw_type_error(
                         "Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer",
@@ -542,19 +551,40 @@ pub unsafe fn dispatch_buffer_method(
                 } else {
                     ab_slice_index(args[1])
                 };
+                // SpeciesConstructor is observed only after BOTH index
+                // coercions. It may run getters and collect, so the buffer is
+                // re-read from its handle again by the copy below.
+                if method_name == "slice" {
+                    buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
+                        super::global_this::validate_array_buffer_species_constructor(buf as usize)
+                    });
+                    // ArrayBuffer.prototype.slice checks detachment again
+                    // after the observable species lookup/creation sequence.
+                    if !source_is_shared_array_buffer
+                        && buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
+                            crate::buffer::is_detached_buffer(buf as usize)
+                        })
+                    {
+                        crate::collection_iter::throw_type_error(
+                            "Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer",
+                        );
+                    }
+                }
                 (s, e)
             } else {
                 let s = arg_i32(0);
                 let e = if args.len() >= 2 { arg_i32(1) } else { len };
                 (s, e)
             };
-            let result = crate::buffer::js_buffer_slice(buf_ptr, start, end);
+            let result = buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
+                crate::buffer::js_buffer_slice(buf, start, end)
+            });
             // #2877: `ArrayBuffer.prototype.slice` returns a NEW ArrayBuffer
             // (a copy), so mark the result so `ArrayBuffer.isView(slice)` is
             // false and a subsequent `new Uint8Array(slice)` aliases it.
-            if crate::buffer::is_array_buffer(addr) {
+            if source_is_array_buffer {
                 crate::buffer::mark_as_array_buffer(result as usize);
-            } else if crate::buffer::is_shared_array_buffer(addr) {
+            } else if source_is_shared_array_buffer {
                 crate::buffer::mark_as_shared_array_buffer(result as usize);
             }
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())

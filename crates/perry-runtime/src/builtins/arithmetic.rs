@@ -111,15 +111,6 @@ pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
     if eq_is_object(a) && eq_is_object(b) {
         return JSValue::bool(false);
     }
-    // Boxed primitives compare via their wrapped primitive value under
-    // abstract equality (`new Number(5) == 5`, and sloppy primitive accessors
-    // return boxed receivers).
-    if let Some((_, payload)) = boxed_primitive_payload(f64::from_bits(a.bits())) {
-        return js_loose_eq(JSValue::from_bits(payload.to_bits()), b);
-    }
-    if let Some((_, payload)) = boxed_primitive_payload(f64::from_bits(b.bits())) {
-        return js_loose_eq(a, JSValue::from_bits(payload.to_bits()));
-    }
     // Object == primitive → ToPrimitive(object), then retry (ES2024 §7.2.15
     // steps 10-11). Object-vs-object was settled above; symbols are primitives
     // (`eq_is_object` excludes them) and correctly fall through to not-equal.
@@ -150,8 +141,8 @@ pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
         );
     }
     // BigInt abstract equality (ES2024 §7.2.15). Neither side is
-    // null/undefined here and boxed wrappers (incl. `Object(0n)`) have already
-    // been unwrapped above.
+    // null/undefined here and boxed wrappers have already gone through the
+    // observable ToPrimitive operation above.
     if a.is_bigint() || b.is_bigint() {
         // BigInt == BigInt → compare by mathematical value.
         if a.is_bigint() && b.is_bigint() {

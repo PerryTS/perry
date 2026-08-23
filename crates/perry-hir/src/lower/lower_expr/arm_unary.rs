@@ -523,6 +523,31 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                 let prop_name = prop.sym.as_ref();
                 let is_global =
                     ctx.lookup_local(obj_name).is_none() && ctx.lookup_func(obj_name).is_none();
+                // Global helper `.length` reads normally fold to a numeric
+                // constant. Under `delete`, preserve the reference so the
+                // configurable synthesized closure slot is actually removed.
+                if is_global
+                    && prop_name == "length"
+                    && matches!(
+                        obj_name,
+                        "decodeURI"
+                            | "decodeURIComponent"
+                            | "encodeURI"
+                            | "encodeURIComponent"
+                            | "eval"
+                            | "isFinite"
+                            | "isNaN"
+                            | "parseFloat"
+                            | "parseInt"
+                    )
+                {
+                    let object = lower_expr(ctx, member.obj.as_ref())?;
+                    return Ok(Expr::Delete(Box::new(Expr::PropertyGet {
+                        object: Box::new(object),
+                        property: "length".to_string(),
+                        byte_offset: member.span.lo.0,
+                    })));
+                }
                 if is_global
                     && obj_name == "Number"
                     && matches!(

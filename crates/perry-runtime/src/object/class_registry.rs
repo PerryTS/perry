@@ -43,6 +43,7 @@ mod class_meta;
 mod construct;
 pub(crate) use construct::scan_current_new_target_root_mut;
 mod dispatch;
+mod function_prototype;
 mod gc_roots;
 pub(crate) mod parent_static;
 mod prototype_methods;
@@ -117,15 +118,18 @@ pub use prototype_methods::{
 
 // ── construct.rs / vm_brand.rs ──────────────────────────────────────────────
 pub(crate) use construct::{
-    extends_target_must_throw, function_would_have_own_prototype, is_callable_function_value,
-    js_value_is_constructor, lookup_prototype_method, nm_ctor_child_process, nm_ctor_cluster,
-    nm_ctor_fs, nm_ctor_readline, nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty,
-    nm_ctor_vm, nm_ctor_wasi, ordinary_function_prototype_value_for_read, promise_parent_in_chain,
+    extends_target_must_throw, is_callable_function_value, js_value_is_constructor,
+    lookup_prototype_method, nm_ctor_child_process, nm_ctor_cluster, nm_ctor_fs, nm_ctor_readline,
+    nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi,
+    promise_parent_in_chain,
 };
 pub use construct::{
-    js_ctor_return_override, js_function_prototype_value_for_read, js_new_function_construct,
-    js_new_function_construct_apply, js_new_function_construct_with_new_target,
-    js_new_target_value,
+    js_ctor_return_override, js_new_function_construct, js_new_function_construct_apply,
+    js_new_function_construct_with_new_target, js_new_target_value,
+};
+pub use function_prototype::js_function_prototype_value_for_read;
+pub(crate) use function_prototype::{
+    function_would_have_own_prototype, ordinary_function_prototype_value_for_read,
 };
 pub(crate) use vm_brand::brand_vm_script_instance;
 

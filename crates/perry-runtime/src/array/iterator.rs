@@ -348,7 +348,16 @@ fn async_from_sync_continue(iter: f64, step_result: f64, close_on_rejection: boo
         if close_on_rejection { 1.0 } else { 0.0 },
     );
 
-    let value_promise = crate::promise::js_promise_resolved(value);
+    let value_promise = match crate::promise::js_promise_resolved_catching(value) {
+        Ok(promise) => promise,
+        Err(reason) => {
+            if close_on_rejection {
+                async_from_sync_close(iter);
+            }
+            crate::promise::js_promise_reject(outer, reason);
+            return boxed_promise_value(outer);
+        }
+    };
     crate::promise::js_promise_then(value_promise, on_fulfilled, on_rejected);
     boxed_promise_value(outer)
 }

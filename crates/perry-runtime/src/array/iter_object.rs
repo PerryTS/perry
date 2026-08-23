@@ -42,6 +42,10 @@ const KIND_ENTRIES: i32 = 2;
 /// array iterator yields `value: undefined`), and `return()` terminates
 /// the iterator. Produced only by `StatementSync.prototype.iterate()`.
 const KIND_VALUES_NULL_DONE: i32 = 3;
+/// Values iterator over a live Arguments exotic object. Unlike an Array
+/// iterator this reads `length` and each indexed property from the Arguments
+/// object on every step, so mutations made before exhaustion are observable.
+const KIND_ARGUMENTS_VALUES: i32 = 4;
 
 /// Clean a NaN-boxed array pointer to a raw `*mut ArrayHeader`, or null.
 fn unbox_array_ptr(value: f64) -> *mut ArrayHeader {
@@ -52,19 +56,34 @@ fn unbox_array_ptr(value: f64) -> *mut ArrayHeader {
     raw as *mut ArrayHeader
 }
 
-unsafe fn alloc_iterator(arr_ptr: *mut ArrayHeader, kind: i32) -> f64 {
-    let obj = js_object_alloc(ARRAY_ITERATOR_CLASS_ID, 3);
+unsafe fn alloc_iterator_backing(backing: f64, kind: i32) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // The iterator allocation and the lazy prototype bootstrap can both
+    // collect. Keep the incoming backing and the new iterator relocatable.
+    let backing_h = scope.root_nanbox_f64(backing);
+    let obj_h = scope.root_raw_mut_ptr(js_object_alloc(ARRAY_ITERATOR_CLASS_ID, 3));
     // Field 0: backing array (NaN-boxed pointer so the GC scanner keeps it).
-    let arr_nan = js_nanbox_pointer(arr_ptr as i64);
-    js_object_set_field(obj, 0, JSValue::from_bits(arr_nan.to_bits()));
+    obj_h.with_mut_ptr(|obj| {
+        js_object_set_field(
+            obj,
+            0,
+            JSValue::from_bits(backing_h.get_nanbox_f64().to_bits()),
+        )
+    });
     // Field 1: cursor index, starts at 0.
-    js_object_set_field(obj, 1, JSValue::number(0.0));
+    obj_h.with_mut_ptr(|obj| js_object_set_field(obj, 1, JSValue::number(0.0)));
     // Field 2: iterator kind.
-    js_object_set_field(obj, 2, JSValue::number(kind as f64));
+    obj_h.with_mut_ptr(|obj| js_object_set_field(obj, 2, JSValue::number(kind as f64)));
     // Link `[[Prototype]]` to the shared `%ArrayIteratorPrototype%` singleton so
     // `Object.getPrototypeOf(it)` and the inherited `.next` read resolve.
-    crate::object::attach_iterator_prototype(obj, ARRAY_ITERATOR_CLASS_ID);
+    obj_h
+        .with_mut_ptr(|obj| crate::object::attach_iterator_prototype(obj, ARRAY_ITERATOR_CLASS_ID));
+    let (_, obj) = obj_h.across_mut::<ObjectHeader, _>(|| ());
     js_nanbox_pointer(obj as i64)
+}
+
+unsafe fn alloc_iterator(arr_ptr: *mut ArrayHeader, kind: i32) -> f64 {
+    alloc_iterator_backing(js_nanbox_pointer(arr_ptr as i64), kind)
 }
 
 /// `arr.values()` iterator — yields each element value.
@@ -122,6 +141,16 @@ pub fn array_entries_iter(arr_f64: f64) -> f64 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     unsafe { alloc_iterator(arr_ptr, KIND_ENTRIES) }
+}
+
+/// `arguments[Symbol.iterator]()` — a live Array-style values iterator over an
+/// Arguments exotic object. Snapshotting to an Array here loses the specified
+/// expansion/truncation behavior before exhaustion.
+pub fn arguments_values_iter(obj: *const ObjectHeader) -> f64 {
+    if obj.is_null() || !crate::object::is_arguments_object(obj) {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    unsafe { alloc_iterator_backing(js_nanbox_pointer(obj as i64), KIND_ARGUMENTS_VALUES) }
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +636,11 @@ pub unsafe fn dispatch_array_iterator_method(
     };
     match method_name {
         "next" => {
+            if let Some(result) =
+                crate::object::call_overridden_iterator_next(iter_obj(), ARRAY_ITERATOR_CLASS_ID)
+            {
+                return result;
+            }
             if kind == KIND_VALUES_NULL_DONE {
                 let epoch_ptr = js_nanbox_get_pointer(f64::from_bits(
                     js_object_get_field(iter_obj(), 3).bits(),
@@ -632,15 +666,17 @@ pub unsafe fn dispatch_array_iterator_method(
                 }
                 return make_iter_result(done_value(), true);
             }
-            let arr_ptr = js_nanbox_get_pointer(backing_f64) as *const ArrayHeader;
+            let backing_ptr = js_nanbox_get_pointer(backing_f64);
             // Field 1: current index.
             let idx_field = js_object_get_field(iter_obj(), 1);
             let idx = f64::from_bits(idx_field.bits()) as u32;
 
-            let len = if arr_ptr.is_null() {
-                0u32
+            let len = if kind == KIND_ARGUMENTS_VALUES {
+                crate::object::arguments_object_length(backing_ptr as *const ObjectHeader)
+            } else if backing_ptr == 0 {
+                0
             } else {
-                crate::array::js_array_length(arr_ptr)
+                crate::array::js_array_length(backing_ptr as *const ArrayHeader)
             };
 
             if idx >= len {
@@ -662,17 +698,21 @@ pub unsafe fn dispatch_array_iterator_method(
             // field 0, which the collector DOES rewrite, instead of reusing
             // the pre-store copy. `iter_obj()` re-reads the iterator's own
             // address from its root for the same reason.
-            let arr_ptr =
+            let backing_ptr =
                 js_nanbox_get_pointer(f64::from_bits(js_object_get_field(iter_obj(), 0).bits()))
-                    as *const ArrayHeader;
-            let elem = if arr_ptr.is_null() {
+                    as usize;
+            let elem = if kind == KIND_ARGUMENTS_VALUES {
+                crate::object::arguments_object_index_value(backing_ptr as *const ObjectHeader, idx)
+            } else if backing_ptr == 0 {
                 f64::from_bits(TAG_UNDEFINED)
             } else {
-                crate::array::js_array_get_f64(arr_ptr, idx)
+                crate::array::js_array_get_f64(backing_ptr as *const ArrayHeader, idx)
             };
 
             let value = match kind {
-                KIND_VALUES | KIND_VALUES_NULL_DONE => JSValue::from_bits(elem.to_bits()),
+                KIND_VALUES | KIND_VALUES_NULL_DONE | KIND_ARGUMENTS_VALUES => {
+                    JSValue::from_bits(elem.to_bits())
+                }
                 KIND_KEYS => JSValue::number(idx as f64),
                 KIND_ENTRIES => {
                     let pair = make_pair_array(idx, elem);

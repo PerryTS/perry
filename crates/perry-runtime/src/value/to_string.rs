@@ -706,13 +706,30 @@ unsafe fn call_method_for_primitive(
     }
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let key_handle = scope.root_string_ptr(key);
-    let key_ptr = key_handle.get_raw_const_ptr::<crate::string::StringHeader>();
-    let has_own_method_key = crate::object::own_key_present(obj_ptr as *mut _, key_ptr);
-    let method = crate::object::js_object_get_field_by_name(obj_ptr, key_ptr);
+    // Presence is independent from the value returned by Get. In particular,
+    // an inherited accessor may exist yet return undefined/null; that is a
+    // present but non-callable method, so OrdinaryToPrimitive must continue to
+    // the other candidate rather than synthesizing a boxed-primitive default.
+    // `own_key_present(receiver)` cannot see that inherited descriptor.
+    let key_value = key_handle.with_const_ptr::<crate::string::StringHeader, _>(|key_ptr| {
+        f64::from_bits(
+            crate::value::JSValue::string_ptr(key_ptr as *mut crate::string::StringHeader).bits(),
+        )
+    });
+    let has_method_key =
+        crate::object::js_object_has_property(value_handle.get_nanbox_f64(), key_value).to_bits()
+            == crate::value::TAG_TRUE;
+    // `HasProperty` can run a Proxy trap and collect. Refresh the receiver and
+    // key from their handles before the subsequent ordinary Get.
+    let recv = value_handle.get_nanbox_f64();
+    let obj_ptr = (recv.to_bits() & POINTER_MASK) as *const crate::object::ObjectHeader;
+    let method = key_handle.with_const_ptr::<crate::string::StringHeader, _>(|key_ptr| {
+        crate::object::js_object_get_field_by_name(obj_ptr, key_ptr)
+    });
     // Must be a callable closure value (POINTER_TAG + CLOSURE_MAGIC).
     let method_bits = method.bits();
     if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
-        return if has_own_method_key || (!method.is_undefined() && !method.is_null()) {
+        return if has_method_key || (!method.is_undefined() && !method.is_null()) {
             MethodOutcome::NonPrimitive
         } else {
             MethodOutcome::Absent
@@ -720,7 +737,7 @@ unsafe fn call_method_for_primitive(
     }
     let method_ptr = (method_bits & POINTER_MASK) as usize;
     if !crate::closure::is_closure_ptr(method_ptr) {
-        return if has_own_method_key {
+        return if has_method_key {
             MethodOutcome::NonPrimitive
         } else {
             MethodOutcome::Absent
