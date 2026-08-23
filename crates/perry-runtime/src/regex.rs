@@ -636,11 +636,16 @@ pub fn is_registered_regex(addr: usize) -> bool {
 
 /// Internal helper: Get string data from StringHeader
 pub(crate) fn string_as_str<'a>(s: *const StringHeader) -> &'a str {
+    unsafe { std::str::from_utf8_unchecked(string_as_bytes(s)) }
+}
+
+/// Internal helper: get the byte payload without assuming it is Unicode
+/// scalar UTF-8. JavaScript strings containing lone surrogates use WTF-8.
+pub(crate) fn string_as_bytes<'a>(s: *const StringHeader) -> &'a [u8] {
     unsafe {
         let len = (*s).byte_len as usize;
         let data = (s as *const u8).add(std::mem::size_of::<StringHeader>());
-        let bytes = std::slice::from_raw_parts(data, len);
-        std::str::from_utf8_unchecked(bytes)
+        std::slice::from_raw_parts(data, len)
     }
 }
 
@@ -1397,19 +1402,39 @@ pub extern "C" fn js_string_replace_regex(
         return js_string_from_str("");
     }
 
-    let str_data = string_as_str(s);
-    let repl_str = if is_valid_ptr(replacement) {
-        string_as_str(replacement)
-    } else {
-        "undefined"
-    };
-
     if !is_valid_regex_ptr(re) {
         // If regex is null, return original string
         return copy_replace_source(s);
     }
 
     unsafe {
+        // The Rust string engines require scalar-value UTF-8, while Perry
+        // stores lone JavaScript surrogates as WTF-8. Match those subjects as
+        // UTF-16 code units with the ECMAScript engine and rebuild the result
+        // through the WTF-8-aware string builder.
+        if (*s).flags & crate::string::STRING_FLAG_HAS_LONE_SURROGATES != 0 {
+            let replacement_bytes = if is_valid_ptr(replacement) {
+                string_as_bytes(replacement)
+            } else {
+                b"undefined"
+            };
+            if let Some(result) = repeat_matcher::replace_wtf8_subject(
+                re,
+                string_as_bytes(s),
+                replacement_bytes,
+                (*re).global,
+            ) {
+                return finish_replace_bytes(&result);
+            }
+        }
+
+        let str_data = string_as_str(s);
+        let repl_str = if is_valid_ptr(replacement) {
+            string_as_str(replacement)
+        } else {
+            "undefined"
+        };
+
         if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
             let result = repeat_matcher.replace(str_data, repl_str, (*re).global);
             return finish_replace_bytes(result.as_bytes());

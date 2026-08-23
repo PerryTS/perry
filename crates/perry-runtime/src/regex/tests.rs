@@ -317,6 +317,25 @@ fn repeat_matcher_clears_captures_when_optional_lookahead_is_skipped() {
 }
 
 #[test]
+fn repeat_matcher_preserves_negative_lookahead_capture_semantics() {
+    let re = js_regexp_new(make_string(r"(.*?)a(?!(a+)b\2c)\2(.*)"), make_string(""));
+    let result = js_regexp_exec(re, make_string("baaabaac"));
+    assert!(!result.is_null());
+    assert_eq!(match_capture_text(result, 0).as_deref(), Some("baaabaac"));
+    assert_eq!(match_capture_text(result, 1).as_deref(), Some("ba"));
+    assert_eq!(match_capture_text(result, 2), None);
+    assert_eq!(match_capture_text(result, 3).as_deref(), Some("abaac"));
+}
+
+#[test]
+fn regex_replace_matches_lone_surrogates_as_utf16_units() {
+    let source = make_wtf8(&[0xED, 0xA0, 0x80]);
+    let re = js_regexp_new(make_string(r"\S+"), make_string("g"));
+    let result = js_string_replace_regex(source, re, make_string("test262"));
+    assert_eq!(string_as_str(result), "test262");
+}
+
+#[test]
 fn test_regexp_test_basic() {
     let pattern = make_string("hello");
     let flags = make_string("");

@@ -288,6 +288,169 @@ pub(super) fn compile(pattern: &str, flags: &str) -> Option<RepeatMatcherRegex> 
     })
 }
 
+fn source_and_flags(re: *const super::RegExpHeader) -> (String, String) {
+    if let Some(source) =
+        super::REGEX_SOURCE_TABLE.with(|table| table.borrow().get(&(re as usize)).cloned())
+    {
+        return source;
+    }
+    unsafe {
+        (
+            super::string_as_str((*re).pattern_ptr).to_string(),
+            super::string_as_str((*re).flags_ptr).to_string(),
+        )
+    }
+}
+
+fn decode_wtf8_units(bytes: &[u8]) -> Vec<u16> {
+    let mut units = Vec::new();
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        let (advance, utf16_units, code_point) = crate::string::wtf8_step(bytes, offset);
+        if utf16_units == 2 && code_point >= 0x10000 {
+            let astral = code_point - 0x10000;
+            units.push(0xD800 + (astral >> 10) as u16);
+            units.push(0xDC00 + (astral & 0x3FF) as u16);
+        } else if utf16_units == 1 {
+            units.push(code_point as u16);
+        }
+        offset = (offset + advance).min(bytes.len());
+    }
+    units
+}
+
+fn append_wtf8_unit(out: &mut Vec<u8>, unit: u16) {
+    if let Some(ch) = char::from_u32(unit as u32) {
+        let mut encoded = [0u8; 3];
+        out.extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
+    } else {
+        out.extend_from_slice(&[
+            0xE0 | ((unit >> 12) as u8),
+            0x80 | (((unit >> 6) & 0x3F) as u8),
+            0x80 | ((unit & 0x3F) as u8),
+        ]);
+    }
+}
+
+fn append_unit_range(out: &mut Vec<u8>, units: &[u16], range: std::ops::Range<usize>) {
+    for &unit in &units[range] {
+        append_wtf8_unit(out, unit);
+    }
+}
+
+fn append_replacement(
+    out: &mut Vec<u8>,
+    replacement: &[u8],
+    units: &[u16],
+    matched: &regress::Match,
+) {
+    let group_count = matched.groups().len();
+    let has_named_groups = matched.named_groups().next().is_some();
+    let mut index = 0usize;
+    while index < replacement.len() {
+        if replacement[index] != b'$' || index + 1 == replacement.len() {
+            out.push(replacement[index]);
+            index += 1;
+            continue;
+        }
+        match replacement[index + 1] {
+            b'$' => {
+                out.push(b'$');
+                index += 2;
+            }
+            b'&' => {
+                append_unit_range(out, units, matched.range());
+                index += 2;
+            }
+            b'`' => {
+                append_unit_range(out, units, 0..matched.start());
+                index += 2;
+            }
+            b'\'' => {
+                append_unit_range(out, units, matched.end()..units.len());
+                index += 2;
+            }
+            b'0'..=b'9' => {
+                let first = (replacement[index + 1] - b'0') as usize;
+                let (group, consumed) =
+                    if index + 2 < replacement.len() && replacement[index + 2].is_ascii_digit() {
+                        let two = first * 10 + (replacement[index + 2] - b'0') as usize;
+                        if (1..group_count).contains(&two) {
+                            (Some(two), 2)
+                        } else if (1..group_count).contains(&first) {
+                            (Some(first), 1)
+                        } else {
+                            (None, 0)
+                        }
+                    } else if (1..group_count).contains(&first) {
+                        (Some(first), 1)
+                    } else {
+                        (None, 0)
+                    };
+                if let Some(group) = group {
+                    if let Some(range) = matched.group(group) {
+                        append_unit_range(out, units, range);
+                    }
+                    index += 1 + consumed;
+                } else {
+                    out.push(b'$');
+                    index += 1;
+                }
+            }
+            b'<' if has_named_groups => {
+                if let Some(relative_end) = replacement[index + 2..]
+                    .iter()
+                    .position(|&byte| byte == b'>')
+                {
+                    let name =
+                        std::str::from_utf8(&replacement[index + 2..index + 2 + relative_end])
+                            .unwrap_or_default();
+                    if let Some(range) = matched.named_group(name) {
+                        append_unit_range(out, units, range);
+                    }
+                    index += 3 + relative_end;
+                } else {
+                    out.push(b'$');
+                    index += 1;
+                }
+            }
+            _ => {
+                out.push(b'$');
+                index += 1;
+            }
+        }
+    }
+}
+
+/// Replace on a WTF-8 subject by exposing its exact JavaScript UTF-16 code
+/// units to the ECMAScript matcher. The returned bytes remain WTF-8 and are
+/// canonicalized by the caller's string builder.
+pub(super) fn replace_wtf8_subject(
+    re: *const super::RegExpHeader,
+    subject: &[u8],
+    replacement: &[u8],
+    global: bool,
+) -> Option<Vec<u8>> {
+    let (source, flags) = source_and_flags(re);
+    let regex = regress::Regex::with_flags(&source, &flags).ok()?;
+    let units = decode_wtf8_units(subject);
+    let matches: Vec<regress::Match> = if flags.contains('u') || flags.contains('v') {
+        regex.find_from_utf16(&units, 0).collect()
+    } else {
+        regex.find_from_ucs2(&units, 0).collect()
+    };
+
+    let mut out = Vec::with_capacity(subject.len().saturating_add(replacement.len()));
+    let mut last_end = 0usize;
+    for matched in matches.iter().take(if global { usize::MAX } else { 1 }) {
+        append_unit_range(&mut out, &units, last_end..matched.start());
+        append_replacement(&mut out, replacement, &units, matched);
+        last_end = matched.end();
+    }
+    append_unit_range(&mut out, &units, last_end..units.len());
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
