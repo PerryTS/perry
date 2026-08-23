@@ -22,6 +22,7 @@ h2 = "0.4"
 http-body-util.workspace = true
 tokio-rustls.workspace = true
 rustls = { workspace = true, features = ["std", "ring", "tls12"] }
+rustls_webpki = { package = "rustls-webpki", version = "0.103" }
 rustls-pemfile.workspace = true
 tokio-tungstenite = { workspace = true }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false }
@@ -35,6 +36,12 @@ bytes.workspace = true
 serde_json.workspace = true
 lazy_static.workspace = true
 base64.workspace = true
+httpdate = "1"
+p12 = "0.6"
+pkcs5 = { version = "0.7", features = ["alloc", "pbes2"] }
+ring = "0.17"
+webpki-roots = "1"
+x509-cert = { version = "0.3", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 socket2.workspace = true

@@ -343,25 +343,31 @@ pub extern "C" fn js_abort_signal_add_listener(
     if signal.is_null() {
         return;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let signal = scope.root_raw_mut_ptr(signal);
+    let event_type = scope.root_nanbox_f64(event_type);
+    let listener = scope.root_nanbox_f64(listener);
     // Only handle "abort" events — ignore everything else.
-    let type_str = get_string_content(event_type);
+    let type_str = get_string_content(event_type.get_nanbox_f64());
     if type_str != "abort" {
         return;
     }
-    let listeners_val = crate::object::js_object_get_field_f64(signal, 2);
+    let listeners_val =
+        signal.with_mut_ptr(|signal| crate::object::js_object_get_field_f64(signal, 2));
     let bits = listeners_val.to_bits();
-    let arr_ptr: *mut crate::array::ArrayHeader =
-        if (bits & 0xFFFF_0000_0000_0000) == POINTER_TAG_AC {
-            (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::array::ArrayHeader
-        } else {
-            // Lazily allocate the listeners array.
-            let new_arr = js_array_alloc(0);
-            let new_bits = POINTER_TAG_AC | ((new_arr as u64) & 0x0000_FFFF_FFFF_FFFF);
-            js_object_set_field_f64(signal, 2, f64::from_bits(new_bits));
-            new_arr
-        };
+    let arr_ptr: *mut crate::array::ArrayHeader = if (bits & 0xFFFF_0000_0000_0000)
+        == POINTER_TAG_AC
+    {
+        (bits & 0x0000_FFFF_FFFF_FFFF) as *mut crate::array::ArrayHeader
+    } else {
+        // Lazily allocate the listeners array.
+        let new_arr = js_array_alloc(0);
+        let new_bits = POINTER_TAG_AC | ((new_arr as u64) & 0x0000_FFFF_FFFF_FFFF);
+        signal.with_mut_ptr(|signal| js_object_set_field_f64(signal, 2, f64::from_bits(new_bits)));
+        new_arr
+    };
     if !arr_ptr.is_null() {
-        js_array_push_f64(arr_ptr, listener);
+        js_array_push_f64(arr_ptr, listener.get_nanbox_f64());
     }
 }
 

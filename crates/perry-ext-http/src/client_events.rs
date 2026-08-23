@@ -17,34 +17,39 @@ extern "C" {
 }
 
 /// Forward a body chunk to a `.pipe(dest)` destination: `dest.write(chunk)`.
-/// `dest_bits` is the NaN-boxed destination value captured by `pipe()`.
-unsafe fn forward_pipe_write(dest_bits: u64, bytes: &[u8], encoding: Option<&str>) {
-    if bytes.is_empty() {
-        return;
-    }
-    let name = alloc_string("write");
-    let name_ptr = name.as_raw();
-    if name_ptr.is_null() {
-        return;
-    }
-    let chunk = body_chunk_value(bytes, encoding);
+/// Both arguments are NaN-boxed JS values and are rooted before method-name
+/// allocation or dynamic dispatch can collect.
+unsafe fn forward_pipe_write_value(dest: f64, chunk: f64) {
     if chunk.to_bits() == TAG_UNDEFINED {
         return;
     }
-    let args = [chunk];
-    js_native_call_method_str_key(f64::from_bits(dest_bits), name_ptr as i64, args.as_ptr(), 1);
+    let scope = perry_ffi::TransientRootScope::enter();
+    let dest = scope.root_nanbox(dest);
+    let chunk = scope.root_nanbox(chunk);
+    let name = alloc_string("write");
+    let name = scope.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(name.as_raw()).bits(),
+    ));
+    let args = [chunk.get()];
+    js_native_call_method_str_key(
+        dest.get(),
+        (name.get().to_bits() & PTR_MASK) as i64,
+        args.as_ptr(),
+        1,
+    );
 }
 
 /// Finish a `.pipe(dest)` destination once the response body ends: `dest.end()`.
 unsafe fn forward_pipe_end(dest_bits: u64) {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let dest = scope.root_nanbox(f64::from_bits(dest_bits));
     let name = alloc_string("end");
-    let name_ptr = name.as_raw();
-    if name_ptr.is_null() {
-        return;
-    }
+    let name = scope.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(name.as_raw()).bits(),
+    ));
     js_native_call_method_str_key(
-        f64::from_bits(dest_bits),
-        name_ptr as i64,
+        dest.get(),
+        (name.get().to_bits() & PTR_MASK) as i64,
         std::ptr::null(),
         0,
     );
@@ -56,16 +61,117 @@ unsafe fn forward_pipe_end(dest_bits: u64) {
 ///
 /// Listener entries are raw closure headers registered via `.on()`; they
 /// stay live for the program's lifetime (GC scanner pins them).
+fn take_client_event_listener_entries(listeners: &mut Vec<ClientEventListener>) -> Vec<i64> {
+    let callbacks = listeners.iter().map(|listener| listener.callback).collect();
+    listeners.retain(|listener| !listener.once);
+    callbacks
+}
+
+fn take_request_event_listeners(request: &mut ClientRequestHandle, event: &str) -> Vec<i64> {
+    let Some(listeners) = request.listeners.get_mut(event) else {
+        return Vec::new();
+    };
+    take_client_event_listener_entries(listeners)
+}
+
+#[cfg(test)]
+mod listener_order_tests {
+    use super::*;
+
+    #[test]
+    fn mixed_persistent_and_once_listeners_keep_registration_order() {
+        let mut listeners = vec![
+            ClientEventListener::persistent(11),
+            ClientEventListener {
+                callback: 22,
+                raw_wrapper: 222,
+                once: true,
+            },
+            ClientEventListener::persistent(33),
+        ];
+
+        assert_eq!(
+            take_client_event_listener_entries(&mut listeners),
+            vec![11, 22, 33]
+        );
+        assert_eq!(
+            listeners
+                .iter()
+                .map(|listener| listener.callback)
+                .collect::<Vec<_>>(),
+            vec![11, 33]
+        );
+    }
+}
+
 pub(crate) unsafe fn fire_request_event_listeners(request_handle: Handle, event: &str) {
     let listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
-        .and_then(|r| r.listeners.get(event).cloned())
+        .map(|request| take_request_event_listeners(request, event))
         .unwrap_or_default();
+    let scope = perry_ffi::TransientRootScope::enter();
+    let listeners = scope.root_addrs(&listeners);
     for cb in listeners {
-        if cb != 0 {
-            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
             let _ = closure.call0();
         }
     }
+}
+
+pub(crate) unsafe fn fire_request_socket_event(request_handle: Handle) {
+    let (socket, listeners) = get_handle_mut::<ClientRequestHandle>(request_handle)
+        .map(|request| {
+            (
+                request.socket_handle,
+                take_request_event_listeners(request, "socket"),
+            )
+        })
+        .unwrap_or_default();
+    if socket == 0 {
+        return;
+    }
+    let value = f64::from_bits(POINTER_TAG | (socket as u64 & PTR_MASK));
+    let scope = perry_ffi::TransientRootScope::enter();
+    let listeners = scope.root_addrs(&listeners);
+    for callback in listeners {
+        if callback.get() != 0 {
+            let closure = JsClosure::from_raw(callback.get() as *const RawClosureHeader);
+            let _ = closure.call1(value);
+        }
+    }
+}
+
+unsafe fn fire_incoming_event(incoming: Handle, event: &str, arg: Option<f64>) {
+    let listeners = get_handle_mut::<IncomingMessageHandle>(incoming)
+        .and_then(|response| response.listeners.get(event).cloned())
+        .unwrap_or_default();
+    for callback in listeners {
+        if callback == 0 {
+            continue;
+        }
+        let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
+        if let Some(value) = arg {
+            let _ = closure.call1(value);
+        } else {
+            let _ = closure.call0();
+        }
+    }
+}
+
+unsafe fn handle_incoming_transport_abort(request_handle: Handle, incoming: Handle, error: f64) {
+    fire_incoming_event(incoming, "aborted", None);
+    fire_incoming_event(incoming, "error", Some(error));
+    fire_incoming_event(incoming, "close", None);
+    if let Some(socket) = get_handle_mut::<IncomingMessageHandle>(incoming)
+        .map(|response| response.socket_handle)
+        .filter(|socket| *socket != 0)
+    {
+        let event = alloc_string("close");
+        perry_ext_net::js_ext_net_socket_emit(socket, event.as_raw() as i64, std::ptr::null(), 0);
+        perry_ext_net::js_ext_net_destroy_socket(socket);
+    }
+    finish_agent_request(request_handle, false);
+    fire_request_close_once(request_handle);
 }
 
 /// Fire a client request's `'error'` listeners with `arg`.
@@ -75,12 +181,15 @@ pub(crate) unsafe fn fire_request_event_listeners(request_handle: Handle, event:
 /// Same listener-liveness contract as [`fire_request_event_listeners`].
 pub(crate) unsafe fn fire_request_error_listeners(request_handle: Handle, arg: f64) {
     let listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
-        .and_then(|r| r.listeners.get("error").cloned())
+        .map(|request| take_request_event_listeners(request, "error"))
         .unwrap_or_default();
+    let scope = perry_ffi::TransientRootScope::enter();
+    let listeners = scope.root_addrs(&listeners);
+    let arg = scope.root_nanbox(arg);
     for cb in listeners {
-        if cb != 0 {
-            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-            let _ = closure.call1(arg);
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
+            let _ = closure.call1(arg.get());
         }
     }
 }
@@ -159,10 +268,7 @@ pub(crate) unsafe fn handle_response_event(
     if already_done {
         return;
     }
-
-    let response_callback = get_handle_mut::<ClientRequestHandle>(request_handle)
-        .map(|r| r.response_callback)
-        .unwrap_or(0);
+    client_abort::cleanup_request_signal(request_handle);
 
     let mut trailers_map = HashMap::new();
     for (k, v) in trailers {
@@ -170,6 +276,9 @@ pub(crate) unsafe fn handle_response_event(
     }
 
     let body_clone = body.clone();
+    let socket_handle = get_handle_mut::<ClientRequestHandle>(request_handle)
+        .map(|request| request.socket_handle)
+        .unwrap_or(0);
     let incoming = register_handle(IncomingMessageHandle {
         status_code: status,
         status_message,
@@ -178,24 +287,35 @@ pub(crate) unsafe fn handle_response_event(
         body,
         listeners: HashMap::new(),
         encoding: None,
+        decoder_pending: Vec::new(),
         pipes: Vec::new(),
+        socket_handle,
+        request_handle,
     });
 
     // Hand the IncomingMessage handle to the user's `(res) => { ... }`
     // callback. POINTER_TAG so the closure-arg unboxer extracts the i64.
     let arg = f64::from_bits(POINTER_TAG | (incoming as u64 & PTR_MASK));
-    if response_callback != 0 {
-        let closure = JsClosure::from_raw(response_callback as *const RawClosureHeader);
+    let (response_callback, response_listeners) =
+        get_handle_mut::<ClientRequestHandle>(request_handle)
+            .map(|request| {
+                let callback = std::mem::take(&mut request.response_callback);
+                request.response_raw_wrapper = 0;
+                (callback, take_request_event_listeners(request, "response"))
+            })
+            .unwrap_or_default();
+    let scope = perry_ffi::TransientRootScope::enter();
+    let response_callback = scope.root_addr(response_callback);
+    let response_listeners = scope.root_addrs(&response_listeners);
+    if response_callback.get() != 0 {
+        let closure = JsClosure::from_raw(response_callback.get() as *const RawClosureHeader);
         let _ = closure.call1(arg);
     }
     // #4909 — `.on('response', cb)` listeners fire too (the factory
     // callback is just Node's pre-registered once-listener).
-    let response_listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
-        .and_then(|r| r.listeners.get("response").cloned())
-        .unwrap_or_default();
     for cb in response_listeners {
-        if cb != 0 {
-            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
             let _ = closure.call1(arg);
         }
     }
@@ -207,22 +327,33 @@ pub(crate) unsafe fn handle_response_event(
     // Issue #1124: bytes cross the FFI boundary as a JS Buffer
     // (`alloc_buffer`), not a lossily-decoded string — unless
     // `res.setEncoding(enc)` asked for Readable's string-chunk behavior.
-    let (data_listeners, encoding) = get_handle_mut::<IncomingMessageHandle>(incoming)
+    let (data_listeners, encoding, pipes) = get_handle_mut::<IncomingMessageHandle>(incoming)
         .map(|r| {
             (
                 r.listeners.get("data").cloned().unwrap_or_default(),
                 r.encoding.clone(),
+                r.pipes.clone(),
             )
         })
         .unwrap_or_default();
-    if !data_listeners.is_empty() && !body_clone.is_empty() {
+    let delivery_scope = perry_ffi::TransientRootScope::enter();
+    let data_listeners = delivery_scope.root_addrs(&data_listeners);
+    let pipes = pipes
+        .iter()
+        .map(|bits| delivery_scope.root_nanbox(f64::from_bits(*bits)))
+        .collect::<Vec<_>>();
+    if (!data_listeners.is_empty() || !pipes.is_empty()) && !body_clone.is_empty() {
         let arg = body_chunk_value(&body_clone, encoding.as_deref());
-        if arg.to_bits() != TAG_UNDEFINED {
-            for cb in data_listeners {
-                if cb != 0 {
-                    let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-                    let _ = closure.call1(arg);
+        let arg = delivery_scope.root_nanbox(arg);
+        if arg.get().to_bits() != TAG_UNDEFINED {
+            for cb in &data_listeners {
+                if cb.get() != 0 {
+                    let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
+                    let _ = closure.call1(arg.get());
                 }
+            }
+            for dest in &pipes {
+                forward_pipe_write_value(dest.get(), arg.get());
             }
         }
     }
@@ -231,28 +362,33 @@ pub(crate) unsafe fn handle_response_event(
     let end_listeners = get_handle_mut::<IncomingMessageHandle>(incoming)
         .and_then(|r| r.listeners.get("end").cloned())
         .unwrap_or_default();
+    let end_scope = perry_ffi::TransientRootScope::enter();
+    let end_listeners = end_scope.root_addrs(&end_listeners);
     for cb in end_listeners {
-        if cb != 0 {
-            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
             let _ = closure.call0();
         }
     }
 
-    // Forward the buffered body to any `.pipe(dest)` destinations registered
-    // during the response callback above (node-fetch: `res.pipe(new
-    // PassThrough())`). Deliver the whole body as one write, then end.
+    // End every pipe currently registered, including one added by an `end`
+    // listener while the callbacks above were running.
     let pipes = get_handle_mut::<IncomingMessageHandle>(incoming)
-        .map(|r| r.pipes.clone())
+        .map(|response| response.pipes.clone())
         .unwrap_or_default();
+    let pipe_scope = perry_ffi::TransientRootScope::enter();
+    let pipes = pipes
+        .iter()
+        .map(|bits| pipe_scope.root_nanbox(f64::from_bits(*bits)))
+        .collect::<Vec<_>>();
     for dest in pipes {
-        forward_pipe_write(dest, &body_clone, encoding.as_deref());
-        forward_pipe_end(dest);
+        forward_pipe_end(dest.get().to_bits());
     }
 
     // Node emits `'close'` on the request once the response has fully
     // ended (#4905).
-    fire_request_close_once(request_handle);
     finish_agent_request(request_handle, true);
+    fire_request_close_once(request_handle);
 }
 
 /// Drain handler for `PendingHttpEvent::ResponseHead` (streaming path):
@@ -277,6 +413,9 @@ pub(crate) unsafe fn handle_response_head_event(
         return;
     }
 
+    let socket_handle = get_handle_mut::<ClientRequestHandle>(request_handle)
+        .map(|request| request.socket_handle)
+        .unwrap_or(0);
     let incoming = register_handle(IncomingMessageHandle {
         status_code: status,
         status_message,
@@ -285,25 +424,31 @@ pub(crate) unsafe fn handle_response_head_event(
         body: Vec::new(),
         listeners: HashMap::new(),
         encoding: None,
+        decoder_pending: Vec::new(),
         pipes: Vec::new(),
+        socket_handle,
+        request_handle,
     });
-    let response_callback = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
-        req.incoming_handle = incoming;
-        req.response_callback
-    })
-    .unwrap_or(0);
+    let (response_callback, response_listeners) =
+        with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |request| {
+            request.incoming_handle = incoming;
+            let callback = std::mem::take(&mut request.response_callback);
+            request.response_raw_wrapper = 0;
+            (callback, take_request_event_listeners(request, "response"))
+        })
+        .unwrap_or_default();
 
     let arg = f64::from_bits(POINTER_TAG | (incoming as u64 & PTR_MASK));
-    if response_callback != 0 {
-        let closure = JsClosure::from_raw(response_callback as *const RawClosureHeader);
+    let scope = perry_ffi::TransientRootScope::enter();
+    let response_callback = scope.root_addr(response_callback);
+    let response_listeners = scope.root_addrs(&response_listeners);
+    if response_callback.get() != 0 {
+        let closure = JsClosure::from_raw(response_callback.get() as *const RawClosureHeader);
         let _ = closure.call1(arg);
     }
-    let response_listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
-        .and_then(|r| r.listeners.get("response").cloned())
-        .unwrap_or_default();
     for cb in response_listeners {
-        if cb != 0 {
-            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
             let _ = closure.call1(arg);
         }
     }
@@ -336,30 +481,38 @@ pub(crate) unsafe fn handle_response_chunk_event(request_handle: Handle, chunk: 
             )
         })
         .unwrap_or_default();
-    // Forward to `.pipe(dest)` destinations (node-fetch streams the body out
-    // this way and registers no `'data'` listener).
-    for dest in &pipes {
-        forward_pipe_write(*dest, chunk.as_ref(), encoding.as_deref());
-    }
-    if data_listeners.is_empty() {
-        // Buffer for a late `'data'` listener only when the body isn't being
-        // piped out (a pipe consumes it eagerly above).
-        if pipes.is_empty() {
-            if let Some(im) = get_handle_mut::<IncomingMessageHandle>(incoming) {
-                im.body.extend_from_slice(&chunk);
-            }
+    if data_listeners.is_empty() && pipes.is_empty() {
+        if let Some(im) = get_handle_mut::<IncomingMessageHandle>(incoming) {
+            im.body.extend_from_slice(&chunk);
         }
         return;
     }
-    let arg = body_chunk_value(&chunk, encoding.as_deref());
-    if arg.to_bits() == TAG_UNDEFINED {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let data_listeners = scope.root_addrs(&data_listeners);
+    let pipes = pipes
+        .iter()
+        .map(|bits| scope.root_nanbox(f64::from_bits(*bits)))
+        .collect::<Vec<_>>();
+    let arg = get_handle_mut::<IncomingMessageHandle>(incoming).and_then(|response| {
+        streaming_body_chunk_value(
+            chunk.as_ref(),
+            encoding.as_deref(),
+            &mut response.decoder_pending,
+            false,
+        )
+    });
+    let Some(arg) = arg else {
         return;
-    }
+    };
+    let arg = scope.root_nanbox(arg);
     for cb in data_listeners {
-        if cb != 0 {
-            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-            let _ = closure.call1(arg);
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
+            let _ = closure.call1(arg.get());
         }
+    }
+    for dest in pipes {
+        forward_pipe_write_value(dest.get(), arg.get());
     }
 }
 
@@ -383,24 +536,44 @@ pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
     if incoming == 0 || was_done {
         return;
     }
+    client_abort::cleanup_request_signal(request_handle);
 
-    let (data_listeners, encoding, buffered) = get_handle_mut::<IncomingMessageHandle>(incoming)
-        .map(|r| {
-            (
-                r.listeners.get("data").cloned().unwrap_or_default(),
-                r.encoding.clone(),
-                std::mem::take(&mut r.body),
+    let (data_listeners, encoding, buffered, pipes) =
+        get_handle_mut::<IncomingMessageHandle>(incoming)
+            .map(|r| {
+                (
+                    r.listeners.get("data").cloned().unwrap_or_default(),
+                    r.encoding.clone(),
+                    std::mem::take(&mut r.body),
+                    r.pipes.clone(),
+                )
+            })
+            .unwrap_or_default();
+    if !data_listeners.is_empty() || !pipes.is_empty() {
+        let scope = perry_ffi::TransientRootScope::enter();
+        let data_listeners = scope.root_addrs(&data_listeners);
+        let pipes = pipes
+            .iter()
+            .map(|bits| scope.root_nanbox(f64::from_bits(*bits)))
+            .collect::<Vec<_>>();
+        let arg = get_handle_mut::<IncomingMessageHandle>(incoming).and_then(|response| {
+            streaming_body_chunk_value(
+                &buffered,
+                encoding.as_deref(),
+                &mut response.decoder_pending,
+                true,
             )
-        })
-        .unwrap_or_default();
-    if !data_listeners.is_empty() && !buffered.is_empty() {
-        let arg = body_chunk_value(&buffered, encoding.as_deref());
-        if arg.to_bits() != TAG_UNDEFINED {
+        });
+        if let Some(arg) = arg {
+            let arg = scope.root_nanbox(arg);
             for cb in data_listeners {
-                if cb != 0 {
-                    let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-                    let _ = closure.call1(arg);
+                if cb.get() != 0 {
+                    let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
+                    let _ = closure.call1(arg.get());
                 }
+            }
+            for dest in pipes {
+                forward_pipe_write_value(dest.get(), arg.get());
             }
         }
     } else if !buffered.is_empty() {
@@ -414,9 +587,11 @@ pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
     let end_listeners = get_handle_mut::<IncomingMessageHandle>(incoming)
         .and_then(|r| r.listeners.get("end").cloned())
         .unwrap_or_default();
+    let end_scope = perry_ffi::TransientRootScope::enter();
+    let end_listeners = end_scope.root_addrs(&end_listeners);
     for cb in end_listeners {
-        if cb != 0 {
-            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
             let _ = closure.call0();
         }
     }
@@ -426,12 +601,17 @@ pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
     let pipes = get_handle_mut::<IncomingMessageHandle>(incoming)
         .map(|r| r.pipes.clone())
         .unwrap_or_default();
+    let pipe_scope = perry_ffi::TransientRootScope::enter();
+    let pipes = pipes
+        .iter()
+        .map(|bits| pipe_scope.root_nanbox(f64::from_bits(*bits)))
+        .collect::<Vec<_>>();
     for dest in pipes {
-        forward_pipe_end(dest);
+        forward_pipe_end(dest.get().to_bits());
     }
 
-    fire_request_close_once(request_handle);
     finish_agent_request(request_handle, true);
+    fire_request_close_once(request_handle);
 }
 
 /// Drain handler for `PendingHttpEvent::Error`: `'error'` listeners then
@@ -442,19 +622,27 @@ pub(crate) unsafe fn handle_response_end_event(request_handle: Handle) {
 ///
 /// Same listener-liveness contract as [`fire_request_event_listeners`].
 pub(crate) unsafe fn handle_error_event(request_handle: Handle, error_message: &str) {
-    let already_done = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
-        let was = req.completed;
-        req.completed = true;
-        was
-    })
-    .unwrap_or(false);
+    let (already_done, incoming) =
+        with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
+            let was = req.completed;
+            req.completed = true;
+            (was, req.incoming_handle)
+        })
+        .unwrap_or((false, 0));
     if already_done {
+        return;
+    }
+    client_abort::cleanup_request_signal(request_handle);
+    if incoming != 0 {
+        let error =
+            perry_ffi::error_value_with_code("aborted", "ECONNRESET", perry_ffi::ErrorKind::Error);
+        handle_incoming_transport_abort(request_handle, incoming, f64::from_bits(error.bits()));
         return;
     }
     fire_request_error_listeners(request_handle, error_event_arg(error_message));
     // Node emits `'close'` on the request after `'error'` (#4905).
-    fire_request_close_once(request_handle);
     finish_agent_request(request_handle, false);
+    fire_request_close_once(request_handle);
 }
 
 /// Drain handler for `PendingHttpEvent::TransportError`: fire `'error'`
@@ -472,19 +660,25 @@ pub(crate) unsafe fn handle_transport_error_event(
     syscall: &str,
     errno: i64,
 ) {
-    let already_done = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
-        let was = req.completed;
-        req.completed = true;
-        was
-    })
-    .unwrap_or(false);
+    let (already_done, incoming) =
+        with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
+            let was = req.completed;
+            req.completed = true;
+            (was, req.incoming_handle)
+        })
+        .unwrap_or((false, 0));
     if already_done {
         return;
     }
+    client_abort::cleanup_request_signal(request_handle);
     let err = perry_ffi::system_error_value(message, code, syscall, errno);
+    if incoming != 0 {
+        handle_incoming_transport_abort(request_handle, incoming, f64::from_bits(err.bits()));
+        return;
+    }
     fire_request_error_listeners(request_handle, f64::from_bits(err.bits()));
-    fire_request_close_once(request_handle);
     finish_agent_request(request_handle, false);
+    fire_request_close_once(request_handle);
 }
 
 /// #4905 / #4909 — drain handler for `PendingHttpEvent::Timeout`.
@@ -515,21 +709,23 @@ pub(crate) unsafe fn handle_timeout_event(request_handle: Handle) {
     }
 
     let timeout_listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
-        .and_then(|r| r.listeners.get("timeout").cloned())
+        .map(|request| take_request_event_listeners(request, "timeout"))
         .unwrap_or_default();
     if timeout_listeners.is_empty() {
         if ended {
             // In-flight exchange aborted by the transport deadline with no
             // `'timeout'` listener — keep the legacy error surface.
             fire_request_error_listeners(request_handle, error_event_arg("request timed out"));
-            fire_request_close_once(request_handle);
             finish_agent_request(request_handle, false);
+            fire_request_close_once(request_handle);
         }
         return;
     }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let timeout_listeners = scope.root_addrs(&timeout_listeners);
     for cb in timeout_listeners {
-        if cb != 0 {
-            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
             let _ = closure.call0();
         }
     }
@@ -537,8 +733,8 @@ pub(crate) unsafe fn handle_timeout_event(request_handle: Handle) {
     // didn't destroy the request (destroy emits its own error + close),
     // fire `'close'` so waiters still finish — nothing else will arrive.
     if ended && !client_request_surface::request_destroyed(request_handle) {
-        fire_request_close_once(request_handle);
         finish_agent_request(request_handle, false);
+        fire_request_close_once(request_handle);
     }
 }
 

@@ -270,6 +270,17 @@ extern "C" fn events_on_abort_listener(closure: *const ClosureHeader) -> f64 {
                     event_name_ptr,
                     data_listener,
                 );
+            } else if perry_runtime::object::net_socket_handle_probe()
+                .is_some_and(|probe| probe(handle))
+            {
+                let _ = super::module_helpers::call_net_socket_method(
+                    handle,
+                    "removeListener",
+                    &[
+                        js_nanbox_string(event_name_ptr as i64),
+                        js_nanbox_pointer(data_listener),
+                    ],
+                );
             } else if stream_value_from_handle(handle).is_some() {
                 let event = js_nanbox_string(event_name_ptr as i64);
                 let listener = js_nanbox_pointer(data_listener);
@@ -357,6 +368,17 @@ pub unsafe extern "C" fn js_events_on(
                 listener as i64,
             );
             target as Handle
+        }
+        EventHelperTarget::NetSocket(handle) => {
+            let _ = module_helpers::call_net_socket_method(
+                handle,
+                "on",
+                &[
+                    js_nanbox_string(event_name_ptr as i64),
+                    js_nanbox_pointer(listener as i64),
+                ],
+            );
+            handle
         }
         EventHelperTarget::Stream(handle) => {
             let event = js_nanbox_string(event_name_ptr as i64);

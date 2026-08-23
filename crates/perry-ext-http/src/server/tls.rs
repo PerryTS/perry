@@ -2,10 +2,210 @@
 //! reads PEM-encoded key/cert pairs and builds a `rustls::ServerConfig`.
 //! See `https_server::js_node_https_create_server`.
 
-use std::sync::Arc;
+use std::fmt;
+use std::fmt::Write as _;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use ring::aead::{self, Aad, LessSafeKey, Nonce, UnboundKey};
+use ring::digest::{digest, SHA256};
+use ring::rand::{SecureRandom, SystemRandom};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::ServerConfig;
+use rustls::server::ProducesTickets;
+use rustls::{KeyLog, ServerConfig};
+
+/// Per-connection rustls key-log sink. The TLS worker records NSS-format
+/// lines here and the main-thread HTTP pump drains them into Node's `keylog`
+/// event without invoking JS from a worker thread.
+#[derive(Debug, Default)]
+pub struct ConnectionKeyLog {
+    lines: Mutex<Vec<Vec<u8>>>,
+}
+
+impl ConnectionKeyLog {
+    pub fn drain(&self) -> Vec<Vec<u8>> {
+        self.lines
+            .lock()
+            .map(|mut lines| lines.drain(..).collect())
+            .unwrap_or_default()
+    }
+}
+
+impl KeyLog for ConnectionKeyLog {
+    fn log(&self, label: &str, client_random: &[u8], secret: &[u8]) {
+        fn append_hex(out: &mut String, bytes: &[u8]) {
+            for byte in bytes {
+                let _ = write!(out, "{byte:02x}");
+            }
+        }
+
+        let mut line =
+            String::with_capacity(label.len() + 2 + (client_random.len() + secret.len()) * 2 + 1);
+        line.push_str(label);
+        line.push(' ');
+        append_hex(&mut line, client_random);
+        line.push(' ');
+        append_hex(&mut line, secret);
+        line.push('\n');
+        if let Ok(mut lines) = self.lines.lock() {
+            lines.push(line.into_bytes());
+        }
+    }
+}
+
+struct TicketCipher {
+    key_name: [u8; 16],
+    key: LessSafeKey,
+}
+
+impl fmt::Debug for TicketCipher {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TicketCipher")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Mutable server-scoped session-ticket provider backing
+/// `server.setTicketKeys()`. Node's public 48-byte key blob is treated as key
+/// material for a stable AEAD ticket key; replacement affects new handshakes
+/// on this server only and never clears unrelated client Agent caches.
+pub struct NodeTicketKey {
+    cipher: RwLock<Option<TicketCipher>>,
+    lifetime_secs: u32,
+}
+
+impl fmt::Debug for NodeTicketKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("NodeTicketKey")
+            .finish_non_exhaustive()
+    }
+}
+
+impl NodeTicketKey {
+    fn now_secs() -> Option<u64> {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|age| age.as_secs())
+    }
+
+    pub fn random(lifetime_secs: u32) -> Result<Arc<Self>, String> {
+        let mut keys = [0_u8; 48];
+        SystemRandom::new()
+            .fill(&mut keys)
+            .map_err(|_| "rustls: unable to generate session ticket keys".to_string())?;
+        Self::from_keys(&keys, lifetime_secs).map(Arc::new)
+    }
+
+    /// A ticket provider that advertises no ticket support until
+    /// `setTicketKeys()` supplies explicit key material.
+    pub fn disabled(lifetime_secs: u32) -> Arc<Self> {
+        Arc::new(Self {
+            cipher: RwLock::new(None),
+            lifetime_secs,
+        })
+    }
+
+    fn from_keys(keys: &[u8; 48], lifetime_secs: u32) -> Result<Self, String> {
+        let mut key_name = [0_u8; 16];
+        key_name.copy_from_slice(&keys[..16]);
+        let material = digest(&SHA256, keys);
+        let key = UnboundKey::new(&aead::CHACHA20_POLY1305, material.as_ref())
+            .map_err(|_| "rustls: invalid session ticket key material".to_string())?;
+        Ok(Self {
+            cipher: RwLock::new(Some(TicketCipher {
+                key_name,
+                key: LessSafeKey::new(key),
+            })),
+            lifetime_secs,
+        })
+    }
+
+    pub fn set_keys(&self, keys: &[u8; 48]) -> Result<(), String> {
+        let replacement = Self::from_keys(keys, self.lifetime_secs)?;
+        let replacement = replacement
+            .cipher
+            .into_inner()
+            .map_err(|_| "rustls: session ticket key lock poisoned".to_string())?;
+        *self
+            .cipher
+            .write()
+            .map_err(|_| "rustls: session ticket key lock poisoned".to_string())? = replacement;
+        Ok(())
+    }
+
+    fn encrypt_at(&self, plain: &[u8], issued_at: u64) -> Option<Vec<u8>> {
+        let cipher = self.cipher.read().ok()?;
+        let cipher = cipher.as_ref()?;
+        let mut nonce_bytes = [0_u8; 12];
+        SystemRandom::new().fill(&mut nonce_bytes).ok()?;
+        let nonce = Nonce::assume_unique_for_key(nonce_bytes);
+        let mut sealed = Vec::with_capacity(8 + plain.len());
+        sealed.extend_from_slice(&issued_at.to_be_bytes());
+        sealed.extend_from_slice(plain);
+        cipher
+            .key
+            .seal_in_place_append_tag(nonce, Aad::from(&cipher.key_name), &mut sealed)
+            .ok()?;
+        let mut ticket = Vec::with_capacity(16 + 12 + sealed.len());
+        ticket.extend_from_slice(&cipher.key_name);
+        ticket.extend_from_slice(&nonce_bytes);
+        ticket.extend_from_slice(&sealed);
+        Some(ticket)
+    }
+
+    fn decrypt_at(&self, ticket: &[u8], now: u64) -> Option<Vec<u8>> {
+        if ticket.len() < 16 + 12 + aead::CHACHA20_POLY1305.tag_len() {
+            return None;
+        }
+        let cipher = self.cipher.read().ok()?;
+        let cipher = cipher.as_ref()?;
+        if ticket[..16] != cipher.key_name {
+            return None;
+        }
+        let nonce_bytes: [u8; 12] = ticket[16..28].try_into().ok()?;
+        let nonce = Nonce::assume_unique_for_key(nonce_bytes);
+        let mut sealed = ticket[28..].to_vec();
+        let plain = cipher
+            .key
+            .open_in_place(nonce, Aad::from(&cipher.key_name), &mut sealed)
+            .ok()?;
+        let issued_at = u64::from_be_bytes(plain.get(..8)?.try_into().ok()?);
+        if issued_at > now || now - issued_at > u64::from(self.lifetime_secs) {
+            return None;
+        }
+        Some(plain[8..].to_vec())
+    }
+}
+
+impl ProducesTickets for NodeTicketKey {
+    fn enabled(&self) -> bool {
+        self.cipher
+            .read()
+            .map(|cipher| cipher.is_some())
+            .unwrap_or(false)
+    }
+
+    fn lifetime(&self) -> u32 {
+        self.lifetime_secs
+    }
+
+    fn encrypt(&self, plain: &[u8]) -> Option<Vec<u8>> {
+        self.encrypt_at(plain, Self::now_secs()?)
+    }
+
+    fn decrypt(&self, ticket: &[u8]) -> Option<Vec<u8>> {
+        self.decrypt_at(ticket, Self::now_secs()?)
+    }
+}
+
+pub fn install_ticket_key(config: &mut Arc<ServerConfig>, ticket_key: Arc<NodeTicketKey>) {
+    Arc::get_mut(config)
+        .expect("newly built ServerConfig must be uniquely owned")
+        .ticketer = ticket_key;
+}
 
 /// Decode a `key`/`cert`-shaped JSON value into the PEM bytes the
 /// rustls parsers expect.
@@ -134,7 +334,8 @@ fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
 
 #[cfg(test)]
 mod tests {
-    use super::json_value_to_pem_bytes;
+    use super::{json_value_to_pem_bytes, ConnectionKeyLog, NodeTicketKey};
+    use rustls::{server::ProducesTickets, KeyLog};
     use serde_json::json;
 
     #[test]
@@ -171,6 +372,47 @@ mod tests {
         assert!(!super::has_pem_material(b"", b""));
         assert!(super::has_pem_material(b"not pem", b""));
         assert!(super::has_pem_material(b"", b"not cert"));
+    }
+
+    #[test]
+    fn keylog_records_are_nss_formatted_and_drained_once() {
+        let log = ConnectionKeyLog::default();
+        log.log("CLIENT_RANDOM", &[0xab, 0xcd], &[0x01, 0x23]);
+        assert_eq!(log.drain(), vec![b"CLIENT_RANDOM abcd 0123\n".to_vec()]);
+        assert!(log.drain().is_empty());
+    }
+
+    #[test]
+    fn rotating_ticket_keys_invalidates_only_old_tickets() {
+        let initial = [0x11; 48];
+        let rotated = [0x22; 48];
+        let ticket_key = NodeTicketKey::from_keys(&initial, 300).expect("initial ticket key");
+        let old_ticket = ticket_key.encrypt(b"session").expect("encrypted ticket");
+        assert_eq!(
+            ticket_key.decrypt(&old_ticket).as_deref(),
+            Some(b"session".as_slice())
+        );
+        assert_eq!(ticket_key.lifetime(), 300);
+
+        ticket_key.set_keys(&rotated).expect("rotate ticket key");
+        assert!(ticket_key.decrypt(&old_ticket).is_none());
+        let new_ticket = ticket_key.encrypt(b"new session").expect("new ticket");
+        assert_eq!(
+            ticket_key.decrypt(&new_ticket).as_deref(),
+            Some(b"new session".as_slice())
+        );
+    }
+
+    #[test]
+    fn tickets_expire_after_the_configured_session_timeout() {
+        let ticket_key = NodeTicketKey::from_keys(&[0x33; 48], 300).expect("ticket key");
+        let ticket = ticket_key.encrypt_at(b"session", 1_000).expect("ticket");
+        assert_eq!(
+            ticket_key.decrypt_at(&ticket, 1_300).as_deref(),
+            Some(b"session".as_slice())
+        );
+        assert!(ticket_key.decrypt_at(&ticket, 1_301).is_none());
+        assert!(ticket_key.decrypt_at(&ticket, 999).is_none());
     }
 }
 

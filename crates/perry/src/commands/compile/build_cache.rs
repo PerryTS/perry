@@ -98,6 +98,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_LLVM_LIB",
     "PERRY_LLVM_OPT",
     "PERRY_OUTLINE_METHOD_DISPATCH",
+    // Entry-function outlining changes the emitted function graph; the chunk
+    // size changes the split points, so both belong in the cache key.
+    "PERRY_OUTLINE_ENTRY",
+    "PERRY_OUTLINE_ENTRY_CHUNK_STMTS",
     "PERRY_PTR_NUMARRAY_LOCALS",
     "PERRY_PTR_SHAPE_LOCALS",
     "PERRY_PTR_SHAPE_THIS",
@@ -141,6 +145,8 @@ const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
     // Human-facing telemetry only; never changes IR or object bytes.
     "PERRY_CODEGEN_PROGRESS",
     "PERRY_CODEGEN_UNIT_TIMINGS",
+    // Entry outlining report output is observational only.
+    "PERRY_OUTLINE_ENTRY_REPORT",
 ];
 
 #[cfg(test)]
@@ -716,6 +722,9 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     // so the report would be empty. Same reasoning as explain-lowering above.
     if args.opt_report.is_some() || std::env::var("PERRY_OPT_REPORT").is_ok() {
         return Err("opt-report".to_string());
+    }
+    if std::env::var("PERRY_OUTLINE_ENTRY_REPORT").is_ok() {
+        return Err("outline-entry-report".to_string());
     }
     if args.verify_native_regions || args.emit_attest || args.emit_sandbox {
         return Err("sidecar-or-verify".to_string());

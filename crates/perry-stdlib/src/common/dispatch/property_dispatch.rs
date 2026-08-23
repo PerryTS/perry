@@ -175,6 +175,7 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
                 | "sockets"
                 | "freeSockets"
                 | "requests"
+                | "_sessionCache"
         ) && unsafe { js_ext_http_agent_is_handle(handle) } != 0
         {
             return unsafe {

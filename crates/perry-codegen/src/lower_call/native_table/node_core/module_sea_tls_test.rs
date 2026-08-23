@@ -360,7 +360,7 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "suite",
         class_filter: None,
-        runtime: "js_node_test_register",
+        runtime: "js_node_test_suite",
         args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_F64,
     },
@@ -369,7 +369,7 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "describe",
         class_filter: None,
-        runtime: "js_node_test_register",
+        runtime: "js_node_test_suite",
         args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_F64,
     },
@@ -387,7 +387,7 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "before",
         class_filter: None,
-        runtime: "js_node_test_hook",
+        runtime: "js_node_test_before",
         args: &[NA_F64],
         ret: NR_F64,
     },
@@ -396,7 +396,7 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "after",
         class_filter: None,
-        runtime: "js_node_test_hook",
+        runtime: "js_node_test_after",
         args: &[NA_F64],
         ret: NR_F64,
     },
@@ -405,7 +405,7 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "beforeEach",
         class_filter: None,
-        runtime: "js_node_test_hook",
+        runtime: "js_node_test_before_each",
         args: &[NA_F64],
         ret: NR_F64,
     },
@@ -414,7 +414,7 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "afterEach",
         class_filter: None,
-        runtime: "js_node_test_hook",
+        runtime: "js_node_test_after_each",
         args: &[NA_F64],
         ret: NR_F64,
     },
@@ -567,6 +567,24 @@ mod tests {
                 .find(|sig| sig.module == "test" && sig.method == method)
                 .unwrap_or_else(|| panic!("missing node:test mock.{method} signature"));
             assert_eq!(sig.args.len(), 4, "mock.{method} must forward options");
+        }
+    }
+
+    #[test]
+    fn node_test_suites_and_hooks_route_to_scoped_runtime_entries() {
+        for (method, runtime) in [
+            ("suite", "js_node_test_suite"),
+            ("describe", "js_node_test_suite"),
+            ("before", "js_node_test_before"),
+            ("after", "js_node_test_after"),
+            ("beforeEach", "js_node_test_before_each"),
+            ("afterEach", "js_node_test_after_each"),
+        ] {
+            let sig = NODE_CORE_MODULE_SEA_TLS_TEST_ROWS
+                .iter()
+                .find(|sig| sig.module == "test" && sig.method == method)
+                .unwrap_or_else(|| panic!("missing node:test {method} signature"));
+            assert_eq!(sig.runtime, runtime, "node:test {method} runtime route");
         }
     }
 }

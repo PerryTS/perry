@@ -57,6 +57,13 @@ fn fallback_errno(code: &str) -> i64 {
                 -103
             }
         }
+        "ECONNRESET" => {
+            if cfg!(target_os = "macos") {
+                -54
+            } else {
+                -104
+            }
+        }
         "EADDRNOTAVAIL" => {
             if cfg!(target_os = "macos") {
                 -49
@@ -123,6 +130,28 @@ pub(crate) fn classify_reqwest(e: &reqwest::Error, url: &str) -> Option<Classifi
             }
         }
         cur = s.source();
+    }
+
+    // The peer accepted the request and closed before any response head.
+    // reqwest's top-level Display is only "error sending request for url";
+    // the useful incomplete-message/reset reason lives in the source chain.
+    // Node reports every such pre-response close as ECONNRESET "socket hang
+    // up", distinct from a reset while consuming an established response.
+    if io_kind == Some(ErrorKind::ConnectionReset)
+        || io_kind == Some(ErrorKind::UnexpectedEof)
+        || chain.contains("connection closed before message completed")
+        || chain.contains("incomplete message")
+        || chain.contains("connection reset")
+    {
+        return Some((
+            "socket hang up".to_string(),
+            "ECONNRESET".to_string(),
+            "read".to_string(),
+            io_errno
+                .map(|n| -(n as i64))
+                .filter(|n| *n != 0)
+                .unwrap_or_else(|| fallback_errno("ECONNRESET")),
+        ));
     }
 
     // Concrete OS connect error (the common case): exact code + errno.

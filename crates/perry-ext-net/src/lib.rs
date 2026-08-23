@@ -71,6 +71,11 @@ mod handle_ids;
 pub(crate) use handle_ids::{next_id, next_id_or_throw};
 mod dispatch;
 mod dispatch_custody;
+mod socket_emit;
+pub use socket_emit::{
+    js_ext_net_register_http_agent_socket_event_hook, js_ext_net_set_http_agent_phase,
+    js_ext_net_socket_emit, js_ext_net_socket_emit_abort_error,
+};
 // #2154 — raw-consumer bridge so perry-ext-http can drive an HTTP exchange
 // over a socket produced by `agent.createConnection` (split out for the gate).
 mod raw_bridge;
@@ -84,10 +89,19 @@ pub use adopt::{adopt_upgraded_tcp_stream, ensure_adopted_socket_dispatch};
 mod option_setters;
 pub use option_setters::{
     js_net_server_noop_self, js_net_socket_get_type_of_service, js_net_socket_noop_self,
-    js_net_socket_set_encoding, js_net_socket_set_no_delay, js_net_socket_set_timeout,
-    js_net_socket_set_type_of_service,
+    js_net_socket_ref, js_net_socket_set_encoding, js_net_socket_set_no_delay,
+    js_net_socket_set_timeout, js_net_socket_set_type_of_service, js_net_socket_unref,
 };
 use option_setters::{js_net_validate_connect_port, js_net_validate_listen_port};
+mod socket_facade;
+pub(crate) use socket_facade::TlsSocketMetadata;
+pub use socket_facade::{
+    js_ext_net_has_active_handles, js_ext_net_is_socket_handle, js_ext_net_set_tls_metadata,
+    js_ext_net_socket_has_ref, js_ext_net_socket_peer_certificate_json, js_ext_net_socket_set_ref,
+    js_ext_net_socket_tls_authorized, js_ext_net_socket_tls_encrypted,
+    js_ext_net_socket_tls_servername, js_ext_net_socket_tls_session,
+    js_ext_net_socket_tls_session_reused,
+};
 
 #[cfg(test)]
 mod nodelay_tests;
@@ -159,6 +173,17 @@ pub(crate) mod statics {
         P.get_or_init(|| Mutex::new(Vec::new()))
     }
 
+    /// HTTP Agent-owned socket handles are transport facades over the HTTP
+    /// client's private connection pool. `true` means assigned to a request;
+    /// `false` means parked in `agent.freeSockets`. Keeping this tiny bit of
+    /// metadata here lets the ordinary net.Socket EventEmitter surface expose
+    /// Node's internal listener counts without leaking HTTP internals into the
+    /// generic handle dispatcher.
+    pub fn http_agent_phases() -> &'static Mutex<HashMap<i64, bool>> {
+        static H: OnceLock<Mutex<HashMap<i64, bool>>> = OnceLock::new();
+        H.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
     /// Server registry — `net.createServer(...)` returns a handle here.
     /// Separate from the socket map: server handles host an accept-loop
     /// shutdown channel and a bound port; sockets host a per-connection
@@ -177,6 +202,12 @@ pub(crate) mod statics {
     pub fn encodings() -> &'static Mutex<HashMap<i64, String>> {
         static E: OnceLock<Mutex<HashMap<i64, String>>> = OnceLock::new();
         E.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Per-socket EventEmitter warning thresholds set through `events.*`.
+    pub fn max_listeners() -> &'static Mutex<HashMap<i64, f64>> {
+        static M: OnceLock<Mutex<HashMap<i64, f64>>> = OnceLock::new();
+        M.get_or_init(|| Mutex::new(HashMap::new()))
     }
 }
 
@@ -273,6 +304,8 @@ pub(crate) struct SocketState {
     /// can move it into the spawned task at connect time.
     pub(crate) pending_rx: Option<mpsc::UnboundedReceiver<SocketCommand>>,
     pub(crate) is_open: bool,
+    /// Whether pending socket I/O keeps the process event loop alive.
+    pub(crate) refed: bool,
     /// Issue #2131 — the kernel-assigned local address, populated after
     /// `TcpStream::connect`/`accept`. Drives `socket.address()` so the
     /// "undefined.address" cluster reports the actual bound port/family.
@@ -293,6 +326,7 @@ pub(crate) struct SocketState {
     pub(crate) type_of_service: u8,
     pub(crate) server_id: Option<i64>,
     pub(crate) server_connection_active: bool,
+    pub(crate) tls: TlsSocketMetadata,
 }
 
 #[cfg(test)]
@@ -304,6 +338,7 @@ impl SocketState {
             cmd_tx,
             pending_rx: None,
             is_open: true,
+            refed: true,
             local_addr: None,
             raw: None,
             destroyed: false,
@@ -313,6 +348,7 @@ impl SocketState {
             type_of_service: 0,
             server_id: None,
             server_connection_active: false,
+            tls: TlsSocketMetadata::default(),
         }
     }
 }
@@ -359,6 +395,7 @@ enum PendingNetEvent {
     End(i64),
     Close(i64),
     Error(i64, String),
+    AbortError(i64),
     /// Issue #1123 followup — accept-loop on a `net.Server` produced
     /// a new client socket. Fires the server's `'connection'`
     /// listeners with the new socket handle.
@@ -570,6 +607,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             cmd_tx: tx,
             pending_rx: Some(rx),
             is_open: false,
+            refed: true,
             local_addr: None,
             raw: None,
             destroyed: false,
@@ -579,6 +617,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             type_of_service: 0,
             server_id: None,
             server_connection_active: false,
+            tls: TlsSocketMetadata::default(),
         },
     );
     statics::listeners()
@@ -813,6 +852,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                                     cmd_tx: tx,
                                     pending_rx: None,
                                     is_open: true,
+                                    refed: true,
                                     local_addr: accepted_local,
                                     raw: None,
                                     destroyed: false,
@@ -822,6 +862,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                                     type_of_service: 0,
                                     server_id: Some(server_id),
                                     server_connection_active: false,
+                                    tls: TlsSocketMetadata::default(),
                                 },
                             );
                             statics::listeners()
@@ -1079,6 +1120,7 @@ pub(crate) fn spawn_socket_task(
             cmd_tx: tx,
             pending_rx: None,
             is_open: false,
+            refed: true,
             local_addr: None,
             raw: None,
             destroyed: false,
@@ -1088,6 +1130,7 @@ pub(crate) fn spawn_socket_task(
             type_of_service: 0,
             server_id: None,
             server_connection_active: false,
+            tls: TlsSocketMetadata::default(),
         },
     );
     statics::listeners()
@@ -1555,6 +1598,26 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 drop(frame);
                 lifecycle::drain_once_listeners(id, "error");
             }
+            PendingNetEvent::AbortError(id) => {
+                let cbs = listeners_for(id, "error");
+                if cbs.is_empty() {
+                    continue;
+                }
+                let mut frame = dispatch_custody::DispatchFrame::park(cbs);
+                extern "C" {
+                    fn js_abort_error_value() -> f64;
+                }
+                frame.set_payload(js_abort_error_value().to_bits());
+                for i in 0..frame.len() {
+                    let cb = frame.cb(i);
+                    if cb != 0 {
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader)
+                            .call1(f64::from_bits(frame.payload_bits()));
+                    }
+                }
+                drop(frame);
+                lifecycle::drain_once_listeners(id, "error");
+            }
             PendingNetEvent::End(id) => {
                 // Issue #1852 — readable side ended (peer FIN). Fire the
                 // `'end'` listeners; the trailing `Close` event (pushed
@@ -1585,6 +1648,8 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 statics::sockets().lock().unwrap().remove(&id);
                 statics::once_flags().lock().unwrap().remove(&id);
                 statics::encodings().lock().unwrap().remove(&id);
+                statics::http_agent_phases().lock().unwrap().remove(&id);
+                statics::max_listeners().lock().unwrap().remove(&id);
                 server_state::discard_pending_server_data(id);
             }
             // Issue #1123 followup — server-side events. The
@@ -1838,16 +1903,6 @@ pub unsafe extern "C" fn js_ext_net_socket_remove_all_listeners(
     js_net_socket_remove_all_listeners(handle, event_ptr)
 }
 
-#[no_mangle]
-pub extern "C" fn js_ext_net_is_socket_handle(handle: i64) -> i32 {
-    let owned = is_net_socket_handle(handle);
-    if owned {
-        1
-    } else {
-        0
-    }
-}
-
 /// `extern "C"` form of `is_net_server_handle` for method-value/property
 /// dispatch on `net.Server` handles.
 #[no_mangle]
@@ -1857,12 +1912,6 @@ pub extern "C" fn js_ext_net_is_server_handle(handle: i64) -> i32 {
     } else {
         0
     }
-}
-
-/// Auxiliary liveness hook registered with the runtime for mixed stdlib links.
-#[no_mangle]
-pub extern "C" fn js_ext_net_has_active_handles() -> i32 {
-    server_state::has_active_handles() as i32
 }
 
 #[cfg(test)]

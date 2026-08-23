@@ -45,8 +45,7 @@ pub(crate) fn register_server_session(server_handle: i64, peer_addr: SocketAddr)
         timeout_callback: 0,
     });
     let has_session_listener = get_handle::<Http2SecureServer>(server_handle)
-        .and_then(|s| s.base.listeners.get("session"))
-        .map(|listeners| !listeners.is_empty())
+        .map(|server| crate::server::server::server_has_event_listener(&server.base, "session"))
         .unwrap_or(false);
     if has_session_listener {
         push_h2_event(Http2PendingEvent::Session {
@@ -120,8 +119,7 @@ fn has_active_server_session(server_handle: i64) -> bool {
 #[allow(dead_code)] // retained: server-session listener probe
 fn server_has_session_listener(server_handle: i64) -> bool {
     get_handle::<Http2SecureServer>(server_handle)
-        .and_then(|server| server.base.listeners.get("session"))
-        .map(|listeners| !listeners.is_empty())
+        .map(|server| crate::server::server::server_has_event_listener(&server.base, "session"))
         .unwrap_or(false)
 }
 

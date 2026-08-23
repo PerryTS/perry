@@ -6,10 +6,8 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::Poll;
 use std::time::Instant;
 
 use lazy_static::lazy_static;
@@ -20,7 +18,6 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{body::Incoming, Request, Response};
 use hyper_util::rt::TokioIo;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
@@ -53,6 +50,11 @@ pub(crate) use in_flight::{
     finalize_or_park_request, finalize_request_handles_deferred, has_in_flight_requests,
     reap_in_flight_requests, response_writable_ended,
 };
+mod deferred_events;
+use deferred_events::{drain_deferred_close_for, drain_deferred_listen_for, server_is_active};
+pub(crate) use deferred_events::{queue_deferred_close_emit, queue_deferred_listening_emit};
+mod io_activity;
+pub(crate) use io_activity::ReadActivity;
 
 /// Apply a server's per-connection `noDelay` (Node's `socket.setNoDelay`
 /// default, ON) to a freshly accepted TCP stream before it is served. Node
@@ -76,6 +78,9 @@ pub struct HttpServer {
     /// Server-level event listeners (`'request'`, `'connection'`,
     /// `'close'`, `'listening'`, `'error'`, `'upgrade'`).
     pub listeners: HashMap<String, Vec<i64>>,
+    /// One-shot server listeners. Drained before their first matching emit so
+    /// re-entrant emission cannot invoke them twice.
+    pub once_listeners: HashMap<String, Vec<i64>>,
     /// Bound port — populated after `.listen()` resolves.
     pub bound_port: u16,
     /// Bound host (e.g. `"0.0.0.0"`).
@@ -98,6 +103,11 @@ pub struct HttpServer {
     /// listener list after the emit fires. Raw closure pointers; rooted
     /// by the GC scanner in lib.rs.
     pub deferred_listen_cbs: Vec<i64>,
+    /// `close()` is asynchronous in Node. Keep the event pending until the
+    /// next pump tick so `await once(server, 'close')` registered immediately
+    /// after `close()` observes it.
+    pub pending_close_emit: bool,
+    pub deferred_close_cbs: Vec<i64>,
     /// Sent by `.close()` to wake the accept loop.
     pub shutdown_tx: Option<oneshot::Sender<()>>,
     /// Channel main thread drains in the event loop. Hyper service
@@ -160,11 +170,14 @@ impl HttpServer {
         Self {
             handler,
             listeners: HashMap::new(),
+            once_listeners: HashMap::new(),
             bound_port: 0,
             bound_host: String::new(),
             listening: false,
             pending_listening_emit: false,
             deferred_listen_cbs: Vec::new(),
+            pending_close_emit: false,
+            deferred_close_cbs: Vec::new(),
             shutdown_tx: None,
             request_rx: None,
             upgrade_rx: None,
@@ -184,6 +197,28 @@ impl HttpServer {
     }
 }
 
+pub(crate) fn server_has_event_listener(server: &HttpServer, event: &str) -> bool {
+    server
+        .listeners
+        .get(event)
+        .is_some_and(|listeners| !listeners.is_empty())
+        || server
+            .once_listeners
+            .get(event)
+            .is_some_and(|listeners| !listeners.is_empty())
+}
+
+/// Snapshot persistent listeners and detach one-shot listeners before JS runs.
+/// This follows EventEmitter's re-entrancy rule: a once listener is already
+/// absent if its callback emits the same event recursively.
+pub(crate) fn take_server_event_listeners(server: &mut HttpServer, event: &str) -> Vec<i64> {
+    let mut listeners = server.listeners.get(event).cloned().unwrap_or_default();
+    if let Some(once) = server.once_listeners.remove(event) {
+        listeners.extend(once);
+    }
+    listeners
+}
+
 /// Pending request from the hyper service fn to the main thread.
 pub struct HttpPendingRequest {
     pub server_handle: i64,
@@ -192,10 +227,6 @@ pub struct HttpPendingRequest {
     pub skip_default_response: bool,
     pub h2_stream_handle: i64,
     pub h2_stream_headers: Vec<(String, String)>,
-    /// `'request'` listeners snapshotted at request time so the
-    /// dispatch loop doesn't need to re-borrow the server handle.
-    pub request_listeners: Vec<i64>,
-    pub handler: i64,
     /// #5080 — routing only: when set, the `'checkContinue'` listeners fire
     /// *instead of* the `'request'` listeners + handler (Node dispatches an
     /// `Expect: 100-continue` request to `'checkContinue'` when a listener
@@ -253,63 +284,6 @@ lazy_static! {
 }
 
 pub(crate) static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
-
-/// AsyncRead/AsyncWrite passthrough that flips `saw_bytes` on every
-/// read that produces data. Wrapped around the server-side stream (the
-/// decrypted one, for HTTPS — handshake traffic must not count) so
-/// idleness can see "client started sending a request whose head hasn't
-/// parsed yet": hyper only invokes the service (and bumps `busy`) once
-/// a complete head arrives. The flag resets at service entry; while a
-/// request is in flight `busy > 0` covers activity, and a quiet
-/// keep-alive socket after the response reads as idle again. #4971.
-pub(crate) struct ReadActivity<S> {
-    inner: S,
-    saw_bytes: Arc<AtomicBool>,
-}
-
-impl<S> ReadActivity<S> {
-    pub(crate) fn new(inner: S, saw_bytes: Arc<AtomicBool>) -> Self {
-        Self { inner, saw_bytes }
-    }
-}
-
-impl<S: AsyncRead + Unpin> AsyncRead for ReadActivity<S> {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        let this = self.get_mut();
-        let before = buf.filled().len();
-        let poll = Pin::new(&mut this.inner).poll_read(cx, buf);
-        if matches!(poll, Poll::Ready(Ok(()))) && buf.filled().len() > before {
-            this.saw_bytes.store(true, Ordering::SeqCst);
-        }
-        poll
-    }
-}
-
-impl<S: AsyncWrite + Unpin> AsyncWrite for ReadActivity<S> {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
-    }
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
-    }
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
-    }
-}
 
 /// Server handles whose accept loop saw a new connection since the last
 /// pump tick. Drained by `js_node_http_server_process_pending` to fire
@@ -620,6 +594,7 @@ fn serve_http_connection(
     let conn_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
     let busy = Arc::new(AtomicUsize::new(0));
     let read_active = Arc::new(AtomicBool::new(false));
+    let rewrite_chunked_header = Arc::new(AtomicBool::new(false));
     let close = Arc::new(tokio::sync::Notify::new());
     let read_active_for_io = read_active.clone();
     let upgrade_tx_peek = upgrade_tx_for_spawn.clone();
@@ -642,12 +617,7 @@ fn serve_http_connection(
         // with NO response on the wire (Node semantics). Other
         // connections replay the peeked bytes to hyper.
         let has_upgrade_listeners = get_handle::<HttpServer>(server_handle)
-            .map(|s| {
-                s.listeners
-                    .get("upgrade")
-                    .map(|v| !v.is_empty())
-                    .unwrap_or(false)
-            })
+            .map(|server| server_has_event_listener(server, "upgrade"))
             .unwrap_or(false);
         let stream = if has_upgrade_listeners {
             match crate::server::raw_upgrade::peek_and_maybe_dispatch_raw_upgrade(
@@ -667,26 +637,42 @@ fn serve_http_connection(
         } else {
             crate::server::raw_upgrade::PrefixedStream::empty(stream)
         };
-        let io = TokioIo::new(ReadActivity::new(stream, read_active_for_io));
+        let io = TokioIo::new(ReadActivity::new(
+            stream,
+            read_active_for_io,
+            rewrite_chunked_header.clone(),
+        ));
+        let close_for_service = close.clone();
         let service = service_fn(move |req: Request<Incoming>| {
             let request_tx = request_tx.clone();
             let upgrade_tx = upgrade_tx.clone();
             let busy = busy.clone();
             let read_active = read_active.clone();
+            let connection_close = close_for_service.clone();
+            let rewrite_chunked_header = rewrite_chunked_header.clone();
             async move {
                 busy.fetch_add(1, Ordering::SeqCst);
                 // The pending head is now an in-flight
                 // request; `busy` covers activity until
                 // the response ships (#4971).
                 read_active.store(false, Ordering::SeqCst);
-                let res = handle_request(server_handle, peer, req, request_tx, upgrade_tx).await;
+                let res = handle_request(
+                    server_handle,
+                    peer,
+                    req,
+                    request_tx,
+                    upgrade_tx,
+                    connection_close,
+                    rewrite_chunked_header,
+                )
+                .await;
                 busy.fetch_sub(1, Ordering::SeqCst);
                 res
             }
         });
-        let conn = http1::Builder::new()
-            .serve_connection(io, service)
-            .with_upgrades();
+        let mut builder = http1::Builder::new();
+        builder.auto_date_header(false).title_case_headers(true);
+        let conn = builder.serve_connection(io, service).with_upgrades();
         tokio::pin!(conn);
         tokio::select! {
             result = &mut conn => {
@@ -972,29 +958,15 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
 /// exits.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_server_close(server_handle: i64, callback: i64) {
-    let close_listeners;
     if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
         s.listening = false;
         s.connections_checking_interval_destroyed = true;
         s.shutdown_tx.take();
-        close_listeners = s.listeners.get("close").cloned().unwrap_or_default();
-    } else {
-        close_listeners = Vec::new();
+        queue_deferred_close_emit(s, callback);
     }
     // Node 19+: `server.close()` destroys idle keep-alive connections
     // (active requests are allowed to finish) (#4905).
     signal_connections_close(server_handle, true);
-    // #8082: `callback` crosses the close-listener emits, which run JS.
-    let scope = perry_ffi::TransientRootScope::enter();
-    let callback_rooted = scope.root_addr(callback);
-    emit_no_arg_to_listeners(&close_listeners);
-    if callback_rooted.get() != 0 {
-        let raw = callback_rooted.get() as *const RawClosureHeader;
-        let closure = JsClosure::from_raw(raw);
-        if !closure.is_null() {
-            let _ = closure.call0();
-        }
-    }
 }
 
 /// `server.closeAllConnections()` — destroy every tracked connection
@@ -1116,8 +1088,14 @@ pub unsafe extern "C" fn js_node_http_server_remove_all_listeners(
     if let Some(s) = get_handle_mut::<HttpServer>(handle) {
         if event_name_ptr.is_null() {
             s.listeners.clear();
+            s.once_listeners.clear();
+            s.handler = 0;
         } else if let Some(event) = read_string_header(event_name_ptr as *mut _) {
             s.listeners.remove(&event);
+            s.once_listeners.remove(&event);
+            if event == "request" {
+                s.handler = 0;
+            }
         }
     }
     handle_to_pointer_f64(handle)
@@ -1136,9 +1114,26 @@ pub unsafe extern "C" fn js_node_http_server_remove_listener(
 ) -> f64 {
     let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
     if let Some(s) = get_handle_mut::<HttpServer>(handle) {
-        if let Some(cbs) = s.listeners.get_mut(&event) {
-            if let Some(pos) = cbs.iter().rposition(|&c| c == callback) {
-                cbs.remove(pos);
+        let removed = if let Some(callbacks) = s.listeners.get_mut(&event) {
+            if let Some(position) = callbacks.iter().rposition(|entry| *entry == callback) {
+                callbacks.remove(position);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !removed {
+            let mut removed_once = false;
+            if let Some(callbacks) = s.once_listeners.get_mut(&event) {
+                if let Some(position) = callbacks.iter().rposition(|entry| *entry == callback) {
+                    callbacks.remove(position);
+                    removed_once = true;
+                }
+            }
+            if !removed_once && event == "request" && s.handler == callback {
+                s.handler = 0;
             }
         }
     }
@@ -1155,6 +1150,8 @@ async fn handle_request(
     req: Request<Incoming>,
     request_tx: Arc<mpsc::Sender<HttpPendingRequest>>,
     upgrade_tx: Arc<mpsc::Sender<HttpPendingUpgrade>>,
+    connection_close: Arc<tokio::sync::Notify>,
+    rewrite_chunked_header: Arc<AtomicBool>,
 ) -> Result<Response<ResponseBody>, hyper::Error> {
     let method = req.method().to_string();
     let uri = req.uri();
@@ -1176,6 +1173,7 @@ async fn handle_request(
     // `headers_lower`) are consumed below.
     let http_version = req.version();
     let req_connection = headers_lower.get("connection").cloned();
+    let req_te = headers_lower.get("te").cloned();
     // #5080 — `Expect: 100-continue` routes to `'checkContinue'` when a
     // listener exists. hyper auto-sends the interim `100 Continue` once the
     // body below is polled, so the client's withheld body arrives before
@@ -1201,12 +1199,7 @@ async fn handle_request(
     // listener was attached at accept time.
     if crate::server::upgrade::is_websocket_upgrade(&req) {
         let has_upgrade_listeners = get_handle::<HttpServer>(server_handle)
-            .map(|s| {
-                s.listeners
-                    .get("upgrade")
-                    .map(|v| !v.is_empty())
-                    .unwrap_or(false)
-            })
+            .map(|server| server_has_event_listener(server, "upgrade"))
             .unwrap_or(false);
         if has_upgrade_listeners && req.headers().contains_key("sec-websocket-key") {
             return handle_websocket_upgrade(
@@ -1248,23 +1241,21 @@ async fn handle_request(
     let im_handle = alloc_incoming_message(im);
 
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
-    let sr_handle = alloc_server_response_for_request(response_tx, im_handle);
+    let transport_destroyed = Arc::new(AtomicBool::new(false));
+    let sr_handle = alloc_server_response_for_request(
+        response_tx,
+        im_handle,
+        Some(connection_close),
+        Some(transport_destroyed.clone()),
+    );
 
-    let (request_listeners, handler, keep_alive_timeout, check_continue_listeners) =
-        match get_handle::<HttpServer>(server_handle) {
-            Some(s) => (
-                s.listeners.get("request").cloned().unwrap_or_default(),
-                s.handler,
-                s.keep_alive_timeout,
-                s.listeners
-                    .get("checkContinue")
-                    .cloned()
-                    .unwrap_or_default(),
-            ),
-            None => (Vec::new(), 0, 5_000.0, Vec::new()),
-        };
+    let keep_alive_timeout = get_handle::<HttpServer>(server_handle)
+        .map(|server| server.keep_alive_timeout)
+        .unwrap_or(5_000.0);
 
-    let is_check_continue = expects_continue && !check_continue_listeners.is_empty();
+    let is_check_continue = expects_continue
+        && get_handle::<HttpServer>(server_handle)
+            .is_some_and(|server| server_has_event_listener(server, "checkContinue"));
 
     let pending = HttpPendingRequest {
         server_handle,
@@ -1273,8 +1264,6 @@ async fn handle_request(
         skip_default_response: false,
         h2_stream_handle: 0,
         h2_stream_headers: Vec::new(),
-        request_listeners,
-        handler,
         is_check_continue,
     };
 
@@ -1290,13 +1279,31 @@ async fn handle_request(
 
     match response_rx.await {
         Ok(mut shape) => {
+            if http_version == hyper::Version::HTTP_10 {
+                shape.response_version = Some(hyper::Version::HTTP_10);
+            }
+            let server_closing = get_handle::<HttpServer>(server_handle)
+                .map(|server| !server.listening)
+                .unwrap_or(false);
+            let default_connection = if server_closing {
+                Some("close")
+            } else {
+                req_connection.as_deref()
+            };
             shape.apply_default_connection_headers(
                 http_version,
-                req_connection.as_deref(),
+                default_connection,
                 keep_alive_timeout,
             );
+            let chunked = shape.apply_http10_chunked_framing(http_version, req_te.as_deref());
+            if chunked {
+                rewrite_chunked_header.store(true, Ordering::Release);
+            } else {
+                shape.apply_http10_eof_framing(http_version, req_te.as_deref());
+            }
             Ok(shape.into_hyper())
         }
+        Err(_) if transport_destroyed.load(Ordering::Acquire) => std::future::pending().await,
         Err(_) => Ok(Response::builder()
             .status(500)
             .body(Full::new(Bytes::from("Handler error")).boxed())
@@ -1473,82 +1480,6 @@ pub extern "C" fn js_node_http_server_has_active() -> i32 {
 /// `(req, res) => res.end(...)` shape that the load-bearing #604
 /// fixture uses works without this — the response oneshot fires
 /// synchronously from inside `js_node_http_res_end`.
-/// #4903 — record a pending `'listening'` emit on a server (http / https /
-/// http2 all share the `HttpServer` base). Node registers the
-/// `listen(port, cb)` callback as a *once* `'listening'` listener inside
-/// `listen()`, so the callback goes into the live listener list (correct
-/// emit order vs. listeners added before/after `listen()`) and into
-/// `deferred_listen_cbs`, which the pump uses to remove it again after
-/// the emit fires.
-pub(crate) fn queue_deferred_listening_emit(s: &mut HttpServer, callback: i64) {
-    s.pending_listening_emit = true;
-    if callback != 0 {
-        s.listeners
-            .entry("listening".to_string())
-            .or_default()
-            .push(callback);
-        s.deferred_listen_cbs.push(callback);
-    }
-}
-
-/// #4903 — fire a server's queued `'listening'` listeners + `listen(cb)`
-/// callbacks with implicit `this` bound to the server. Runs from the
-/// main-thread pump, never from inside `listen()` itself: Node emits
-/// `'listening'` on a later event-loop tick, so the listen callback only
-/// runs after the current synchronous script segment (including the
-/// `const server = ...` assignment) has finished, and `'listening'`
-/// listeners registered after `listen()` returned still fire. The
-/// listener snapshot is taken here at drain time for that same reason,
-/// and the queue is detached (`mem::take`) before any callback runs so
-/// a re-entrant `listen()` from a callback can't double-fire.
-pub(crate) fn drain_deferred_listen_for<T, F>(server_handle: i64, base_of: F) -> i32
-where
-    T: Send + Sync + 'static,
-    F: FnOnce(&mut T) -> &mut HttpServer,
-{
-    let cbs: Vec<i64> = match get_handle_mut::<T>(server_handle) {
-        Some(t) => {
-            let s = base_of(t);
-            if !std::mem::take(&mut s.pending_listening_emit) {
-                return 0;
-            }
-            let snapshot = s.listeners.get("listening").cloned().unwrap_or_default();
-            // The `listen(port, cb)` callbacks are once-listeners: now that
-            // this emit has snapshotted them, drop them from the live list
-            // so a future emit / listener introspection doesn't see them.
-            let once: Vec<i64> = std::mem::take(&mut s.deferred_listen_cbs);
-            if let Some(ls) = s.listeners.get_mut("listening") {
-                for cb in &once {
-                    if let Some(pos) = ls.iter().position(|x| x == cb) {
-                        ls.remove(pos);
-                    }
-                }
-            }
-            snapshot
-        }
-        None => return 0,
-    };
-    let this_val = handle_to_pointer_f64(server_handle);
-    let mut fired = 0i32;
-    // #8082: the drained snapshot crosses each callback — root it.
-    let scope = perry_ffi::TransientRootScope::enter();
-    let rooted = scope.root_addrs(&cbs);
-    for cb in &rooted {
-        let addr = cb.get();
-        if addr == 0 {
-            continue;
-        }
-        let raw = addr as *const RawClosureHeader;
-        let closure = unsafe { JsClosure::from_raw(raw) };
-        if !closure.is_null() {
-            with_implicit_this(this_val, || {
-                let _ = unsafe { closure.call0() };
-            });
-            fired += 1;
-        }
-    }
-    fired
-}
 
 #[no_mangle]
 pub extern "C" fn js_node_http_server_process_pending() -> i32 {
@@ -1581,11 +1512,11 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     for server_handle in connection_events {
         // The handle may back an HttpServer or an HttpsServer (whose
         // accept loop pushes here too since #4971) — probe both.
-        let listeners = get_handle::<HttpServer>(server_handle)
-            .and_then(|s| s.listeners.get("connection").cloned())
+        let listeners = get_handle_mut::<HttpServer>(server_handle)
+            .map(|server| take_server_event_listeners(server, "connection"))
             .or_else(|| {
-                get_handle::<crate::server::https_server::HttpsServer>(server_handle)
-                    .and_then(|s| s.base.listeners.get("connection").cloned())
+                get_handle_mut::<crate::server::https_server::HttpsServer>(server_handle)
+                    .map(|server| take_server_event_listeners(&mut server.base, "connection"))
             })
             .unwrap_or_default();
         if listeners.is_empty() {
@@ -1606,6 +1537,7 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         // before draining requests: the listen callback is usually what
         // kicks off the client request in the first place.
         count += drain_deferred_listen_for::<HttpServer, _>(h, |s| s);
+        count += drain_deferred_close_for::<HttpServer, _>(h, |s| s);
         // Drain upgrades first so they don't get starved by a busy
         // request stream.
         while let Some(up) = try_recv_upgrade(h) {
@@ -1654,6 +1586,11 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         count += drain_deferred_listen_for::<crate::server::https_server::HttpsServer, _>(h, |s| {
             &mut s.base
         });
+        count += drain_deferred_close_for::<crate::server::https_server::HttpsServer, _>(h, |s| {
+            &mut s.base
+        });
+        count += crate::server::https_server::process_pending_tls_keylogs(h);
+        count += crate::server::https_server::process_pending_tls_client_errors(h);
         while let Some(p) = crate::server::https_server::try_recv_pending_https_nonblocking(h) {
             crate::server::https_server::process_pending_https(p);
             count += 1;
@@ -1669,6 +1606,10 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
             h,
             |s| &mut s.base,
         );
+        count +=
+            drain_deferred_close_for::<crate::server::http2_server::Http2SecureServer, _>(h, |s| {
+                &mut s.base
+            });
         count += crate::server::http2_server::process_pending_h2_events();
         while let Some(p) = crate::server::http2_server::try_recv_pending_h2_nonblocking(h) {
             crate::server::http2_server::process_pending_h2(p);
@@ -1693,36 +1634,6 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     count += unsafe { perry_ext_net::js_ext_net_drain_pending() };
 
     count
-}
-
-fn server_is_active(s: &HttpServer) -> bool {
-    // #5011 — an `unref()`ed server no longer keeps the event loop alive
-    // just by being bound, so a quietly-listening unref'd server lets the
-    // process exit (Node semantics). Pending listen callbacks and queued
-    // requests below still keep the loop alive long enough to flush any
-    // in-flight work.
-    if s.listening && s.refed {
-        return true;
-    }
-    // #4903 — a queued `'listening'` emit / listen callback must keep the
-    // loop alive until the pump fires it, even if `close()` already ran.
-    if s.pending_listening_emit || !s.deferred_listen_cbs.is_empty() {
-        return true;
-    }
-    // Even if the user has called close(), the channels may still
-    // hold queued items the pump needs to drain on a subsequent tick
-    // before the program can exit cleanly.
-    if let Some(rx) = s.request_rx.as_ref() {
-        if !rx.is_closed() && rx.len() > 0 {
-            return true;
-        }
-    }
-    if let Some(rx) = s.upgrade_rx.as_ref() {
-        if !rx.is_closed() && rx.len() > 0 {
-            return true;
-        }
-    }
-    false
 }
 
 fn try_recv_upgrade(server_handle: i64) -> Option<HttpPendingUpgrade> {
@@ -1800,14 +1711,16 @@ fn process_pending(pending: HttpPendingRequest) {
     // because each callback below can itself run a moving collection.
     // (`req_f64`/`res_f64`/`server_this` are small handle ids — no move.)
     let (fresh_request_listeners, fresh_check_continue_listeners, fresh_handler) =
-        match get_handle::<HttpServer>(pending.server_handle) {
-            Some(s) => (
-                s.listeners.get("request").cloned().unwrap_or_default(),
-                s.listeners
-                    .get("checkContinue")
-                    .cloned()
-                    .unwrap_or_default(),
-                s.handler,
+        match get_handle_mut::<HttpServer>(pending.server_handle) {
+            Some(server) if pending.is_check_continue => (
+                Vec::new(),
+                take_server_event_listeners(server, "checkContinue"),
+                server.handler,
+            ),
+            Some(server) => (
+                take_server_event_listeners(server, "request"),
+                Vec::new(),
+                server.handler,
             ),
             // Server gone: nothing safe to dispatch to.
             None => (Vec::new(), Vec::new(), 0),
@@ -1838,24 +1751,8 @@ fn process_pending(pending: HttpPendingRequest) {
         return;
     }
 
-    for cb in &request_rooted {
-        let addr = cb.get();
-        if addr == 0 {
-            continue;
-        }
-        unsafe {
-            let raw = addr as *const RawClosureHeader;
-            let closure = JsClosure::from_raw(raw);
-            if !closure.is_null() {
-                with_implicit_this(server_this, || {
-                    let _ = closure.call2(req_f64, res_f64);
-                });
-            }
-            js_promise_run_microtasks();
-        }
-    }
-
-    // Main handler. Per the issue #604 architectural change documented
+    // The createServer handler is the first registered request listener.
+    // Per the issue #604 architectural change documented
     // on `js_node_http_server_process_pending`, we no longer
     // synchronously block on the handler's returned Promise — that
     // would re-introduce the listen()-blocks-main-thread problem at
@@ -1871,6 +1768,22 @@ fn process_pending(pending: HttpPendingRequest) {
             if !closure.is_null() {
                 // `createServer(handler)` registers `handler` as a
                 // `'request'` listener — same `this` = server binding.
+                with_implicit_this(server_this, || {
+                    let _ = closure.call2(req_f64, res_f64);
+                });
+            }
+            js_promise_run_microtasks();
+        }
+    }
+    for cb in &request_rooted {
+        let addr = cb.get();
+        if addr == 0 {
+            continue;
+        }
+        unsafe {
+            let raw = addr as *const RawClosureHeader;
+            let closure = JsClosure::from_raw(raw);
+            if !closure.is_null() {
                 with_implicit_this(server_this, || {
                     let _ = closure.call2(req_f64, res_f64);
                 });
@@ -1912,17 +1825,20 @@ pub(crate) fn synthesize_default_response_if_needed(response_handle: i64) {
             // Set-Cookie) into one entry per element so they emit a separate
             // wire line each (#4826).
             let mut headers = sr.snapshot_headers();
-            if !sr.headers.contains_key("content-length")
+            let auto_content_length = !sr.headers.contains_key("content-length")
                 && !sr.headers.contains_key("transfer-encoding")
-            {
+                && sr.trailers.is_empty();
+            if auto_content_length {
                 headers.push(("Content-Length".to_string(), body.len().to_string()));
             }
             let shape = HyperResponseShape {
                 status: sr.status_code,
                 status_message: sr.status_message.clone(),
+                response_version: None,
                 headers,
                 trailers: Vec::new(),
                 body: crate::server::response::ShapeBody::Full(body),
+                auto_content_length,
             };
             if let Some(tx) = sr.response_tx.take() {
                 let _ = tx.send(shape);

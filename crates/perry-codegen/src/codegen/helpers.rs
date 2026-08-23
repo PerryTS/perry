@@ -405,13 +405,30 @@ fn root_spill_relocation_threshold() -> usize {
 /// The relocation estimate for a function with `slot_count` GC-root slots and
 /// a body containing `safepoint_sites` call-like expressions. Saturating so a
 /// pathological product cannot wrap.
+/// The root population RS4GC actually relocates: named pointer locals plus
+/// ~one live pointer temporary per call result (#8583). Production and the
+/// threshold tests must agree on this composition — computing it in only one
+/// of the two is how the endpoint tests silently stop guarding the real
+/// formula.
+pub(crate) fn spill_live_root_count(slot_count: usize, safepoint_sites: usize) -> usize {
+    slot_count.saturating_add(safepoint_sites)
+}
+
 pub(crate) fn root_relocation_estimate(slot_count: usize, safepoint_sites: usize) -> usize {
     slot_count.saturating_mul(safepoint_sites)
 }
 
 #[cfg(test)]
 mod root_spill_default_tests {
-    use super::{root_relocation_estimate, DEFAULT_ROOT_SPILL_RELOCATIONS};
+    use super::{root_relocation_estimate, spill_live_root_count, DEFAULT_ROOT_SPILL_RELOCATIONS};
+
+    /// Exactly what `maybe_spill_roots_to_shadow_frame` computes, so these
+    /// endpoint tests track the production formula instead of a stale copy of
+    /// it (#8633 changed the composition; before this helper the tests still
+    /// asserted on the pre-#8633 `slot_count x sites`).
+    fn production_estimate(slot_count: usize, sites: usize) -> usize {
+        root_relocation_estimate(spill_live_root_count(slot_count, sites), sites)
+    }
 
     /// #8620: the default is pinned to the measured RS4GC fan-out cliff — the
     /// largest estimate whose fan-out finished in bounded time (32M finished in
@@ -427,8 +444,8 @@ mod root_spill_default_tests {
     /// under the new default it stays on native statepoints.
     #[test]
     fn moderate_fan_out_stays_on_statepoints() {
-        let est = root_relocation_estimate(4000, 2001);
-        assert_eq!(est, 8_004_000);
+        let est = production_estimate(4000, 2001);
+        assert_eq!(est, 12_008_001);
         assert!(
             est <= DEFAULT_ROOT_SPILL_RELOCATIONS,
             "moderate estimate {est} must not exceed the default (would spill)",
@@ -440,7 +457,7 @@ mod root_spill_default_tests {
     /// still spill under the new default.
     #[test]
     fn catastrophic_fan_out_still_spills() {
-        let est = root_relocation_estimate(795, 106_000);
+        let est = production_estimate(795, 106_000);
         assert!(
             est > DEFAULT_ROOT_SPILL_RELOCATIONS,
             "catastrophic estimate {est} must exceed the default (should spill)",
@@ -468,16 +485,32 @@ pub(super) fn maybe_spill_roots_to_shadow_frame(
         return;
     }
     let sites = crate::collectors::count_safepoint_sites(body);
-    let estimate = root_relocation_estimate(slot_count, sites);
+    // #8583 (unit-4 / `__33499` of the Claude Code bundle): `slot_count` is the
+    // shadow-slot map size — the count of *named* pointer-typed locals — but
+    // that is NOT the root population RS4GC relocates. A call-heavy minified
+    // closure produces one pointer-typed *temporary* per call result (the
+    // constructed IR carries ~one `alloca ptr addrspace(1)` per call), and each
+    // is live across the later safepoints; those temporaries dominate the true
+    // root count yet are invisible to `collect_pointer_typed_locals`. `__33499`
+    // measured ~20.3k named-and-anonymous pointer roots × ~20.3k safepoints, but
+    // its `slot_count` alone was ~100x smaller, so `slot_count × sites` fell
+    // under the threshold, the function stayed on statepoints, and RS4GC then
+    // fanned out for >3 h / ~30 GiB (never reaching the #8586 post-rewrite
+    // budget assertion, which only fires *after* the rewrite it never finishes).
+    // Count each safepoint as contributing ~one live pointer temporary. This is
+    // an over-approximation biased toward spilling — the intended direction (a
+    // false-positive shadow frame is cheap; a missed fan-out is not).
+    let live_roots = spill_live_root_count(slot_count, sites);
+    let estimate = root_relocation_estimate(live_roots, sites);
     if estimate <= threshold {
         return;
     }
     func.request_shadow_frame_spill();
     eprintln!(
-        "perry: `{fn_name}` keeps its {slot_count} GC roots in a shadow frame instead of \
-         statepoints: an estimated {estimate} relocations ({slot_count} roots × {sites} \
-         safepoints) would make rewrite-statepoints-for-gc fan-out super-linear in the \
-         optimizer (> {threshold}). The function is still compiled at the requested \
+        "perry: `{fn_name}` keeps its {live_roots} GC roots (incl. call-result temporaries) in a \
+         shadow frame instead of statepoints: an estimated {estimate} relocations ({live_roots} \
+         roots × {sites} safepoints) would make rewrite-statepoints-for-gc fan-out super-linear in \
+         the optimizer (> {threshold}). The function is still compiled at the requested \
          optimization level; only its GC-root representation changes, and its roots stay \
          precise (#8583). Override with PERRY_ROOT_SPILL_RELOCATIONS."
     );

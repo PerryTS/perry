@@ -3,13 +3,10 @@
 
 use super::*;
 
-use perry_ffi::{
-    alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, RawClosureHeader,
-    StringHeader,
-};
+use perry_ffi::{alloc_string, get_handle, get_handle_mut, register_handle, StringHeader};
 use std::collections::HashMap;
 
-use crate::server::request::{emit_no_arg_to_listeners, handle_to_pointer_f64};
+use crate::server::request::handle_to_pointer_f64;
 use crate::server::response::HyperResponseShape;
 use crate::server::types::{
     jsvalue_to_body_bytes, jsvalue_to_owned_string, read_string_header, POINTER_TAG, PTR_MASK,
@@ -321,9 +318,11 @@ fn end_server_h2_stream(handle: i64, body: Vec<u8>) {
         let shape = HyperResponseShape {
             status: stream.response_status,
             status_message: None,
+            response_version: None,
             headers,
             trailers: Vec::new(),
             body: crate::server::response::ShapeBody::Full(body),
+            auto_content_length: false,
         };
         if let Some(tx) = stream.response_tx.take() {
             let _ = tx.send(shape);
@@ -359,24 +358,13 @@ pub extern "C" fn js_node_http2_server_address_json(handle: i64) -> *mut StringH
 /// `http2SecureServer.close(cb?)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http2_server_close(handle: i64, callback: i64) {
-    let close_listeners;
     if let Some(s) = get_handle_mut::<Http2SecureServer>(handle) {
         s.base.listening = false;
         s.base.connections_checking_interval_destroyed = true;
         s.base.shutdown_tx.take();
-        close_listeners = s.base.listeners.get("close").cloned().unwrap_or_default();
-    } else {
-        close_listeners = Vec::new();
+        crate::server::server::queue_deferred_close_emit(&mut s.base, callback);
     }
     mark_server_sessions_closed(handle);
-    emit_no_arg_to_listeners(&close_listeners);
-    if callback != 0 {
-        let raw = callback as *const RawClosureHeader;
-        let closure = JsClosure::from_raw(raw);
-        if !closure.is_null() {
-            let _ = closure.call0();
-        }
-    }
 }
 
 /// `http2SecureServer.on(event, cb)`.

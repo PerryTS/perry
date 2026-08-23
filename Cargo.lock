@@ -1861,6 +1861,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "des"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffdd80ce8ce993de27e9f063a444a4d53ce8e8db4c1f00cc03af5ad5a9867a1e"
+dependencies = [
+ "cipher 0.4.4",
+]
+
+[[package]]
 name = "dialoguer"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5386,6 +5395,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
 
 [[package]]
+name = "p12"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4873306de53fe82e7e484df31e1e947d61514b6ea2ed6cd7b45d63006fd9224"
+dependencies = [
+ "cbc 0.1.2",
+ "cipher 0.4.4",
+ "des",
+ "getrandom 0.2.17",
+ "hmac 0.12.1",
+ "lazy_static",
+ "rc2",
+ "sha1 0.10.6",
+ "yasna",
+]
+
+[[package]]
 name = "p256"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5971,21 +5997,28 @@ dependencies = [
  "bytes",
  "h2",
  "http-body-util",
+ "httpdate",
  "hyper",
  "hyper-util",
  "lazy_static",
+ "p12",
  "perry-ext-net",
  "perry-ext-ws",
  "perry-ffi",
  "perry-runtime",
+ "pkcs5",
  "reqwest",
+ "ring",
  "rustls",
  "rustls-pemfile",
+ "rustls-webpki",
  "serde_json",
  "socket2",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
+ "webpki-roots 1.0.7",
+ "x509-cert",
 ]
 
 [[package]]
@@ -6066,6 +6099,7 @@ dependencies = [
  "perry-runtime",
  "rustls",
  "rustls-native-certs",
+ "serde_json",
  "tokio",
  "tokio-rustls",
 ]
@@ -7398,6 +7432,15 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "rc2"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62c64daa8e9438b84aaae55010a93f396f8e60e3911590fcba770d04643fc1dd"
+dependencies = [
+ "cipher 0.4.4",
 ]
 
 [[package]]
@@ -11065,6 +11108,12 @@ name = "y4m"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
+
+[[package]]
+name = "yasna"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
 
 [[package]]
 name = "yoke"

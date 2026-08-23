@@ -65,6 +65,8 @@ mod method_override;
 mod namespace_call;
 mod native;
 mod native_module_dispatch;
+#[cfg(test)]
+mod native_module_rooting_tests;
 mod native_table;
 mod new;
 pub(crate) mod new_alloc;
