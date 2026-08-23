@@ -74,6 +74,19 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
         return Ok(nanbox_pointer_inline(ctx.block(), &arr));
     }
 
+    // #8583 follow-up: a LARGE, fully-CONSTANT array literal (the minified
+    // data-table shape — a giant nested array of number/bool/null literals)
+    // becomes a static rodata descriptor + ONE bulk-materialization runtime
+    // call, instead of the N per-subarray `js_array_from_values` allocations and
+    // the giant procedural body that made `__33499` fan out under RS4GC (245k
+    // instrs / 11,104 allocations → one call over a compact blob). Small const
+    // arrays fall through to the fast inline bump-alloc path below.
+    if const_array_descriptor_enabled() {
+        if let Some(v) = try_lower_const_array_descriptor(ctx, elements) {
+            return Ok(v);
+        }
+    }
+
     // Evaluate all element expressions *before* allocating, so nested
     // allocations inside element expressions don't see a half-initialized
     // outer array. Each evaluated value is kept in a temp root until the last
@@ -270,4 +283,142 @@ pub(crate) fn lower_array_literal(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Res
 
         Ok(nanbox_pointer_inline(ctx.block(), &arr))
     })
+}
+
+/// #8583 follow-up gate. Default ON; `PERRY_CONST_ARRAY_DESCRIPTOR=0/off/false`
+/// reverts every large constant literal to the procedural construction path
+/// (A/B bisection, and an escape hatch if a descriptor ever proves wrong).
+fn const_array_descriptor_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_CONST_ARRAY_DESCRIPTOR").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// A value the const-descriptor path can materialize with no JS evaluation:
+/// number/int/bool/null/undefined, or an array recursively of the same. Strings
+/// and objects decline (v2) — the whole literal then falls back to the
+/// procedural path, so a mixed table is never half-materialized.
+fn is_const_materializable(e: &Expr) -> bool {
+    match e {
+        Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined => true,
+        Expr::Array(elems) => elems.iter().all(is_const_materializable),
+        _ => false,
+    }
+}
+
+/// Total materializable nodes (every scalar + every array), the size gate below.
+fn count_const_nodes(e: &Expr) -> usize {
+    match e {
+        Expr::Array(elems) => 1 + elems.iter().map(count_const_nodes).sum::<usize>(),
+        _ => 1,
+    }
+}
+
+/// Serialize one constant value into the descriptor blob (must match the tag
+/// bytes in `perry-runtime/src/array/alloc.rs::build_const_value`).
+fn serialize_const_value(e: &Expr, out: &mut Vec<u8>) {
+    match e {
+        Expr::Number(n) => {
+            out.push(0);
+            out.extend_from_slice(&n.to_le_bytes());
+        }
+        Expr::Integer(i) => {
+            out.push(0);
+            out.extend_from_slice(&(*i as f64).to_le_bytes());
+        }
+        Expr::Bool(true) => out.push(2),
+        Expr::Bool(false) => out.push(3),
+        Expr::Null => out.push(4),
+        Expr::Undefined => out.push(5),
+        Expr::Array(elems) => {
+            out.push(1);
+            out.extend_from_slice(&(elems.len() as u32).to_le_bytes());
+            for el in elems {
+                serialize_const_value(el, out);
+            }
+        }
+        // Guarded by `is_const_materializable`; unreachable in practice.
+        _ => out.push(5),
+    }
+}
+
+/// Only worth a rodata blob + runtime call for genuinely large tables; small
+/// const arrays keep the fast inline bump-alloc path (no regression). `__33499`
+/// has ~44k nodes; an ordinary `[1,2,3]` has 4 and never qualifies.
+const CONST_DESCRIPTOR_MIN_NODES: usize = 256;
+
+/// If `elements` is a large, fully-constant array literal, emit a static rodata
+/// descriptor and a single `js_value_from_const_descriptor` call and return the
+/// nanboxed value; otherwise `None` (caller falls back to the procedural path).
+fn try_lower_const_array_descriptor(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> Option<String> {
+    if !elements.iter().all(is_const_materializable) {
+        return None;
+    }
+    // Only NESTED constant tables benefit: the fan-out cost is the per-subarray
+    // allocation (a data table lowers to thousands of `js_array_from_values`).
+    // A flat constant scalar array is already a single `js_array_alloc_literal`
+    // + inline stores, so keep that path — it also preserves the precise
+    // per-slot write barriers a later push/store relies on.
+    if !elements.iter().any(|e| matches!(e, Expr::Array(_))) {
+        return None;
+    }
+    let total_nodes: usize = 1 + elements.iter().map(count_const_nodes).sum::<usize>();
+    if total_nodes < CONST_DESCRIPTOR_MIN_NODES {
+        return None;
+    }
+
+    // Serialize the outer array: tag 1 (ARRAY) + u32 count + each element.
+    let mut blob: Vec<u8> = Vec::new();
+    blob.push(1);
+    blob.extend_from_slice(&(elements.len() as u32).to_le_bytes());
+    for el in elements {
+        serialize_const_value(el, &mut blob);
+    }
+
+    // Emit the blob as a module-private rodata constant (mirrors
+    // `expr/strings.rs::emit_string_literal_global`; `ic_site_counter` is the
+    // module-wide site identity so re-emitted bodies don't collide).
+    let idx = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let func_part: String = ctx
+        .func
+        .name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    let global_name = format!("perry_const_arr_{}_{}", func_part, idx);
+    let mut lit = String::with_capacity(blob.len() + 4);
+    lit.push('c');
+    lit.push('"');
+    for &b in &blob {
+        if (32..127).contains(&b) && b != b'"' && b != b'\\' {
+            lit.push(b as char);
+        } else {
+            lit.push('\\');
+            lit.push_str(&format!("{:02X}", b));
+        }
+    }
+    lit.push('"');
+    ctx.typed_parse_rodata.push(format!(
+        "@{} = private unnamed_addr constant [{} x i8] {}",
+        global_name,
+        blob.len(),
+        lit
+    ));
+
+    // ONE runtime call materializes the whole nested structure and returns the
+    // nanboxed (DOUBLE) JS value directly — no per-element IR, so no fan-out.
+    let global_ref = format!("@{}", global_name);
+    let len_str = blob.len().to_string();
+    let v = ctx.block().call(
+        DOUBLE,
+        "js_value_from_const_descriptor",
+        &[(PTR, &global_ref), (I32, &len_str)],
+    );
+    Some(v)
 }

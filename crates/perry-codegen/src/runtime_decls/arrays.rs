@@ -37,6 +37,10 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // #5391: build an array literal from a stack buffer of N values in one call
     // (outlines the inline alloc + per-element store/note/barrier). (values_ptr, n).
     module.declare_function("js_array_from_values", I64, &[PTR, I32]);
+    // #8583 follow-up: materialize a large, fully-constant nested array literal
+    // from a static rodata descriptor blob in ONE call — (descriptor_ptr,
+    // blob_len). Returns the nanboxed JS value (a fresh, mutable array).
+    module.declare_function("js_value_from_const_descriptor", DOUBLE, &[PTR, I32]);
     module.declare_function("js_array_push_f64", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_push_guard", VOID, &[I64]);
     module.declare_function("js_array_push_hole", I64, &[I64]);
