@@ -1506,6 +1506,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 && ctx.lookup_func(&class_name).is_none()
                 && ctx.lookup_imported_func(&class_name).is_none()
                 && ctx.lookup_native_module(&class_name).is_none()
+                && !ctx.forward_class_names.contains(class_name.as_str())
                 && !is_reified_global_builtin_constructor(&class_name)
             {
                 return Ok(Expr::NewDynamic {
