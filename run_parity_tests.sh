@@ -510,8 +510,8 @@ for raw in sys.stdin:
         sed -E 's/^([^:]*): [0-9]+(\.[0-9]+)?[[:space:]]*(μs|ms|s)( .*)$/\1: <timer>\4/g' | \
         sed -E 's/^([^:]*): [0-9]+(\.[0-9]+)?[[:space:]]*(μs|ms|s)$/\1: <timer>/g' | \
         # Normalize node:test's measured durations in the default reporter.
-        sed -E 's/^([✔✖﹣] .*) \([0-9]+(\.[0-9]+)?ms\)( .*)$/\1 (<duration>)\3/g' | \
-        sed -E 's/^([✔✖﹣] .*) \([0-9]+(\.[0-9]+)?ms\)$/\1 (<duration>)/g' | \
+        sed -E 's/^([[:space:]]*[✔✖﹣] .*) \([0-9]+(\.[0-9]+)?ms\)( .*)$/\1 (<duration>)\3/g' | \
+        sed -E 's/^([[:space:]]*[✔✖﹣] .*) \([0-9]+(\.[0-9]+)?ms\)$/\1 (<duration>)/g' | \
         sed -E 's/^ℹ duration_ms [0-9]+(\.[0-9]+)?$/ℹ duration_ms <duration>/g' | \
         # Normalize console warning delivery: Node emits process warnings on
         # stderr after the script body, while Perry writes the equivalent
@@ -541,6 +541,14 @@ import re
 import sys
 
 lines = sys.stdin.read().splitlines()
+# The default node:test reporter repeats every failed result with source
+# locations and stacks after the aggregate summary. Those details are already
+# intentionally outside parity scope (paths/stacks are runtime-specific), so
+# compare the deterministic summary prefix for both runtimes.
+if "✖ failing tests:" in lines:
+    lines = lines[:lines.index("✖ failing tests:")]
+    while lines and not lines[-1]:
+        lines.pop()
 error = re.compile(r"^[A-Za-z]*Error(?: \[[^]]+\])?:")
 index = next((i for i, line in enumerate(lines) if error.match(line)), None)
 if index is None:
