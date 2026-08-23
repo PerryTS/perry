@@ -1500,6 +1500,32 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 // via `js_new_function_construct` — see
                 // `perry-codegen/src/lower_call/new.rs`.
             }
+            // A named native-module export whose public name is not a class
+            // name still has a real runtime function value. Route `new` over
+            // that value through the dynamic constructor check instead of the
+            // static `Expr::New { class_name }` fallback, which would merely
+            // allocate an empty placeholder. This is where Node distinguishes
+            // constructable JavaScript wrappers (`repl.start`, `events.init`)
+            // from native non-constructors (`path.toNamespacedPath`). The
+            // runtime's explicit export metadata makes that decision. Keep
+            // capitalized class exports on the specialized paths below.
+            if let Some((module, Some(export))) = ctx.lookup_native_module(&class_name) {
+                if export
+                    .chars()
+                    .next()
+                    .is_some_and(|first| !first.is_uppercase())
+                {
+                    return Ok(Expr::NewDynamic {
+                        callee: Box::new(Expr::PropertyGet {
+                            byte_offset: 0,
+                            object: Box::new(Expr::NativeModuleRef(module.to_string())),
+                            property: export.to_string(),
+                        }),
+                        args,
+                        byte_offset: new_byte_offset,
+                    });
+                }
+            }
             // #wall: an ALIASED named import of a native built-in class
             // (`import { BlockList as Wj4 } from "net"; new Wj4()`) must
             // construct exactly like the un-aliased form. The bare-ident

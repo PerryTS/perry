@@ -52,6 +52,24 @@ console.log(
   mirroredUpdates.join(","),
 );
 
+// The update may hide the script-var write inside another expression. Mirror
+// it before the next argument reads globalThis, while preserving the old value
+// produced by postfix `++` for the first argument.
+const nestedUpdateSeen: number[] = [];
+for (
+  var nestedUpdateScriptVar = 0;
+  nestedUpdateScriptVar < 1;
+  nestedUpdateSeen.push(
+    nestedUpdateScriptVar++,
+    (globalThis as any).nestedUpdateScriptVar,
+  )
+) {}
+console.log(
+  "nested update:",
+  (globalThis as any).nestedUpdateScriptVar,
+  nestedUpdateSeen.join(","),
+);
+
 switch (1) {
   case 1: {
     var switchScriptVar = "case";

@@ -11,6 +11,15 @@ pub(crate) fn function_would_have_own_prototype(func_value: f64) -> bool {
     {
         return false;
     }
+    let jv = crate::value::JSValue::from_bits(func_value.to_bits());
+    if jv.is_pointer() {
+        let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
+        if crate::closure::closure_is_bound_method(ptr)
+            && !super::super::native_module::bound_native_callable_is_constructor_value(func_value)
+        {
+            return false;
+        }
+    }
     synthetic_class_id_for_function(func_value) != 0
 }
 
@@ -33,15 +42,8 @@ pub(crate) fn ordinary_function_prototype_value_for_read(func_value: f64) -> Opt
             if super::super::native_module::builtin_closure_is_non_constructable_value(func_value) {
                 return None;
             }
-            let is_native_class_export = unsafe {
-                super::super::native_module::bound_native_callable_module_and_method(func_value)
-            }
-            .is_some_and(|(_, method)| {
-                method
-                    .as_bytes()
-                    .first()
-                    .is_some_and(|b| b.is_ascii_uppercase())
-            });
+            let is_native_class_export =
+                super::super::native_module::bound_native_callable_is_constructor_value(func_value);
             if !is_native_class_export {
                 return None;
             }

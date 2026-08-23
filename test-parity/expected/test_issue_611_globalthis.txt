@@ -5,4 +5,5 @@ store.get('k'): v
 nested var: 42
 try/finally vars: try finally
 labeled loop: 3 1,2 1,2,3
+nested update: 1 0,1
 switch var: case

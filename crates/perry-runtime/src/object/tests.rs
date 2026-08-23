@@ -273,18 +273,20 @@ fn builtin_prototype_methods_reject_dynamic_new() {
 }
 
 #[test]
-fn bound_native_constructor_export_is_not_rejected_as_a_bound_method() {
-    let _global = crate::gc::global_side_table_test_lock();
-    let console = super::native_module::bound_native_callable_export_value("console", "Console");
-
-    assert!(
-        js_value_is_constructor(console),
-        "console.Console is a constructor"
-    );
-    assert!(
-        !extends_target_must_throw(console),
-        "bound native constructor metadata must win over the shared bound-method trampoline"
-    );
+fn bound_native_constructor_metadata_distinguishes_module_functions() {
+    assert!(super::native_module::is_native_module_constructor_export(
+        "console", "Console"
+    ));
+    assert!(super::native_module::is_native_module_constructor_export(
+        "repl", "start"
+    ));
+    assert!(super::native_module::is_native_module_constructor_export(
+        "events", "init"
+    ));
+    assert!(!super::native_module::is_native_module_constructor_export(
+        "node:path",
+        "toNamespacedPath"
+    ));
 }
 
 #[test]

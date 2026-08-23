@@ -11,22 +11,11 @@ pub(crate) fn is_non_constructable_builtin_function_value(value: f64) -> bool {
     super::super::native_module::builtin_closure_is_non_constructable_value(value)
 }
 
-/// True when `value` is a bound native-module method/export closure
-/// (`BOUND_METHOD_FUNC_PTR` trampoline — what a `require('stream').Writable`
-/// property read produces). These represent real Node classes/functions and
-/// must be accepted as `extends` targets.
-pub(crate) fn is_bound_native_method_closure_value(value: f64) -> bool {
-    // Gate on the native-module metadata, not the raw BOUND_METHOD_FUNC_PTR
-    // trampoline: reified `Function.prototype.{bind,call,apply}` values
-    // (`reify_function_method_value`) share that trampoline but are NOT native
-    // constructors, so matching the sentinel alone would let `class X extends
-    // obj.method {}` skip the spec-required TypeError and silently stay
-    // parentless. A real native-module export carries a non-empty module name.
-    unsafe {
-        super::super::native_module::bound_native_callable_module_and_method(value)
-            .map(|(module, _)| !module.is_empty())
-            .unwrap_or(false)
-    }
+/// True when `value` is a bound native-module *constructor* export. Native
+/// constructors and ordinary module functions share `BOUND_METHOD_FUNC_PTR`,
+/// so the export's explicit constructor metadata must make the distinction.
+pub(crate) fn is_bound_native_constructor_closure_value(value: f64) -> bool {
+    super::super::native_module::bound_native_callable_is_constructor_value(value)
 }
 
 pub(crate) fn throw_non_constructable_builtin_function() -> ! {
