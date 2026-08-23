@@ -793,6 +793,16 @@
       "name": "WARN_NULL_PTR_STATE"
     },
     {
+      "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_member_access.rs",
+      "name": "PRIVATE_METHOD_OWNER_HINT",
+      "why": "RefCell<Option<(u32, String)>>: a declaring class_id plus an OWNED Rust String naming the private method. Neither field is, or is derived from, a heap address, so a copying collection cannot invalidate it and there is nothing for a scanner to visit."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_member_access.rs",
+      "name": "PRIVATE_MEMBER_ACCESS_HINTS",
+      "why": "RefCell<Vec<PrivateMemberAccessHint>>; the struct is class_id: u32, name: String, kind: u32, is_static: bool, is_write: bool -- all owned Rust data. No JSValue, NaN-box word or raw heap pointer is stored."
+    },
+    {
       "file": "crates/perry-runtime/src/object/instanceof.rs",
       "name": "SUPPRESS_INSTANCEOF_RHS_THROW"
     },
@@ -919,6 +929,11 @@
     {
       "file": "crates/perry-runtime/src/object/prop_plan.rs",
       "name": "STORE_PLAN_CACHE"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/this_binding.rs",
+      "name": "DERIVED_SUPER_BINDING_STACK",
+      "why": "RefCell<Vec<usize>> of `slot as usize`, where slot is the derived constructor's own i1 ALLOCA (perry-codegen expr/this_super_call.rs::push_shared_super_called_slot). That is a NATIVE STACK address, not a heap address: native frames do not move under GC, so this is not the address-keyed side-table shape the census exists to catch. The only accesses are slot.read() / slot.write(1) on that one-byte has-super()-run flag. Lifetime is bounded by the js_derived_super_scope_push/pop pair around the constructor body plus the savepoint/restore pairs in exception.rs:224/349 and class_registry/dispatch.rs:540/550, so no entry outlives its frame."
     },
     {
       "file": "crates/perry-runtime/src/perf_hooks/resource_timing.rs",
