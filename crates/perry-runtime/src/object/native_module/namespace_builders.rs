@@ -633,11 +633,20 @@ pub unsafe extern "C" fn js_https_global_agent_emit(
         entries.retain(|entry| !entry.once);
         callbacks
     });
-    for callback_bits in callbacks {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callbacks = callbacks
+        .into_iter()
+        .map(|bits| scope.root_nanbox_u64(bits))
+        .collect::<Vec<_>>();
+    let arg0 = scope.root_nanbox_f64(arg0);
+    let arg1 = scope.root_nanbox_f64(arg1);
+    for callback in callbacks {
+        let callback_bits = callback.get_nanbox_u64();
         let ptr =
             (callback_bits & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
         if crate::closure::is_closure_ptr(ptr as usize) {
-            let _ = crate::closure::js_closure_call2(ptr, arg0, arg1);
+            let _ =
+                crate::closure::js_closure_call2(ptr, arg0.get_nanbox_f64(), arg1.get_nanbox_f64());
         }
     }
 }

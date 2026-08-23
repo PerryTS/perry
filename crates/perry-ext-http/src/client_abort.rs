@@ -26,8 +26,9 @@ pub(crate) unsafe fn attach_request_signal(request_handle: Handle, options: f64)
     if signal_value.is_undefined() || signal_value.is_null() {
         return;
     }
-    let signal_f64 = f64::from_bits(signal_value.bits());
-    let signal = js_abort_signal_resolve_ptr(signal_f64);
+    let scope = perry_ffi::TransientRootScope::enter();
+    let signal_value = scope.root_nanbox(f64::from_bits(signal_value.bits()));
+    let signal = js_abort_signal_resolve_ptr(signal_value.get());
     if signal.is_null() {
         return;
     }
@@ -37,12 +38,18 @@ pub(crate) unsafe fn attach_request_signal(request_handle: Handle, options: f64)
     }
 
     let listener = perry_ffi::alloc_closure(request_signal_listener as *const u8, 1);
+    if listener.is_null() {
+        return;
+    }
     perry_ffi::set_closure_capture_f64(listener, 0, request_handle as f64);
-    let listener_value = f64::from_bits(POINTER_TAG | (listener as u64 & PTR_MASK));
-    js_abort_signal_add_listener(signal, abort_event_value(), listener_value);
+    let listener_value =
+        scope.root_nanbox(f64::from_bits(POINTER_TAG | (listener as u64 & PTR_MASK)));
+    let event_value = scope.root_nanbox(abort_event_value());
+    let signal = js_abort_signal_resolve_ptr(signal_value.get());
+    js_abort_signal_add_listener(signal, event_value.get(), listener_value.get());
     with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |request| {
-        request.abort_signal_bits = signal_value.bits();
-        request.abort_listener_bits = listener_value.to_bits();
+        request.abort_signal_bits = signal_value.get().to_bits();
+        request.abort_listener_bits = listener_value.get().to_bits();
     });
 }
 
@@ -60,9 +67,13 @@ pub(crate) unsafe fn cleanup_request_signal(request_handle: Handle) {
     if signal_bits == 0 || listener_bits == 0 {
         return;
     }
-    let signal = js_abort_signal_resolve_ptr(f64::from_bits(signal_bits));
+    let scope = perry_ffi::TransientRootScope::enter();
+    let signal_value = scope.root_nanbox(f64::from_bits(signal_bits));
+    let listener_value = scope.root_nanbox(f64::from_bits(listener_bits));
+    let event_value = scope.root_nanbox(abort_event_value());
+    let signal = js_abort_signal_resolve_ptr(signal_value.get());
     if !signal.is_null() {
-        js_abort_signal_remove_listener(signal, abort_event_value(), f64::from_bits(listener_bits));
+        js_abort_signal_remove_listener(signal, event_value.get(), listener_value.get());
     }
 }
 
