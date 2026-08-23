@@ -23,16 +23,83 @@
   ],
   "holders": [
     {
-      "file": "crates/perry-runtime/src/async_hooks.rs",
-      "name": "ASYNC_RESOURCE_HANDLES",
+      "file": "crates/perry-ext-exponential-backoff/src/lib.rs",
+      "name": "NEXT_ID",
       "verdict": "not_a_gc_pointer",
-      "why": "HashSet of async resource IDs (async_hooks' asyncId space), not heap addresses. The resource OBJECTS live in RESOURCES, which scan_async_hooks_roots_mut visits."
+      "why": "Monotonic backoff-state id counter (lib.rs:378). The closures live in STATES (BackoffState.task/outer/retry_cb), which scan_backoff_roots visits."
     },
     {
-      "file": "crates/perry-runtime/src/async_hooks.rs",
-      "name": "ASYNC_RESOURCE_HANDLE_COUNT",
+      "file": "crates/perry-ext-fetch/src/lib.rs",
+      "name": "REQUEST_HANDLES",
+      "verdict": "covered_elsewhere",
+      "scanner": "gc::scan_fetch_roots (crates/perry-ext-fetch/src/gc.rs), registered via perry_ffi::gc_register_mutable_root_scanner_named from gc::ensure_gc_scanner_registered, armed at store_request before the first insert",
+      "why": "Declared in lib.rs, scanned from the gc.rs submodule (split out for the 2,000-line gate): every RequestRecord.signal slot is visited and rewritten."
+    },
+    {
+      "file": "crates/perry-ext-http/src/lib.rs",
+      "name": "HTTP_PENDING_EVENTS",
       "verdict": "not_a_gc_pointer",
-      "why": "Monotonic counter of live async-resource handles. Holds no address at all; the resource objects live in RESOURCES, which scan_async_hooks_roots_mut visits."
+      "why": "Client-side pending-event queue. Every variant carries a perry-ffi registry Handle, strings, Bytes, or an errno i64 (rule S fired on TransportError.errno) \u2014 no NaN-boxed value. The closures the drain fires live in ClientRequestHandle (response_callback/end_callback/pending_write_callbacks/listeners), which scan_http_roots visits."
+    },
+    {
+      "file": "crates/perry-ext-http/src/server/https_server.rs",
+      "name": "PENDING_TLS_CLIENT_ERRORS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Vec<PendingTlsClientError>: an i64 server HANDLE (an index into the handle side table, stable across collection -- not a heap address) plus an owned Rust String. Neither field can hold a pointer into the GC heap, so there is nothing for a scanner to visit."
+    },
+    {
+      "file": "crates/perry-ext-http/src/server/https_server.rs",
+      "name": "PENDING_TLS_KEYLOGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Vec<PendingTlsKeylog>: an i64 server HANDLE plus Vec<Vec<u8>> of owned keylog bytes. Both are Rust-allocated; no JS heap pointer is stored, so no root scanner is required."
+    },
+    {
+      "file": "crates/perry-ext-http/src/server/server.rs",
+      "name": "CONNECTIONS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TrackedConnection = {server_handle: ffi registry id, close: Notify, busy/read_active: atomics}. No JS values; server closures live in the HttpServer handle, scanned by scan_http_server_roots."
+    },
+    {
+      "file": "crates/perry-ext-http/src/server/server.rs",
+      "name": "PENDING_CONNECTION_EVENTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Vec of server-handle registry ids drained by js_node_http_server_process_pending to fire 'connection' listeners; the listeners themselves are in HttpServer.listeners, scanned by scan_http_server_roots."
+    },
+    {
+      "file": "crates/perry-ext-http/src/server/server/in_flight.rs",
+      "name": "IN_FLIGHT",
+      "verdict": "not_a_gc_pointer",
+      "why": "InFlightRequest = three perry-ffi registry handle ids + a deadline Instant. The JS-value-bearing objects behind the ids (IncomingMessage/ServerResponse) are registered handles scanned by scan_http_server_roots via iter_handles_of_mut."
+    },
+    {
+      "file": "crates/perry-ext-net/src/lib.rs",
+      "name": "P",
+      "verdict": "not_a_gc_pointer",
+      "why": "pending_events(): Vec<PendingNetEvent>; every variant carries socket/server ids, Bytes, String, bool, or DropInfo (SocketAddrs) \u2014 no closures or NaN-boxed values. Listener closures live in listeners(), visited by scan_net_roots."
+    },
+    {
+      "file": "crates/perry-ext-net/src/lib.rs",
+      "name": "SCRATCH",
+      "verdict": "not_a_gc_pointer",
+      "why": "Drain-side reusable Vec<PendingNetEvent> inside js_ext_net_drain_pending; same payload as P (ids/Bytes/strings), emptied within the drain call. No JS values."
+    },
+    {
+      "file": "crates/perry-ext-net/src/server_state.rs",
+      "name": "STATE",
+      "verdict": "not_a_gc_pointer",
+      "why": "ConnectionOrderState = socket-id VecDeques, per-server usize credits, and buffered Bytes chunks keyed by socket id. Pure ids and bytes; no NaN-boxed values."
+    },
+    {
+      "file": "crates/perry-ext-parcel-watcher/src/lib.rs",
+      "name": "PENDING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Pending watcher events carry only a subscription u64 id plus Rust-owned PathBuf/String payloads and enum tags. Callback closures live in perry-ffi CallbackRoot handles, which scan_subscription_roots visits and rewrites."
+    },
+    {
+      "file": "crates/perry-ext-pdf/src/lib.rs",
+      "name": "WARNED",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashSet of perry-ffi registry handle ids already found stale, kept only to log each once. Registry ids are indices into the ffi DashMap, not heap addresses."
     },
     {
       "file": "crates/perry-runtime/src/async_hooks.rs",
@@ -47,119 +114,22 @@
       "why": "Monotonic count of AsyncHookHandle boxes registered in ASYNC_HOOK_HANDLES. It holds no address and is used only as a fast-path emptiness check."
     },
     {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "ASYNC_RESOURCE_HANDLES",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashSet of async resource IDs (async_hooks' asyncId space), not heap addresses. The resource OBJECTS live in RESOURCES, which scan_async_hooks_roots_mut visits."
+    },
+    {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "ASYNC_RESOURCE_HANDLE_COUNT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic counter of live async-resource handles. Holds no address at all; the resource objects live in RESOURCES, which scan_async_hooks_roots_mut visits."
+    },
+    {
       "file": "crates/perry-runtime/src/child_process/reactor.rs",
       "name": "CP_NEXT_LIVE_ID",
       "verdict": "not_a_gc_pointer",
       "why": "Monotonic id counter for CP_LIVE keys. CP_LIVE itself is covered by cp_reactor_scan_roots_mut."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_submodules/blob.rs",
-      "name": "FILE_BLOB_STREAMS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Keyed by stream id; FileBlobStreamState is Rust-owned (byte buffers + offsets), no JS values."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_submodules/blob.rs",
-      "name": "NEXT_FILE_BLOB_STREAM_ID",
-      "verdict": "not_a_gc_pointer",
-      "why": "Monotonic id counter."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
-      "name": "DIAG_CHANNELS",
-      "verdict": "covered_elsewhere",
-      "scanner": "node_submodules::scan_node_submodule_singleton_roots_mut (node_submodules/mod.rs:1505)",
-      "why": "Visited from the sibling module, so the same-file rule misses it."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
-      "name": "ERROR_USER_PROPS",
-      "verdict": "covered_elsewhere",
-      "scanner": "node_submodules::diagnostics_gc::scan_error_user_props_roots_mut (diagnostics_gc.rs:46/72/134)",
-      "why": "The whole GC half of diagnostics lives in diagnostics_gc.rs, including the ErrorHeader-address rekey."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
-      "name": "DIAG_NOOP_CLOSURE",
-      "verdict": "covered_elsewhere",
-      "scanner": "node_submodules::scan_node_submodule_singleton_roots_mut (node_submodules/mod.rs:1499)",
-      "why": "Visited from the sibling module."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_vm.rs",
-      "name": "VM_INTRINSIC_GLOBAL",
-      "verdict": "covered_elsewhere",
-      "scanner": "gc::roots::visit_global_root_slots, reached by js_gc_register_global_root (gc/roots.rs:325 pushes the slot into GLOBAL_ROOTS; gc/roots.rs:1433 hands it to the mutable-root walk)",
-      "why": "Caches the shared VM intrinsic realm's globalThis as NaN-boxed bits. The single site that writes the cell \u2014 fresh_intrinsic_global, node_vm.rs:1080 \u2014 calls js_gc_register_global_root(slot.as_ptr()) in the same `with` closure, immediately after the store and with no allocation in between; the early return on a non-zero cell means that store happens at most once per thread, so there is no path that populates the cell without registering it. GLOBAL_ROOTS is thread_local, exactly like the cell, and visit_mutable_root_slots feeds it to BOTH the marker and the post-evacuation rewrite (gc/tests/copying.rs:1272, test_copying_minor_rewrites_shadow_and_global_roots), so the cached pointer is marked and forwarded rather than left stale."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_OBJECT_VALUES",
-      "verdict": "covered_elsewhere",
-      "scanner": "object::scan_class_side_table_roots_mut and its budgeted step twin (class_registry/gc_roots.rs:138 and :256)",
-      "why": "The class side tables are declared in state.rs and scanned from gc_roots.rs. Both twins visit it \u2014 #7239 diffed all eight budgeted (FULL, STEP) pairs and found no drift."
-    },
-    {
-      "file": "crates/perry-runtime/src/process.rs",
-      "name": "MODULE_LOADER_NEXT_RESOLVE",
-      "verdict": "covered_elsewhere",
-      "scanner": "process::scan_process_module_loader_roots_mut (process/node_module.rs:17)",
-      "why": "Declared in process.rs, scanned from the process/node_module.rs submodule."
-    },
-    {
-      "file": "crates/perry-runtime/src/process.rs",
-      "name": "MODULE_LOADER_NEXT_LOAD",
-      "verdict": "covered_elsewhere",
-      "scanner": "process::scan_process_module_loader_roots_mut (process/node_module.rs:17)",
-      "why": "Same scanner, same file split."
-    },
-    {
-      "file": "crates/perry-runtime/src/pty/mod.rs",
-      "name": "EXIT_SINK",
-      "verdict": "test_only",
-      "why": "#[cfg(test)] sink for the pty exit callback's two JSValues. Never compiled into a shipped binary."
-    },
-    {
-      "file": "crates/perry-runtime/src/string/format.rs",
-      "name": "POW10",
-      "verdict": "not_a_gc_pointer",
-      "why": "A [u64; 7] constant table of powers of ten."
-    },
-    {
-      "file": "crates/perry-runtime/src/string/mod.rs",
-      "name": "PERRY_EMPTY_STRING",
-      "verdict": "not_a_gc_pointer",
-      "why": "A StringHeader living in .rodata, not in the arena. It has no GcHeader, is never allocated and never moves; the collector's heap-attribution predicates reject its address."
-    },
-    {
-      "file": "crates/perry-runtime/src/symbol/properties.rs",
-      "name": "CACHED",
-      "verdict": "not_a_gc_pointer",
-      "why": "Memoizes the sym_key of the Symbol.for('NextInternalRequestMeta') REGISTERED symbol. Registered / well-known symbols are Box::leak'd (symbol.rs's SYMBOL_REGISTRY / WELL_KNOWN_SYMBOLS), so they live outside the GC arena and their addresses are stable for the process. A FRESH Symbol() would not be \u2014 see #7246."
-    },
-    {
-      "file": "crates/perry-runtime/src/thread.rs",
-      "name": "ACTIVE_THREAD_JOBS",
-      "verdict": "not_a_gc_pointer",
-      "why": "In-flight job counter for perry/thread."
-    },
-    {
-      "file": "crates/perry-stdlib/src/streams.rs",
-      "name": "N",
-      "verdict": "not_a_gc_pointer",
-      "why": "Five identically-named per-function AtomicUsize call counters inside streams.rs (one entry covers all five: this inventory keys on file+name). Telemetry, no JS values."
-    },
-    {
-      "file": "crates/perry-stdlib/src/streams/transform.rs",
-      "name": "TRANSFORM_CALLS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Telemetry call counter for the transform path. Holds a count, never an address; no JS value ever reaches it."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/native_module.rs",
-      "name": "TEST_BOUND_METHOD_MOVE",
-      "verdict": "test_only",
-      "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
     },
     {
       "file": "crates/perry-runtime/src/closure/alloc.rs",
@@ -204,6 +174,32 @@
       "why": "Keyed by handle id; TcpStreamWrapper is Rust-owned (tokio stream + SocketAddr), no JS values."
     },
     {
+      "file": "crates/perry-runtime/src/node_submodules/blob.rs",
+      "name": "FILE_BLOB_STREAMS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Keyed by stream id; FileBlobStreamState is Rust-owned (byte buffers + offsets), no JS values."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/blob.rs",
+      "name": "NEXT_FILE_BLOB_STREAM_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic id counter."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "DIAG_CHANNELS",
+      "verdict": "covered_elsewhere",
+      "scanner": "node_submodules::scan_node_submodule_singleton_roots_mut (node_submodules/mod.rs:1505)",
+      "why": "Visited from the sibling module, so the same-file rule misses it."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "DIAG_NOOP_CLOSURE",
+      "verdict": "covered_elsewhere",
+      "scanner": "node_submodules::scan_node_submodule_singleton_roots_mut (node_submodules/mod.rs:1499)",
+      "why": "Visited from the sibling module."
+    },
+    {
       "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
       "name": "DIAG_TRACES",
       "verdict": "covered_elsewhere",
@@ -211,10 +207,31 @@
       "why": "Visited from the sibling module, so the same-file rule misses it. The `events: [i64; 5]` are DIAG_CHANNELS ids, not addresses."
     },
     {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "ERROR_USER_PROPS",
+      "verdict": "covered_elsewhere",
+      "scanner": "node_submodules::diagnostics_gc::scan_error_user_props_roots_mut (diagnostics_gc.rs:46/72/134)",
+      "why": "The whole GC half of diagnostics lives in diagnostics_gc.rs, including the ErrorHeader-address rekey."
+    },
+    {
       "file": "crates/perry-runtime/src/node_submodules/diagnostics_tail.rs",
       "name": "DIAG_STORE_SCOPES",
       "verdict": "not_a_gc_pointer",
       "why": "DiagStoreScopeState.handles are store KEYS produced by store_handle() (diagnostics_tail.rs:72), which admits only an INT32-tagged value, a POINTER_TAG value inside the handle band (raw < 0x10000), or a finite float \u2014 a real heap pointer returns None, so one cannot be stored here by construction. The store CONTEXT objects live in DIAG_CHANNELS[*].stores, which scan_node_submodule_singleton_roots_mut visits."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_vm.rs",
+      "name": "VM_INTRINSIC_GLOBAL",
+      "verdict": "covered_elsewhere",
+      "scanner": "gc::roots::visit_global_root_slots, reached by js_gc_register_global_root (gc/roots.rs:325 pushes the slot into GLOBAL_ROOTS; gc/roots.rs:1433 hands it to the mutable-root walk)",
+      "why": "Caches the shared VM intrinsic realm's globalThis as NaN-boxed bits. The single site that writes the cell \u2014 fresh_intrinsic_global, node_vm.rs:1080 \u2014 calls js_gc_register_global_root(slot.as_ptr()) in the same `with` closure, immediately after the store and with no allocation in between; the early return on a non-zero cell means that store happens at most once per thread, so there is no path that populates the cell without registering it. GLOBAL_ROOTS is thread_local, exactly like the cell, and visit_mutable_root_slots feeds it to BOTH the marker and the post-evacuation rewrite (gc/tests/copying.rs:1272, test_copying_minor_rewrites_shadow_and_global_roots), so the cached pointer is marked and forwarded rather than left stale."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_OBJECT_VALUES",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_class_side_table_roots_mut and its budgeted step twin (class_registry/gc_roots.rs:138 and :256)",
+      "why": "The class side tables are declared in state.rs and scanned from gc_roots.rs. Both twins visit it \u2014 #7239 diffed all eight budgeted (FULL, STEP) pairs and found no drift."
     },
     {
       "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
@@ -231,6 +248,52 @@
       "why": "Same shape as THREAD_GLOBAL_THIS: a NaN-boxed cache slot registered as a mutable global root at first population."
     },
     {
+      "file": "crates/perry-runtime/src/object/native_module.rs",
+      "name": "TEST_BOUND_METHOD_MOVE",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
+    },
+    {
+      "file": "crates/perry-runtime/src/perf_hooks.rs",
+      "name": "LOOP_START_MS",
+      "verdict": "not_a_gc_pointer",
+      "why": "A timeOrigin-relative millisecond timestamp (or the -1 'loop has not started' sentinel) reported as nodeTiming.loopStart, and the gate eventLoopUtilization() reads before reporting anything but zeros. An f64 time value, never an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "MODULE_LOADER_NEXT_LOAD",
+      "verdict": "covered_elsewhere",
+      "scanner": "process::scan_process_module_loader_roots_mut (process/node_module.rs:17)",
+      "why": "Same scanner, same file split."
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "MODULE_LOADER_NEXT_RESOLVE",
+      "verdict": "covered_elsewhere",
+      "scanner": "process::scan_process_module_loader_roots_mut (process/node_module.rs:17)",
+      "why": "Declared in process.rs, scanned from the process/node_module.rs submodule."
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER",
+      "verdict": "covered_elsewhere",
+      "scanner": "process::scan_process_finalization_roots_mut (process/finalization.rs:171; visits the cell at :184-189 via visit_raw_const_ptr_slot; reg_scanner! at gc/mod.rs:1008)",
+      "why": "Declared in process.rs, scanned from the process/finalization.rs submodule \u2014 same file split as the MODULE_LOADER_* siblings."
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/microtasks.rs",
+      "name": "CURRENT_MICROTASK_VALUE",
+      "verdict": "covered_elsewhere",
+      "scanner": "promise::scan_promise_roots_mut (promise/scanners.rs:66, visit_cell_f64_slot) plus its budgeted step twin scan_current_microtask_value_step (scanners.rs:420); registered via reg_budgeted_scanner! at gc/mod.rs:833-838",
+      "why": "Declared in promise/microtasks.rs, scanned from promise/scanners.rs. The scanners.rs:786/913 sites are the mutator-side save/clear the scanner exists to protect, not the coverage mechanism."
+    },
+    {
+      "file": "crates/perry-runtime/src/pty/mod.rs",
+      "name": "EXIT_SINK",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] sink for the pty exit callback's two JSValues. Never compiled into a shipped binary."
+    },
+    {
       "file": "crates/perry-runtime/src/regex.rs",
       "name": "REGEX_POINTERS",
       "verdict": "covered_elsewhere",
@@ -245,10 +308,40 @@
       "why": "Address-KEYED owner table (owned String copies of pattern/flags); rekeyed on move, cleared on death, same hooks as REGEX_POINTERS."
     },
     {
+      "file": "crates/perry-runtime/src/set.rs",
+      "name": "SET_INDEX",
+      "verdict": "not_a_gc_pointer",
+      "why": "Derived cache of the Set's own elements array, which is the canonical scanned storage (GcRewriteDescriptorKind::Set element-slot walk). Not root-scanner-shaped: the outer address key is rekeyed on relocation by GcMoveHookKind::SetSideTables -> set_header_moved_for_gc (set.rs:352), the JSValueKey inner keys are rebuilt post-rewrite by GcRewriteHookKind::SetIndex -> rebuild_set_index_for_gc (set.rs:315, fired from gc/copying.rs:669/798, gc/barrier/mod.rs:195, gc/verify.rs:114), and finalize_set_side_allocation_for_gc (set.rs:374) prunes dead owners \u2014 the same three-hook design as MAP_INDEX."
+    },
+    {
+      "file": "crates/perry-runtime/src/string/format.rs",
+      "name": "POW10",
+      "verdict": "not_a_gc_pointer",
+      "why": "A [u64; 7] constant table of powers of ten."
+    },
+    {
+      "file": "crates/perry-runtime/src/string/mod.rs",
+      "name": "PERRY_EMPTY_STRING",
+      "verdict": "not_a_gc_pointer",
+      "why": "A StringHeader living in .rodata, not in the arena. It has no GcHeader, is never allocated and never moves; the collector's heap-attribution predicates reject its address."
+    },
+    {
+      "file": "crates/perry-runtime/src/symbol/properties.rs",
+      "name": "CACHED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Memoizes the sym_key of the Symbol.for('NextInternalRequestMeta') REGISTERED symbol. Registered / well-known symbols are Box::leak'd (symbol.rs's SYMBOL_REGISTRY / WELL_KNOWN_SYMBOLS), so they live outside the GC arena and their addresses are stable for the process. A FRESH Symbol() would not be \u2014 see #7246."
+    },
+    {
       "file": "crates/perry-runtime/src/text.rs",
       "name": "DECODER_REGISTRY",
       "verdict": "not_a_gc_pointer",
       "why": "Keyed by decoder handle id; DecoderState is Rust-owned (encoding enum, label, flags), no JS values."
+    },
+    {
+      "file": "crates/perry-runtime/src/thread.rs",
+      "name": "ACTIVE_THREAD_JOBS",
+      "verdict": "not_a_gc_pointer",
+      "why": "In-flight job counter for perry/thread."
     },
     {
       "file": "crates/perry-stdlib/src/fetch/body_metadata.rs",
@@ -295,6 +388,12 @@
     },
     {
       "file": "crates/perry-stdlib/src/streams.rs",
+      "name": "N",
+      "verdict": "not_a_gc_pointer",
+      "why": "Five identically-named per-function AtomicUsize call counters inside streams.rs (one entry covers all five: this inventory keys on file+name). Telemetry, no JS values."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams.rs",
       "name": "READABLE_STREAMS",
       "verdict": "covered_elsewhere",
       "scanner": "streams::gc::scan_stream_roots_with (streams/gc.rs, registered through perry_ffi_gc_register_mutable_root_scanner_named as \"stdlib:streams\")",
@@ -318,6 +417,12 @@
       "verdict": "covered_elsewhere",
       "scanner": "streams::gc::scan_transform_deferred_roots (streams/gc.rs, visit_raw_mut_ptr_slot on each job closure)",
       "why": "The values are ClosureHeader addresses of parked write jobs; visited from streams/gc.rs, so the same-file rule misses it."
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/transform.rs",
+      "name": "TRANSFORM_CALLS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Telemetry call counter for the transform path. Holds a count, never an address; no JS value ever reaches it."
     },
     {
       "file": "crates/perry-stdlib/src/streams/transform.rs",
@@ -354,99 +459,6 @@
       "name": "WS_CONNECTIONS",
       "verdict": "not_a_gc_pointer",
       "why": "Keyed by ws id; WsConnection is Rust-owned (command sender, buffered message Strings, state flags). Listener closures live in WS_CLIENT_LISTENERS, which scan_ws_roots_mut visits."
-    },
-    {
-      "file": "crates/perry-ext-http/src/lib.rs",
-      "name": "HTTP_PENDING_EVENTS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Client-side pending-event queue. Every variant carries a perry-ffi registry Handle, strings, Bytes, or an errno i64 (rule S fired on TransportError.errno) \u2014 no NaN-boxed value. The closures the drain fires live in ClientRequestHandle (response_callback/end_callback/pending_write_callbacks/listeners), which scan_http_roots visits."
-    },
-    {
-      "file": "crates/perry-ext-http/src/server/server.rs",
-      "name": "CONNECTIONS",
-      "verdict": "not_a_gc_pointer",
-      "why": "TrackedConnection = {server_handle: ffi registry id, close: Notify, busy/read_active: atomics}. No JS values; server closures live in the HttpServer handle, scanned by scan_http_server_roots."
-    },
-    {
-      "file": "crates/perry-ext-http/src/server/server.rs",
-      "name": "PENDING_CONNECTION_EVENTS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Vec of server-handle registry ids drained by js_node_http_server_process_pending to fire 'connection' listeners; the listeners themselves are in HttpServer.listeners, scanned by scan_http_server_roots."
-    },
-    {
-      "file": "crates/perry-ext-http/src/server/server/in_flight.rs",
-      "name": "IN_FLIGHT",
-      "verdict": "not_a_gc_pointer",
-      "why": "InFlightRequest = three perry-ffi registry handle ids + a deadline Instant. The JS-value-bearing objects behind the ids (IncomingMessage/ServerResponse) are registered handles scanned by scan_http_server_roots via iter_handles_of_mut."
-    },
-    {
-      "file": "crates/perry-ext-net/src/lib.rs",
-      "name": "P",
-      "verdict": "not_a_gc_pointer",
-      "why": "pending_events(): Vec<PendingNetEvent>; every variant carries socket/server ids, Bytes, String, bool, or DropInfo (SocketAddrs) \u2014 no closures or NaN-boxed values. Listener closures live in listeners(), visited by scan_net_roots."
-    },
-    {
-      "file": "crates/perry-ext-net/src/lib.rs",
-      "name": "SCRATCH",
-      "verdict": "not_a_gc_pointer",
-      "why": "Drain-side reusable Vec<PendingNetEvent> inside js_ext_net_drain_pending; same payload as P (ids/Bytes/strings), emptied within the drain call. No JS values."
-    },
-    {
-      "file": "crates/perry-ext-net/src/server_state.rs",
-      "name": "STATE",
-      "verdict": "not_a_gc_pointer",
-      "why": "ConnectionOrderState = socket-id VecDeques, per-server usize credits, and buffered Bytes chunks keyed by socket id. Pure ids and bytes; no NaN-boxed values."
-    },
-    {
-      "file": "crates/perry-ext-pdf/src/lib.rs",
-      "name": "WARNED",
-      "verdict": "not_a_gc_pointer",
-      "why": "HashSet of perry-ffi registry handle ids already found stale, kept only to log each once. Registry ids are indices into the ffi DashMap, not heap addresses."
-    },
-    {
-      "file": "crates/perry-runtime/src/process.rs",
-      "name": "PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER",
-      "verdict": "covered_elsewhere",
-      "scanner": "process::scan_process_finalization_roots_mut (process/finalization.rs:171; visits the cell at :184-189 via visit_raw_const_ptr_slot; reg_scanner! at gc/mod.rs:1008)",
-      "why": "Declared in process.rs, scanned from the process/finalization.rs submodule \u2014 same file split as the MODULE_LOADER_* siblings."
-    },
-    {
-      "file": "crates/perry-runtime/src/promise/microtasks.rs",
-      "name": "CURRENT_MICROTASK_VALUE",
-      "verdict": "covered_elsewhere",
-      "scanner": "promise::scan_promise_roots_mut (promise/scanners.rs:66, visit_cell_f64_slot) plus its budgeted step twin scan_current_microtask_value_step (scanners.rs:420); registered via reg_budgeted_scanner! at gc/mod.rs:833-838",
-      "why": "Declared in promise/microtasks.rs, scanned from promise/scanners.rs. The scanners.rs:786/913 sites are the mutator-side save/clear the scanner exists to protect, not the coverage mechanism."
-    },
-    {
-      "file": "crates/perry-runtime/src/set.rs",
-      "name": "SET_INDEX",
-      "verdict": "not_a_gc_pointer",
-      "why": "Derived cache of the Set's own elements array, which is the canonical scanned storage (GcRewriteDescriptorKind::Set element-slot walk). Not root-scanner-shaped: the outer address key is rekeyed on relocation by GcMoveHookKind::SetSideTables -> set_header_moved_for_gc (set.rs:352), the JSValueKey inner keys are rebuilt post-rewrite by GcRewriteHookKind::SetIndex -> rebuild_set_index_for_gc (set.rs:315, fired from gc/copying.rs:669/798, gc/barrier/mod.rs:195, gc/verify.rs:114), and finalize_set_side_allocation_for_gc (set.rs:374) prunes dead owners \u2014 the same three-hook design as MAP_INDEX."
-    },
-    {
-      "file": "crates/perry-ext-exponential-backoff/src/lib.rs",
-      "name": "NEXT_ID",
-      "verdict": "not_a_gc_pointer",
-      "why": "Monotonic backoff-state id counter (lib.rs:378). The closures live in STATES (BackoffState.task/outer/retry_cb), which scan_backoff_roots visits."
-    },
-    {
-      "file": "crates/perry-ext-fetch/src/lib.rs",
-      "name": "REQUEST_HANDLES",
-      "verdict": "covered_elsewhere",
-      "scanner": "gc::scan_fetch_roots (crates/perry-ext-fetch/src/gc.rs), registered via perry_ffi::gc_register_mutable_root_scanner_named from gc::ensure_gc_scanner_registered, armed at store_request before the first insert",
-      "why": "Declared in lib.rs, scanned from the gc.rs submodule (split out for the 2,000-line gate): every RequestRecord.signal slot is visited and rewritten."
-    },
-    {
-      "file": "crates/perry-ext-parcel-watcher/src/lib.rs",
-      "name": "PENDING",
-      "verdict": "not_a_gc_pointer",
-      "why": "Pending watcher events carry only a subscription u64 id plus Rust-owned PathBuf/String payloads and enum tags. Callback closures live in perry-ffi CallbackRoot handles, which scan_subscription_roots visits and rewrites."
-    },
-    {
-      "file": "crates/perry-runtime/src/perf_hooks.rs",
-      "name": "LOOP_START_MS",
-      "verdict": "not_a_gc_pointer",
-      "why": "A timeOrigin-relative millisecond timestamp (or the -1 'loop has not started' sentinel) reported as nodeTiming.loopStart, and the gate eventLoopUtilization() reads before reporting anything but zeros. An f64 time value, never an address."
     }
   ],
   "_FRONTIER_README": "Identity-pinned ratchet over the perry-ui* crates and otherwise-unclassified core perry_thread_local! declarations (see the census docstring, 'The identity-pinned frontier'). Entries are debt baselines, not verdicts. A new uncovered holder fails until deliberately pinned, and a fixed holder fails until its stale entry is deleted. An optional scanner names cross-file coverage and must remain registered; deleting that registration invalidates the pin and fails the gate. Covered same-file holders must NOT be pinned.",
