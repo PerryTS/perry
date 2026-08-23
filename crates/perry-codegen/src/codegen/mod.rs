@@ -216,6 +216,8 @@ mod spec_self_recursion_tests;
 mod string_pool;
 #[cfg(test)]
 mod testing_feature_gate_tests;
+#[cfg(test)]
+mod trusted_box_callback_tests;
 mod typed_abi;
 mod typed_abi_opt_report;
 #[cfg(test)]
@@ -2491,6 +2493,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // `closure_collect::collect_module_closures`.
     let closure_collect::ModuleClosures {
         closures,
+        direct_call_closures,
         closure_rest_params,
         closure_synthetic_arguments,
         closure_rest_and_arguments,
@@ -2659,6 +2662,28 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             ),
         }
     }
+
+    // Trusted bodies deliberately use the ordinary closure ABI. Keep them
+    // disjoint from all typed-clone families so registration can always name
+    // the public body directly and so one closure never accumulates two
+    // independent cloning policies.
+    let trusted_box_exclusions: std::collections::HashSet<u32> = cross_module
+        .async_step_closures
+        .union(&cross_module.local_generator_funcs)
+        .chain(cross_module.funcs_reading_dynamic_this.iter())
+        .chain(cross_module.typed_f64_closures.iter())
+        .chain(cross_module.typed_i32_closures.iter())
+        .chain(cross_module.typed_i1_closures.iter())
+        .chain(cross_module.typed_string_closures.iter())
+        .copied()
+        .collect();
+    let trusted_box_closures = closure_collect::select_trusted_box_closures(
+        &closures,
+        &direct_call_closures,
+        &module_boxed_vars,
+        &module_globals,
+        &trusted_box_exclusions,
+    );
 
     // ---- Representation-selection Phase 2: specialized-ABI plan selection.
     // Runs AFTER the typed_abi clone sets so mutual exclusion is decidable;
@@ -3256,6 +3281,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         closure_arities: &closure_arities,
         closure_lengths: &closure_lengths,
         closure_arrow_functions: &closure_arrow_functions,
+        trusted_box_closures: &trusted_box_closures,
         closures: &closures,
         class_keys_init_data: &class_keys_init_data,
         class_header_image_inits: &class_header_image_inits,

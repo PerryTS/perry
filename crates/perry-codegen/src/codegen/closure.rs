@@ -499,6 +499,7 @@ pub(super) fn compile_closure(
     module_reassigned_locals: &HashSet<u32>,
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
+    trusted_box_captures: bool,
 ) -> Result<()> {
     // Destructure the closure expression. We trust that the caller
     // passes only `Expr::Closure` here (from `collect_closures_*`).
@@ -562,10 +563,15 @@ pub(super) fn compile_closure(
     } else {
         None
     };
-    let llvm_name = if typed_public_trampoline.is_some() {
+    let ordinary_body_name = if typed_public_trampoline.is_some() {
         generic_closure_body_name(&public_llvm_name)
     } else {
         public_llvm_name.clone()
+    };
+    let llvm_name = if trusted_box_captures {
+        format!("{ordinary_body_name}$trusted_boxes")
+    } else {
+        ordinary_body_name
     };
 
     // Param list: i64 this_closure, then each param as double.
@@ -584,7 +590,7 @@ pub(super) fn compile_closure(
     // indirect-call admission is computed correctly but never reaches
     // `new_site_is_in_loop` while the closure body is emitted.
     lf.alloc_hot = cross_module.alloc_hot_functions.contains(&func_id);
-    if typed_public_trampoline.is_some() {
+    if typed_public_trampoline.is_some() || trusted_box_captures {
         lf.linkage = "internal".to_string();
     }
 
@@ -680,26 +686,12 @@ pub(super) fn compile_closure(
     // creation sites disagree on capture indices and a globalized
     // block-scoped let captured by a closure ends up with a
     // value-instead-of-box-pointer in its capture slot.
-    let mut auto_captures: Vec<u32> = captures
-        .iter()
-        .copied()
-        .filter(|id| !module_globals.contains_key(id))
-        .collect();
-    {
-        let param_ids: std::collections::HashSet<u32> = params.iter().map(|p| p.id).collect();
-        let already: std::collections::HashSet<u32> = auto_captures.iter().copied().collect();
-        let mut sorted: Vec<u32> = closure_referenced_ids.iter().copied().collect();
-        sorted.sort();
-        for id in sorted {
-            if !param_ids.contains(&id)
-                && !closure_declared_ids.contains(&id)
-                && !already.contains(&id)
-                && !module_globals.contains_key(&id)
-            {
-                auto_captures.push(id);
-            }
-        }
-    }
+    let auto_captures = crate::type_analysis::compute_auto_captures_with_globals(
+        params,
+        body,
+        captures,
+        module_globals,
+    );
     let closure_captures: HashMap<u32, u32> = auto_captures
         .iter()
         .enumerate()
@@ -1007,6 +999,7 @@ pub(super) fn compile_closure(
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
         resolved_arrow_callback_targets: HashMap::new(),
+        trusted_box_captures,
         local_func_ref_ids: HashMap::new(),
         option_object_locals: HashMap::new(),
         object_literal_locals: HashSet::new(),
@@ -1210,21 +1203,23 @@ pub(super) fn compile_closure(
     for raw in &typed_parse_rodata {
         llmod.add_raw_global(raw.clone());
     }
-    if let Some(kind) = typed_public_trampoline {
-        let capture_reps = cross_module
-            .typed_closure_capture_reps
-            .get(&func_id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        emit_public_typed_closure_trampoline(
-            llmod,
-            func_id,
-            closure_expr,
-            module_prefix,
-            &llvm_name,
-            kind,
-            capture_reps,
-        )?;
+    if !trusted_box_captures {
+        if let Some(kind) = typed_public_trampoline {
+            let capture_reps = cross_module
+                .typed_closure_capture_reps
+                .get(&func_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            emit_public_typed_closure_trampoline(
+                llmod,
+                func_id,
+                closure_expr,
+                module_prefix,
+                &llvm_name,
+                kind,
+                capture_reps,
+            )?;
+        }
     }
     Ok(())
 }

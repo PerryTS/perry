@@ -418,13 +418,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // raw box pointer. Read the capture, extract the box pointer,
                 // and deref via js_box_get_bits.
                 if ctx.boxed_vars.contains(id) {
+                    let getter = if ctx.trusted_box_captures {
+                        "js_box_get_bits_trusted"
+                    } else {
+                        "js_box_get_bits"
+                    };
                     let blk = ctx.block();
                     let box_ptr = blk.call(
                         I64,
                         "js_closure_get_capture_bits",
                         &[(I64, &closure_ptr), (I32, &idx_str)],
                     );
-                    let bits = blk.call(I64, "js_box_get_bits", &[(I64, &box_ptr)]);
+                    let bits = blk.call(I64, getter, &[(I64, &box_ptr)]);
                     let value = blk.bitcast_i64_to_double(&bits);
                     demote_extracted_string_binding(ctx, *id, &value);
                     return Ok(value);
@@ -658,6 +663,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // cell. Do NOT overwrite the capture slot — it holds
                 // the box pointer, not the value.
                 if ctx.boxed_vars.contains(id) {
+                    let setter = if ctx.trusted_box_captures {
+                        "js_box_set_bits_trusted_no_barrier"
+                    } else {
+                        "js_box_set_bits"
+                    };
                     let blk = ctx.block();
                     let box_ptr = blk.call(
                         I64,
@@ -665,7 +675,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &closure_ptr), (I32, &idx_str)],
                     );
                     let v_bits = blk.bitcast_double_to_i64(&v);
-                    blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &v_bits)]);
+                    blk.call_void(setter, &[(I64, &box_ptr), (I64, &v_bits)]);
                     // Gen-GC Phase C2: barrier — box is the parent.
                     emit_write_barrier(ctx, &box_ptr, &v_bits);
                 } else {
@@ -804,18 +814,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // activation therefore cannot become reusable inside the
                 // nested user frame `coerce_old`/`step_new` may enter.
                 if ctx.boxed_vars.contains(id) {
+                    let getter = if ctx.trusted_box_captures {
+                        "js_box_get_bits_trusted"
+                    } else {
+                        "js_box_get_bits"
+                    };
+                    let setter = if ctx.trusted_box_captures {
+                        "js_box_set_bits_trusted_no_barrier"
+                    } else {
+                        "js_box_set_bits"
+                    };
                     let blk = ctx.block();
                     let box_ptr = blk.call(
                         I64,
                         "js_closure_get_capture_bits",
                         &[(I64, &closure_ptr), (I32, &idx_str)],
                     );
-                    let old_bits = blk.call(I64, "js_box_get_bits", &[(I64, &box_ptr)]);
+                    let old_bits = blk.call(I64, getter, &[(I64, &box_ptr)]);
                     let old = blk.bitcast_i64_to_double(&old_bits);
                     let old = coerce_old(blk, &old);
                     let new = step_new(blk, &old);
                     let new_bits = blk.bitcast_double_to_i64(&new);
-                    blk.call_void("js_box_set_bits", &[(I64, &box_ptr), (I64, &new_bits)]);
+                    blk.call_void(setter, &[(I64, &box_ptr), (I64, &new_bits)]);
                     // Gen-GC Phase C2: `++`/`--` on a BigInt yields a heap
                     // pointer via js_numeric_step — barrier the box parent.
                     emit_write_barrier(ctx, &box_ptr, &new_bits);
