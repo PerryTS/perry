@@ -1277,7 +1277,7 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         (
             guards,
             "static G4",
-            "static G4: unsafe extern \"C\" fn(f64, u32, u32) -> i32",
+            "static G4: unsafe extern \"C\" fn(f64, u32, u32, u32) -> i32",
             "js_method_direct_shape_guard",
         ),
         (
@@ -1981,10 +1981,17 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
     let class_id = 0x7EED_1061;
     let (obj, _, _, receiver) = class_instance(class_id, b"x");
     let expected_shape_id = shape_id(obj);
+    let method_name = "direct_shape_target_1061";
+    let method_slot = crate::object::class_prototype_method_guard_slot(method_name);
 
     assert_eq!(
         unsafe {
-            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id)
+            super::guards::js_method_direct_shape_guard(
+                receiver,
+                class_id,
+                expected_shape_id,
+                method_slot,
+            )
         },
         1
     );
@@ -1994,6 +2001,7 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
                 receiver,
                 class_id.wrapping_add(1),
                 expected_shape_id,
+                method_slot,
             )
         },
         0
@@ -2011,7 +2019,12 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
     );
     assert_eq!(
         unsafe {
-            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id)
+            super::guards::js_method_direct_shape_guard(
+                receiver,
+                class_id,
+                expected_shape_id,
+                method_slot,
+            )
         },
         1
     );
@@ -2023,7 +2036,12 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
         let original_reserved = (*gc)._reserved;
         (*gc)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
         assert_eq!(
-            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id),
+            super::guards::js_method_direct_shape_guard(
+                receiver,
+                class_id,
+                expected_shape_id,
+                method_slot,
+            ),
             0
         );
         (*gc)._reserved = original_reserved;
@@ -2037,13 +2055,54 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
     }
     assert_eq!(
         unsafe {
-            super::guards::js_method_direct_shape_guard(receiver, class_id, expected_shape_id)
+            super::guards::js_method_direct_shape_guard(
+                receiver,
+                class_id,
+                expected_shape_id,
+                method_slot,
+            )
         },
         0
     );
     unsafe {
         (*obj).parent_class_id = expected_shape_id;
     }
+
+    crate::object::class_prototype_method_root_store(
+        class_id.wrapping_add(10),
+        "direct_shape_unrelated_1061".to_string(),
+        crate::value::TAG_UNDEFINED,
+    );
+    assert_eq!(
+        unsafe {
+            super::guards::js_method_direct_shape_guard(
+                receiver,
+                class_id,
+                expected_shape_id,
+                method_slot,
+            )
+        },
+        1,
+        "a different method name must not poison this direct guard",
+    );
+
+    crate::object::class_prototype_method_root_store(
+        class_id.wrapping_add(11),
+        method_name.to_string(),
+        crate::value::TAG_UNDEFINED,
+    );
+    assert_eq!(
+        unsafe {
+            super::guards::js_method_direct_shape_guard(
+                receiver,
+                class_id,
+                expected_shape_id,
+                method_slot,
+            )
+        },
+        0,
+        "the same method name must retire guards across the class hierarchy",
+    );
 }
 
 #[test]

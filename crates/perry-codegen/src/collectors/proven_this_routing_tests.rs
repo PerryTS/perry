@@ -692,11 +692,11 @@ fn guarded_pshape_call_site_is_preceded_by_a_shape_id_guard() {
 }
 
 /// The single-pair shape-only arm is small enough to inline at the call site.
-/// Pin the complete safety gate: acquire the prototype-mutation latch, accept
-/// both the boxed-pointer and internal raw-pointer ABIs, reject addresses
-/// outside the target heap range before dereference, reject own descriptors,
-/// then compare the exact class/ShapeId pair. The out-of-line guard must be
-/// absent from this caller.
+/// Pin the complete safety gate: acquire both the all-method escape latch and
+/// the FNV-indexed method-name latch, accept both the boxed-pointer and
+/// internal raw-pointer ABIs, reject addresses outside the target heap range
+/// before dereference, reject own descriptors, then compare the exact
+/// class/ShapeId pair. The out-of-line guard must be absent from this caller.
 #[test]
 fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
     let ir = emit(&guarded_site_module(), false);
@@ -706,6 +706,12 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
             "load atomic i8, ptr @PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED acquire, align 1",
         ),
         "the inline guard must acquire the runtime's release-published sticky latch:\n{probe}"
+    );
+    assert!(
+        probe.contains(
+            "getelementptr i8, ptr @PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD",
+        ) && probe.matches("load atomic i8").count() >= 2,
+        "the inline guard must acquire its method-name invalidation byte:\n{probe}"
     );
     assert!(
         !probe.contains("call i32 @js_method_direct_shape_guard("),

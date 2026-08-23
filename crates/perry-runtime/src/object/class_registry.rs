@@ -63,7 +63,7 @@ pub(crate) use state::{
     class_parent_closure, class_parent_closure_root_store, class_prototype_method_is_enumerable,
     class_prototype_method_set_enumerable, class_prototype_method_value_cache_root_store,
     class_prototype_object_root_store, class_static_defined_attrs, class_static_set_defined_attrs,
-    global_object_prototype_bits, is_bound_native_method_closure_value,
+    class_unmark_key_deleted, global_object_prototype_bits, is_bound_native_method_closure_value,
     is_non_constructable_builtin_function_value, parent_closure_in_chain,
     throw_non_constructable_builtin_function,
 };
@@ -102,12 +102,15 @@ pub(crate) use class_meta::{
     CLASS_ID_TEXT_ENCODER_STREAM,
 };
 #[cfg(test)]
-pub(crate) use prototype_methods::CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED;
+pub(crate) use prototype_methods::{
+    class_prototype_fast_guards_invalidated, class_prototype_method_guard_slot,
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED, CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD,
+};
 
 // ── prototype_methods.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_methods::{
-    class_prototype_fast_guards_invalidated, class_prototype_method_root_store,
-    invalidate_class_prototype_fast_guards, mirror_prototype_method_on_object,
+    class_prototype_fast_guard_invalidated_for_method, class_prototype_method_root_store,
+    invalidate_class_prototype_fast_guards_for_method, mirror_prototype_method_on_object,
     synthetic_class_id_for_function,
 };
 pub use prototype_methods::{
@@ -118,9 +121,10 @@ pub use prototype_methods::{
 // ── construct.rs / vm_brand.rs ──────────────────────────────────────────────
 pub(crate) use construct::{
     extends_target_must_throw, function_would_have_own_prototype, is_callable_function_value,
-    js_value_is_constructor, lookup_prototype_method, nm_ctor_child_process, nm_ctor_cluster,
-    nm_ctor_fs, nm_ctor_readline, nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty,
-    nm_ctor_vm, nm_ctor_wasi, ordinary_function_prototype_value_for_read, promise_parent_in_chain,
+    js_value_is_constructor, lookup_own_prototype_method, lookup_prototype_method,
+    nm_ctor_child_process, nm_ctor_cluster, nm_ctor_fs, nm_ctor_readline, nm_ctor_repl,
+    nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi,
+    ordinary_function_prototype_value_for_read, promise_parent_in_chain,
 };
 pub use construct::{
     js_ctor_return_override, js_function_prototype_value_for_read, js_new_function_construct,

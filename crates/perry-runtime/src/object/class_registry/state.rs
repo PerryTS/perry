@@ -54,6 +54,14 @@ pub(crate) fn class_is_key_deleted(class_id: u32, key: &str) -> bool {
     })
 }
 
+pub(crate) fn class_unmark_key_deleted(class_id: u32, key: &str) {
+    CLASS_DELETED_KEYS.with(|m| {
+        if let Some(keys) = m.borrow_mut().get_mut(&class_id) {
+            keys.remove(key);
+        }
+    });
+}
+
 /// Record `C.<name> = value` in the class-ref side table that dynamic reads
 /// (`const K: any = C; K.name`, `Object.keys(C)`, `getOwnPropertyDescriptor`)
 /// consult, and shade the stored value for the incremental marker.
@@ -632,14 +640,11 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     // not prototype SURGERY, and it used to invalidate the fast guards as if
     // it were.
     //
-    // `invalidate_class_prototype_fast_guards()` trips a process-global,
-    // MONOTONIC latch. It disables every `js_method_direct_shape_guard` /
-    // `js_typed_feedback_method_direct_call_guard` in the program, retires
-    // every outstanding element-shape record (`invalidate_all_element_shapes`)
-    // and bumps `VTABLE_GEN`, retiring the `vtable_ic` / `obj_dispatch_ic`
-    // dispatch caches. It exists for the one event that can change which
-    // member `recv.m()` resolves to: a WRITE to a prototype
-    // (`Class.prototype.m = fn`), which is what the two call sites in
+    // A real keyed prototype write sets the matching method-name invalidation
+    // byte, retires every outstanding element-shape record, and bumps
+    // `VTABLE_GEN` for the dispatch caches. It exists for the one event that
+    // can change which member `recv.m()` resolves to: a WRITE to a prototype
+    // (`Class.prototype.m = fn`), which is what the registration paths in
     // `prototype_methods.rs` cover.
     //
     // Reaching this line changes none of that. The object being created is
@@ -647,9 +652,8 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     // `constructor` plus exactly the methods the class already declares, i.e.
     // the same answers the vtable already gives. But because ANY demand for
     // `Class.prototype` lands here — `instanceof`, `Object.getPrototypeOf`,
-    // a `super` chain — a plain class-hierarchy program disarmed its own
-    // dispatch speculation during startup and then ran every `recv.m()`
-    // through the `js_native_call_method` tower.
+    // a `super` chain — materialization must not disarm any method-name guard
+    // or dispatch speculation during startup.
     //
     // Measured on `gc-handoff/apps/shapes.ts`: 384,000 of 384,000 shape-guard
     // probes failed here and nowhere else, and every element read fell back to

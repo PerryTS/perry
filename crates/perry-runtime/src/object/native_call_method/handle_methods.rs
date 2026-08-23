@@ -1017,45 +1017,65 @@ pub(super) unsafe fn dispatch_handle(
                         let mut cur_cid = class_id;
                         let mut depth = 0u32;
                         while depth < 32 {
-                            if let Some(vtable) = reg.get(&cur_cid) {
-                                if let Some(entry) = vtable.methods.get(method_name) {
-                                    vtable_ic_insert(
-                                        class_id,
-                                        method_name_ptr as usize,
-                                        entry.func_ptr,
-                                        entry.param_count,
-                                        entry.has_synthetic_arguments,
-                                        entry.has_rest,
-                                    );
-                                    // #7769: this walk — not the tail vtable
-                                    // arm of `js_native_call_method` — is where
-                                    // an INHERITED method resolves, and
-                                    // inherited methods are the common case in
-                                    // any real hierarchy (`class Square extends
-                                    // Rect` calling `Rect`'s `area`). Recording
-                                    // the outcome here is what lets the
-                                    // top-of-tower fast path serve them; the
-                                    // helper re-checks the receiver-shape
-                                    // predicate before storing anything.
-                                    super::note_class_vtable_resolution(
-                                        f64::from_bits(jsval.bits()),
-                                        method_name,
-                                        entry.func_ptr,
-                                        entry.param_count,
-                                        entry.has_synthetic_arguments,
-                                        entry.has_rest,
-                                    );
-                                    resolved_method = Some(ResolvedMethod::Vtable {
-                                        func_ptr: entry.func_ptr,
-                                        param_count: entry.param_count,
-                                        has_synthetic_arguments: entry.has_synthetic_arguments,
-                                        has_rest: entry.has_rest,
-                                        this_i64: jsval.as_pointer::<u8>() as i64,
+                            let deleted = class_is_key_deleted(cur_cid, method_name);
+                            // `C.prototype.m = fn` replaces a declared `m` on
+                            // this exact prototype object, so the assignment
+                            // side table must win before the original vtable.
+                            if !deleted {
+                                if let Some(method_value) =
+                                    lookup_own_prototype_method(cur_cid, method_name)
+                                {
+                                    resolved_method = Some(ResolvedMethod::ProtoClosure {
+                                        field_bits: method_value.to_bits(),
                                     });
                                     break;
                                 }
                             }
-                            let proto_obj = class_prototype_object(cur_cid);
+                            if !deleted {
+                                if let Some(vtable) = reg.get(&cur_cid) {
+                                    if let Some(entry) = vtable.methods.get(method_name) {
+                                        vtable_ic_insert(
+                                            class_id,
+                                            method_name_ptr as usize,
+                                            entry.func_ptr,
+                                            entry.param_count,
+                                            entry.has_synthetic_arguments,
+                                            entry.has_rest,
+                                        );
+                                        // #7769: this walk — not the tail vtable
+                                        // arm of `js_native_call_method` — is where
+                                        // an INHERITED method resolves, and
+                                        // inherited methods are the common case in
+                                        // any real hierarchy (`class Square extends
+                                        // Rect` calling `Rect`'s `area`). Recording
+                                        // the outcome here is what lets the
+                                        // top-of-tower fast path serve them; the
+                                        // helper re-checks the receiver-shape
+                                        // predicate before storing anything.
+                                        super::note_class_vtable_resolution(
+                                            f64::from_bits(jsval.bits()),
+                                            method_name,
+                                            entry.func_ptr,
+                                            entry.param_count,
+                                            entry.has_synthetic_arguments,
+                                            entry.has_rest,
+                                        );
+                                        resolved_method = Some(ResolvedMethod::Vtable {
+                                            func_ptr: entry.func_ptr,
+                                            param_count: entry.param_count,
+                                            has_synthetic_arguments: entry.has_synthetic_arguments,
+                                            has_rest: entry.has_rest,
+                                            this_i64: jsval.as_pointer::<u8>() as i64,
+                                        });
+                                        break;
+                                    }
+                                }
+                            }
+                            let proto_obj = if deleted {
+                                std::ptr::null_mut()
+                            } else {
+                                class_prototype_object(cur_cid)
+                            };
                             if !proto_obj.is_null() {
                                 let method_key = crate::string::js_string_from_bytes(
                                     method_name.as_ptr(),

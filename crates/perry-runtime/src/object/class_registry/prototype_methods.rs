@@ -100,19 +100,36 @@ crate::perry_thread_local! {
         RwLock::new(None);
 }
 
-// Production codegen reads this byte directly before entering a guarded
-// direct-method arm. Keep the test build per-thread so one mutation test cannot
-// poison unrelated tests running in parallel; generated programs link the
-// non-test symbol below.
+// Production codegen reads this fail-closed all-method byte and the scoped
+// table below before entering a guarded direct-method arm. Keep the test state
+// per-thread so one mutation test cannot poison unrelated tests running in
+// parallel; generated programs link the non-test symbols below.
 #[cfg(not(test))]
 #[no_mangle]
 pub static PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED: std::sync::atomic::AtomicU8 =
     std::sync::atomic::AtomicU8::new(0);
 
+/// Sticky per-method invalidation bytes for compiler-emitted direct-method
+/// guards. Prototype writes always have a property name, so they only need to
+/// retire guards for that name. The low 16 bits of the name's FNV-1a hash
+/// select a byte; collisions conservatively retire additional names.
+pub(crate) const CLASS_PROTOTYPE_METHOD_GUARD_SLOT_COUNT: usize = 1 << 16;
+pub(crate) const CLASS_PROTOTYPE_METHOD_GUARD_SLOT_MASK: u64 =
+    (CLASS_PROTOTYPE_METHOD_GUARD_SLOT_COUNT - 1) as u64;
+
+#[cfg(not(test))]
+#[no_mangle]
+pub static PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD: [std::sync::atomic::AtomicU8;
+    CLASS_PROTOTYPE_METHOD_GUARD_SLOT_COUNT] =
+    [const { std::sync::atomic::AtomicU8::new(0) }; CLASS_PROTOTYPE_METHOD_GUARD_SLOT_COUNT];
+
 #[cfg(test)]
 per_test_global! {
     pub(crate) static CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
+    pub(crate) static CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD:
+        std::sync::RwLock<std::collections::HashSet<u16>> =
+        std::sync::RwLock::new(std::collections::HashSet::new());
 }
 
 pub(crate) fn class_prototype_fast_guards_invalidated() -> bool {
@@ -127,30 +144,68 @@ pub(crate) fn class_prototype_fast_guards_invalidated() -> bool {
     }
 }
 
+#[inline]
+pub(crate) fn class_prototype_method_guard_slot(name: &str) -> u32 {
+    (super::super::key_bytes_hash(name.as_ptr(), name.len())
+        & CLASS_PROTOTYPE_METHOD_GUARD_SLOT_MASK) as u32
+}
+
+#[inline]
+pub(crate) fn class_prototype_fast_guard_invalidated_for_method(slot: u32) -> bool {
+    if class_prototype_fast_guards_invalidated() {
+        return true;
+    }
+    let slot = (slot as usize) & (CLASS_PROTOTYPE_METHOD_GUARD_SLOT_COUNT - 1);
+    #[cfg(not(test))]
+    {
+        PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD[slot]
+            .load(std::sync::atomic::Ordering::Acquire)
+            != 0
+    }
+    #[cfg(test)]
+    {
+        CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD
+            .read()
+            .unwrap()
+            .contains(&(slot as u16))
+    }
+}
+
+#[inline]
+fn retire_prototype_dependent_caches() {
+    // #7480: prototype surgery retires element-shape proofs.
+    crate::array::invalidate_all_element_shapes();
+    // #7769: method-dispatch caches are keyed by VTABLE_GEN.
+    VTABLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Release);
+}
+
+pub(crate) fn invalidate_class_prototype_fast_guards_for_method(name: &str) {
+    let slot = class_prototype_method_guard_slot(name) as usize;
+    #[cfg(not(test))]
+    PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD[slot]
+        .store(1, std::sync::atomic::Ordering::Release);
+    #[cfg(test)]
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD
+        .write()
+        .unwrap()
+        .insert(slot as u16);
+    retire_prototype_dependent_caches();
+}
+
+#[allow(dead_code)] // Fail-closed escape hatch for a future keyless mutation path.
 pub(crate) fn invalidate_class_prototype_fast_guards() {
     #[cfg(not(test))]
     PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(1, std::sync::atomic::Ordering::Release);
     #[cfg(test)]
     CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(true, std::sync::atomic::Ordering::Release);
-    // #7480: prototype surgery is the one event that retires an element-shape
-    // proof without touching any array — the class's shape stopped being a
-    // reliable description of its instances. This is the existing single
-    // latch all three prototype-write entry points funnel through
-    // (`js_register_prototype_method`, `class_prototype_method_root_store`,
-    // and the class-registry state path), so one generation bump here retires
-    // every outstanding record at O(1).
-    crate::array::invalidate_all_element_shapes();
-    // #7769: prototype surgery can change which member a `recv.m()` resolves
-    // to, and the method-dispatch caches (`vtable_ic`, `obj_dispatch_ic`) key
-    // their entries on `VTABLE_GEN`. Those caches were only retired by class
-    // REGISTRATION, so a `Class.prototype.m = fn` after first dispatch left
-    // them serving the pre-surgery answer. Retire them here, at the one latch
-    // all three prototype-write entry points funnel through — the same O(1)
-    // argument as the element-shape invalidation above.
-    VTABLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Release);
+    // Unknown-key prototype surgery cannot use a scoped slot. Retire every
+    // direct-method guard, then perform the common cache invalidations.
+    retire_prototype_dependent_caches();
 }
 
 pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, value_bits: u64) {
+    // Assignment after `delete C.prototype.m` creates the property again.
+    class_unmark_key_deleted(class_id, &name);
     CLASS_PROTOTYPE_METHODS.with(|table| {
         let mut guard = table.write().unwrap();
         if guard.is_none() {
@@ -163,7 +218,7 @@ pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, val
             .or_default()
             .insert(name.clone(), value_bits);
     });
-    invalidate_class_prototype_fast_guards();
+    invalidate_class_prototype_fast_guards_for_method(&name);
     crate::gc::runtime_write_barrier_root_nanbox(value_bits);
     // #5024: the side table makes the method dispatchable, but own-key
     // enumeration on the prototype OBJECT (Object.keys / getOwnPropertyNames /
@@ -238,7 +293,6 @@ pub unsafe extern "C" fn js_register_prototype_method(
     name_len: usize,
     value: f64,
 ) {
-    invalidate_class_prototype_fast_guards();
     if class_id == 0 || name_ptr.is_null() || name_len == 0 {
         return;
     }

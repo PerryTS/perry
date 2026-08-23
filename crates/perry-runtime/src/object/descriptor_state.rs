@@ -200,11 +200,11 @@ pub(crate) fn disable_inline_guards_for_descriptor_target(obj: usize, key: &str)
         || class_registry::is_registered_class_prototype_object(obj)
         || class_registry::class_id_for_decl_prototype_object(obj).is_some();
     if is_prototype_target {
-        // Direct method guards are not key-aware. Conservatively retire them
-        // after any user descriptor/accessor install on a prototype that can
-        // affect a class instance. Own-instance installs are rejected by the
-        // receiver's `OBJ_FLAG_HAS_DESCRIPTORS` header bit instead.
-        class_registry::invalidate_class_prototype_fast_guards();
+        // A prototype descriptor can only change resolution for this key.
+        // Retire the matching method-name guard slot across all classes;
+        // own-instance installs are still rejected by the receiver's
+        // `OBJ_FLAG_HAS_DESCRIPTORS` header bit.
+        class_registry::invalidate_class_prototype_fast_guards_for_method(key);
         let hash = super::key_bytes_hash(key.as_ptr(), key.len());
         note_proto_descriptor_key_hash(hash);
         if declared_field_name_hash_exists(hash) {
@@ -1187,8 +1187,18 @@ mod c5a_tests {
              the inline class-field fast path"
         );
         assert!(
-            class_registry::class_prototype_fast_guards_invalidated(),
-            "a prototype descriptor must retire unkeyed direct-method guards"
+            !class_registry::class_prototype_fast_guards_invalidated(),
+            "a keyed prototype descriptor must not retire every method guard"
+        );
+        let render_slot = class_registry::class_prototype_method_guard_slot("c5a_render_method");
+        assert!(
+            class_registry::class_prototype_fast_guard_invalidated_for_method(render_slot),
+            "a prototype descriptor must retire its matching method guard"
+        );
+        let other_slot = class_registry::class_prototype_method_guard_slot("c5a_other_method");
+        assert!(
+            !class_registry::class_prototype_fast_guard_invalidated_for_method(other_slot),
+            "an unrelated method guard must remain valid"
         );
 
         // Field-style install: key declared by a registered class.

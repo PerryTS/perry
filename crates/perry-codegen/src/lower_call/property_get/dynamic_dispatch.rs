@@ -498,6 +498,7 @@ pub(crate) fn try_lower_instance_method_call(
             let probe_entry = ctx.strings.entry(key_idx_probe);
             let probe_bytes_global = format!("@{}", probe_entry.bytes_global);
             let probe_name_len_str = probe_entry.byte_len.to_string();
+            let method_guard_slot_str = (probe_entry.dispatch_hash & 0xffff).to_string();
             let probe_override_idx = ctx.new_block("idisp.override");
             let probe_dispatch_idx = ctx.new_block("idisp.dispatch");
             let probe_outer_merge_idx = ctx.new_block("idisp.outer_merge");
@@ -536,7 +537,11 @@ pub(crate) fn try_lower_instance_method_call(
                 let cid = ctx.block().call(
                     I32,
                     "js_method_direct_shape_class",
-                    &[(DOUBLE, &recv_box), (crate::types::PTR, &shape_slot)],
+                    &[
+                        (DOUBLE, &recv_box),
+                        (crate::types::PTR, &shape_slot),
+                        (I32, &method_guard_slot_str),
+                    ],
                 );
                 let shape_id = ctx.block().load(I32, &shape_slot);
                 shape_probe_cid = Some(cid.clone());
