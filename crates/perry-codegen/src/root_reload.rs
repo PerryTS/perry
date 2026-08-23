@@ -223,6 +223,7 @@ const NON_COLLECTING: &[&str] = &[
     "js_closure_set_capture_ptr",
     "js_closure_get_capture_ptr",
     "js_box_set_bits",
+    "js_box_set_bits_trusted_no_barrier",
     "js_box_get_bits",
     "js_i32_box_set",
     "js_bool_box_set",

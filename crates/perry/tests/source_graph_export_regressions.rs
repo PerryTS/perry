@@ -280,20 +280,26 @@ fn cross_module_arrow_callback_dispatch_is_resolved_once_and_fails_closed() {
         "main.ts",
         "import { Forwarder } from './forwarder';\n\
          const iterator = new Forwarder();\n\
-         const total = iterator.run((a, b, c) => {\n\
-           const churn = new Array(8192);\n\
-           churn[0] = { value: a };\n\
-           return a + b + c;\n\
-         });\n\
+         function exercise() {\n\
+           let invocations = 0;\n\
+           const total = iterator.run((a, b, c) => {\n\
+             invocations++;\n\
+             const churn = new Array(8192);\n\
+             churn[0] = { value: a };\n\
+             return a + b + c;\n\
+           });\n\
+           console.log(total);\n\
+           console.log(invocations);\n\
+         }\n\
          function ordinary(a: number, b: number, c: number) {\n\
            return this === undefined ? 42 : -1;\n\
          }\n\
-         console.log(total);\n\
+         exercise();\n\
          console.log(iterator.ordinary(ordinary));\n",
     );
 
     let (stdout, all_ir) = compile_and_run_with_all_llvm_trace(dir.path(), "main.ts");
-    assert_eq!(stdout, "1584\n42\n");
+    assert_eq!(stdout, "1584\n32\n42\n");
 
     let sink_run = llvm_function_body_containing(
         &all_ir,
@@ -321,6 +327,20 @@ fn cross_module_arrow_callback_dispatch_is_resolved_once_and_fails_closed() {
         !all_ir.contains("$callback_"),
         "entry hoisting must not clone callback method bodies"
     );
+    assert!(
+        all_ir.contains("$trusted_boxes"),
+        "the direct arrow with a mutable capture must get a bounded private body"
+    );
+    assert!(
+        all_ir.contains("call void @js_register_closure_trusted_direct(")
+            && all_ir.contains("i32 1, i64 1)"),
+        "module init must register the exact one-box capture layout"
+    );
+    assert!(
+        all_ir.contains("call i64 @js_box_get_bits_trusted(")
+            && all_ir.contains("call void @js_box_set_bits_trusted_no_barrier("),
+        "the private body must use the trusted box accessors"
+    );
 
     let mut forced_command = Command::new(dir.path().join("main_bin"));
     forced_command.current_dir(dir.path());
@@ -339,7 +359,7 @@ fn cross_module_arrow_callback_dispatch_is_resolved_once_and_fails_closed() {
         String::from_utf8_lossy(&forced.stdout),
         String::from_utf8_lossy(&forced.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&forced.stdout), "1584\n42\n");
+    assert_eq!(String::from_utf8_lossy(&forced.stdout), "1584\n32\n42\n");
 }
 
 #[test]

@@ -571,6 +571,12 @@ pub(crate) struct FnCtx<'a> {
     /// parameters, indexed by callback local (including exact const aliases)
     /// and call arity.
     pub resolved_arrow_callback_targets: std::collections::HashMap<(u32, usize), String>,
+    /// This is an internal clone of a compiler-proven direct arrow body. Its
+    /// boxed capture slots were installed through
+    /// `js_closure_set_box_capture_ptr`, so captured-box accesses may use the
+    /// raw helpers. Public and dynamically dispatched closure bodies keep the
+    /// defensive runtime registry validation.
+    pub trusted_box_captures: bool,
     /// Immutable local aliases of same-module function declarations.
     /// Calling one is semantically the same as calling its `FuncRef` directly;
     /// retain the runtime function object in the local for identity/property

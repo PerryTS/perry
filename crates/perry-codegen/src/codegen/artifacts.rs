@@ -89,6 +89,8 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub closure_arities: &'a HashMap<u32, u32>,
     pub closure_lengths: &'a HashMap<u32, u32>,
     pub closure_arrow_functions: &'a std::collections::HashSet<u32>,
+    pub trusted_box_closures:
+        &'a std::collections::HashMap<u32, super::closure_collect::TrustedBoxClosure>,
     pub closures: &'a [(perry_hir::types::FuncId, perry_hir::Expr)],
     pub class_keys_init_data: &'a [(String, String, u32, Vec<u64>, Vec<u64>)],
     /// #8122: keys global → (class id, packed GcHeader word) for the classes
@@ -138,6 +140,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         closure_arities,
         closure_lengths,
         closure_arrow_functions,
+        trusted_box_closures,
         closures,
         class_keys_init_data,
         class_header_image_inits,
@@ -225,8 +228,35 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             &module_reassigned_locals,
             closure_rest_params,
             cross_module,
+            false,
         )
         .with_context(|| format!("lowering closure func_id={}", func_id))?;
+        if trusted_box_closures.contains_key(func_id) {
+            compile_closure(
+                llmod,
+                *func_id,
+                closure_expr,
+                func_names,
+                strings,
+                class_table,
+                method_names,
+                module_globals,
+                opts.import_function_prefixes,
+                enum_table,
+                static_field_globals,
+                class_ids,
+                func_signatures,
+                func_synthetic_arguments,
+                module_prefix,
+                module_boxed_vars,
+                module_receiver_types,
+                &module_reassigned_locals,
+                closure_rest_params,
+                cross_module,
+                true,
+            )
+            .with_context(|| format!("lowering trusted-box closure func_id={}", func_id))?;
+        }
         let done = closure_index + 1;
         if done == closures.len() || done % closure_progress_step == 0 {
             progress.items("closure bodies", done, closures.len(), closure_started);
@@ -1934,6 +1964,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         closure_arities,
         closure_lengths,
         closure_arrow_functions,
+        trusted_box_closures,
         &user_fn_wrapper_rest,
         closure_synthetic_arguments,
         &user_fn_wrapper_synthetic_arguments,
