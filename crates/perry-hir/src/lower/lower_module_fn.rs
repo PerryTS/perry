@@ -21,6 +21,7 @@ use crate::lower_types::hoisted_text_codec::{
 fn reflect_script_var_initializers(
     stmts: Vec<Stmt>,
     script_vars: &HashMap<LocalId, String>,
+    next_local_id: &mut LocalId,
 ) -> Vec<Stmt> {
     let mut reflected = Vec::with_capacity(stmts.len());
     for mut stmt in stmts {
@@ -30,21 +31,35 @@ fn reflect_script_var_initializers(
                 else_branch,
                 ..
             } => {
-                *then_branch =
-                    reflect_script_var_initializers(std::mem::take(then_branch), script_vars);
+                *then_branch = reflect_script_var_initializers(
+                    std::mem::take(then_branch),
+                    script_vars,
+                    next_local_id,
+                );
                 if let Some(branch) = else_branch {
-                    *branch = reflect_script_var_initializers(std::mem::take(branch), script_vars);
+                    *branch = reflect_script_var_initializers(
+                        std::mem::take(branch),
+                        script_vars,
+                        next_local_id,
+                    );
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                *body = reflect_script_var_initializers(std::mem::take(body), script_vars);
+                *body = reflect_script_var_initializers(
+                    std::mem::take(body),
+                    script_vars,
+                    next_local_id,
+                );
             }
             Stmt::For {
                 init, update, body, ..
             } => {
                 if let Some(init_stmt) = init.take() {
-                    let mut expanded =
-                        reflect_script_var_initializers(vec![*init_stmt], script_vars);
+                    let mut expanded = reflect_script_var_initializers(
+                        vec![*init_stmt],
+                        script_vars,
+                        next_local_id,
+                    );
                     if expanded.len() == 1 {
                         *init = expanded.pop().map(Box::new);
                     } else {
@@ -56,13 +71,25 @@ fn reflect_script_var_initializers(
                     }
                 }
                 if let Some(update_expr) = update.take() {
-                    *update = Some(reflect_script_var_update_expr(update_expr, script_vars));
+                    let mut update_temps = Vec::new();
+                    *update = Some(reflect_script_var_update_expr(
+                        update_expr,
+                        script_vars,
+                        next_local_id,
+                        &mut update_temps,
+                    ));
+                    reflected.append(&mut update_temps);
                 }
-                *body = reflect_script_var_initializers(std::mem::take(body), script_vars);
+                *body = reflect_script_var_initializers(
+                    std::mem::take(body),
+                    script_vars,
+                    next_local_id,
+                );
             }
             Stmt::Labeled { body, .. } => {
                 let inner = std::mem::replace(body, Box::new(Stmt::Break));
-                let mut expanded = reflect_script_var_initializers(vec![*inner], script_vars);
+                let mut expanded =
+                    reflect_script_var_initializers(vec![*inner], script_vars, next_local_id);
                 *body = if expanded.len() > 1 && matches!(expanded.last(), Some(Stmt::For { .. })) {
                     // A reflected `for (var ...)` init expands to the init,
                     // its global mirror, and the loop. Keep those one-shot
@@ -91,16 +118,24 @@ fn reflect_script_var_initializers(
                 catch,
                 finally,
             } => {
-                *body = reflect_script_var_initializers(std::mem::take(body), script_vars);
+                *body = reflect_script_var_initializers(
+                    std::mem::take(body),
+                    script_vars,
+                    next_local_id,
+                );
                 if let Some(catch) = catch {
                     catch.body = reflect_script_var_initializers(
                         std::mem::take(&mut catch.body),
                         script_vars,
+                        next_local_id,
                     );
                 }
                 if let Some(finally) = finally {
-                    *finally =
-                        reflect_script_var_initializers(std::mem::take(finally), script_vars);
+                    *finally = reflect_script_var_initializers(
+                        std::mem::take(finally),
+                        script_vars,
+                        next_local_id,
+                    );
                 }
             }
             Stmt::Switch { cases, .. } => {
@@ -108,6 +143,7 @@ fn reflect_script_var_initializers(
                     case.body = reflect_script_var_initializers(
                         std::mem::take(&mut case.body),
                         script_vars,
+                        next_local_id,
                     );
                 }
             }
@@ -140,50 +176,81 @@ fn reflect_script_var_initializers(
     reflected
 }
 
-fn reflect_script_var_update_expr(expr: Expr, script_vars: &HashMap<LocalId, String>) -> Expr {
-    let mut reflected = Vec::new();
-    reflect_script_var_update_parts(expr, script_vars, &mut reflected);
-    if reflected.len() == 1 {
-        reflected.pop().expect("one reflected update expression")
-    } else {
-        Expr::Sequence(reflected)
-    }
-}
-
-fn reflect_script_var_update_parts(
-    expr: Expr,
+fn reflect_script_var_update_expr(
+    mut expr: Expr,
     script_vars: &HashMap<LocalId, String>,
-    reflected: &mut Vec<Expr>,
-) {
+    next_local_id: &mut LocalId,
+    temp_decls: &mut Vec<Stmt>,
+) -> Expr {
+    // A loop update is an arbitrary expression tree, not necessarily a bare
+    // assignment or a top-level comma sequence. Rewrite children first in
+    // their evaluation order so writes nested in call arguments, computed
+    // keys, conditionals, etc. are mirrored at the instant they execute.
+    crate::walker::walk_expr_children_mut(&mut expr, &mut |child| {
+        let original = std::mem::replace(child, Expr::Undefined);
+        *child = reflect_script_var_update_expr(original, script_vars, next_local_id, temp_decls);
+    });
+
     match expr {
-        Expr::Sequence(exprs) => {
-            for expr in exprs {
-                reflect_script_var_update_parts(expr, script_vars, reflected);
-            }
+        Expr::LocalSet(id, value) if script_vars.contains_key(&id) => Expr::Sequence(vec![
+            Expr::LocalSet(id, value),
+            script_var_mirror_expr(id, script_vars),
+        ]),
+        Expr::Update {
+            id,
+            op,
+            prefix: true,
+        } if script_vars.contains_key(&id) => Expr::Sequence(vec![
+            Expr::Update {
+                id,
+                op,
+                prefix: true,
+            },
+            script_var_mirror_expr(id, script_vars),
+        ]),
+        Expr::Update {
+            id,
+            op,
+            prefix: false,
+        } if script_vars.contains_key(&id) => {
+            // The mirror must run after the update, while postfix `x++` must
+            // still evaluate to the old value for its parent expression. Save
+            // that result in a compiler-only local, publish the new binding,
+            // then restore the expression result.
+            let temp_id = *next_local_id;
+            *next_local_id += 1;
+            temp_decls.push(Stmt::Let {
+                id: temp_id,
+                name: format!("__perry_script_var_postfix_{temp_id}"),
+                ty: Type::Any,
+                mutable: true,
+                init: None,
+            });
+            Expr::Sequence(vec![
+                Expr::LocalSet(
+                    temp_id,
+                    Box::new(Expr::Update {
+                        id,
+                        op,
+                        prefix: false,
+                    }),
+                ),
+                script_var_mirror_expr(id, script_vars),
+                Expr::LocalGet(temp_id),
+            ])
         }
-        Expr::LocalSet(id, value) => {
-            reflected.push(Expr::LocalSet(id, value));
-            reflect_script_var_update(id, script_vars, reflected);
-        }
-        Expr::Update { id, op, prefix } => {
-            reflected.push(Expr::Update { id, op, prefix });
-            reflect_script_var_update(id, script_vars, reflected);
-        }
-        expr => reflected.push(expr),
+        expr => expr,
     }
 }
 
-fn reflect_script_var_update(
-    id: LocalId,
-    script_vars: &HashMap<LocalId, String>,
-    reflected: &mut Vec<Expr>,
-) {
-    if let Some(name) = script_vars.get(&id) {
-        reflected.push(Expr::PropertySet {
-            object: Box::new(Expr::GlobalThisExpr),
-            property: name.clone(),
-            value: Box::new(Expr::LocalGet(id)),
-        });
+fn script_var_mirror_expr(id: LocalId, script_vars: &HashMap<LocalId, String>) -> Expr {
+    Expr::PropertySet {
+        object: Box::new(Expr::GlobalThisExpr),
+        property: script_vars
+            .get(&id)
+            .expect("script var mirror requires a script var")
+            .clone(),
+        value: Box::new(Expr::LocalGet(id)),
     }
 }
 
@@ -1405,8 +1472,11 @@ pub fn lower_module_full(
         // nested in blocks, loops, switch arms and try/catch/finally. Matching
         // by LocalId prevents a same-named lexical shadow from leaking onto
         // globalThis (ES modules keep their module binding only).
-        module.init =
-            reflect_script_var_initializers(std::mem::take(&mut module.init), &script_vars);
+        module.init = reflect_script_var_initializers(
+            std::mem::take(&mut module.init),
+            &script_vars,
+            &mut ctx.next_local_id,
+        );
     }
     if ctx.is_entry_module && !is_esm_entry {
         const RESTRICTED_GLOBAL_NAMES: [&str; 3] = ["undefined", "NaN", "Infinity"];

@@ -313,6 +313,13 @@ pub unsafe extern "C" fn js_new_function_construct(
         super::super::object_ops::throw_object_type_error(b"is not a constructor");
     }
     if let Some((module, method)) = bound_native_callable_module_and_method(func_value) {
+        // Native constructors and ordinary exports share the bound-method
+        // trampoline. Consult the export metadata before falling through to
+        // generic closure construction; some lower-case JavaScript wrappers
+        // are constructors while native functions such as path methods are not.
+        if !super::super::native_module::is_native_module_constructor_export(&module, &method) {
+            super::super::object_ops::throw_object_type_error(b"is not a constructor");
+        }
         if module == "perf_hooks" {
             if let Some(result) =
                 crate::perf_hooks::construct_perf_hooks_class(&method, args_ptr, args_len)
@@ -1215,6 +1222,10 @@ pub(crate) fn js_value_is_constructor(value: f64) -> bool {
     if is_non_constructable_builtin_function_value(value) {
         return false;
     }
+    let ptr = JSValue::from_bits(value.to_bits()).as_pointer::<crate::closure::ClosureHeader>();
+    if crate::closure::closure_is_bound_method(ptr) {
+        return is_bound_native_constructor_closure_value(value);
+    }
     true
 }
 
@@ -1255,7 +1266,7 @@ pub(crate) fn extends_target_must_throw(value: f64) -> bool {
         // trampoline here breaks dynamic aliases such as
         // `const Console = console.Console; new Console(...)` and native base
         // construction reached through an indirect user-class chain.
-        if is_bound_native_method_closure_value(value) {
+        if is_bound_native_constructor_closure_value(value) {
             return false;
         }
         let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();

@@ -245,6 +245,33 @@ fn test_native_module_binding_value_named_import() {
 }
 
 #[test]
+fn new_named_native_function_routes_through_runtime_constructor_check() {
+    let source = r#"
+import { toNamespacedPath } from "node:path";
+new toNamespacedPath();
+"#;
+    let module = perry_parser::parse_typescript(source, "native-new.ts").expect("source parses");
+    let hir = super::lower_module(&module, "native-new", "native-new.ts").expect("source lowers");
+    assert!(
+        hir.init.iter().any(|stmt| matches!(
+            stmt,
+            Stmt::Expr(crate::ir::Expr::NewDynamic { callee, .. })
+                if matches!(
+                    callee.as_ref(),
+                    crate::ir::Expr::PropertyGet { object, property, .. }
+                        if property == "toNamespacedPath"
+                            && matches!(
+                                object.as_ref(),
+                                crate::ir::Expr::NativeModuleRef(module) if module == "path"
+                            )
+                )
+        )),
+        "new over a named native function must construct its runtime export value: {:#?}",
+        hir.init
+    );
+}
+
+#[test]
 fn test_native_module_binding_value_os_eol() {
     // `import { EOL } from 'os'` resolves to the OsEOL intrinsic value, whether
     // used directly or as a shorthand property.
