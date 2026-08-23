@@ -273,6 +273,21 @@ fn builtin_prototype_methods_reject_dynamic_new() {
 }
 
 #[test]
+fn bound_native_constructor_export_is_not_rejected_as_a_bound_method() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let console = super::native_module::bound_native_callable_export_value("console", "Console");
+
+    assert!(
+        js_value_is_constructor(console),
+        "console.Console is a constructor"
+    );
+    assert!(
+        !extends_target_must_throw(console),
+        "bound native constructor metadata must win over the shared bound-method trampoline"
+    );
+}
+
+#[test]
 fn recorded_prototype_constructor_overrides_plain_object_constructor() {
     unsafe {
         let prototype = js_object_alloc(0, 1);

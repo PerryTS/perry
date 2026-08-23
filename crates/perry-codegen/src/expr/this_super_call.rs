@@ -806,6 +806,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
                         };
                         lower_event_emitter_subclass_init(ctx, &this_box);
+                        bind_derived_this_after_super(ctx);
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
                         crate::lower_call::apply_field_initializers_recursive(
@@ -1162,6 +1163,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &this_box,
                     &lowered_args,
                 );
+                // The native base initialized the provisional receiver, so a
+                // successful super() must now initialize the derived `this`
+                // binding before field initializers or the remaining
+                // constructor body can observe it. Without this, an indirect
+                // chain such as Counter -> B -> EventEmitter installed the
+                // emitter surface but the next `this.seen = ...` still threw
+                // the pre-super ReferenceError.
+                bind_derived_this_after_super(ctx);
                 // Spec: derived-class field initializers run AFTER `super()`
                 // returns. The native base is the chain root and has no TS
                 // fields, so everything after it still needs initializing —
