@@ -651,7 +651,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 setters: HashMap::new(),
             });
         vtable.methods.insert(
-            name,
+            name.clone(),
             VTableMethodEntry {
                 func_ptr: func_ptr as usize,
                 param_count: param_count as u32,
@@ -662,6 +662,10 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 has_rest: has_rest != 0,
             },
         );
+        // Backfill when reflection already materialized `C.prototype`.
+        drop(registry);
+        let proto = class_decl_prototype_object(class_id);
+        super::state::install_class_decl_prototype_method_field(proto, class_id, &name);
     }
     VTABLE_GEN.fetch_add(1, Ordering::Release);
 }

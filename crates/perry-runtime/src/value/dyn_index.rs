@@ -409,11 +409,16 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             );
         }
     }
-    let idx_i32 = if index.is_nan() || index.is_infinite() {
-        return f64::from_bits(TAG_UNDEFINED);
-    } else {
-        index as i32
-    };
+    // NaN and +/-Infinity are not array indices, but they are still ordinary
+    // property keys (`"NaN"`, `"Infinity"`, `"-Infinity"`) on Objects and
+    // Arrays. Delegate this cold case to the polymorphic key path, which runs
+    // ToPropertyKey and already distinguishes ordinary from integer-indexed
+    // exotic receivers. The old early return made a computed definition such
+    // as `{ [Infinity]: value }` unreadable through `obj[Infinity]`.
+    if index.is_nan() || index.is_infinite() {
+        return crate::object::js_object_get_index_polymorphic(raw_ptr as i64, index);
+    }
+    let idx_i32 = index as i32;
     if idx_i32 >= 0 {
         if let Some(value) = unsafe {
             crate::object::arguments_object_get_index(

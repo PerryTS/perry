@@ -580,13 +580,13 @@ pub(crate) fn class_decl_prototype_method_names(class_id: u32) -> Vec<String> {
     let mut names = Vec::new();
     if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
         if let Some(vtable) = registry.as_ref().and_then(|reg| reg.get(&class_id)) {
-            names.extend(
-                vtable
-                    .methods
-                    .keys()
-                    .filter(|name| *name != "constructor")
-                    .cloned(),
-            );
+            // The real class constructor is stored in `Class::constructor`,
+            // not in the instance-method vtable. An entry named
+            // `"constructor"` here is therefore an ordinary method, most
+            // notably `class C { ["constructor"]() {} }`. It must replace the
+            // implicit `C.prototype.constructor` data property when the
+            // reflective prototype object is materialized.
+            names.extend(vtable.methods.keys().cloned());
         }
     }
     names.sort();
@@ -594,14 +594,44 @@ pub(crate) fn class_decl_prototype_method_names(class_id: u32) -> Vec<String> {
     names
 }
 
+pub(super) fn install_class_decl_prototype_method_field(
+    proto: *mut ObjectHeader,
+    class_id: u32,
+    name: &str,
+) {
+    if proto.is_null() {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto_handle = scope.root_raw_mut_ptr(proto);
+    // Do not bind by reading the prototype object here. Its implicit
+    // `constructor` data property would shadow a computed method with that
+    // name and make the installation write the class constructor straight
+    // back. The canonical vtable value is the property value we need.
+    let method_handle =
+        scope.root_nanbox_f64(class_prototype_method_value_for_name(class_id, name));
+    let key_handle = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        name.as_ptr(),
+        name.len() as u32,
+    ));
+    let method = method_handle.get_nanbox_f64();
+    proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| {
+        key_handle.with_const_ptr::<crate::StringHeader, _>(|key| {
+            js_object_set_field_by_name(proto, key, method)
+        })
+    });
+    proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| {
+        set_builtin_property_attrs(
+            proto as usize,
+            name.to_string(),
+            PropertyAttrs::new(true, false, true),
+        )
+    });
+}
+
 fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id: u32) {
-    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
     for name in class_decl_prototype_method_names(class_id) {
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let leaked: &'static [u8] = name.as_bytes().to_vec().leak();
-        let method = js_class_method_bind(proto_value, leaked.as_ptr(), leaked.len());
-        js_object_set_field_by_name(proto, key, method);
-        set_builtin_property_attrs(proto as usize, name, PropertyAttrs::new(true, false, true));
+        install_class_decl_prototype_method_field(proto, class_id, &name);
     }
 }
 
