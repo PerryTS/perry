@@ -291,7 +291,16 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             return unsafe { rooted_property_key_get(raw, idx) };
         }
     }
-    if gc_type == crate::gc::GC_TYPE_OBJECT || gc_type == crate::gc::GC_TYPE_CLOSURE {
+    if gc_type == crate::gc::GC_TYPE_OBJECT {
+        if let Some(index) = numeric_key_u32_index(idx) {
+            let receiver = f64::from_bits(crate::value::POINTER_TAG | raw);
+            if let Some(value) = crate::array::array_subclass_fast_index_get(receiver, index) {
+                return value;
+            }
+        }
+        return unsafe { rooted_property_key_get(raw, idx) };
+    }
+    if gc_type == crate::gc::GC_TYPE_CLOSURE {
         return unsafe { rooted_property_key_get(raw, idx) };
     }
     if crate::set::is_registered_set(raw as usize) || crate::map::is_registered_map(raw as usize) {

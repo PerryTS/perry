@@ -170,8 +170,9 @@ pub(crate) use indexing::test_swap_array_index_fast_path_invalidated;
 // points, plus the Array-exotic `length` maintenance the generic OBJECT index
 // store needs for a `class X extends Array` receiver.
 pub(crate) use self::subclass::{
-    array_object_set_length, is_array_subclass_class_id, is_array_subclass_value,
-    maintain_array_exotic_length, note_array_subclass_index_write,
+    array_object_set_length, array_subclass_fast_index_get, array_subclass_fast_length,
+    is_array_subclass_class_id, is_array_subclass_value, maintain_array_exotic_length,
+    note_array_subclass_index_write,
 };
 // Issue #1572 — flatten helpers reused by `node_stream::ns_iter_flat_map`
 // so an `async function*` mapper return is driven through the iterator
