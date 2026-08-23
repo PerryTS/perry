@@ -43,7 +43,7 @@ use crate::nanbox::POINTER_MASK_I64;
 use crate::rooting::{self, Repr};
 use crate::types::{DOUBLE, I32, I64, I8};
 
-use super::{lower_expr, FnCtx};
+use super::{emit_root_nanbox_store_on_block, lower_expr, FnCtx};
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
@@ -57,6 +57,107 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             prefix,
             strict,
         } => {
+            // #8654: a statically-known class field has one canonical LLVM
+            // global shared by its defining module and every importer.
+            // `Class.field = value` already lowers through `StaticFieldSet`
+            // and updates that global, but `Class.field++` used the generic
+            // class-object side table instead. The two stores then diverged:
+            // direct reads kept seeing the initialized global while the
+            // update read `undefined` from (and wrote `NaN` to) the side
+            // table. Perform the RMW on the shared global and mirror the new
+            // value into the side table for genuinely dynamic reads.
+            let static_class_name = match object.as_ref() {
+                Expr::ClassRef(class_name) => Some(class_name),
+                // Imported class bindings are represented as an extern ref
+                // until codegen resolves their source-module metadata.
+                Expr::ExternFuncRef { name, .. } => Some(name),
+                _ => None,
+            };
+            if let Some(class_name) = static_class_name {
+                let key = (class_name.clone(), property.clone());
+                if let Some(global_name) = ctx.static_field_globals.get(&key).cloned() {
+                    let global_ref = format!("@{global_name}");
+                    let old = ctx.block().load(DOUBLE, &global_ref);
+                    let old_num = ctx.block().call(DOUBLE, "js_to_numeric", &[(DOUBLE, &old)]);
+
+                    // A postfix BigInt result remains live across the
+                    // allocating numeric step and the runtime-table mirror.
+                    // Keep it in a function-lifetime root: a temporary root
+                    // cannot be released before its final load escapes this
+                    // lowering, because `root_reload` may otherwise rederive
+                    // that load after the pooled slot has been reused.
+                    let postfix_result = if *prefix {
+                        None
+                    } else {
+                        let old_bits = ctx.block().bitcast_double_to_i64(&old_num);
+                        let top16 = ctx.block().lshr(I64, &old_bits, "48");
+                        let is_bigint =
+                            ctx.block()
+                                .icmp_eq(I64, &top16, crate::nanbox::BIGINT_TAG_TOP16_I64);
+                        let rooted_bits = ctx.block().select(
+                            crate::types::I1,
+                            &is_bigint,
+                            I64,
+                            &old_bits,
+                            crate::nanbox::TAG_UNDEFINED_I64,
+                        );
+                        let slot = ctx.func.alloca_entry(I64);
+                        ctx.func.entry_allocas_push_store(
+                            I64,
+                            crate::nanbox::TAG_UNDEFINED_I64,
+                            &slot,
+                        );
+                        ctx.block().store(I64, &rooted_bits, &slot);
+                        super::root_entry_alloca(ctx, &slot);
+                        Some((slot, is_bigint))
+                    };
+
+                    let step_arg = match op {
+                        BinaryOp::Sub => "0",
+                        _ => "1",
+                    };
+                    let new = ctx.block().call(
+                        DOUBLE,
+                        "js_numeric_step",
+                        &[(DOUBLE, &old_num), (I32, step_arg)],
+                    );
+                    emit_root_nanbox_store_on_block(ctx.block(), &new, &global_ref);
+
+                    if let Some(&class_id) = ctx.class_ids.get(class_name) {
+                        let field_idx = ctx.strings.intern(property);
+                        let field = ctx.strings.entry(field_idx);
+                        let bytes_ref = format!("@{}", field.bytes_global);
+                        let byte_len = field.byte_len.to_string();
+                        let class_id = class_id.to_string();
+                        // Reload from the registered root after the root
+                        // barrier: a moving collection may rewrite it.
+                        let mirrored = ctx.block().load(DOUBLE, &global_ref);
+                        ctx.block().call_void(
+                            "js_class_register_static_field",
+                            &[
+                                (I32, &class_id),
+                                (crate::types::PTR, &bytes_ref),
+                                (I64, &byte_len),
+                                (DOUBLE, &mirrored),
+                            ],
+                        );
+                    }
+
+                    return Ok(if let Some((slot, is_bigint)) = postfix_result {
+                        let rooted_bits = ctx.block().load(I64, &slot);
+                        let rooted_result = ctx.block().bitcast_i64_to_double(&rooted_bits);
+                        ctx.block().select(
+                            crate::types::I1,
+                            &is_bigint,
+                            DOUBLE,
+                            &rooted_result,
+                            &old_num,
+                        )
+                    } else {
+                        ctx.block().load(DOUBLE, &global_ref)
+                    });
+                }
+            }
             // Scalar replacement fast path: load → fadd/fsub 1.0 → store
             // on the field's alloca, no heap traffic.
             if let Expr::LocalGet(id) = object.as_ref() {
