@@ -9782,6 +9782,39 @@ fn scalar_method_summary_module() -> Module {
     )
 }
 
+fn scalar_field_initializer_module() -> Module {
+    let mut value_field = class_field("value", Type::Number);
+    value_field.init = Some(number(42.0));
+    let holder = class(109, "Holder", vec![value_field]);
+
+    module_with_classes_and_params(
+        "scalar_field_initializer.ts",
+        vec![holder],
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 20,
+                name: "holder".to_string(),
+                ty: Type::Named("Holder".to_string()),
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: "Holder".to_string(),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+            },
+            Stmt::Return(Some(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(local(20)),
+                property: "value".to_string(),
+            })),
+        ],
+    )
+}
+
 fn scalar_method_field_write_module() -> Module {
     let mut counter = class(111, "Counter", vec![class_field("value", Type::Number)]);
     counter.constructor = Some(Function {
@@ -13278,6 +13311,23 @@ fn scalar_replaced_simple_method_call_inlines_summary_without_dispatch() {
     assert!(
         !ir.contains("call double @perry_method_scalar_method_summary_ts__Point_sum"),
         "scalar-replaced summarized method call should inline the method body:\n{ir}"
+    );
+}
+
+#[test]
+fn scalar_replaced_class_field_initializer_uses_its_field_slot() {
+    let ir = String::from_utf8(
+        compile_module(&scalar_field_initializer_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_scalar_field_initializer_ts__probe");
+    assert!(
+        !probe_ir.contains("call double @js_class_field_add"),
+        "a scalar-replaced construction has no receiver for DefineField:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("store double 42.0"),
+        "the initializer must populate the scalar field slot:\n{probe_ir}"
     );
 }
 
