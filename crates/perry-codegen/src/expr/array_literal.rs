@@ -301,11 +301,7 @@ fn const_array_descriptor_enabled() -> bool {
 /// procedural path, so a mixed table is never half-materialized.
 fn is_const_materializable(e: &Expr) -> bool {
     match e {
-        Expr::Number(_)
-        | Expr::Integer(_)
-        | Expr::Bool(_)
-        | Expr::Null
-        | Expr::Undefined => true,
+        Expr::Number(_) | Expr::Integer(_) | Expr::Bool(_) | Expr::Null | Expr::Undefined => true,
         Expr::Array(elems) => elems.iter().all(is_const_materializable),
         _ => false,
     }

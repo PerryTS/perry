@@ -302,7 +302,13 @@ fn dump_dialect_failure(f: &FrozenFunction, e: anyhow::Error) -> anyhow::Error {
         let safe: String = f
             .name
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         let _ = std::fs::write(format!("{dir}/{safe}.ll"), &buf);
     }

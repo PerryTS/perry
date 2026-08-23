@@ -37,7 +37,12 @@ fn source() -> String {
         if i > 0 {
             rows.push(',');
         }
-        rows.push_str(&format!("[{},{},{}]", i % 128, (i * 7) % 128, (i * 13) % 128));
+        rows.push_str(&format!(
+            "[{},{},{}]",
+            i % 128,
+            (i * 7) % 128,
+            (i * 13) % 128
+        ));
     }
     // One non-numeric row so bool/null tags are exercised in the descriptor.
     rows.push_str(",[true,null,false]");
@@ -164,7 +169,11 @@ fn const_array_descriptor_fires_in_ir() {
         .env_remove("PERRY_CONST_ARRAY_DESCRIPTOR")
         .output()
         .expect("run perry compile --no-link");
-    assert!(out.status.success(), "compile failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "compile failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let ir: String = std::fs::read_dir(&ll_dir)
         .unwrap()
