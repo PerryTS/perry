@@ -77,8 +77,8 @@ The harness defines its own pass/fail/skip totals; downstream consumers
 The `effect-basic` and `ink-link-smoke` fixtures also have named CI jobs in
 `.github/workflows/test.yml`. They run on release tags, on manual dispatch with
 `run_extended_tests=true`, and on PRs with the `run-extended-tests` label. The
-Effect job opts into a currently advisory compile/run signal with
-`PERRY_EFFECT_BASIC_ADVISORY=1`; the default tier-3 sweep records it as SKIP so
-known Effect end-to-end gaps do not block unrelated package releases. The Ink
-job intentionally stops at compile/link plus symbol inspection; end-to-end Ink
-rendering remains tracked separately from the release fixture contract.
+Effect fixture compiles and runs in both the default tier-3 sweep and its named
+job. The named job remains advisory, matching the tier-3 convention, so broader
+Effect end-to-end gaps do not block unrelated changes. The Ink job intentionally
+stops at compile/link plus symbol inspection; end-to-end Ink rendering remains
+tracked separately from the release fixture contract.
