@@ -1188,6 +1188,20 @@ fn test_numeric_array_layout_length_and_delete_transitions() {
 }
 
 #[test]
+fn large_length_growth_stays_logically_sparse() {
+    let mut arr = js_array_alloc(1);
+    arr = js_array_push_f64(arr, 1.0);
+    js_array_set_length(arr, u32::MAX as f64);
+
+    assert_eq!(js_array_length(arr), u32::MAX);
+    assert!(unsafe { (*arr).capacity } <= 1_000_000);
+
+    js_array_set_length(arr, 1.0);
+    assert_eq!(js_array_length(arr), 1);
+    assert_eq!(array_spec_get(arr, 0), 1.0);
+}
+
+#[test]
 fn test_numeric_array_layout_immutable_helpers_preserve_or_downgrade() {
     let values = [10.0, 2.0, 30.0, 40.0];
     let src = js_array_from_f64(values.as_ptr(), values.len() as u32);

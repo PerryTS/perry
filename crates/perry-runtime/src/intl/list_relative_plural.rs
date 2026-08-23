@@ -342,46 +342,161 @@ fn rtf_auto_word(value: f64, unit: &str, style: &str) -> Option<&'static str> {
     }
 }
 
-/// Build en-US relative-time parts for `value` in `unit`.
-///
-/// When `numeric == "auto"`, substitutes the CLDR relative word form
-/// (`"yesterday"` / `"today"` / `"tomorrow"`, `"last/this/next <unit>"`,
-/// `"now"`, …) for the discrete integer values CLDR names; otherwise (and for
-/// every other value) renders the long numeric form (`"in 2 days"` /
-/// `"1 day ago"`). `format` and `formatToParts` share this path so they stay
-/// consistent. A word-form result is a single `"literal"` part (no unit field),
-/// matching Node / ECMA-402 FormatRelativeTimeToParts.
-///
-/// `style` is consulted only for the auto word forms (`week`/`month`/
-/// `quarter`/`year` short abbreviations); the numeric path still uses the long
-/// unit names (a pre-existing limitation of the en-US fallback formatter).
+fn intl_language(locale: &str) -> &str {
+    locale.split(['-', '_']).next().unwrap_or(locale)
+}
+
+fn polish_plural(value: f64) -> &'static str {
+    let abs = value.abs();
+    if abs.fract() != 0.0 {
+        return "other";
+    }
+    let i = abs as u64;
+    if i == 1 {
+        "one"
+    } else if matches!(i % 10, 2..=4) && !matches!(i % 100, 12..=14) {
+        "few"
+    } else {
+        "many"
+    }
+}
+
+fn polish_unit(unit: &str, style: &str, category: &str) -> &'static str {
+    if style != "long" {
+        return match (style, unit, category) {
+            ("narrow", "second", _) => "s",
+            (_, "second", _) => "sek.",
+            (_, "minute", _) => "min",
+            ("narrow", "hour", _) => "g.",
+            (_, "hour", _) => "godz.",
+            (_, "day", "one") => "dzień",
+            (_, "day", "other") => "dnia",
+            (_, "day", _) => "dni",
+            (_, "week", "one") => "tydz.",
+            (_, "week", "other") => "tyg.",
+            (_, "week", _) => "tyg.",
+            (_, "month", _) => "mies.",
+            (_, "quarter", _) => "kw.",
+            (_, "year", "one") => "rok",
+            (_, "year", "few") => "lata",
+            (_, "year", "other") => "roku",
+            (_, "year", _) => "lat",
+            _ => "",
+        };
+    }
+    match (unit, category) {
+        ("second", "one") => "sekundę",
+        ("second", "few" | "other") => "sekundy",
+        ("second", _) => "sekund",
+        ("minute", "one") => "minutę",
+        ("minute", "few" | "other") => "minuty",
+        ("minute", _) => "minut",
+        ("hour", "one") => "godzinę",
+        ("hour", "few" | "other") => "godziny",
+        ("hour", _) => "godzin",
+        ("day", "one") => "dzień",
+        ("day", "other") => "dnia",
+        ("day", _) => "dni",
+        ("week", "one") => "tydzień",
+        ("week", "few") => "tygodnie",
+        ("week", "other") => "tygodnia",
+        ("week", _) => "tygodni",
+        ("month", "one") => "miesiąc",
+        ("month", "few") => "miesiące",
+        ("month", "other") => "miesiąca",
+        ("month", _) => "miesięcy",
+        ("quarter", "one") => "kwartał",
+        ("quarter", "few") => "kwartały",
+        ("quarter", "other") => "kwartału",
+        ("quarter", _) => "kwartałów",
+        ("year", "one") => "rok",
+        ("year", "few") => "lata",
+        ("year", "other") => "roku",
+        ("year", _) => "lat",
+        _ => "",
+    }
+}
+
+fn english_unit(unit: &str, style: &str, singular: bool) -> String {
+    if style == "long" {
+        return if singular {
+            unit.to_string()
+        } else {
+            format!("{unit}s")
+        };
+    }
+    match (unit, singular) {
+        ("second", _) => "sec.".to_string(),
+        ("minute", _) => "min.".to_string(),
+        ("hour", _) => "hr.".to_string(),
+        ("day", true) => "day".to_string(),
+        ("day", false) => "days".to_string(),
+        ("week", _) => "wk.".to_string(),
+        ("month", _) => "mo.".to_string(),
+        ("quarter", true) => "qtr.".to_string(),
+        ("quarter", false) => "qtrs.".to_string(),
+        ("year", _) => "yr.".to_string(),
+        _ => unit.to_string(),
+    }
+}
+
+/// Build relative-time parts around the shared NumberFormat rendering core.
+/// This keeps digit substitution, grouping, separators, and typed number parts
+/// identical to `new Intl.NumberFormat(locale).formatToParts(value)`.
 pub(crate) fn rtf_parts(
     value: f64,
     unit: &str,
     numeric: &str,
     style: &str,
+    locale: &str,
+    numbering_system: &str,
 ) -> Vec<(&'static str, String)> {
-    if numeric == "auto" {
+    let language = intl_language(locale);
+    if language == "en" && numeric == "auto" {
         if let Some(word) = rtf_auto_word(value, unit, style) {
             return vec![("literal", word.to_string())];
         }
     }
     let abs = value.abs();
-    let num_str = format_number_parts(abs, "en-US", None, None);
-    let unit_display = if abs == 1.0 {
-        unit.to_string()
+    let mut resolved = nf_resolved_default(locale);
+    resolved.numbering_system = numbering_system.to_string();
+    if language == "pl" {
+        resolved.use_grouping = "min2".to_string();
+    }
+    let number_parts = number_parts_from_resolved(&resolved, abs);
+    let unit_display = if language == "pl" {
+        polish_unit(unit, style, polish_plural(abs)).to_string()
     } else {
-        format!("{unit}s")
+        english_unit(unit, style, abs == 1.0)
     };
     let past = value.is_sign_negative();
     let mut parts: Vec<(&'static str, String)> = Vec::new();
-    if past {
-        split_numeric_parts(&num_str, "en-US", &mut parts);
-        parts.push(("literal", format!(" {unit_display} ago")));
+    if language == "pl" {
+        if !past {
+            parts.push(("literal", "za ".to_string()));
+        }
+        parts.extend(number_parts);
+        parts.push((
+            "literal",
+            if past {
+                format!(" {unit_display} temu")
+            } else {
+                format!(" {unit_display}")
+            },
+        ));
     } else {
-        parts.push(("literal", "in ".to_string()));
-        split_numeric_parts(&num_str, "en-US", &mut parts);
-        parts.push(("literal", format!(" {unit_display}")));
+        if !past {
+            parts.push(("literal", "in ".to_string()));
+        }
+        parts.extend(number_parts);
+        parts.push((
+            "literal",
+            if past {
+                format!(" {unit_display} ago")
+            } else {
+                format!(" {unit_display}")
+            },
+        ));
     }
     parts
 }
@@ -417,6 +532,9 @@ pub(crate) fn rtf_instance_parts_and_unit(
     // being held as a raw pointer across a GC-capable call (#6960 / CodeRabbit).
     let numeric = get_string_field(obj, KEY_NUMERIC).unwrap_or_else(|| "always".to_string());
     let style = get_string_field(obj, KEY_RTF_STYLE).unwrap_or_else(|| "long".to_string());
+    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
+    let numbering_system =
+        get_string_field(obj, KEY_RTF_NUMBERING).unwrap_or_else(|| "latn".to_string());
     // ToNumber: a Symbol/BigInt value throws TypeError *before* the finite-ness
     // RangeError (format/value-symbol.js); an object's valueOf is invoked.
     let number = to_number_reject_bigint(value);
@@ -434,7 +552,10 @@ pub(crate) fn rtf_instance_parts_and_unit(
             "Value {unit_str} out of range for Intl.RelativeTimeFormat.format() unit"
         ));
     };
-    (rtf_parts(number, unit, &numeric, &style), unit)
+    (
+        rtf_parts(number, unit, &numeric, &style, &locale, &numbering_system),
+        unit,
+    )
 }
 
 pub(crate) fn rtf_instance_parts(
@@ -527,7 +648,13 @@ pub(crate) fn rtf_resolved_options_object(obj: *const ObjectHeader) -> f64 {
         "numeric",
         string_value(&get_string_field(obj, KEY_NUMERIC).unwrap_or_else(|| "always".to_string())),
     );
-    set_field(out, "numberingSystem", string_value("latn"));
+    set_field(
+        out,
+        "numberingSystem",
+        string_value(
+            &get_string_field(obj, KEY_RTF_NUMBERING).unwrap_or_else(|| "latn".to_string()),
+        ),
+    );
     js_nanbox_pointer(out as i64)
 }
 
@@ -542,6 +669,102 @@ pub(crate) extern "C" fn rtf_bound_resolved_options_thunk(closure: *const Closur
 }
 
 // ---- Intl.PluralRules ------------------------------------------------------
+
+pub(super) fn configure_plural_rules(
+    obj: *mut ObjectHeader,
+    options_handle: &crate::gc::RuntimeHandle<'_>,
+) -> *mut ObjectHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    // `? GetOptionsObject(options)`, then GetOption in the exact order asserted
+    // by constructor-option-read-order.js. Every read reloads the rooted Proxy:
+    // its getter appends to a JS array and can therefore move both arguments and
+    // the partially initialized result during GC.
+    let _ = get_options_object(options_handle.get_nanbox_f64());
+    let _ = enum_option_strict(
+        options_handle.get_nanbox_f64(),
+        "localeMatcher",
+        &["lookup", "best fit"],
+        "best fit",
+    );
+    let pr_type = enum_option_strict(
+        options_handle.get_nanbox_f64(),
+        "type",
+        &["cardinal", "ordinal"],
+        "cardinal",
+    );
+    obj_handle.with_mut_ptr(|obj| set_internal_field(obj, KEY_TYPE, string_value(&pr_type)));
+    let notation = enum_option_strict(
+        options_handle.get_nanbox_f64(),
+        "notation",
+        &["standard", "scientific", "engineering", "compact"],
+        "standard",
+    );
+    let compact_display = enum_option_strict(
+        options_handle.get_nanbox_f64(),
+        "compactDisplay",
+        &["short", "long"],
+        "short",
+    );
+    obj_handle
+        .with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_NOTATION, string_value(&notation)));
+    if notation == "compact" {
+        obj_handle.with_mut_ptr(|obj| {
+            set_internal_field(obj, KEY_PR_COMPACT_DISPLAY, string_value(&compact_display))
+        });
+    }
+    let min_int =
+        get_option_number(options_handle.get_nanbox_f64(), "minimumIntegerDigits").unwrap_or(1.0);
+    obj_handle.with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_MIN_INT, min_int));
+    let min_frac_read = get_option_number(options_handle.get_nanbox_f64(), "minimumFractionDigits");
+    let max_frac_read = get_option_number(options_handle.get_nanbox_f64(), "maximumFractionDigits");
+    let min_sig = get_option_number(options_handle.get_nanbox_f64(), "minimumSignificantDigits");
+    let max_sig = get_option_number(options_handle.get_nanbox_f64(), "maximumSignificantDigits");
+    let _ = get_option_value(options_handle.get_nanbox_f64(), "roundingIncrement");
+    let _ = get_option_value(options_handle.get_nanbox_f64(), "roundingMode");
+    let _ = get_option_value(options_handle.get_nanbox_f64(), "roundingPriority");
+    let _ = get_option_value(options_handle.get_nanbox_f64(), "trailingZeroDisplay");
+    if min_sig.is_some() || max_sig.is_some() {
+        obj_handle.with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_USE_SIG, bool_value(true)));
+        obj_handle
+            .with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_MIN_SIG, min_sig.unwrap_or(1.0)));
+        obj_handle
+            .with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_MAX_SIG, max_sig.unwrap_or(21.0)));
+    } else {
+        obj_handle.with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_USE_SIG, bool_value(false)));
+        let min_frac = min_frac_read.unwrap_or(0.0);
+        let max_frac = max_frac_read.unwrap_or_else(|| min_frac.max(3.0));
+        obj_handle.with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_MIN_FRAC, min_frac));
+        obj_handle.with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_MAX_FRAC, max_frac));
+    }
+    obj_handle.with_mut_ptr(|obj| {
+        install_bound_instance_function(
+            obj,
+            "select",
+            plural_rules_bound_select_thunk as *const u8,
+            1,
+        )
+    });
+    obj_handle.with_mut_ptr(|obj| {
+        install_function(
+            obj,
+            "selectRange",
+            plural_rules_select_range_thunk as *const u8,
+            2,
+            2,
+            false,
+        )
+    });
+    obj_handle.with_mut_ptr(|obj| {
+        install_bound_instance_function(
+            obj,
+            "resolvedOptions",
+            plural_rules_bound_resolved_options_thunk as *const u8,
+            0,
+        )
+    });
+    obj_handle.across_mut::<ObjectHeader, _>(|| ()).1
+}
 
 /// en plural-category selection. Cardinal: `i == 1 && v == 0` → "one". Ordinal
 /// (UTS #35 en ordinal rules): 1st→"one", 2nd→"two", 3rd→"few", else "other".
@@ -570,17 +793,44 @@ pub(crate) fn plural_select_en(n: f64, is_ordinal: bool) -> &'static str {
     }
 }
 
-pub(crate) fn plural_categories(is_ordinal: bool) -> &'static [&'static str] {
+pub(crate) fn plural_categories(locale: &str, is_ordinal: bool) -> &'static [&'static str] {
     if is_ordinal {
-        &["one", "two", "few", "other"]
-    } else {
-        &["one", "other"]
+        return if intl_language(locale) == "en" {
+            &["one", "two", "few", "other"]
+        } else {
+            &["other"]
+        };
+    }
+    match intl_language(locale) {
+        "ar" => &["zero", "one", "two", "few", "many", "other"],
+        "fa" | "en" => &["one", "other"],
+        "fr" => &["one", "many", "other"],
+        "gv" => &["one", "two", "few", "many", "other"],
+        "ko" => &["other"],
+        "sl" => &["one", "two", "few", "other"],
+        _ => &["one", "other"],
     }
 }
 
 pub(crate) fn plural_rules_select(obj: *const ObjectHeader, value: f64) -> f64 {
     let n = JSValue::from_bits(value.to_bits()).to_number();
     let is_ordinal = get_string_field(obj, KEY_TYPE).as_deref() == Some("ordinal");
+    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
+    if intl_language(&locale) == "fr" && !is_ordinal && n.is_finite() {
+        let abs = n.abs();
+        let notation =
+            get_string_field(obj, KEY_PR_NOTATION).unwrap_or_else(|| "standard".to_string());
+        let category = if abs < 2.0 {
+            "one"
+        } else if (notation == "compact" && abs >= 1_000_000.0)
+            || (abs.fract() == 0.0 && abs != 0.0 && abs % 1_000_000.0 == 0.0)
+        {
+            "many"
+        } else {
+            "other"
+        };
+        return string_value(category);
+    }
     string_value(plural_select_en(n, is_ordinal))
 }
 
@@ -606,15 +856,6 @@ pub(crate) extern "C" fn plural_rules_select_range_thunk(
     end: f64,
 ) -> f64 {
     let _obj = this_intl_object("selectRange", KIND_PLURAL_RULES);
-    plural_select_range(start, end)
-}
-
-pub(crate) extern "C" fn plural_rules_bound_select_range_thunk(
-    closure: *const ClosureHeader,
-    start: f64,
-    end: f64,
-) -> f64 {
-    let _obj = captured_intl_object(closure, "selectRange", KIND_PLURAL_RULES);
     plural_select_range(start, end)
 }
 
@@ -693,7 +934,8 @@ pub(crate) fn plural_rules_resolved_options_object(obj: *const ObjectHeader) -> 
         );
     }
     let mut categories = js_array_alloc(0);
-    for cat in plural_categories(is_ordinal) {
+    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
+    for cat in plural_categories(&locale, is_ordinal) {
         categories = js_array_push_f64(categories, string_value(cat));
     }
     set_field(

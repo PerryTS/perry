@@ -9,7 +9,24 @@
 
 use super::ParsedLocale;
 
+#[cfg(feature = "intl-locale")]
+fn transform_with_icu(p: &mut ParsedLocale, maximize: bool) {
+    let Ok(mut locale) = super::full_string(p).parse::<icu_locale::Locale>() else {
+        return;
+    };
+    let expander = icu_locale::LocaleExpander::new_extended();
+    if maximize {
+        expander.maximize(&mut locale.id);
+    } else {
+        expander.minimize(&mut locale.id);
+    }
+    if let Some(parsed) = super::parse_language_tag(&locale.to_string()) {
+        *p = parsed;
+    }
+}
+
 /// `language -> (script, region)` — the maximal expansion of a bare language.
+#[cfg(not(feature = "intl-locale"))]
 const LANG: &[(&str, &str, &str)] = &[
     ("en", "Latn", "US"),
     ("es", "Latn", "ES"),
@@ -97,6 +114,7 @@ const LANG: &[(&str, &str, &str)] = &[
 
 /// `(language, region) -> script` overrides where the region disambiguates the
 /// script (e.g. `zh-TW` is `Hant`, not the bare-`zh` default `Hans`).
+#[cfg(not(feature = "intl-locale"))]
 const LANG_REGION: &[(&str, &str, &str)] = &[
     ("zh", "TW", "Hant"),
     ("zh", "HK", "Hant"),
@@ -109,6 +127,7 @@ const LANG_REGION: &[(&str, &str, &str)] = &[
 
 /// `script -> language` — the most likely language for a script, used to fill a
 /// `und`-language tag during maximization.
+#[cfg(not(feature = "intl-locale"))]
 const SCRIPT_LANG: &[(&str, &str)] = &[
     ("Latn", "en"),
     ("Cyrl", "ru"),
@@ -128,12 +147,14 @@ const SCRIPT_LANG: &[(&str, &str)] = &[
     ("Beng", "bn"),
 ];
 
+#[cfg(not(feature = "intl-locale"))]
 fn lang_defaults(lang: &str) -> Option<(&'static str, &'static str)> {
     LANG.iter()
         .find(|(l, _, _)| *l == lang)
         .map(|(_, s, r)| (*s, *r))
 }
 
+#[cfg(not(feature = "intl-locale"))]
 fn script_for_region(lang: &str, region: &str) -> Option<&'static str> {
     LANG_REGION
         .iter()
@@ -141,6 +162,7 @@ fn script_for_region(lang: &str, region: &str) -> Option<&'static str> {
         .map(|(_, _, s)| *s)
 }
 
+#[cfg(not(feature = "intl-locale"))]
 fn lang_for_script(script: &str) -> Option<&'static str> {
     SCRIPT_LANG
         .iter()
@@ -150,6 +172,7 @@ fn lang_for_script(script: &str) -> Option<&'static str> {
 
 /// Fully expand `(language, script, region)`, filling missing script/region from
 /// the table. Returns the (possibly unchanged) maximal triple.
+#[cfg(not(feature = "intl-locale"))]
 fn maximize_triple(
     language: &str,
     script: Option<String>,
@@ -189,41 +212,58 @@ fn maximize_triple(
 
 /// `Intl.Locale.prototype.maximize`: add the most likely script and region.
 pub(super) fn maximize(p: &mut ParsedLocale) {
-    let (lang, script, region) = maximize_triple(&p.language, p.script.clone(), p.region.clone());
-    p.language = lang;
-    p.script = script;
-    p.region = region;
+    #[cfg(feature = "intl-locale")]
+    {
+        transform_with_icu(p, true);
+        return;
+    }
+    #[cfg(not(feature = "intl-locale"))]
+    {
+        let (lang, script, region) =
+            maximize_triple(&p.language, p.script.clone(), p.region.clone());
+        p.language = lang;
+        p.script = script;
+        p.region = region;
+    }
 }
 
 /// `Intl.Locale.prototype.minimize`: remove script/region that the
 /// likely-subtags expansion would re-add. Chooses the shortest base subtags
 /// whose maximization round-trips to the same maximal triple.
 pub(super) fn minimize(p: &mut ParsedLocale) {
-    let max = maximize_triple(&p.language, p.script.clone(), p.region.clone());
-    // Minimization operates on the fully-resolved tag, so the result language is
-    // always the maximal language (e.g. `und-Latn` minimizes to `en`).
-    let lang = max.0.clone();
-    p.language = lang.clone();
+    #[cfg(feature = "intl-locale")]
+    {
+        transform_with_icu(p, false);
+        return;
+    }
+    #[cfg(not(feature = "intl-locale"))]
+    {
+        let max = maximize_triple(&p.language, p.script.clone(), p.region.clone());
+        // Minimization operates on the fully-resolved tag, so the result language is
+        // always the maximal language (e.g. `und-Latn` minimizes to `en`).
+        let lang = max.0.clone();
+        p.language = lang.clone();
 
-    // 1. language alone.
-    if maximize_triple(&lang, None, None) == max {
-        p.script = None;
-        p.region = None;
-        return;
+        // 1. language alone.
+        if maximize_triple(&lang, None, None) == max {
+            p.script = None;
+            p.region = None;
+            return;
+        }
+        // 2. language + region.
+        if max.2.is_some() && maximize_triple(&lang, None, max.2.clone()) == max {
+            p.script = None;
+            p.region = max.2.clone();
+            return;
+        }
+        // 3. language + script.
+        if max.1.is_some() && maximize_triple(&lang, max.1.clone(), None) == max {
+            p.script = max.1.clone();
+            p.region = None;
+            return;
+        }
+        // 4. keep the full maximal triple.
+        p.script = max.1;
+        p.region = max.2;
     }
-    // 2. language + region.
-    if max.2.is_some() && maximize_triple(&lang, None, max.2.clone()) == max {
-        p.script = None;
-        p.region = max.2.clone();
-        return;
-    }
-    // 3. language + script.
-    if max.1.is_some() && maximize_triple(&lang, max.1.clone(), None) == max {
-        p.script = max.1.clone();
-        p.region = None;
-        return;
-    }
-    // 4. keep the full maximal triple.
-    p.script = max.1;
-    p.region = max.2;
 }

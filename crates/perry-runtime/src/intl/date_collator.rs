@@ -1603,20 +1603,161 @@ fn collation_normalize(s: &str) -> String {
     s.to_string()
 }
 
-pub(crate) fn compare_strings(locale: &str, left: &str, right: &str) -> f64 {
-    let left = collation_normalize(left);
-    let right = collation_normalize(right);
-    let (left, right) = (left.as_str(), right.as_str());
-    let ordering = if locale == "sv" || locale.starts_with("sv-") {
-        swedish_collation_key(left).cmp(&swedish_collation_key(right))
-    } else {
-        left.cmp(right)
-    };
-    match ordering {
-        std::cmp::Ordering::Less => -1.0,
-        std::cmp::Ordering::Equal => 0.0,
-        std::cmp::Ordering::Greater => 1.0,
+fn locale_base_name(locale: &str) -> String {
+    locale
+        .split('-')
+        .take_while(|part| part.len() != 1)
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+fn supports_collation(locale: &str, collation: &str) -> bool {
+    collation == "eor" || (collation == "phonebk" && (locale == "de" || locale.starts_with("de-")))
+}
+
+/// Resolve Collator's relevant Unicode extension keys. Unsupported/irrelevant
+/// keys and attributes are removed from the resolved locale; an explicit
+/// supported option overrides the extension, while an unsupported option does
+/// not displace a supported extension value.
+pub(crate) fn resolve_collator_locale(
+    requested: &str,
+    collation_option: Option<String>,
+    numeric_option: Option<bool>,
+    case_first_option: Option<String>,
+) -> (String, String, bool, String) {
+    let base = locale_base_name(requested);
+    let ext_collation =
+        unicode_extension_keyword(requested, "co").filter(|value| supports_collation(&base, value));
+    let effective_collation = collation_option
+        .filter(|value| supports_collation(&base, value))
+        .or_else(|| ext_collation.clone())
+        .unwrap_or_else(|| "default".to_string());
+
+    let ext_numeric =
+        unicode_extension_keyword(requested, "kn").and_then(|value| match value.as_str() {
+            "" | "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        });
+    let effective_numeric = numeric_option.or(ext_numeric).unwrap_or(false);
+    let ext_case_first = unicode_extension_keyword(requested, "kf")
+        .filter(|value| ["upper", "lower", "false"].contains(&value.as_str()));
+    let effective_case_first = case_first_option
+        .clone()
+        .or_else(|| ext_case_first.clone())
+        .unwrap_or_else(|| "false".to_string());
+
+    let mut keywords: Vec<(&str, String)> = Vec::new();
+    if ext_collation.as_deref() == Some(effective_collation.as_str()) {
+        keywords.push(("co", effective_collation.clone()));
     }
+    if ext_case_first.as_deref() == Some(effective_case_first.as_str()) {
+        keywords.push(("kf", effective_case_first.clone()));
+    }
+    if ext_numeric == Some(effective_numeric) {
+        keywords.push((
+            "kn",
+            if effective_numeric { "" } else { "false" }.to_string(),
+        ));
+    }
+    let resolved_locale = if keywords.is_empty() {
+        base
+    } else {
+        let mut locale = format!("{base}-u");
+        for (key, value) in keywords {
+            locale.push('-');
+            locale.push_str(key);
+            if !value.is_empty() {
+                locale.push('-');
+                locale.push_str(&value);
+            }
+        }
+        locale
+    };
+    (
+        resolved_locale,
+        effective_collation,
+        effective_numeric,
+        effective_case_first,
+    )
+}
+
+#[cfg(feature = "string-normalize")]
+fn base_collation_key(s: &str, preserve_case: bool) -> String {
+    use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
+    s.nfd()
+        .filter(|ch| !is_combining_mark(*ch))
+        .flat_map(|ch| {
+            if preserve_case {
+                ch.to_string().chars().collect::<Vec<_>>()
+            } else {
+                ch.to_lowercase().collect::<Vec<_>>()
+            }
+        })
+        .collect()
+}
+
+#[cfg(not(feature = "string-normalize"))]
+fn base_collation_key(s: &str, preserve_case: bool) -> String {
+    if preserve_case {
+        s.to_string()
+    } else {
+        s.to_lowercase()
+    }
+}
+
+fn german_phonebook_key(s: &str) -> String {
+    let mut out = String::new();
+    for ch in collation_normalize(s).chars() {
+        match ch.to_lowercase().next().unwrap_or(ch) {
+            'ä' => out.push_str("ae"),
+            'ö' => out.push_str("oe"),
+            'ü' => out.push_str("ue"),
+            'ß' => out.push_str("ss"),
+            other => out.push_str(&base_collation_key(&other.to_string(), false)),
+        }
+    }
+    out
+}
+
+fn collator_compare_order(obj: *const ObjectHeader, left: &str, right: &str) -> std::cmp::Ordering {
+    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
+    let usage = get_string_field(obj, KEY_COL_USAGE).unwrap_or_else(|| "sort".to_string());
+    let collation =
+        get_string_field(obj, KEY_COL_COLLATION).unwrap_or_else(|| "default".to_string());
+    let sensitivity =
+        get_string_field(obj, KEY_COL_SENSITIVITY).unwrap_or_else(|| "variant".to_string());
+    if locale == "sv" || locale.starts_with("sv-") {
+        return swedish_collation_key(left).cmp(&swedish_collation_key(right));
+    }
+    let phonebook = collation == "phonebk"
+        || (usage == "search" && (locale == "de" || locale.starts_with("de-")));
+    let primary_left = if phonebook {
+        german_phonebook_key(left)
+    } else {
+        base_collation_key(left, false)
+    };
+    let primary_right = if phonebook {
+        german_phonebook_key(right)
+    } else {
+        base_collation_key(right, false)
+    };
+    let primary = primary_left.cmp(&primary_right);
+    if primary != std::cmp::Ordering::Equal || sensitivity == "base" {
+        return primary;
+    }
+    let normalized_left = collation_normalize(left);
+    let normalized_right = collation_normalize(right);
+    if sensitivity == "accent" {
+        return normalized_left
+            .to_lowercase()
+            .cmp(&normalized_right.to_lowercase());
+    }
+    if sensitivity == "case" {
+        return base_collation_key(&normalized_left, true)
+            .cmp(&base_collation_key(&normalized_right, true));
+    }
+    normalized_left.cmp(&normalized_right)
 }
 
 /// `GetOption(options, key, "string", allowed, undefined)` for a Collator string
@@ -1717,7 +1858,12 @@ pub(crate) fn collator_compare_object(obj: *const ObjectHeader, left: f64, right
         l = strip_ignorable_punctuation(&l);
         r = strip_ignorable_punctuation(&r);
     }
-    compare_strings(&locale, &l, &r)
+    let _ = locale;
+    match collator_compare_order(obj, &l, &r) {
+        std::cmp::Ordering::Less => -1.0,
+        std::cmp::Ordering::Equal => 0.0,
+        std::cmp::Ordering::Greater => 1.0,
+    }
 }
 
 pub(crate) extern "C" fn collator_resolved_options_thunk(_closure: *const ClosureHeader) -> f64 {

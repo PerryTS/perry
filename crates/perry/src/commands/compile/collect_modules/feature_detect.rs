@@ -448,11 +448,13 @@ pub(super) fn detect_optional_feature_usage(
         {
             ctx.uses_proc_ipc = true;
         }
-        // `Intl.getCanonicalLocales(...)` / `Intl.*.supportedLocalesOf(...)` gate
-        // `perry-runtime/intl-locale` (`icu_locale_core` BCP-47 canonicalization).
-        // Both lower with the method name as a `property` token.
+        // `Intl.Locale`, `Intl.getCanonicalLocales(...)`, and
+        // `Intl.*.supportedLocalesOf(...)` gate `perry-runtime/intl-locale`
+        // (ICU4X BCP-47 canonicalization + likely-subtag expansion). These lower
+        // with the constructor/method name as a `property` token.
         if hir_debug.contains("property: \"getCanonicalLocales\"")
             || hir_debug.contains("property: \"supportedLocalesOf\"")
+            || hir_debug.contains("property: \"Locale\"")
         {
             ctx.uses_intl_locale = true;
         }

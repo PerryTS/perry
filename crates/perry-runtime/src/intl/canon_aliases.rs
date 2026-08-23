@@ -11,10 +11,11 @@
 //! unicode-ext-canonicalize-*`).
 //!
 //! We keep this to the curated, code-unit-`|uvalue|`-shaped deprecated type
-//! aliases that test262 exercises for the `ca` / `ks` / `ms` / `rg` / `sd` /
-//! `tz` keys. Only the exact single-value replacements are represented; the
-//! multi-territory / likely-subtag-dependent territoryAlias logic is out of
-//! scope here (it lives in the language/region path, not the `-u-` extension).
+//! aliases that test262 exercises for the transformed `m0` key and the Unicode
+//! `ca` / `ks` / `ms` / `rg` / `sd` / `tz` keys. Only the exact single-value
+//! replacements are represented; the multi-territory / likely-subtag-dependent
+//! territoryAlias logic is out of scope here (it lives in the language/region
+//! path, not the extension type-value path).
 
 /// `(key, deprecated_value, canonical_value)` for the Unicode-extension type
 /// aliases test262 canonicalizes. `deprecated_value` is the full `-`-joined
@@ -60,6 +61,64 @@ fn u_ext_type_alias(key: &str, value: &str) -> Option<&'static str> {
     })
 }
 
+/// Rewrite the deprecated transformed-extension `m0-names` type. CLDR maps it
+/// to `m0-prprname`, but ICU4X 2.2 leaves it unchanged. A transformed key is an
+/// ASCII letter followed by a digit; that distinction prevents a two-letter
+/// region in the optional `tlang` prefix from being mistaken for a field key.
+fn canonicalize_transformed_extension_types(tag: &str) -> String {
+    let subtags: Vec<&str> = tag.split('-').collect();
+    let Some(t_start) = subtags.iter().position(|s| *s == "t") else {
+        return tag.to_string();
+    };
+    if subtags[..t_start].contains(&"x") {
+        return tag.to_string();
+    }
+    let t_end = subtags
+        .iter()
+        .enumerate()
+        .skip(t_start + 1)
+        .find_map(|(i, s)| (s.len() == 1).then_some(i))
+        .unwrap_or(subtags.len());
+    let is_tkey = |s: &str| {
+        let bytes = s.as_bytes();
+        bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1].is_ascii_digit()
+    };
+    let mut out: Vec<String> = Vec::with_capacity(subtags.len());
+    out.extend(subtags[..=t_start].iter().map(|s| s.to_string()));
+    let mut changed = false;
+    let mut i = t_start + 1;
+    while i < t_end {
+        if !is_tkey(subtags[i]) {
+            out.push(subtags[i].to_string());
+            i += 1;
+            continue;
+        }
+        let key = subtags[i];
+        out.push(key.to_string());
+        let value_start = i + 1;
+        let value_end = (value_start..t_end)
+            .find(|&j| is_tkey(subtags[j]))
+            .unwrap_or(t_end);
+        if key == "m0" && subtags[value_start..value_end] == ["names"] {
+            out.push("prprname".to_string());
+            changed = true;
+        } else {
+            out.extend(
+                subtags[value_start..value_end]
+                    .iter()
+                    .map(|s| s.to_string()),
+            );
+        }
+        i = value_end;
+    }
+    out.extend(subtags[t_end..].iter().map(|s| s.to_string()));
+    if changed {
+        out.join("-")
+    } else {
+        tag.to_string()
+    }
+}
+
 /// Rewrite deprecated CLDR type values inside the Unicode (`-u-`) extension of
 /// an already-`normalize`d BCP-47 tag. Returns the tag unchanged when it has no
 /// `-u-` extension or no aliased value.
@@ -70,6 +129,8 @@ fn u_ext_type_alias(key: &str, value: &str) -> Option<&'static str> {
 /// run that follows it (its `-`-joined 3..8-char subtags) is what we match and
 /// replace.
 pub(super) fn canonicalize_unicode_extension_types(tag: &str) -> String {
+    let transformed = canonicalize_transformed_extension_types(tag);
+    let tag = transformed.as_str();
     let subtags: Vec<&str> = tag.split('-').collect();
     // Find the `u` singleton (not inside a private-use `x` sequence).
     let mut u_start = None;
@@ -130,5 +191,22 @@ pub(super) fn canonicalize_unicode_extension_types(tag: &str) -> String {
         out.join("-")
     } else {
         tag.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonicalize_unicode_extension_types;
+
+    #[test]
+    fn canonicalizes_transformed_type_without_mistaking_region_for_key() {
+        assert_eq!(
+            canonicalize_unicode_extension_types("und-Latn-t-und-hani-m0-names"),
+            "und-Latn-t-und-hani-m0-prprname"
+        );
+        assert_eq!(
+            canonicalize_unicode_extension_types("en-t-en-US-m0-names"),
+            "en-t-en-US-m0-prprname"
+        );
     }
 }

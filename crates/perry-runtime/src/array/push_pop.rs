@@ -974,7 +974,36 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             // index 0 cannot remain observable after its getter truncates the
             // array to zero. If a non-configurable index blocks deletion, keep
             // that index and restore length to index + 1 per §10.4.2.4.
-            for i in (n..cur).rev() {
+            //
+            // A large logical extension does not allocate its holes (see the
+            // growth branch below), so do not walk those holes when the length
+            // is restored. Far materialized indices live in the named-property
+            // table. Delete them first, in the same descending order required
+            // by ArraySetLength, then visit the allocated dense prefix.
+            let capacity = (*arr).capacity;
+            if cur > capacity {
+                let mut sparse_indices: Vec<u32> = array_named_property_names(arr, false)
+                    .into_iter()
+                    .filter_map(|name| {
+                        let index = name.parse::<u32>().ok()?;
+                        (index != u32::MAX
+                            && index >= n.max(capacity)
+                            && index < cur
+                            && index.to_string() == name)
+                            .then_some(index)
+                    })
+                    .collect();
+                sparse_indices.sort_unstable_by(|a, b| b.cmp(a));
+                sparse_indices.dedup();
+                for i in sparse_indices {
+                    if js_array_delete(arr, i) == 0 {
+                        (*arr).length = i + 1;
+                        refresh_array_numeric_layout(arr);
+                        return;
+                    }
+                }
+            }
+            for i in (n..cur.min(capacity)).rev() {
                 if js_array_delete(arr, i) == 0 {
                     (*arr).length = i + 1;
                     refresh_array_numeric_layout(arr);
@@ -984,6 +1013,15 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             (*arr).length = n;
             refresh_array_numeric_layout(arr);
         } else if n > cur {
+            // Growing `length` creates holes conceptually; it must not allocate
+            // a dense backing store proportional to the requested length.
+            // Test262's descriptor probe writes 2^32-1 here. Keep large sparse
+            // extensions logical and let later indexed writes choose storage.
+            if n > (*arr).capacity && n > 1_000_000 {
+                (*arr).length = n;
+                refresh_array_numeric_layout(arr);
+                return;
+            }
             // Extend: pad with TAG_HOLE. Past-capacity extensions go
             // through `js_array_grow` which installs a forwarding pointer at
             // the OLD location (issue #233 mechanism), so the caller's stale

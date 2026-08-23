@@ -189,7 +189,43 @@ pub(crate) fn build_segments(granularity: &str, value: f64) -> f64 {
         1,
         false,
     );
+    install_segments_iterator(segments);
     js_nanbox_pointer(arr as i64)
+}
+
+fn install_segments_iterator(segments: *mut ObjectHeader) {
+    let symbol = crate::symbol::well_known_symbol("iterator");
+    let closure = crate::closure::js_closure_alloc(segments_iterator_thunk as *const u8, 0);
+    if symbol.is_null() || closure.is_null() {
+        return;
+    }
+    crate::closure::js_register_closure_arity(segments_iterator_thunk as *const u8, 0);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure = scope.root_raw_mut_ptr(closure);
+    closure.with_mut_ptr::<ClosureHeader, _>(|ptr| {
+        crate::object::set_bound_native_closure_name(ptr, "[Symbol.iterator]")
+    });
+    closure.with_mut_ptr::<ClosureHeader, _>(|ptr| {
+        crate::object::set_builtin_closure_length(ptr as usize, 0)
+    });
+    let value = closure.with_mut_ptr::<ClosureHeader, _>(|ptr| js_nanbox_pointer(ptr as i64));
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            js_nanbox_pointer(segments as i64),
+            f64::from_bits(JSValue::pointer(symbol as *const u8).bits()),
+            value,
+        );
+    }
+    crate::symbol::set_symbol_property_attrs(
+        segments as usize,
+        symbol as usize,
+        PropertyAttrs::new(true, false, true),
+    );
+}
+
+extern "C" fn segments_iterator_thunk(_closure: *const ClosureHeader) -> f64 {
+    let segments = segments_from_this();
+    crate::array::array_values_iter(js_nanbox_pointer(segments as i64))
 }
 
 fn segments_from_this() -> *const crate::ArrayHeader {

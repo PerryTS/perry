@@ -317,27 +317,34 @@ fn base_name(p: &ParsedLocale) -> String {
 
 fn full_string(p: &ParsedLocale) -> String {
     let mut s = base_name(p);
+    let mut extensions = p.other_ext.clone();
     if !p.attributes.is_empty() || !p.keywords.is_empty() {
-        s.push_str("-u");
+        let mut unicode = String::new();
         let mut attrs = p.attributes.clone();
         attrs.sort();
         for a in attrs {
-            s.push('-');
-            s.push_str(&a);
+            if !unicode.is_empty() {
+                unicode.push('-');
+            }
+            unicode.push_str(&a);
         }
         for (k, v) in &p.keywords {
-            s.push('-');
-            s.push_str(k);
+            if !unicode.is_empty() {
+                unicode.push('-');
+            }
+            unicode.push_str(k);
             if !v.is_empty() {
-                s.push('-');
-                s.push_str(v);
+                unicode.push('-');
+                unicode.push_str(v);
             }
         }
+        extensions.push(('u', unicode));
     }
-    // Other extensions, sorted by singleton with private-use (`x`) last.
-    let mut others = p.other_ext.clone();
-    others.sort_by_key(|(c, _)| if *c == 'x' { '{' } else { *c });
-    for (c, content) in others {
+    // All extensions are sorted by singleton with private-use (`x`) last. The
+    // Unicode extension is not privileged: `en-a-bar-u-baz-x-private` keeps
+    // `a` before `u` (Locale/constructor-tag.js).
+    extensions.sort_by_key(|(c, _)| if *c == 'x' { '{' } else { *c });
+    for (c, content) in extensions {
         s.push('-');
         s.push(c);
         s.push('-');
@@ -669,7 +676,11 @@ pub(super) extern "C" fn locale_constructor_thunk(closure: *const ClosureHeader,
         throw_type_error("Intl.Locale: tag must be a String or an Intl.Locale instance");
     };
 
-    let Some(mut parsed) = parse_language_tag(&tag) else {
+    #[cfg(feature = "intl-locale")]
+    let canonical_tag = super::canonicalize_language_tag(&tag);
+    #[cfg(not(feature = "intl-locale"))]
+    let canonical_tag = Some(tag.clone());
+    let Some(mut parsed) = canonical_tag.as_deref().and_then(parse_language_tag) else {
         throw_range_error(&format!("Incorrect locale information provided: {tag}"));
     };
     canonicalize_aliases(&mut parsed);
@@ -682,6 +693,18 @@ pub(super) extern "C" fn locale_constructor_thunk(closure: *const ClosureHeader,
         }
     }
     apply_options(&mut parsed, options);
+    // ApplyOptionsToTag canonicalizes both before and after the overrides. The
+    // second pass is observable for numeric region aliases (`554` -> `NZ`) and
+    // for replacements whose result depends on an overridden base subtag.
+    #[cfg(feature = "intl-locale")]
+    {
+        let adjusted = full_string(&parsed);
+        let canonical = super::canonicalize_language_tag(&adjusted)
+            .unwrap_or_else(|| throw_range_error("Incorrect locale information provided"));
+        parsed = parse_language_tag(&canonical)
+            .unwrap_or_else(|| throw_range_error("Incorrect locale information provided"));
+        canonicalize_aliases(&mut parsed);
+    }
 
     let proto = super::constructor_target_prototype(closure);
     make_locale_instance(proto.to_bits(), &parsed)
