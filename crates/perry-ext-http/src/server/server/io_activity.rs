@@ -78,8 +78,7 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for ReadActivity<S> {
                     Poll::Pending
                 }
                 Poll::Ready(Ok(_)) => {
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
+                    Poll::Ready(Err(std::io::Error::from(std::io::ErrorKind::WriteZero)))
                 }
                 Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
                 Poll::Pending => Poll::Pending,
@@ -164,9 +163,21 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for ReadActivity<S> {
         cx: &mut std::task::Context<'_>,
     ) -> Poll<std::io::Result<()>> {
         let this = self.get_mut();
+        if !this.response_head.is_empty() {
+            let mut buffered_head = std::mem::take(&mut this.response_head);
+            if buffered_head.starts_with(b"HTTP/1.0 ") {
+                buffered_head[7] = b'1';
+            }
+            this.pending_write.extend_from_slice(&buffered_head);
+            this.response_version_rewrite_offset = None;
+            this.rewrite_chunked_header.store(false, Ordering::Release);
+        }
         while !this.pending_write.is_empty() {
             match Pin::new(&mut this.inner).poll_write(cx, &this.pending_write) {
-                Poll::Ready(Ok(0)) | Poll::Pending => return Poll::Pending,
+                Poll::Ready(Ok(0)) => {
+                    return Poll::Ready(Err(std::io::Error::from(std::io::ErrorKind::WriteZero)))
+                }
+                Poll::Pending => return Poll::Pending,
                 Poll::Ready(Ok(written)) => {
                     this.pending_write.drain(..written);
                 }
@@ -177,10 +188,13 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for ReadActivity<S> {
     }
 
     fn poll_shutdown(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+        match self.as_mut().poll_flush(cx) {
+            Poll::Ready(Ok(())) => Pin::new(&mut self.get_mut().inner).poll_shutdown(cx),
+            other => other,
+        }
     }
 }
 
@@ -212,5 +226,61 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\nabc"
         );
         assert!(!rewrite.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn shutdown_flushes_an_incomplete_buffered_response_head() {
+        let (stream, mut peer) = tokio::io::duplex(4096);
+        let rewrite = Arc::new(AtomicBool::new(true));
+        let mut writer =
+            ReadActivity::new(stream, Arc::new(AtomicBool::new(false)), rewrite.clone());
+        writer
+            .write_all(b"HTTP/1.0 200 OK\r\nContent-Len")
+            .await
+            .unwrap();
+        writer.shutdown().await.unwrap();
+
+        let mut bytes = Vec::new();
+        peer.read_to_end(&mut bytes).await.unwrap();
+        assert_eq!(bytes, b"HTTP/1.1 200 OK\r\nContent-Len");
+        assert!(!rewrite.load(Ordering::Acquire));
+    }
+
+    struct ZeroWriter;
+
+    impl AsyncWrite for ZeroWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(0))
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn flush_reports_write_zero_instead_of_hanging() {
+        let rewrite = Arc::new(AtomicBool::new(true));
+        let mut writer = ReadActivity::new(ZeroWriter, Arc::new(AtomicBool::new(false)), rewrite);
+        writer
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Len")
+            .await
+            .unwrap();
+        let error = writer.flush().await.expect_err("zero write must fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::WriteZero);
     }
 }

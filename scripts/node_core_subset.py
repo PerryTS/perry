@@ -155,16 +155,34 @@ _PID_PREFIX = re.compile(r"^\(node:\d+\)")
 # while removing the wall-clock value from the differential signal.
 _HTTP_DATE = re.compile(
     r"(?<=Date: )(?P<value>(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), "
-    r"\d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
-    r"\d{4} \d{2}:\d{2}:\d{2} GMT)"
+    r"(?P<day>\d{2}) (?P<month>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+    r"(?P<year>\d{4}) (?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2}) GMT)"
 )
+
+_HTTP_MONTHS = {
+    month: index
+    for index, month in enumerate(
+        ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"),
+        start=1,
+    )
+}
 
 
 def _normalize_http_date(match: re.Match[str]) -> str:
     value = match.group("value")
     try:
-        dt.datetime.strptime(value, "%a, %d %b %Y %H:%M:%S GMT")
-    except ValueError:
+        dt.date(
+            int(match.group("year")),
+            _HTTP_MONTHS[match.group("month")],
+            int(match.group("day")),
+        )
+    except (KeyError, ValueError):
+        return value
+    if not (
+        0 <= int(match.group("hour")) <= 23
+        and 0 <= int(match.group("minute")) <= 59
+        and 0 <= int(match.group("second")) <= 61
+    ):
         return value
     return "<HTTP-DATE>"
 

@@ -210,6 +210,8 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         fn js_ext_net_socket_remove_listener(handle: i64, event_ptr: i64, cb_ptr: i64) -> i64;
         fn js_ext_net_socket_remove_all_listeners(handle: i64, event_ptr: i64) -> i64;
         fn js_ext_net_socket_listener_count(handle: i64, event_ptr: i64) -> f64;
+        fn js_ext_net_socket_get_max_listeners(handle: i64) -> f64;
+        fn js_ext_net_socket_set_max_listeners(handle: i64, n: f64) -> f64;
         fn js_net_socket_event_names(handle: i64) -> *mut perry_runtime::StringHeader;
         fn js_net_socket_reset_and_destroy(handle: i64) -> i64;
         // Issue #2211 — listeners()/rawListeners() return a *mut ArrayHeader
@@ -304,6 +306,16 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         "listenerCount" if !args.is_empty() => {
             let event_ptr = unbox_to_i64(args[0]);
             js_ext_net_socket_listener_count(handle, event_ptr)
+        }
+        "getMaxListeners" => js_ext_net_socket_get_max_listeners(handle),
+        "setMaxListeners" if !args.is_empty() => {
+            let bits = args[0].to_bits();
+            let n = if (bits >> 48) == 0x7FFE {
+                (bits as u32 as i32) as f64
+            } else {
+                args[0]
+            };
+            js_ext_net_socket_set_max_listeners(handle, n)
         }
         "eventNames" => json_str_to_value(js_net_socket_event_names(handle)),
         // Issue #2211 — `socket.listeners(event)` / `socket.rawListeners(event)`

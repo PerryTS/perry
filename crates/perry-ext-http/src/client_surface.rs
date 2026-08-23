@@ -16,6 +16,7 @@ pub unsafe extern "C" fn js_http_incoming_message_set_encoding(
     let mut matched = false;
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         res.encoding = Some(encoding.clone());
+        res.decoder_pending.clear();
         matched = true;
     });
     if matched {
@@ -56,6 +57,7 @@ pub unsafe extern "C" fn js_ext_http_client_incoming_message_set_encoding(
     let encoding = read_str(encoding_ptr).unwrap_or_else(|| "utf8".to_string());
     with_handle_mut::<IncomingMessageHandle, _, _>(handle, |res| {
         res.encoding = Some(encoding);
+        res.decoder_pending.clear();
     });
     handle
 }
@@ -122,17 +124,12 @@ pub unsafe extern "C" fn js_http_client_request_listener_count(
     };
     with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
         let explicit = req.listeners.get(&event).map(|v| v.len()).unwrap_or(0);
-        let once = req
-            .once_listeners
-            .get(&event)
-            .map(|listeners| listeners.len())
-            .unwrap_or(0);
         let implicit_response = if event == "response" && req.response_callback != 0 {
             1
         } else {
             0
         };
-        (explicit + once + implicit_response) as f64
+        (explicit + implicit_response) as f64
     })
     .unwrap_or(0.0)
 }
@@ -298,4 +295,49 @@ pub(crate) fn body_chunk_value(body: &[u8], encoding: Option<&str>) -> f64 {
             }
         }
     }
+}
+
+/// Decode one streamed fragment while retaining bytes that need the next
+/// fragment. `None` means the decoder intentionally has no JS chunk to emit.
+pub(crate) fn streaming_body_chunk_value(
+    body: &[u8],
+    encoding: Option<&str>,
+    pending: &mut Vec<u8>,
+    end: bool,
+) -> Option<f64> {
+    let Some(encoding) = encoding else {
+        return (!body.is_empty()).then(|| body_chunk_value(body, None));
+    };
+    let normalized = encoding.to_ascii_lowercase().replace(['-', '_'], "");
+    if !matches!(
+        normalized.as_str(),
+        "base64" | "base64url" | "utf16le" | "ucs2"
+    ) {
+        return (!body.is_empty()).then(|| body_chunk_value(body, Some(encoding)));
+    }
+
+    pending.extend_from_slice(body);
+    let mut emit_len = match normalized.as_str() {
+        "base64" | "base64url" if end => pending.len(),
+        "base64" | "base64url" => pending.len() / 3 * 3,
+        _ => pending.len() / 2 * 2,
+    };
+    if !end && matches!(normalized.as_str(), "utf16le" | "ucs2") && emit_len >= 2 {
+        let last = u16::from_le_bytes([pending[emit_len - 2], pending[emit_len - 1]]);
+        if (0xd800..=0xdbff).contains(&last) {
+            emit_len -= 2;
+        }
+    }
+    if emit_len == 0 {
+        if end {
+            pending.clear();
+        }
+        return None;
+    }
+    let decoded = pending.drain(..emit_len).collect::<Vec<_>>();
+    if end {
+        // Node's utf16le StringDecoder ignores a final unmatched byte.
+        pending.clear();
+    }
+    Some(body_chunk_value(&decoded, Some(encoding)))
 }

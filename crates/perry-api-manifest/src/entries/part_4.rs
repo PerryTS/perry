@@ -838,6 +838,8 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("http", "setEncoding", true, Some("IncomingMessage")),
     method("http", "setTimeout", true, Some("IncomingMessage")),
     method("http", "__get_req", true, Some("IncomingMessage")),
+    method("http", "__get_socket", true, Some("IncomingMessage")),
+    method("http", "__get_connection", true, Some("IncomingMessage")),
     method("http", "socket", true, Some("IncomingMessage")),
     method("http", "connection", true, Some("IncomingMessage")),
     method("http", "req", true, Some("IncomingMessage")),

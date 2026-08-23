@@ -407,7 +407,7 @@ mod tests {
             ),
             alpn_protocols: Some(vec![8, b'h', b't', b't', b'p', b'/', b'1', b'.', b'1']),
             alpn_callback: https_alpn_callback,
-            ticket_key: crate::server::tls::NodeTicketKey::random().unwrap(),
+            ticket_key: crate::server::tls::NodeTicketKey::random(300).unwrap(),
             certificate_cn: None,
         });
 

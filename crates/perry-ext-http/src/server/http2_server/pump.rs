@@ -318,12 +318,14 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                         )
                     })
                     .unwrap_or_default();
+                let scope = perry_ffi::TransientRootScope::enter();
+                let listeners = scope.root_addrs(&listeners);
                 let arg = handle_to_pointer_f64(session_handle);
                 if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {
                     session.session_event_emitted = true;
                 }
                 for cb in listeners {
-                    call1(cb, arg);
+                    call1(cb.get(), arg);
                     unsafe {
                         js_promise_run_microtasks();
                     }

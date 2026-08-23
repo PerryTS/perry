@@ -96,12 +96,12 @@ extern "C" fn client_once_wrapper(closure: *const RawClosureHeader, rest: f64) -
                 }
                 return false;
             }
-            let Some(listeners) = request.once_listeners.get_mut(&event) else {
+            let Some(listeners) = request.listeners.get_mut(&event) else {
                 return false;
             };
             let Some(position) = listeners
                 .iter()
-                .rposition(|listener| listener.raw_wrapper == wrapper)
+                .rposition(|listener| listener.once && listener.raw_wrapper == wrapper)
             else {
                 return false;
             };
@@ -660,17 +660,12 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
             get_handle_mut::<ClientRequestHandle>(handle)
                 .map(|req| {
                     let explicit = req.listeners.get(&event).map(|v| v.len()).unwrap_or(0);
-                    let once = req
-                        .once_listeners
-                        .get(&event)
-                        .map(|listeners| listeners.len())
-                        .unwrap_or(0);
                     let implicit_response = if event == "response" && req.response_callback != 0 {
                         1
                     } else {
                         0
                     };
-                    (explicit + once + implicit_response) as f64
+                    (explicit + implicit_response) as f64
                 })
                 .unwrap_or(0.0)
         }
@@ -679,16 +674,19 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
             let raw = method == "rawListeners";
             let callbacks = get_handle_mut::<ClientRequestHandle>(handle)
                 .map(|req| {
-                    let mut callbacks = req.listeners.get(&event).cloned().unwrap_or_default();
-                    callbacks.extend(req.once_listeners.get(&event).into_iter().flatten().map(
-                        |listener| {
+                    let mut callbacks = req
+                        .listeners
+                        .get(&event)
+                        .into_iter()
+                        .flatten()
+                        .map(|listener| {
                             if raw {
                                 listener.raw_wrapper
                             } else {
                                 listener.callback
                             }
-                        },
-                    ));
+                        })
+                        .collect::<Vec<_>>();
                     if event == "response" && req.response_callback != 0 {
                         callbacks.insert(
                             0,
@@ -729,10 +727,11 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
             if !event.is_empty() && cb != 0 {
                 with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
                     let listeners = req.listeners.entry(event.clone()).or_default();
+                    let listener = ClientEventListener::persistent(cb);
                     if method == "prependListener" {
-                        listeners.insert(0, cb);
+                        listeners.insert(0, listener);
                     } else {
-                        listeners.push(cb);
+                        listeners.push(listener);
                     }
                 });
             }
@@ -745,12 +744,13 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
                 let raw_wrapper = create_client_once_wrapper(handle, &event, callback, false);
                 with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
                     request
-                        .once_listeners
+                        .listeners
                         .entry(event.clone())
                         .or_default()
-                        .push(ClientOnceListener {
+                        .push(ClientEventListener {
                             callback,
                             raw_wrapper,
+                            once: true,
                         });
                 });
             }
@@ -761,13 +761,7 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
             let cb = client_outgoing::callback_from_bits(arg_bits(1));
             if !event.is_empty() && cb != 0 {
                 with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-                    if let Some(cbs) = req.listeners.get_mut(&event) {
-                        if let Some(pos) = cbs.iter().rposition(|&c| c == cb) {
-                            cbs.remove(pos);
-                            return;
-                        }
-                    }
-                    if let Some(listeners) = req.once_listeners.get_mut(&event) {
+                    if let Some(listeners) = req.listeners.get_mut(&event) {
                         if let Some(position) = listeners.iter().rposition(|listener| {
                             listener.callback == cb || listener.raw_wrapper == cb
                         }) {
@@ -790,7 +784,6 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
             with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| match &event {
                 Some(e) => {
                     req.listeners.remove(e);
-                    req.once_listeners.remove(e);
                     if e == "response" {
                         req.response_callback = 0;
                         req.response_raw_wrapper = 0;
@@ -798,7 +791,6 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
                 }
                 None => {
                     req.listeners.clear();
-                    req.once_listeners.clear();
                     req.response_callback = 0;
                     req.response_raw_wrapper = 0;
                 }

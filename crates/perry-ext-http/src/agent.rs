@@ -147,7 +147,9 @@ pub struct AgentHandle {
     /// reqwest intentionally hides them; this mirror preserves the cache and
     /// eviction semantics without exposing backend internals.
     pub max_cached_sessions: usize,
-    pub tls_sessions: HashMap<String, u64>,
+    /// Opaque session id and the server port it belongs to. Keeping the port
+    /// structurally avoids guessing inside the colon-delimited Agent key.
+    pub tls_sessions: HashMap<String, (u64, u16)>,
     pub tls_session_order: VecDeque<String>,
     pub next_tls_session: u64,
     /// HTTPS options supplied to the Agent constructor. Request-local
@@ -744,92 +746,103 @@ fn release_request_inner(
     socket: Handle,
     keep_alive: bool,
 ) -> Option<(Handle, bool, Handle)> {
-    let agent = get_handle_mut::<AgentHandle>(handle)?;
-    if let Some(active) = agent.sockets.get_mut(key) {
-        *active = active.saturating_sub(1);
-        if *active == 0 {
-            agent.sockets.remove(key);
+    let free_generation = {
+        let agent = get_handle_mut::<AgentHandle>(handle)?;
+        if let Some(active) = agent.sockets.get_mut(key) {
+            *active = active.saturating_sub(1);
+            if *active == 0 {
+                agent.sockets.remove(key);
+            }
         }
-    }
-    if let Some(active) = agent.active_socket_handles.get_mut(key) {
-        active.retain(|candidate| *candidate != socket);
-        if active.is_empty() {
-            agent.active_socket_handles.remove(key);
+        if let Some(active) = agent.active_socket_handles.get_mut(key) {
+            active.retain(|candidate| *candidate != socket);
+            if active.is_empty() {
+                agent.active_socket_handles.remove(key);
+            }
         }
-    }
 
-    let next = agent
-        .queued_requests
-        .get_mut(key)
-        .and_then(|queue| (!queue.is_empty()).then(|| queue.remove(0)));
-    if let Some(next_handle) = next {
-        let remaining = agent.queued_requests.get(key).map(Vec::len).unwrap_or(0);
-        if remaining == 0 {
-            agent.queued_requests.remove(key);
-            agent.requests.remove(key);
-        } else {
-            agent.requests.insert(key.to_string(), remaining as u32);
+        let next = agent
+            .queued_requests
+            .get_mut(key)
+            .and_then(|queue| (!queue.is_empty()).then(|| queue.remove(0)));
+        if let Some(next_handle) = next {
+            let remaining = agent.queued_requests.get(key).map(Vec::len).unwrap_or(0);
+            if remaining == 0 {
+                agent.queued_requests.remove(key);
+                agent.requests.remove(key);
+            } else {
+                agent.requests.insert(key.to_string(), remaining as u32);
+            }
+            let (next_socket, reused) = if keep_alive && socket != 0 {
+                (socket, true)
+            } else {
+                if socket != 0 {
+                    perry_ext_net::js_ext_net_destroy_socket(socket);
+                }
+                (allocate_agent_socket(), false)
+            };
+            perry_ext_net::js_ext_net_set_http_agent_phase(next_socket, 1);
+            agent
+                .active_socket_handles
+                .entry(key.to_string())
+                .or_default()
+                .push(next_socket);
+            *agent.sockets.entry(key.to_string()).or_default() += 1;
+            return Some((next_handle, reused, next_socket));
         }
-        let (next_socket, reused) = if keep_alive && socket != 0 {
-            (socket, true)
+
+        if keep_alive && agent.keep_alive && !agent.destroyed && socket != 0 {
+            let free = agent.free_sockets.entry(key.to_string()).or_default();
+            if (*free as f64) < agent.max_free_sockets.max(0.0) {
+                *free += 1;
+                perry_ext_net::js_ext_net_set_http_agent_phase(socket, 0);
+                agent
+                    .free_socket_handles
+                    .entry(key.to_string())
+                    .or_default()
+                    .push(socket);
+                agent.next_free_socket_generation =
+                    agent.next_free_socket_generation.wrapping_add(1);
+                let generation = agent.next_free_socket_generation;
+                agent.free_socket_generations.insert(socket, generation);
+                Some(generation)
+            } else {
+                perry_ext_net::js_ext_net_destroy_socket(socket);
+                None
+            }
         } else {
             if socket != 0 {
                 perry_ext_net::js_ext_net_destroy_socket(socket);
             }
-            (allocate_agent_socket(), false)
-        };
-        perry_ext_net::js_ext_net_set_http_agent_phase(next_socket, 1);
-        agent
-            .active_socket_handles
-            .entry(key.to_string())
-            .or_default()
-            .push(next_socket);
-        *agent.sockets.entry(key.to_string()).or_default() += 1;
-        return Some((next_handle, reused, next_socket));
-    }
-
-    if keep_alive && agent.keep_alive && !agent.destroyed && socket != 0 {
-        let free = agent.free_sockets.entry(key.to_string()).or_default();
-        if (*free as f64) < agent.max_free_sockets.max(0.0) {
-            *free += 1;
-            perry_ext_net::js_ext_net_set_http_agent_phase(socket, 0);
-            agent
-                .free_socket_handles
-                .entry(key.to_string())
-                .or_default()
-                .push(socket);
-            agent.next_free_socket_generation = agent.next_free_socket_generation.wrapping_add(1);
-            let generation = agent.next_free_socket_generation;
-            agent.free_socket_generations.insert(socket, generation);
-            unsafe {
-                let event = alloc_string("free");
-                perry_ext_net::js_ext_net_socket_emit(
-                    socket,
-                    event.as_raw() as i64,
-                    std::ptr::null(),
-                    0,
-                );
-            }
-            let key = key.to_string();
-            perry_ffi::spawn_async(async move {
-                // reqwest owns the physical pooled connection, so the public
-                // net.Socket facade cannot receive its idle read/EOF edge.
-                // Conservatively retire an unclaimed facade after the I/O
-                // guard window; immediate/next-tick reuse cancels this via the
-                // generation check below.
-                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
-                crate::push_event(crate::PendingHttpEvent::AgentIdleExpire {
-                    agent_handle: handle,
-                    key,
-                    socket,
-                    generation,
-                });
-            });
-        } else {
-            perry_ext_net::js_ext_net_destroy_socket(socket);
+            None
         }
-    } else if socket != 0 {
-        perry_ext_net::js_ext_net_destroy_socket(socket);
+    };
+
+    if let Some(generation) = free_generation {
+        unsafe {
+            let event = alloc_string("free");
+            perry_ext_net::js_ext_net_socket_emit(
+                socket,
+                event.as_raw() as i64,
+                std::ptr::null(),
+                0,
+            );
+        }
+        let key = key.to_string();
+        perry_ffi::spawn_async(async move {
+            // reqwest owns the physical pooled connection, so the public
+            // net.Socket facade cannot receive its idle read/EOF edge.
+            // Conservatively retire an unclaimed facade after the I/O
+            // guard window; immediate/next-tick reuse cancels this via the
+            // generation check below.
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            crate::push_event(crate::PendingHttpEvent::AgentIdleExpire {
+                agent_handle: handle,
+                key,
+                socket,
+                generation,
+            });
+        });
     }
     None
 }

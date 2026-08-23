@@ -723,6 +723,9 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if args.opt_report.is_some() || std::env::var("PERRY_OPT_REPORT").is_ok() {
         return Err("opt-report".to_string());
     }
+    if std::env::var("PERRY_OUTLINE_ENTRY_REPORT").is_ok() {
+        return Err("outline-entry-report".to_string());
+    }
     if args.verify_native_regions || args.emit_attest || args.emit_sandbox {
         return Err("sidecar-or-verify".to_string());
     }

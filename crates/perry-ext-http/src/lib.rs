@@ -429,10 +429,10 @@ pub struct ClientRequestHandle {
     body: Vec<u8>,
     response_callback: i64,
     response_raw_wrapper: i64,
-    /// `.on(event, cb)` listeners (`'response'` / `'error'` / `'timeout'`
-    /// / `'finish'` / `'close'`).
-    listeners: HashMap<String, Vec<i64>>,
-    once_listeners: HashMap<String, Vec<ClientOnceListener>>,
+    /// EventEmitter listeners in their exact registration order. Persistent
+    /// and one-shot entries share a vector so mixed `on` / `once` calls retain
+    /// Node's dispatch, introspection, and removal ordering.
+    listeners: HashMap<String, Vec<ClientEventListener>>,
     timeout_ms: Option<u64>,
     ended: bool,
     /// `flushHeaders()` dispatched the exchange before `end()` was called;
@@ -500,9 +500,20 @@ pub struct ClientRequestHandle {
 }
 
 #[derive(Clone, Copy)]
-struct ClientOnceListener {
+struct ClientEventListener {
     callback: i64,
     raw_wrapper: i64,
+    once: bool,
+}
+
+impl ClientEventListener {
+    fn persistent(callback: i64) -> Self {
+        Self {
+            callback,
+            raw_wrapper: callback,
+            once: false,
+        }
+    }
 }
 
 // SAFETY: closure pointers point into program-global code/data and
@@ -523,6 +534,9 @@ pub struct IncomingMessageHandle {
     pub body: Vec<u8>,
     pub listeners: HashMap<String, Vec<i64>>,
     pub encoding: Option<String>,
+    /// Bytes retained when a streamed transport chunk ends inside a base64
+    /// quantum or UTF-16 code unit.
+    pub decoder_pending: Vec<u8>,
     /// `.pipe(dest)` destinations as NaN-boxed value bits. Node's
     /// `readable.pipe(writable)` forwards every body chunk to `dest.write()`
     /// and ends it with `dest.end()`; node-fetch reads the response body this
@@ -661,7 +675,6 @@ fn make_request_handle(
         response_callback: callback,
         response_raw_wrapper: 0,
         listeners: HashMap::new(),
-        once_listeners: HashMap::new(),
         timeout_ms,
         ended: false,
         flushed_early: false,
@@ -765,15 +778,21 @@ unsafe fn attach_tls_options(handle: Handle, opts_f64: f64) {
     if !url.starts_with("https://") || socket == 0 {
         return;
     }
-    let fallback_servername = reqwest::Url::parse(&url)
-        .ok()
+    let parsed_url = reqwest::Url::parse(&url).ok();
+    let fallback_servername = parsed_url
+        .as_ref()
         .and_then(|url| url.host_str().map(String::from));
+    let server_port = parsed_url
+        .as_ref()
+        .and_then(reqwest::Url::port_or_known_default)
+        .unwrap_or(443);
     let callback_host = tls
         .servername
         .as_deref()
         .or(fallback_servername.as_deref())
         .unwrap_or("");
-    let (session_id, reused) = agent::tls_session_for_request(agent_handle, &agent_key);
+    let (session_id, reused) =
+        agent::tls_session_for_request(agent_handle, &agent_key, server_port);
     if !(tls.check_server_identity_from_agent && reused) {
         if let Some(error) = tls_client::check_server_identity_error(&tls, callback_host) {
             with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
@@ -1482,6 +1501,23 @@ pub(crate) unsafe fn client_request_flush_headers(handle: Handle) {
     if client_request_surface::request_destroyed(handle) {
         return;
     }
+    let preflight_error = with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+        request.preflight_error.take()
+    })
+    .flatten();
+    if let Some(error_message) = preflight_error {
+        with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+            request.ended = true;
+        });
+        push_event(PendingHttpEvent::Flushed {
+            request_handle: handle,
+        });
+        push_event(PendingHttpEvent::Error {
+            request_handle: handle,
+            error_message,
+        });
+        return;
+    }
     // #5080 — `flushHeaders()` is a send boundary; when it arms the continue
     // path, that exchange owns the head, so don't also dispatch via reqwest.
     continue_client::arm_expect_continue(handle);
@@ -1714,7 +1750,7 @@ unsafe fn http_on_impl(handle: Handle, event_ptr: *const StringHeader, callback:
         req.listeners
             .entry(event.clone())
             .or_default()
-            .push(callback);
+            .push(ClientEventListener::persistent(callback));
         matched = true;
     });
     if matched {
@@ -1759,7 +1795,7 @@ pub(crate) unsafe fn client_request_set_timeout_impl(handle: Handle, ms: f64) ->
     // Node instead of silently storing the raw value. (#4910)
     const TIMEOUT_MAX: f64 = 2_147_483_647.0;
     let effective = if ms > TIMEOUT_MAX {
-        emit_socket_timeout_overflow_warning(ms);
+        client_outgoing::emit_socket_timeout_overflow_warning(ms);
         TIMEOUT_MAX
     } else {
         ms
@@ -1773,24 +1809,6 @@ pub(crate) unsafe fn client_request_set_timeout_impl(handle: Handle, ms: f64) ->
         };
     });
     handle
-}
-
-/// Emit Node's `TimeoutOverflowWarning` for an out-of-range socket timeout.
-/// The net/timers path warns with a message distinct from the global timer
-/// path ("Timer duration was truncated to 2147483647." rather than "Timeout
-/// duration was set to 1.") because the socket timeout clamps to TIMEOUT_MAX,
-/// not 1. (#4910)
-unsafe fn emit_socket_timeout_overflow_warning(ms: f64) {
-    let value_text = if ms.is_finite() && ms.fract() == 0.0 {
-        format!("{}", ms as i64)
-    } else {
-        format!("{ms}")
-    };
-    let message = format!(
-        "{value_text} does not fit into a 32-bit signed integer.\n\
-         Timer duration was truncated to 2147483647."
-    );
-    perry_ffi::emit_warning(&message, "TimeoutOverflowWarning");
 }
 
 // ------------------------------------------------------------------

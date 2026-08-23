@@ -137,6 +137,8 @@ fn socket_method_name(prop: &str) -> Option<&'static [u8]> {
         "getTypeOfService" => Some(b"getTypeOfService"),
         "setTypeOfService" => Some(b"setTypeOfService"),
         "setTimeout" => Some(b"setTimeout"),
+        "getMaxListeners" => Some(b"getMaxListeners"),
+        "setMaxListeners" => Some(b"setMaxListeners"),
         "unref" => Some(b"unref"),
         "write" => Some(b"write"),
         "on" => Some(b"on"),
@@ -266,6 +268,10 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
         }
         "listenerCount" if !args.is_empty() => {
             crate::js_net_socket_listener_count(handle, unbox_to_i64(args[0]))
+        }
+        "getMaxListeners" => crate::js_ext_net_socket_get_max_listeners(handle),
+        "setMaxListeners" if !args.is_empty() => {
+            crate::js_ext_net_socket_set_max_listeners(handle, unbox_to_f64(args[0]))
         }
         "eventNames" => json_str_to_value(crate::js_net_socket_event_names(handle)),
         "listeners" if !args.is_empty() => {

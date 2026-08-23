@@ -18,15 +18,15 @@ pub(super) fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
         for cb in &mut req.pending_write_callbacks {
             visitor.visit_i64_slot(cb);
         }
-        for cbs in req.listeners.values_mut() {
-            for cb in cbs {
-                visitor.visit_i64_slot(cb);
-            }
-        }
-        for listeners in req.once_listeners.values_mut() {
+        for listeners in req.listeners.values_mut() {
             for listener in listeners {
+                let shared_wrapper = listener.raw_wrapper == listener.callback;
                 visitor.visit_i64_slot(&mut listener.callback);
-                visitor.visit_i64_slot(&mut listener.raw_wrapper);
+                if shared_wrapper {
+                    listener.raw_wrapper = listener.callback;
+                } else {
+                    visitor.visit_i64_slot(&mut listener.raw_wrapper);
+                }
             }
         }
         if req.tls.check_server_identity_callback != 0 {
