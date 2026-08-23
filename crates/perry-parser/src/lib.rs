@@ -883,7 +883,11 @@ fn normalize_swc_class_syntax(source: &str) -> String {
                 i += 1;
             }
         } else {
-            i += 1;
+            // Advance by a whole character, never a raw byte: a non-ASCII
+            // codepoint in code position (`const re = /a\u{20AC}b/;`) makes a
+            // byte cursor land mid-sequence, and the `&masked[start..i]`
+            // slice below then panics on a non-char-boundary index.
+            i += masked[i..].chars().next().map_or(1, char::len_utf8);
         }
         tokens.push(Token {
             start,
@@ -1382,6 +1386,29 @@ class C {
         assert_eq!(normalized, "var C = class _wait {};");
         parse_typescript("var C = class await {};", "await-name.js").unwrap();
         parse_typescript(r"var C = class \u0061wait {};", "await-name-escaped.js").unwrap();
+    }
+
+    #[test]
+    fn normalize_swc_class_syntax_walks_char_boundaries() {
+        // The tokenizer slices `&masked[start..i]`, so its cursor must never
+        // land inside a multi-byte codepoint. A raw non-ASCII char in code
+        // position (regex literal, identifier, operand) used to panic with
+        // "not a char boundary".
+        for source in [
+            "const re = /a\u{20AC}b/;\n",
+            "const \u{e9}t\u{e9} = 1;\n",
+            "const s = [\u{3bb}, \u{2603}];\n",
+        ] {
+            assert_eq!(normalize_swc_class_syntax(source), source);
+        }
+        // ...and the source/masked boundary map still lands on the right bytes
+        // when non-ASCII text precedes the token being rewritten.
+        let source =
+            "// caf\u{e9} \u{2603}\nconst t = \"\u{20ac}\";\nclass C { static constructor() {} }\n";
+        let normalized = normalize_swc_class_syntax(source);
+        assert!(normalized.contains("// caf\u{e9} \u{2603}"));
+        assert!(normalized.contains("\"\u{20ac}\""));
+        assert!(normalized.contains("static [\"constructor\"]() {}"));
     }
 
     #[test]
