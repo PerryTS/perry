@@ -777,9 +777,17 @@ pub(crate) unsafe fn define_property_force_store_value(
     // setter lookup. DefineProperty must write the receiver's own slot
     // directly. Ensure the shape entry exists, then locate its parallel value
     // slot and store by index (or through object-owned overflow storage).
-    ensure_key_in_keys_array(obj, key_str);
-    obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-    let key_str = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+    // #7341: `ensure_key_in_keys_array` can grow the keys array, so both the
+    // receiver and the key must be re-read from their handles AFTER it. Nested
+    // `across_*` expresses that ordering without ever binding a pre-call
+    // address: the inner call yields the refreshed key, the outer the
+    // refreshed receiver.
+    let (key_str, obj_reloaded) = obj_handle.across_mut::<ObjectHeader, _>(|| {
+        key_handle
+            .across_const::<crate::StringHeader, _>(|| ensure_key_in_keys_array(obj, key_str))
+            .1
+    });
+    obj = obj_reloaded;
     let keys = crate::object::object_keys_array(obj);
     if !keys.is_null() {
         let count = crate::array::keys_array_len_capped_to_capacity(keys) as usize;
