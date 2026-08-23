@@ -47,8 +47,9 @@ pub fn parse_typescript_with_cache(
     filename: &str,
     cache: &mut SourceCache,
 ) -> Result<ParseResult> {
-    let unicode_source = normalize_unicode_identifier_escapes(source);
-    let normalized = normalize_swc_class_syntax_with_metadata(&unicode_source);
+    let unicode_source = normalize_unicode_identifier_escapes_with_metadata(source);
+    let class_source = normalize_swc_class_syntax_with_metadata(&unicode_source.source);
+    let normalized = unicode_source.then(class_source);
     let parse_source = &normalized.source;
     // Add the source to the cache
     let file_id = cache.add_file(filename, source.to_string());
@@ -100,8 +101,9 @@ pub fn parse_typescript_with_cache(
 /// This is the original parsing function for backward compatibility.
 /// For new code, prefer `parse_typescript_with_cache` for better diagnostics.
 pub fn parse_typescript(source: &str, filename: &str) -> Result<Module> {
-    let unicode_source = normalize_unicode_identifier_escapes(source);
-    let normalized = normalize_swc_class_syntax_with_metadata(&unicode_source);
+    let unicode_source = normalize_unicode_identifier_escapes_with_metadata(source);
+    let class_source = normalize_swc_class_syntax_with_metadata(&unicode_source.source);
+    let normalized = unicode_source.then(class_source);
     let parse_source = &normalized.source;
     let source_map: Lrc<SourceMap> = Default::default();
     let source_file = source_map.new_source_file(
@@ -603,7 +605,12 @@ fn script_to_module(script: Script) -> Module {
     }
 }
 
+#[cfg(test)]
 fn normalize_unicode_identifier_escapes(source: &str) -> String {
+    normalize_unicode_identifier_escapes_with_metadata(source).source
+}
+
+fn normalize_unicode_identifier_escapes_with_metadata(source: &str) -> NormalizedSource {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum State {
         Code,
@@ -714,6 +721,7 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
     let mut i = 0;
     let mut state = State::Code;
     let mut last_sig = LastSig::None;
+    let mut edits = Vec::new();
     while i < bytes.len() {
         match state {
             State::Code => {
@@ -742,7 +750,14 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
                     last_sig = LastSig::Char(b'/');
                     i += 1;
                 } else if let Some((ch, next)) = read_escape(bytes, i) {
+                    let normalized_start = out.len();
                     out.push(ch);
+                    edits.push(NormalizedSourceEdit {
+                        original_start: i,
+                        original_end: next,
+                        normalized_start,
+                        normalized_end: out.len(),
+                    });
                     if ch == '_' || ch == '$' || ch.is_alphanumeric() {
                         last_sig = LastSig::Ident {
                             start: i,
@@ -841,12 +856,14 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
             }
         }
     }
-    out
+    NormalizedSource {
+        source: out,
+        edit_stages: vec![edits],
+    }
 }
 
-/// Normalize two valid class grammar corners that SWC currently rejects.
-/// String/comment contents are masked before tokenization, so source text that
-/// merely mentions these spellings is never rewritten.
+/// Describes one width-changing source edit so offsets can be mapped back to
+/// the source cached for diagnostics.
 #[derive(Clone, Copy, Debug)]
 struct NormalizedSourceEdit {
     original_start: usize,
@@ -855,32 +872,25 @@ struct NormalizedSourceEdit {
     normalized_end: usize,
 }
 
-struct NormalizedClassSyntax {
+struct NormalizedSource {
     source: String,
-    edits: Vec<NormalizedSourceEdit>,
+    edit_stages: Vec<Vec<NormalizedSourceEdit>>,
 }
 
-impl NormalizedClassSyntax {
+impl NormalizedSource {
+    fn then(mut self, next: Self) -> Self {
+        self.source = next.source;
+        self.edit_stages.extend(next.edit_stages);
+        self
+    }
+
     fn original_offset(&self, normalized_offset: usize) -> usize {
-        let mut cumulative_delta = 0isize;
-        for edit in &self.edits {
-            if normalized_offset < edit.normalized_start {
-                break;
-            }
-            if normalized_offset <= edit.normalized_end {
-                if normalized_offset == edit.normalized_end {
-                    return edit.original_end;
-                }
-                let normalized_len = edit.normalized_end - edit.normalized_start;
-                let original_len = edit.original_end - edit.original_start;
-                let relative = normalized_offset - edit.normalized_start;
-                return edit.original_start
-                    + relative.saturating_mul(original_len) / normalized_len.max(1);
-            }
-            cumulative_delta += (edit.normalized_end - edit.normalized_start) as isize
-                - (edit.original_end - edit.original_start) as isize;
-        }
-        (normalized_offset as isize - cumulative_delta).max(0) as usize
+        self.edit_stages
+            .iter()
+            .rev()
+            .fold(normalized_offset, |offset, edits| {
+                original_offset_for_edits(offset, edits)
+            })
     }
 
     fn swc_span(&self, span: swc_common::Span, file_start: BytePos) -> swc_common::Span {
@@ -902,7 +912,7 @@ impl NormalizedClassSyntax {
 
     fn remap_module_spans(&self, module: &mut Module, file_start: BytePos) {
         struct RemapSpans<'a> {
-            normalized: &'a NormalizedClassSyntax,
+            normalized: &'a NormalizedSource,
             file_start: BytePos,
         }
 
@@ -919,7 +929,32 @@ impl NormalizedClassSyntax {
     }
 }
 
-fn normalize_swc_class_syntax_with_metadata(source: &str) -> NormalizedClassSyntax {
+fn original_offset_for_edits(normalized_offset: usize, edits: &[NormalizedSourceEdit]) -> usize {
+    let mut cumulative_delta = 0isize;
+    for edit in edits {
+        if normalized_offset < edit.normalized_start {
+            break;
+        }
+        if normalized_offset <= edit.normalized_end {
+            if normalized_offset == edit.normalized_end {
+                return edit.original_end;
+            }
+            let normalized_len = edit.normalized_end - edit.normalized_start;
+            let original_len = edit.original_end - edit.original_start;
+            let relative = normalized_offset - edit.normalized_start;
+            return edit.original_start
+                + relative.saturating_mul(original_len) / normalized_len.max(1);
+        }
+        cumulative_delta += (edit.normalized_end - edit.normalized_start) as isize
+            - (edit.original_end - edit.original_start) as isize;
+    }
+    (normalized_offset as isize - cumulative_delta).max(0) as usize
+}
+
+/// Normalize two valid class grammar corners that SWC currently rejects.
+/// String/comment contents are masked before tokenization, so source text that
+/// merely mentions these spellings is never rewritten.
+fn normalize_swc_class_syntax_with_metadata(source: &str) -> NormalizedSource {
     #[derive(Clone, Copy)]
     struct Token<'a> {
         start: usize,
@@ -1037,9 +1072,9 @@ fn normalize_swc_class_syntax_with_metadata(source: &str) -> NormalizedClassSynt
     for (start, end, replacement) in replacements.into_iter().rev() {
         result.replace_range(start..end, replacement);
     }
-    NormalizedClassSyntax {
+    NormalizedSource {
         source: result,
-        edits,
+        edit_stages: vec![edits],
     }
 }
 
@@ -1542,6 +1577,46 @@ class C {
             .iter()
             .find(|diagnostic| diagnostic.message.contains("only have one constructor"))
             .expect("expected duplicate-constructor diagnostic");
+        assert_eq!(
+            duplicate.span.start,
+            source.rfind("constructor").unwrap() as u32 + 1
+        );
+    }
+
+    #[test]
+    fn unicode_and_class_normalization_preserve_following_ast_offsets() {
+        let source = r#"const \u0061 = 0; class C { static constructor() {} } function after() {}"#;
+        let module = parse_typescript(source, "composed-offset.js").unwrap();
+        let function = module
+            .body
+            .iter()
+            .find_map(|item| match item {
+                swc_ecma_ast::ModuleItem::Stmt(swc_ecma_ast::Stmt::Decl(
+                    swc_ecma_ast::Decl::Fn(function),
+                )) => Some(function),
+                _ => None,
+            })
+            .expect("expected trailing function declaration");
+
+        assert_eq!(
+            function.function.span.lo.0,
+            source.find("function").unwrap() as u32 + 1
+        );
+        assert_eq!(module.span.hi.0, source.len() as u32 + 1);
+    }
+
+    #[test]
+    fn unicode_and_class_normalization_preserve_diagnostic_offsets() {
+        let source = r#"const \u0061 = 0; class C { static constructor() {} constructor() {} constructor() {} }"#;
+        let mut cache = SourceCache::new();
+        let result = parse_typescript_with_cache(source, "composed-diagnostic.js", &mut cache)
+            .expect("duplicate constructor is a recoverable parse error");
+        let duplicate = result
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.contains("only have one constructor"))
+            .expect("expected duplicate-constructor diagnostic");
+
         assert_eq!(
             duplicate.span.start,
             source.rfind("constructor").unwrap() as u32 + 1
