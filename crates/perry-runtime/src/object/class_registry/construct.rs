@@ -158,7 +158,7 @@ pub(crate) unsafe fn nm_ctor_tls(
             args_ptr, args_len, 0,
         )));
     }
-    None
+    crate::tls::construct_registered_tls_class(method, args_ptr, args_len)
 }
 
 pub(crate) unsafe fn nm_ctor_wasi(

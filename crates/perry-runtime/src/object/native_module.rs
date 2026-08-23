@@ -27,14 +27,14 @@ mod namespace_builders;
 mod web_locks;
 
 pub(crate) use callable_export_check::is_native_module_callable_export;
+pub use callable_exports::bound_native_callable_export_value;
 #[cfg(test)]
 pub(crate) use callable_exports::builtin_closure_is_non_constructable;
 #[cfg(test)]
 pub(crate) use callable_exports::test_collect_native_export_after_alloc;
 pub(crate) use callable_exports::{
-    bound_native_callable_export_value, bound_native_callable_module_and_method,
-    bound_native_callable_value_arity, buffer_constructor_value,
-    builtin_closure_is_non_constructable_value, builtin_closure_length,
+    bound_native_callable_module_and_method, bound_native_callable_value_arity,
+    buffer_constructor_value, builtin_closure_is_non_constructable_value, builtin_closure_length,
     fs_namespace_descriptor_getter_value, fs_namespace_descriptor_setter_value,
     is_buffer_constructor_value, is_cluster_emitter_method, module_builtin_modules_value,
     module_cjs_cache_value, module_cjs_extensions_value, module_cjs_global_paths_value,
@@ -117,6 +117,26 @@ pub(crate) fn native_namespace_prop_override_store(module: &str, prop: &str, val
         m.borrow_mut()
             .insert(format!("{module}\0{prop}"), value.to_bits());
     });
+    // `node:tls` is a CommonJS builtin and its default import is the mutable
+    // exports object. Codegen currently shares the snapshot-backed property
+    // read used by native ESM imports for that default object, so keep the TLS
+    // defaults in that cache coherent with writes to the default export. Do
+    // not do this for ordinary builtin named exports: those intentionally stay
+    // unchanged until `module.syncBuiltinESMExports()` is called.
+    if module == "tls"
+        && matches!(
+            prop,
+            "DEFAULT_CIPHERS" | "DEFAULT_MIN_VERSION" | "DEFAULT_MAX_VERSION"
+        )
+    {
+        let key = format!("{module}\0{prop}");
+        NATIVE_ESM_EXPORT_VALUES.with(|values| {
+            if let Some(slot) = values.borrow_mut().get_mut(&key) {
+                *slot = value.to_bits();
+            }
+        });
+        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    }
 }
 
 /// Read back a stored native-namespace property override, if any.

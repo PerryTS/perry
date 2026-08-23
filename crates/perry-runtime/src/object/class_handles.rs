@@ -108,6 +108,9 @@ pub type EventEmitterSetDomainFn = unsafe extern "C" fn(handle: i64, domain: i64
 pub type NetSocketHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
 /// Probe for external `http.Agent` / `https.Agent` registry handles.
 pub type HttpAgentHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
+/// Classify stdlib TLS handles for `instanceof tls.Server` / `TLSSocket`.
+/// Returns 0 = not TLS, 1 = Server, 2 = TLSSocket.
+pub type TlsHandleKindProbeFn = unsafe extern "C" fn(handle: i64) -> u8;
 
 /// Probe for live `perry-ffi` registry handles. `register_handle`-issued ids
 /// and Node timer ids both occupy the pointer-tagged small-integer band and
@@ -162,6 +165,7 @@ static EVENT_EMITTER_GET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mu
 static EVENT_EMITTER_SET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static NET_SOCKET_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static HTTP_AGENT_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
+static TLS_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static FFI_HANDLE_EXISTS_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_ON_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
@@ -534,6 +538,16 @@ pub fn http_agent_handle_probe() -> Option<HttpAgentHandleProbeFn> {
     }
 }
 
+#[inline]
+pub fn tls_handle_kind_probe() -> Option<TlsHandleKindProbeFn> {
+    let p = TLS_HANDLE_KIND_PROBE_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), TlsHandleKindProbeFn>(p) })
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_register_http_agent_handle_probe(f: HttpAgentHandleProbeFn) {
     HTTP_AGENT_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
@@ -546,6 +560,11 @@ pub extern "C" fn js_is_registered_net_socket_handle(handle: i64) -> i32 {
     net_socket_handle_probe()
         .map(|probe| unsafe { probe(handle) } as i32)
         .unwrap_or(0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_tls_handle_kind_probe(f: TlsHandleKindProbeFn) {
+    TLS_HANDLE_KIND_PROBE_PTR.store(f as *mut (), Ordering::Release);
 }
 
 #[inline]

@@ -587,6 +587,7 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
             ("createSecureContext", 1),
             ("createServer", 2),
             ("getCACertificates", 1),
+            ("getCertificateCompressionAlgorithms", 0),
             ("getCiphers", 0),
             ("setDefaultCACertificates", 1),
         ],

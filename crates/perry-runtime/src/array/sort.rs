@@ -443,7 +443,7 @@ unsafe fn sort_spec_set(
             }
         }
     }
-    let updated = js_array_set_f64_extend(
+    let updated = js_array_set_f64_extend_strict(
         arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
         index,
         value_handle.get_nanbox_f64(),

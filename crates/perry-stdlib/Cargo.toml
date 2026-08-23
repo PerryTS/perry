@@ -207,6 +207,7 @@ tls = [
     "dep:rustls-native-certs",
     "dep:rustls-pemfile",
     "dep:base64",
+    "dep:x509-cert",
 ]
 
 # Databases

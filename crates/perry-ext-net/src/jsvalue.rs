@@ -187,6 +187,18 @@ pub(crate) unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> 
     None
 }
 
+pub(crate) unsafe fn get_object_value_field(obj_f64: f64, field_name: &str) -> Option<f64> {
+    if !is_nanboxed_pointer(obj_f64) {
+        return None;
+    }
+    let obj_ptr = unbox_pointer(obj_f64) as *const ObjectHeader;
+    if (obj_ptr as usize) < 0x100000 {
+        return None;
+    }
+    let key = js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    Some(js_object_get_field_by_name_f64(obj_ptr, key))
+}
+
 pub(crate) unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64> {
     if !is_nanboxed_pointer(obj_f64) {
         return None;
@@ -253,10 +265,10 @@ pub(crate) unsafe fn get_object_bool_field(obj_f64: f64, field_name: &str) -> Op
 /// instances, not raw strings. Returns a NaN-boxed `f64` pointing at
 /// the object. Issue #770.
 pub(crate) unsafe fn build_error_object(msg: &str) -> f64 {
-    let keys: [&str; 1] = ["message"];
+    let keys: [&str; 3] = ["message", "code", "name"];
     let (packed, shape_id) = build_object_shape(&keys);
     let obj: *mut ObjectHeader =
-        js_object_alloc_with_shape(shape_id, 1, packed.as_ptr(), packed.len() as u32);
+        js_object_alloc_with_shape(shape_id, 3, packed.as_ptr(), packed.len() as u32);
     if obj.is_null() {
         // Fall back to the bare string so the listener still receives
         // *something* if the object alloc failed.
@@ -266,6 +278,24 @@ pub(crate) unsafe fn build_error_object(msg: &str) -> f64 {
     let s = alloc_string(msg);
     let v = JsValue::from_string_ptr(s.as_raw());
     js_object_set_field(obj, 0, v);
+    let code = if msg.starts_with("ERR_") {
+        Some(msg)
+    } else if msg.contains("UnknownIssuer")
+        || msg.contains("unknown issuer")
+        || msg.contains("invalid peer certificate")
+    {
+        Some("DEPTH_ZERO_SELF_SIGNED_CERT")
+    } else if msg.to_ascii_lowercase().contains("connection refused") {
+        Some("ECONNREFUSED")
+    } else {
+        None
+    };
+    if let Some(code) = code {
+        let code = alloc_string(code);
+        js_object_set_field(obj, 1, JsValue::from_string_ptr(code.as_raw()));
+    }
+    let name = alloc_string("Error");
+    js_object_set_field(obj, 2, JsValue::from_string_ptr(name.as_raw()));
     let obj_v = JsValue::from_object_ptr(obj as *mut u8);
     f64::from_bits(obj_v.bits())
 }

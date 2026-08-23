@@ -38,9 +38,29 @@ use tokio::sync::{mpsc, oneshot};
 use crate::common::async_bridge::spawn;
 
 #[cfg(feature = "tls")]
+mod tls_verifier;
+#[cfg(feature = "tls")]
+use tls_verifier::NodeConfiguredCaVerifier;
+
+#[cfg(feature = "tls")]
 use std::sync::Arc;
 #[cfg(feature = "tls")]
+use tokio_rustls::rustls::client::danger::{
+    HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
+};
+#[cfg(feature = "tls")]
 use tokio_rustls::{client::TlsStream, rustls, TlsConnector};
+
+#[cfg(feature = "tls")]
+#[derive(Clone, Default)]
+struct TlsClientConfigData {
+    ca: Option<Vec<Vec<u8>>>,
+    cert: Vec<u8>,
+    key: Vec<u8>,
+    alpn_protocols: Vec<Vec<u8>>,
+    version_mask: i32,
+    custom_identity: bool,
+}
 
 // ─── Transport enum (plain or TLS, swappable at runtime) ─────────────────────
 
@@ -98,6 +118,7 @@ lazy_static::lazy_static! {
     static ref NET_SOCKETS: Mutex<HashMap<i64, SocketState>> = Mutex::new(HashMap::new());
     static ref NET_LISTENERS: Mutex<HashMap<i64, HashMap<String, Vec<i64>>>> = Mutex::new(HashMap::new());
     static ref NET_PENDING_EVENTS: Mutex<Vec<PendingNetEvent>> = Mutex::new(Vec::new());
+    static ref NET_PENDING_TLS_ABORTS: Mutex<std::collections::HashSet<i64>> = Mutex::new(std::collections::HashSet::new());
     static ref NEXT_NET_ID: Mutex<i64> = Mutex::new(1);
 }
 
@@ -166,15 +187,20 @@ enum SocketCommand {
     UpgradeTls {
         servername: String,
         verify: bool,
+        config: TlsClientConfigData,
         reply: oneshot::Sender<Result<(), String>>,
     },
 }
 
 enum PendingNetEvent {
     Connect(i64),
+    #[cfg(feature = "tls")]
+    SecureConnect(i64),
     Data(i64, Vec<u8>),
+    End(i64),
     Close(i64),
     Error(i64, String),
+    Abort(i64),
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -276,6 +302,189 @@ unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> Option<Stri
     None
 }
 
+unsafe fn get_object_value_field(obj_f64: f64, field_name: &str) -> Option<f64> {
+    if !is_nanboxed_pointer(obj_f64) {
+        return None;
+    }
+    let obj_ptr = unbox_pointer(obj_f64) as *const perry_runtime::ObjectHeader;
+    if !perry_runtime::value::addr_class::is_above_handle_band(obj_ptr as usize) {
+        return None;
+    }
+    let key = perry_runtime::js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    Some(f64::from_bits(
+        perry_runtime::js_object_get_field_by_name(obj_ptr, key).bits(),
+    ))
+}
+
+#[cfg(feature = "tls")]
+unsafe fn tls_value_bytes(value: f64) -> Option<Vec<u8>> {
+    let mut len = 0u32;
+    let data = perry_runtime::buffer::js_value_buffer_or_typedarray_data(value, &mut len);
+    if !data.is_null() {
+        return Some(std::slice::from_raw_parts(data, len as usize).to_vec());
+    }
+    // `js_get_string_pointer_unified` deliberately returns the raw pointer for
+    // any POINTER_TAG value. Probe Buffer/TypedArray values first so their
+    // headers are never interpreted as StringHeaders.
+    let string_ptr = perry_runtime::js_get_string_pointer_unified(value);
+    (string_ptr != 0)
+        .then(|| crate::common::string_from_header(string_ptr as *const StringHeader))
+        .flatten()
+        .map(String::into_bytes)
+}
+
+#[cfg(feature = "tls")]
+unsafe fn tls_material_list(value: f64) -> Option<Vec<Vec<u8>>> {
+    let js = JSValue::from_bits(value.to_bits());
+    if js.is_undefined() || js.is_null() {
+        return Some(Vec::new());
+    }
+    if JSValue::from_bits(perry_runtime::js_array_is_array(value).to_bits()).as_bool() {
+        let array = unbox_pointer(value) as *const perry_runtime::ArrayHeader;
+        let mut out = Vec::new();
+        for index in 0..perry_runtime::js_array_length(array) {
+            out.extend(tls_material_list(perry_runtime::array::js_array_get_f64(
+                array, index,
+            ))?);
+        }
+        return Some(out);
+    }
+    tls_value_bytes(value).map(|bytes| vec![bytes])
+}
+
+#[cfg(feature = "tls")]
+unsafe fn tls_option_value(options: f64, secure_context: f64, name: &str) -> Option<f64> {
+    get_object_value_field(options, name).and_then(|value| {
+        if JSValue::from_bits(value.to_bits()).is_undefined() {
+            get_object_value_field(secure_context, name)
+        } else {
+            Some(value)
+        }
+    })
+}
+
+#[cfg(feature = "tls")]
+unsafe fn tls_parse_alpn(value: f64) -> Vec<Vec<u8>> {
+    if JSValue::from_bits(perry_runtime::js_array_is_array(value).to_bits()).as_bool() {
+        let array = unbox_pointer(value) as *const perry_runtime::ArrayHeader;
+        return (0..perry_runtime::js_array_length(array))
+            .filter_map(|index| {
+                tls_value_bytes(perry_runtime::array::js_array_get_f64(array, index))
+            })
+            .collect();
+    }
+    let Some(encoded) = tls_value_bytes(value) else {
+        return Vec::new();
+    };
+    let mut offset = 0usize;
+    let mut out = Vec::new();
+    while offset < encoded.len() {
+        let len = encoded[offset] as usize;
+        offset += 1;
+        if len == 0 || offset + len > encoded.len() {
+            break;
+        }
+        out.push(encoded[offset..offset + len].to_vec());
+        offset += len;
+    }
+    out
+}
+
+#[cfg(feature = "tls")]
+unsafe fn tls_client_config_data(options: f64) -> TlsClientConfigData {
+    let secure_context = get_object_value_field(options, "secureContext")
+        .unwrap_or_else(|| f64::from_bits(0x7FFC_0000_0000_0001));
+    let mut ca =
+        tls_option_value(options, secure_context, "ca").and_then(|value| tls_material_list(value));
+    if ca.is_none() && perry_runtime::tls::js_tls_default_ca_is_configured() != 0 {
+        ca = tls_material_list(perry_runtime::tls::js_tls_get_ca_certificates(
+            f64::from_bits(0x7FFC_0000_0000_0001),
+        ));
+    }
+    TlsClientConfigData {
+        ca,
+        cert: tls_option_value(options, secure_context, "cert")
+            .and_then(|value| tls_value_bytes(value))
+            .unwrap_or_default(),
+        key: tls_option_value(options, secure_context, "key")
+            .and_then(|value| tls_value_bytes(value))
+            .unwrap_or_default(),
+        alpn_protocols: tls_option_value(options, secure_context, "ALPNProtocols")
+            .map(|value| tls_parse_alpn(value))
+            .unwrap_or_default(),
+        version_mask: perry_runtime::tls::js_tls_effective_version_mask(options),
+        custom_identity: tls_option_value(options, secure_context, "checkServerIdentity")
+            .is_some_and(|value| {
+                let js = JSValue::from_bits(value.to_bits());
+                !js.is_undefined() && !js.is_null()
+            }),
+    }
+}
+
+#[cfg(feature = "tls")]
+fn tls_protocol_versions(mask: i32) -> Vec<&'static rustls::SupportedProtocolVersion> {
+    let mask = if mask == 0 { 0b11 } else { mask };
+    let mut versions = Vec::new();
+    if mask & 0b10 != 0 {
+        versions.push(&rustls::version::TLS13);
+    }
+    if mask & 0b01 != 0 {
+        versions.push(&rustls::version::TLS12);
+    }
+    versions
+}
+
+#[cfg(feature = "tls")]
+unsafe fn tls_signal_is_pre_aborted(options: f64) -> bool {
+    let Some(signal) = get_object_value_field(options, "signal") else {
+        return false;
+    };
+    let signal = perry_runtime::url::js_abort_signal_resolve_ptr(signal);
+    if signal.is_null() {
+        return false;
+    }
+    perry_runtime::url::js_abort_signal_is_aborted(signal) != 0
+}
+
+#[cfg(feature = "tls")]
+fn begin_tls_upgrade(
+    handle: i64,
+    servername: String,
+    verify: bool,
+    config: TlsClientConfigData,
+) -> Result<(), String> {
+    let cmd_tx = NET_SOCKETS
+        .lock()
+        .unwrap()
+        .get(&handle)
+        .map(|socket| socket.cmd_tx.clone())
+        .ok_or_else(|| "socket is closed".to_string())?;
+    let (reply, _reply_rx) = oneshot::channel();
+    cmd_tx
+        .send(SocketCommand::UpgradeTls {
+            servername,
+            verify,
+            config,
+            reply,
+        })
+        .map_err(|_| "socket task is gone".to_string())
+}
+
+#[cfg(feature = "tls")]
+unsafe fn tls_preflight(port: u16, servername: &str, options: f64) -> i32 {
+    crate::tls::js_tls_client_preflight(port as f64, servername.as_ptr(), servername.len(), options)
+}
+
+#[cfg(feature = "tls")]
+fn tls_preflight_error(code: i32) -> &'static str {
+    match code {
+        1 => "ERR_TLS_ALPN_CALLBACK_INVALID_RESULT",
+        2 => "ERR_SSL_TLSV1_ALERT_NO_APPLICATION_PROTOCOL",
+        3 => "ERR_TLS_SNI_CALLBACK_FAILED",
+        _ => "ERR_TLS_HANDSHAKE_FAILED",
+    }
+}
+
 unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> Option<f64> {
     if !is_nanboxed_pointer(obj_f64) {
         return None;
@@ -334,17 +543,21 @@ unsafe fn get_object_bool_field(obj_f64: f64, field_name: &str) -> Option<bool> 
 /// mirrors `crates/perry-stdlib/src/sqlite.rs::build_packed_keys`.
 unsafe fn build_error_object(msg: &str) -> f64 {
     use perry_runtime::JSValue;
-    let name = b"message";
-    let packed: Vec<u8> = name.to_vec();
+    let keys = ["message", "code", "name"];
+    let mut packed = Vec::new();
+    for key in keys {
+        packed.extend_from_slice(key.as_bytes());
+        packed.push(0);
+    }
     let mut shape_id: u32 = 0x4E45_0000; // "NE" — net error
-    for &b in name {
+    for &b in &packed {
         shape_id = shape_id.wrapping_mul(31).wrapping_add(b as u32);
     }
-    shape_id = shape_id.wrapping_add(1);
+    shape_id = shape_id.wrapping_add(3);
     let s_msg = perry_runtime::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let obj = perry_runtime::js_object_alloc_with_shape(
         shape_id,
-        1,
+        3,
         packed.as_ptr(),
         packed.len() as u32,
     );
@@ -352,6 +565,24 @@ unsafe fn build_error_object(msg: &str) -> f64 {
         return f64::from_bits(0x7FFF_0000_0000_0000u64 | (s_msg as u64 & 0x0000_FFFF_FFFF_FFFF));
     }
     perry_runtime::js_object_set_field(obj, 0, JSValue::string_ptr(s_msg));
+    let code = if msg.starts_with("ERR_") {
+        Some(msg)
+    } else if msg.contains("UnknownIssuer")
+        || msg.contains("unknown issuer")
+        || msg.contains("invalid peer certificate")
+    {
+        Some("DEPTH_ZERO_SELF_SIGNED_CERT")
+    } else if msg.to_ascii_lowercase().contains("connection refused") {
+        Some("ECONNREFUSED")
+    } else {
+        None
+    };
+    if let Some(code) = code {
+        let code = perry_runtime::js_string_from_bytes(code.as_ptr(), code.len() as u32);
+        perry_runtime::js_object_set_field(obj, 1, JSValue::string_ptr(code));
+    }
+    let name = perry_runtime::js_string_from_bytes(b"Error".as_ptr(), 5);
+    perry_runtime::js_object_set_field(obj, 2, JSValue::string_ptr(name));
     let obj_bits = (obj as u64 & 0x0000_FFFF_FFFF_FFFF) | 0x7FFD_0000_0000_0000;
     f64::from_bits(obj_bits)
 }
@@ -370,6 +601,23 @@ fn push_event(ev: PendingNetEvent) {
     perry_runtime::event_pump::js_notify_main_thread();
 }
 
+#[cfg(feature = "tls")]
+fn fire_pending_tls_abort(handle: i64) {
+    if NET_PENDING_TLS_ABORTS.lock().unwrap().remove(&handle) {
+        push_event(PendingNetEvent::Abort(handle));
+        push_event(PendingNetEvent::Close(handle));
+    }
+}
+
+#[cfg(feature = "tls")]
+unsafe fn schedule_tls_abort(handle: i64) {
+    NET_PENDING_TLS_ABORTS.lock().unwrap().insert(handle);
+    crate::common::async_bridge::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        fire_pending_tls_abort(handle);
+    });
+}
+
 fn mark_closed(id: i64) {
     if let Some(s) = NET_SOCKETS.lock().unwrap().get_mut(&id) {
         s.is_open = false;
@@ -379,7 +627,10 @@ fn mark_closed(id: i64) {
 // ─── rustls config (TLS feature only) ────────────────────────────────────────
 
 #[cfg(feature = "tls")]
-fn build_tls_connector(verify: bool) -> Result<TlsConnector, String> {
+fn build_tls_connector(
+    verify: bool,
+    data: Option<&TlsClientConfigData>,
+) -> Result<TlsConnector, String> {
     // rustls panics resolving the process-level CryptoProvider when both
     // `ring` and `aws-lc-rs` end up in the dep graph. Server paths install
     // one before their first handshake; a client-only program (no tls/https
@@ -388,7 +639,7 @@ fn build_tls_connector(verify: bool) -> Result<TlsConnector, String> {
     // `install_default` errors (ignored) if a provider is already set.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     if !verify {
-        return build_tls_connector_insecure();
+        return build_tls_connector_insecure(data);
     }
     // System trust store. Aligns with Perry's broader rustls-only stance
     // (reqwest / tokio-tungstenite / mongodb all use rustls) — no OpenSSL.
@@ -396,14 +647,95 @@ fn build_tls_connector(verify: bool) -> Result<TlsConnector, String> {
     // rustls-native-certs 0.8 returns a CertificateResult with separate
     // `.certs` and `.errors` fields; we accept per-cert failures rather
     // than bail, matching the crate's own documented pattern.
-    let native = rustls_native_certs::load_native_certs();
-    for cert in native.certs {
-        let _ = root_store.add(cert);
+    if let Some(ca) = data.and_then(|data| data.ca.as_ref()) {
+        add_pem_roots(&mut root_store, ca);
+    } else {
+        let native = rustls_native_certs::load_native_certs();
+        for cert in native.certs {
+            let _ = root_store.add(cert);
+        }
     }
-    let config = rustls::ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
+    let configured = configured_ca_certificates(data);
+    let custom_identity = data.is_some_and(|data| data.custom_identity);
+    let node_verifier = if configured.is_empty() && !custom_identity {
+        None
+    } else {
+        Some(NodeConfiguredCaVerifier {
+            inner: rustls::client::WebPkiServerVerifier::builder(Arc::new(root_store.clone()))
+                .build()
+                .map_err(|error| format!("tls certificate verifier: {error}"))?,
+            roots: root_store.clone(),
+            configured,
+            custom_identity,
+        })
+    };
+    let versions = tls_protocol_versions(data.map_or(0b11, |data| data.version_mask));
+    let builder = rustls::ClientConfig::builder_with_provider(
+        rustls::crypto::aws_lc_rs::default_provider().into(),
+    )
+    .with_protocol_versions(&versions)
+    .map_err(|error| format!("tls protocol versions: {error}"))?
+    .with_root_certificates(root_store);
+    let mut config = if let Some((certs, key)) = data.and_then(client_auth_material) {
+        builder
+            .with_client_auth_cert(certs, key)
+            .map_err(|error| format!("tls client certificate: {error}"))?
+    } else {
+        builder.with_no_client_auth()
+    };
+    if let Some(data) = data {
+        config.alpn_protocols = data.alpn_protocols.clone();
+    }
+    if let Some(verifier) = node_verifier {
+        config
+            .dangerous()
+            .set_certificate_verifier(Arc::new(verifier));
+    }
     Ok(TlsConnector::from(Arc::new(config)))
+}
+
+#[cfg(feature = "tls")]
+fn add_pem_roots(store: &mut rustls::RootCertStore, materials: &[Vec<u8>]) {
+    for material in materials {
+        let mut cursor = std::io::Cursor::new(material);
+        for cert in rustls_pemfile::certs(&mut cursor).flatten() {
+            let _ = store.add(cert);
+        }
+    }
+}
+
+#[cfg(feature = "tls")]
+fn configured_ca_certificates(data: Option<&TlsClientConfigData>) -> Vec<Vec<u8>> {
+    data.and_then(|data| data.ca.as_ref())
+        .into_iter()
+        .flatten()
+        .flat_map(|material| {
+            let mut cursor = std::io::Cursor::new(material);
+            rustls_pemfile::certs(&mut cursor)
+                .flatten()
+                .map(|cert| cert.as_ref().to_vec())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[cfg(feature = "tls")]
+fn client_auth_material(
+    data: &TlsClientConfigData,
+) -> Option<(
+    Vec<rustls::pki_types::CertificateDer<'static>>,
+    rustls::pki_types::PrivateKeyDer<'static>,
+)> {
+    let mut cert_cursor = std::io::Cursor::new(&data.cert);
+    let certs: Vec<_> = rustls_pemfile::certs(&mut cert_cursor).flatten().collect();
+    if certs.is_empty() {
+        return None;
+    }
+    let mut key_cursor = std::io::Cursor::new(&data.key);
+    let key = rustls_pemfile::private_key(&mut key_cursor)
+        .ok()
+        .flatten()?;
+    Some((certs, key))
 }
 
 /// Insecure TLS — accept any server cert without verifying chain or hostname.
@@ -412,8 +744,9 @@ fn build_tls_connector(verify: bool) -> Result<TlsConnector, String> {
 /// should pass `verify: true` (the default) so the system trust store and
 /// hostname validation apply.
 #[cfg(feature = "tls")]
-fn build_tls_connector_insecure() -> Result<TlsConnector, String> {
-    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+fn build_tls_connector_insecure(
+    data: Option<&TlsClientConfigData>,
+) -> Result<TlsConnector, String> {
     use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
     use rustls::{DigitallySignedStruct, SignatureScheme};
 
@@ -462,10 +795,24 @@ fn build_tls_connector_insecure() -> Result<TlsConnector, String> {
         }
     }
 
-    let config = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(NoVerify))
-        .with_no_client_auth();
+    let versions = tls_protocol_versions(data.map_or(0b11, |data| data.version_mask));
+    let builder = rustls::ClientConfig::builder_with_provider(
+        rustls::crypto::aws_lc_rs::default_provider().into(),
+    )
+    .with_protocol_versions(&versions)
+    .map_err(|error| format!("tls protocol versions: {error}"))?
+    .dangerous()
+    .with_custom_certificate_verifier(Arc::new(NoVerify));
+    let mut config = if let Some((certs, key)) = data.and_then(client_auth_material) {
+        builder
+            .with_client_auth_cert(certs, key)
+            .map_err(|error| format!("tls client certificate: {error}"))?
+    } else {
+        builder.with_no_client_auth()
+    };
+    if let Some(data) = data {
+        config.alpn_protocols = data.alpn_protocols.clone();
+    }
     Ok(TlsConnector::from(Arc::new(config)))
 }
 
@@ -667,6 +1014,7 @@ pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, ho
 #[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64 {
+    perry_runtime::tls::js_tls_prepare_connect();
     extern "C" {
         fn js_value_is_closure(value_bits: i64) -> i32;
     }
@@ -685,7 +1033,7 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
         (j.is_bool() && !j.to_bool()) || (j.is_number() && j.as_number() == 0.0)
     };
 
-    let (host, port, servername, verify, cb_f64);
+    let (host, port, servername, verify, cb_f64, metadata_options);
     if let Some(h) = as_string(arg1) {
         // Legacy Perry positional: (host, port, servername?, verify?).
         let p = JSValue::from_bits(arg2.to_bits());
@@ -697,8 +1045,60 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
         host = h;
         verify = !explicitly_off(arg4);
         cb_f64 = None;
+        metadata_options = f64::from_bits(0x7FFC_0000_0000_0001);
     } else if is_nanboxed_pointer(arg1) && !is_closure(arg1) {
         // Node options form: tls.connect(options[, callback]).
+        perry_runtime::tls::js_tls_validate_connect_options(arg1);
+        if let Some(socket_value) = get_object_value_field(arg1, "socket") {
+            let socket_js = JSValue::from_bits(socket_value.to_bits());
+            let handle = if socket_js.is_pointer() {
+                unbox_pointer(socket_value) as i64
+            } else {
+                0
+            };
+            if handle != 0 {
+                host = get_object_string_field(arg1, "host")
+                    .or_else(|| get_object_string_field(arg1, "hostname"))
+                    .unwrap_or_else(|| "localhost".to_string());
+                servername =
+                    get_object_string_field(arg1, "servername").unwrap_or_else(|| host.clone());
+                verify = get_object_bool_field(arg1, "rejectUnauthorized").unwrap_or(true);
+                cb_f64 = is_closure(arg2).then_some(arg2);
+                metadata_options = arg1;
+                let config = tls_client_config_data(metadata_options);
+                perry_runtime::tls::js_tls_client_record_start(
+                    handle,
+                    metadata_options,
+                    servername.as_ptr(),
+                    servername.len(),
+                );
+                if let Some(callback) = cb_f64 {
+                    let callback = unbox_pointer(callback) as i64;
+                    if callback != 0 {
+                        NET_LISTENERS
+                            .lock()
+                            .unwrap()
+                            .entry(handle)
+                            .or_default()
+                            .entry("secureConnect".to_string())
+                            .or_default()
+                            .push(callback);
+                    }
+                }
+                let preflight = tls_preflight(0, &servername, metadata_options);
+                if preflight != 0 {
+                    push_event(PendingNetEvent::Error(
+                        handle,
+                        tls_preflight_error(preflight).to_string(),
+                    ));
+                    push_event(PendingNetEvent::Close(handle));
+                } else if let Err(error) = begin_tls_upgrade(handle, servername, verify, config) {
+                    push_event(PendingNetEvent::Error(handle, error));
+                    push_event(PendingNetEvent::Close(handle));
+                }
+                return handle;
+            }
+        }
         port = match get_object_number_field(arg1, "port") {
             Some(p) => {
                 perry_runtime::net_validate::js_net_validate_connect_port(p);
@@ -715,10 +1115,18 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
         servername = get_object_string_field(arg1, "servername").unwrap_or_else(|| host.clone());
         verify = get_object_bool_field(arg1, "rejectUnauthorized").unwrap_or(true);
         cb_f64 = if is_closure(arg2) { Some(arg2) } else { None };
-    } else if JSValue::from_bits(arg1.to_bits()).is_number() {
+        metadata_options = arg1;
+    } else if JSValue::from_bits(arg1.to_bits()).is_number()
+        || JSValue::from_bits(arg1.to_bits()).is_int32()
+    {
         // Node positional form: tls.connect(port[, host][, options][, cb]).
         perry_runtime::net_validate::js_net_validate_connect_port(arg1);
-        port = arg1 as u16;
+        let port_value = JSValue::from_bits(arg1.to_bits());
+        port = if port_value.is_int32() {
+            port_value.as_int32() as u16
+        } else {
+            arg1 as u16
+        };
         let mut opt_host: Option<String> = None;
         let mut opts: Option<f64> = None;
         let mut cb: Option<f64> = None;
@@ -734,6 +1142,9 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
             } else if is_nanboxed_pointer(v) {
                 opts = opts.or(Some(v));
             }
+        }
+        if let Some(options) = opts {
+            perry_runtime::tls::js_tls_validate_positional_connect_options(options);
         }
         host = opt_host
             .or_else(|| {
@@ -751,11 +1162,46 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
             .and_then(|o| get_object_bool_field(o, "rejectUnauthorized"))
             .unwrap_or(true);
         cb_f64 = cb;
+        metadata_options = opts.unwrap_or_else(|| f64::from_bits(0x7FFC_0000_0000_0001));
     } else {
         return 0;
     }
 
-    let handle = spawn_socket_task(host, port, Some((servername, verify)));
+    let config = tls_client_config_data(metadata_options);
+    if tls_signal_is_pre_aborted(metadata_options) {
+        let handle = js_net_socket_alloc();
+        perry_runtime::tls::js_tls_client_record_start(
+            handle,
+            metadata_options,
+            servername.as_ptr(),
+            servername.len(),
+        );
+        schedule_tls_abort(handle);
+        return handle;
+    }
+    let preflight = tls_preflight(port, &servername, metadata_options);
+    if preflight != 0 {
+        let handle = js_net_socket_alloc();
+        perry_runtime::tls::js_tls_client_record_start(
+            handle,
+            metadata_options,
+            servername.as_ptr(),
+            servername.len(),
+        );
+        push_event(PendingNetEvent::Error(
+            handle,
+            tls_preflight_error(preflight).to_string(),
+        ));
+        push_event(PendingNetEvent::Close(handle));
+        return handle;
+    }
+    let handle = spawn_socket_task(host, port, Some((servername.clone(), verify, config)));
+    perry_runtime::tls::js_tls_client_record_start(
+        handle,
+        metadata_options,
+        servername.as_ptr(),
+        servername.len(),
+    );
     crate::tls::record_tls_client_handle(handle);
     if let Some(cb) = cb_f64 {
         if handle != 0 {
@@ -778,7 +1224,11 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
 /// Internal: allocate the handle, spawn the tokio task.
 /// `direct_tls` = Some((servername, verify)) runs a TLS handshake before
 /// firing 'connect'; None keeps the socket in plain TCP mode.
-fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>) -> i64 {
+fn spawn_socket_task(
+    host: String,
+    port: u16,
+    direct_tls: Option<(String, bool, TlsClientConfigData)>,
+) -> i64 {
     ensure_gc_scanner_registered();
     let id = next_id();
     let (tx, mut rx) = mpsc::unbounded_channel::<SocketCommand>();
@@ -809,15 +1259,20 @@ fn spawn_socket_task(host: String, port: u16, direct_tls: Option<(String, bool)>
         // Direct-TLS path: run the TLS handshake before signalling connect.
         let transport = match direct_tls {
             #[cfg(feature = "tls")]
-            Some((servername, verify)) => match do_tls_handshake(tcp, &servername, verify).await {
-                Ok(tls) => Transport::Tls(Box::new(tls)),
-                Err(e) => {
-                    push_event(PendingNetEvent::Error(id, e));
-                    push_event(PendingNetEvent::Close(id));
-                    mark_closed(id);
-                    return;
+            Some((servername, verify, config)) => {
+                match do_tls_handshake(tcp, &servername, verify, Some(&config)).await {
+                    Ok(tls) => {
+                        record_tls_handshake(id, &tls, verify, Some(&config));
+                        Transport::Tls(Box::new(tls))
+                    }
+                    Err(e) => {
+                        push_event(PendingNetEvent::Error(id, e));
+                        push_event(PendingNetEvent::Close(id));
+                        mark_closed(id);
+                        return;
+                    }
                 }
-            },
+            }
             #[cfg(not(feature = "tls"))]
             Some(_) => {
                 push_event(PendingNetEvent::Error(
@@ -847,14 +1302,80 @@ async fn do_tls_handshake(
     tcp: TcpStream,
     servername: &str,
     verify: bool,
+    data: Option<&TlsClientConfigData>,
 ) -> Result<TlsStream<TcpStream>, String> {
-    let connector = build_tls_connector(verify)?;
+    let connector = build_tls_connector(verify, data)?;
     let server_name = rustls::pki_types::ServerName::try_from(servername.to_string())
         .map_err(|e| format!("invalid servername '{}': {}", servername, e))?;
     connector
         .connect(server_name, tcp)
         .await
         .map_err(|e| format!("tls handshake: {}", e))
+}
+
+#[cfg(feature = "tls")]
+fn record_tls_handshake(
+    handle: i64,
+    stream: &TlsStream<TcpStream>,
+    verify: bool,
+    data: Option<&TlsClientConfigData>,
+) {
+    let connection = stream.get_ref().1;
+    let protocol = match connection.protocol_version() {
+        Some(rustls::ProtocolVersion::TLSv1_2) => "TLSv1.2",
+        Some(rustls::ProtocolVersion::TLSv1_3) => "TLSv1.3",
+        _ => "",
+    };
+    let alpn = connection.alpn_protocol().unwrap_or_default();
+    let peer = connection
+        .peer_certificates()
+        .and_then(|certs| certs.first())
+        .map(|cert| cert.as_ref())
+        .unwrap_or_default();
+    let trusted_by_configured_ca =
+        data.and_then(|data| data.ca.as_ref())
+            .is_some_and(|materials| {
+                materials.iter().any(|material| {
+                    let mut cursor = std::io::Cursor::new(material);
+                    let trusted = rustls_pemfile::certs(&mut cursor)
+                        .flatten()
+                        .any(|cert| cert.as_ref() == peer);
+                    trusted
+                })
+            });
+    let authorized = verify || trusted_by_configured_ca;
+    let authorization_error = if authorized {
+        ""
+    } else {
+        "DEPTH_ZERO_SELF_SIGNED_CERT"
+    };
+    let own_certificate = data
+        .map(|data| {
+            let mut cursor = std::io::Cursor::new(&data.cert);
+            let certificate = rustls_pemfile::certs(&mut cursor)
+                .flatten()
+                .next()
+                .map(|cert| cert.as_ref().to_vec())
+                .unwrap_or_default();
+            certificate
+        })
+        .unwrap_or_default();
+    unsafe {
+        perry_runtime::tls::js_tls_client_record_connected(
+            handle,
+            authorized as i32,
+            authorization_error.as_ptr(),
+            authorization_error.len(),
+            protocol.as_ptr(),
+            protocol.len(),
+            alpn.as_ptr(),
+            alpn.len(),
+            peer.as_ptr(),
+            peer.len(),
+            own_certificate.as_ptr(),
+            own_certificate.len(),
+        );
+    }
 }
 
 /// The read/write/command loop. Shared by plain-TCP and direct-TLS paths.
@@ -876,6 +1397,12 @@ async fn run_socket_task(
             read_result = t.read(&mut buf) => {
                 match read_result {
                     Ok(0) => {
+                        // Node's default `allowHalfOpen: false` closes the
+                        // writable side after peer EOF. On TLS transports this
+                        // also sends close_notify instead of making the peer
+                        // report an unclean close without an `end` event.
+                        let _ = t.shutdown().await;
+                        push_event(PendingNetEvent::End(id));
                         push_event(PendingNetEvent::Close(id));
                         mark_closed(id);
                         break;
@@ -910,7 +1437,7 @@ async fn run_socket_task(
                         break;
                     }
                     #[cfg(feature = "tls")]
-                    Some(SocketCommand::UpgradeTls { servername, verify, reply }) => {
+                    Some(SocketCommand::UpgradeTls { servername, verify, config, reply }) => {
                         // Take the plain TcpStream out of the enum, run the
                         // handshake, and put a TlsStream back under the same id.
                         // Done inline (blocks reads until handshake completes),
@@ -918,11 +1445,13 @@ async fn run_socket_task(
                         let old = transport.take();
                         match old {
                             Some(Transport::Plain(tcp)) => {
-                                match do_tls_handshake(tcp, &servername, verify).await {
+                                match do_tls_handshake(tcp, &servername, verify, Some(&config)).await {
                                     Ok(tls) => {
+                                        record_tls_handshake(id, &tls, verify, Some(&config));
                                         transport = Some(Transport::Tls(Box::new(tls)));
                                         crate::tls::record_tls_client_handle(id);
                                         let _ = reply.send(Ok(()));
+                                        push_event(PendingNetEvent::SecureConnect(id));
                                     }
                                     Err(e) => {
                                         let _ = reply.send(Err(e.clone()));
@@ -1039,9 +1568,89 @@ pub unsafe extern "C" fn js_net_socket_on(handle: i64, event_ptr: i64, cb: i64) 
         Some(e) => e,
         None => return,
     };
-    let mut listeners = NET_LISTENERS.lock().unwrap();
-    let entry = listeners.entry(handle).or_default();
-    entry.entry(event).or_default().push(cb);
+    {
+        let mut listeners = NET_LISTENERS.lock().unwrap();
+        let entry = listeners.entry(handle).or_default();
+        entry.entry(event.clone()).or_default().push(cb);
+    }
+    #[cfg(feature = "tls")]
+    if event == "close" {
+        fire_pending_tls_abort(handle);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_once(handle: i64, event_ptr: i64, cb: i64) -> i64 {
+    // Net events in this transport are terminal or edge-triggered for the
+    // lifecycle cases TLSSocket uses. Register in the same provider map; the
+    // external provider supplies its full once-flag implementation when it is
+    // linked ahead of this bundled fallback.
+    js_net_socket_on(handle, event_ptr, cb);
+    handle
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_remove_listener(
+    handle: i64,
+    event_ptr: i64,
+    cb: i64,
+) -> i64 {
+    if let Some(event) = string_from_header_i64(event_ptr) {
+        if let Some(callbacks) = NET_LISTENERS
+            .lock()
+            .unwrap()
+            .get_mut(&handle)
+            .and_then(|events| events.get_mut(&event))
+        {
+            if let Some(index) = callbacks.iter().position(|candidate| *candidate == cb) {
+                callbacks.remove(index);
+            }
+        }
+    }
+    handle
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_remove_all_listeners(handle: i64, event_ptr: i64) -> i64 {
+    let mut all = NET_LISTENERS.lock().unwrap();
+    if event_ptr == 0 {
+        all.entry(handle).or_default().clear();
+    } else if let Some(event) = string_from_header_i64(event_ptr) {
+        all.entry(handle).or_default().remove(&event);
+    }
+    handle
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_listener_count(handle: i64, event_ptr: i64) -> f64 {
+    let Some(event) = string_from_header_i64(event_ptr) else {
+        return 0.0;
+    };
+    NET_LISTENERS
+        .lock()
+        .unwrap()
+        .get(&handle)
+        .and_then(|events| events.get(&event))
+        .map(|callbacks| callbacks.len() as f64)
+        .unwrap_or(0.0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_event_names(handle: i64) -> *mut StringHeader {
+    let names = NET_LISTENERS
+        .lock()
+        .unwrap()
+        .get(&handle)
+        .map(|events| {
+            events
+                .iter()
+                .filter(|(_, callbacks)| !callbacks.is_empty())
+                .map(|(name, _)| format!("\"{}\"", name.replace('"', "\\\"")))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let json = format!("[{}]", names.join(","));
+    perry_runtime::js_string_from_bytes(json.as_ptr(), json.len() as u32)
 }
 
 // ─── FFI: socket.upgradeToTLS(servername) -> Promise ─────────────────────────
@@ -1097,6 +1706,7 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
         .send(SocketCommand::UpgradeTls {
             servername,
             verify,
+            config: TlsClientConfigData::default(),
             reply: reply_tx,
         })
         .is_err()
@@ -1140,6 +1750,34 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
 /// per-thread scratch buffer (moved out across dispatch so a re-entrant
 /// pump from inside a user callback is safe; capacity retained → zero
 /// steady-state allocation).
+unsafe fn emit_socket_no_arg(handle: i64, event: &str) {
+    let receiver = f64::from_bits(0x7FFD_0000_0000_0000 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF));
+    let previous_this = perry_runtime::object::js_implicit_this_set(receiver);
+    for callback in listeners_for(handle, event) {
+        if callback != 0 {
+            js_closure_call0(callback as *const ClosureHeader);
+        }
+    }
+    perry_runtime::object::js_implicit_this_set(previous_this);
+}
+
+#[cfg(feature = "tls")]
+unsafe fn emit_tls_secure_connect(handle: i64) {
+    let identity_error = perry_runtime::tls::js_tls_client_check_identity_from_metadata(handle);
+    if !JSValue::from_bits(identity_error.to_bits()).is_undefined() {
+        for callback in listeners_for(handle, "error") {
+            if callback != 0 {
+                js_closure_call1(callback as *const ClosureHeader, identity_error);
+            }
+        }
+        if let Some(socket) = NET_SOCKETS.lock().unwrap().get(&handle) {
+            let _ = socket.cmd_tx.send(SocketCommand::Destroy);
+        }
+        return;
+    }
+    emit_socket_no_arg(handle, "secureConnect");
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_net_process_pending() -> i32 {
     thread_local! {
@@ -1157,17 +1795,14 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
     for ev in events.drain(..) {
         match ev {
             PendingNetEvent::Connect(id) => {
-                for cb in listeners_for(id, "connect") {
-                    if cb != 0 {
-                        js_closure_call0(cb as *const ClosureHeader);
-                    }
-                }
-                for cb in listeners_for(id, "secureConnect") {
-                    if cb != 0 {
-                        js_closure_call0(cb as *const ClosureHeader);
-                    }
+                emit_socket_no_arg(id, "connect");
+                #[cfg(feature = "tls")]
+                if perry_runtime::tls::js_tls_client_is_connected(id) != 0 {
+                    emit_tls_secure_connect(id);
                 }
             }
+            #[cfg(feature = "tls")]
+            PendingNetEvent::SecureConnect(id) => emit_tls_secure_connect(id),
             PendingNetEvent::Data(id, bytes) => {
                 let cbs = listeners_for(id, "data");
                 if cbs.is_empty() {
@@ -1205,7 +1840,17 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                     }
                 }
             }
+            PendingNetEvent::Abort(id) => {
+                let error = perry_runtime::url::js_abort_error_value();
+                for callback in listeners_for(id, "error") {
+                    if callback != 0 {
+                        js_closure_call1(callback as *const ClosureHeader, error);
+                    }
+                }
+            }
+            PendingNetEvent::End(id) => emit_socket_no_arg(id, "end"),
             PendingNetEvent::Close(id) => {
+                perry_runtime::tls::js_tls_client_record_closed(id);
                 for cb in listeners_for(id, "close") {
                     if cb != 0 {
                         js_closure_call0(cb as *const ClosureHeader);

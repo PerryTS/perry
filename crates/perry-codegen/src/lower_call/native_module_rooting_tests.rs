@@ -11,6 +11,16 @@ use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, Stmt};
 
 fn compile_native_call(args: Vec<Expr>) -> String {
+    compile_native_instance_call("https", None, None, "createServer", args)
+}
+
+fn compile_native_instance_call(
+    native_module: &str,
+    class_name: Option<&str>,
+    object: Option<Expr>,
+    method: &str,
+    args: Vec<Expr>,
+) -> String {
     let mut module = Module::new("native_module_rooting_test.ts");
     module.functions.push(Function {
         id: 0,
@@ -19,10 +29,10 @@ fn compile_native_call(args: Vec<Expr>) -> String {
         params: Vec::new(),
         return_type: Type::Any,
         body: vec![Stmt::Expr(Expr::NativeMethodCall {
-            module: "https".to_string(),
-            class_name: None,
-            object: None,
-            method: "createServer".to_string(),
+            module: native_module.to_string(),
+            class_name: class_name.map(str::to_string),
+            object: object.map(Box::new),
+            method: method.to_string(),
             args,
         })],
         is_async: false,
@@ -82,5 +92,26 @@ fn native_module_first_argument_is_rooted_across_allocating_second_argument() {
         &options,
         "js_node_https_create_server",
         "native-module options argument",
+    );
+}
+
+#[test]
+fn x509_zero_argument_method_call_uses_invoking_dispatch() {
+    let module_ir = compile_native_instance_call(
+        "crypto",
+        Some("X509Certificate"),
+        Some(Expr::Number(1.0)),
+        "toLegacyObject",
+        Vec::new(),
+    );
+    let ir = build_function_ir(&module_ir);
+
+    assert!(
+        ir.contains("call double @js_native_call_method("),
+        "X509Certificate method calls must use the invoking dispatcher:\n{ir}"
+    );
+    assert!(
+        !ir.contains("@js_native_call_method_nullsafe("),
+        "the zero-argument property-read fallback returns a bound method closure:\n{ir}"
     );
 }

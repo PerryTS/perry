@@ -320,7 +320,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
 /// Polymorphic numeric-key set: `obj[idx] = value` where `idx` is a number
 /// and the receiver type isn't statically known. Dispatches by GC type:
 ///
-/// - `GC_TYPE_ARRAY` / buffer / typed-array → `js_array_set_f64_extend`,
+/// - `GC_TYPE_ARRAY` / buffer / typed-array → `js_array_set_f64_extend_strict`,
 ///   which preserves the array fast-path (forwarding chain follow + grow).
 /// - `GC_TYPE_OBJECT` / `GC_TYPE_CLOSURE`   → stringify `idx` and delegate
 ///   to `js_object_set_field_by_name`. JS treats `obj[0] = v` as `obj["0"] = v`,
@@ -466,10 +466,10 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
 
     if gc_type == crate::gc::GC_TYPE_ARRAY {
         if let Some(index) = numeric_key_u32_index(idx) {
-            // Includes lazy/forwarded — js_array_set_f64_extend's clean_arr_ptr_mut
+            // Includes lazy/forwarded — js_array_set_f64_extend_strict's clean_arr_ptr_mut
             // walks the forwarding chain and routes buffers/typed-arrays through
             // their per-kind setter.
-            crate::array::js_array_set_f64_extend(
+            crate::array::js_array_set_f64_extend_strict(
                 raw as *mut crate::array::ArrayHeader,
                 index,
                 value,
@@ -507,7 +507,11 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     // writes are no-ops instead of truncating fractional keys into element
     // offsets.
     if let Some(index) = numeric_key_u32_index(idx) {
-        crate::array::js_array_set_f64_extend(raw as *mut crate::array::ArrayHeader, index, value);
+        crate::array::js_array_set_f64_extend_strict(
+            raw as *mut crate::array::ArrayHeader,
+            index,
+            value,
+        );
     }
 }
 

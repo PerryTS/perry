@@ -529,7 +529,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
 /// the incremented value without duplicating the IndexSet dispatch tree.
 ///
 /// Routes by the receiver's `gc_type` byte: arrays go through
-/// `js_array_set_index_or_string` (numeric/string-key spec dispatch);
+/// `js_array_set_index_or_string_strict` (numeric/string-key spec dispatch);
 /// everything else stringifies the index and routes through
 /// `js_object_set_field_by_name`. Strings are immutable — no-op (matches
 /// strict-mode `s[i] = x` semantics, close enough for the `++result[key]`
@@ -753,7 +753,7 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     }
     let is_array = receiver_tag.is_some_and(|(obj_type, _)| obj_type == crate::gc::GC_TYPE_ARRAY);
     if is_array {
-        crate::array::js_array_set_index_or_string(
+        crate::array::js_array_set_index_or_string_strict(
             raw_ptr as *mut crate::array::ArrayHeader,
             index,
             value,

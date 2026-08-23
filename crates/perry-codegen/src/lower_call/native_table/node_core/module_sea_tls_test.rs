@@ -258,6 +258,15 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "tls",
         has_receiver: false,
+        method: "getCertificateCompressionAlgorithms",
+        class_filter: None,
+        runtime: "js_tls_get_certificate_compression_algorithms",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "tls",
+        has_receiver: false,
         method: "getCACertificates",
         class_filter: None,
         runtime: "js_tls_get_ca_certificates",

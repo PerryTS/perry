@@ -10,100 +10,12 @@
 use perry_runtime::array::js_array_get_f64;
 use perry_runtime::{js_array_length, js_nanbox_pointer, JSValue, ObjectHeader};
 
-use super::secure_context::{
-    ca_store, cert_list_from_array_value, make_secure_context, root_certificates,
-    validate_ca_list_for_set,
-};
 use super::{
     f64_from_raw_bits, is_array_value, js_is_undefined_or_null, js_tls_create_server,
-    js_tls_tlssocket_constructor, nanbox_handle, nanbox_str, object_field, object_field_string,
-    pointer_addr, record_tls_client_handle, set_field, set_str_field, static_string_array,
-    string_array, throw_type_error, type_name, undefined, value_to_string,
+    js_tls_tlssocket_constructor, nanbox_handle, object_field, object_field_string, pointer_addr,
+    record_tls_client_handle, set_field, throw_type_error, undefined, value_to_string,
     TLS_DISPATCH_MISSING_BITS,
 };
-
-const DEFAULT_CIPHERS: &str = concat!(
-    "TLS_AES_256_GCM_SHA384:",
-    "TLS_CHACHA20_POLY1305_SHA256:",
-    "TLS_AES_128_GCM_SHA256:",
-    "ECDHE-RSA-AES128-GCM-SHA256:",
-    "ECDHE-ECDSA-AES128-GCM-SHA256:",
-    "ECDHE-RSA-AES256-GCM-SHA384:",
-    "ECDHE-ECDSA-AES256-GCM-SHA384:",
-    "DHE-RSA-AES128-GCM-SHA256:",
-    "ECDHE-RSA-AES128-SHA256:",
-    "DHE-RSA-AES128-SHA256:",
-    "ECDHE-RSA-AES256-SHA384:",
-    "DHE-RSA-AES256-SHA384:",
-    "ECDHE-RSA-AES256-SHA256:",
-    "DHE-RSA-AES256-SHA256:",
-    "HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA"
-);
-
-const NODE_TLS_CIPHERS: &[&str] = &[
-    "aes128-gcm-sha256",
-    "aes128-sha",
-    "aes128-sha256",
-    "aes256-gcm-sha384",
-    "aes256-sha",
-    "aes256-sha256",
-    "dhe-psk-aes128-cbc-sha",
-    "dhe-psk-aes128-cbc-sha256",
-    "dhe-psk-aes128-gcm-sha256",
-    "dhe-psk-aes256-cbc-sha",
-    "dhe-psk-aes256-cbc-sha384",
-    "dhe-psk-aes256-gcm-sha384",
-    "dhe-psk-chacha20-poly1305",
-    "dhe-rsa-aes128-gcm-sha256",
-    "dhe-rsa-aes128-sha",
-    "dhe-rsa-aes128-sha256",
-    "dhe-rsa-aes256-gcm-sha384",
-    "dhe-rsa-aes256-sha",
-    "dhe-rsa-aes256-sha256",
-    "dhe-rsa-chacha20-poly1305",
-    "ecdhe-ecdsa-aes128-gcm-sha256",
-    "ecdhe-ecdsa-aes128-sha",
-    "ecdhe-ecdsa-aes128-sha256",
-    "ecdhe-ecdsa-aes256-gcm-sha384",
-    "ecdhe-ecdsa-aes256-sha",
-    "ecdhe-ecdsa-aes256-sha384",
-    "ecdhe-ecdsa-chacha20-poly1305",
-    "ecdhe-psk-aes128-cbc-sha",
-    "ecdhe-psk-aes128-cbc-sha256",
-    "ecdhe-psk-aes256-cbc-sha",
-    "ecdhe-psk-aes256-cbc-sha384",
-    "ecdhe-psk-chacha20-poly1305",
-    "ecdhe-rsa-aes128-gcm-sha256",
-    "ecdhe-rsa-aes128-sha",
-    "ecdhe-rsa-aes128-sha256",
-    "ecdhe-rsa-aes256-gcm-sha384",
-    "ecdhe-rsa-aes256-sha",
-    "ecdhe-rsa-aes256-sha384",
-    "ecdhe-rsa-chacha20-poly1305",
-    "psk-aes128-cbc-sha",
-    "psk-aes128-cbc-sha256",
-    "psk-aes128-gcm-sha256",
-    "psk-aes256-cbc-sha",
-    "psk-aes256-cbc-sha384",
-    "psk-aes256-gcm-sha384",
-    "psk-chacha20-poly1305",
-    "rsa-psk-aes128-cbc-sha",
-    "rsa-psk-aes128-cbc-sha256",
-    "rsa-psk-aes128-gcm-sha256",
-    "rsa-psk-aes256-cbc-sha",
-    "rsa-psk-aes256-cbc-sha384",
-    "rsa-psk-aes256-gcm-sha384",
-    "rsa-psk-chacha20-poly1305",
-    "srp-aes-128-cbc-sha",
-    "srp-aes-256-cbc-sha",
-    "srp-rsa-aes-128-cbc-sha",
-    "srp-rsa-aes-256-cbc-sha",
-    "tls_aes_128_ccm_8_sha256",
-    "tls_aes_128_ccm_sha256",
-    "tls_aes_128_gcm_sha256",
-    "tls_aes_256_gcm_sha384",
-    "tls_chacha20_poly1305_sha256",
-];
 
 fn split_subject_alt_names(san: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -141,90 +53,78 @@ unsafe fn cn_values(subject_value: f64) -> Vec<String> {
 
 unsafe fn make_altname_error(reason: String, host: &str, cert: f64) -> f64 {
     let message = format!("Hostname/IP does not match certificate's altnames: {reason}");
-    let message_ptr =
-        perry_runtime::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = perry_runtime::error::js_error_new_with_message(message_ptr);
-    let obj = error as *mut ObjectHeader;
-    set_str_field(obj, "code", "ERR_TLS_CERT_ALTNAME_INVALID");
-    set_str_field(obj, "reason", &reason);
-    set_str_field(obj, "host", host);
-    set_field(obj, "cert", cert);
-    js_nanbox_pointer(error as i64)
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let cert = scope.root_nanbox_f64(cert);
+    let message = scope.root_string_ptr(perry_runtime::string::js_string_from_bytes(
+        message.as_ptr(),
+        message.len() as u32,
+    ));
+    let fields = [
+        ("code", "ERR_TLS_CERT_ALTNAME_INVALID"),
+        ("reason", reason.as_str()),
+        ("host", host),
+    ]
+    .into_iter()
+    .map(|(name, value)| {
+        (
+            scope.root_string_ptr(perry_runtime::string::js_string_from_bytes(
+                name.as_ptr(),
+                name.len() as u32,
+            )),
+            scope.root_nanbox_f64(super::nanbox_str(value)),
+        )
+    })
+    .collect::<Vec<_>>();
+    let cert_key = scope.root_string_ptr(perry_runtime::string::js_string_from_bytes(
+        b"cert".as_ptr(),
+        4,
+    ));
+    let error = scope.root_raw_mut_ptr(perry_runtime::error::js_error_new_with_message(
+        message.get_raw_mut_ptr(),
+    ));
+    for (key, value) in &fields {
+        perry_runtime::object::js_object_set_field_by_name(
+            error.get_raw_mut_ptr::<ObjectHeader>(),
+            key.get_raw_const_ptr(),
+            value.get_nanbox_f64(),
+        );
+    }
+    perry_runtime::object::js_object_set_field_by_name(
+        error.get_raw_mut_ptr::<ObjectHeader>(),
+        cert_key.get_raw_const_ptr(),
+        cert.get_nanbox_f64(),
+    );
+    js_nanbox_pointer(error.get_raw_mut_ptr::<ObjectHeader>() as i64)
 }
 
 pub unsafe extern "C" fn js_tls_get_ciphers() -> *mut perry_runtime::ArrayHeader {
-    static_string_array(NODE_TLS_CIPHERS)
+    let value = perry_runtime::tls::js_tls_get_ciphers();
+    pointer_addr(value).unwrap_or(0) as *mut perry_runtime::ArrayHeader
 }
 
 pub unsafe extern "C" fn js_tls_root_certificates() -> *mut perry_runtime::ArrayHeader {
-    string_array(root_certificates())
+    let value = perry_runtime::tls::js_tls_root_certificates();
+    pointer_addr(value).unwrap_or(0) as *mut perry_runtime::ArrayHeader
 }
 
 pub unsafe extern "C" fn js_tls_get_ca_certificates(
     type_bits: i64,
 ) -> *mut perry_runtime::ArrayHeader {
-    let value = f64_from_raw_bits(type_bits);
-    let kind = if js_is_undefined_or_null(value) {
-        "default".to_string()
-    } else {
-        let jsv = JSValue::from_bits(value.to_bits());
-        if !jsv.is_any_string() {
-            throw_type_error(
-                &format!(
-                    "The \"type\" argument must be of type string. Received type {}",
-                    type_name(value)
-                ),
-                "ERR_INVALID_ARG_TYPE",
-            );
-        }
-        value_to_string(value).unwrap_or_default()
-    };
-
-    match kind.as_str() {
-        "default" => {
-            if let Some(certs) = ca_store().lock().unwrap().clone() {
-                string_array(&certs)
-            } else {
-                string_array(root_certificates())
-            }
-        }
-        "system" | "bundled" => string_array(root_certificates()),
-        "extra" => string_array(&[]),
-        _ => throw_type_error(
-            &format!("The argument 'type' is invalid. Received {kind:?}"),
-            "ERR_INVALID_ARG_VALUE",
-        ),
-    }
+    let value = perry_runtime::tls::js_tls_get_ca_certificates(f64_from_raw_bits(type_bits));
+    pointer_addr(value).unwrap_or(0) as *mut perry_runtime::ArrayHeader
 }
 
 pub unsafe extern "C" fn js_tls_set_default_ca_certificates(certs_bits: i64) -> f64 {
-    let value = f64_from_raw_bits(certs_bits);
-    if !is_array_value(value) {
-        throw_type_error(
-            &format!(
-                "The \"certs\" argument must be an instance of Array. Received type {}",
-                type_name(value)
-            ),
-            "ERR_INVALID_ARG_TYPE",
-        );
-    }
-    let certs = cert_list_from_array_value(value).unwrap_or_else(|_| {
-        throw_type_error(
-            "The \"certs\" argument must contain strings or Buffer-like values",
-            "ERR_INVALID_ARG_TYPE",
-        )
-    });
-    validate_ca_list_for_set(&certs);
-    *ca_store().lock().unwrap() = Some(certs);
-    undefined()
+    perry_runtime::tls::js_tls_set_default_ca_certificates(f64_from_raw_bits(certs_bits))
 }
 
 pub unsafe extern "C" fn js_tls_check_server_identity(hostname_bits: i64, cert_bits: i64) -> f64 {
-    let hostname_value = f64_from_raw_bits(hostname_bits);
-    let cert = f64_from_raw_bits(cert_bits);
-    let host = value_to_string(hostname_value).unwrap_or_default();
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let hostname = scope.root_nanbox_f64(f64_from_raw_bits(hostname_bits));
+    let cert = scope.root_nanbox_f64(f64_from_raw_bits(cert_bits));
+    let host = value_to_string(hostname.get_nanbox_f64()).unwrap_or_default();
     let match_host = perry_runtime::tls::tls_domain_to_ascii(&host);
-    let san = object_field_string(cert, "subjectaltname").unwrap_or_default();
+    let san = object_field_string(cert.get_nanbox_f64(), "subjectaltname").unwrap_or_default();
     let san_entries = split_subject_alt_names(&san);
     let ip_names: Vec<String> = san_entries
         .iter()
@@ -249,7 +149,7 @@ pub unsafe extern "C" fn js_tls_check_server_identity(hostname_bits: i64, cert_b
             "IP: {host} is not in the cert's list: {}",
             ip_names.join(", ")
         );
-        return make_altname_error(reason, &host, cert);
+        return make_altname_error(reason, &host, cert.get_nanbox_f64());
     }
 
     if !dns_names.is_empty() {
@@ -260,10 +160,10 @@ pub unsafe extern "C" fn js_tls_check_server_identity(hostname_bits: i64, cert_b
             return undefined();
         }
         let reason = format!("Host: {host}. is not in the cert's altnames: {san}");
-        return make_altname_error(reason, &host, cert);
+        return make_altname_error(reason, &host, cert.get_nanbox_f64());
     }
 
-    let subject = object_field(cert, "subject");
+    let subject = object_field(cert.get_nanbox_f64(), "subject");
     let cns = cn_values(subject);
     if cns
         .iter()
@@ -276,15 +176,15 @@ pub unsafe extern "C" fn js_tls_check_server_identity(hostname_bits: i64, cert_b
     } else {
         format!("Host: {host}. is not cert's CN: {}", cns.join(","))
     };
-    make_altname_error(reason, &host, cert)
+    make_altname_error(reason, &host, cert.get_nanbox_f64())
 }
 
 pub unsafe extern "C" fn js_tls_create_secure_context(options_bits: i64) -> f64 {
-    make_secure_context(f64_from_raw_bits(options_bits))
+    perry_runtime::tls::js_tls_create_secure_context(f64_from_raw_bits(options_bits))
 }
 
 pub unsafe extern "C" fn js_tls_secure_context_constructor(options_bits: i64) -> f64 {
-    make_secure_context(f64_from_raw_bits(options_bits))
+    perry_runtime::tls::js_tls_secure_context_new(f64_from_raw_bits(options_bits))
 }
 
 #[no_mangle]
@@ -376,6 +276,9 @@ pub unsafe extern "C" fn js_tls_native_dispatch(
     };
     match method {
         "getCiphers" => js_nanbox_pointer(js_tls_get_ciphers() as i64),
+        "getCertificateCompressionAlgorithms" => {
+            perry_runtime::tls::js_tls_get_certificate_compression_algorithms()
+        }
         "rootCertificates" => js_nanbox_pointer(js_tls_root_certificates() as i64),
         "getCACertificates" => {
             js_nanbox_pointer(js_tls_get_ca_certificates(arg(0).to_bits() as i64) as i64)
@@ -410,7 +313,7 @@ pub unsafe extern "C" fn js_tls_native_dispatch(
         "createSecureContext" | "SecureContext" => {
             js_tls_create_secure_context(arg(0).to_bits() as i64)
         }
-        "$DEFAULT_CIPHERS" => nanbox_str(DEFAULT_CIPHERS),
+        "$DEFAULT_CIPHERS" => perry_runtime::tls::tls_default_ciphers_value(),
         _ => f64::from_bits(TLS_DISPATCH_MISSING_BITS),
     }
 }

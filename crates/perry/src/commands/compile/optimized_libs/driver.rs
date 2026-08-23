@@ -47,6 +47,9 @@ pub(crate) fn build_optimized_libs(
     let imports_undici = iteration_set
         .iter()
         .any(|m| m.strip_prefix("node:").unwrap_or(m) == "undici");
+    let imports_tls = iteration_set
+        .iter()
+        .any(|m| m.strip_prefix("node:").unwrap_or(m) == "tls");
     if imports_undici && !use_well_known {
         eprintln!(
             "error: `import 'undici'` requires the external perry-ext-undici wrapper, but the \
@@ -448,6 +451,16 @@ pub(crate) fn build_optimized_libs(
                 features.insert("external-events-construct");
             }
         }
+    }
+
+    // `net` maps to `[bundled-net, tls]` because its bundled implementation
+    // owns upgradeToTLS. Routing net to perry-ext-net strips both features,
+    // but an independent `node:tls` import still needs the stdlib TLS module
+    // for Server/TLSSocket constructors and their dynamic method dispatcher.
+    // Reassert that shared feature after all well-known removals so iteration
+    // order cannot make a direct `new tls.TLSSocket(...)` lose its provider.
+    if imports_tls {
+        features.insert("tls");
     }
 
     // The UI backends (perry-ui-gtk4 on Linux, perry-ui-macos, perry-ui-windows)

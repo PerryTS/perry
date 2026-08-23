@@ -29,12 +29,13 @@ pub use super::class_handles::{
     js_register_handle_property_set_dispatch, js_register_handle_prototype_dispatch,
     js_register_http_agent_handle_probe, js_register_net_socket_handle_probe,
     js_register_stream_expando_set, js_register_stream_handle_kind_probe,
-    js_register_stream_handle_probe, net_socket_handle_probe, stream_expando_set,
-    stream_handle_kind_probe, stream_handle_probe, EventEmitterAsyncResourceHandleProbeFn,
-    EventEmitterGetDomainFn, EventEmitterHandleProbeFn, EventEmitterOnFn, EventEmitterSetDomainFn,
-    FetchHandleKindProbeFn, HandleMethodDispatchFn, HandleOwnPropertyNamesDispatchFn,
-    HandlePropertyDispatchFn, HandlePropertySetDispatchFn, HandlePrototypeDispatchFn,
-    HttpAgentHandleProbeFn, NetSocketHandleProbeFn, StreamHandleKindProbeFn, StreamHandleProbeFn,
+    js_register_stream_handle_probe, js_register_tls_handle_kind_probe, net_socket_handle_probe,
+    stream_expando_set, stream_handle_kind_probe, stream_handle_probe, tls_handle_kind_probe,
+    EventEmitterAsyncResourceHandleProbeFn, EventEmitterGetDomainFn, EventEmitterHandleProbeFn,
+    EventEmitterOnFn, EventEmitterSetDomainFn, FetchHandleKindProbeFn, HandleMethodDispatchFn,
+    HandleOwnPropertyNamesDispatchFn, HandlePropertyDispatchFn, HandlePropertySetDispatchFn,
+    HandlePrototypeDispatchFn, HttpAgentHandleProbeFn, NetSocketHandleProbeFn,
+    StreamHandleKindProbeFn, StreamHandleProbeFn, TlsHandleKindProbeFn,
 };
 use super::*;
 

@@ -57,7 +57,7 @@ pub(crate) use dispatch::{
     coerce_call_this, rebind_explicit_this, reify_function_method_value,
     reset_throw_not_callable_counter,
 };
-pub use unbox::js_closure_unbox_callee_checked;
+pub use unbox::{js_closure_unbox_callee_checked, js_closure_unbox_callee_checked_rebind};
 
 #[cfg(test)]
 pub(crate) use box_captures::test_clear_closure_box_capture_indexes;

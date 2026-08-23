@@ -6099,6 +6099,7 @@ dependencies = [
  "perry-runtime",
  "rustls",
  "rustls-native-certs",
+ "rustls-pemfile",
  "serde_json",
  "tokio",
  "tokio-rustls",
@@ -6335,6 +6336,7 @@ dependencies = [
  "unicode-segmentation",
  "url",
  "windows-sys 0.61.2",
+ "x509-cert",
 ]
 
 [[package]]

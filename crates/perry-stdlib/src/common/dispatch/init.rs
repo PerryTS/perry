@@ -176,6 +176,20 @@ pub unsafe extern "C" fn js_handle_prototype_dispatch(handle: i64) -> f64 {
     if crate::string_decoder::is_string_decoder_handle(handle) {
         return crate::string_decoder::string_decoder_prototype_value();
     }
+    #[cfg(feature = "crypto")]
+    if crate::common::handle::with_handle::<crate::crypto::X509Handle, bool, _>(handle, |_| true)
+        .unwrap_or(false)
+    {
+        let constructor =
+            perry_runtime::object::bound_native_callable_export_value("crypto", "X509Certificate");
+        let constructor = perry_runtime::JSValue::from_bits(constructor.to_bits());
+        if constructor.is_pointer() {
+            return perry_runtime::closure::closure_get_dynamic_prop(
+                constructor.as_pointer::<u8>() as usize,
+                "prototype",
+            );
+        }
+    }
     f64::from_bits(perry_runtime::JSValue::undefined().bits())
 }
 
@@ -652,6 +666,19 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             js_ext_http_agent_is_handle(handle) != 0
         }
         js_register_http_agent_handle_probe(http_agent_probe);
+    }
+    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    {
+        unsafe extern "C" fn tls_handle_kind_probe(handle: i64) -> u8 {
+            if crate::tls::is_tls_server_handle(handle) {
+                1
+            } else if crate::tls::is_tls_socket_handle(handle) {
+                2
+            } else {
+                0
+            }
+        }
+        perry_runtime::object::js_register_tls_handle_kind_probe(tls_handle_kind_probe);
     }
     js_register_worker_threads_namespace_getters(
         crate::worker_threads::js_worker_threads_get_worker_data,

@@ -24,6 +24,7 @@ tokio-rustls.workspace = true
 rustls.workspace = true
 rustls-native-certs = "0.8"
 serde_json.workspace = true
+rustls-pemfile.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }

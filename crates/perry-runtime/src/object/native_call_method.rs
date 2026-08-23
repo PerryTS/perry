@@ -1060,6 +1060,23 @@ pub unsafe extern "C-unwind" fn js_native_call_method_nullsafe(
             }
         }
     }
+    // Native handle properties use this same member-read fallback when the
+    // static receiver class is wider than the runtime value.  Ask the handle
+    // property dispatcher before interpreting the member as a method.  This
+    // is what makes data properties such as `TLSSocket.authorized` and
+    // `alpnProtocol` observable, and also recovers bound method values such as
+    // `setKeyCert` when they are read before being called.
+    if args_len == 0 && !method_name_ptr.is_null() && v.is_pointer() {
+        let handle = crate::value::js_nanbox_get_pointer(object);
+        if crate::value::addr_class::is_handle_band(handle as usize) {
+            if let Some(dispatch) = crate::object::handle_property_dispatch() {
+                let value = dispatch(handle, method_name_ptr as *const u8, method_name_len);
+                if value.to_bits() != crate::value::TAG_UNDEFINED {
+                    return value;
+                }
+            }
+        }
+    }
     js_native_call_method(object, method_name_ptr, method_name_len, args_ptr, args_len)
 }
 
@@ -1094,20 +1111,25 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     // feedback can dispatch its methods before the generic prototype/native-
     // module tower below. Validate the WebIDL-required filter argument at this
     // common entry so direct calls and extracted prototype calls agree.
-    if method_name_len == 16
-        && !method_name_ptr.is_null()
-        && crate::perf_hooks::is_perf_observer_list_value(object)
-    {
+    if method_name_len == 16 && !method_name_ptr.is_null() {
         let name = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
-        let arg0 = if args_len > 0 && !args_ptr.is_null() {
-            *args_ptr
-        } else {
-            f64::from_bits(crate::value::TAG_UNDEFINED)
-        };
-        if name == b"getEntriesByName" {
-            crate::perf_hooks::validate_perf_list_filter_arg(arg0, "name", args_len == 0);
-        } else if name == b"getEntriesByType" {
-            crate::perf_hooks::validate_perf_list_filter_arg(arg0, "type", args_len == 0);
+        // Compare the method before probing the receiver. Pointer-tagged
+        // native handles share this call bridge with heap objects, and an
+        // unrelated 16-byte method (for example TLSSocket#getSharedSigalgs)
+        // must not be dereferenced as a PerformanceObserverEntryList.
+        if matches!(name, b"getEntriesByName" | b"getEntriesByType")
+            && crate::perf_hooks::is_perf_observer_list_value(object)
+        {
+            let arg0 = if args_len > 0 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            if name == b"getEntriesByName" {
+                crate::perf_hooks::validate_perf_list_filter_arg(arg0, "name", args_len == 0);
+            } else {
+                crate::perf_hooks::validate_perf_list_filter_arg(arg0, "type", args_len == 0);
+            }
         }
     }
     // #7769: the tower's own previously-computed answer for this

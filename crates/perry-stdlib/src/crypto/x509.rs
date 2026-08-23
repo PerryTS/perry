@@ -533,12 +533,17 @@ fn x509_string_f64(s: &str) -> f64 {
 }
 
 unsafe fn x509_string_array_f64(items: &[String]) -> f64 {
-    let mut arr = perry_runtime::js_array_alloc(items.len() as u32);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let arr = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(items.len() as u32));
     for item in items {
-        let s = js_string_from_bytes(item.as_ptr(), item.len() as u32);
-        arr = perry_runtime::js_array_push(arr, JSValue::string_ptr(s));
+        let s = scope.root_raw_mut_ptr(js_string_from_bytes(item.as_ptr(), item.len() as u32));
+        let grown = perry_runtime::js_array_push(
+            arr.get_raw_mut_ptr(),
+            JSValue::string_ptr(s.get_raw_mut_ptr()),
+        );
+        arr.set_raw_mut_ptr(grown);
     }
-    nanbox_ptr(arr)
+    nanbox_ptr(arr.get_raw_mut_ptr::<perry_runtime::ArrayHeader>())
 }
 
 fn x509_time_millis(time: &x509_cert::time::Time) -> f64 {
@@ -630,13 +635,14 @@ fn x509_rsa_signature_digest(cert: &x509_cert::Certificate) -> Option<RsaDigestK
 
 unsafe fn x509_name_legacy_object(name: &x509_cert::name::Name) -> f64 {
     let attr_count = name.iter().count() as u32;
-    let obj = js_object_alloc(0, attr_count);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(js_object_alloc(0, attr_count));
     for atv in name.iter() {
         let key = x509_attr_short_name(&atv.oid.to_string());
         let value = x509_attr_value(atv);
-        set_object_string_field(obj, key.as_bytes(), &value);
+        set_object_string_field(obj.get_raw_mut_ptr(), key.as_bytes(), &value);
     }
-    nanbox_ptr(obj)
+    nanbox_ptr(obj.get_raw_mut_ptr::<ObjectHeader>())
 }
 
 fn x509_rsa_public_key(cert: &x509_cert::Certificate) -> Option<(Vec<u8>, RsaPublicKey)> {
@@ -676,87 +682,93 @@ unsafe fn x509_to_legacy_object(handle: &X509Handle) -> f64 {
     use sha1::Sha1;
     use sha2::{Digest, Sha256, Sha512};
 
-    let obj = js_object_alloc(0, 20);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 20));
     let tbs = handle.cert.tbs_certificate();
 
-    set_object_value_field(obj, b"subject", x509_name_legacy_object(tbs.subject()));
-    set_object_value_field(obj, b"issuer", x509_name_legacy_object(tbs.issuer()));
+    let subject = scope.root_nanbox_f64(x509_name_legacy_object(tbs.subject()));
+    set_object_value_field(obj.get_raw_mut_ptr(), b"subject", subject.get_nanbox_f64());
+    let issuer = scope.root_nanbox_f64(x509_name_legacy_object(tbs.issuer()));
+    set_object_value_field(obj.get_raw_mut_ptr(), b"issuer", issuer.get_nanbox_f64());
     match x509_subject_alt_name(&handle.cert) {
-        Some(value) => set_object_string_field(obj, b"subjectaltname", &value),
-        None => set_undefined_field(obj, b"subjectaltname"),
+        Some(value) => set_object_string_field(obj.get_raw_mut_ptr(), b"subjectaltname", &value),
+        None => set_undefined_field(obj.get_raw_mut_ptr(), b"subjectaltname"),
     }
-    set_undefined_field(obj, b"infoAccess");
+    set_undefined_field(obj.get_raw_mut_ptr(), b"infoAccess");
     set_object_value_field(
-        obj,
+        obj.get_raw_mut_ptr(),
         b"ca",
         x509_bool_f64(x509_basic_constraints_ca(&handle.cert)),
     );
 
     if let Some((spki_der, public_key)) = x509_rsa_public_key(&handle.cert) {
         set_object_string_field(
-            obj,
+            obj.get_raw_mut_ptr(),
             b"modulus",
             &hex::encode_upper(public_key.n().to_bytes_be()),
         );
         set_object_string_field(
-            obj,
+            obj.get_raw_mut_ptr(),
             b"exponent",
             &format!("0x{}", public_key.e().to_str_radix(16)),
         );
-        set_object_value_field(
-            obj,
-            b"pubkey",
-            nanbox_ptr(alloc_buffer_from_slice(&spki_der)),
-        );
-        set_object_value_field(obj, b"bits", public_key.n().bits() as f64);
+        let pubkey = scope.root_nanbox_f64(nanbox_ptr(alloc_buffer_from_slice(&spki_der)));
+        set_object_value_field(obj.get_raw_mut_ptr(), b"pubkey", pubkey.get_nanbox_f64());
+        set_object_value_field(obj.get_raw_mut_ptr(), b"bits", public_key.n().bits() as f64);
     } else {
-        set_undefined_field(obj, b"modulus");
-        set_undefined_field(obj, b"exponent");
-        set_undefined_field(obj, b"pubkey");
-        set_undefined_field(obj, b"bits");
+        set_undefined_field(obj.get_raw_mut_ptr(), b"modulus");
+        set_undefined_field(obj.get_raw_mut_ptr(), b"exponent");
+        set_undefined_field(obj.get_raw_mut_ptr(), b"pubkey");
+        set_undefined_field(obj.get_raw_mut_ptr(), b"bits");
     }
 
     set_object_string_field(
-        obj,
+        obj.get_raw_mut_ptr(),
         b"valid_from",
         &x509_format_time(&tbs.validity().not_before),
     );
     set_object_string_field(
-        obj,
+        obj.get_raw_mut_ptr(),
         b"valid_to",
         &x509_format_time(&tbs.validity().not_after),
     );
     set_object_string_field(
-        obj,
+        obj.get_raw_mut_ptr(),
         b"fingerprint",
         &x509_colon_hex(&Sha1::digest(&handle.der)),
     );
     set_object_string_field(
-        obj,
+        obj.get_raw_mut_ptr(),
         b"fingerprint256",
         &x509_colon_hex(&Sha256::digest(&handle.der)),
     );
     set_object_string_field(
-        obj,
+        obj.get_raw_mut_ptr(),
         b"fingerprint512",
         &x509_colon_hex(&Sha512::digest(&handle.der)),
     );
     match x509_extended_key_usage(&handle.cert) {
         Some(values) => {
-            set_object_value_field(obj, b"ext_key_usage", x509_string_array_f64(&values))
+            let usages = scope.root_nanbox_f64(x509_string_array_f64(&values));
+            set_object_value_field(
+                obj.get_raw_mut_ptr(),
+                b"ext_key_usage",
+                usages.get_nanbox_f64(),
+            )
         }
-        None => set_undefined_field(obj, b"ext_key_usage"),
+        None => set_undefined_field(obj.get_raw_mut_ptr(), b"ext_key_usage"),
     }
-    set_object_string_field(obj, b"serialNumber", &x509_serial_number_hex(&handle.cert));
-    set_object_value_field(
-        obj,
-        b"raw",
-        nanbox_ptr(alloc_buffer_from_slice(&handle.der)),
+    set_object_string_field(
+        obj.get_raw_mut_ptr(),
+        b"serialNumber",
+        &x509_serial_number_hex(&handle.cert),
     );
-    set_undefined_field(obj, b"asn1Curve");
-    set_undefined_field(obj, b"nistCurve");
+    let raw = scope.root_nanbox_f64(nanbox_ptr(alloc_buffer_from_slice(&handle.der)));
+    set_object_value_field(obj.get_raw_mut_ptr(), b"raw", raw.get_nanbox_f64());
+    set_undefined_field(obj.get_raw_mut_ptr(), b"asn1Curve");
+    set_undefined_field(obj.get_raw_mut_ptr(), b"nistCurve");
 
-    nanbox_ptr(obj)
+    nanbox_ptr(obj.get_raw_mut_ptr::<ObjectHeader>())
 }
 
 unsafe fn x509_asymmetric_key_meta(value: f64) -> Option<(u8, u8)> {

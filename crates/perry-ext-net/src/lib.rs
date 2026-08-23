@@ -117,10 +117,11 @@ pub use server_state::*;
 mod jsvalue;
 pub(crate) use jsvalue::{
     build_error_object, get_object_bool_field, get_object_number_field, get_object_string_field,
-    is_nanboxed_pointer, jsvalue_to_socket_bytes, string_from_header_i64, unbox_pointer,
+    get_object_value_field, is_nanboxed_pointer, jsvalue_to_socket_bytes, string_from_header_i64,
+    unbox_pointer,
 };
 
-use crate::tls::do_tls_handshake;
+use crate::tls::{do_tls_handshake, record_tls_handshake, TlsClientConfigData};
 
 // ─── Transport enum (plain or TLS, swappable at runtime) ─────────────────────
 //
@@ -373,6 +374,7 @@ pub(crate) enum SocketCommand {
     UpgradeTls {
         servername: String,
         verify: bool,
+        config: TlsClientConfigData,
         reply: oneshot::Sender<Result<(), String>>,
     },
 }
@@ -382,6 +384,7 @@ enum PendingNetEvent {
     /// `.1` identifies a same-process server target and whether its admission
     /// is expected to hit `dropMaxConnection`; external connects use `None`.
     Connect(i64, Option<(i64, bool)>),
+    SecureConnect(i64),
     /// One chunk of read data. Carried as a refcounted `Bytes` — a zero-copy
     /// view sliced out of the socket task's reused read buffer (`split_to`) —
     /// so the path from the receive buffer to the main-thread drain handler
@@ -1103,8 +1106,23 @@ pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, ho
 pub(crate) fn spawn_socket_task(
     host: String,
     port: u16,
-    direct_tls: Option<(String, bool)>,
+    direct_tls: Option<(String, bool, TlsClientConfigData)>,
 ) -> i64 {
+    spawn_socket_task_initialized(host, port, direct_tls, |_| {})
+}
+
+/// Allocate a socket and run `initialize` after its registries exist but before
+/// the async connect task can complete. TLS uses this boundary to publish its
+/// runtime metadata without racing a fast loopback handshake.
+pub(crate) fn spawn_socket_task_initialized<F>(
+    host: String,
+    port: u16,
+    direct_tls: Option<(String, bool, TlsClientConfigData)>,
+    initialize: F,
+) -> i64
+where
+    F: FnOnce(i64),
+{
     ensure_gc_scanner_registered();
     dispatch::ensure_runtime_dispatch_registered();
     let id = next_id_or_throw();
@@ -1137,6 +1155,7 @@ pub(crate) fn spawn_socket_task(
         .lock()
         .unwrap()
         .insert(id, HashMap::new());
+    initialize(id);
 
     spawn_socket_runner(move || {
         Box::pin(async move {
@@ -1162,9 +1181,12 @@ pub(crate) fn spawn_socket_task(
             let local = tcp.local_addr().ok();
 
             let transport = match direct_tls {
-                Some((servername, verify)) => {
-                    match do_tls_handshake(tcp, &servername, verify).await {
-                        Ok(tls) => Transport::Tls(Box::new(tls)),
+                Some((servername, verify, config)) => {
+                    match do_tls_handshake(tcp, &servername, verify, Some(&config)).await {
+                        Ok(tls) => {
+                            record_tls_handshake(id, &tls, &servername, verify, Some(&config));
+                            Transport::Tls(Box::new(tls))
+                        }
                         Err(e) => {
                             server_state::cancel_local_connect(local_server);
                             push_event(PendingNetEvent::Error(id, e));
@@ -1242,6 +1264,11 @@ pub(crate) async fn run_socket_task(
                         // #2154 raw mode: signal EOF on the buffer, suppress
                         // JS events. Else (#1852) fire 'end' then 'close' per
                         // Node's default `allowHalfOpen: false` teardown order.
+                        // Complete the writable half before dropping the
+                        // transport. For TLS this sends close_notify; without
+                        // it the peer observes an unclean EOF and emits only
+                        // 'close', skipping its 'end' event.
+                        let _ = t.shutdown().await;
                         if !raw_bridge::mark_terminal(id, None) {
                             push_event(PendingNetEvent::End(id));
                             push_event(PendingNetEvent::Close(id));
@@ -1317,14 +1344,22 @@ pub(crate) async fn run_socket_task(
                         mark_closed(id);
                         break;
                     }
-                    Some(SocketCommand::UpgradeTls { servername, verify, reply }) => {
+                    Some(SocketCommand::UpgradeTls { servername, verify, config, reply }) => {
                         let old = transport.take();
                         match old {
                             Some(Transport::Plain(tcp)) => {
-                                match do_tls_handshake(tcp, &servername, verify).await {
+                                match do_tls_handshake(tcp, &servername, verify, Some(&config)).await {
                                     Ok(tls) => {
+                                        record_tls_handshake(
+                                            id,
+                                            &tls,
+                                            &servername,
+                                            verify,
+                                            Some(&config),
+                                        );
                                         transport = Some(Transport::Tls(Box::new(tls)));
                                         let _ = reply.send(Ok(()));
+                                        push_event(PendingNetEvent::SecureConnect(id));
                                     }
                                     Err(e) => {
                                         let _ = reply.send(Err(e.clone()));
@@ -1371,9 +1406,14 @@ pub unsafe extern "C" fn js_net_socket_on(handle: i64, event_ptr: i64, cb: i64) 
         Some(e) => e,
         None => return,
     };
-    let mut listeners = statics::listeners().lock().unwrap();
-    let entry = listeners.entry(handle).or_default();
-    entry.entry(event).or_default().push(cb);
+    {
+        let mut listeners = statics::listeners().lock().unwrap();
+        let entry = listeners.entry(handle).or_default();
+        entry.entry(event.clone()).or_default().push(cb);
+    }
+    if event == "close" {
+        tls::fire_pending_tls_abort(handle);
+    }
 }
 
 // ─── FFI: socket.upgradeToTLS(servername, verify) -> Promise ─────────────────
@@ -1422,6 +1462,7 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
         .send(SocketCommand::UpgradeTls {
             servername,
             verify: verify_bool,
+            config: TlsClientConfigData::default(),
             reply: reply_tx,
         })
         .is_err()
@@ -1471,6 +1512,52 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
     js_ext_net_drain_pending()
 }
 
+fn socket_receiver(handle: i64) -> f64 {
+    f64::from_bits(0x7FFD_0000_0000_0000 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF))
+}
+
+unsafe fn emit_socket_no_arg(handle: i64, event: &str) {
+    extern "C" {
+        fn js_implicit_this_set(value: f64) -> f64;
+    }
+    let frame = dispatch_custody::DispatchFrame::park(listeners_for(handle, event));
+    let previous_this = js_implicit_this_set(socket_receiver(handle));
+    for index in 0..frame.len() {
+        let callback = frame.cb(index);
+        if callback != 0 {
+            let _ = JsClosure::from_raw(callback as *const RawClosureHeader).call0();
+        }
+    }
+    js_implicit_this_set(previous_this);
+    drop(frame);
+    lifecycle::drain_once_listeners(handle, event);
+}
+
+unsafe fn emit_tls_secure_connect(handle: i64) {
+    extern "C" {
+        fn js_tls_client_check_identity_from_metadata(handle: i64) -> f64;
+    }
+    let identity_error = js_tls_client_check_identity_from_metadata(handle);
+    if !JsValue::from_bits(identity_error.to_bits()).is_undefined() {
+        let mut frame = dispatch_custody::DispatchFrame::park(listeners_for(handle, "error"));
+        frame.set_payload(identity_error.to_bits());
+        for index in 0..frame.len() {
+            let callback = frame.cb(index);
+            if callback != 0 {
+                let _ = JsClosure::from_raw(callback as *const RawClosureHeader)
+                    .call1(f64::from_bits(frame.payload_bits()));
+            }
+        }
+        drop(frame);
+        lifecycle::drain_once_listeners(handle, "error");
+        if let Some(socket) = statics::sockets().lock().unwrap().get(&handle) {
+            let _ = socket.cmd_tx.send(SocketCommand::Destroy);
+        }
+        return;
+    }
+    emit_socket_no_arg(handle, "secureConnect");
+}
+
 /// Drain ext-net's own pending-event queue.
 ///
 /// This carries a DISTINCT `#[no_mangle]` symbol (`js_ext_net_drain_pending`),
@@ -1507,30 +1594,19 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 server_state::finish_local_connect(local_server);
                 // #8259: park the snapshot so callback N stays rooted (and is
                 // rewritten on evacuation) while callback N-1 runs user JS.
-                let frame = dispatch_custody::DispatchFrame::park(listeners_for(id, "connect"));
-                for i in 0..frame.len() {
-                    let cb = frame.cb(i);
-                    if cb != 0 {
-                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
-                    }
-                }
-                drop(frame);
-                lifecycle::drain_once_listeners(id, "connect");
+                emit_socket_no_arg(id, "connect");
                 // TLS sockets additionally fire 'secureConnect' once the
                 // handshake completes — the direct-TLS connect path only
                 // signals Connect after the handshake, so this is the right
                 // tick. Plain sockets simply have no listeners here. #4971.
-                let frame =
-                    dispatch_custody::DispatchFrame::park(listeners_for(id, "secureConnect"));
-                for i in 0..frame.len() {
-                    let cb = frame.cb(i);
-                    if cb != 0 {
-                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
-                    }
+                extern "C" {
+                    fn js_tls_client_is_connected(handle: i64) -> i32;
                 }
-                drop(frame);
-                lifecycle::drain_once_listeners(id, "secureConnect");
+                if js_tls_client_is_connected(id) != 0 {
+                    emit_tls_secure_connect(id);
+                }
             }
+            PendingNetEvent::SecureConnect(id) => emit_tls_secure_connect(id),
             PendingNetEvent::Data(id, bytes) => {
                 let cbs = listeners_for(id, "data");
                 if cbs.is_empty() {
@@ -1635,6 +1711,10 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 lifecycle::drain_once_listeners(id, "end");
             }
             PendingNetEvent::Close(id) => {
+                extern "C" {
+                    fn js_tls_client_record_closed(handle: i64);
+                }
+                js_tls_client_record_closed(id);
                 let had_error = f64::from_bits(JsValue::from_bool(false).bits());
                 let frame = dispatch_custody::DispatchFrame::park(listeners_for(id, "close"));
                 for i in 0..frame.len() {
