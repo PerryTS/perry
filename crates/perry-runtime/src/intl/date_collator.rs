@@ -1668,15 +1668,6 @@ pub(super) fn validate_collator_options(options: f64) {
     let _ = get_option_value(options, "ignorePunctuation");
 }
 
-pub(crate) extern "C" fn collator_compare_thunk(
-    _closure: *const ClosureHeader,
-    left: f64,
-    right: f64,
-) -> f64 {
-    let obj = this_intl_object("compare", KIND_COLLATOR);
-    collator_compare_object(obj, left, right)
-}
-
 pub(crate) extern "C" fn collator_bound_compare_thunk(
     closure: *const ClosureHeader,
     left: f64,
@@ -1684,6 +1675,14 @@ pub(crate) extern "C" fn collator_bound_compare_thunk(
 ) -> f64 {
     let obj = captured_intl_object(closure, "compare", KIND_COLLATOR);
     collator_compare_object(obj, left, right)
+}
+
+/// `get Intl.Collator.prototype.compare` — validate the receiver and return its
+/// stable [[BoundCompare]] function. The constructor gives that function the
+/// anonymous built-in shape required by ECMA-402 (`name: ""`, `length: 2`).
+pub(crate) extern "C" fn collator_compare_getter_thunk(_closure: *const ClosureHeader) -> f64 {
+    let obj = this_intl_object("compare", KIND_COLLATOR);
+    get_field(obj, KEY_COL_BOUND_COMPARE)
 }
 
 /// Strip the code points a UCA `ignorePunctuation` collator treats as ignorable
