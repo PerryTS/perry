@@ -218,12 +218,12 @@ fn test_jsvalue_equals_numbers() {
 }
 
 #[test]
-fn test_jsvalue_equals_distinct_box_allocated_symbols() {
-    let left = crate::symbol::well_known_symbol("iterator") as usize;
-    let right = crate::symbol::well_known_symbol("species") as usize;
-    assert_ne!(left, right);
+fn test_jsvalue_equals_distinct_box_allocated_registered_symbols() {
+    let left_key = f64::from_bits(JSValue::try_short_string(b"eq_l").unwrap().bits());
+    let right_key = f64::from_bits(JSValue::try_short_string(b"eq_r").unwrap().bits());
+    let left = unsafe { crate::symbol::js_symbol_for(left_key) };
+    let right = unsafe { crate::symbol::js_symbol_for(right_key) };
+    assert_ne!(left.to_bits(), right.to_bits());
 
-    let left = f64::from_bits(POINTER_TAG | (left as u64 & POINTER_MASK));
-    let right = f64::from_bits(POINTER_TAG | (right as u64 & POINTER_MASK));
     assert_eq!(js_jsvalue_equals(left, right), 0);
 }
