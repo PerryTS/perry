@@ -276,9 +276,18 @@ pub(crate) fn set_field_by_name_object_tail(
         // hono-base's `if (!context.finalized) throw` fired on every
         // request. Walk the class -> parent chain mirroring the getter
         // dispatch in `js_object_get_field_by_name`.
-        let receiver_has_own_key =
-            !key.is_null() && super::object_ops::own_key_present(obj as *mut ObjectHeader, key);
-        if !plan_fast && !receiver_has_own_key && !key.is_null() && (key as usize) > 0x10000 {
+        // OrdinarySet step 1 is `O.[[GetOwnProperty]](P)`: an own data property
+        // on the RECEIVER shadows an inherited accessor, so the vtable walk only
+        // applies when the receiver has no own property of this name (Node
+        // 26.5.1: `class A { x = 1; set x(v){} }` + `Object.assign(a, {x: 7})`
+        // stores 7 and never calls the setter). `own_key_present` is a
+        // keys-array scan, so it is evaluated LAST and only on the slow path --
+        // a `plan_fast` hit must not pay for it.
+        if !plan_fast
+            && !key.is_null()
+            && (key as usize) > 0x10000
+            && !super::object_ops::own_key_present(obj as *mut ObjectHeader, key)
+        {
             let class_id = (*obj).class_id;
             if class_id != 0 {
                 if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
