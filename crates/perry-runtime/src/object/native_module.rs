@@ -9,8 +9,12 @@
 
 use super::*;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::{
+    atomic::{AtomicPtr, Ordering},
+    OnceLock, RwLock,
+};
 
 mod async_hooks_exports;
 mod callable_export_arity_table;
@@ -1354,20 +1358,6 @@ pub(crate) fn test_collect_bound_method_after_capture_init() {
 #[cfg(test)]
 pub(crate) fn test_take_bound_method_move() -> (usize, usize) {
     TEST_BOUND_METHOD_MOVE.with(|trace| trace.replace((0, 0)))
-}
-
-/// Allocate a BOUND_METHOD closure binding `instance` as the receiver for the
-/// named method, stamping its `.name`/`.length`. This is the raw builder used
-/// by both `js_class_method_bind` (after its canonical-identity short-circuit)
-/// and `class_prototype_method_value_for_name` (which caches one canonical per
-/// `(class_id, name)`). Keeping it separate breaks the recursion that an
-/// unconditional canonical lookup inside `js_class_method_bind` would create.
-pub(crate) fn build_bound_method_closure(
-    instance: f64,
-    method_name_ptr: *const u8,
-    method_name_len: usize,
-) -> f64 {
-    build_bound_method_closure_with_private_brand(instance, method_name_ptr, method_name_len, None)
 }
 
 fn build_bound_method_closure_with_private_brand(

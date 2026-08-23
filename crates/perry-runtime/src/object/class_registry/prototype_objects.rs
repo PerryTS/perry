@@ -407,13 +407,18 @@ unsafe fn resolve_proto_chain_field_inner(
                         if let Ok(name) =
                             std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len))
                         {
-                            if super::super::native_module::class_has_own_method(cid, name)
-                                && value.bits()
+                            let name = name.to_string();
+                            let scope = crate::gc::RuntimeHandleScope::new();
+                            let value = scope.root_nanbox_u64(value.bits());
+                            let receiver = scope.root_heap_word_u64(receiver.to_bits());
+                            if super::super::native_module::class_has_own_method(cid, &name)
+                                && value.get_nanbox_u64()
                                     == super::super::native_module::class_prototype_method_value_for_name(
-                                        cid, name,
+                                        cid, &name,
                                     )
                                     .to_bits()
                             {
+                                let receiver = f64::from_bits(receiver.get_heap_word_u64());
                                 if let Some(brand) =
                                     super::super::private_evaluation_brand_value(receiver)
                                 {
@@ -423,12 +428,13 @@ unsafe fn resolve_proto_chain_field_inner(
                                         && js_object_get_class_id(brand_obj) == cid
                                     {
                                         let method = super::super::native_module::class_evaluation_method_value_for_name(
-                                            cid, name, brand,
+                                            cid, &name, brand,
                                         );
                                         return Some(JSValue::from_bits(method.to_bits()));
                                     }
                                 }
                             }
+                            return Some(JSValue::from_bits(value.get_nanbox_u64()));
                         }
                     }
                     return Some(value);

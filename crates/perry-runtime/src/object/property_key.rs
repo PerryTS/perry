@@ -389,14 +389,23 @@ pub unsafe extern "C" fn js_super_accessor_get(
                     }
                 }
             }
-            if let Some(result) =
-                crate::object::class_registry::class_dynamic_static_accessor_getter_value(
-                    parent_class_id,
-                    key_name,
-                    receiver,
-                )
-            {
-                return result;
+            let mut cid = parent_class_id;
+            let mut depth = 0usize;
+            while cid != 0 && depth < 32 {
+                if let Some(result) =
+                    crate::object::class_registry::class_dynamic_static_accessor_getter_value(
+                        cid, key_name, receiver,
+                    )
+                {
+                    return result;
+                }
+                match crate::object::get_parent_class_id(cid) {
+                    Some(parent) if parent != 0 && parent != cid => {
+                        cid = parent;
+                        depth += 1;
+                    }
+                    _ => break,
+                }
             }
             // (b) parent static data field (CLASS_DYNAMIC_PROPS), same walk.
             let mut cid = parent_class_id;
@@ -422,6 +431,7 @@ pub unsafe extern "C" fn js_super_accessor_get(
         // own properties with the child constructor as Receiver.
         if let Some(child_id) = super::class_ref_id(receiver) {
             let parent = crate::object::js_get_dynamic_parent_value(child_id);
+            let parent_handle = scope.root_heap_word_u64(parent.to_bits());
             let pv = crate::value::JSValue::from_bits(parent.to_bits());
             if !pv.is_undefined() && !pv.is_null() {
                 if let Some(key_name) = key_name.as_ref() {
@@ -435,7 +445,11 @@ pub unsafe extern "C" fn js_super_accessor_get(
                         }
                     }
                 }
-                return crate::proxy::js_reflect_get(parent, key_handle.get_nanbox_f64(), receiver);
+                return crate::proxy::js_reflect_get(
+                    f64::from_bits(parent_handle.get_heap_word_u64()),
+                    key_handle.get_nanbox_f64(),
+                    f64::from_bits(receiver_handle.get_heap_word_u64()),
+                );
             }
         }
         return f64::from_bits(crate::value::TAG_UNDEFINED);

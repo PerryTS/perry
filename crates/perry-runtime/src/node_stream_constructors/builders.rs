@@ -157,9 +157,9 @@ pub unsafe extern "C" fn js_array_subclass_init_args(
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(this);
+    let args = scope.root_nanbox_f64_slice(args);
     js_array_subclass_init(this.get_nanbox_f64(), args.len() as f64);
-    for (index, value) in args.iter().copied().enumerate() {
-        let value = scope.root_nanbox_f64(value);
+    for (index, value) in args.iter().enumerate() {
         let name = index.to_string();
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let receiver = this.get_nanbox_f64();

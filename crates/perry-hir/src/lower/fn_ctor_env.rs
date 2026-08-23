@@ -442,6 +442,13 @@ fn indirect_eval_factory_shape(expr: &ast::Expr) -> Option<(String, bool)> {
     let ast::Expr::Fn(function) = expr else {
         return None;
     };
+    // The direct-eval rewrite below executes the wrapper body immediately and
+    // returns the evaluated value.  That is equivalent only for an ordinary
+    // synchronous function: async wrappers must return a Promise, while a
+    // generator body must not run until the iterator is advanced.
+    if function.function.is_async || function.function.is_generator {
+        return None;
+    }
     if function.function.params.len() != 1 {
         return None;
     }
@@ -1368,5 +1375,31 @@ fn scan_expr_writes(expr: &ast::Expr, writes: &mut HashMap<String, usize>, shado
         ast::Expr::TsTypeAssertion(t) => scan_expr_writes(&t.expr, writes, shadow),
         ast::Expr::TsNonNull(t) => scan_expr_writes(&t.expr, writes, shadow),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn first_var_initializer(source: &str) -> Box<ast::Expr> {
+        let module = perry_parser::parse_typescript(source, "factory-shape.js").unwrap();
+        let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = &module.body[0] else {
+            panic!("expected variable declaration");
+        };
+        var.decls[0].init.clone().expect("expected initializer")
+    }
+
+    #[test]
+    fn indirect_eval_factory_rejects_async_wrapper() {
+        let init =
+            first_var_initializer("const factory = async function (ev) { return ev(src); };");
+        assert!(indirect_eval_factory_shape(&init).is_none());
+    }
+
+    #[test]
+    fn indirect_eval_factory_rejects_generator_wrapper() {
+        let init = first_var_initializer("const factory = function* (ev) { return ev(src); };");
+        assert!(indirect_eval_factory_shape(&init).is_none());
     }
 }

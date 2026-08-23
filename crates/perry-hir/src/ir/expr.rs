@@ -17,6 +17,15 @@ pub enum WithSetFallback {
     SloppyImplicit(LocalId),
 }
 
+/// One source-ordered static initialization step on a per-evaluation class
+/// object. Computed names have already been evaluated before these steps run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClassFreshStaticInit {
+    Named(u32),
+    Computed(u32),
+    Block(u32),
+}
+
 /// Expression
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -554,6 +563,10 @@ pub enum Expr {
         computed_keys: Vec<(String, Expr)>,
         /// (hidden resolved-key slot name, initializer)
         computed_statics: Vec<(String, Expr)>,
+        /// Static fields and blocks in ClassBody source order. Indices address
+        /// `named_statics`, `computed_statics`, or the template's static-block
+        /// function list respectively.
+        static_init_order: Vec<ClassFreshStaticInit>,
         /// #1787: the captured outer-scope values this class expression
         /// closes over, in the synthesized constructor's capture-param
         /// order (see `synthesize_class_captures`). Each entry is a

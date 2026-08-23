@@ -192,6 +192,25 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             && crate::symbol::js_is_symbol(key_value) == 0
         {
             if let Some(method_name) = metadata_key_to_string(key_value) {
+                let class_obj = extract_obj_ptr(obj_value);
+                if !class_obj.is_null() {
+                    let class_id = super::js_object_get_class_id(class_obj);
+                    if let Some((acc, attrs)) =
+                        super::class_registry::class_dynamic_static_accessor_descriptor(
+                            class_id,
+                            &method_name,
+                            obj_value,
+                        )
+                    {
+                        let undef = crate::value::TAG_UNDEFINED;
+                        return build_accessor_descriptor(
+                            f64::from_bits(if acc.get == 0 { undef } else { acc.get }),
+                            f64::from_bits(if acc.set == 0 { undef } else { acc.set }),
+                            attrs.enumerable(),
+                            attrs.configurable(),
+                        );
+                    }
+                }
                 // #6943: `js_string_coerce` allocates for every non-heap-string
                 // key and can run a user `toString` / `valueOf` for an object
                 // key, so it can trigger a GC that **evacuates**. `obj` — the
@@ -356,6 +375,23 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         }
                     }
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
+                }
+                if super::class_prototype_ref_id(obj_value).is_none() {
+                    if let Some((acc, attrs)) =
+                        super::class_registry::class_dynamic_static_accessor_descriptor(
+                            class_id,
+                            &method_name,
+                            obj_value,
+                        )
+                    {
+                        let undef = crate::value::TAG_UNDEFINED;
+                        return build_accessor_descriptor(
+                            f64::from_bits(if acc.get == 0 { undef } else { acc.get }),
+                            f64::from_bits(if acc.set == 0 { undef } else { acc.set }),
+                            attrs.enumerable(),
+                            attrs.configurable(),
+                        );
+                    }
                 }
                 // `C.prototype` is a non-writable, non-enumerable, non-configurable
                 // own data property of the class constructor (ECMA-262
@@ -693,7 +729,13 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         if crate::array::is_array_subclass_value(obj_value) && key_rust.as_deref() == Some("length")
         {
             let length = crate::object::js_object_get_field_by_name(obj, key_str);
-            return build_data_descriptor(f64::from_bits(length.bits()), true, false, false);
+            let frozen =
+                (*crate::object::gc_header_for(obj))._reserved & crate::gc::OBJ_FLAG_FROZEN != 0;
+            let writable = !frozen
+                && get_property_attrs(obj as usize, "length")
+                    .map(|attrs| attrs.writable())
+                    .unwrap_or(true);
+            return build_data_descriptor(f64::from_bits(length.bits()), writable, false, false);
         }
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =

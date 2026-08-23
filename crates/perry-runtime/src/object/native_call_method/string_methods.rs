@@ -156,7 +156,7 @@ pub(super) unsafe fn dispatch_string(
                     }
                     return Some(f64::from_bits(JSValue::string_ptr(result).bits()));
                 }
-                "toString" | "valueOf" => return Some(object_handle.get_nanbox_f64()),
+                "toString" | "valueOf" => return Some(string_receiver),
                 // Issue #519 follow-up: hono's matcher.js does
                 // `path2.match(matcher[0])` where `path2` is a string and
                 // `matcher[0]` is a regex. The HIR optimistic

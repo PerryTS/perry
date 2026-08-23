@@ -137,11 +137,12 @@ pub(crate) fn lower_class_expr(
     // canonical case: `isSchema(C)` was called from Schema.ts's
     // own top-level `class extends transform(...)` chains, which
     // run before the module's `init_static_fields_late`.
-    let computed_keys = crate::lower_decl::computed_field_key_initializers(
-        &class_expr.class.body,
-        &class.fields,
-        &class.static_fields,
-    );
+    let (computed_name_evaluations, computed_keys, computed_member_registrations) =
+        crate::lower_decl::prepare_ordered_class_computed_names(
+            ctx,
+            &class_expr.class.body,
+            &class,
+        );
     let computed_statics: Vec<(String, Expr)> = class
         .static_fields
         .iter()
@@ -151,6 +152,10 @@ pub(crate) fn lower_class_expr(
                 .map(|_| (sf.name.clone(), sf.init.clone().unwrap_or(Expr::Undefined)))
         })
         .collect();
+    let static_init_order = crate::lower_decl::fresh_class_static_init_order(
+        &class_expr.class.body,
+        &class.static_fields,
+    );
     // Issue #1772: regular-named static fields with an initializer
     // (`static ast = ast`). #894 only handled the Symbol-key case;
     // these need the same per-evaluation treatment, otherwise a class
@@ -159,15 +164,10 @@ pub(crate) fn lower_class_expr(
     let named_statics: Vec<(String, Expr)> = class
         .static_fields
         .iter()
-        .filter_map(|sf| match (sf.key_expr.as_ref(), sf.init.as_ref()) {
-            (None, Some(v)) => Some((sf.name.clone(), v.clone())),
-            _ => None,
+        .filter_map(|sf| match sf.key_expr.as_ref() {
+            None => Some((sf.name.clone(), sf.init.clone().unwrap_or(Expr::Undefined))),
+            Some(_) => None,
         })
-        .collect();
-    let computed_member_registrations: Vec<Expr> = class
-        .computed_members
-        .iter()
-        .map(|member| class_computed_member_registration_expr(&synthetic_name, member))
         .collect();
     let captured_args: Vec<Expr> = ctx
         .lookup_class_captures(&synthetic_name)
@@ -291,6 +291,7 @@ pub(crate) fn lower_class_expr(
             named_statics,
             computed_keys,
             computed_statics,
+            static_init_order,
             captured_args,
         };
         let mut seq: Vec<Expr> = Vec::new();
@@ -300,6 +301,7 @@ pub(crate) fn lower_class_expr(
                 parent_expr: p,
             });
         }
+        seq.extend(computed_name_evaluations);
         seq.extend(computed_member_registrations);
         let fresh_expr = if let Some(owner) = capture_owner {
             Expr::Sequence(vec![
@@ -322,6 +324,7 @@ pub(crate) fn lower_class_expr(
             parent_expr: p,
         });
     }
+    seq.extend(computed_name_evaluations);
     // #5437 (p-queue PQueue undefined-`.default` capture): a class EXPRESSION
     // that captures enclosing-scope locals AND reaches the shared-template
     // (`ClassRef`) path — i.e. one with heritage (`class extends t { … uses

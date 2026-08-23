@@ -15,7 +15,7 @@ pub(crate) fn class_evaluation_method_value_for_name(
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let brand = scope.root_nanbox_f64(evaluation_brand);
-    let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
+    let leaked = intern_class_method_name(owner_class_id, method_name);
     let method = build_bound_method_closure_with_private_brand(
         class_prototype_ref_value(owner_class_id),
         leaked.as_ptr(),
@@ -54,7 +54,7 @@ pub(crate) fn class_private_static_method_value_for_name(
 
         let scope = crate::gc::RuntimeHandleScope::new();
         let brand = scope.root_nanbox_f64(evaluation_brand);
-        let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
+        let leaked = intern_class_method_name(owner_class_id, method_name);
         let method = build_bound_method_closure_with_private_brand(
             class_constructor_ref_value(owner_class_id),
             leaked.as_ptr(),
@@ -83,7 +83,7 @@ pub(crate) fn class_private_static_method_value_for_name(
     }) {
         return f64::from_bits(bits);
     }
-    let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
+    let leaked = intern_class_method_name(owner_class_id, method_name);
     let method = build_bound_method_closure_with_private_brand(
         class_constructor_ref_value(owner_class_id),
         leaked.as_ptr(),
@@ -92,4 +92,38 @@ pub(crate) fn class_private_static_method_value_for_name(
     );
     class_prototype_method_value_cache_root_store(owner_class_id, cache_name, method.to_bits());
     method
+}
+static CLASS_METHOD_NAME_INTERNER: OnceLock<RwLock<HashMap<(u32, String), &'static [u8]>>> =
+    OnceLock::new();
+
+/// Stable storage for the method-name pointer captured by bound-method
+/// closures. The key set is bounded by the program's declared class methods,
+/// even when one class expression is evaluated arbitrarily many times.
+pub(super) fn intern_class_method_name(class_id: u32, method_name: &str) -> &'static [u8] {
+    let interner = CLASS_METHOD_NAME_INTERNER.get_or_init(|| RwLock::new(HashMap::new()));
+    let key = (class_id, method_name.to_string());
+    if let Ok(guard) = interner.read() {
+        if let Some(bytes) = guard.get(&key).copied() {
+            return bytes;
+        }
+    }
+    let mut guard = interner
+        .write()
+        .expect("class method name interner poisoned");
+    if let Some(bytes) = guard.get(&key).copied() {
+        return bytes;
+    }
+    let bytes: &'static [u8] = method_name.as_bytes().to_vec().leak();
+    guard.insert(key, bytes);
+    bytes
+}
+
+/// Allocate a bound-method closure for the named method. Keeping this raw
+/// builder separate avoids recursion through the canonical method cache.
+pub(crate) fn build_bound_method_closure(
+    instance: f64,
+    method_name_ptr: *const u8,
+    method_name_len: usize,
+) -> f64 {
+    build_bound_method_closure_with_private_brand(instance, method_name_ptr, method_name_len, None)
 }

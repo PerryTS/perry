@@ -889,8 +889,15 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                     );
                     if parent_cid != 0 {
                         if let Some(obj) = subclass_this_object_ptr(this_box) {
-                            super::super::class_constructors::run_class_constructor_on_this_flat(
-                                parent_cid, obj as i64, args_ptr, args_len,
+                            // A fresh class object's constructor environment
+                            // is per evaluation. Replaying by class id alone
+                            // consults the template-wide declaration snapshot
+                            // and drops captured values such as a factory's
+                            // `tag`. Use the class-object replay path so this
+                            // exact parent's `__perry_ctor_caps` supplies its
+                            // synthesized capture params.
+                            super::super::class_constructors::replay_class_object_constructor(
+                                parent_val, parent_cid, obj, args_ptr, args_len,
                             );
                             return undef;
                         }
@@ -903,8 +910,8 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                     let parent_cid = crate::object::js_object_get_class_id(p as *const _);
                     if parent_cid != 0 {
                         if let Some(obj) = subclass_this_object_ptr(this_box) {
-                            super::super::class_constructors::run_class_constructor_on_this_flat(
-                                parent_cid, obj as i64, args_ptr, args_len,
+                            super::super::class_constructors::replay_class_object_constructor(
+                                parent_val, parent_cid, obj, args_ptr, args_len,
                             );
                         }
                     }

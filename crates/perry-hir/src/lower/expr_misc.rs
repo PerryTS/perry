@@ -106,8 +106,12 @@ pub(super) fn lower_super_prop(
                 ast::Expr::Lit(ast::Lit::Num(n))
                     if n.value.is_finite()
                         && n.value.fract() == 0.0
-                        && n.value >= i64::MIN as f64
-                        && n.value <= i64::MAX as f64 =>
+                        // Outside the safe-integer range, formatting an exact
+                        // f64 integer through i64 is not ECMAScript Number::
+                        // toString (for example 2^63 becomes the property key
+                        // "9223372036854776000"). Let runtime ToPropertyKey
+                        // perform the shortest-decimal conversion instead.
+                        && n.value.abs() <= 9_007_199_254_740_991.0 =>
                 {
                     Some(if n.value == 0.0 {
                         "0".to_string()

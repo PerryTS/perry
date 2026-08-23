@@ -464,6 +464,21 @@
   "_FRONTIER_README": "Identity-pinned ratchet over the perry-ui* crates and otherwise-unclassified core perry_thread_local! declarations (see the census docstring, 'The identity-pinned frontier'). Entries are debt baselines, not verdicts. A new uncovered holder fails until deliberately pinned, and a fixed holder fails until its stale entry is deleted. An optional scanner names cross-file coverage and must remain registered; deleting that registration invalidates the pin and fails the gate. Covered same-file holders must NOT be pinned.",
   "frontier": [
     {
+      "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_member_access.rs",
+      "name": "PRIVATE_METHOD_OWNER_HINT",
+      "why": "Only a compile-time class id and Rust-owned method-name String; no JS value or Perry heap address."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_member_access.rs",
+      "name": "PRIVATE_MEMBER_ACCESS_HINTS",
+      "why": "Only compile-time class ids, Rust-owned Strings, and scalar flags; no JS value or Perry heap address."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/this_binding.rs",
+      "name": "DERIVED_SUPER_BINDING_STACK",
+      "why": "Pointers to one-byte LLVM alloca flags in active native constructor frames, not Perry heap objects. Native frames do not move; balanced push/pop and exception savepoint restoration prevent entries outliving their frames."
+    },
+    {
       "file": "crates/perry-runtime/src/array/element_shape.rs",
       "name": "ELEMENT_SHAPES"
     },

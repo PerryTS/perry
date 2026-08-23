@@ -1195,14 +1195,6 @@ pub extern "C" fn js_object_get_field_by_name(
                     {
                         return JSValue::from_bits(v.to_bits());
                     }
-                    // The built-in constructor object's `constructor` value is
-                    // inherited from Function.prototype. It is therefore only
-                    // the fallback after own computed fields, static methods,
-                    // and static accessors of the same name have had a chance
-                    // to win.
-                    if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
-                        return JSValue::from_bits(class_value.to_bits());
-                    }
                 }
                 if !name.is_empty() {
                     if super::super::class_registry::class_is_key_deleted(class_id, name) {
@@ -1419,6 +1411,13 @@ pub extern "C" fn js_object_get_field_by_name(
                             "ERR_INVALID_ARG_TYPE",
                         );
                     }
+                }
+                // The built-in constructor object's `constructor` value is
+                // inherited from Function.prototype. It is therefore only the
+                // fallback after own computed fields, static methods, and
+                // static accessors of the same name have had a chance to win.
+                if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
+                    return JSValue::from_bits(class_value.to_bits());
                 }
             }
             return JSValue::undefined();

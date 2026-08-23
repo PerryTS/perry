@@ -1552,6 +1552,22 @@ fn collect_inline_invoked_static_blocks(
         {
             out.insert((class_name.clone(), method_name.clone()));
         }
+        // `ClassExprFresh` invokes its static blocks directly from the
+        // per-evaluation source-order plan. Treat those calls as inline too;
+        // otherwise the module-init fallback below invokes every block once
+        // more with no fresh class object armed as `this`.
+        if let Expr::ClassExprFresh {
+            template,
+            static_init_order,
+            ..
+        } = e
+        {
+            for step in static_init_order {
+                if let perry_hir::ClassFreshStaticInit::Block(index) = step {
+                    out.insert((template.clone(), format!("__perry_static_init_{index}")));
+                }
+            }
+        }
         if let Expr::Closure { body, .. } = e {
             for s in body {
                 walk_stmt(s, out);

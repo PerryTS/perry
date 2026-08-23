@@ -207,13 +207,15 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
     unsafe {
         if let Some(obj) = meta_capable_object(obj_ptr) {
             // `object_meta_ensure` allocates and may evacuate the owner. Keep
-            // the caller's pointer rooted and reload it before the semantic
-            // ShapeId transition below.
+            // both the caller's pointer and the prototype rooted, then reload
+            // them before the stores below.
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj_handle = scope.root_raw_mut_ptr(obj);
+            let proto_handle = scope.root_heap_word_u64(proto_bits);
             let (meta, obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
                 crate::object::object_meta_ensure(obj)
             });
+            let proto_bits = proto_handle.get_heap_word_u64();
             (*meta).prototype = proto_bits;
             if instance_override {
                 (*meta).flags |= crate::object::OBJECT_META_FLAG_PROTO_OVERRIDE;

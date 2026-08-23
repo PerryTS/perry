@@ -127,7 +127,7 @@ pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -
     // `(class_id, method_name)` pair the program ever asks for, so the
     // total leak is bounded by the static set of decorated method
     // descriptors. The cache below short-circuits repeat queries.
-    let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
+    let leaked = intern_class_method_name(class_id, method_name);
     let class_ref = class_prototype_ref_value(class_id);
     // Build the closure DIRECTLY (not via `js_class_method_bind`, whose
     // canonical short-circuit would call back into this function and recurse).

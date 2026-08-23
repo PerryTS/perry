@@ -48,6 +48,111 @@ pub(crate) fn class_computed_member_registration_expr(
     }
 }
 
+/// Evaluate every computed class-element name in one ClassBody-ordered pass,
+/// then return inert local reads for the field-key storage and member
+/// registration phases. `ToPropertyKey` is part of the ordered evaluation so
+/// an allocating/user-defined coercion cannot move after a later element.
+pub(crate) fn prepare_ordered_class_computed_names(
+    ctx: &mut LoweringContext,
+    class_body: &[ast::ClassMember],
+    class: &Class,
+) -> (Vec<Expr>, Vec<(String, Expr)>, Vec<Expr>) {
+    let mut ordered: Vec<(usize, Expr)> = Vec::new();
+    let mut field_keys = Vec::new();
+    for (source_order, name, value) in super::computed_field_key_initializers_with_order(
+        class_body,
+        &class.fields,
+        &class.static_fields,
+    ) {
+        let local = ctx.define_local(
+            format!("__perry_computed_field_name_{}_{}", class.id, source_order),
+            Type::Any,
+        );
+        ordered.push((source_order, Expr::LocalSet(local, Box::new(value))));
+        field_keys.push((name, Expr::LocalGet(local)));
+    }
+
+    let mut member_registrations = Vec::new();
+    for member in &class.computed_members {
+        let local = ctx.define_local(
+            format!(
+                "__perry_computed_member_name_{}_{}",
+                class.id, member.source_order
+            ),
+            Type::Any,
+        );
+        let to_property_key = Expr::Call {
+            callee: Box::new(Expr::ExternFuncRef {
+                name: "js_to_property_key".to_string(),
+                param_types: vec![Type::Any],
+                return_type: Type::Any,
+            }),
+            args: vec![member.key_expr.clone()],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        };
+        ordered.push((
+            member.source_order,
+            Expr::LocalSet(local, Box::new(to_property_key)),
+        ));
+        let mut resolved = member.clone();
+        resolved.key_expr = Expr::LocalGet(local);
+        member_registrations.push(class_computed_member_registration_expr(
+            &class.name,
+            &resolved,
+        ));
+    }
+    ordered.sort_by_key(|(source_order, _)| *source_order);
+    (
+        ordered.into_iter().map(|(_, expr)| expr).collect(),
+        field_keys,
+        member_registrations,
+    )
+}
+
+/// Reconstruct the source order of static fields and static blocks for the
+/// `ClassExprFresh` codegen path. Computed-name evaluation remains a separate,
+/// earlier phase as required by ClassDefinitionEvaluation.
+pub(crate) fn fresh_class_static_init_order(
+    class_body: &[ast::ClassMember],
+    static_fields: &[ClassField],
+) -> Vec<ClassFreshStaticInit> {
+    let mut result = Vec::new();
+    let mut static_field_index = 0usize;
+    let mut named_index = 0u32;
+    let mut computed_index = 0u32;
+    let mut block_index = 0u32;
+    for member in class_body {
+        match member {
+            ast::ClassMember::ClassProp(prop)
+                if prop.is_static && !prop.declare && !prop.is_abstract =>
+            {
+                if let Some(field) = static_fields.get(static_field_index) {
+                    if field.key_expr.is_some() {
+                        result.push(ClassFreshStaticInit::Computed(computed_index));
+                        computed_index += 1;
+                    } else {
+                        result.push(ClassFreshStaticInit::Named(named_index));
+                        named_index += 1;
+                    }
+                }
+                static_field_index += 1;
+            }
+            ast::ClassMember::PrivateProp(prop) if prop.is_static => {
+                result.push(ClassFreshStaticInit::Named(named_index));
+                named_index += 1;
+                static_field_index += 1;
+            }
+            ast::ClassMember::StaticBlock(_) => {
+                result.push(ClassFreshStaticInit::Block(block_index));
+                block_index += 1;
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
 /// A class declared inside a function body is name-deduped against an earlier
 /// same-named class (Perry's codegen is name-keyed; #336). But ECMA-262
 /// ClassDefinitionEvaluation still evaluates every `class` expression's
