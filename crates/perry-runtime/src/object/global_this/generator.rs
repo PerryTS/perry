@@ -146,16 +146,21 @@ pub(crate) fn wire_async_function_intrinsic_parents() {
     let proto = scope.root_raw_mut_ptr(proto as *mut ObjectHeader);
     let function_ctor = js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
     if crate::value::JSValue::from_bits(function_ctor.to_bits()).is_pointer() {
+        let function_ctor = scope.root_nanbox_f64(function_ctor);
         ctor.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ctor| {
-            crate::closure::closure_set_static_prototype(ctor as usize, function_ctor.to_bits())
+            crate::closure::closure_set_static_prototype(
+                ctor as usize,
+                function_ctor.get_nanbox_f64().to_bits(),
+            )
         });
     }
     let function_proto = builtin_prototype_value("Function");
     if crate::value::JSValue::from_bits(function_proto.to_bits()).is_pointer() {
+        let function_proto = scope.root_nanbox_f64(function_proto);
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
             super::super::prototype_chain::object_set_static_prototype(
                 proto as usize,
-                function_proto.to_bits(),
+                function_proto.get_nanbox_f64().to_bits(),
             )
         });
     }
