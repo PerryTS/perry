@@ -10,6 +10,25 @@ const u2 = new Uint8Array([10, 20, 30, 40, 50]);
 console.log("from array:", u2[0], u2[1], u2[2], u2[3], u2[4]);
 console.log("from array length:", u2.length);
 
+// GetMethod(source, @@iterator) falls back to array-like reads when the
+// method is undefined or null.
+const iteratorDescriptor = Object.getOwnPropertyDescriptor(
+  Array.prototype,
+  Symbol.iterator,
+)!;
+delete (Array.prototype as any)[Symbol.iterator];
+const noPrototypeIterator = new Uint8Array([6, 7]);
+Object.defineProperty(Array.prototype, Symbol.iterator, iteratorDescriptor);
+console.log(
+  "from array without prototype iterator:",
+  noPrototypeIterator[0],
+  noPrototypeIterator[1],
+);
+const nullIteratorSource: any = [8, 9];
+nullIteratorSource[Symbol.iterator] = null;
+const nullIterator = new Uint8Array(nullIteratorSource);
+console.log("from array with null iterator:", nullIterator[0], nullIterator[1]);
+
 // --- Uint8Array read/write ---
 const u3 = new Uint8Array(3);
 u3[0] = 100;

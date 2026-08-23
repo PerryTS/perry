@@ -212,17 +212,29 @@ pub(crate) unsafe fn mirror_prototype_method_on_object(
     if proto.is_null() || name.is_empty() {
         return;
     }
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(proto, key, f64::from_bits(value_bits));
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_raw_mut_ptr(proto);
+    let value = scope.root_nanbox_u64(value_bits);
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        name.as_ptr(),
+        name.len() as u32,
+    ));
+    proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+        key.with_const_ptr::<crate::StringHeader, _>(|key| {
+            js_object_set_field_by_name(proto, key, value.get_nanbox_f64())
+        })
+    });
     if !enumerable {
         // `js_object_set_field_by_name` records the default (enumerable) attrs;
         // override so reflective own-key enumeration skips a defineProperty-
         // registered non-enumerable method.
-        set_builtin_property_attrs(
-            proto as usize,
-            name.to_string(),
-            PropertyAttrs::new(true, false, true),
-        );
+        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+            set_builtin_property_attrs(
+                proto as usize,
+                name.to_string(),
+                PropertyAttrs::new(true, false, true),
+            )
+        });
     }
 }
 

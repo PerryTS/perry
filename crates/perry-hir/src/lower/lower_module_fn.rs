@@ -7,7 +7,7 @@
 //! reach them via `crate::lower::lower_module*` (or the `lib.rs`
 //! re-exports — `pub use lower::{lower_module, ...}`).
 
-use crate::types::Type;
+use crate::types::{LocalId, Type};
 use anyhow::Result;
 use std::collections::HashSet;
 use swc_ecma_ast as ast;
@@ -17,6 +17,114 @@ use crate::ir::*;
 use crate::lower_types::hoisted_text_codec::{
     infer_hoisted_text_codec_var_type, require_literal_specifier,
 };
+
+fn reflect_script_var_initializers(
+    stmts: Vec<Stmt>,
+    script_var_ids: &HashSet<LocalId>,
+) -> Vec<Stmt> {
+    let mut reflected = Vec::with_capacity(stmts.len());
+    for mut stmt in stmts {
+        match &mut stmt {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                *then_branch =
+                    reflect_script_var_initializers(std::mem::take(then_branch), script_var_ids);
+                if let Some(branch) = else_branch {
+                    *branch =
+                        reflect_script_var_initializers(std::mem::take(branch), script_var_ids);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                *body = reflect_script_var_initializers(std::mem::take(body), script_var_ids);
+            }
+            Stmt::For { init, body, .. } => {
+                if let Some(init_stmt) = init.take() {
+                    let mut expanded =
+                        reflect_script_var_initializers(vec![*init_stmt], script_var_ids);
+                    if expanded.len() == 1 {
+                        *init = expanded.pop().map(Box::new);
+                    } else {
+                        // A script `var` initializer can be hoisted out of the
+                        // `for` init slot without changing its one-shot order.
+                        // This makes room for the immediately-following global
+                        // mirror, since HIR's init field holds only one Stmt.
+                        reflected.append(&mut expanded);
+                    }
+                }
+                *body = reflect_script_var_initializers(std::mem::take(body), script_var_ids);
+            }
+            Stmt::Labeled { body, .. } => {
+                let inner = std::mem::replace(body, Box::new(Stmt::Break));
+                let mut expanded = reflect_script_var_initializers(vec![*inner], script_var_ids);
+                *body = if expanded.len() == 1 {
+                    Box::new(expanded.pop().expect("one reflected labeled statement"))
+                } else {
+                    // Non-loop labels are already represented as run-once
+                    // do/while statements. Keep the same representation if a
+                    // direct labeled declaration expands to declaration +
+                    // mirror so `break label` still targets one statement.
+                    Box::new(Stmt::DoWhile {
+                        body: expanded,
+                        condition: Expr::Bool(false),
+                    })
+                };
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                *body = reflect_script_var_initializers(std::mem::take(body), script_var_ids);
+                if let Some(catch) = catch {
+                    catch.body = reflect_script_var_initializers(
+                        std::mem::take(&mut catch.body),
+                        script_var_ids,
+                    );
+                }
+                if let Some(finally) = finally {
+                    *finally =
+                        reflect_script_var_initializers(std::mem::take(finally), script_var_ids);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    case.body = reflect_script_var_initializers(
+                        std::mem::take(&mut case.body),
+                        script_var_ids,
+                    );
+                }
+            }
+            Stmt::Let { .. }
+            | Stmt::Expr(_)
+            | Stmt::Return(_)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::Throw(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
+        }
+
+        let global_var = match &stmt {
+            Stmt::Let { id, name, .. } if script_var_ids.contains(id) => Some((*id, name.clone())),
+            _ => None,
+        };
+        reflected.push(stmt);
+        if let Some((id, name)) = global_var {
+            reflected.push(Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::GlobalThisExpr),
+                property: name,
+                value: Box::new(Expr::LocalGet(id)),
+            }));
+        }
+    }
+    reflected
+}
 
 fn should_enable_react_automatic_jsx(name: &str, ast_module: &ast::Module) -> bool {
     let is_jsx_source = name.ends_with(".tsx")
@@ -1231,28 +1339,13 @@ pub fn lower_module_full(
             .iter()
             .filter_map(|name| ctx.lookup_local(name))
             .collect();
-        // Script `var` bindings are properties of the global object. Insert
-        // the mirror immediately after each top-level initializer so code
-        // later in the same script observes the initialized value through
-        // `globalThis` (ES modules keep their lexical/module binding only).
-        let mut reflected = Vec::with_capacity(module.init.len());
-        for stmt in std::mem::take(&mut module.init) {
-            let global_var = match &stmt {
-                Stmt::Let { id, name, .. } if script_var_decl_ids.contains(id) => {
-                    Some((*id, name.clone()))
-                }
-                _ => None,
-            };
-            reflected.push(stmt);
-            if let Some((id, name)) = global_var {
-                reflected.push(Stmt::Expr(Expr::PropertySet {
-                    object: Box::new(Expr::GlobalThisExpr),
-                    property: name,
-                    value: Box::new(Expr::LocalGet(id)),
-                }));
-            }
-        }
-        module.init = reflected;
+        // Script `var` bindings are properties of the global object. Mirror
+        // every write at its actual execution point, including declarations
+        // nested in blocks, loops, switch arms and try/catch/finally. Matching
+        // by LocalId prevents a same-named lexical shadow from leaking onto
+        // globalThis (ES modules keep their module binding only).
+        module.init =
+            reflect_script_var_initializers(std::mem::take(&mut module.init), &script_var_decl_ids);
     }
     if ctx.is_entry_module && !is_esm_entry {
         const RESTRICTED_GLOBAL_NAMES: [&str; 3] = ["undefined", "NaN", "Infinity"];

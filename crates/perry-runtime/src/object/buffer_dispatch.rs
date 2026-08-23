@@ -386,17 +386,25 @@ pub unsafe fn dispatch_buffer_method(
     // write methods of a zero-length Buffer with a no-op to MEASURE a packet
     // before allocating it; dispatching the native method regardless would
     // write into the empty buffer and throw RangeError [ERR_OUT_OF_RANGE].
-    if let Some(own) = crate::buffer::buffer_get_own_prop(addr, method_name) {
-        let jv = JSValue::from_bits(own.to_bits());
-        if jv.is_pointer() {
-            let ptr = jv.as_pointer::<u8>() as usize;
-            if crate::closure::is_closure_ptr(ptr) {
-                let prev_this = crate::object::js_implicit_this_set(buf_f64);
-                let r = crate::closure::js_native_call_value(own, args_ptr, args_len);
-                crate::object::js_implicit_this_set(prev_this);
-                return r;
-            }
+    if crate::buffer::buffer_has_own_prop(addr, method_name) {
+        let own_scope = crate::gc::RuntimeHandleScope::new();
+        let own_receiver = own_scope.root_nanbox_f64(buf_f64);
+        let own = crate::buffer::buffer_read_own_prop(addr, method_name)
+            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+        let own = own_scope.root_nanbox_f64(own);
+        let own_value = own.get_nanbox_f64();
+        let own_js = JSValue::from_bits(own_value.to_bits());
+        if own_js.is_undefined() || own_js.is_null() {
+            crate::closure::throw_not_callable();
         }
+        return match crate::collection_iter::call_with_this_capturing_throw(
+            own_value,
+            own_receiver.get_nanbox_f64(),
+            args,
+        ) {
+            Ok(value) => value,
+            Err(error) => crate::exception::js_throw(error),
+        };
     }
     let arg_i32 = |i: usize| -> i32 {
         if i < args.len() {

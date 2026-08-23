@@ -102,6 +102,34 @@ pub fn buffer_get_own_prop(addr: usize, prop: &str) -> Option<f64> {
         .map(f64::from_bits)
 }
 
+/// Read an own buffer expando with ordinary `[[Get]]` semantics.
+///
+/// Accessor descriptors keep an `undefined` placeholder in the data table so
+/// enumeration retains their key order. Readers must therefore consult the
+/// accessor table first and invoke the getter instead of returning that
+/// placeholder. The receiver and getter are rooted across the user call.
+pub fn buffer_read_own_prop(addr: usize, prop: &str) -> Option<f64> {
+    if addr == 0 {
+        return None;
+    }
+    if let Some(accessor) = crate::object::get_accessor_descriptor(addr, prop) {
+        if accessor.get == 0 {
+            return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(addr as i64));
+        let getter = scope.root_nanbox_u64(accessor.get);
+        let value = unsafe {
+            crate::object::invoke_accessor_getter(
+                getter.get_nanbox_u64(),
+                receiver.get_nanbox_f64(),
+            )
+        };
+        return Some(f64::from_bits(value.bits()));
+    }
+    buffer_get_own_prop(addr, prop)
+}
+
 /// Every own dynamic prop key recorded for `addr`, in insertion-independent
 /// (sorted) order.
 ///
