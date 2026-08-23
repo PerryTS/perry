@@ -361,6 +361,8 @@ pub(crate) fn object_prototype_index_get(index: u32) -> f64 {
 }
 
 pub(crate) fn object_prototype_index_get_with_receiver(index: u32, receiver: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
     match object_prototype_value() {
         Some(proto) => {
             // Fire an accessor getter installed via
@@ -370,7 +372,13 @@ pub(crate) fn object_prototype_index_get_with_receiver(index: u32, receiver: f64
             if let Some(acc) = crate::object::get_accessor_descriptor(addr, &index.to_string()) {
                 if acc.get != 0 {
                     return f64::from_bits(
-                        unsafe { crate::object::invoke_accessor_getter(acc.get, receiver) }.bits(),
+                        unsafe {
+                            crate::object::invoke_accessor_getter(
+                                acc.get,
+                                receiver.get_nanbox_f64(),
+                            )
+                        }
+                        .bits(),
                     );
                 }
                 return f64::from_bits(crate::value::TAG_UNDEFINED);

@@ -4,5 +4,5 @@ typeof store: object
 store.get('k'): v
 nested var: 42
 try/finally vars: try finally
-labeled loop: 3 1,2
+labeled loop: 3 1,2 1,2,3
 switch var: case

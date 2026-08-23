@@ -354,12 +354,14 @@ pub(crate) fn array_spec_get(arr: *const ArrayHeader, index: u32) -> f64 {
     }
     unsafe {
         let receiver = crate::value::js_nanbox_pointer(arr as i64);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(receiver);
         if array_has_own_index(arr, index) {
             return js_array_get_f64(arr, index);
         }
         if let Some(proto_arr) = array_custom_array_prototype(arr) {
             if index < (*proto_arr).length && array_has_own_index(proto_arr, index) {
-                return array_inherited_index_get(proto_arr, index, receiver);
+                return array_inherited_index_get(proto_arr, index, receiver.get_nanbox_f64());
             }
         }
         if ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
@@ -367,14 +369,17 @@ pub(crate) fn array_spec_get(arr: *const ArrayHeader, index: u32) -> f64 {
             if proto != 0 && proto != arr as usize {
                 let proto_arr = proto as *const ArrayHeader;
                 if index < (*proto_arr).length && array_has_own_index(proto_arr, index) {
-                    return array_inherited_index_get(proto_arr, index, receiver);
+                    return array_inherited_index_get(proto_arr, index, receiver.get_nanbox_f64());
                 }
             }
         }
         if OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
             && crate::array::object_prototype_has_index_prop(index)
         {
-            return crate::array::sort_object_prototype_index_get_with_receiver(index, receiver);
+            return crate::array::sort_object_prototype_index_get_with_receiver(
+                index,
+                receiver.get_nanbox_f64(),
+            );
         }
         TAG_UNDEFINED_F64
     }

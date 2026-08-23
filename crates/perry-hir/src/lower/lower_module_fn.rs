@@ -56,26 +56,7 @@ fn reflect_script_var_initializers(
                     }
                 }
                 if let Some(update_expr) = update.take() {
-                    let mut updated_globals: Vec<_> = script_vars
-                        .iter()
-                        .filter(|(id, _)| expr_updates_local(&update_expr, **id))
-                        .map(|(id, name)| (*id, name.clone()))
-                        .collect();
-                    updated_globals.sort_unstable_by_key(|(id, _)| *id);
-                    if updated_globals.is_empty() {
-                        *update = Some(update_expr);
-                    } else {
-                        let mut sequence = Vec::with_capacity(1 + updated_globals.len());
-                        sequence.push(update_expr);
-                        sequence.extend(updated_globals.into_iter().map(|(id, name)| {
-                            Expr::PropertySet {
-                                object: Box::new(Expr::GlobalThisExpr),
-                                property: name,
-                                value: Box::new(Expr::LocalGet(id)),
-                            }
-                        }));
-                        *update = Some(Expr::Sequence(sequence));
-                    }
+                    *update = Some(reflect_script_var_update_expr(update_expr, script_vars));
                 }
                 *body = reflect_script_var_initializers(std::mem::take(body), script_vars);
             }
@@ -159,11 +140,50 @@ fn reflect_script_var_initializers(
     reflected
 }
 
-fn expr_updates_local(expr: &Expr, target: LocalId) -> bool {
+fn reflect_script_var_update_expr(expr: Expr, script_vars: &HashMap<LocalId, String>) -> Expr {
+    let mut reflected = Vec::new();
+    reflect_script_var_update_parts(expr, script_vars, &mut reflected);
+    if reflected.len() == 1 {
+        reflected.pop().expect("one reflected update expression")
+    } else {
+        Expr::Sequence(reflected)
+    }
+}
+
+fn reflect_script_var_update_parts(
+    expr: Expr,
+    script_vars: &HashMap<LocalId, String>,
+    reflected: &mut Vec<Expr>,
+) {
     match expr {
-        Expr::LocalSet(id, _) | Expr::Update { id, .. } => *id == target,
-        Expr::Sequence(exprs) => exprs.iter().any(|expr| expr_updates_local(expr, target)),
-        _ => false,
+        Expr::Sequence(exprs) => {
+            for expr in exprs {
+                reflect_script_var_update_parts(expr, script_vars, reflected);
+            }
+        }
+        Expr::LocalSet(id, value) => {
+            reflected.push(Expr::LocalSet(id, value));
+            reflect_script_var_update(id, script_vars, reflected);
+        }
+        Expr::Update { id, op, prefix } => {
+            reflected.push(Expr::Update { id, op, prefix });
+            reflect_script_var_update(id, script_vars, reflected);
+        }
+        expr => reflected.push(expr),
+    }
+}
+
+fn reflect_script_var_update(
+    id: LocalId,
+    script_vars: &HashMap<LocalId, String>,
+    reflected: &mut Vec<Expr>,
+) {
+    if let Some(name) = script_vars.get(&id) {
+        reflected.push(Expr::PropertySet {
+            object: Box::new(Expr::GlobalThisExpr),
+            property: name.clone(),
+            value: Box::new(Expr::LocalGet(id)),
+        });
     }
 }
 

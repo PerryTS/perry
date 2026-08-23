@@ -1249,6 +1249,15 @@ pub(crate) fn extends_target_must_throw(value: f64) -> bool {
         if is_arrow_function_value(value) || is_non_constructable_builtin_function_value(value) {
             return true;
         }
+        // Native-module constructor exports use the same BOUND_METHOD
+        // trampoline as ordinary method reads. Their module/method captures
+        // are the distinguishing [[Construct]] metadata: rejecting the raw
+        // trampoline here breaks dynamic aliases such as
+        // `const Console = console.Console; new Console(...)` and native base
+        // construction reached through an indirect user-class chain.
+        if is_bound_native_method_closure_value(value) {
+            return false;
+        }
         let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
         if !ptr.is_null() && is_valid_obj_ptr(ptr as *const u8) {
             // A bound *method* (class/instance method read as a value) is never
