@@ -84,6 +84,8 @@ fn is_http_server_method(name: &str) -> bool {
             | "address"
             | "on"
             | "addListener"
+            | "once"
+            | "listeners"
             | "setTimeout"
             | "closeAllConnections"
             | "closeIdleConnections"
@@ -92,6 +94,7 @@ fn is_http_server_method(name: &str) -> bool {
             | "off"
             | "ref"
             | "unref"
+            | "setTicketKeys"
             | "@@__perry_wk_asyncDispose"
     )
 }
@@ -109,6 +112,8 @@ fn is_http_server_property(name: &str) -> bool {
                 | "timeout"
                 | "maxHeadersCount"
                 | "maxRequestsPerSocket"
+                | "ALPNProtocols"
+                | "ALPNCallback"
         )
 }
 
@@ -122,6 +127,10 @@ fn is_incoming_message_member(name: &str) -> bool {
             | "resume"
             | "destroy"
             | "read"
+            | "unref"
+            | "getSession"
+            | "isSessionReused"
+            | "getPeerCertificate"
             | "_addHeaderLine"
             | "__set_socket"
             | "__set_connection"
@@ -151,6 +160,10 @@ fn is_incoming_message_member(name: &str) -> bool {
             | "signal"
             | "remoteAddress"
             | "remotePort"
+            | "encrypted"
+            | "authorized"
+            | "servername"
+            | "bytesWritten"
     ) || matches!(
         name,
         "__get_method"

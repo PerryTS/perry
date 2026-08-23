@@ -200,7 +200,14 @@ pub(super) unsafe fn dispatch_client_incoming_property(
 ) -> Option<f64> {
     if !matches!(
         property_name,
-        "statusCode" | "statusMessage" | "headers" | "trailers" | "setEncoding"
+        "statusCode"
+            | "statusMessage"
+            | "headers"
+            | "trailers"
+            | "setEncoding"
+            | "socket"
+            | "connection"
+            | "req"
     ) {
         return None;
     }
@@ -216,6 +223,8 @@ pub(super) unsafe fn dispatch_client_incoming_property(
         fn js_http_status_message(handle: i64) -> *mut perry_runtime::StringHeader;
         fn js_http_response_headers(handle: i64) -> f64;
         fn js_http_response_trailers(handle: i64) -> f64;
+        fn js_http_incoming_message_socket(handle: i64) -> f64;
+        fn js_http_incoming_message_req(handle: i64) -> f64;
     }
 
     if unsafe { js_http_is_incoming_message(handle) } == 0 {
@@ -240,6 +249,8 @@ pub(super) unsafe fn dispatch_client_incoming_property(
         }
         "headers" => unsafe { js_http_response_headers(handle) },
         "trailers" => unsafe { js_http_response_trailers(handle) },
+        "socket" | "connection" => unsafe { js_http_incoming_message_socket(handle) },
+        "req" => unsafe { js_http_incoming_message_req(handle) },
         _ => f64::from_bits(0x7FFC_0000_0000_0001),
     };
     Some(value)

@@ -148,6 +148,10 @@ impl Body for ChannelBody {
 /// `res.write(...)`, body frames following over a channel).
 pub enum ShapeBody {
     Full(Vec<u8>),
+    /// HTTP/1.0 body delimited by closing the connection. Unlike `Full`, this
+    /// deliberately reports no exact size so hyper does not synthesize a
+    /// Content-Length header and keep the connection open.
+    Eof(Vec<u8>),
     Stream {
         rx: tokio::sync::mpsc::UnboundedReceiver<StreamFrame>,
         in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -198,6 +202,10 @@ pub struct ServerResponse {
     /// Lowercase → original-case map so `getHeaderNames()` returns
     /// what the user originally set (matches Node behavior).
     pub raw_header_names: HashMap<String, String>,
+    /// Lowercase header names in first-insertion order. The lookup maps above
+    /// intentionally stay hash-based; this side list preserves Node's wire
+    /// ordering for `writeHead({...})` and sequential `setHeader` calls.
+    pub header_order: Vec<String>,
     pub raw_trailer_names: HashMap<String, String>,
     pub headers_sent: bool,
     /// True once `writeHead()` has committed the status line + headers (Node's
@@ -220,6 +228,12 @@ pub struct ServerResponse {
     /// One-shot back to hyper's service fn — taken on `.end()`, or earlier
     /// by `begin_streaming` when the headers flush before the body is done.
     pub response_tx: Option<oneshot::Sender<HyperResponseShape>>,
+    /// Connection-task wakeup used by `res.destroy()` to abort the transport
+    /// without synthesizing an HTTP response.
+    pub connection_close: Option<std::sync::Arc<tokio::sync::Notify>>,
+    /// Shared with the service future so a dropped response channel caused by
+    /// `destroy()` is distinguishable from an accidental handler failure.
+    pub transport_destroyed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Live body channel once the response head has been flushed early
     /// (`res.flushHeaders()` / first `res.write(...)`). `Some` means
     /// streaming mode: subsequent chunks go straight to the wire and
@@ -268,9 +282,13 @@ pub struct ServerResponse {
 pub struct HyperResponseShape {
     pub status: u16,
     pub status_message: Option<String>,
+    pub response_version: Option<hyper::Version>,
     pub headers: Vec<(String, String)>,
     pub trailers: Vec<(String, String)>,
     pub body: ShapeBody,
+    /// True when Perry synthesized Content-Length for a fully buffered body,
+    /// rather than the application setting it explicitly.
+    pub auto_content_length: bool,
 }
 
 impl HyperResponseShape {
@@ -284,6 +302,9 @@ impl HyperResponseShape {
         let status = crate::server::response_fast::status_code_const(self.status)
             .unwrap_or_else(|| StatusCode::from_u16(self.status).unwrap_or(StatusCode::OK));
         let mut builder = Response::builder().status(status);
+        if let Some(version) = self.response_version {
+            builder = builder.version(version);
+        }
         // `res.statusMessage = 'Custom Message'` must reach the HTTP/1
         // status line (test-http-status-message reads it off the raw
         // socket). hyper emits it via the ReasonPhrase extension.
@@ -302,6 +323,17 @@ impl HyperResponseShape {
         let full = match self.body {
             ShapeBody::Stream { rx, in_flight } => {
                 return builder.body(ChannelBody { rx, in_flight }.boxed()).unwrap();
+            }
+            ShapeBody::Eof(bytes) => {
+                return builder
+                    .body(
+                        TrailerBody {
+                            body: Some(Bytes::from(bytes)),
+                            trailers: None,
+                        }
+                        .boxed(),
+                    )
+                    .unwrap();
             }
             ShapeBody::Full(bytes) => bytes,
         };
@@ -387,6 +419,92 @@ impl HyperResponseShape {
                 .push(("Connection".to_string(), "close".to_string()));
         }
     }
+
+    /// Node uses EOF framing for an HTTP/1.0 response that promises
+    /// no explicit length or chunked framing and whose client did not
+    /// advertise `TE: chunked`. Hyper sees a full body and would otherwise add
+    /// Content-Length, changing the connection edge.
+    pub fn apply_http10_eof_framing(&mut self, version: hyper::Version, request_te: Option<&str>) {
+        if version != hyper::Version::HTTP_10 || !self.auto_content_length {
+            return;
+        }
+        let client_accepts_chunked = request_te
+            .map(|value| {
+                value
+                    .split(',')
+                    .any(|part| part.trim().eq_ignore_ascii_case("chunked"))
+            })
+            .unwrap_or(false);
+        if client_accepts_chunked {
+            return;
+        }
+        self.headers
+            .retain(|(name, _)| !name.eq_ignore_ascii_case("content-length"));
+        if let ShapeBody::Full(body) = &mut self.body {
+            let body = std::mem::take(body);
+            self.body = ShapeBody::Eof(body);
+        }
+    }
+
+    /// Prepare a chunked HTTP/1.0 keep-alive response for the transport
+    /// adapter. Hyper refuses chunked framing once it has seen an HTTP/1.0
+    /// request, so it receives a fixed-length body containing the already
+    /// encoded chunks; `ReadActivity` rewrites that Content-Length header to
+    /// Transfer-Encoding without changing hyper's keep-alive accounting.
+    pub fn apply_http10_chunked_framing(
+        &mut self,
+        version: hyper::Version,
+        request_te: Option<&str>,
+    ) -> bool {
+        if version != hyper::Version::HTTP_10 {
+            return false;
+        }
+        let client_accepts_chunked = request_te
+            .map(|value| {
+                value
+                    .split(',')
+                    .any(|part| part.trim().eq_ignore_ascii_case("chunked"))
+            })
+            .unwrap_or(false);
+        let explicit_chunked_index = self.headers.iter().position(|(name, value)| {
+            name.eq_ignore_ascii_case("transfer-encoding")
+                && value
+                    .split(',')
+                    .any(|part| part.trim().eq_ignore_ascii_case("chunked"))
+        });
+        if explicit_chunked_index.is_none() && !(client_accepts_chunked && self.auto_content_length)
+        {
+            return false;
+        }
+        let ShapeBody::Full(body) = &mut self.body else {
+            return false;
+        };
+        let body = std::mem::take(body);
+        let mut encoded = Vec::with_capacity(body.len() + 16);
+        if !body.is_empty() {
+            encoded.extend_from_slice(format!("{:x}\r\n", body.len()).as_bytes());
+            encoded.extend_from_slice(&body);
+            encoded.extend_from_slice(b"\r\n");
+        }
+        encoded.extend_from_slice(b"0\r\n\r\n");
+        self.headers
+            .retain(|(name, _)| !name.eq_ignore_ascii_case("content-length"));
+        if explicit_chunked_index.is_some() {
+            let index = self
+                .headers
+                .iter()
+                .position(|(name, _)| name.eq_ignore_ascii_case("transfer-encoding"))
+                .expect("explicit chunked header retained");
+            self.headers[index] = ("Content-Length".to_string(), encoded.len().to_string());
+        } else {
+            self.headers
+                .retain(|(name, _)| !name.eq_ignore_ascii_case("transfer-encoding"));
+            self.headers
+                .push(("Content-Length".to_string(), encoded.len().to_string()));
+        }
+        self.body = ShapeBody::Full(encoded);
+        true
+    }
 }
 
 impl ServerResponse {
@@ -398,6 +516,7 @@ impl ServerResponse {
             header_value_lists: HashMap::new(),
             trailers: HashMap::new(),
             raw_header_names: HashMap::new(),
+            header_order: Vec::new(),
             header_committed: false,
             raw_trailer_names: HashMap::new(),
             headers_sent: false,
@@ -409,6 +528,8 @@ impl ServerResponse {
             outgoing_message_only: false,
             buffered_body: Vec::new(),
             response_tx: Some(response_tx),
+            connection_close: None,
+            transport_destroyed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             stream_tx: None,
             stream_in_flight: None,
             needs_drain: false,
@@ -441,7 +562,16 @@ impl ServerResponse {
     /// layer emits a separate header line each (#4826).
     pub fn snapshot_headers(&self) -> Vec<(String, String)> {
         let mut out = Vec::with_capacity(self.headers.len());
-        for (lower_k, v) in &self.headers {
+        let mut ordered = self.header_order.clone();
+        for lower in self.headers.keys() {
+            if !ordered.contains(lower) {
+                ordered.push(lower.clone());
+            }
+        }
+        for lower_k in &ordered {
+            let Some(v) = self.headers.get(lower_k) else {
+                continue;
+            };
             let orig = self
                 .raw_header_names
                 .get(lower_k)
@@ -455,7 +585,19 @@ impl ServerResponse {
                 out.push((orig, v.clone()));
             }
         }
+        if self.send_date && !self.headers.contains_key("date") {
+            out.push((
+                "Date".to_string(),
+                httpdate::fmt_http_date(std::time::SystemTime::now()),
+            ));
+        }
         out
+    }
+
+    fn remember_header(&mut self, lower: &str) {
+        if !self.header_order.iter().any(|name| name == lower) {
+            self.header_order.push(lower.to_string());
+        }
     }
 
     fn snapshot_trailers(&self) -> Vec<(String, String)> {
@@ -483,6 +625,7 @@ impl ServerResponse {
         if !self.headers.contains_key("content-length")
             && !self.headers.contains_key("transfer-encoding")
         {
+            self.remember_header("content-length");
             let len = self.buffered_body.len();
             self.headers
                 .insert("content-length".to_string(), len.to_string());
@@ -597,6 +740,7 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
 
     if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
         if !sr.headers_sent {
+            sr.remember_header(&lower);
             if let Some(elems) = array_elems {
                 sr.headers.insert(lower.clone(), elems.join(", "));
                 sr.header_value_lists.insert(lower.clone(), elems);
@@ -667,6 +811,7 @@ pub unsafe extern "C" fn js_node_http_res_remove_header(
             sr.headers.remove(&name);
             sr.header_value_lists.remove(&name);
             sr.raw_header_names.remove(&name);
+            sr.header_order.retain(|header| header != &name);
         }
     }
 }
@@ -715,6 +860,7 @@ pub unsafe extern "C" fn js_node_http_res_append_header(
     let lower = name.to_lowercase();
     if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
         if !sr.headers_sent {
+            sr.remember_header(&lower);
             if let Some(list) = sr.header_value_lists.get_mut(&lower) {
                 // Already a multi-value header (e.g. Set-Cookie): append a new
                 // element so it emits its own wire line (#4826).
@@ -826,6 +972,7 @@ fn apply_headers_entries(sr: &mut ServerResponse, json: &str) {
             continue;
         }
         let lower = name.to_lowercase();
+        sr.remember_header(&lower);
         if let serde_json::Value::Array(elems) = value_v {
             let elems: Vec<String> = elems
                 .into_iter()
@@ -943,6 +1090,7 @@ fn apply_headers_json(sr: &mut ServerResponse, json: &str) {
     if let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(json) {
         for (k, v) in obj {
             let lower = k.to_lowercase();
+            sr.remember_header(&lower);
             // Array values (e.g. Set-Cookie) emit one wire line per element.
             // Node coerces the scalar `getHeader`/lookup value to the
             // elements joined with `, `, and keeps the per-element list so
@@ -1066,6 +1214,7 @@ fn apply_headers_flat_array(sr: &mut ServerResponse, json: &str) {
             continue;
         }
         let lower = name.to_lowercase();
+        sr.remember_header(&lower);
         if let serde_json::Value::Array(elems) = value_v {
             let elems: Vec<String> = elems
                 .into_iter()
@@ -1309,6 +1458,7 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         }
         sr.writable_ended = true;
         sr.writable_finished = true;
+        crate::server::request::mark_connection_written(sr.req_handle);
         sr.needs_drain = false;
         let finish_listeners = take_event_listeners(sr, "finish");
         let close_listeners = take_event_listeners(sr, "close");
@@ -1320,6 +1470,9 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
     }
     sr.headers_sent = true;
     sr.writable_ended = true;
+    let auto_content_length = sr.trailers.is_empty()
+        && !sr.headers.contains_key("content-length")
+        && !sr.headers.contains_key("transfer-encoding");
     sr.ensure_content_length();
     let body = std::mem::take(&mut sr.buffered_body);
     let headers = sr.snapshot_headers();
@@ -1327,9 +1480,11 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
     let shape = HyperResponseShape {
         status: sr.status_code,
         status_message: sr.status_message.clone(),
+        response_version: None,
         headers,
         trailers,
         body: ShapeBody::Full(body),
+        auto_content_length,
     };
     let finish_listeners = take_event_listeners(sr, "finish");
     let close_listeners = take_event_listeners(sr, "close");
@@ -1337,6 +1492,7 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         let _ = tx.send(shape);
     }
     sr.writable_finished = true;
+    crate::server::request::mark_connection_written(sr.req_handle);
     Some((finish_listeners, close_listeners))
 }
 
@@ -1378,12 +1534,14 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
     let shape = HyperResponseShape {
         status: sr.status_code,
         status_message: sr.status_message.clone(),
+        response_version: None,
         headers: sr.snapshot_headers(),
         trailers: Vec::new(),
         body: ShapeBody::Stream {
             rx,
             in_flight: in_flight.clone(),
         },
+        auto_content_length: false,
     };
     sr.headers_sent = true;
     let oneshot_tx = sr.response_tx.take().expect("checked above");
@@ -1782,8 +1940,15 @@ pub(crate) unsafe fn socket_write_str(socket: f64, chunk: &str) {
 pub(crate) fn alloc_server_response_for_request(
     response_tx: oneshot::Sender<HyperResponseShape>,
     req_handle: i64,
+    connection_close: Option<std::sync::Arc<tokio::sync::Notify>>,
+    transport_destroyed: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> i64 {
-    register_handle(ServerResponse::new(response_tx).with_request_handle(req_handle))
+    let mut response = ServerResponse::new(response_tx).with_request_handle(req_handle);
+    response.connection_close = connection_close;
+    if let Some(transport_destroyed) = transport_destroyed {
+        response.transport_destroyed = transport_destroyed;
+    }
+    register_handle(response)
 }
 
 fn jsvalue_truthy(value: f64) -> bool {

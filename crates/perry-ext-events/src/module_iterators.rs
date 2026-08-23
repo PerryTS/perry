@@ -54,8 +54,22 @@ pub(super) extern "C" fn events_once_stream_resolve_listener(
             let error_event =
                 f64::from_bits(nanbox_string_bits(error_event_ptr as *mut StringHeader));
             let error_listener_value = nanbox_pointer_bits(error_listener);
-            let _ =
-                js_node_stream_method_remove_listener(handle, error_event, error_listener_value);
+            if matches!(
+                event_helper_target(nanbox_pointer_bits(handle)),
+                Some(EventHelperTarget::NetSocket(_) | EventHelperTarget::NativeHandle(_))
+            ) {
+                let _ = call_net_socket_method(
+                    handle,
+                    "removeListener",
+                    &[error_event, error_listener_value],
+                );
+            } else {
+                let _ = js_node_stream_method_remove_listener(
+                    handle,
+                    error_event,
+                    error_listener_value,
+                );
+            }
         }
         js_promise_resolve(promise, rest_array_or_empty(rest));
         js_native_async_drop_promise_token(promise);
@@ -75,7 +89,19 @@ pub(super) extern "C" fn events_once_stream_reject_listener(
         if handle != 0 && event_name_ptr != 0 && resolve_listener != 0 {
             let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
             let resolve_listener_value = nanbox_pointer_bits(resolve_listener);
-            let _ = js_node_stream_method_remove_listener(handle, event, resolve_listener_value);
+            if matches!(
+                event_helper_target(nanbox_pointer_bits(handle)),
+                Some(EventHelperTarget::NetSocket(_) | EventHelperTarget::NativeHandle(_))
+            ) {
+                let _ = call_net_socket_method(
+                    handle,
+                    "removeListener",
+                    &[event, resolve_listener_value],
+                );
+            } else {
+                let _ =
+                    js_node_stream_method_remove_listener(handle, event, resolve_listener_value);
+            }
         }
         if !promise.is_null() {
             js_promise_reject(promise, first_rest_arg_or_undefined(rest));

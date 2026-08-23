@@ -32,7 +32,14 @@ mod error_monitor;
 use error_monitor::dispatch_error_monitor;
 mod max_listeners;
 mod messages;
+mod module_helpers;
 mod target_helpers;
+
+use module_helpers::{call_net_socket_method, js_events_native_dispatch};
+pub use module_helpers::{
+    js_events_get_event_listeners, js_events_get_max_listeners, js_events_listener_count,
+    js_events_set_max_listeners,
+};
 
 #[cfg(test)]
 mod test_async_shims;
@@ -164,6 +171,9 @@ extern "C" {
     // so the runtime's `js_dynamic_new` constructs a real emitter instead of
     // falling through to the generic empty-object path.
     fn js_set_native_events_construct(
+        f: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64,
+    );
+    fn js_set_native_events_dispatch(
         f: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64,
     );
     // #3072: shared listener validator. Takes the raw NaN-box bits of the
@@ -490,6 +500,7 @@ fn ensure_runtime_hooks_registered() {
         js_register_event_emitter_set_domain(js_event_emitter_set_domain);
         js_register_event_emitter_on(event_emitter_on_hook);
         js_set_native_events_construct(events_native_construct);
+        js_set_native_events_dispatch(js_events_native_dispatch);
     });
 }
 
@@ -1673,11 +1684,77 @@ pub unsafe extern "C" fn js_events_once(
         js_event_target_add_event_listener(target, event_name_ptr, listener as i64);
         return raw;
     }
+    if let EventHelperTarget::NetSocket(handle) | EventHelperTarget::NativeHandle(handle) = target {
+        let event_name_ptr = string_header_ptr_from_arg(event_name_ptr);
+        if event_name_ptr.is_null() {
+            return raw;
+        }
+        let scope = perry_ffi::TransientRootScope::enter();
+        let event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
+            event_name_ptr as *mut StringHeader,
+        )));
+        js_register_closure_rest(events_once_stream_resolve_listener as *const u8, 0);
+        let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
+        js_closure_set_capture_ptr(listener, 0, raw as i64);
+        js_closure_set_capture_ptr(listener, 1, handle);
+        js_closure_set_capture_ptr(listener, 2, 0);
+        js_closure_set_capture_ptr(listener, 3, 0);
+        let listener = scope.root_addr(listener as i64);
+        if event_name != "error" {
+            js_register_closure_rest(events_once_stream_reject_listener as *const u8, 0);
+            let error_event_ptr = js_string_from_bytes(b"error".as_ptr(), 5);
+            let error_event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
+                error_event_ptr as *mut StringHeader,
+            )));
+            let reject_listener =
+                js_closure_alloc(events_once_stream_reject_listener as *const u8, 4);
+            let reject_listener = scope.root_addr(reject_listener as i64);
+            let event_name_ptr = (event.get().to_bits() & POINTER_MASK) as i64;
+            js_closure_set_capture_ptr(
+                reject_listener.get() as *mut RawClosureHeader,
+                0,
+                raw as i64,
+            );
+            js_closure_set_capture_ptr(reject_listener.get() as *mut RawClosureHeader, 1, handle);
+            js_closure_set_capture_ptr(
+                reject_listener.get() as *mut RawClosureHeader,
+                2,
+                event_name_ptr,
+            );
+            js_closure_set_capture_ptr(
+                reject_listener.get() as *mut RawClosureHeader,
+                3,
+                listener.get(),
+            );
+            js_closure_set_capture_ptr(
+                listener.get() as *mut RawClosureHeader,
+                2,
+                reject_listener.get(),
+            );
+            js_closure_set_capture_ptr(
+                listener.get() as *mut RawClosureHeader,
+                3,
+                (error_event.get().to_bits() & POINTER_MASK) as i64,
+            );
+            let args = [
+                error_event.get(),
+                nanbox_pointer_bits(reject_listener.get()),
+            ];
+            let _ = call_net_socket_method(handle, "once", &args);
+        }
+        let args = [event.get(), nanbox_pointer_bits(listener.get())];
+        let _ = call_net_socket_method(handle, "once", &args);
+        return raw;
+    }
     if let EventHelperTarget::Stream(handle) = target {
         let event_name_ptr = string_header_ptr_from_arg(event_name_ptr);
         if event_name_ptr.is_null() {
             return raw;
         }
+        let scope = perry_ffi::TransientRootScope::enter();
+        let event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
+            event_name_ptr as *mut StringHeader,
+        )));
         js_register_closure_rest(events_once_stream_resolve_listener as *const u8, 0);
         js_register_closure_rest(events_once_stream_reject_listener as *const u8, 0);
         let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
@@ -1685,25 +1762,49 @@ pub unsafe extern "C" fn js_events_once(
         js_closure_set_capture_ptr(listener, 1, handle);
         js_closure_set_capture_ptr(listener, 2, 0);
         js_closure_set_capture_ptr(listener, 3, 0);
-        let event_value = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
-        let listener_value = nanbox_pointer_bits(listener as i64);
+        let listener = scope.root_addr(listener as i64);
         if event_name != "error" {
-            let error_event_name = b"error";
-            let error_event_ptr =
-                js_string_from_bytes(error_event_name.as_ptr(), error_event_name.len() as u32);
+            let error_event_ptr = js_string_from_bytes(b"error".as_ptr(), 5);
+            let error_event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
+                error_event_ptr as *mut StringHeader,
+            )));
             let reject_listener =
                 js_closure_alloc(events_once_stream_reject_listener as *const u8, 4);
-            js_closure_set_capture_ptr(reject_listener, 0, raw as i64);
-            js_closure_set_capture_ptr(reject_listener, 1, handle);
-            js_closure_set_capture_ptr(reject_listener, 2, event_name_ptr as i64);
-            js_closure_set_capture_ptr(reject_listener, 3, listener as i64);
-            js_closure_set_capture_ptr(listener, 2, reject_listener as i64);
-            js_closure_set_capture_ptr(listener, 3, error_event_ptr as i64);
-            let error_event = f64::from_bits(nanbox_string_bits(error_event_ptr));
-            let reject_listener_value = nanbox_pointer_bits(reject_listener as i64);
-            let _ = js_node_stream_method_once(handle, error_event, reject_listener_value);
+            let reject_listener = scope.root_addr(reject_listener as i64);
+            js_closure_set_capture_ptr(
+                reject_listener.get() as *mut RawClosureHeader,
+                0,
+                raw as i64,
+            );
+            js_closure_set_capture_ptr(reject_listener.get() as *mut RawClosureHeader, 1, handle);
+            js_closure_set_capture_ptr(
+                reject_listener.get() as *mut RawClosureHeader,
+                2,
+                (event.get().to_bits() & POINTER_MASK) as i64,
+            );
+            js_closure_set_capture_ptr(
+                reject_listener.get() as *mut RawClosureHeader,
+                3,
+                listener.get(),
+            );
+            js_closure_set_capture_ptr(
+                listener.get() as *mut RawClosureHeader,
+                2,
+                reject_listener.get(),
+            );
+            js_closure_set_capture_ptr(
+                listener.get() as *mut RawClosureHeader,
+                3,
+                (error_event.get().to_bits() & POINTER_MASK) as i64,
+            );
+            let _ = js_node_stream_method_once(
+                handle,
+                error_event.get(),
+                nanbox_pointer_bits(reject_listener.get()),
+            );
         }
-        let _ = js_node_stream_method_once(handle, event_value, listener_value);
+        let _ =
+            js_node_stream_method_once(handle, event.get(), nanbox_pointer_bits(listener.get()));
     }
     raw
 }
@@ -1760,6 +1861,14 @@ pub unsafe extern "C" fn js_events_on(
                 js_event_target_add_event_listener(target, event_name_ptr, listener as i64);
             }
             target as Handle
+        }
+        EventHelperTarget::NetSocket(handle) | EventHelperTarget::NativeHandle(handle) => {
+            if !event_name_ptr.is_null() {
+                let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
+                let listener_value = nanbox_pointer_bits(listener as i64);
+                let _ = call_net_socket_method(handle, "on", &[event, listener_value]);
+            }
+            handle
         }
         EventHelperTarget::Stream(handle) => {
             if !event_name_ptr.is_null() {
@@ -1839,154 +1948,6 @@ pub unsafe extern "C" fn js_events_add_abort_listener(signal: f64, listener: f64
     let dispose_sym_val = js_symbol_for(dispose_key_val);
     js_object_set_symbol_property(disposable_val, dispose_sym_val, dispose_val);
     disposable as i64
-}
-
-/// `events.getEventListeners(emitter, eventName)` — alias for
-/// `emitter.listeners(eventName)`.
-///
-/// # Safety
-///
-/// `event_name_ptr` must be null or a Perry-runtime `StringHeader`.
-#[no_mangle]
-pub unsafe extern "C" fn js_events_get_event_listeners(
-    target_value: f64,
-    event_name_ptr: *const StringHeader,
-) -> *mut ArrayHeader {
-    // AbortSignal is an EventTarget in Node, but Perry represents it as its
-    // own native object that `event_helper_target` doesn't recognize. A
-    // signal only ever tracks "abort" listeners.
-    let signal_ptr = js_abort_signal_resolve_ptr(target_value);
-    if !signal_ptr.is_null() {
-        if string_from_header(event_name_ptr).as_deref() == Some("abort") {
-            return js_abort_signal_listeners_copy(signal_ptr);
-        }
-        return js_array_alloc(0);
-    }
-    match event_helper_target(target_value).unwrap_or_else(|| {
-        throw_invalid_arg_type(&invalid_instance_arg_message(
-            "emitter",
-            "EventEmitter or EventTarget",
-            target_value,
-        ))
-    }) {
-        EventHelperTarget::EventEmitter(handle) => {
-            js_event_emitter_listeners(handle, event_name_ptr as i64)
-        }
-        EventHelperTarget::EventTarget(target) => {
-            js_event_target_get_event_listeners(target, event_name_ptr)
-        }
-        EventHelperTarget::Stream(handle) => {
-            stream_listeners_for_heap_object(handle, event_name_ptr)
-                .unwrap_or_else(|| js_array_alloc(0))
-        }
-    }
-}
-
-/// `events.listenerCount(emitter, eventName)` — alias.
-///
-/// # Safety
-///
-/// `event_name_ptr` must be null or a Perry-runtime `StringHeader`.
-#[no_mangle]
-pub unsafe extern "C" fn js_events_listener_count(
-    target_value: f64,
-    event_name_ptr: *const StringHeader,
-) -> f64 {
-    // AbortSignal: see `js_events_get_event_listeners`.
-    let signal_ptr = js_abort_signal_resolve_ptr(target_value);
-    if !signal_ptr.is_null() {
-        if string_from_header(event_name_ptr).as_deref() == Some("abort") {
-            return js_abort_signal_listener_count(signal_ptr);
-        }
-        return 0.0;
-    }
-    match event_helper_target(target_value).unwrap_or_else(|| {
-        throw_invalid_arg_type(&invalid_instance_arg_message(
-            "emitter",
-            "EventEmitter or EventTarget",
-            target_value,
-        ))
-    }) {
-        EventHelperTarget::EventEmitter(handle) => js_event_emitter_listener_count(
-            handle,
-            event_name_ptr as i64,
-            TAG_UNDEFINED_F64_BITS as i64,
-        ),
-        EventHelperTarget::EventTarget(target) => event_target_array_len(target, event_name_ptr),
-        EventHelperTarget::Stream(handle) => {
-            stream_array_len(handle, event_name_ptr).unwrap_or(0.0)
-        }
-    }
-}
-
-/// `events.getMaxListeners(emitter)` — alias.
-#[no_mangle]
-pub unsafe extern "C" fn js_events_get_max_listeners(target_value: f64) -> f64 {
-    // AbortSignal: Node's default EventTarget listener cap. Perry stores no
-    // per-signal override (`setMaxListeners` below is an accepted no-op), so
-    // the default is always reported.
-    if !js_abort_signal_resolve_ptr(target_value).is_null() {
-        return 10.0;
-    }
-    match event_helper_target(target_value).unwrap_or_else(|| {
-        throw_invalid_arg_type(&invalid_instance_arg_message(
-            "emitter",
-            "EventEmitter or EventTarget",
-            target_value,
-        ))
-    }) {
-        EventHelperTarget::EventEmitter(handle) => js_event_emitter_get_max_listeners(handle),
-        EventHelperTarget::EventTarget(target) => js_event_target_get_max_listeners(target),
-        EventHelperTarget::Stream(handle) => js_node_stream_method_get_max_listeners(handle),
-    }
-}
-
-/// `events.setMaxListeners(n, ...emitters)` — Perry FFI takes a single
-/// array of target handles from the codegen varargs lowering.
-#[no_mangle]
-pub unsafe extern "C" fn js_events_set_max_listeners(
-    n: f64,
-    handles_ptr: *const ArrayHeader,
-) -> f64 {
-    let n = validate_max_listeners(n);
-    if !handles_ptr.is_null() {
-        let len = (*handles_ptr).length;
-        for i in 0..len {
-            let value = f64::from_bits(js_array_get(handles_ptr, i).bits());
-            // AbortSignal is an EventTarget in Node — SDKs routinely call
-            // `events.setMaxListeners(n, controller.signal)` to raise the
-            // MaxListenersExceededWarning threshold on a shared signal. Perry
-            // represents signals as their own native object that
-            // `event_helper_target` doesn't recognize, so this threw
-            // ERR_INVALID_ARG_TYPE and rejected the caller's whole request
-            // path. Accept the signal; the warning threshold is the call's
-            // only Node-observable effect and Perry never emits that warning
-            // for signals, so accepting is a faithful no-op.
-            if !js_abort_signal_resolve_ptr(value).is_null() {
-                continue;
-            }
-            match event_helper_target(value).unwrap_or_else(|| {
-                throw_invalid_arg_type(&invalid_instance_arg_message(
-                    "eventTargets",
-                    "EventEmitter or EventTarget",
-                    value,
-                ))
-            }) {
-                EventHelperTarget::EventEmitter(handle) => {
-                    if let Some(emitter) = get_event_emitter_mut(handle) {
-                        emitter.max_listeners = n;
-                    }
-                }
-                EventHelperTarget::EventTarget(target) => {
-                    let _ = js_event_target_set_max_listeners(target, n);
-                }
-                EventHelperTarget::Stream(handle) => {
-                    let _ = js_node_stream_method_set_max_listeners(handle, n);
-                }
-            }
-        }
-    }
-    f64::from_bits(0x7FFC_0000_0000_0001)
 }
 
 #[cfg(test)]

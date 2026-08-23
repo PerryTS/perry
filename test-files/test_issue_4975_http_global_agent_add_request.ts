@@ -13,4 +13,5 @@ agent.addRequest(request, {
   localAddress: "127.0.0.1",
   path: "/ignored",
 });
-console.log(Object.keys(agent.requests).join(","));
+const key = Object.keys(agent.requests).join(",");
+console.log(key, agent.requests[key].length);

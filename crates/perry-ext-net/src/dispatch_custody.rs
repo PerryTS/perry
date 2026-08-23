@@ -66,7 +66,8 @@ pub(crate) fn scan(visitor: &mut GcRootVisitor<'_>) {
 pub(crate) struct DispatchFrame {
     cb_base: usize,
     cb_len: usize,
-    payload_idx: Option<usize>,
+    payload_base: Option<usize>,
+    payload_len: usize,
 }
 
 impl DispatchFrame {
@@ -81,7 +82,8 @@ impl DispatchFrame {
         DispatchFrame {
             cb_base,
             cb_len,
-            payload_idx: None,
+            payload_base: None,
+            payload_len: 0,
         }
     }
 
@@ -104,19 +106,37 @@ impl DispatchFrame {
     /// (so the callbacks were already in custody while the payload was
     /// allocated) and BEFORE the first `call*`.
     pub(crate) fn set_payload(&mut self, bits: u64) {
-        debug_assert!(self.payload_idx.is_none());
-        let idx = PAYLOADS.with(|p| {
+        self.set_payloads(&[bits]);
+    }
+
+    /// Park several NaN-boxed arguments for a single synchronous dispatch.
+    pub(crate) fn set_payloads(&mut self, bits: &[u64]) {
+        debug_assert!(self.payload_base.is_none());
+        if bits.is_empty() {
+            return;
+        }
+        let base = PAYLOADS.with(|p| {
             let mut p = p.borrow_mut();
-            p.push(bits);
-            p.len() - 1
+            let base = p.len();
+            p.extend_from_slice(bits);
+            base
         });
-        self.payload_idx = Some(idx);
+        self.payload_base = Some(base);
+        self.payload_len = bits.len();
     }
 
     /// Fresh read of the parked payload (rewritten if its object moved).
     pub(crate) fn payload_bits(&self) -> u64 {
-        let idx = self.payload_idx.expect("payload_bits without set_payload");
-        PAYLOADS.with(|p| p.borrow()[idx])
+        self.payload_bits_at(0)
+    }
+
+    /// Fresh read of one parked argument.
+    pub(crate) fn payload_bits_at(&self, index: usize) -> u64 {
+        debug_assert!(index < self.payload_len);
+        let base = self
+            .payload_base
+            .expect("payload_bits_at without set_payloads");
+        PAYLOADS.with(|p| p.borrow()[base + index])
     }
 }
 
@@ -127,11 +147,11 @@ impl Drop for DispatchFrame {
             debug_assert_eq!(s.len(), self.cb_base + self.cb_len, "unnested frame drop");
             s.truncate(self.cb_base);
         });
-        if let Some(idx) = self.payload_idx {
+        if let Some(base) = self.payload_base {
             PAYLOADS.with(|p| {
                 let mut p = p.borrow_mut();
-                debug_assert_eq!(p.len(), idx + 1, "unnested payload drop");
-                p.truncate(idx);
+                debug_assert_eq!(p.len(), base + self.payload_len, "unnested payload drop");
+                p.truncate(base);
             });
         }
     }
@@ -166,11 +186,12 @@ mod tests {
         // an object moves) must be visible through the frame's accessors —
         // that is the entire point of parking.
         let mut frame = DispatchFrame::park(vec![0x1000]);
-        frame.set_payload(0x7FFF_0000_0000_2000);
+        frame.set_payloads(&[0x7FFF_0000_0000_2000, 0x7FFF_0000_0000_3000]);
         CBS.with(|s| s.borrow_mut()[0] = 0x9000);
         PAYLOADS.with(|p| p.borrow_mut()[0] = 0x7FFF_0000_0000_A000);
         assert_eq!(frame.cb(0), 0x9000);
         assert_eq!(frame.payload_bits(), 0x7FFF_0000_0000_A000);
+        assert_eq!(frame.payload_bits_at(1), 0x7FFF_0000_0000_3000);
     }
 
     #[test]

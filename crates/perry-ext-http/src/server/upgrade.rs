@@ -72,7 +72,7 @@ pub(crate) fn fire_upgrade_listeners(
     head_data: Vec<u8>,
 ) {
     let listeners = if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
-        s.listeners.get("upgrade").cloned().unwrap_or_default()
+        crate::server::server::take_server_event_listeners(s, "upgrade")
     } else {
         return;
     };

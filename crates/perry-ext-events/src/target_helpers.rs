@@ -3,6 +3,8 @@ use super::*;
 pub(super) enum EventHelperTarget {
     EventEmitter(Handle),
     EventTarget(*mut u8),
+    NetSocket(Handle),
+    NativeHandle(Handle),
     Stream(Handle),
 }
 
@@ -13,6 +15,18 @@ pub(super) unsafe fn event_helper_target(value: f64) -> Option<EventHelperTarget
     }
     if let Some(target) = event_target_ptr(handle) {
         return Some(EventHelperTarget::EventTarget(target));
+    }
+    extern "C" {
+        fn js_is_registered_net_socket_handle(handle: i64) -> i32;
+    }
+    if js_is_registered_net_socket_handle(handle) != 0 {
+        return Some(EventHelperTarget::NetSocket(handle));
+    }
+    extern "C" {
+        fn js_is_registered_ffi_handle(handle: i64) -> i32;
+    }
+    if js_is_registered_ffi_handle(handle) != 0 {
+        return Some(EventHelperTarget::NativeHandle(handle));
     }
     if stream_value_from_handle(handle).is_some() {
         return Some(EventHelperTarget::Stream(handle));

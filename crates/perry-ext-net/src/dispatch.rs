@@ -126,6 +126,7 @@ fn socket_method_name(prop: &str) -> Option<&'static [u8]> {
         "destroy" => Some(b"destroy"),
         "destroySoon" => Some(b"destroySoon"),
         "end" => Some(b"end"),
+        "emit" => Some(b"emit"),
         "pause" => Some(b"pause"),
         "ref" => Some(b"ref"),
         "resetAndDestroy" => Some(b"resetAndDestroy"),
@@ -149,6 +150,9 @@ fn socket_method_name(prop: &str) -> Option<&'static [u8]> {
         "listeners" => Some(b"listeners"),
         "rawListeners" => Some(b"rawListeners"),
         "upgradeToTLS" => Some(b"upgradeToTLS"),
+        "getSession" => Some(b"getSession"),
+        "isSessionReused" => Some(b"isSessionReused"),
+        "getPeerCertificate" => Some(b"getPeerCertificate"),
         "setDefaultEncoding" => Some(b"setDefaultEncoding"),
         "cork" => Some(b"cork"),
         "uncork" => Some(b"uncork"),
@@ -208,6 +212,11 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
             crate::js_ext_net_socket_end(handle, chunk.to_bits() as i64);
             undefined()
         }
+        "emit" if !args.is_empty() => {
+            let event = unbox_to_i64(args[0]);
+            let rest = args.get(1..).unwrap_or(&[]);
+            crate::js_ext_net_socket_emit(handle, event, rest.as_ptr(), rest.len())
+        }
         "destroy" | "destroySoon" => {
             // Drive teardown through the DISTINCT `js_ext_net_destroy_socket`
             // symbol — NOT the `js_net_socket_destroy` extern, whose symbol the
@@ -232,6 +241,11 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
                 unbox_to_i64(args[0]),
                 verify,
             ))
+        }
+        "getSession" => nanbox_ptr(crate::js_ext_net_socket_tls_session(handle)),
+        "isSessionReused" => crate::js_ext_net_socket_tls_session_reused(handle),
+        "getPeerCertificate" => {
+            json_str_to_value(crate::js_ext_net_socket_peer_certificate_json(handle))
         }
         "once" if args.len() >= 2 => {
             crate::js_net_socket_once(handle, unbox_to_i64(args[0]), unbox_to_i64(args[1]));
@@ -302,8 +316,11 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
             crate::js_net_socket_set_no_delay(handle, arg.to_bits() as i64);
             nanbox_handle(handle)
         }
-        "setKeepAlive" | "pause" | "resume" | "ref" | "unref" | "cork" | "uncork"
-        | "setDefaultEncoding" => nanbox_handle(handle),
+        "ref" => nanbox_handle(crate::js_net_socket_ref(handle)),
+        "unref" => nanbox_handle(crate::js_net_socket_unref(handle)),
+        "setKeepAlive" | "pause" | "resume" | "cork" | "uncork" | "setDefaultEncoding" => {
+            nanbox_handle(handle)
+        }
         _ => undefined(),
     };
     Some(result)
@@ -476,6 +493,28 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
             ),
             "port" => crate::js_net_socket_address_get_port(handle),
             _ => crate::js_net_socket_address_get_flowlabel(handle),
+        })
+    } else if prop == "parser"
+        && crate::js_ext_net_is_socket_handle(handle) != 0
+        && crate::statics::http_agent_phases()
+            .lock()
+            .unwrap()
+            .contains_key(&handle)
+    {
+        Some(null())
+    } else if prop == "destroyed" && crate::js_ext_net_is_socket_handle(handle) != 0 {
+        Some(crate::js_net_socket_get_destroyed(handle))
+    } else if crate::js_ext_net_is_socket_handle(handle) != 0
+        && matches!(
+            prop,
+            "encrypted" | "authorized" | "servername" | "bytesWritten"
+        )
+    {
+        Some(match prop {
+            "encrypted" => crate::js_ext_net_socket_tls_encrypted(handle),
+            "authorized" => crate::js_ext_net_socket_tls_authorized(handle),
+            "servername" => crate::js_ext_net_socket_tls_servername(handle),
+            _ => crate::js_net_socket_get_bytes_written(handle),
         })
     } else if let Some(name) = socket_method_name(prop) {
         if crate::js_ext_net_is_socket_handle(handle) != 0 {

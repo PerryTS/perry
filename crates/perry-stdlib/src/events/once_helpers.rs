@@ -12,6 +12,32 @@ use perry_runtime::{
 
 use crate::common::{get_handle_mut, Handle};
 
+unsafe fn remove_stream_or_socket_once_listener(
+    handle: Handle,
+    event_name_ptr: i64,
+    listener: i64,
+) {
+    extern "C" {
+        fn js_is_registered_net_socket_handle(handle: i64) -> i32;
+    }
+    if js_is_registered_net_socket_handle(handle) != 0 {
+        let _ = super::module_helpers::call_net_socket_method(
+            handle,
+            "removeListener",
+            &[
+                js_nanbox_string(event_name_ptr),
+                js_nanbox_pointer(listener),
+            ],
+        );
+    } else {
+        let _ = perry_runtime::node_stream::js_node_stream_method_remove_listener(
+            handle,
+            js_nanbox_string(event_name_ptr),
+            js_nanbox_pointer(listener),
+        );
+    }
+}
+
 extern "C" fn events_once_abort_listener(closure: *const ClosureHeader) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
@@ -43,13 +69,9 @@ extern "C" fn events_once_stream_resolve_listener(closure: *const ClosureHeader,
         return undefined_value();
     }
     if handle != 0 && error_listener != 0 && error_event_ptr != 0 {
-        let error_event = js_nanbox_string(error_event_ptr);
-        let error_listener_value = js_nanbox_pointer(error_listener);
-        let _ = perry_runtime::node_stream::js_node_stream_method_remove_listener(
-            handle,
-            error_event,
-            error_listener_value,
-        );
+        unsafe {
+            remove_stream_or_socket_once_listener(handle, error_event_ptr, error_listener);
+        }
     }
     js_promise_resolve(promise, rest_array_or_empty(rest));
     undefined_value()
@@ -63,13 +85,9 @@ extern "C" fn events_once_stream_reject_listener(closure: *const ClosureHeader, 
     let event_name_ptr = js_closure_get_capture_ptr(closure, 2);
     let resolve_listener = js_closure_get_capture_ptr(closure, 3);
     if handle != 0 && event_name_ptr != 0 && resolve_listener != 0 {
-        let event = js_nanbox_string(event_name_ptr);
-        let resolve_listener_value = js_nanbox_pointer(resolve_listener);
-        let _ = perry_runtime::node_stream::js_node_stream_method_remove_listener(
-            handle,
-            event,
-            resolve_listener_value,
-        );
+        unsafe {
+            remove_stream_or_socket_once_listener(handle, event_name_ptr, resolve_listener);
+        }
     }
     if !promise.is_null() {
         js_promise_reject(promise, first_rest_arg_or_undefined(rest));
@@ -205,6 +223,71 @@ pub unsafe extern "C" fn js_events_once(
             target,
             event_name_ptr,
             listener as i64,
+        );
+        return promise;
+    }
+    if let EventHelperTarget::NetSocket(handle) = target {
+        let listens_for_error = event_name == "error";
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let event_name = scope.root_string_ptr(event_name_ptr);
+        perry_runtime::closure::js_register_closure_rest(
+            events_once_stream_resolve_listener as *const u8,
+            0,
+        );
+        perry_runtime::closure::js_register_closure_rest(
+            events_once_stream_reject_listener as *const u8,
+            0,
+        );
+        let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
+        let listener = scope.root_raw_mut_ptr(listener);
+        js_closure_set_capture_ptr(listener.get_raw_mut_ptr(), 0, promise as i64);
+        js_closure_set_capture_ptr(listener.get_raw_mut_ptr(), 1, handle);
+        js_closure_set_capture_ptr(listener.get_raw_mut_ptr(), 2, 0);
+        js_closure_set_capture_ptr(listener.get_raw_mut_ptr(), 3, 0);
+        if !listens_for_error {
+            let error_event_ptr = js_string_from_bytes(b"error".as_ptr(), 5);
+            let error_event = scope.root_string_ptr(error_event_ptr);
+            let reject_listener =
+                js_closure_alloc(events_once_stream_reject_listener as *const u8, 4);
+            let reject_listener = scope.root_raw_mut_ptr(reject_listener);
+            js_closure_set_capture_ptr(reject_listener.get_raw_mut_ptr(), 0, promise as i64);
+            js_closure_set_capture_ptr(reject_listener.get_raw_mut_ptr(), 1, handle);
+            js_closure_set_capture_ptr(
+                reject_listener.get_raw_mut_ptr(),
+                2,
+                event_name.get_raw_const_ptr::<StringHeader>() as i64,
+            );
+            js_closure_set_capture_ptr(
+                reject_listener.get_raw_mut_ptr(),
+                3,
+                listener.get_raw_mut_ptr::<ClosureHeader>() as i64,
+            );
+            js_closure_set_capture_ptr(
+                listener.get_raw_mut_ptr(),
+                2,
+                reject_listener.get_raw_mut_ptr::<ClosureHeader>() as i64,
+            );
+            js_closure_set_capture_ptr(
+                listener.get_raw_mut_ptr(),
+                3,
+                error_event.get_raw_const_ptr::<StringHeader>() as i64,
+            );
+            let _ = super::module_helpers::call_net_socket_method(
+                handle,
+                "once",
+                &[
+                    js_nanbox_string(error_event.get_raw_const_ptr::<StringHeader>() as i64),
+                    js_nanbox_pointer(reject_listener.get_raw_mut_ptr::<ClosureHeader>() as i64),
+                ],
+            );
+        }
+        let _ = super::module_helpers::call_net_socket_method(
+            handle,
+            "once",
+            &[
+                js_nanbox_string(event_name.get_raw_const_ptr::<StringHeader>() as i64),
+                js_nanbox_pointer(listener.get_raw_mut_ptr::<ClosureHeader>() as i64),
+            ],
         );
         return promise;
     }

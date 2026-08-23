@@ -18,6 +18,111 @@ extern "C" {
         method_name_ptr: *const u8,
         method_name_len: usize,
     ) -> f64;
+    fn js_register_closure_rest(func_ptr: *const u8, fixed_arity: u32);
+    fn js_closure_call_array(closure: i64, args: *const f64, args_len: i64) -> f64;
+    fn js_object_set_field_by_name(object: *mut ObjectHeader, key: *const StringHeader, value: f64);
+}
+
+static CLIENT_ONCE_WRAPPER_REGISTERED: Once = Once::new();
+
+pub(crate) fn create_client_once_wrapper(
+    handle: Handle,
+    event: &str,
+    callback: i64,
+    factory_callback: bool,
+) -> i64 {
+    if callback == 0 {
+        return 0;
+    }
+    CLIENT_ONCE_WRAPPER_REGISTERED.call_once(|| unsafe {
+        js_register_closure_rest(client_once_wrapper as *const u8, 0);
+    });
+    let scope = perry_ffi::TransientRootScope::enter();
+    let callback = scope.root_addr(callback);
+    let event = scope.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(alloc_string(event).as_raw()).bits(),
+    ));
+    let wrapper = perry_ffi::alloc_closure(client_once_wrapper as *const u8, 5);
+    let wrapper = scope.root_addr(wrapper as i64);
+    let wrapper_ptr = wrapper.get() as *mut RawClosureHeader;
+    unsafe {
+        perry_ffi::set_closure_capture_f64(wrapper_ptr, 0, handle as f64);
+        perry_ffi::set_closure_capture_f64(wrapper_ptr, 1, event.get());
+        perry_ffi::set_closure_capture_f64(
+            wrapper_ptr,
+            2,
+            f64::from_bits(POINTER_TAG | (callback.get() as u64 & PTR_MASK)),
+        );
+        perry_ffi::set_closure_capture_f64(
+            wrapper_ptr,
+            3,
+            f64::from_bits(POINTER_TAG | (wrapper.get() as u64 & PTR_MASK)),
+        );
+        perry_ffi::set_closure_capture_f64(wrapper_ptr, 4, bool_value(factory_callback));
+    }
+    let key = scope.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(alloc_string("listener").as_raw()).bits(),
+    ));
+    unsafe {
+        js_object_set_field_by_name(
+            wrapper.get() as *mut ObjectHeader,
+            (key.get().to_bits() & PTR_MASK) as *const StringHeader,
+            f64::from_bits(POINTER_TAG | (callback.get() as u64 & PTR_MASK)),
+        );
+    }
+    wrapper.get()
+}
+
+extern "C" fn client_once_wrapper(closure: *const RawClosureHeader, rest: f64) -> f64 {
+    unsafe {
+        let handle = perry_ffi::closure_capture_f64(closure, 0) as Handle;
+        let event_value = perry_ffi::closure_capture_f64(closure, 1);
+        let callback_value = perry_ffi::closure_capture_f64(closure, 2);
+        let wrapper_value = perry_ffi::closure_capture_f64(closure, 3);
+        let factory_callback =
+            JsValue::from_bits(perry_ffi::closure_capture_f64(closure, 4).to_bits()).is_bool()
+                && JsValue::from_bits(perry_ffi::closure_capture_f64(closure, 4).to_bits())
+                    .to_bool();
+        let callback = (callback_value.to_bits() & PTR_MASK) as i64;
+        let wrapper = (wrapper_value.to_bits() & PTR_MASK) as i64;
+        let event_ptr = (event_value.to_bits() & PTR_MASK) as *const StringHeader;
+        let event = read_str(event_ptr).unwrap_or_default();
+        let removed = with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+            if factory_callback {
+                if request.response_raw_wrapper == wrapper {
+                    request.response_callback = 0;
+                    request.response_raw_wrapper = 0;
+                    return true;
+                }
+                return false;
+            }
+            let Some(listeners) = request.once_listeners.get_mut(&event) else {
+                return false;
+            };
+            let Some(position) = listeners
+                .iter()
+                .rposition(|listener| listener.raw_wrapper == wrapper)
+            else {
+                return false;
+            };
+            listeners.remove(position);
+            true
+        })
+        .unwrap_or(false);
+        if !removed || callback == 0 {
+            return undefined_value();
+        }
+        let value = JsValue::from_bits(rest.to_bits());
+        if !value.is_pointer() {
+            return js_closure_call_array(callback, std::ptr::null(), 0);
+        }
+        let array = value.as_pointer::<ArrayHeader>();
+        if array.is_null() {
+            return js_closure_call_array(callback, std::ptr::null(), 0);
+        }
+        let args = array.add(1) as *const f64;
+        js_closure_call_array(callback, args, (*array).length as i64)
+    }
 }
 
 fn undefined_value() -> f64 {
@@ -167,6 +272,12 @@ pub(crate) fn constructor_object(name: &str) -> f64 {
 fn socket_value(handle: Handle) -> f64 {
     if !is_client_request_handle(handle) {
         return undefined_value();
+    }
+    if let Some(socket) = get_handle_mut::<ClientRequestHandle>(handle)
+        .map(|request| request.socket_handle)
+        .filter(|socket| *socket != 0)
+    {
+        return handle_value(socket);
     }
     with_state_mut(handle, |state| {
         if state.socket == 0.0 {
@@ -549,14 +660,62 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
             get_handle_mut::<ClientRequestHandle>(handle)
                 .map(|req| {
                     let explicit = req.listeners.get(&event).map(|v| v.len()).unwrap_or(0);
+                    let once = req
+                        .once_listeners
+                        .get(&event)
+                        .map(|listeners| listeners.len())
+                        .unwrap_or(0);
                     let implicit_response = if event == "response" && req.response_callback != 0 {
                         1
                     } else {
                         0
                     };
-                    (explicit + implicit_response) as f64
+                    (explicit + once + implicit_response) as f64
                 })
                 .unwrap_or(0.0)
+        }
+        "listeners" | "rawListeners" => {
+            let event = string_arg(args, 0).unwrap_or_default();
+            let raw = method == "rawListeners";
+            let callbacks = get_handle_mut::<ClientRequestHandle>(handle)
+                .map(|req| {
+                    let mut callbacks = req.listeners.get(&event).cloned().unwrap_or_default();
+                    callbacks.extend(req.once_listeners.get(&event).into_iter().flatten().map(
+                        |listener| {
+                            if raw {
+                                listener.raw_wrapper
+                            } else {
+                                listener.callback
+                            }
+                        },
+                    ));
+                    if event == "response" && req.response_callback != 0 {
+                        callbacks.insert(
+                            0,
+                            if raw {
+                                req.response_raw_wrapper
+                            } else {
+                                req.response_callback
+                            },
+                        );
+                    }
+                    callbacks
+                })
+                .unwrap_or_default();
+            let scope = perry_ffi::TransientRootScope::enter();
+            let callbacks = scope.root_addrs(&callbacks);
+            let array = unsafe { perry_ffi::js_array_alloc(callbacks.len() as u32) };
+            let array = scope.root_nanbox(f64::from_bits(JsValue::from_object_ptr(array).bits()));
+            for callback in callbacks {
+                let current = JsValue::from_bits(array.get().to_bits()).as_pointer::<ArrayHeader>();
+                let _ = unsafe {
+                    perry_ffi::js_array_push(
+                        current,
+                        JsValue::from_object_ptr(callback.get() as *mut u8),
+                    )
+                };
+            }
+            array.get()
         }
         "abort" => js_http_client_request_abort(handle),
         "destroy" => handle_value(js_http_client_request_destroy(handle, undefined_value())),
@@ -564,12 +723,35 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
         // through to the unknown-method arm here, so `.on('finish', cb)`
         // silently dropped the listener even though the statically-typed
         // route registered it fine via `js_http_on`.
-        "on" | "once" | "addListener" | "prependListener" => {
+        "on" | "addListener" | "prependListener" => {
             let event = string_arg(args, 0).unwrap_or_default();
             let cb = client_outgoing::callback_from_bits(arg_bits(1));
             if !event.is_empty() && cb != 0 {
                 with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
-                    req.listeners.entry(event.clone()).or_default().push(cb);
+                    let listeners = req.listeners.entry(event.clone()).or_default();
+                    if method == "prependListener" {
+                        listeners.insert(0, cb);
+                    } else {
+                        listeners.push(cb);
+                    }
+                });
+            }
+            handle_value(handle)
+        }
+        "once" => {
+            let event = string_arg(args, 0).unwrap_or_default();
+            let callback = client_outgoing::callback_from_bits(arg_bits(1));
+            if !event.is_empty() && callback != 0 {
+                let raw_wrapper = create_client_once_wrapper(handle, &event, callback, false);
+                with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+                    request
+                        .once_listeners
+                        .entry(event.clone())
+                        .or_default()
+                        .push(ClientOnceListener {
+                            callback,
+                            raw_wrapper,
+                        });
                 });
             }
             handle_value(handle)
@@ -580,9 +762,24 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
             if !event.is_empty() && cb != 0 {
                 with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
                     if let Some(cbs) = req.listeners.get_mut(&event) {
-                        if let Some(pos) = cbs.iter().position(|&c| c == cb) {
+                        if let Some(pos) = cbs.iter().rposition(|&c| c == cb) {
                             cbs.remove(pos);
+                            return;
                         }
+                    }
+                    if let Some(listeners) = req.once_listeners.get_mut(&event) {
+                        if let Some(position) = listeners.iter().rposition(|listener| {
+                            listener.callback == cb || listener.raw_wrapper == cb
+                        }) {
+                            listeners.remove(position);
+                            return;
+                        }
+                    }
+                    if event == "response"
+                        && (req.response_callback == cb || req.response_raw_wrapper == cb)
+                    {
+                        req.response_callback = 0;
+                        req.response_raw_wrapper = 0;
                     }
                 });
             }
@@ -593,8 +790,18 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
             with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| match &event {
                 Some(e) => {
                     req.listeners.remove(e);
+                    req.once_listeners.remove(e);
+                    if e == "response" {
+                        req.response_callback = 0;
+                        req.response_raw_wrapper = 0;
+                    }
                 }
-                None => req.listeners.clear(),
+                None => {
+                    req.listeners.clear();
+                    req.once_listeners.clear();
+                    req.response_callback = 0;
+                    req.response_raw_wrapper = 0;
+                }
             });
             handle_value(handle)
         }

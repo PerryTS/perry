@@ -46,13 +46,24 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     let opts_val = cp_options_from_raw_args(args_ptr, opts_ptr);
     let abort_signal = cp_read_abort_signal(opts_val);
 
-    // Launch interpreter: options.execPath → $PERRY_FORK_EXECPATH → "node".
+    // Launch interpreter: options.execPath → $PERRY_FORK_EXECPATH → the
+    // current AOT executable when it forks its own source entry → "node".
+    // Running the current executable is both cheaper and semantically
+    // important: a compiled parent and its self-forked child must share Perry's
+    // handle/liveness behavior instead of silently switching runtimes.
+    let entry_path = current_entry_path();
     let exec_path = cp_value_to_string(cp_get_field(opts_val, b"execPath"))
         .filter(|s| !s.is_empty())
         .or_else(|| {
             std::env::var("PERRY_FORK_EXECPATH")
                 .ok()
                 .filter(|s| !s.is_empty())
+        })
+        .or_else(|| {
+            (entry_path.as_deref() == Some(module.as_str()))
+                .then(|| std::env::current_exe().ok())
+                .flatten()
+                .map(|path| path.to_string_lossy().into_owned())
         })
         .unwrap_or_else(|| "node".to_string());
 
@@ -177,7 +188,10 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
     let native_self = std::env::current_exe()
         .ok()
         .map(|path| path.to_string_lossy().into_owned())
-        .is_some_and(|path| path == exec_path && module == exec_path);
+        .is_some_and(|path| {
+            path == exec_path
+                && (module == exec_path || entry_path.as_deref() == Some(module.as_str()))
+        });
     let mut command = Command::new(&exec_path);
     let native_exec_argv = if native_self {
         command.args(&arg_strs);
@@ -245,6 +259,15 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
         crate::timer::js_set_immediate_callback(emit_closure as i64);
     }
     cp
+}
+
+/// Compiler-seeded source entry exposed as `process.argv[1]`.
+fn current_entry_path() -> Option<String> {
+    let argv = crate::os::js_process_argv();
+    if argv.is_null() || crate::array::js_array_length(argv) < 2 {
+        return None;
+    }
+    cp_value_to_string(crate::array::js_array_get_f64(argv, 1)).filter(|path| !path.is_empty())
 }
 
 /// Wire up the platform IPC transport, launch the child, and register it with

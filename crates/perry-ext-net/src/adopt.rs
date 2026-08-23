@@ -44,6 +44,7 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
             cmd_tx: tx,
             pending_rx: None,
             is_open: true,
+            refed: true,
             local_addr: local,
             raw: None,
             destroyed: false,
@@ -53,6 +54,7 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
             type_of_service: 0,
             server_id: None,
             server_connection_active: false,
+            tls: Default::default(),
         },
     );
     statics::listeners()

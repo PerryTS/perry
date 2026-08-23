@@ -102,6 +102,7 @@ See test-compat/node-core/README.md.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import os
 import re
@@ -148,6 +149,25 @@ _NOISE = re.compile(
 # `Warning`) compares by message content, not by pid. (#4910)
 _PID_PREFIX = re.compile(r"^\(node:\d+\)")
 
+# Node and Perry execute sequentially, so an otherwise byte-identical raw HTTP
+# transcript necessarily contains different automatically generated `Date`
+# header seconds. Preserve the fact that a valid RFC 7231 date was emitted,
+# while removing the wall-clock value from the differential signal.
+_HTTP_DATE = re.compile(
+    r"(?<=Date: )(?P<value>(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), "
+    r"\d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+    r"\d{4} \d{2}:\d{2}:\d{2} GMT)"
+)
+
+
+def _normalize_http_date(match: re.Match[str]) -> str:
+    value = match.group("value")
+    try:
+        dt.datetime.strptime(value, "%a, %d %b %Y %H:%M:%S GMT")
+    except ValueError:
+        return value
+    return "<HTTP-DATE>"
+
 
 def normalize(text: str) -> str:
     out = []
@@ -156,6 +176,7 @@ def normalize(text: str) -> str:
         if _NOISE.search(line):
             continue
         line = _PID_PREFIX.sub("(node:PID)", line)
+        line = _HTTP_DATE.sub(_normalize_http_date, line)
         out.append(line)
     while out and out[-1] == "":
         out.pop()
