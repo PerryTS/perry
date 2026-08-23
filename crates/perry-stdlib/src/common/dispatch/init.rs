@@ -338,16 +338,27 @@ unsafe extern "C" fn js_node_http_native_dispatch(
         // Picking only the first non-closure argument lost `(url, options,
         // callback)` and treated WHATWG URL objects as plain option bags.
         if matches!(method, "get" | "request") && matches!(module, "http" | "https") {
-            let mut overload_args = perry_runtime::js_array_alloc(args_len as u32);
-            for n in 0..args_len {
-                overload_args = perry_runtime::js_array_push_f64(overload_args, arg(n));
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let args = (0..args_len)
+                .map(|n| scope.root_nanbox_f64(arg(n)))
+                .collect::<Vec<_>>();
+            let overload_args = scope.root_raw_mut_ptr::<perry_runtime::ArrayHeader>(
+                perry_runtime::js_array_alloc(args_len as u32),
+            );
+            for arg in args {
+                overload_args.with_mut_ptr(|array: *mut perry_runtime::ArrayHeader| {
+                    let _ = perry_runtime::js_array_push_f64(array, arg.get_nanbox_f64());
+                });
             }
-            let handle = match (module, method) {
-                ("http", "get") => js_http_get_overload(overload_args as i64),
-                ("http", "request") => js_http_request_overload(overload_args as i64),
-                ("https", "get") => js_https_get_overload(overload_args as i64),
-                _ => js_https_request_overload(overload_args as i64),
-            };
+            let handle =
+                overload_args.with_mut_ptr(|array: *mut perry_runtime::ArrayHeader| {
+                    match (module, method) {
+                        ("http", "get") => js_http_get_overload(array as i64),
+                        ("http", "request") => js_http_request_overload(array as i64),
+                        ("https", "get") => js_https_get_overload(array as i64),
+                        _ => js_https_request_overload(array as i64),
+                    }
+                });
             return if handle == 0 {
                 undefined
             } else {

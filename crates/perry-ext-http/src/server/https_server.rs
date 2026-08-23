@@ -114,14 +114,7 @@ fn encode_alpn(values: &[serde_json::Value]) -> Vec<u8> {
 
 unsafe fn raw_closure_field(options: f64, field: &str) -> i64 {
     let value = perry_ffi::object_field_by_name(JsValue::from_bits(options.to_bits()), field);
-    let bits = value.bits();
-    if value.is_pointer() {
-        (bits & PTR_MASK) as i64
-    } else if bits >> 48 == 0 && bits >= 0x10000 {
-        bits as i64
-    } else {
-        0
-    }
+    crate::client_outgoing::callback_from_bits(value.bits() as i64)
 }
 use crate::server::types::{
     extract_host, extract_port, js_promise_run_microtasks, read_string_header, POINTER_TAG,

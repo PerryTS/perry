@@ -1689,16 +1689,18 @@ pub unsafe extern "C" fn js_events_once(
         if event_name_ptr.is_null() {
             return raw;
         }
+        let scope = perry_ffi::TransientRootScope::enter();
+        let event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
+            event_name_ptr as *mut StringHeader,
+        )));
         js_register_closure_rest(events_once_stream_resolve_listener as *const u8, 0);
         let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
         js_closure_set_capture_ptr(listener, 0, raw as i64);
         js_closure_set_capture_ptr(listener, 1, handle);
         js_closure_set_capture_ptr(listener, 2, 0);
         js_closure_set_capture_ptr(listener, 3, 0);
-        let args = [
-            f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader)),
-            nanbox_pointer_bits(listener as i64),
-        ];
+        let listener = scope.root_addr(listener as i64);
+        let args = [event.get(), nanbox_pointer_bits(listener.get())];
         let _ = call_net_socket_method(handle, "once", &args);
         return raw;
     }

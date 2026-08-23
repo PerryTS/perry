@@ -114,15 +114,13 @@ pub(crate) unsafe fn resolve_https_agent_handle(explicit: Handle) -> Handle {
         return explicit;
     }
     let override_value = js_https_global_agent_override_value();
-    let bits = override_value.to_bits();
-    let candidate = if bits >> 48 == 0x7FFD {
-        (bits & PTR_MASK) as Handle
-    } else if bits >> 48 == 0 && bits >= 0x10000 {
-        bits as Handle
-    } else {
-        0
-    };
-    if candidate != 0 && get_handle_mut::<AgentHandle>(candidate).is_some() {
+    let value = JsValue::from_bits(override_value.to_bits());
+    let candidate = value
+        .is_pointer()
+        .then(|| value.as_pointer::<u8>() as Handle);
+    if let Some(candidate) = candidate
+        .filter(|candidate| *candidate != 0 && get_handle_mut::<AgentHandle>(*candidate).is_some())
+    {
         candidate
     } else {
         default_https_agent_handle()

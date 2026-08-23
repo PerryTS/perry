@@ -949,7 +949,15 @@ fn numeric_array_to_bytes(arr: &[serde_json::Value]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
     use serde_json::json;
+
+    fn fixture(encoded: &str) -> Vec<u8> {
+        let compact: String = encoded.split_whitespace().collect();
+        base64::engine::general_purpose::STANDARD
+            .decode(compact)
+            .expect("checked-in TLS fixture is valid base64")
+    }
 
     fn pems(v: serde_json::Value) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
@@ -1026,17 +1034,20 @@ mod tests {
 
     #[test]
     fn extracts_common_name_from_pkcs12_identity() {
-        let agent1 = include_bytes!("../../../vendor/nodejs/test/fixtures/keys/agent1.pfx");
-        let agent10 = include_bytes!("../../../vendor/nodejs/test/fixtures/keys/agent10.pfx");
-        assert_eq!(pfx_common_name(agent1, "sample").as_deref(), Some("agent1"));
+        let agent1 = fixture(include_str!("../tests/fixtures/agent1.pfx.b64"));
+        let agent10 = fixture(include_str!("../tests/fixtures/agent10.pfx.b64"));
         assert_eq!(
-            pfx_common_name(agent10, "sample").as_deref(),
+            pfx_common_name(&agent1, "sample").as_deref(),
+            Some("agent1")
+        );
+        assert_eq!(
+            pfx_common_name(&agent10, "sample").as_deref(),
             Some("agent10.example.com")
         );
-        for identity in [agent1.as_slice(), agent10.as_slice()] {
+        for identity in [&agent1, &agent10] {
             let options = TlsOptions {
                 reject_unauthorized: Some(false),
-                client_pfx: vec![(identity.to_vec(), "sample".to_string())],
+                client_pfx: vec![(identity.clone(), "sample".to_string())],
                 ..TlsOptions::default()
             };
             let built = options.build_client(None);
@@ -1046,9 +1057,9 @@ mod tests {
 
     #[test]
     fn builds_node_ca_config_for_explicit_endpoint_certificate() {
-        let certificate = include_bytes!("../../../vendor/nodejs/test/fixtures/keys/rsa_cert.crt");
-        assert!(build_node_tls_config(&[certificate.to_vec()], None, false, false, None,).is_ok());
-        let certificate_der = rustls_pemfile::certs(&mut std::io::Cursor::new(certificate))
+        let certificate = fixture(include_str!("../tests/fixtures/rsa_cert.crt.b64"));
+        assert!(build_node_tls_config(&[certificate.clone()], None, false, false, None,).is_ok());
+        let certificate_der = rustls_pemfile::certs(&mut std::io::Cursor::new(&certificate))
             .next()
             .expect("fixture contains a certificate")
             .expect("fixture certificate is valid");
@@ -1064,13 +1075,13 @@ mod tests {
 
     #[test]
     fn verifies_directly_trusted_legacy_v1_certificate() {
-        let endpoint = include_bytes!("../../../vendor/nodejs/test/fixtures/keys/agent3-cert.pem");
-        let trusted_ca = include_bytes!("../../../vendor/nodejs/test/fixtures/keys/ca2-cert.pem");
-        let endpoint = rustls_pemfile::certs(&mut std::io::Cursor::new(endpoint))
+        let endpoint = fixture(include_str!("../tests/fixtures/agent3-cert.pem.b64"));
+        let trusted_ca = fixture(include_str!("../tests/fixtures/ca2-cert.pem.b64"));
+        let endpoint = rustls_pemfile::certs(&mut std::io::Cursor::new(&endpoint))
             .next()
             .unwrap()
             .unwrap();
-        let trusted_ca = rustls_pemfile::certs(&mut std::io::Cursor::new(trusted_ca))
+        let trusted_ca = rustls_pemfile::certs(&mut std::io::Cursor::new(&trusted_ca))
             .next()
             .unwrap()
             .unwrap();
@@ -1094,12 +1105,5 @@ mod tests {
 unsafe fn closure_field(obj_f64: f64, field: &str) -> i64 {
     let value =
         perry_ffi::object_field_by_name(perry_ffi::JsValue::from_bits(obj_f64.to_bits()), field);
-    let bits = value.bits();
-    if value.is_pointer() {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as i64
-    } else if bits >> 48 == 0 && bits >= 0x10000 {
-        bits as i64
-    } else {
-        0
-    }
+    crate::client_outgoing::callback_from_bits(value.bits() as i64)
 }

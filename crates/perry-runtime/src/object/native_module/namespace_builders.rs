@@ -452,15 +452,15 @@ extern "C" fn global_agent_add_request_thunk(
 
         if let Some(requests) = global_agent_get_field_raw(agent_value, "requests") {
             let requests_value = f64::from_bits(requests.bits());
-            if global_agent_object_ptr(requests_value).is_some() {
+            if let Some(requests_ptr) = global_agent_object_ptr(requests_value) {
                 let scope = crate::gc::RuntimeHandleScope::new();
-                let requests = scope.root_nanbox_f64(requests_value);
+                let requests = scope.root_raw_mut_ptr(requests_ptr as *mut ObjectHeader);
                 let req = scope.root_nanbox_f64(req);
                 let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
                 let key = scope.root_string_ptr(key_ptr);
-                let requests_ptr = JSValue::from_bits(requests.get_nanbox_f64().to_bits())
-                    .as_pointer::<ObjectHeader>();
-                let existing = js_object_get_field_by_name(requests_ptr, key.get_raw_const_ptr());
+                let existing = requests.with_mut_ptr(|requests_ptr| {
+                    key.with_const_ptr(|key_ptr| js_object_get_field_by_name(requests_ptr, key_ptr))
+                });
                 let mut queued = if crate::array::js_array_is_array(f64::from_bits(existing.bits()))
                     .to_bits()
                     == crate::value::TAG_TRUE
@@ -471,12 +471,11 @@ extern "C" fn global_agent_add_request_thunk(
                 };
                 queued = crate::array::js_array_push_f64(queued, req.get_nanbox_f64());
                 let queued_value = crate::value::js_nanbox_pointer(queued as i64);
-                js_object_set_field_by_name(
-                    JSValue::from_bits(requests.get_nanbox_f64().to_bits())
-                        .as_pointer::<ObjectHeader>() as *mut _,
-                    key.get_raw_const_ptr(),
-                    queued_value,
-                );
+                requests.with_mut_ptr(|requests_ptr| {
+                    key.with_const_ptr(|key_ptr| {
+                        js_object_set_field_by_name(requests_ptr, key_ptr, queued_value)
+                    })
+                });
             }
         }
     }

@@ -225,10 +225,17 @@ pub unsafe extern "C" fn js_events_native_dispatch(
             }
         }
         "setMaxListeners" => {
-            let mut targets = js_array_alloc(args_len.saturating_sub(1) as u32);
-            for index in 1..args_len {
-                targets = js_array_push_f64(targets, arg(index));
+            let scope = perry_ffi::TransientRootScope::enter();
+            let target_values = (1..args_len)
+                .map(|index| scope.root_nanbox(arg(index)))
+                .collect::<Vec<_>>();
+            let targets = js_array_alloc(target_values.len() as u32);
+            let targets = scope.root_nanbox(nanbox_pointer_bits(targets as i64));
+            for target in target_values {
+                let current = (targets.get().to_bits() & POINTER_MASK) as *mut ArrayHeader;
+                let _ = js_array_push_f64(current, target.get());
             }
+            let targets = (targets.get().to_bits() & POINTER_MASK) as *mut ArrayHeader;
             js_events_set_max_listeners(arg(0), targets)
         }
         _ => undefined,

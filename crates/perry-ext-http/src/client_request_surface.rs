@@ -575,13 +575,20 @@ fn dispatch_method(handle: Handle, method: &str, args: &[f64]) -> Option<f64> {
                     callbacks
                 })
                 .unwrap_or_default();
-            let mut array = unsafe { perry_ffi::js_array_alloc(callbacks.len() as u32) };
+            let scope = perry_ffi::TransientRootScope::enter();
+            let callbacks = scope.root_addrs(&callbacks);
+            let array = unsafe { perry_ffi::js_array_alloc(callbacks.len() as u32) };
+            let array = scope.root_nanbox(f64::from_bits(JsValue::from_object_ptr(array).bits()));
             for callback in callbacks {
-                array = unsafe {
-                    perry_ffi::js_array_push(array, JsValue::from_object_ptr(callback as *mut u8))
+                let current = JsValue::from_bits(array.get().to_bits()).as_pointer::<ArrayHeader>();
+                let _ = unsafe {
+                    perry_ffi::js_array_push(
+                        current,
+                        JsValue::from_object_ptr(callback.get() as *mut u8),
+                    )
                 };
             }
-            f64::from_bits(JsValue::from_object_ptr(array).bits())
+            array.get()
         }
         "abort" => js_http_client_request_abort(handle),
         "destroy" => handle_value(js_http_client_request_destroy(handle, undefined_value())),

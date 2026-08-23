@@ -108,7 +108,13 @@ COLLECTION_POINTS = ALLOCATORS + (
 
 # A function that opens a handle scope has adopted the rooting API; its bindings
 # are `raw_handle_debt.py`'s denominator, not this one's.
-ROOTED_MARKERS = ("RuntimeHandleScope", "across_mut", "across_const", "across_nanbox")
+ROOTED_MARKERS = (
+    "RuntimeHandleScope",
+    "TransientRootScope",
+    "across_mut",
+    "across_const",
+    "across_nanbox",
+)
 
 FN_START = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+|async\s+|unsafe\s+|extern\s+\"[^\"]*\"\s+)*fn\s+(\w+)")
 LET_BIND = re.compile(r"^\s*let\s+(?:mut\s+)?(\w+)\s*(?::[^=]+)?=\s*(.+)$")
@@ -257,6 +263,13 @@ unsafe fn clean_use_on_first_collection() {
     let only = js_array_alloc(1);
     js_array_push_f64(only, 0.0);
 }
+
+unsafe fn clean_ffi_transient_root() -> *mut ArrayHeader {
+    let scope = TransientRootScope::enter();
+    let rooted = scope.root_nanbox(js_nanbox_pointer(js_array_alloc(1) as i64));
+    let _other = js_array_alloc(0);
+    rooted.get() as *mut ArrayHeader
+}
 '''
 
 
@@ -354,7 +367,11 @@ def self_test() -> int:
     if missing:
         print(f"SELF-TEST FAIL: did not flag planted shape(s): {sorted(missing)}", file=sys.stderr)
         ok = False
-    forbidden = {"clean_single_alloc", "clean_use_on_first_collection"} & names
+    forbidden = {
+        "clean_single_alloc",
+        "clean_use_on_first_collection",
+        "clean_ffi_transient_root",
+    } & names
     if forbidden:
         print(f"SELF-TEST FAIL: flagged clean control(s): {sorted(forbidden)}", file=sys.stderr)
         ok = False

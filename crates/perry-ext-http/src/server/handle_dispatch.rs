@@ -23,7 +23,8 @@
 //! Issue #2153.
 
 use perry_ffi::{
-    alloc_string, get_handle, get_handle_mut, js_object_alloc_with_shape, JsValue, StringHeader,
+    alloc_string, get_handle, get_handle_mut, js_object_alloc_with_shape, ArrayHeader, JsValue,
+    StringHeader,
 };
 
 use crate::server::http2_server::Http2SecureServer;
@@ -395,14 +396,18 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                     listeners.push(handler);
                 }
             }
-            let mut array = perry_ffi::js_array_alloc(listeners.len() as u32);
+            let scope = perry_ffi::TransientRootScope::enter();
+            let listeners = scope.root_addrs(&listeners);
+            let array = perry_ffi::js_array_alloc(listeners.len() as u32);
+            let array = scope.root_nanbox(f64::from_bits(JsValue::from_object_ptr(array).bits()));
             for callback in listeners {
-                array = perry_ffi::js_array_push(
-                    array,
-                    JsValue::from_bits(POINTER_TAG | (callback as u64 & PTR_MASK)),
+                let current = JsValue::from_bits(array.get().to_bits()).as_pointer::<ArrayHeader>();
+                let _ = perry_ffi::js_array_push(
+                    current,
+                    JsValue::from_bits(POINTER_TAG | (callback.get() as u64 & PTR_MASK)),
                 );
             }
-            f64::from_bits(JsValue::from_object_ptr(array).bits())
+            array.get()
         }
         "removeAllListeners" => {
             let event_ptr = args
