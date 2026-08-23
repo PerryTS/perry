@@ -536,6 +536,19 @@ unsafe fn prepare_event_provider(ev: &PendingNetEvent) {
                 }
             }
         }
+        PendingNetEvent::ShutdownComplete(id) => {
+            let trigger = statics::sockets().lock().ok().and_then(|sockets| {
+                sockets.get(id).and_then(|socket| {
+                    (socket.shutdown_async_id == 0).then_some(socket.tcp_async_id)
+                })
+            });
+            if let Some(trigger) = trigger {
+                let async_id = init_provider_with_trigger(b"SHUTDOWNWRAP", trigger);
+                if let Some(socket) = statics::sockets().lock().unwrap().get_mut(id) {
+                    socket.shutdown_async_id = async_id;
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -1468,6 +1481,7 @@ pub(crate) async fn run_socket_task(
                         }
                         if !writable_ended {
                             let _ = t.shutdown().await;
+                            push_event(PendingNetEvent::ShutdownComplete(id));
                         }
                         push_event(PendingNetEvent::Close(id));
                         mark_closed(id);
