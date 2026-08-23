@@ -283,9 +283,8 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         parent_expr: extends_expr.clone(),
                     }));
                 }
-                let (computed_name_evaluations, computed_keys, computed_member_registrations) =
+                let (computed_name_evaluations, computed_keys) =
                     crate::lower_decl::prepare_ordered_class_computed_names(
-                        ctx,
                         &class_decl.class.body,
                         &class,
                         &class.name,
@@ -382,16 +381,6 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // classes initialized. Interleaved in source order (see
                 // `build_interleaved_static_init_stmts`), with lexical `this`
                 // in field initializers bound to the class ref.
-                if !fresh_binding {
-                    for (field_name, value) in &computed_keys {
-                        result.push(Stmt::Expr(Expr::StaticFieldSet {
-                            class_name: class.name.clone(),
-                            field_name: field_name.clone(),
-                            value: Box::new(value.clone()),
-                        }));
-                    }
-                }
-                result.extend(computed_member_registrations.into_iter().map(Stmt::Expr));
                 if !fresh_binding {
                     result.extend(
                         crate::lower_decl::build_interleaved_static_init_stmts_after_computed_names(

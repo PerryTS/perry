@@ -137,9 +137,8 @@ pub(crate) fn lower_class_expr(
     // canonical case: `isSchema(C)` was called from Schema.ts's
     // own top-level `class extends transform(...)` chains, which
     // run before the module's `init_static_fields_late`.
-    let (computed_name_evaluations, computed_keys, computed_member_registrations) =
+    let (computed_name_evaluations, computed_keys) =
         crate::lower_decl::prepare_ordered_class_computed_names(
-            ctx,
             &class_expr.class.body,
             &class,
             &synthetic_name,
@@ -304,7 +303,6 @@ pub(crate) fn lower_class_expr(
             });
         }
         seq.extend(computed_name_evaluations);
-        seq.extend(computed_member_registrations);
         let fresh_expr = if let Some(owner) = capture_owner {
             Expr::Sequence(vec![
                 Expr::LocalSet(owner, Box::new(fresh_expr)),
@@ -364,14 +362,6 @@ pub(crate) fn lower_class_expr(
             captures: captured_args.clone(),
         });
     }
-    for (field_name, value) in computed_keys {
-        seq.push(Expr::StaticFieldSet {
-            class_name: synthetic_name.clone(),
-            field_name,
-            value: Box::new(value),
-        });
-    }
-    seq.extend(computed_member_registrations);
     // The shared-template path must obey the same source-order plan as the
     // fresh-object path. Computed names were all resolved above, but their
     // initializers still interleave with named fields and static blocks.

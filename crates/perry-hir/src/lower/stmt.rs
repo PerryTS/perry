@@ -1232,9 +1232,8 @@ pub(crate) fn lower_stmt(
                                 parent_expr: extends_expr.clone(),
                             }));
                     }
-                    let (computed_name_evaluations, computed_keys, computed_member_registrations) =
+                    let (computed_name_evaluations, _) =
                         crate::lower_decl::prepare_ordered_class_computed_names(
-                            ctx,
                             &class_decl.class.body,
                             &class,
                             &class.name,
@@ -1242,16 +1241,6 @@ pub(crate) fn lower_stmt(
                     module
                         .init
                         .extend(computed_name_evaluations.into_iter().map(Stmt::Expr));
-                    for (field_name, value) in computed_keys {
-                        module.init.push(Stmt::Expr(Expr::StaticFieldSet {
-                            class_name: class.name.clone(),
-                            field_name,
-                            value: Box::new(value),
-                        }));
-                    }
-                    module
-                        .init
-                        .extend(computed_member_registrations.into_iter().map(Stmt::Expr));
                     // Inject static-field-init and static-block-call
                     // statements at the source position of the class
                     // declaration, INTERLEAVED in source order (see

@@ -2,12 +2,12 @@
 //! declared inside a function body. Extracted from `body_stmt.rs` to keep that
 //! file under the source-size gate.
 
-use crate::types::Type;
 use anyhow::Result;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
 use crate::lower::{lower_expr, LoweringContext};
+use crate::types::Type;
 
 /// Build the registration expression for one computed-key class member
 /// (`[expr]() {}` / `get [expr]() {}` / `set [expr](v) {}`). Codegen lowers
@@ -48,16 +48,16 @@ pub(crate) fn class_computed_member_registration_expr(
     }
 }
 
-/// Evaluate every computed class-element name in one ClassBody-ordered pass,
-/// then return inert local reads for the field-key storage and member
-/// registration phases. `ToPropertyKey` is part of the ordered evaluation so
-/// an allocating/user-defined coercion cannot move after a later element.
+/// Evaluate and install every computed class-element name in one
+/// ClassBody-ordered pass. Field names are stored in hidden class slots and
+/// returned as inert reads for `ClassExprFresh` to copy onto its per-evaluation
+/// class object. `ToPropertyKey` is part of the ordered evaluation so an
+/// allocating/user-defined coercion cannot move after a later element.
 pub(crate) fn prepare_ordered_class_computed_names(
-    ctx: &mut LoweringContext,
     class_body: &[ast::ClassMember],
     class: &Class,
     registration_class_name: &str,
-) -> (Vec<Expr>, Vec<(String, Expr)>, Vec<Expr>) {
+) -> (Vec<Expr>, Vec<(String, Expr)>) {
     let mut ordered: Vec<(usize, Expr)> = Vec::new();
     let mut field_keys = Vec::new();
     for (source_order, name, value) in super::computed_field_key_initializers_with_order(
@@ -65,23 +65,25 @@ pub(crate) fn prepare_ordered_class_computed_names(
         &class.fields,
         &class.static_fields,
     ) {
-        let local = ctx.define_local(
-            format!("__perry_computed_field_name_{}_{}", class.id, source_order),
-            Type::Any,
-        );
-        ordered.push((source_order, Expr::LocalSet(local, Box::new(value))));
-        field_keys.push((name, Expr::LocalGet(local)));
+        ordered.push((
+            source_order,
+            Expr::StaticFieldSet {
+                class_name: registration_class_name.to_string(),
+                field_name: name.clone(),
+                value: Box::new(value),
+            },
+        ));
+        field_keys.push((
+            name.clone(),
+            Expr::PropertyGet {
+                object: Box::new(Expr::ClassRef(registration_class_name.to_string())),
+                property: name,
+                byte_offset: 0,
+            },
+        ));
     }
 
-    let mut member_registrations = Vec::new();
     for member in &class.computed_members {
-        let local = ctx.define_local(
-            format!(
-                "__perry_computed_member_name_{}_{}",
-                class.id, member.source_order
-            ),
-            Type::Any,
-        );
         let to_property_key = Expr::Call {
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_to_property_key".to_string(),
@@ -92,22 +94,17 @@ pub(crate) fn prepare_ordered_class_computed_names(
             type_args: Vec::new(),
             byte_offset: 0,
         };
+        let mut resolved = member.clone();
+        resolved.key_expr = to_property_key;
         ordered.push((
             member.source_order,
-            Expr::LocalSet(local, Box::new(to_property_key)),
-        ));
-        let mut resolved = member.clone();
-        resolved.key_expr = Expr::LocalGet(local);
-        member_registrations.push(class_computed_member_registration_expr(
-            registration_class_name,
-            &resolved,
+            class_computed_member_registration_expr(registration_class_name, &resolved),
         ));
     }
     ordered.sort_by_key(|(source_order, _)| *source_order);
     (
         ordered.into_iter().map(|(_, expr)| expr).collect(),
         field_keys,
-        member_registrations,
     )
 }
 

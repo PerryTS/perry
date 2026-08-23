@@ -1301,9 +1301,8 @@ pub(crate) fn lower_module_decl(
                                 parent_expr: extends_expr.clone(),
                             }));
                     }
-                    let (computed_name_evaluations, computed_keys, computed_member_registrations) =
+                    let (computed_name_evaluations, _) =
                         crate::lower_decl::prepare_ordered_class_computed_names(
-                            ctx,
                             &class_decl.class.body,
                             &class,
                             &class.name,
@@ -1311,16 +1310,6 @@ pub(crate) fn lower_module_decl(
                     module
                         .init
                         .extend(computed_name_evaluations.into_iter().map(Stmt::Expr));
-                    for (field_name, value) in computed_keys {
-                        module.init.push(Stmt::Expr(Expr::StaticFieldSet {
-                            class_name: class_name.clone(),
-                            field_name,
-                            value: Box::new(value),
-                        }));
-                    }
-                    module
-                        .init
-                        .extend(computed_member_registrations.into_iter().map(Stmt::Expr));
                     module.init.extend(
                         crate::lower_decl::build_interleaved_static_init_stmts_after_computed_names(
                             &class_decl.class.body,
@@ -1875,9 +1864,8 @@ pub(crate) fn lower_module_decl(
                                 parent_expr: extends_expr.clone(),
                             }));
                     }
-                    let (computed_name_evaluations, computed_keys, computed_member_registrations) =
+                    let (computed_name_evaluations, _) =
                         crate::lower_decl::prepare_ordered_class_computed_names(
-                            ctx,
                             &synth_class_decl.class.body,
                             &class,
                             &class.name,
@@ -1885,16 +1873,6 @@ pub(crate) fn lower_module_decl(
                     module
                         .init
                         .extend(computed_name_evaluations.into_iter().map(Stmt::Expr));
-                    for (field_name, value) in computed_keys {
-                        module.init.push(Stmt::Expr(Expr::StaticFieldSet {
-                            class_name: class_name.clone(),
-                            field_name,
-                            value: Box::new(value),
-                        }));
-                    }
-                    module
-                        .init
-                        .extend(computed_member_registrations.into_iter().map(Stmt::Expr));
                     module.init.extend(
                         crate::lower_decl::build_interleaved_static_init_stmts_after_computed_names(
                             &synth_class_decl.class.body,
