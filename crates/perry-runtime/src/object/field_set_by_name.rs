@@ -47,16 +47,21 @@ pub extern "C" fn js_object_set_field_by_name(
     // `prototype` property is non-writable, so both ordinary assignment and
     // a computed static field whose PropertyKey resolves to "prototype" must
     // fail instead of appending an ordinary shape slot.
+    let obj_bits = obj as u64;
+    let normalized_obj = if (obj_bits >> 48) == 0x7FFD {
+        (obj_bits & crate::value::POINTER_MASK) as *mut ObjectHeader
+    } else {
+        obj
+    };
     if !key.is_null()
-        && ((obj as u64) >> 48) == 0
-        && crate::value::addr_class::is_above_handle_band(obj as usize)
-        && crate::object::class_registry::is_class_object_ptr(obj.cast())
+        && crate::value::addr_class::is_above_handle_band(normalized_obj as usize)
+        && crate::object::class_registry::is_class_object_ptr(normalized_obj.cast())
     {
         unsafe {
-            let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let name_ptr = crate::string::string_data(key);
             let name_len = (*key).byte_len as usize;
             if std::slice::from_raw_parts(name_ptr, name_len) == b"prototype" {
-                crate::error::throw_immutable_write((*obj).class_id, "prototype");
+                crate::error::throw_immutable_write((*normalized_obj).class_id, "prototype");
             }
         }
     }

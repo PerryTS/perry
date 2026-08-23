@@ -457,7 +457,25 @@ pub(crate) fn lower_ident_assignment(
                 throw_type_error_const_assignment(&name),
             ]));
         }
-        Ok(Expr::LocalSet(id, value))
+        let local_set = Expr::LocalSet(id, value);
+        let mirrors_script_var = super::lower_expr::global_script_this_enabled()
+            && ctx.script_var_decl_names.contains(&name)
+            && ctx.local_decl_scope_depth(&name) == Some(0);
+        if mirrors_script_var {
+            let global_this = Box::new(Expr::GlobalThisExpr);
+            Ok(Expr::Sequence(vec![
+                local_set,
+                Expr::PutValueSet {
+                    target: global_this.clone(),
+                    key: Box::new(Expr::String(name)),
+                    value: Box::new(Expr::LocalGet(id)),
+                    receiver: global_this,
+                    strict: ctx.current_strict,
+                },
+            ]))
+        } else {
+            Ok(local_set)
+        }
     } else if ctx.lookup_class(&name).is_some() || ctx.forward_class_shadows_local(&name) {
         let class_name = ctx.resolve_class_name(&name);
         Ok(Expr::Call {

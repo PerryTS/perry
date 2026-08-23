@@ -146,7 +146,36 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
     // ---- declaring bodies: rewrite with ONLY the ids detected in them -------
     for (f, s) in module.functions.iter_mut().zip(fn_shared.iter()) {
         if !s.is_empty() {
+            // Parameters have no `Stmt::Let` for `rewrite_stmt` to wrap. Turn
+            // each flagged parameter into the same one-element shared cell at
+            // function entry, then let the already-rewritten body use
+            // `param[0]`. Add this after rewriting so the initializer's
+            // `LocalGet(param)` reads the incoming scalar rather than being
+            // rewritten into an index read before the cell exists. Retype the
+            // holder to `Any`: its slot now carries an array pointer, not the
+            // source parameter's scalar representation.
+            let shared_params: Vec<LocalId> = f
+                .params
+                .iter_mut()
+                .filter_map(|param| {
+                    if s.contains(&param.id) {
+                        param.ty = Type::Any;
+                        Some(param.id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             rewrite_stmts(&mut f.body, s, s);
+            for id in shared_params.into_iter().rev() {
+                f.body.insert(
+                    0,
+                    Stmt::Expr(Expr::LocalSet(
+                        id,
+                        Box::new(Expr::Array(vec![Expr::LocalGet(id)])),
+                    )),
+                );
+            }
         }
     }
     if !init_shared.is_empty() {
@@ -614,11 +643,27 @@ fn find_regs_stmt(stmt: &Stmt, out: &mut Vec<(String, Vec<LocalId>)>) {
 }
 
 fn find_regs_expr(expr: &Expr, out: &mut Vec<(String, Vec<LocalId>)>) {
-    if let Expr::RegisterClassCaptures {
-        class_name,
-        captures,
-    } = expr
-    {
+    let registration = match expr {
+        Expr::RegisterClassCaptures {
+            class_name,
+            captures,
+        } => Some((class_name, captures)),
+        // A fresh class expression carries the same capture vector as a
+        // declaration snapshot, but it deliberately has no
+        // `RegisterClassCaptures`: each evaluation stores its environment on
+        // its own heap class object. Treat that vector as a registration for
+        // shared-mutable detection too. Otherwise a mutation nested in a
+        // fresh class member (for example a defineProperty setter created by
+        // a static method) receives a private scalar copy while sibling
+        // methods keep reading the class object's stale capture value.
+        Expr::ClassExprFresh {
+            template,
+            captured_args,
+            ..
+        } => Some((template, captured_args)),
+        _ => None,
+    };
+    if let Some((class_name, captures)) = registration {
         let ids: Vec<LocalId> = captures
             .iter()
             .filter_map(|c| match c {

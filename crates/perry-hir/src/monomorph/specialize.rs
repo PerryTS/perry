@@ -227,6 +227,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
             .iter()
             .map(|member| ClassComputedMember {
                 key_expr: substitute_expr(&member.key_expr, &substitutions),
+                source_order: member.source_order,
                 function: Function {
                     id: member.function.id,
                     name: member.function.name.clone(),

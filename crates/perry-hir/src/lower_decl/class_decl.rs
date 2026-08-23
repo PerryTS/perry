@@ -132,6 +132,7 @@ fn lower_generic_computed_class_member(
     ctx: &mut LoweringContext,
     method: &ast::ClassMethod,
     computed: &ast::ComputedPropName,
+    source_order: usize,
 ) -> Result<ClassComputedMember> {
     let key_expr = lower_expr(ctx, &computed.expr)?;
     let function_name = computed_member_name(method.kind, computed);
@@ -160,6 +161,7 @@ fn lower_generic_computed_class_member(
         function,
         is_static: method.is_static,
         kind,
+        source_order,
     })
 }
 
@@ -179,6 +181,7 @@ fn lower_noncomputed_class_member_registration(
     ctx: &mut LoweringContext,
     method: &ast::ClassMethod,
     prop_name: &str,
+    source_order: usize,
 ) -> Result<ClassComputedMember> {
     let function_name = noncomputed_member_registration_name(method.kind, method);
     let (kind, function) = match method.kind {
@@ -206,6 +209,7 @@ fn lower_noncomputed_class_member_registration(
         function,
         is_static: method.is_static,
         kind,
+        source_order,
     })
 }
 
@@ -753,7 +757,7 @@ pub fn lower_class_decl(
     let mut seen_generic_computed_member = false;
 
     // Second pass: actually lower the class members
-    for member in &class_decl.class.body {
+    for (member_index, member) in class_decl.class.body.iter().enumerate() {
         match member {
             ast::ClassMember::Constructor(ctor) => {
                 constructor = Some(lower_constructor(ctx, &name, ctor)?);
@@ -764,8 +768,12 @@ pub fn lower_class_decl(
                     continue;
                 }
                 if let Some(computed) = generic_computed_member_key(ctx, method) {
-                    computed_members
-                        .push(lower_generic_computed_class_member(ctx, method, computed)?);
+                    computed_members.push(lower_generic_computed_class_member(
+                        ctx,
+                        method,
+                        computed,
+                        member_index,
+                    )?);
                     seen_generic_computed_member = true;
                     continue;
                 }
@@ -828,7 +836,10 @@ pub fn lower_class_decl(
                         })?;
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
-                                ctx, method, &prop_name,
+                                ctx,
+                                method,
+                                &prop_name,
+                                member_index,
                             )?);
                         }
                         if method.is_static {
@@ -844,7 +855,10 @@ pub fn lower_class_decl(
                         })?;
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
-                                ctx, method, &prop_name,
+                                ctx,
+                                method,
+                                &prop_name,
+                                member_index,
                             )?);
                         }
                         if method.is_static {
@@ -878,7 +892,10 @@ pub fn lower_class_decl(
                         }
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
-                                ctx, method, &prop_name,
+                                ctx,
+                                method,
+                                &prop_name,
+                                member_index,
                             )?);
                         }
                         if method.is_static {
@@ -1361,9 +1378,9 @@ pub fn lower_class_from_ast(
     let old_inner_name = ctx.current_class_inner_name.take();
     // A class-expression caller stashes the source ident here; fall back
     // to the (possibly synthetic) registration name when absent.
-    ctx.current_class_inner_name = ctx
-        .pending_class_inner_name
-        .take()
+    let explicit_inner_name = ctx.pending_class_inner_name.take();
+    ctx.current_class_inner_name = explicit_inner_name
+        .clone()
         .or_else(|| Some(name.to_string()));
     let old_is_derived = ctx.current_class_is_derived;
     ctx.current_class_is_derived = class.super_class.is_some();
@@ -1402,8 +1419,7 @@ pub fn lower_class_from_ast(
     let (extends, extends_name, native_extends, extends_expr) = if let Some(ref super_class) =
         class.super_class
     {
-        if ctx
-            .current_class_inner_name
+        if explicit_inner_name
             .as_deref()
             .is_some_and(|inner| is_class_self_heritage(super_class, inner))
         {
@@ -1617,7 +1633,7 @@ pub fn lower_class_from_ast(
     let mut computed_members = Vec::new();
     let mut seen_generic_computed_member = false;
 
-    for member in &class.body {
+    for (member_index, member) in class.body.iter().enumerate() {
         match member {
             ast::ClassMember::Constructor(ctor) => {
                 constructor = Some(lower_constructor(ctx, name, ctor)?);
@@ -1628,8 +1644,12 @@ pub fn lower_class_from_ast(
                     continue;
                 }
                 if let Some(computed) = generic_computed_member_key(ctx, method) {
-                    computed_members
-                        .push(lower_generic_computed_class_member(ctx, method, computed)?);
+                    computed_members.push(lower_generic_computed_class_member(
+                        ctx,
+                        method,
+                        computed,
+                        member_index,
+                    )?);
                     seen_generic_computed_member = true;
                     continue;
                 }
@@ -1684,7 +1704,10 @@ pub fn lower_class_from_ast(
                         })?;
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
-                                ctx, method, &prop_name,
+                                ctx,
+                                method,
+                                &prop_name,
+                                member_index,
                             )?);
                         }
                         if method.is_static {
@@ -1699,7 +1722,10 @@ pub fn lower_class_from_ast(
                         })?;
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
-                                ctx, method, &prop_name,
+                                ctx,
+                                method,
+                                &prop_name,
+                                member_index,
                             )?);
                         }
                         if method.is_static {
@@ -1722,7 +1748,10 @@ pub fn lower_class_from_ast(
                         }
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
-                                ctx, method, &prop_name,
+                                ctx,
+                                method,
+                                &prop_name,
+                                member_index,
                             )?);
                         }
                         if method.is_static {

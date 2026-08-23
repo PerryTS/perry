@@ -41,6 +41,10 @@ fn static_block_fns(ctx: &FnCtx<'_>, template: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn private_static_storage_name(class_id: u32, field_name: &str) -> String {
+    format!("#<perry:private-value:{class_id}:{field_name}>")
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::StaticFieldGet {
@@ -76,7 +80,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Refs #420 / #618 followup.
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
                 let runtime_field_name = if field_name.starts_with('#') {
-                    format!("#<perry:private-value:{class_id}:{field_name}>")
+                    private_static_storage_name(class_id, field_name)
                 } else {
                     field_name.clone()
                 };
@@ -431,6 +435,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             named_statics,
             computed_keys,
             computed_statics,
+            static_init_order,
             captured_args,
         } => {
             let template_cid = ctx.class_ids.get(template).copied().unwrap_or(0);
@@ -535,26 +540,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &obj), (I64, &storage_raw), (DOUBLE, &key_value)],
                     );
                 }
-                for (name, init) in named_statics {
-                    let storage_name = if name.starts_with('#') {
-                        format!("#<perry:private-value:{template_cid}:{name}>")
-                    } else {
-                        name.clone()
-                    };
-                    let key_idx = ctx.strings.intern(&storage_name);
-                    let key_handle_global =
-                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                    let v = lower_expr(ctx, init)?;
-                    let obj = group.reread_emitted(ctx, rooted);
-                    let blk = ctx.block();
-                    let key_box = blk.load(DOUBLE, &key_handle_global);
-                    let key_bits = blk.bitcast_double_to_i64(&key_box);
-                    let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
-                    blk.call_void(
-                        "js_object_set_field_by_name",
-                        &[(I64, &obj), (I64, &key_raw), (DOUBLE, &v)],
-                    );
-                }
                 // #1787: snapshot the captured outer-scope values onto the class
                 // object as the `__perry_ctor_caps` own array (in the constructor's
                 // capture-param order). `new <thisClassObjectValue>()` reads it back
@@ -624,52 +609,72 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &[(I64, &obj), (I64, &key_raw), (DOUBLE, &caps_box)],
                     );
                 }
-                for (key_slot, init) in computed_statics {
-                    let value = lower_expr(ctx, init)?;
-                    let key_idx = ctx.strings.intern(key_slot);
-                    let entry = ctx.strings.entry(key_idx);
-                    let key_bytes = format!("@{}", entry.bytes_global);
-                    let key_len = entry.byte_len.to_string();
-                    let obj = group.reread_emitted(ctx, rooted);
-                    let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
-                    let resolved_key = ctx.block().call(
-                        DOUBLE,
-                        "js_object_get_own_field_or_undef",
-                        &[(DOUBLE, &obj_box), (PTR, &key_bytes), (I64, &key_len)],
-                    );
-                    ctx.block().call(
-                        DOUBLE,
-                        "js_object_set_property_key",
-                        &[
-                            (DOUBLE, &obj_box),
-                            (DOUBLE, &resolved_key),
-                            (DOUBLE, &value),
-                        ],
-                    );
-                }
-                // #685: run the class's `static { … }` blocks NOW — at the class
-                // expression's evaluation, with `this` = THIS fresh class object.
-                // The `ClassExprFresh` fast path previously never invoked them
-                // (they are also skipped by the module-init fallback when another
-                // evaluation site invokes them inline), so `return class { static
-                // { this.viaBlock = tag } }` factories produced objects whose
-                // blocks simply never ran. Arm the one-shot static-`this`
-                // override before each call so the compiled body's
-                // `js_static_this_resolve` prologue binds `this` to the fresh
-                // object (writes land as own properties of this evaluation's
-                // object, not the shared template). Blocks run after the named
-                // static fields above — the source interleaving of fields and
-                // blocks is not reproduced on this path (pre-existing limitation).
-                //
-                // `block_fns` is computed above, next to `protect_handle`.
-                for fn_name in block_fns {
-                    // #7154: a static block runs arbitrary user code, so re-derive
-                    // the receiver from the root before each one.
-                    let obj = group.reread_emitted(ctx, rooted);
-                    let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
-                    ctx.block()
-                        .call_void("js_static_this_arm_value", &[(DOUBLE, &obj_box)]);
-                    ctx.block().call(DOUBLE, &fn_name, &[]);
+                // Static fields and blocks execute only after every computed
+                // name has been resolved, then in their original ClassBody
+                // order. Each vector index is recorded by HIR lowering.
+                for step in static_init_order {
+                    match step {
+                        perry_hir::ClassFreshStaticInit::Named(index) => {
+                            let Some((name, init)) = named_statics.get(*index as usize) else {
+                                continue;
+                            };
+                            let storage_name = if name.starts_with('#') {
+                                private_static_storage_name(template_cid, name)
+                            } else {
+                                name.clone()
+                            };
+                            let key_idx = ctx.strings.intern(&storage_name);
+                            let key_handle_global =
+                                format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                            let value = lower_expr(ctx, init)?;
+                            let obj = group.reread_emitted(ctx, rooted);
+                            let blk = ctx.block();
+                            let key_box = blk.load(DOUBLE, &key_handle_global);
+                            let key_bits = blk.bitcast_double_to_i64(&key_box);
+                            let key_raw = blk.and(I64, &key_bits, crate::nanbox::POINTER_MASK_I64);
+                            blk.call_void(
+                                "js_object_set_field_by_name",
+                                &[(I64, &obj), (I64, &key_raw), (DOUBLE, &value)],
+                            );
+                        }
+                        perry_hir::ClassFreshStaticInit::Computed(index) => {
+                            let Some((key_slot, init)) = computed_statics.get(*index as usize)
+                            else {
+                                continue;
+                            };
+                            let value = lower_expr(ctx, init)?;
+                            let key_idx = ctx.strings.intern(key_slot);
+                            let entry = ctx.strings.entry(key_idx);
+                            let key_bytes = format!("@{}", entry.bytes_global);
+                            let key_len = entry.byte_len.to_string();
+                            let obj = group.reread_emitted(ctx, rooted);
+                            let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
+                            let resolved_key = ctx.block().call(
+                                DOUBLE,
+                                "js_object_get_own_field_or_undef",
+                                &[(DOUBLE, &obj_box), (PTR, &key_bytes), (I64, &key_len)],
+                            );
+                            ctx.block().call(
+                                DOUBLE,
+                                "js_object_set_property_key",
+                                &[
+                                    (DOUBLE, &obj_box),
+                                    (DOUBLE, &resolved_key),
+                                    (DOUBLE, &value),
+                                ],
+                            );
+                        }
+                        perry_hir::ClassFreshStaticInit::Block(index) => {
+                            let Some(fn_name) = block_fns.get(*index as usize) else {
+                                continue;
+                            };
+                            let obj = group.reread_emitted(ctx, rooted);
+                            let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
+                            ctx.block()
+                                .call_void("js_static_this_arm_value", &[(DOUBLE, &obj_box)]);
+                            ctx.block().call(DOUBLE, fn_name, &[]);
+                        }
+                    }
                 }
                 let obj = group.reread_emitted(ctx, rooted);
                 let obj_box = nanbox_pointer_inline(ctx.block(), &obj);

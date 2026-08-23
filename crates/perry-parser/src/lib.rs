@@ -9,6 +9,7 @@ use std::path::Path;
 use swc_common::{input::StringInput, sync::Lrc, FileName, SourceMap};
 use swc_ecma_ast::{Module, ModuleItem, Script};
 use swc_ecma_parser::{lexer::Lexer, EsSyntax, Parser, Syntax, TsSyntax};
+use swc_ecma_visit::{VisitMut, VisitMutWith};
 
 // Re-export AST types for consumers that need to inspect the AST
 pub use swc_ecma_ast;
@@ -46,7 +47,9 @@ pub fn parse_typescript_with_cache(
     filename: &str,
     cache: &mut SourceCache,
 ) -> Result<ParseResult> {
-    let parse_source = normalize_swc_class_syntax(&normalize_unicode_identifier_escapes(source));
+    let unicode_source = normalize_unicode_identifier_escapes(source);
+    let normalized = normalize_swc_class_syntax_with_metadata(&unicode_source);
+    let parse_source = normalized.source;
     // Add the source to the cache
     let file_id = cache.add_file(filename, source.to_string());
 
@@ -58,7 +61,7 @@ pub fn parse_typescript_with_cache(
     );
     let mut diagnostics = Diagnostics::new();
 
-    let (module, mut parser) =
+    let (mut module, mut parser) =
         parse_source_file_with_typescript_fallback(&source_file, filename, &parse_source).map_err(
             |e| {
                 // Convert SWC error to our diagnostic
@@ -71,6 +74,11 @@ pub fn parse_typescript_with_cache(
                 anyhow::anyhow!("Parse error: {}", e.kind().msg())
             },
         )?;
+    restore_await_class_identifiers(
+        &mut module,
+        source_file.start_pos.0,
+        &normalized.await_name_starts,
+    );
 
     // Collect recoverable errors as warnings
     for error in parser.take_errors() {
@@ -97,16 +105,23 @@ pub fn parse_typescript_with_cache(
 /// This is the original parsing function for backward compatibility.
 /// For new code, prefer `parse_typescript_with_cache` for better diagnostics.
 pub fn parse_typescript(source: &str, filename: &str) -> Result<Module> {
-    let parse_source = normalize_swc_class_syntax(&normalize_unicode_identifier_escapes(source));
+    let unicode_source = normalize_unicode_identifier_escapes(source);
+    let normalized = normalize_swc_class_syntax_with_metadata(&unicode_source);
+    let parse_source = normalized.source;
     let source_map: Lrc<SourceMap> = Default::default();
     let source_file = source_map.new_source_file(
         Lrc::new(FileName::Custom(filename.to_string())),
         parse_source,
     );
 
-    let (module, mut parser) =
+    let (mut module, mut parser) =
         parse_source_file_with_typescript_fallback(&source_file, filename, &source_file.src)
             .map_err(|e| anyhow::anyhow!("Parse error: {:?}", e))?;
+    restore_await_class_identifiers(
+        &mut module,
+        source_file.start_pos.0,
+        &normalized.await_name_starts,
+    );
 
     // Check for recoverable errors
     for error in parser.take_errors() {
@@ -842,7 +857,15 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
 /// Normalize two valid class grammar corners that SWC currently rejects.
 /// String/comment contents are masked before tokenization, so source text that
 /// merely mentions these spellings is never rewritten.
-fn normalize_swc_class_syntax(source: &str) -> String {
+struct NormalizedClassSyntax {
+    source: String,
+    /// Byte offsets in the normalized source where SWC sees the synthetic
+    /// `_wait` class identifier. The AST is restored to the source spelling
+    /// after parsing so `.name` and the class-body inner binding stay correct.
+    await_name_starts: Vec<usize>,
+}
+
+fn normalize_swc_class_syntax_with_metadata(source: &str) -> NormalizedClassSyntax {
     #[derive(Clone, Copy)]
     struct Token<'a> {
         start: usize,
@@ -883,7 +906,11 @@ fn normalize_swc_class_syntax(source: &str) -> String {
                 i += 1;
             }
         } else {
-            i += 1;
+            i += masked[i..]
+                .chars()
+                .next()
+                .expect("token cursor must be on a character boundary")
+                .len_utf8();
         }
         tokens.push(Token {
             start,
@@ -935,11 +962,59 @@ fn normalize_swc_class_syntax(source: &str) -> String {
         }
     }
 
+    let await_name_starts = replacements
+        .iter()
+        .filter(|(_, _, replacement)| *replacement == "_wait")
+        .map(|(start, _, _)| {
+            let shift: isize = replacements
+                .iter()
+                .filter(|(prior_start, _, _)| prior_start < start)
+                .map(|(prior_start, prior_end, replacement)| {
+                    replacement.len() as isize - (*prior_end - *prior_start) as isize
+                })
+                .sum();
+            (*start as isize + shift) as usize
+        })
+        .collect();
     let mut result = source.to_string();
     for (start, end, replacement) in replacements.into_iter().rev() {
         result.replace_range(start..end, replacement);
     }
-    result
+    NormalizedClassSyntax {
+        source: result,
+        await_name_starts,
+    }
+}
+
+#[cfg(test)]
+fn normalize_swc_class_syntax(source: &str) -> String {
+    normalize_swc_class_syntax_with_metadata(source).source
+}
+
+fn restore_await_class_identifiers(
+    module: &mut Module,
+    file_start: u32,
+    await_name_starts: &[usize],
+) {
+    if await_name_starts.is_empty() {
+        return;
+    }
+    struct RestoreAwaitNames<'a> {
+        file_start: u32,
+        starts: &'a [usize],
+    }
+    impl VisitMut for RestoreAwaitNames<'_> {
+        fn visit_mut_ident(&mut self, ident: &mut swc_ecma_ast::Ident) {
+            let local_start = ident.span.lo.0.saturating_sub(self.file_start) as usize;
+            if ident.sym == *"_wait" && self.starts.contains(&local_start) {
+                ident.sym = "await".into();
+            }
+        }
+    }
+    module.visit_mut_with(&mut RestoreAwaitNames {
+        file_start,
+        starts: await_name_starts,
+    });
 }
 
 /// Utility to convert SWC span to our span type.
@@ -1380,7 +1455,19 @@ class C {
     fn normalize_await_class_expression_name_for_script_parser() {
         let normalized = normalize_swc_class_syntax("var C = class await {};");
         assert_eq!(normalized, "var C = class _wait {};");
-        parse_typescript("var C = class await {};", "await-name.js").unwrap();
+        let module = parse_typescript("var C = class await {};", "await-name.js").unwrap();
+        let swc_ecma_ast::ModuleItem::Stmt(swc_ecma_ast::Stmt::Decl(swc_ecma_ast::Decl::Var(var))) =
+            &module.body[0]
+        else {
+            panic!("expected var declaration");
+        };
+        let Some(swc_ecma_ast::Expr::Class(class)) = var.decls[0].init.as_deref() else {
+            panic!("expected class expression initializer");
+        };
+        assert_eq!(
+            class.ident.as_ref().map(|ident| ident.sym.as_ref()),
+            Some("await")
+        );
         parse_typescript(r"var C = class \u0061wait {};", "await-name-escaped.js").unwrap();
     }
 

@@ -1301,36 +1301,34 @@ pub(crate) fn lower_module_decl(
                                 parent_expr: extends_expr.clone(),
                             }));
                     }
-                    for member in &class.computed_members {
-                        module
-                            .init
-                            .push(Stmt::Expr(class_computed_member_registration_expr(
-                                &class_name,
-                                member,
-                            )));
+                    let (computed_name_evaluations, computed_keys, computed_member_registrations) =
+                        crate::lower_decl::prepare_ordered_class_computed_names(
+                            ctx,
+                            &class_decl.class.body,
+                            &class,
+                        );
+                    module
+                        .init
+                        .extend(computed_name_evaluations.into_iter().map(Stmt::Expr));
+                    for (field_name, value) in computed_keys {
+                        module.init.push(Stmt::Expr(Expr::StaticFieldSet {
+                            class_name: class_name.clone(),
+                            field_name,
+                            value: Box::new(value),
+                        }));
                     }
-                    // Inject static-field-init statements in source order
-                    // (see non-export class arm below for rationale).
-                    for sf in &class.static_fields {
-                        if let Some(init) = &sf.init {
-                            // Computed-key static fields (`static [sym] = v`)
-                            // emit a runtime-register call instead of a
-                            // string-keyed StaticFieldSet. Refs #420.
-                            if let Some(key) = sf.key_expr.as_ref() {
-                                module.init.push(Stmt::Expr(Expr::ClassStaticSymbolSet {
-                                    class_name: class_name.clone(),
-                                    key: Box::new(key.clone()),
-                                    value: Box::new(init.clone()),
-                                }));
-                            } else {
-                                module.init.push(Stmt::Expr(Expr::StaticFieldSet {
-                                    class_name: class_name.clone(),
-                                    field_name: sf.name.clone(),
-                                    value: Box::new(init.clone()),
-                                }));
-                            }
-                        }
-                    }
+                    module
+                        .init
+                        .extend(computed_member_registrations.into_iter().map(Stmt::Expr));
+                    module.init.extend(
+                        crate::lower_decl::build_interleaved_static_init_stmts_after_computed_names(
+                            &class_decl.class.body,
+                            &class_name,
+                            &class.fields,
+                            &class.static_fields,
+                            &class.static_methods,
+                        ),
+                    );
                     append_legacy_decorator_init_for_class(ctx, &mut module.init, &class);
                     push_class_dedup(module, class);
                     module.exports.push(Export::Named {
@@ -1876,33 +1874,34 @@ pub(crate) fn lower_module_decl(
                                 parent_expr: extends_expr.clone(),
                             }));
                     }
-                    for member in &class.computed_members {
-                        module
-                            .init
-                            .push(Stmt::Expr(class_computed_member_registration_expr(
-                                &class_name,
-                                member,
-                            )));
+                    let (computed_name_evaluations, computed_keys, computed_member_registrations) =
+                        crate::lower_decl::prepare_ordered_class_computed_names(
+                            ctx,
+                            &synth_class_decl.class.body,
+                            &class,
+                        );
+                    module
+                        .init
+                        .extend(computed_name_evaluations.into_iter().map(Stmt::Expr));
+                    for (field_name, value) in computed_keys {
+                        module.init.push(Stmt::Expr(Expr::StaticFieldSet {
+                            class_name: class_name.clone(),
+                            field_name,
+                            value: Box::new(value),
+                        }));
                     }
-                    // Inject static-field-init statements in source order
-                    // (see non-export class arm for rationale).
-                    for sf in &class.static_fields {
-                        if let Some(init) = &sf.init {
-                            if let Some(key) = sf.key_expr.as_ref() {
-                                module.init.push(Stmt::Expr(Expr::ClassStaticSymbolSet {
-                                    class_name: class_name.clone(),
-                                    key: Box::new(key.clone()),
-                                    value: Box::new(init.clone()),
-                                }));
-                            } else {
-                                module.init.push(Stmt::Expr(Expr::StaticFieldSet {
-                                    class_name: class_name.clone(),
-                                    field_name: sf.name.clone(),
-                                    value: Box::new(init.clone()),
-                                }));
-                            }
-                        }
-                    }
+                    module
+                        .init
+                        .extend(computed_member_registrations.into_iter().map(Stmt::Expr));
+                    module.init.extend(
+                        crate::lower_decl::build_interleaved_static_init_stmts_after_computed_names(
+                            &synth_class_decl.class.body,
+                            &class_name,
+                            &class.fields,
+                            &class.static_fields,
+                            &class.static_methods,
+                        ),
+                    );
                     append_legacy_decorator_init_for_class(ctx, &mut module.init, &class);
                     push_class_dedup(module, class);
                     // The `local != exported` shape lets the #485 alias loop

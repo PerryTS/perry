@@ -266,6 +266,31 @@ pub(crate) fn set_field_by_name_object_tail(
         let plan_fast = plan_eligible
             && super::prop_plan::store_plan_check(obj_class_id, interned_key as usize);
 
+        // A per-evaluation class object carries dynamically installed static
+        // accessors in the descriptor side table, not in its ordinary field
+        // slots. Invoke that setter before the generic instance-vtable and
+        // own-data paths below; otherwise `C.x = value` silently appends or
+        // overwrites a data field after `defineProperty(C, "x", { set })`.
+        if !plan_fast
+            && !key.is_null()
+            && crate::object::class_registry::is_class_object_ptr(obj.cast())
+        {
+            let name_ptr = crate::string::string_data(key);
+            let name_len = (*key).byte_len as usize;
+            if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+                let receiver =
+                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                if super::class_registry::class_static_accessor_setter_apply(
+                    obj_class_id,
+                    name,
+                    receiver,
+                    value,
+                ) {
+                    return;
+                }
+            }
+        }
+
         // Refs #486 (hono): class setter dispatch. JS spec: a `set X(...)`
         // accessor on the prototype intercepts `obj.X = value` writes
         // before they hit the instance's data slots. Hono's `set res(_res)
@@ -276,9 +301,7 @@ pub(crate) fn set_field_by_name_object_tail(
         // hono-base's `if (!context.finalized) throw` fired on every
         // request. Walk the class -> parent chain mirroring the getter
         // dispatch in `js_object_get_field_by_name`.
-        let receiver_has_own_key =
-            !key.is_null() && super::object_ops::own_key_present(obj as *mut ObjectHeader, key);
-        if !plan_fast && !receiver_has_own_key && !key.is_null() && (key as usize) > 0x10000 {
+        if !plan_fast && !key.is_null() && (key as usize) > 0x10000 {
             let class_id = (*obj).class_id;
             if class_id != 0 {
                 if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {

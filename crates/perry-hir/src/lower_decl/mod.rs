@@ -38,7 +38,10 @@ pub(crate) use block::{
 pub(crate) use body_stmt::gen_capture_scan::forward_referenced_nested_generators;
 pub(crate) use body_stmt::{find_native_return_in_stmts, lower_body_stmt};
 pub(crate) use class_captures::{append_new_args_stmt, synthesize_class_captures};
-pub(crate) use class_computed::class_computed_member_registration_expr;
+pub(crate) use class_computed::fresh_class_static_init_order;
+pub(crate) use class_computed::{
+    class_computed_member_registration_expr, prepare_ordered_class_computed_names,
+};
 pub(crate) use class_decl::{lower_class_decl, lower_class_from_ast};
 pub(crate) use class_members::{
     lower_class_method, lower_class_method_with_name, lower_class_prop, lower_constructor,
@@ -63,6 +66,7 @@ pub(crate) use private_members::{
     lower_private_setter,
 };
 pub(crate) use static_init::{
-    build_interleaved_static_init_stmts, computed_field_key_initializers,
+    build_interleaved_static_init_stmts, build_interleaved_static_init_stmts_after_computed_names,
+    computed_field_key_initializers_with_order,
 };
 pub(crate) use type_alias::lower_type_alias_decl;

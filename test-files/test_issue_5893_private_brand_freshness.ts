@@ -212,3 +212,129 @@ function checkFreshStaticBrands(label: string, make: () => any): void {
 
 checkFreshStaticBrands("static expression", makeStaticClass);
 checkFreshStaticBrands("static declaration", makeStaticDeclarationClass);
+
+function makeOrderedStatics(label: string): any {
+    const events: string[] = [];
+    const key = (name: string): string => {
+        events.push("key-" + name);
+        return name;
+    };
+    const C = class {
+        static #brand = 0;
+
+        [key("method")](): void {}
+
+        static [key("first")] = (events.push("init-first"), 1);
+
+        static {
+            events.push("block");
+            (this as any).fromBlock = label;
+        }
+
+        static tail = (events.push("init-tail"), 2);
+        static missing;
+    };
+
+    check(
+        label + " computed/static order",
+        events.join(",") ===
+            "key-method,key-first,init-first,block,init-tail"
+    );
+    check(label + " static block this", C.fromBlock === label);
+    check(
+        label + " uninitialized static own",
+        Object.prototype.hasOwnProperty.call(C, "missing") &&
+            C.missing === undefined
+    );
+    return C;
+}
+
+makeOrderedStatics("fresh order");
+
+function makeDynamicAccessor(tag: string): any {
+    return class {
+        static #brand = 0;
+
+        static install(): void {
+            Object.defineProperty(this, "dynamic", {
+                configurable: true,
+                enumerable: true,
+                get: () => tag,
+                set: (value: string) => {
+                    tag = value;
+                },
+            });
+        }
+
+        static readTag(): string {
+            return tag;
+        }
+    };
+}
+
+const accessorA = makeDynamicAccessor("a");
+const accessorB = makeDynamicAccessor("b");
+accessorA.install();
+accessorB.install();
+check("dynamic accessor evaluation A", accessorA.dynamic === "a");
+check("dynamic accessor evaluation B", accessorB.dynamic === "b");
+Object.defineProperty(accessorA, "dynamic", {
+    get: () => "fixed",
+});
+const accessorDescriptor = Object.getOwnPropertyDescriptor(
+    accessorA,
+    "dynamic"
+)!;
+check(
+    "dynamic accessor retained halves",
+    typeof accessorDescriptor.set === "function"
+);
+check(
+    "dynamic accessor retained attrs",
+    accessorDescriptor.enumerable && accessorDescriptor.configurable
+);
+accessorA.dynamic = "changed";
+check("dynamic accessor retained setter", accessorA.readTag() === "changed");
+check("dynamic accessor sibling isolated", accessorB.dynamic === "b");
+
+function makePrototypeParent(tag: string): any {
+    return class {
+        static #brand = 0;
+
+        inherited(): string {
+            return tag;
+        }
+    };
+}
+
+function makePrototypeChild(parent: any): any {
+    return class extends parent {
+        static #brand = 0;
+    };
+}
+
+const prototypeParent = makePrototypeParent("parent");
+const prototypeChild = makePrototypeChild(prototypeParent);
+check(
+    "fresh prototype parent link",
+    Object.getPrototypeOf(prototypeChild.prototype) === prototypeParent.prototype
+);
+check(
+    "fresh prototype inherited method",
+    new prototypeChild().inherited() === "parent"
+);
+
+class HugeKeyBase {}
+Object.defineProperty(HugeKeyBase.prototype, "9223372036854776000", {
+    value: "huge",
+});
+class HugeKeyDerived extends HugeKeyBase {
+    read(): string {
+        return super[9223372036854775808];
+    }
+}
+check("super huge numeric property key", new HugeKeyDerived().read() === "huge");
+
+const boxedString = new String("payload");
+check("boxed String toString payload", boxedString.toString() === "payload");
+check("boxed String valueOf payload", boxedString.valueOf() === "payload");

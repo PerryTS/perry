@@ -89,7 +89,7 @@
 4 crates/perry-runtime/src/node_submodules/test.rs
 33 crates/perry-runtime/src/object/alloc.rs
 2 crates/perry-runtime/src/object/bigint_dispatch.rs
-5 crates/perry-runtime/src/object/class_registry/construct.rs
+3 crates/perry-runtime/src/object/class_registry/construct.rs
 2 crates/perry-runtime/src/object/delete_rest.rs
 12 crates/perry-runtime/src/object/descriptors.rs
 5 crates/perry-runtime/src/object/field_get_set/enumeration.rs
@@ -109,7 +109,7 @@
 26 crates/perry-runtime/src/object/native_module/callable_exports.rs
 6 crates/perry-runtime/src/object/object_literal_ops.rs
 2 crates/perry-runtime/src/object/object_ops/define_property.rs
-3 crates/perry-runtime/src/object/object_ops/descriptor_helpers.rs
+2 crates/perry-runtime/src/object/object_ops/descriptor_helpers.rs
 4 crates/perry-runtime/src/object/object_ops/from_entries.rs
 5 crates/perry-runtime/src/object/object_ops/keys_array.rs
 6 crates/perry-runtime/src/object/polymorphic_index.rs

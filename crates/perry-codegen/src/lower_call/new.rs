@@ -1360,6 +1360,7 @@ fn lower_new_impl_inner<'a>(
                         | "BigUint64Array"
                 )
             }) {
+                lowered_args = refresh_rooted_args(ctx, group)?;
                 let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
                 let class_id = ctx
                     .class_ids

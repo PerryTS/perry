@@ -2195,8 +2195,7 @@ pub extern "C" fn js_super_put_value_set(
         // A base class's constructor inherits from Function.prototype. Perry
         // does not materialize that object for this path; when lookup misses,
         // OrdinarySet creates the own property on Receiver.
-        target_set(receiver, key, value);
-        return value;
+        return js_put_value_set(receiver, key, value, receiver, strict);
     }
     if parent_class_id == 0 && crate::object::is_class_object_value(receiver) {
         let obj = crate::value::JSValue::from_bits(receiver.to_bits())
@@ -2208,8 +2207,7 @@ pub extern "C" fn js_super_put_value_set(
         };
         let dynamic_parent = crate::object::js_get_dynamic_parent_value(child_id);
         if crate::value::JSValue::from_bits(dynamic_parent.to_bits()).is_undefined() {
-            target_set(receiver, key, value);
-            return value;
+            return js_put_value_set(receiver, key, value, receiver, strict);
         }
         return js_put_value_set(dynamic_parent, key, value, receiver, strict);
     }

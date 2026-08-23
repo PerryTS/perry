@@ -331,6 +331,9 @@ pub struct ClassComputedMember {
     pub function: Function,
     pub is_static: bool,
     pub kind: ClassComputedMemberKind,
+    /// Zero-based position in the source ClassBody. Computed field and member
+    /// names share this ordering during ClassDefinitionEvaluation.
+    pub source_order: usize,
 }
 
 /// A class field

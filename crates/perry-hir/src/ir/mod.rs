@@ -60,7 +60,8 @@ pub use stmt::{CatchClause, Stmt, SwitchCase};
 
 // ---- expr.rs ----
 pub use expr::{
-    BoxedPrimitiveKind, Expr, PathWin32Method, ProcessStdinLifecycleMethod, WithSetFallback,
+    BoxedPrimitiveKind, ClassFreshStaticInit, Expr, PathWin32Method, ProcessStdinLifecycleMethod,
+    WithSetFallback,
 };
 
 // ---- ops.rs ----

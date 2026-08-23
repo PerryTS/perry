@@ -168,15 +168,16 @@ pub(crate) use dispatch::{
 // ── parent_static.rs ────────────────────────────────────────────────────────
 pub(crate) use parent_static::{
     call_private_static_method_for_owner, call_registered_static_method, call_static_method,
-    class_chain_has_instance_accessor, class_dynamic_static_accessor_getter_value,
-    class_has_instance_getter, class_has_own_static_method, class_has_symbol_member_in_chain,
-    class_instance_setter_apply, class_method_bind_length, class_object_own_field_bytes,
-    class_object_pinned_parent, class_own_symbol_accessor_ptrs, class_own_symbol_member_keys,
-    class_own_symbol_method, class_private_instance_getter_value,
-    class_private_instance_setter_apply, class_static_accessor_getter_value,
-    class_static_accessor_setter_apply, class_symbol_getter_value, class_symbol_setter_apply,
-    get_parent_class_id, lookup_class_symbol_method_in_chain, lookup_static_method_in_chain,
-    register_class, register_class_dynamic_static_accessor,
+    class_chain_has_instance_accessor, class_dynamic_static_accessor_descriptor,
+    class_dynamic_static_accessor_getter_value, class_has_instance_getter,
+    class_has_own_static_method, class_has_symbol_member_in_chain, class_instance_setter_apply,
+    class_method_bind_length, class_object_own_field_bytes, class_object_pinned_parent,
+    class_own_symbol_accessor_ptrs, class_own_symbol_member_keys, class_own_symbol_method,
+    class_private_instance_getter_value, class_private_instance_setter_apply,
+    class_static_accessor_getter_value, class_static_accessor_setter_apply,
+    class_symbol_getter_value, class_symbol_setter_apply, get_parent_class_id,
+    lookup_class_symbol_method_in_chain, lookup_static_method_in_chain, register_class,
+    register_class_dynamic_static_accessor,
 };
 pub use parent_static::{
     is_class_object_ptr, is_class_object_value, is_registered_class_prototype_object,

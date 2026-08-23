@@ -772,39 +772,49 @@ pub(crate) unsafe fn define_property_force_store_value(
     let gc = gc_header_for(obj);
     let saved = (*gc)._reserved;
     (*gc)._reserved &= !immutability;
-    let key_str = key_handle.get_raw_const_ptr::<crate::StringHeader>();
     // `js_object_set_field_by_name` implements [[Set]], including inherited
     // setter lookup. DefineProperty must write the receiver's own slot
     // directly. Ensure the shape entry exists, then locate its parallel value
     // slot and store by index (or through object-owned overflow storage).
-    ensure_key_in_keys_array(obj, key_str);
-    obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-    let key_str = key_handle.get_raw_const_ptr::<crate::StringHeader>();
-    let keys = crate::object::object_keys_array(obj);
-    if !keys.is_null() {
-        let count = crate::array::keys_array_len_capped_to_capacity(keys) as usize;
-        let (slots, slot_len) = crate::object::keys_array_dense_slots(keys);
-        for i in 0..count.min(slot_len) {
-            let stored = JSValue::from_bits((*slots.add(i)).to_bits());
-            if crate::string::js_string_key_matches(stored, key_str) {
-                let live_slots = crate::object::object_live_slot_count(obj) as usize;
-                let inline_limit = live_slots.max(crate::object::INLINE_SLOT_FLOOR);
-                if i < inline_limit {
-                    js_object_set_field(
-                        obj,
-                        i as u32,
-                        JSValue::from_bits(value_handle.get_nanbox_f64().to_bits()),
-                    );
-                } else {
-                    crate::object::overflow_set(
-                        obj as usize,
-                        i,
-                        value_handle.get_nanbox_f64().to_bits(),
-                    );
-                }
-                break;
+    obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        key_handle.with_const_ptr::<crate::StringHeader, _>(|key_str| {
+            ensure_key_in_keys_array(obj, key_str)
+        })
+    });
+    let slot = obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        key_handle.with_const_ptr::<crate::StringHeader, _>(|key_str| {
+            let keys = crate::object::object_keys_array(obj);
+            if keys.is_null() {
+                return None;
             }
-        }
+            let count = crate::array::keys_array_len_capped_to_capacity(keys) as usize;
+            let (slots, slot_len) = crate::object::keys_array_dense_slots(keys);
+            for i in 0..count.min(slot_len) {
+                let stored = JSValue::from_bits((*slots.add(i)).to_bits());
+                if crate::string::js_string_key_matches(stored, key_str) {
+                    let live_slots = crate::object::object_live_slot_count(obj) as usize;
+                    return Some((i, live_slots));
+                }
+            }
+            None
+        })
+    });
+    if let Some((index, live_slots)) = slot {
+        obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            if index < live_slots.max(crate::object::INLINE_SLOT_FLOOR) {
+                js_object_set_field(
+                    obj,
+                    index as u32,
+                    JSValue::from_bits(value_handle.get_nanbox_f64().to_bits()),
+                );
+            } else {
+                crate::object::overflow_set(
+                    obj as usize,
+                    index,
+                    value_handle.get_nanbox_f64().to_bits(),
+                );
+            }
+        });
     }
     // Re-fetch after a possible evacuation, then restore the immutability bits.
     obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();

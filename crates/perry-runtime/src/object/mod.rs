@@ -249,6 +249,7 @@ pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
     private_evaluation_brand_value, private_lexical_brand_pop, private_lexical_brand_push,
     private_lexical_brand_stack_restore, private_lexical_brand_stack_savepoint,
+    private_member_access_hints_restore, private_member_access_hints_savepoint,
     scan_private_lexical_brand_roots_mut,
 };
 pub(crate) use this_binding::{

@@ -9,8 +9,12 @@
 
 use super::*;
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::ptr::null_mut;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::{
+    atomic::{AtomicPtr, Ordering},
+    OnceLock, RwLock,
+};
 
 mod async_hooks_exports;
 mod callable_export_arity_table;
@@ -1338,20 +1342,6 @@ pub(crate) fn test_take_bound_method_move() -> (usize, usize) {
     TEST_BOUND_METHOD_MOVE.with(|trace| trace.replace((0, 0)))
 }
 
-/// Allocate a BOUND_METHOD closure binding `instance` as the receiver for the
-/// named method, stamping its `.name`/`.length`. This is the raw builder used
-/// by both `js_class_method_bind` (after its canonical-identity short-circuit)
-/// and `class_prototype_method_value_for_name` (which caches one canonical per
-/// `(class_id, name)`). Keeping it separate breaks the recursion that an
-/// unconditional canonical lookup inside `js_class_method_bind` would create.
-pub(crate) fn build_bound_method_closure(
-    instance: f64,
-    method_name_ptr: *const u8,
-    method_name_len: usize,
-) -> f64 {
-    build_bound_method_closure_with_private_brand(instance, method_name_ptr, method_name_len, None)
-}
-
 fn build_bound_method_closure_with_private_brand(
     instance: f64,
     method_name_ptr: *const u8,
@@ -1776,7 +1766,7 @@ pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -
     // `(class_id, method_name)` pair the program ever asks for, so the
     // total leak is bounded by the static set of decorated method
     // descriptors. The cache below short-circuits repeat queries.
-    let leaked: &'static [u8] = method_name.as_bytes().to_vec().leak();
+    let leaked = intern_class_method_name(class_id, method_name);
     let class_ref = class_prototype_ref_value(class_id);
     // Build the closure DIRECTLY (not via `js_class_method_bind`, whose
     // canonical short-circuit would call back into this function and recurse).
