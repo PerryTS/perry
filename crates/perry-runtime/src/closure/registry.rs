@@ -4,6 +4,13 @@
 use super::*;
 use std::cell::RefCell;
 
+#[derive(Clone, Copy)]
+pub(crate) struct TrustedDirectTarget {
+    pub func_ptr: *const u8,
+    pub capture_count: u32,
+    pub boxed_capture_mask: u64,
+}
+
 // Side-table mapping closure body `func_ptr` -> fixed_arity (number of fixed
 // params declared BEFORE the rest param). Populated at module init by
 // `js_register_closure_rest` for every closure body whose HIR signature ends
@@ -56,8 +63,12 @@ crate::perry_thread_local! {
 
     /// Side-table marking closure body `func_ptr`s that came from arrow
     /// functions. Arrows are callable but not constructable and inherit the
-    /// restricted Function.prototype caller/arguments accessors.
-    static CLOSURE_ARROW_FUNCTION_REGISTRY: RefCell<crate::fast_hash::PtrHashMap<usize, ()>> =
+    /// restricted Function.prototype caller/arguments accessors. A small
+    /// eligible subset also records an internal direct-call body that may use
+    /// compiler-proven capture invariants. Dynamic callers retain the public
+    /// body; only the exact-arrow resolver reads that optional target.
+    static CLOSURE_ARROW_FUNCTION_REGISTRY:
+        RefCell<crate::fast_hash::PtrHashMap<usize, Option<TrustedDirectTarget>>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
     /// Side-table marking closure body `func_ptr`s whose body is strict-mode
@@ -513,7 +524,7 @@ pub extern "C" fn js_register_closure_arrow_function(func_ptr: *const u8) {
         return;
     }
     CLOSURE_ARROW_FUNCTION_REGISTRY.with(|r| {
-        r.borrow_mut().insert(func_ptr as usize, ());
+        r.borrow_mut().entry(func_ptr as usize).or_insert(None);
     });
     // A closure can be invoked during a cyclic module-init graph before its
     // metadata batch runs. Keep arrow-ness coherent with the rest/arity data
@@ -528,6 +539,45 @@ pub fn is_registered_arrow_function(func_ptr: *const u8) -> bool {
     }
     CLOSURE_ARROW_FUNCTION_REGISTRY.with(|r| r.borrow().contains_key(&(func_ptr as usize)))
 }
+
+/// Associate a public closure body with its compiler-private direct-call
+/// body. Both addresses are static code pointers emitted by the same module.
+#[no_mangle]
+pub extern "C" fn js_register_closure_trusted_direct(
+    public_func_ptr: *const u8,
+    trusted_func_ptr: *const u8,
+    capture_count: u32,
+    boxed_capture_mask: u64,
+) {
+    if public_func_ptr.is_null() || trusted_func_ptr.is_null() {
+        return;
+    }
+    CLOSURE_ARROW_FUNCTION_REGISTRY.with(|r| {
+        let mut registry = r.borrow_mut();
+        let Some(target) = registry.get_mut(&(public_func_ptr as usize)) else {
+            // Registration must never turn an ordinary function into an arrow.
+            return;
+        };
+        *target = Some(TrustedDirectTarget {
+            func_ptr: trusted_func_ptr,
+            capture_count,
+            boxed_capture_mask,
+        });
+    });
+}
+
+#[inline(always)]
+pub(crate) fn lookup_closure_trusted_direct(func_ptr: *const u8) -> Option<TrustedDirectTarget> {
+    CLOSURE_ARROW_FUNCTION_REGISTRY
+        .with(|r| r.borrow().get(&(func_ptr as usize)).copied().flatten())
+}
+
+/// Keepalive anchor for the auto-optimize whole-program build — registration
+/// is referenced only by generated module-init code.
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_REGISTER_CLOSURE_TRUSTED_DIRECT: extern "C" fn(*const u8, *const u8, u32, u64) =
+    js_register_closure_trusted_direct;
 
 /// Register a compiled function address as strict-mode code. Emitted from
 /// module init alongside the arrow-function registration.

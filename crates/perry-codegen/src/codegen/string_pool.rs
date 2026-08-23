@@ -126,6 +126,12 @@ pub(super) fn emit_string_pool(
     closure_lengths: &HashMap<u32, u32>,
     // Closure body func_ids that came from arrow function syntax.
     closure_arrow_functions: &std::collections::HashSet<u32>,
+    // Small direct arrow callbacks with an internal body that trusts their
+    // compiler-installed box-capture slots after exact-target resolution.
+    trusted_box_closures: &std::collections::HashMap<
+        u32,
+        super::closure_collect::TrustedBoxClosure,
+    >,
     // Issue #653: wrappers (`__perry_wrap_<name>`) for top-level user functions
     // that declare a rest param. Each entry is `(wrapper_symbol, fixed_arity)`
     // — the runtime side-table is keyed on the wrapper's func_ptr, NOT the
@@ -1362,6 +1368,28 @@ pub(super) fn emit_string_pool(
         let closure_sym = format!("perry_closure_{}__{}", module_prefix, fid);
         let func_ref = format!("@{}", closure_sym);
         blk.call_void("js_register_closure_arrow_function", &[(PTR, &func_ref)]);
+    }
+
+    let mut sorted_trusted: Vec<(u32, super::closure_collect::TrustedBoxClosure)> =
+        trusted_box_closures
+            .iter()
+            .map(|(func_id, plan)| (*func_id, *plan))
+            .collect();
+    sorted_trusted.sort_unstable_by_key(|(func_id, _)| *func_id);
+    for (fid, plan) in sorted_trusted {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
+        let public_ref = format!("@perry_closure_{}__{}", module_prefix, fid);
+        let trusted_ref = format!("{}$trusted_boxes", public_ref);
+        blk.call_void(
+            "js_register_closure_trusted_direct",
+            &[
+                (PTR, &public_ref),
+                (PTR, &trusted_ref),
+                (I32, &plan.capture_count.to_string()),
+                (I64, &plan.boxed_capture_mask.to_string()),
+            ],
+        );
     }
 
     // Issue #653: register `__perry_wrap_<name>` wrappers for top-level user

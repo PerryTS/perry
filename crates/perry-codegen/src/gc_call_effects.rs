@@ -178,6 +178,7 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_i32_box_alloc"
         | "js_bool_box_alloc"
         | "js_box_set_bits"
+        | "js_box_set_bits_trusted_no_barrier"
         | "js_i32_box_set"
         | "js_bool_box_set"
         | "js_i32_box_get"
@@ -463,6 +464,7 @@ mod tests {
             "js_i32_box_alloc",
             "js_bool_box_alloc",
             "js_box_set_bits",
+            "js_box_set_bits_trusted_no_barrier",
             "js_i32_box_set",
             "js_bool_box_set",
             "js_i32_box_get",
@@ -527,11 +529,13 @@ mod tests {
     /// symbol can be admitted; this one cannot.
     #[test]
     fn the_tdz_capable_box_getter_stays_a_safepoint() {
-        assert_eq!(
-            classify_direct_callee("js_box_get_bits"),
-            GcCallEffect::Unknown,
-            "js_box_get_bits can throw (and allocate) on the TDZ path"
-        );
+        for name in ["js_box_get_bits", "js_box_get_bits_trusted"] {
+            assert_eq!(
+                classify_direct_callee(name),
+                GcCallEffect::Unknown,
+                "{name} can throw (and allocate) on the TDZ path"
+            );
+        }
     }
 
     #[test]

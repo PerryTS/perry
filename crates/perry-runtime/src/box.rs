@@ -1014,6 +1014,32 @@ pub extern "C" fn js_box_get_bits(ptr: *mut Box) -> i64 {
     }
 }
 
+/// Raw read for an internal closure body selected from an exact arrow target.
+///
+/// Codegen emits this only for capture slots installed by
+/// `js_closure_set_box_capture_ptr`. The public closure body retains
+/// `js_box_get_bits` and its authoritative registry check. A live closure's
+/// exact capture edge keeps the non-moving box cell from being published for
+/// reuse, so the compiler-installed pointer stays valid for this call. TDZ
+/// behavior remains identical to the public accessor.
+///
+/// # Safety
+///
+/// `ptr` must be non-null and must name a live Perry box cell whose capture
+/// edge remains live for the duration of the call. The exact-arrow resolver
+/// establishes this before selecting the only generated callers.
+#[no_mangle]
+pub unsafe extern "C" fn js_box_get_bits_trusted(ptr: *mut Box) -> i64 {
+    let bits = unsafe { (*ptr).value };
+    if bits == crate::value::TAG_TDZ {
+        if TDZ_SUPPRESS_DEPTH.with(|d| d.get()) > 0 {
+            return crate::value::TAG_UNDEFINED as i64;
+        }
+        crate::error::js_throw_reference_error_tdz(f64::from_bits(crate::value::TAG_UNDEFINED));
+    }
+    bits as i64
+}
+
 crate::perry_thread_local! {
     /// #6052: >0 while codegen-emitted Perry-internal materialization reads
     /// (the `RegisterClassCaptures` decl-site snapshot refresh) are running —
@@ -1125,6 +1151,24 @@ pub extern "C" fn js_box_set_bits(ptr: *mut Box, value_bits: i64) {
         let bits = value_bits as u64;
         (*ptr).value = bits;
         crate::gc::runtime_write_barrier_root_nanbox(bits);
+    }
+}
+
+/// Raw store paired with [`js_box_get_bits_trusted`]. The generated caller
+/// immediately emits the ordinary child-shading write barrier after this
+/// store, so this helper deliberately performs only the cell write. Public
+/// closure bodies retain the validating, self-barriering setter.
+///
+/// # Safety
+///
+/// `ptr` must be non-null and must name a live Perry box cell whose capture
+/// edge remains live for the duration of the call. If `value_bits` may name a
+/// GC object, the caller must shade it against this box before any operation
+/// that can collect.
+#[no_mangle]
+pub unsafe extern "C" fn js_box_set_bits_trusted_no_barrier(ptr: *mut Box, value_bits: i64) {
+    unsafe {
+        (*ptr).value = value_bits as u64;
     }
 }
 
@@ -1324,6 +1368,14 @@ static KEEP_JS_BOX_GET_BITS: extern "C" fn(*mut Box) -> i64 = js_box_get_bits;
 static KEEP_JS_BOX_SET_BITS: extern "C" fn(*mut Box, i64) = js_box_set_bits;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
+static KEEP_JS_BOX_GET_BITS_TRUSTED: unsafe extern "C" fn(*mut Box) -> i64 =
+    js_box_get_bits_trusted;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_BOX_SET_BITS_TRUSTED_NO_BARRIER: unsafe extern "C" fn(*mut Box, i64) =
+    js_box_set_bits_trusted_no_barrier;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
 static KEEP_JS_BOX_ALLOC: extern "C" fn(f64) -> *mut Box = js_box_alloc;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
@@ -1461,6 +1513,30 @@ mod tests {
             assert_eq!(js_box_get_bits(b) as u64, replacement);
             assert_eq!(js_box_get(b).to_bits(), replacement);
         }
+    }
+
+    #[test]
+    fn trusted_box_access_matches_valid_public_access_and_tdz_suppression() {
+        test_clear_box_registry();
+        let initial = crate::value::JSValue::int32(17).bits();
+        let replacement = crate::value::JSValue::try_short_string(b"next")
+            .unwrap()
+            .bits();
+        let b = js_box_alloc_bits(initial as i64);
+
+        assert_eq!(unsafe { js_box_get_bits_trusted(b) } as u64, initial);
+        unsafe {
+            js_box_set_bits_trusted_no_barrier(b, replacement as i64);
+        }
+        assert_eq!(js_box_get_bits(b) as u64, replacement);
+
+        js_box_set_bits(b, crate::value::TAG_TDZ as i64);
+        js_tdz_suppress_begin();
+        let trusted_tdz = unsafe { js_box_get_bits_trusted(b) } as u64;
+        let public_tdz = js_box_get_bits(b) as u64;
+        js_tdz_suppress_end();
+        assert_eq!(trusted_tdz, crate::value::TAG_UNDEFINED);
+        assert_eq!(public_tdz, crate::value::TAG_UNDEFINED);
     }
 
     #[test]
