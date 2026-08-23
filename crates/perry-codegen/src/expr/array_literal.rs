@@ -359,6 +359,14 @@ fn try_lower_const_array_descriptor(ctx: &mut FnCtx<'_>, elements: &[Expr]) -> O
     if !elements.iter().all(is_const_materializable) {
         return None;
     }
+    // Only NESTED constant tables benefit: the fan-out cost is the per-subarray
+    // allocation (a data table lowers to thousands of `js_array_from_values`).
+    // A flat constant scalar array is already a single `js_array_alloc_literal`
+    // + inline stores, so keep that path — it also preserves the precise
+    // per-slot write barriers a later push/store relies on.
+    if !elements.iter().any(|e| matches!(e, Expr::Array(_))) {
+        return None;
+    }
     let total_nodes: usize = 1 + elements.iter().map(count_const_nodes).sum::<usize>();
     if total_nodes < CONST_DESCRIPTOR_MIN_NODES {
         return None;
