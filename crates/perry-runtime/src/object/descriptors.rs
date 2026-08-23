@@ -284,6 +284,27 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 };
                 let addr = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
+                // Plain node Buffers are byte-indexed exotic objects but are
+                // not always marked as Uint8Array owners, so the typed-array
+                // arm above can legitimately decline them. Their canonical
+                // in-bounds byte keys still have ordinary element descriptors;
+                // an out-of-bounds canonical index cannot fall through to an
+                // expando/accessor of the same spelling.
+                if crate::buffer::is_byte_indexed_buffer(addr) {
+                    if let Some(index) = property_name_array_index(&name) {
+                        let buf = addr as *const crate::buffer::BufferHeader;
+                        let len = crate::buffer::js_buffer_length(buf).max(0) as u32;
+                        if index < len && index <= i32::MAX as u32 {
+                            return build_data_descriptor(
+                                f64::from(crate::buffer::js_buffer_get(buf, index as i32)),
+                                true,
+                                true,
+                                true,
+                            );
+                        }
+                        return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    }
+                }
                 if let Some(accessor) = get_accessor_descriptor(addr, &name) {
                     let attrs = get_property_attrs(addr, &name)
                         .unwrap_or_else(|| PropertyAttrs::new(false, false, false));

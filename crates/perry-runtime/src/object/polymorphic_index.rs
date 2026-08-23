@@ -208,7 +208,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         && crate::buffer::is_non_indexed_buffer_view(raw as usize)
     {
         if let Some(key) = crate::buffer::canonical_index_key(idx) {
-            return crate::buffer::buffer_get_own_prop(raw as usize, &key)
+            return crate::buffer::buffer_read_own_prop(raw as usize, &key)
                 .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
         }
     }
@@ -223,7 +223,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             // pass wrote into a zero-length Buffer (RangeError
             // [ERR_OUT_OF_RANGE] at the MySQL handshake).
             if let Some(name) = buffer_key_name(idx) {
-                if let Some(v) = crate::buffer::buffer_get_own_prop(raw as usize, &name) {
+                if let Some(v) = crate::buffer::buffer_read_own_prop(raw as usize, &name) {
                     return v;
                 }
                 // The bound closure keeps the name POINTER and re-reads it at

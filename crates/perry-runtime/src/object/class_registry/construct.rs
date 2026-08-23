@@ -988,14 +988,14 @@ pub unsafe extern "C" fn js_new_function_construct(
             class_cid, class_cid, func_value, args_ptr, args_len,
         );
     }
-    if extends_target_must_throw(func_value) {
-        super::super::object_ops::throw_object_type_error(b"is not a constructor");
-    }
     if is_arrow_function_value(func_value) {
         crate::fs::validate::throw_type_error_with_code(
             "Arrow function is not a constructor",
             "ERR_INVALID_ARG_TYPE",
         );
+    }
+    if extends_target_must_throw(func_value) {
+        super::super::object_ops::throw_object_type_error(b"is not a constructor");
     }
     let cid = synthetic_class_id_for_function(func_value);
     // Allocate the instance with the synthetic class id (or 0 if the
@@ -1673,8 +1673,8 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                 | "BigUint64Array"
         ) {
             // Validate and initialize the typed-array contents before reading
-            // a custom newTarget prototype.  In particular, a Number/BigInt
-            // element-type mismatch must throw TypeError without observing a
+            // a custom newTarget prototype. In particular, invalid Symbol
+            // element conversion must throw TypeError without observing a
             // poisoned `newTarget.prototype` getter.
             let scope = crate::gc::RuntimeHandleScope::new();
             let nt_h = scope.root_nanbox_f64(nt);

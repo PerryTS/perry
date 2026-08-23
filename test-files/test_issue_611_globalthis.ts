@@ -17,3 +17,20 @@ const store = (globalThis as any)[storeId] as Map<string, string>;
 console.log("typeof store:", typeof store);
 store.set("k", "v");
 console.log("store.get('k'):", store.get("k"));
+
+// Script-level `var` remains a global-object binding even when its initializer
+// executes inside a compound statement.
+if (true) {
+  var nestedScriptVar = 42;
+}
+console.log("nested var:", (globalThis as any).nestedScriptVar);
+try {
+  var caughtScriptVar = "try";
+} finally {
+  var finalScriptVar = "finally";
+}
+console.log(
+  "try/finally vars:",
+  (globalThis as any).caughtScriptVar,
+  (globalThis as any).finalScriptVar,
+);

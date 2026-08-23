@@ -291,7 +291,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         && crate::buffer::is_non_indexed_buffer_view(raw_ptr)
     {
         if let Some(key) = crate::buffer::canonical_index_key(index) {
-            return crate::buffer::buffer_get_own_prop(raw_ptr, &key)
+            return crate::buffer::buffer_read_own_prop(raw_ptr, &key)
                 .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
         }
     }

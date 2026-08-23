@@ -95,6 +95,58 @@ console.log("utf8 len:", Buffer.from("hello").length);
 console.log("emoji len:", Buffer.from("😀").length);
 console.log("empty len:", Buffer.from("").length);
 
+// --- Buffer exotic descriptors and accessor reads ---
+const descriptorBuffer = Buffer.from([7]);
+const byteDescriptor = Object.getOwnPropertyDescriptor(descriptorBuffer, "0");
+console.log(
+  "byte descriptor:",
+  byteDescriptor?.value,
+  byteDescriptor?.writable,
+  byteDescriptor?.enumerable,
+  byteDescriptor?.configurable,
+);
+
+const accessorBuffer: any = Buffer.from([1, 2]);
+let accessorHits = 0;
+Object.defineProperty(accessorBuffer, "computed", {
+  enumerable: true,
+  configurable: true,
+  get() {
+    accessorHits++;
+    return 41;
+  },
+});
+const computedKey: any = "computed";
+console.log("buffer computed getter:", accessorBuffer[computedKey], accessorHits);
+console.log("buffer values getter:", Object.values(accessorBuffer).join(","), accessorHits);
+console.log(
+  "buffer entries getter:",
+  JSON.stringify(Object.entries(accessorBuffer)),
+  accessorHits,
+);
+
+Object.defineProperty(accessorBuffer, "readUInt8", {
+  configurable: true,
+  get() {
+    accessorHits++;
+    return function (_offset: number) {
+      return this === accessorBuffer ? 99 : -1;
+    };
+  },
+});
+console.log("buffer accessor method:", accessorBuffer.readUInt8(0), accessorHits);
+
+const accessorView: any = new DataView(new ArrayBuffer(1));
+Object.defineProperty(accessorView, "0", {
+  enumerable: true,
+  configurable: true,
+  get() {
+    return 77;
+  },
+});
+const zeroKey: any = 0;
+console.log("dataview numeric getter:", accessorView[zeroKey]);
+
 // --- Buffer.isBuffer --- (not yet in codegen: BufferIsBuffer)
 // console.log("isBuffer buf:", Buffer.isBuffer(Buffer.from("x")));
 
