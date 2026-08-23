@@ -6,9 +6,10 @@
 use anyhow::Result;
 use perry_diagnostics::{Diagnostic, DiagnosticCode, Diagnostics, FileId, SourceCache, Span};
 use std::path::Path;
-use swc_common::{input::StringInput, sync::Lrc, FileName, SourceMap};
+use swc_common::{input::StringInput, sync::Lrc, BytePos, FileName, SourceMap};
 use swc_ecma_ast::{Module, ModuleItem, Script};
 use swc_ecma_parser::{lexer::Lexer, EsSyntax, Parser, Syntax, TsSyntax};
+use swc_ecma_visit::{VisitMut, VisitMutWith};
 
 // Re-export AST types for consumers that need to inspect the AST
 pub use swc_ecma_ast;
@@ -47,7 +48,8 @@ pub fn parse_typescript_with_cache(
     cache: &mut SourceCache,
 ) -> Result<ParseResult> {
     let unicode_source = normalize_unicode_identifier_escapes(source);
-    let parse_source = normalize_swc_class_syntax(&unicode_source);
+    let normalized = normalize_swc_class_syntax_with_metadata(&unicode_source);
+    let parse_source = &normalized.source;
     // Add the source to the cache
     let file_id = cache.add_file(filename, source.to_string());
 
@@ -59,11 +61,11 @@ pub fn parse_typescript_with_cache(
     );
     let mut diagnostics = Diagnostics::new();
 
-    let (module, mut parser) =
+    let (mut module, mut parser) =
         parse_source_file_with_typescript_fallback(&source_file, filename, &parse_source).map_err(
             |e| {
                 // Convert SWC error to our diagnostic
-                let span = Span::new(file_id, e.span().lo.0, e.span().hi.0);
+                let span = normalized.perry_span(e.span(), source_file.start_pos, file_id);
                 let diag =
                     Diagnostic::error(DiagnosticCode::ParseError, format!("{}", e.kind().msg()))
                         .with_span(span)
@@ -72,9 +74,10 @@ pub fn parse_typescript_with_cache(
                 anyhow::anyhow!("Parse error: {}", e.kind().msg())
             },
         )?;
+    normalized.remap_module_spans(&mut module, source_file.start_pos);
     // Collect recoverable errors as warnings
     for error in parser.take_errors() {
-        let span = Span::new(file_id, error.span().lo.0, error.span().hi.0);
+        let span = normalized.perry_span(error.span(), source_file.start_pos, file_id);
         diagnostics.push(
             Diagnostic::warning(
                 DiagnosticCode::ParseError,
@@ -98,16 +101,18 @@ pub fn parse_typescript_with_cache(
 /// For new code, prefer `parse_typescript_with_cache` for better diagnostics.
 pub fn parse_typescript(source: &str, filename: &str) -> Result<Module> {
     let unicode_source = normalize_unicode_identifier_escapes(source);
-    let parse_source = normalize_swc_class_syntax(&unicode_source);
+    let normalized = normalize_swc_class_syntax_with_metadata(&unicode_source);
+    let parse_source = &normalized.source;
     let source_map: Lrc<SourceMap> = Default::default();
     let source_file = source_map.new_source_file(
         Lrc::new(FileName::Custom(filename.to_string())),
-        parse_source,
+        parse_source.clone(),
     );
 
-    let (module, mut parser) =
+    let (mut module, mut parser) =
         parse_source_file_with_typescript_fallback(&source_file, filename, &source_file.src)
             .map_err(|e| anyhow::anyhow!("Parse error: {:?}", e))?;
+    normalized.remap_module_spans(&mut module, source_file.start_pos);
     // Check for recoverable errors
     for error in parser.take_errors() {
         eprintln!("Parse warning: {:?}", error);
@@ -842,7 +847,79 @@ fn normalize_unicode_identifier_escapes(source: &str) -> String {
 /// Normalize two valid class grammar corners that SWC currently rejects.
 /// String/comment contents are masked before tokenization, so source text that
 /// merely mentions these spellings is never rewritten.
-fn normalize_swc_class_syntax(source: &str) -> String {
+#[derive(Clone, Copy, Debug)]
+struct NormalizedSourceEdit {
+    original_start: usize,
+    original_end: usize,
+    normalized_start: usize,
+    normalized_end: usize,
+}
+
+struct NormalizedClassSyntax {
+    source: String,
+    edits: Vec<NormalizedSourceEdit>,
+}
+
+impl NormalizedClassSyntax {
+    fn original_offset(&self, normalized_offset: usize) -> usize {
+        let mut cumulative_delta = 0isize;
+        for edit in &self.edits {
+            if normalized_offset < edit.normalized_start {
+                break;
+            }
+            if normalized_offset <= edit.normalized_end {
+                if normalized_offset == edit.normalized_end {
+                    return edit.original_end;
+                }
+                let normalized_len = edit.normalized_end - edit.normalized_start;
+                let original_len = edit.original_end - edit.original_start;
+                let relative = normalized_offset - edit.normalized_start;
+                return edit.original_start
+                    + relative.saturating_mul(original_len) / normalized_len.max(1);
+            }
+            cumulative_delta += (edit.normalized_end - edit.normalized_start) as isize
+                - (edit.original_end - edit.original_start) as isize;
+        }
+        (normalized_offset as isize - cumulative_delta).max(0) as usize
+    }
+
+    fn swc_span(&self, span: swc_common::Span, file_start: BytePos) -> swc_common::Span {
+        if span.lo < file_start || span.hi < file_start {
+            return span;
+        }
+        let lo = span.lo.0.saturating_sub(file_start.0) as usize;
+        let hi = span.hi.0.saturating_sub(file_start.0) as usize;
+        swc_common::Span::new(
+            BytePos(file_start.0 + self.original_offset(lo) as u32),
+            BytePos(file_start.0 + self.original_offset(hi) as u32),
+        )
+    }
+
+    fn perry_span(&self, span: swc_common::Span, file_start: BytePos, file_id: FileId) -> Span {
+        let span = self.swc_span(span, file_start);
+        Span::new(file_id, span.lo.0, span.hi.0)
+    }
+
+    fn remap_module_spans(&self, module: &mut Module, file_start: BytePos) {
+        struct RemapSpans<'a> {
+            normalized: &'a NormalizedClassSyntax,
+            file_start: BytePos,
+        }
+
+        impl VisitMut for RemapSpans<'_> {
+            fn visit_mut_span(&mut self, span: &mut swc_common::Span) {
+                *span = self.normalized.swc_span(*span, self.file_start);
+            }
+        }
+
+        module.visit_mut_with(&mut RemapSpans {
+            normalized: self,
+            file_start,
+        });
+    }
+}
+
+fn normalize_swc_class_syntax_with_metadata(source: &str) -> NormalizedClassSyntax {
     #[derive(Clone, Copy)]
     struct Token<'a> {
         start: usize,
@@ -941,11 +1018,34 @@ fn normalize_swc_class_syntax(source: &str) -> String {
         }
     }
 
+    let mut cumulative_delta = 0isize;
+    let edits = replacements
+        .iter()
+        .map(|(start, end, replacement)| {
+            let normalized_start = (*start as isize + cumulative_delta) as usize;
+            let normalized_end = normalized_start + replacement.len();
+            cumulative_delta += replacement.len() as isize - (*end - *start) as isize;
+            NormalizedSourceEdit {
+                original_start: *start,
+                original_end: *end,
+                normalized_start,
+                normalized_end,
+            }
+        })
+        .collect();
     let mut result = source.to_string();
     for (start, end, replacement) in replacements.into_iter().rev() {
         result.replace_range(start..end, replacement);
     }
-    result
+    NormalizedClassSyntax {
+        source: result,
+        edits,
+    }
+}
+
+#[cfg(test)]
+fn normalize_swc_class_syntax(source: &str) -> String {
+    normalize_swc_class_syntax_with_metadata(source).source
 }
 
 /// Utility to convert SWC span to our span type.
@@ -1400,6 +1500,52 @@ class C {
             Some("await")
         );
         parse_typescript(r"var C = class \u0061wait {};", "await-name-escaped.js").unwrap();
+    }
+
+    #[test]
+    fn class_syntax_normalization_preserves_following_ast_offsets() {
+        for (source, filename) in [
+            (
+                "var C = class await {}; function afterAwait() {}",
+                "await-offset.js",
+            ),
+            (
+                "class C { static constructor() {} } function afterConstructor() {}",
+                "constructor-offset.js",
+            ),
+        ] {
+            let module = parse_typescript(source, filename).unwrap();
+            let function = module
+                .body
+                .iter()
+                .find_map(|item| match item {
+                    swc_ecma_ast::ModuleItem::Stmt(swc_ecma_ast::Stmt::Decl(
+                        swc_ecma_ast::Decl::Fn(function),
+                    )) => Some(function),
+                    _ => None,
+                })
+                .expect("expected trailing function declaration");
+            let expected = source.find("function").unwrap() as u32 + 1;
+            assert_eq!(function.function.span.lo.0, expected, "{filename}");
+            assert_eq!(module.span.hi.0, source.len() as u32 + 1, "{filename}");
+        }
+    }
+
+    #[test]
+    fn class_syntax_normalization_preserves_following_diagnostic_offsets() {
+        let source = "class C { static constructor() {} constructor() {} constructor() {} }";
+        let mut cache = SourceCache::new();
+        let result = parse_typescript_with_cache(source, "constructor-diagnostic.js", &mut cache)
+            .expect("duplicate constructor is a recoverable parse error");
+        let duplicate = result
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.contains("only have one constructor"))
+            .expect("expected duplicate-constructor diagnostic");
+        assert_eq!(
+            duplicate.span.start,
+            source.rfind("constructor").unwrap() as u32 + 1
+        );
     }
 
     #[test]

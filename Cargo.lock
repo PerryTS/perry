@@ -6291,6 +6291,7 @@ dependencies = [
  "swc_common",
  "swc_ecma_ast",
  "swc_ecma_parser 32.0.0",
+ "swc_ecma_visit",
  "thiserror 1.0.69",
 ]
 

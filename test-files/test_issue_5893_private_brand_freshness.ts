@@ -320,6 +320,25 @@ check(
         SharedTemplateOrder.last === 2
 );
 
+function makeStaticBlockOnlyClass(): any {
+    return class {
+        static {
+            (this as any).n = ((this as any).n ?? 0) + 1;
+        }
+    };
+}
+
+const staticBlockOnlyFirst = makeStaticBlockOnlyClass();
+const staticBlockOnlySecond = makeStaticBlockOnlyClass();
+check(
+    "static-block-only class identity",
+    staticBlockOnlyFirst !== staticBlockOnlySecond
+);
+check(
+    "static-block-only class state",
+    staticBlockOnlyFirst.n === 1 && staticBlockOnlySecond.n === 1
+);
+
 function makeMutableParameter(value: string): any {
     class MutableParameter {
         read(): string {

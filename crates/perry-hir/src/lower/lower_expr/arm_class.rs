@@ -249,6 +249,7 @@ pub(crate) fn lower_class_expr(
         && (!named_statics.is_empty()
             || !computed_keys.is_empty()
             || !captured_args.is_empty()
+            || !static_block_names.is_empty()
             || has_private_elements)
     {
         // #6438: a class expression WITH heritage (`class extends <expr>`) used
