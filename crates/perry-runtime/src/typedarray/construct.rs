@@ -307,15 +307,25 @@ pub(crate) unsafe fn typed_array_from_source_raw_values(val: f64) -> Vec<f64> {
 /// Coerce a snapshot of raw element values per `kind` (observable, may throw)
 /// and store them into a freshly allocated typed array.
 unsafe fn typed_array_from_snapshot(kind: u8, raw: Vec<f64>) -> *mut TypedArrayHeader {
-    let vals: Vec<f64> = raw
-        .into_iter()
-        .map(|v| bigint::coerce_for_kind(kind, v))
-        .collect();
-    let ta = typed_array_alloc(kind, vals.len() as u32);
-    for (i, v) in vals.iter().enumerate() {
-        store_at(ta, i, *v);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let rooted = scope.root_nanbox_f64_slice(&raw);
+    typed_array_from_rooted_snapshot(kind, &rooted)
+}
+
+/// Root-preserving sibling used while an iterator is still being driven: every
+/// value yielded so far remains live across later `next()` calls and across
+/// each observable numeric/BigInt coercion.
+unsafe fn typed_array_from_rooted_snapshot(
+    kind: u8,
+    raw: &[crate::gc::RuntimeHandle<'_>],
+) -> *mut TypedArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ta = scope.root_raw_mut_ptr(typed_array_alloc(kind, raw.len() as u32));
+    for (i, value) in raw.iter().enumerate() {
+        let coerced = bigint::coerce_for_kind(kind, value.get_nanbox_f64());
+        ta.with_mut_ptr::<TypedArrayHeader, _>(|ta| store_at(ta, i, coerced));
     }
-    ta
+    ta.across_mut::<TypedArrayHeader, _>(|| ()).1
 }
 
 /// `Get(obj, name)` for a plain-object or function source value.
@@ -407,27 +417,21 @@ pub extern "C" fn js_typed_array_new_from_array(
         return typed_array_alloc(kind, 0);
     }
     rooted.set_raw_const_ptr(arr);
-    unsafe {
-        let len = (*arr).length;
-        // Snapshot the raw source values BEFORE any coercion. Per spec the
-        // source list is fully collected first and only THEN are the elements
-        // converted (`ToNumber`/`ToBigInt`) and stored. A converting element can
-        // run user code (`valueOf`/`Symbol.toPrimitive`) that mutates the source
-        // array — `Int32Array.from([0, { valueOf() { src.length = 0; return 100 }}, 2])`
-        // must still yield `[0, 100, 2]`, not lose the trailing element. Reading
-        // raw values first also keeps the snapshot ahead of the `typed_array_alloc`
-        // GC point (#871).
-        let raw: Vec<f64> = (0..len)
-            .map(|i| crate::array::js_array_get_f64(rooted.get_raw_const_ptr::<ArrayHeader>(), i))
-            .collect();
-        let vals: Vec<f64> = raw
-            .into_iter()
-            .map(|v| bigint::coerce_for_kind(kind, v))
-            .collect();
-        let ta = typed_array_alloc(kind, len);
-        for (i, v) in vals.iter().enumerate() {
-            store_at(ta, i, *v);
-        }
-        ta
+    // InitializeTypedArrayFromArrayLike obtains and drives the source's
+    // iterator. Going through the real iterator protocol matters even for a
+    // dense Array: user code can replace Array.prototype[Symbol.iterator] or
+    // %ArrayIteratorPrototype%.next, and construction must observe either.
+    // Collect the raw values first and only then coerce them, retaining the
+    // mutation/snapshot rule described by `typed_array_from_snapshot`.
+    let source = rooted
+        .with_const_ptr::<ArrayHeader, _>(|source| crate::value::js_nanbox_pointer(source as i64));
+    let iter = crate::symbol::js_get_iterator(source);
+    let iter_rooted = scope.root_nanbox_f64(iter);
+    let mut raw = Vec::new();
+    while let Some(value) =
+        crate::collection_iter::iterator_next_value(iter_rooted.get_nanbox_f64())
+    {
+        raw.push(scope.root_nanbox_f64(value));
     }
+    unsafe { typed_array_from_rooted_snapshot(kind, &raw) }
 }

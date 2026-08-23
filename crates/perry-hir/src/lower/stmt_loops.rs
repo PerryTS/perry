@@ -941,6 +941,12 @@ pub(super) fn lower_stmt_for_of_inner(
                 method: "iterator".to_string(),
                 args: vec![],
             }
+        } else if for_of_stmt.is_await && is_generator_call && !callee_is_async_gen {
+            // A sync generator used by `for await` must be adapted through
+            // CreateAsyncFromSyncIterator. Awaiting only its raw `next()`
+            // result does not await `result.value`, and therefore neither
+            // preserves a rejected yielded promise nor closes the generator.
+            Expr::GetAsyncIterator(Box::new(iter_expr))
         } else {
             iter_expr
         };
@@ -1042,8 +1048,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 });
             }
         }
-        // Lower user body statements. lower_stmt appends to module.init,
-        // so we snapshot and drain to capture the body stmts.
+        // Lower user body statements. Snapshot module.init and drain body stmts.
         // Handle both Block bodies (`for (...) { ... }`) AND single-statement
         // bodies (`for (...) console.log(v);`). Pre-fix the brace-less
         // form was silently dropped — `for (const v of gen()) doThing(v);`
@@ -1061,6 +1066,7 @@ pub(super) fn lower_stmt_for_of_inner(
             || is_filehandle_readlines_for_await
             || is_fs_dir_for_await
             || is_readline_interface_for_await
+            || (for_of_stmt.is_await && is_generator_call && !callee_is_async_gen)
         {
             insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
         }

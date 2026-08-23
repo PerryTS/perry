@@ -58,6 +58,20 @@ pub(crate) fn symbol_property_root_bits(owner: usize, sym_key: usize) -> Option<
     })
 }
 
+/// Install a symbol-keyed data descriptor after the caller has completed
+/// `ValidateAndApplyPropertyDescriptor`. Unlike ordinary `[[Set]]`, this must
+/// not be intercepted by the property's previous writable flag or setter.
+pub(crate) unsafe fn define_symbol_data_property(obj_f64: f64, sym_f64: f64, value_f64: f64) {
+    let obj_key = obj_key_from_f64(obj_f64);
+    let sym_key = sym_key_from_f64(sym_f64);
+    if obj_key == 0 || sym_key == 0 {
+        return;
+    }
+    super::note_symbol_key_installed(sym_key);
+    accessors::clear_symbol_accessor_property(obj_key, sym_key);
+    store_object_symbol_property_root(obj_key, sym_key, value_f64.to_bits());
+}
+
 pub(crate) fn get_symbol_property_attrs(
     owner: usize,
     sym_key: usize,

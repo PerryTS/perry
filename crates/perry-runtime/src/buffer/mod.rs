@@ -71,8 +71,9 @@ pub(crate) use detach::{array_buffer_transfer, detach_array_buffer};
 #[cfg(test)]
 pub(crate) use own_props::test_buffer_own_props_owner_count;
 pub use own_props::{
-    buffer_get_own_prop, buffer_has_own_prop, buffer_own_prop_names, buffer_own_props_possible,
-    buffer_set_own_prop, clear_buffer_own_props, scan_buffer_own_props_roots_mut,
+    buffer_define_own_data_prop, buffer_delete_own_prop, buffer_get_own_prop, buffer_has_own_prop,
+    buffer_own_prop_names, buffer_own_props_possible, buffer_set_own_prop, clear_buffer_own_props,
+    scan_buffer_own_props_roots_mut,
 };
 
 // ---- Re-exports: #8149 integer-indexed-exotic discrimination ----

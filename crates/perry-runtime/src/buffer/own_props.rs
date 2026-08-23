@@ -55,6 +55,32 @@ pub fn buffer_set_own_prop(addr: usize, prop: &str, value: f64) {
     if addr == 0 {
         return;
     }
+    if let Some(accessor) = crate::object::get_accessor_descriptor(addr, prop) {
+        if accessor.set != 0 {
+            unsafe {
+                crate::object::invoke_accessor_setter(
+                    accessor.set,
+                    crate::value::js_nanbox_pointer(addr as i64),
+                    value,
+                );
+            }
+        }
+        return;
+    }
+    if crate::object::get_property_attrs(addr, prop).is_some_and(|attrs| !attrs.writable())
+        && buffer_get_own_prop(addr, prop).is_some()
+    {
+        return;
+    }
+    buffer_define_own_data_prop(addr, prop, value);
+}
+
+/// Descriptor installation bypasses ordinary [[Set]] interception after it
+/// has validated the redefinition and selected the new property kind.
+pub fn buffer_define_own_data_prop(addr: usize, prop: &str, value: f64) {
+    if addr == 0 {
+        return;
+    }
     BUFFER_OWN_PROPS_EVER.store(true, Ordering::Release);
     if let Ok(mut props) = buffer_props().lock() {
         props
@@ -104,6 +130,28 @@ pub fn buffer_own_prop_names(addr: usize) -> Vec<String> {
 /// Whether the buffer carries any own dynamic prop under `prop`.
 pub fn buffer_has_own_prop(addr: usize, prop: &str) -> bool {
     buffer_get_own_prop(addr, prop).is_some()
+        || crate::object::get_accessor_descriptor(addr, prop).is_some()
+}
+
+/// Delete an ordinary named own property from a registered buffer/view.
+/// Returns whether the property was present.
+pub fn buffer_delete_own_prop(addr: usize, prop: &str) -> bool {
+    if addr == 0 || !buffer_own_props_possible() {
+        return false;
+    }
+    let Ok(mut props) = buffer_props().lock() else {
+        return false;
+    };
+    let Some(entries) = props.get_mut(&addr) else {
+        return false;
+    };
+    let removed = entries.remove(prop).is_some();
+    crate::object::clear_accessor_descriptor(addr, prop);
+    crate::object::clear_property_attrs(addr, prop);
+    if entries.is_empty() {
+        props.remove(&addr);
+    }
+    removed
 }
 
 /// GC: trace stored values in every phase (a stored closure is reachable ONLY

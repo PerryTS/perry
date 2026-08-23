@@ -124,7 +124,7 @@ pub(crate) fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr
         "BigInt" => "js_throw_bigint_constructor_type_error",
         "Math" => "js_throw_math_constructor_type_error",
         "JSON" => "js_throw_json_constructor_type_error",
-        _ => unreachable!(),
+        _ => "js_throw_not_a_constructor",
     };
     let throw_expr = Expr::Call {
         callee: Box::new(Expr::ExternFuncRef {

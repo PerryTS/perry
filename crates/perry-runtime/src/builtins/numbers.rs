@@ -21,7 +21,15 @@ pub extern "C" fn js_parse_int(str_ptr: *const StringHeader, radix: f64) -> f64 
         let data = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let bytes = std::slice::from_raw_parts(data, len);
 
-        if let Ok(s) = std::str::from_utf8(bytes) {
+        // Perry stores lone UTF-16 surrogates as WTF-8. `parseInt` only
+        // inspects the leading digit run, so an invalid UTF-8 sequence after
+        // that run is a terminator, not a reason to reject the whole string.
+        // Decode the valid prefix in that case (`"1Z\uD800"`, radix 36, is
+        // still 71), matching the spec's longest-prefix rule.
+        let valid_len = std::str::from_utf8(bytes)
+            .map(|_| bytes.len())
+            .unwrap_or_else(|err| err.valid_up_to());
+        if let Ok(s) = std::str::from_utf8(&bytes[..valid_len]) {
             // StrWhiteSpace per spec (NBSP/BOM in, NEL out) — not Rust's
             // `trim_start`, whose White_Space set diverges from JS's.
             let trimmed = s.trim_start_matches(crate::string::is_js_whitespace);

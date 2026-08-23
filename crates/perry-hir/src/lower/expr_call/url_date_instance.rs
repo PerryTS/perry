@@ -92,6 +92,19 @@ pub(super) fn try_url_date_weakref_instance(
         //   `let u = new URL(...); u.toString()` (typed local)
         if let ast::MemberProp::Ident(method_ident) = &member.prop {
             let method_name = method_ident.sym.as_ref();
+            // `%Date.prototype%` is an ordinary object without [[DateValue]].
+            // Do not feed direct calls on it into the statically-specialized
+            // DateCell path; the reflective prototype thunk performs the
+            // required brand check and throws TypeError.
+            let receiver_is_date_prototype = matches!(
+                member.obj.as_ref(),
+                ast::Expr::Member(proto_member)
+                    if matches!(proto_member.obj.as_ref(), ast::Expr::Ident(id) if id.sym.as_ref() == "Date")
+                        && matches!(&proto_member.prop, ast::MemberProp::Ident(id) if id.sym.as_ref() == "prototype")
+            );
+            if receiver_is_date_prototype {
+                return Ok(Err(args));
+            }
             if static_receiver_class(ctx, member.obj.as_ref()) == Some("URL") {
                 match method_name {
                     "toString" => {
@@ -288,11 +301,9 @@ pub(super) fn try_url_date_weakref_instance(
                         let date_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::DateGetUtcMilliseconds(Box::new(date_expr))));
                     }
-                    // Other getters/methods
-                    "valueOf" => {
-                        let date_expr = lower_expr(ctx, &member.obj)?;
-                        return Ok(Ok(Expr::DateValueOf(Box::new(date_expr))));
-                    }
+                    // Other getters/methods. `valueOf` deliberately remains a
+                    // generic property call: an own replacement on a Date must
+                    // take precedence over Date.prototype.valueOf.
                     "toDateString" => {
                         let date_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::DateToDateString(Box::new(date_expr))));

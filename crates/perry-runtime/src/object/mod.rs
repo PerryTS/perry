@@ -185,7 +185,7 @@ pub(crate) use class_gc_roots::{
 };
 pub use class_registry::*;
 pub(crate) use collection_proto_thunks::{is_builtin_map_set_value, is_builtin_set_add_value};
-pub(crate) use data_view_registry::extends_builtin_data_view;
+pub(crate) use data_view_registry::{extends_builtin_data_view, extends_builtin_typed_array};
 pub use delete_rest::*;
 pub use descriptors::*;
 pub use exotic_expando::scan_exotic_expando_roots_mut;
@@ -195,7 +195,9 @@ pub use global_this::*;
 pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
-pub(crate) use iterator_prototypes::{attach_iterator_prototype, iterator_prototype_for_class_id};
+pub(crate) use iterator_prototypes::{
+    attach_iterator_prototype, call_overridden_iterator_next, iterator_prototype_for_class_id,
+};
 pub use namespace_create::*;
 pub use native_call_method::*;
 pub use native_module::*;
@@ -341,6 +343,8 @@ crate::perry_thread_local! {
     static OS_CONSTANTS_DLOPEN_CACHE_SLOT: AtomicU64 = const { AtomicU64::new(0) };
     static TYPED_ARRAY_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static TYPED_ARRAY_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static ASYNC_FUNCTION_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static ASYNC_FUNCTION_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static GENERATOR_INTRINSIC_PROTO_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static GENERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
@@ -367,6 +371,10 @@ pub(crate) static TYPED_ARRAY_INTRINSIC_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&TYPED_ARRAY_INTRINSIC_PTR_SLOT);
 pub(crate) static TYPED_ARRAY_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&TYPED_ARRAY_INTRINSIC_PROTO_PTR_SLOT);
+pub(crate) static ASYNC_FUNCTION_INTRINSIC_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&ASYNC_FUNCTION_INTRINSIC_PTR_SLOT);
+pub(crate) static ASYNC_FUNCTION_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
+    RealmAtomicI64::new(&ASYNC_FUNCTION_INTRINSIC_PROTO_PTR_SLOT);
 pub(crate) static GENERATOR_FUNCTION_INTRINSIC_PTR: RealmAtomicI64 =
     RealmAtomicI64::new(&GENERATOR_FUNCTION_INTRINSIC_PTR_SLOT);
 pub(crate) static GENERATOR_INTRINSIC_PROTO_PTR: RealmAtomicI64 =
@@ -1186,6 +1194,8 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     for slot in [
         &TYPED_ARRAY_INTRINSIC_PTR,
         &TYPED_ARRAY_INTRINSIC_PROTO_PTR,
+        &ASYNC_FUNCTION_INTRINSIC_PTR,
+        &ASYNC_FUNCTION_INTRINSIC_PROTO_PTR,
         &GENERATOR_FUNCTION_INTRINSIC_PTR,
         &GENERATOR_INTRINSIC_PROTO_PTR,
         &GENERATOR_PROTOTYPE_PTR,
@@ -1200,6 +1210,7 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         });
     }
     async_generator_queue::scan_async_generator_queue_roots_mut(visitor);
+    collection_proto_thunks::scan_builtin_collection_method_roots_mut(visitor);
     // Shared `%IteratorPrototype%`-style singletons for Array/Map/Set/String
     // iterator objects. Each iterator instance's `[[Prototype]]` points here, so
     // these must stay live for the lifetime of any iterator.
@@ -1565,6 +1576,7 @@ pub(crate) fn test_realm_owned_root_snapshot() -> Vec<(&'static str, usize, u64)
             slot.load(Ordering::Acquire) as u64,
         ));
     }
+    global_this::append_async_function_root_snapshot(&mut roots);
     roots
 }
 

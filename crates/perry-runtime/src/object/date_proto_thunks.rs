@@ -96,6 +96,17 @@ extern "C" fn date_to_utc_string(_closure: *const crate::closure::ClosureHeader)
     crate::value::js_nanbox_string(s as i64)
 }
 
+#[cfg(feature = "temporal")]
+extern "C" fn date_to_temporal_instant(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    let timestamp = require_date_timestamp();
+    crate::temporal::instant::from_epoch_milliseconds_static(&[timestamp])
+}
+
+#[cfg(not(feature = "temporal"))]
+extern "C" fn date_to_temporal_instant(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
 /// `Date.prototype.toJSON` reflective thunk. Unlike the getters this is a
 /// *generic* method — it is not brand-checked to Date. Per ECMA-262
 /// (`thisTimeValue` is NOT used): `ToObject(this)`, then `ToPrimitive(this,
@@ -406,6 +417,12 @@ pub(crate) fn install_date_proto_getters(proto_obj: *mut ObjectHeader) {
         0,
     );
     super::global_this::install_proto_method(proto_obj, "toJSON", date_to_json as *const u8, 1);
+    super::global_this::install_proto_method(
+        proto_obj,
+        "toTemporalInstant",
+        date_to_temporal_instant as *const u8,
+        0,
+    );
     let utc = super::global_this::install_proto_method(
         proto_obj,
         "toUTCString",
