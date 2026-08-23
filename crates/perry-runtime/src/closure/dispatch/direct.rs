@@ -94,10 +94,26 @@ pub extern "C" fn js_closure_resolve_arrow_direct_call(
     let Some(func_ptr) = resolve_direct_func_ptr(closure, arity) else {
         return std::ptr::null();
     };
-    resolve_strategy(func_ptr)
-        .is_arrow()
-        .then_some(func_ptr)
-        .unwrap_or(std::ptr::null())
+    if !resolve_strategy(func_ptr).is_arrow() {
+        return std::ptr::null();
+    }
+    let Some(trusted) = super::super::registry::lookup_closure_trusted_direct(func_ptr) else {
+        return func_ptr;
+    };
+    let actual_capture_count = unsafe { real_capture_count((*closure).capture_count) };
+    if actual_capture_count != trusted.capture_count {
+        return func_ptr;
+    }
+    let mut mask = trusted.boxed_capture_mask;
+    while mask != 0 {
+        let index = mask.trailing_zeros();
+        let box_ptr = crate::closure::js_closure_get_capture_bits(closure, index);
+        if crate::r#box::box_slot_contents_bits(box_ptr).is_none() {
+            return func_ptr;
+        }
+        mask &= mask - 1;
+    }
+    trusted.func_ptr
 }
 
 macro_rules! define_direct_call_site {
@@ -208,6 +224,18 @@ mod tests {
         0.0
     }
 
+    extern "C" fn trusted_add3(_c: *const ClosureHeader, a: f64, b: f64, c: f64) -> f64 {
+        a * 100.0 + b * 10.0 + c
+    }
+
+    extern "C" fn boxed1(_c: *const ClosureHeader, value: f64) -> f64 {
+        value
+    }
+
+    extern "C" fn trusted_boxed1(_c: *const ClosureHeader, value: f64) -> f64 {
+        value
+    }
+
     fn closure_for(body: *const u8) -> *const ClosureHeader {
         crate::closure::js_closure_alloc(body, 0)
     }
@@ -221,10 +249,26 @@ mod tests {
             js_closure_resolve_arrow_direct_call(arrow, 3),
             add3 as *const u8
         );
+        crate::closure::js_register_closure_trusted_direct(
+            add3 as *const u8,
+            trusted_add3 as *const u8,
+            0,
+            0,
+        );
+        assert_eq!(
+            js_closure_resolve_arrow_direct_call(arrow, 3),
+            trusted_add3 as *const u8
+        );
         assert!(js_closure_resolve_arrow_direct_call(arrow, 2).is_null());
 
         let ordinary = closure_for(ordinary3 as *const u8);
         crate::closure::js_register_closure_arity(ordinary3 as *const u8, 3);
+        crate::closure::js_register_closure_trusted_direct(
+            ordinary3 as *const u8,
+            trusted_add3 as *const u8,
+            0,
+            0,
+        );
         assert!(js_closure_resolve_arrow_direct_call(ordinary, 3).is_null());
 
         let rest = closure_for(rest_body as *const u8);
@@ -236,6 +280,42 @@ mod tests {
             let bound = closure_for(sentinel);
             assert!(js_closure_resolve_arrow_direct_call(bound, 3).is_null());
         }
+    }
+
+    #[test]
+    fn trusted_target_requires_the_registered_capture_layout() {
+        crate::closure::js_register_closure_arity(boxed1 as *const u8, 1);
+        crate::closure::js_register_closure_arrow_function(boxed1 as *const u8);
+        crate::closure::js_register_closure_trusted_direct(
+            boxed1 as *const u8,
+            trusted_boxed1 as *const u8,
+            1,
+            1,
+        );
+
+        let wrong_count = closure_for(boxed1 as *const u8);
+        assert_eq!(
+            js_closure_resolve_arrow_direct_call(wrong_count, 1),
+            boxed1 as *const u8,
+            "a wrong capture count must retain the checked public body"
+        );
+
+        let non_box = crate::closure::js_closure_alloc(boxed1 as *const u8, 1);
+        crate::closure::js_closure_set_capture_bits(non_box, 0, crate::value::TAG_UNDEFINED);
+        assert_eq!(
+            js_closure_resolve_arrow_direct_call(non_box, 1),
+            boxed1 as *const u8,
+            "a non-box payload must retain the checked public body"
+        );
+
+        let valid = crate::closure::js_closure_alloc(boxed1 as *const u8, 1);
+        let cell = crate::r#box::js_box_alloc_bits(crate::value::TAG_UNDEFINED as i64);
+        crate::closure::js_closure_set_box_capture_ptr(valid, 0, cell as i64);
+        assert_eq!(
+            js_closure_resolve_arrow_direct_call(valid, 1),
+            trusted_boxed1 as *const u8,
+            "the exact compiler-installed layout must select the private body"
+        );
     }
 
     #[test]

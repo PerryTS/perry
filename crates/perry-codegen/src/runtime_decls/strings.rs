@@ -218,6 +218,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_register_closure_arity", VOID, &[PTR, I32]);
     module.declare_function("js_register_closure_length", VOID, &[PTR, I32]);
     module.declare_function("js_register_closure_arrow_function", VOID, &[PTR]);
+    module.declare_function(
+        "js_register_closure_trusted_direct",
+        VOID,
+        &[PTR, PTR, I32, I64],
+    );
     module.declare_function("js_register_closure_strict_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_async_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_generator_function", VOID, &[PTR]);
@@ -1007,6 +1012,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_box_alloc_bits", I64, &[I64]);
     module.declare_function("js_box_get_bits", I64, &[I64]);
     module.declare_function("js_box_set_bits", VOID, &[I64, I64]);
+    module.declare_function("js_box_get_bits_trusted", I64, &[I64]);
+    module.declare_function("js_box_set_bits_trusted_no_barrier", VOID, &[I64, I64]);
     module.declare_function("js_box_alloc", I64, &[DOUBLE]);
     module.declare_function("js_box_get", DOUBLE, &[I64]);
     module.declare_function("js_box_set", VOID, &[I64, DOUBLE]);
