@@ -348,8 +348,12 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     //     keep the macrotask-boundary ticks-first ordering.
     let ticks_allowed = !matches!(mode, MicrotaskDrainMode::PromiseJobsOnly);
     let mid_promise_job = CURRENT_MICROTASK_CALLBACK.with(|c| !c.get().is_null());
+    let esm_checkpoint = ticks_allowed && consume_esm_eval_checkpoint();
+    if esm_checkpoint {
+        crate::async_hooks::init_esm_evaluation_promise();
+    }
     let mut esm_defer_tick_drain = if ticks_allowed {
-        consume_esm_eval_checkpoint() || (reentrant && mid_promise_job)
+        esm_checkpoint || (reentrant && mid_promise_job)
     } else {
         // PromiseJobsOnly never drains ticks; leave the one-shot ESM flag
         // for the first real checkpoint to consume.
@@ -397,9 +401,20 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         // No callback registered → propagate the value/reason
                         // to the next promise without invoking anything.
                         if callback.is_null() {
+                            let async_id = if (*promise).next.is_null() {
+                                0
+                            } else {
+                                (*(*promise).next).async_id
+                            };
+                            let trigger_async_id = if (*promise).next.is_null() {
+                                0
+                            } else {
+                                (*(*promise).next).trigger_async_id
+                            };
                             CURRENT_MICROTASK_PROMISE.with(|c| c.set(promise));
                             CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
                             CURRENT_MICROTASK_NEXT.with(|c| c.set((*promise).next));
+                            crate::async_hooks::before_promise(async_id, trigger_async_id);
                             if !(*promise).next.is_null() {
                                 if is_fulfilled {
                                     js_promise_resolve((*promise).next, value);
@@ -407,6 +422,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                                     js_promise_reject((*promise).next, value);
                                 }
                             }
+                            crate::async_hooks::after_promise(async_id);
                             let promise =
                                 CURRENT_MICROTASK_PROMISE.with(|c| c.replace(std::ptr::null_mut()));
                             CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
@@ -468,15 +484,22 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         } else {
                             None
                         };
-                        // #1663: capture async_id + trigger as plain values BEFORE
-                        // the callback. They are immutable for the promise's life,
-                        // and the callback can re-entrantly drain microtasks (which
-                        // can move the promise via GC or realloc the GC-root handle
-                        // stack). Reading `(*promise).async_id` AFTER the callback
-                        // to feed `after()` was the exact deref that segfaulted; use
-                        // the captured value so `after()` needs no live promise.
-                        let async_id = (*promise).async_id;
-                        let trigger_async_id = (*promise).trigger_async_id;
+                        // A Promise reaction executes as the child Promise
+                        // returned by `.then()`, not as its parent. The parent
+                        // owns the callback slot in Perry, but Node exposes the
+                        // child's id/resource to before/after and
+                        // executionAsyncResource(). Capture those child ids as
+                        // plain values before user code can move the heap.
+                        let async_id = if (*promise).next.is_null() {
+                            0
+                        } else {
+                            (*(*promise).next).async_id
+                        };
+                        let trigger_async_id = if (*promise).next.is_null() {
+                            0
+                        } else {
+                            (*(*promise).next).trigger_async_id
+                        };
                         crate::async_hooks::before_promise(async_id, trigger_async_id);
                         let promise = promise_handle.get_raw_mut_ptr::<Promise>();
                         crate::v8::promise_hook_before(promise);
@@ -571,6 +594,17 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     let callback = rooted_closure(&callback_handle);
                     let value = value_handle.get_nanbox_f64();
                     let next = rooted_promise(&next_handle);
+                    let async_id = if next.is_null() {
+                        0
+                    } else {
+                        unsafe { (*next).async_id }
+                    };
+                    let trigger_async_id = if next.is_null() {
+                        0
+                    } else {
+                        unsafe { (*next).trigger_async_id }
+                    };
+                    crate::async_hooks::before_promise(async_id, trigger_async_id);
                     // Inline tasks are produced by `js_promise_resolved_then`
                     // (the `Promise.resolve(<primitive>).then(cb_f, cb_e)`
                     // fast path). We've already skipped allocating the
@@ -584,6 +618,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                                 js_promise_reject(next, value);
                             }
                         }
+                        crate::async_hooks::after_promise(async_id);
                         restore_microtask_context();
                         ran += 1;
                         continue;
@@ -630,6 +665,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     CURRENT_MICROTASK_VALUE.with(|c| c.set(result));
                     let next_for_after = CURRENT_MICROTASK_NEXT.with(|c| c.get());
                     crate::v8::promise_hook_after(next_for_after);
+                    crate::async_hooks::after_promise(async_id);
                     if let Some(t) = t1 {
                         MT_TIME_NS_CALLBACK
                             .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -708,6 +744,8 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     is_error,
                     task_context,
                     box_activation,
+                    step_async_id,
+                    step_trigger_id,
                 )) => {
                     bump(&MT_RUN_COUNT);
                     // The popped Task's activation reference transfers to the
@@ -901,16 +939,6 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     // `next` via GC, #1663) and feed the same id to `after()`.
                     // `before`/`after` early-return on id 0, so this is a no-op
                     // when async_hooks are inactive.
-                    let step_async_id = if next.is_null() {
-                        0
-                    } else {
-                        unsafe { (*next).async_id }
-                    };
-                    let step_trigger_id = if next.is_null() {
-                        0
-                    } else {
-                        unsafe { (*next).trigger_async_id }
-                    };
                     crate::async_hooks::before_promise(step_async_id, step_trigger_id);
                     let next = rooted_promise(&next_handle);
                     crate::v8::promise_hook_before(next);

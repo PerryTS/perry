@@ -189,7 +189,9 @@ pub(crate) fn bind_impl(socket: f64, args: &[f64]) -> f64 {
         Ok(()) => {
             emit_event(socket, "listening", &[]);
             if let Some(callback) = callback_from_args(args) {
-                call_function(callback, socket, &[]);
+                crate::async_hooks::run_resource_scope(socket_async_ids(socket), || {
+                    call_function(callback, socket, &[]);
+                });
             }
         }
         Err(error) => {
@@ -224,6 +226,7 @@ pub(crate) fn close_impl(socket: f64, args: &[f64]) -> f64 {
     if is_truthy_hidden(socket, KEY_CLOSED) {
         return undefined_value();
     }
+    let async_ids = socket_async_ids(socket);
     if deterministic() {
         remove_bound_socket(socket);
     } else if let Some(id) = reactor_id(socket) {
@@ -235,8 +238,12 @@ pub(crate) fn close_impl(socket: f64, args: &[f64]) -> f64 {
     set_hidden_value(socket, KEY_CLOSED, bool_value(true));
     emit_event(socket, "close", &[]);
     if let Some(callback) = callback_from_args(args) {
+        // The UDPWRAP represents the socket lifetime. Node does not enter the
+        // socket's execution scope merely to invoke the optional close()
+        // completion callback (event listeners have their own dispatch path).
         call_function(callback, socket, &[]);
     }
+    crate::async_hooks::destroy(async_ids.async_id);
     socket
 }
 

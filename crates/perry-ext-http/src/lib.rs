@@ -423,6 +423,7 @@ fn map_to_js_object(map: &HashMap<String, String>) -> f64 {
 // ------------------------------------------------------------------
 
 pub struct ClientRequestHandle {
+    async_id: u64,
     method: String,
     url: String,
     headers: HashMap<String, String>,
@@ -667,7 +668,11 @@ fn make_request_handle(
     agent_handle: Handle,
     agent_key: String,
 ) -> Handle {
+    let async_id = unsafe {
+        js_async_hooks_provider_init(b"HTTPCLIENTREQUEST".as_ptr(), b"HTTPCLIENTREQUEST".len())
+    };
     let handle = register_handle(ClientRequestHandle {
+        async_id,
         method,
         url,
         headers,
@@ -742,6 +747,44 @@ fn make_request_handle(
         }
     }
     handle
+}
+
+extern "C" {
+    fn js_async_hooks_provider_init(type_ptr: *const u8, type_len: usize) -> u64;
+    fn js_async_hooks_provider_enter(async_id: u64);
+    fn js_async_hooks_provider_leave(async_id: u64);
+    fn js_async_hooks_provider_destroy(async_id: u64);
+}
+
+fn pending_request_handle(event: &PendingHttpEvent) -> Handle {
+    match event {
+        PendingHttpEvent::Socket { request_handle }
+        | PendingHttpEvent::SignalAbort { request_handle }
+        | PendingHttpEvent::Response { request_handle, .. }
+        | PendingHttpEvent::ResponseHead { request_handle, .. }
+        | PendingHttpEvent::ResponseChunk { request_handle, .. }
+        | PendingHttpEvent::ResponseEnd { request_handle }
+        | PendingHttpEvent::Error { request_handle, .. }
+        | PendingHttpEvent::TransportError { request_handle, .. }
+        | PendingHttpEvent::Timeout { request_handle }
+        | PendingHttpEvent::Abort { request_handle }
+        | PendingHttpEvent::Flushed { request_handle }
+        | PendingHttpEvent::Continue { request_handle }
+        | PendingHttpEvent::DeferredArmContinue { request_handle } => *request_handle,
+        PendingHttpEvent::AgentIdleExpire { .. } => 0,
+    }
+}
+
+fn terminal_http_event(event: &PendingHttpEvent) -> bool {
+    matches!(
+        event,
+        PendingHttpEvent::SignalAbort { .. }
+            | PendingHttpEvent::Response { .. }
+            | PendingHttpEvent::ResponseEnd { .. }
+            | PendingHttpEvent::Error { .. }
+            | PendingHttpEvent::TransportError { .. }
+            | PendingHttpEvent::Abort { .. }
+    )
 }
 
 /// Parse the client-side TLS options (#4906) off a request options value
@@ -1867,6 +1910,15 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
             break;
         };
         count += 1;
+        let request_handle = pending_request_handle(&ev);
+        let terminal = terminal_http_event(&ev);
+        let async_id = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |request| {
+            request.async_id
+        })
+        .unwrap_or(0);
+        if async_id != 0 {
+            js_async_hooks_provider_enter(async_id);
+        }
         match ev {
             PendingHttpEvent::Socket { request_handle } => {
                 client_events::fire_request_socket_event(request_handle);
@@ -1962,6 +2014,12 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
             PendingHttpEvent::DeferredArmContinue { request_handle } => {
                 // #5080 — next-tick arming (see the enum variant docs).
                 continue_client::arm_expect_continue(request_handle);
+            }
+        }
+        if async_id != 0 {
+            js_async_hooks_provider_leave(async_id);
+            if terminal {
+                js_async_hooks_provider_destroy(async_id);
             }
         }
     }

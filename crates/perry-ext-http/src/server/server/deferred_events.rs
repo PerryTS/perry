@@ -46,7 +46,7 @@ where
     T: Send + Sync + 'static,
     F: FnOnce(&mut T) -> &mut HttpServer,
 {
-    let cbs: Vec<i64> = match get_handle_mut::<T>(server_handle) {
+    let (cbs, async_id): (Vec<i64>, u64) = match get_handle_mut::<T>(server_handle) {
         Some(t) => {
             let s = base_of(t);
             if !std::mem::take(&mut s.pending_listening_emit) {
@@ -64,10 +64,13 @@ where
                     }
                 }
             }
-            snapshot
+            (snapshot, s.async_id)
         }
         None => return 0,
     };
+    if async_id != 0 {
+        unsafe { crate::js_async_hooks_provider_enter(async_id) };
+    }
     let this_val = handle_to_pointer_f64(server_handle);
     let mut fired = 0i32;
     // #8082: the drained snapshot crosses each callback — root it.
@@ -86,6 +89,9 @@ where
             });
             fired += 1;
         }
+    }
+    if async_id != 0 {
+        unsafe { crate::js_async_hooks_provider_leave(async_id) };
     }
     fired
 }

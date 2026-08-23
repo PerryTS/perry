@@ -620,7 +620,10 @@ pub(crate) unsafe fn nm_ee_prototype_install(
             )
         {
             proto.with_mut_ptr::<crate::object::ObjectHeader, _>(|proto| {
-                crate::node_stream::install_event_emitter_prototype_methods(proto)
+                crate::node_stream::install_event_emitter_prototype_methods(proto);
+                if method == "EventEmitterAsyncResource" {
+                    crate::node_stream::install_event_emitter_async_resource_prototype(proto);
+                }
             });
         }
     }

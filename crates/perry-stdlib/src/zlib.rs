@@ -439,10 +439,16 @@ unsafe fn queue_zlib_callback(codec: Codec, data_value: f64, callback_value: f64
     let result = run_one_shot_codec(codec, &data).map_err(|e| e.to_string());
     crate::common::async_bridge::ensure_pump_registered();
     ensure_zlib_gc_scanner();
+    let resource = perry_runtime::js_object_alloc_null_proto(0, 0);
+    let async_ids = perry_runtime::async_hooks::init_resource(
+        "ZLIB",
+        perry_runtime::js_nanbox_pointer(resource as i64),
+        true,
+    );
     ZLIB_PENDING_EVENTS
         .lock()
         .unwrap()
-        .push(ZlibEvent::OneShotCallback(callback, result));
+        .push(ZlibEvent::OneShotCallback(callback, result, async_ids));
     perry_runtime::event_pump::js_notify_main_thread();
 }
 
@@ -625,6 +631,7 @@ pub unsafe extern "C" fn js_zlib_zstd_decompress(data_value: f64, callback_value
 // ============================================================================
 
 struct ZlibStreamState {
+    async_ids: perry_runtime::async_hooks::AsyncResourceIds,
     codec: Codec,
     /// Compression level resolved from the factory's `{ level }` option
     /// (#4917) — kept so `.reset()` rebuilds the codec at the same level.
@@ -649,7 +656,11 @@ enum ZlibEvent {
     /// `.flush(cb)` completion callback — invoked after its flushed 'data'.
     Callback(i64),
     /// One-shot `zlib.gzip(data, cb)` style completion callback.
-    OneShotCallback(i64, Result<Vec<u8>, String>),
+    OneShotCallback(
+        i64,
+        Result<Vec<u8>, String>,
+        perry_runtime::async_hooks::AsyncResourceIds,
+    ),
 }
 
 lazy_static::lazy_static! {
@@ -699,7 +710,7 @@ fn scan_zlib_roots(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
     if let Ok(mut pending) = ZLIB_PENDING_EVENTS.lock() {
         for ev in pending.iter_mut() {
             match ev {
-                ZlibEvent::Callback(cb) | ZlibEvent::OneShotCallback(cb, _) => {
+                ZlibEvent::Callback(cb) | ZlibEvent::OneShotCallback(cb, _, _) => {
                     visitor.visit_i64_slot(cb);
                 }
                 _ => {}
@@ -718,12 +729,23 @@ fn next_zlib_id() -> i64 {
     id
 }
 
+fn init_zlib_resource() -> perry_runtime::async_hooks::AsyncResourceIds {
+    let resource = perry_runtime::js_object_alloc_null_proto(0, 0);
+    perry_runtime::async_hooks::init_resource(
+        "ZLIB",
+        perry_runtime::js_nanbox_pointer(resource as i64),
+        true,
+    )
+}
+
 fn create_zlib_stream(codec: Codec, level: Compression) -> i64 {
     ensure_zlib_gc_scanner();
     let id = next_zlib_id();
+    let async_ids = init_zlib_resource();
     ZLIB_STREAMS.lock().unwrap().insert(
         id,
         ZlibStreamState {
+            async_ids,
             codec,
             level,
             codec_state: make_codec_state(codec, level),
@@ -1322,6 +1344,16 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
     };
     let count = events.len() as i32;
     for ev in events {
+        let event_ids = match &ev {
+            ZlibEvent::Data(id, _) | ZlibEvent::End(id) | ZlibEvent::Error(id, _) => ZLIB_STREAMS
+                .lock()
+                .ok()
+                .and_then(|streams| streams.get(id).map(|stream| stream.async_ids)),
+            _ => None,
+        };
+        if let Some(ids) = event_ids {
+            perry_runtime::async_hooks::enter_resource_scope(ids);
+        }
         match ev {
             ZlibEvent::Data(id, bytes) => {
                 publish_zlib_bytes_written(id);
@@ -1369,7 +1401,9 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                     js_closure_call0(cb as *const ClosureHeader);
                 }
             }
-            ZlibEvent::OneShotCallback(cb, result) => {
+            ZlibEvent::OneShotCallback(cb, result, ids) => {
+                perry_runtime::async_hooks::run_resource_scope(ids, || {});
+                perry_runtime::async_hooks::enter_resource_scope(ids);
                 if cb != 0 {
                     match result {
                         Ok(bytes) => {
@@ -1398,6 +1432,7 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                         }
                     }
                 }
+                perry_runtime::async_hooks::leave_resource_scope(ids.async_id);
             }
             ZlibEvent::Error(id, msg) => {
                 let err_f64 = build_zlib_error(&msg);
@@ -1409,6 +1444,9 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                 ZLIB_LISTENERS.lock().unwrap().remove(&id);
                 ZLIB_STREAMS.lock().unwrap().remove(&id);
             }
+        }
+        if let Some(ids) = event_ids {
+            perry_runtime::async_hooks::leave_resource_scope(ids.async_id);
         }
     }
     count

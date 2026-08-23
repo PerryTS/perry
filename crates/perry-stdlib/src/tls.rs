@@ -1997,3 +1997,39 @@ pub fn js_tls_has_active_handles() -> i32 {
     }
     0
 }
+
+// TLS methods are called only by symbols emitted into generated object files.
+// Keep every public FFI entry point in the auto-optimized stdlib archive so
+// whole-program LTO cannot discard them before the generated object is linked.
+struct KeepTlsFfi<const N: usize>(
+    #[allow(dead_code)] [*const (); N], // link-time keepalive anchor; field never read
+);
+// SAFETY: the pointers are retained for linking only and are never read or
+// dereferenced, so sharing the static anchor between threads is sound.
+unsafe impl<const N: usize> Sync for KeepTlsFfi<N> {}
+#[used]
+static KEEP_TLS_FFI: KeepTlsFfi<23> = KeepTlsFfi([
+    js_tls_create_server as *const (),
+    js_tls_tlssocket_constructor as *const (),
+    js_tls_server_listen as *const (),
+    js_tls_server_close as *const (),
+    js_tls_server_address as *const (),
+    js_tls_server_on as *const (),
+    js_tls_server_once as *const (),
+    js_tls_server_remove_listener as *const (),
+    js_tls_server_remove_all_listeners as *const (),
+    js_tls_server_listener_count as *const (),
+    js_tls_server_event_names as *const (),
+    js_tls_server_set_secure_context as *const (),
+    js_tls_server_get_ticket_keys as *const (),
+    js_tls_server_set_ticket_keys as *const (),
+    js_tls_socket_get_protocol as *const (),
+    js_tls_socket_get_cipher as *const (),
+    js_tls_socket_get_peer_certificate as *const (),
+    js_tls_socket_get_certificate as *const (),
+    js_tls_socket_get_session as *const (),
+    js_tls_socket_is_session_reused as *const (),
+    js_tls_socket_export_keying_material as *const (),
+    js_tls_socket_set_max_send_fragment as *const (),
+    js_tls_process_pending as *const (),
+]);

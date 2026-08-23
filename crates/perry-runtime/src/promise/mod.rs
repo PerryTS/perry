@@ -542,7 +542,9 @@ pub struct Promise {
     pub(crate) on_rejected: ClosurePtr,
     /// Next promise in the chain (for .then())
     pub(crate) next: *mut Promise,
-    /// async_hooks asyncId for this Promise, 0 when hooks were inactive.
+    /// Stable async_hooks asyncId for this Promise. IDs are reserved even
+    /// before hooks are enabled so a later reaction can still point at its
+    /// pre-created parent.
     pub(crate) async_id: u64,
     /// async_hooks triggerAsyncId captured at Promise creation.
     pub(crate) trigger_async_id: u64,
@@ -610,6 +612,8 @@ pub(crate) enum Task {
         bool,
         AsyncContextSnapshot,
         *mut crate::r#box::AsyncBoxActivation,
+        u64,
+        u64,
     ),
 }
 

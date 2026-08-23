@@ -111,14 +111,10 @@ pub(crate) fn defer_server_connection(server_id: i64, socket_id: i64) -> bool {
 
 pub(crate) fn buffer_pending_server_data(socket_id: i64, bytes: Bytes) {
     let mut state = connection_order_state().lock().unwrap();
-    let pending_connection = statics::sockets()
-        .lock()
-        .unwrap()
-        .get(&socket_id)
-        .is_some_and(|socket| socket.server_id.is_some() && !socket.server_connection_active);
-    if !pending_connection {
-        return;
-    }
+    // Reads can win the race with JavaScript listener registration on both
+    // accepted and outbound sockets.  Keep every otherwise-undeliverable
+    // chunk here; registration releases it immediately, while close() drops
+    // abandoned data through `discard_pending_server_data`.
     state
         .pending_socket_data
         .entry(socket_id)
@@ -334,6 +330,17 @@ pub(crate) fn activate_connection(server_id: i64, socket_id: i64) {
     if let Some(server) = statics::servers().lock().unwrap().get_mut(&server_id) {
         server.pending_connections = server.pending_connections.saturating_sub(1);
         server.active_connections += 1;
+    }
+}
+
+/// Tell the socket task that JavaScript's accepted-socket callback has
+/// returned. Any writes/end queued by that callback are already ahead of this
+/// marker in the channel, so peer-EOF handling can safely auto-close after it.
+pub(crate) fn release_connection_callback(socket_id: i64) {
+    if let Some(socket) = statics::sockets().lock().unwrap().get(&socket_id) {
+        let _ = socket
+            .cmd_tx
+            .send(crate::SocketCommand::ServerConnectionReady);
     }
 }
 

@@ -132,32 +132,138 @@ pub(super) unsafe fn first_rest_arg_or_undefined(rest: f64) -> f64 {
     }
 }
 
-/// Queue listener for `events.on(...)` — captures the queue array in
-/// slot 0 and pushes `[arg]` onto it for each emitted event. The
-/// `for await (... of iter)` loop pulls items off the array as the
-/// stream produces them.
+// `events.on()` state lives in a GC-traced Array captured by the listener and
+// iterator closures. Keeping all JS pointers inside that array means the
+// extension's existing listener scanner is sufficient across moving GC.
+const EVENTS_ON_BUFFER: u32 = 0;
+const EVENTS_ON_PENDING: u32 = 1;
+const EVENTS_ON_DONE: u32 = 2;
+const EVENTS_ON_ABORT: u32 = 3;
+const EVENTS_ON_HANDLE: u32 = 4;
+const EVENTS_ON_LISTENER: u32 = 5;
+const EVENTS_ON_ITER_SHAPE_ID: u32 = 0x7FFF_FF60;
+
+pub(super) unsafe fn events_on_state_new() -> *mut ArrayHeader {
+    let scope = TransientRootScope::enter();
+    let state = js_array_alloc(6);
+    let state_root = scope.root_nanbox(nanbox_pointer_bits(state as i64));
+    let buffer = js_array_alloc(0);
+    let buffer_root = scope.root_nanbox(nanbox_pointer_bits(buffer as i64));
+    let pending = js_array_alloc(0);
+    let pending_root = scope.root_nanbox(nanbox_pointer_bits(pending as i64));
+    let state_ptr = || (state_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader;
+    let _ = js_array_push_f64(state_ptr(), buffer_root.get());
+    let _ = js_array_push_f64(state_ptr(), pending_root.get());
+    let _ = js_array_push_f64(state_ptr(), f64::from_bits(0x7FFC_0000_0000_0003));
+    let _ = js_array_push_f64(state_ptr(), undefined_value());
+    let _ = js_array_push_f64(state_ptr(), undefined_value());
+    let _ = js_array_push_f64(state_ptr(), undefined_value());
+    state_ptr()
+}
+
+unsafe fn events_on_state_array(state: *mut ArrayHeader, index: u32) -> *mut ArrayHeader {
+    let value = f64::from_bits(js_array_get(state, index).bits());
+    (value.to_bits() & POINTER_MASK) as *mut ArrayHeader
+}
+
+unsafe fn events_on_state_set(state: *mut ArrayHeader, index: u32, value: f64) {
+    js_array_set(state, index, JsValue::from_bits(value.to_bits()));
+}
+
+pub(super) unsafe fn events_on_state_set_target(
+    state: *mut ArrayHeader,
+    handle: Handle,
+    listener: *mut RawClosureHeader,
+) {
+    events_on_state_set(state, EVENTS_ON_HANDLE, handle as f64);
+    events_on_state_set(
+        state,
+        EVENTS_ON_LISTENER,
+        nanbox_pointer_bits(listener as i64),
+    );
+}
+
+fn events_on_iter_result(value: f64, done: bool) -> f64 {
+    let scope = TransientRootScope::enter();
+    let value_root = scope.root_nanbox(value);
+    let packed = b"value\0done\0";
+    let object = unsafe {
+        js_object_alloc_with_shape(
+            EVENTS_ON_ITER_SHAPE_ID,
+            2,
+            packed.as_ptr(),
+            packed.len() as u32,
+        )
+    };
+    let object_root = scope.root_nanbox(nanbox_pointer_bits(object as i64));
+    unsafe {
+        let current = (object_root.get().to_bits() & POINTER_MASK) as *mut ObjectHeader;
+        js_object_set_field(current, 0, JsValue::from_bits(value_root.get().to_bits()));
+        js_object_set_field(current, 1, JsValue::from_bool(done));
+    }
+    object_root.get()
+}
+
+fn events_on_resolved(value: f64, done: bool) -> f64 {
+    unsafe {
+        let scope = TransientRootScope::enter();
+        let result = scope.root_nanbox(events_on_iter_result(value, done));
+        let promise = js_promise_new();
+        let promise_root = scope.root_addr(promise as i64);
+        js_promise_resolve(promise_root.get() as *mut Promise, result.get());
+        nanbox_pointer_bits(promise_root.get())
+    }
+}
+
+fn events_on_finish_pending(state: *mut ArrayHeader, reason: Option<f64>) {
+    unsafe {
+        let pending = events_on_state_array(state, EVENTS_ON_PENDING);
+        if pending.is_null() {
+            return;
+        }
+        while js_array_length(pending) > 0 {
+            let promise = (js_array_shift_f64(pending).to_bits() & POINTER_MASK) as *mut Promise;
+            if promise.is_null() {
+                continue;
+            }
+            if let Some(reason) = reason {
+                js_promise_reject(promise, reason);
+            } else {
+                js_promise_resolve(promise, events_on_iter_result(undefined_value(), true));
+            }
+        }
+    }
+}
+
+/// Queue listener for `events.on(...)`. Resolve an already-blocked `next()`
+/// immediately, otherwise retain the argument tuple in FIFO order.
 pub(super) extern "C" fn events_on_queue_listener(
     closure: *const RawClosureHeader,
     arg0: f64,
 ) -> f64 {
     unsafe {
-        let queue = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
-        let abort_promise = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
-        if !queue.is_null() {
+        let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
+        if !state.is_null() {
+            let scope = TransientRootScope::enter();
+            let state_root = scope.root_nanbox(nanbox_pointer_bits(state as i64));
             let mut args = js_array_alloc(0);
             args = js_array_push_f64(args, arg0);
-            let args_val = nanbox_pointer_bits(args as i64);
-            if abort_promise.is_null() {
-                let _ = js_array_push_f64(queue, args_val);
+            let args_root = scope.root_nanbox(nanbox_pointer_bits(args as i64));
+            let current_state = (state_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader;
+            let pending = events_on_state_array(current_state, EVENTS_ON_PENDING);
+            if !pending.is_null() && js_array_length(pending) > 0 {
+                let promise =
+                    (js_array_shift_f64(pending).to_bits() & POINTER_MASK) as *mut Promise;
+                if !promise.is_null() {
+                    let promise_root = scope.root_addr(promise as i64);
+                    let result = scope.root_nanbox(events_on_iter_result(args_root.get(), false));
+                    js_promise_resolve(promise_root.get() as *mut Promise, result.get());
+                }
             } else {
-                let abort_val = nanbox_pointer_bits(abort_promise as i64);
-                let len = (*queue).length;
-                if len == 0 {
-                    let _ = js_array_push_f64(queue, args_val);
-                    let _ = js_array_push_f64(queue, abort_val);
-                } else {
-                    js_array_set(queue, len - 1, JsValue::from_bits(args_val.to_bits()));
-                    let _ = js_array_push_f64(queue, abort_val);
+                let current_state = (state_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader;
+                let buffer = events_on_state_array(current_state, EVENTS_ON_BUFFER);
+                if !buffer.is_null() {
+                    let _ = js_array_push_f64(buffer, args_root.get());
                 }
             }
         }
@@ -165,12 +271,148 @@ pub(super) extern "C" fn events_on_queue_listener(
     f64::from_bits(TAG_UNDEFINED_F64_BITS)
 }
 
+extern "C" fn events_on_next(closure: *const RawClosureHeader) -> f64 {
+    unsafe {
+        let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
+        if state.is_null() {
+            return events_on_resolved(undefined_value(), true);
+        }
+        let buffer = events_on_state_array(state, EVENTS_ON_BUFFER);
+        if !buffer.is_null() && js_array_length(buffer) > 0 {
+            return events_on_resolved(js_array_shift_f64(buffer), false);
+        }
+        let abort = f64::from_bits(js_array_get(state, EVENTS_ON_ABORT).bits());
+        if abort.to_bits() != TAG_UNDEFINED_F64_BITS {
+            let promise = js_promise_new();
+            js_promise_reject(promise, abort);
+            return nanbox_pointer_bits(promise as i64);
+        }
+        let done = f64::from_bits(js_array_get(state, EVENTS_ON_DONE).bits());
+        if done.to_bits() == TAG_TRUE_F64_BITS {
+            return events_on_resolved(undefined_value(), true);
+        }
+        let promise = js_promise_new();
+        let pending = events_on_state_array(state, EVENTS_ON_PENDING);
+        if !pending.is_null() {
+            let _ = js_array_push_f64(pending, nanbox_pointer_bits(promise as i64));
+        }
+        nanbox_pointer_bits(promise as i64)
+    }
+}
+
+extern "C" fn events_on_return(closure: *const RawClosureHeader) -> f64 {
+    unsafe {
+        let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
+        if state.is_null() {
+            return events_on_resolved(undefined_value(), true);
+        }
+        events_on_state_set(state, EVENTS_ON_DONE, f64::from_bits(TAG_TRUE_F64_BITS));
+        let handle = f64::from_bits(js_array_get(state, EVENTS_ON_HANDLE).bits());
+        let listener = f64::from_bits(js_array_get(state, EVENTS_ON_LISTENER).bits());
+        if handle.is_finite() && listener.to_bits() != TAG_UNDEFINED_F64_BITS {
+            if let Some(emitter) = get_event_emitter_mut(handle as Handle) {
+                remove_listener_by_callback(emitter, (listener.to_bits() & POINTER_MASK) as i64);
+            }
+        }
+        events_on_finish_pending(state, None);
+        events_on_resolved(undefined_value(), true)
+    }
+}
+
+extern "C" fn events_on_iterator_self(closure: *const RawClosureHeader) -> f64 {
+    unsafe { js_closure_get_capture_f64(closure, 0) }
+}
+
+extern "C" fn events_on_async_iterator(closure: *const RawClosureHeader) -> f64 {
+    unsafe {
+        let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
+        let scope = TransientRootScope::enter();
+        let state_root = scope.root_nanbox(nanbox_pointer_bits(state as i64));
+        let packed = b"next\0return\0";
+        let object = js_object_alloc_with_shape(
+            EVENTS_ON_ITER_SHAPE_ID + 1,
+            2,
+            packed.as_ptr(),
+            packed.len() as u32,
+        );
+        let object_root = scope.root_nanbox(nanbox_pointer_bits(object as i64));
+        let next = js_closure_alloc(events_on_next as *const u8, 1);
+        js_closure_set_capture_ptr(next, 0, (state_root.get().to_bits() & POINTER_MASK) as i64);
+        let next_root = scope.root_addr(next as i64);
+        js_object_set_field(
+            (object_root.get().to_bits() & POINTER_MASK) as *mut ObjectHeader,
+            0,
+            JsValue::from_object_ptr(next_root.get() as *mut u8),
+        );
+        let return_fn = js_closure_alloc(events_on_return as *const u8, 1);
+        js_closure_set_capture_ptr(
+            return_fn,
+            0,
+            (state_root.get().to_bits() & POINTER_MASK) as i64,
+        );
+        let return_root = scope.root_addr(return_fn as i64);
+        js_object_set_field(
+            (object_root.get().to_bits() & POINTER_MASK) as *mut ObjectHeader,
+            1,
+            JsValue::from_object_ptr(return_root.get() as *mut u8),
+        );
+
+        let iterator = object_root.get();
+        let iterator_root = scope.root_nanbox(iterator);
+        let symbol = js_symbol_well_known_async_iterator();
+        let self_fn = js_closure_alloc(events_on_iterator_self as *const u8, 1);
+        js_closure_set_capture_f64(self_fn, 0, iterator_root.get());
+        js_object_set_symbol_property(
+            iterator_root.get(),
+            symbol,
+            nanbox_pointer_bits(self_fn as i64),
+        );
+        iterator_root.get()
+    }
+}
+
+pub(super) unsafe fn events_on_install_async_iterator(
+    queue: *mut ArrayHeader,
+    state: *mut ArrayHeader,
+) {
+    let scope = TransientRootScope::enter();
+    let queue_root = scope.root_nanbox(nanbox_pointer_bits(queue as i64));
+    let state_root = scope.root_nanbox(nanbox_pointer_bits(state as i64));
+    js_register_closure_arity(events_on_next as *const u8, 0);
+    js_register_closure_arity(events_on_return as *const u8, 0);
+    js_register_closure_arity(events_on_iterator_self as *const u8, 0);
+    js_register_closure_arity(events_on_async_iterator as *const u8, 0);
+    let closure = js_closure_alloc(events_on_async_iterator as *const u8, 1);
+    js_closure_set_capture_ptr(
+        closure,
+        0,
+        (state_root.get().to_bits() & POINTER_MASK) as i64,
+    );
+    js_object_set_symbol_property(
+        queue_root.get(),
+        js_symbol_well_known_async_iterator(),
+        nanbox_pointer_bits(closure as i64),
+    );
+}
+
+/// A configured close event ends the iterator after already-buffered events.
+pub(super) extern "C" fn events_on_close_listener(closure: *const RawClosureHeader) -> f64 {
+    unsafe {
+        let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
+        if !state.is_null() {
+            events_on_state_set(state, EVENTS_ON_DONE, f64::from_bits(TAG_TRUE_F64_BITS));
+            events_on_finish_pending(state, None);
+        }
+    }
+    undefined_value()
+}
+
 pub(super) extern "C" fn events_on_abort_listener(closure: *const RawClosureHeader) -> f64 {
     unsafe {
         let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
         let data_listener = js_closure_get_capture_ptr(closure, 1);
         let signal_ptr = js_closure_get_capture_ptr(closure, 2) as *mut u8;
-        let abort_promise = js_closure_get_capture_ptr(closure, 3) as *mut Promise;
+        let state = js_closure_get_capture_ptr(closure, 3) as *mut ArrayHeader;
         let event_name_ptr = js_closure_get_capture_ptr(closure, 4) as *const StringHeader;
 
         if let Some(emitter) = get_event_emitter_mut(handle) {
@@ -192,8 +434,11 @@ pub(super) extern "C" fn events_on_abort_listener(closure: *const RawClosureHead
                 nanbox_pointer_bits(closure as i64),
             );
         }
-        if !abort_promise.is_null() {
-            js_promise_reject(abort_promise, js_abort_error_value());
+        if !state.is_null() {
+            let reason = js_abort_error_value();
+            events_on_state_set(state, EVENTS_ON_ABORT, reason);
+            events_on_state_set(state, EVENTS_ON_DONE, f64::from_bits(TAG_TRUE_F64_BITS));
+            events_on_finish_pending(state, Some(reason));
         }
     }
     undefined_value()

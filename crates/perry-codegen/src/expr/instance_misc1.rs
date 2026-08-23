@@ -483,6 +483,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // Promise values are raw promise allocations, not ObjectHeader
                 // instances with a class_id field.
                 "Promise" => 0xFFFF0027u32,
+                "AsyncLocalStorage" => 0xFFFF0078u32,
+                "AsyncResource" => 0xFFFF0079u32,
                 // WHATWG fetch types. Like Blob/streams these are pointer-tagged
                 // small-int handles; the runtime resolves them via the stdlib
                 // fetch kind-probe (`res instanceof Response`, etc.).

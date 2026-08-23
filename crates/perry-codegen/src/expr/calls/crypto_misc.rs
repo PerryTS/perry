@@ -271,13 +271,18 @@ pub(crate) fn arm_crypto_prime(
         unreachable!()
     };
     let first_box = lower_expr(ctx, &args[0])?;
-    let options_box = if args.len() >= 2 {
+    let is_async = matches!(property, "generatePrime" | "checkPrime");
+    // The callback forms are `(value, callback)` or
+    // `(value, options, callback)`.  Treating the second argument as options
+    // unconditionally accidentally routed the common two-argument form to
+    // the synchronous implementation and returned the generated value.
+    let options_box = if args.len() >= 2 && (!is_async || args.len() >= 3) {
         lower_expr(ctx, &args[1])?
     } else {
         double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
     };
-    let callback_box = if matches!(property, "generatePrime" | "checkPrime") && args.len() >= 3 {
-        Some(lower_expr(ctx, &args[2])?)
+    let callback_box = if is_async && args.len() >= 2 {
+        Some(lower_expr(ctx, &args[args.len().min(3) - 1])?)
     } else {
         None
     };

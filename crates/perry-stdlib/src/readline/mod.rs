@@ -615,16 +615,18 @@ fn close_custom_interface(handle: i64) {
     .flatten();
     if let Some(cb_i64) = cb {
         js_closure_call0(cb_i64 as *const ClosureHeader);
+        // Release the slot once the close notification has an observer. If the
+        // custom stream completed before user code could attach `rl.on`
+        // listeners, retain the closed state temporarily; `js_readline_on`
+        // replays the buffered lines and close below. This compensates for
+        // Perry's native-call checkpoint draining Readable.from microtasks
+        // between adjacent JS statements (#6764).
+        READLINE_INTERFACES.with(|interfaces| {
+            if let Some(slot) = interfaces.borrow_mut().get_mut(handle as usize) {
+                *slot = None;
+            }
+        });
     }
-    // Release the slot so the GC scanner stops rooting the closed
-    // interface's input/output/callbacks. Handles are NOT reused: a stale
-    // handle to a closed interface must hit the `None` slot (a no-op, like
-    // Node's ERR_USE_AFTER_CLOSE), not alias a newer interface.
-    READLINE_INTERFACES.with(|interfaces| {
-        if let Some(slot) = interfaces.borrow_mut().get_mut(handle as usize) {
-            *slot = None;
-        }
-    });
 }
 
 fn append_custom_input(handle: i64, chunk: f64) {
@@ -665,6 +667,10 @@ fn append_custom_input(handle: i64, chunk: f64) {
             .flatten();
             if let Some(cb_i64) = cb {
                 js_closure_call1(cb_i64 as *const ClosureHeader, callback_arg(&line));
+            } else {
+                let _ = with_interface_mut(handle, |state| {
+                    state.buffered_lines.push_back(line);
+                });
             }
         }
     }
@@ -863,6 +869,13 @@ fn attach_custom_input(handle: i64, input: f64) {
     if raw_ptr_from_value(input).is_none() {
         return;
     }
+    // These are native listener closures, so the generic stream emitter needs
+    // their public arities before it can select call0/call1 correctly. Without
+    // registration Readable.from-backed interfaces retained the callbacks but
+    // never delivered `data`/`end`, leaving the top-level readline Promise
+    // unsettled.
+    perry_runtime::closure::js_register_closure_arity(custom_input_data as *const u8, 1);
+    perry_runtime::closure::js_register_closure_arity(custom_input_close as *const u8, 0);
     // Root every value built here: each later closure/string allocation (and
     // the JS `.on` calls below) can trigger a moving minor GC, leaving an
     // unrooted listener pointer in from-space. Re-read handles at each use.
@@ -1299,19 +1312,51 @@ pub extern "C" fn js_readline_on(
         return undefined();
     }
     let event = string_header_to_string(event_ptr);
+    let mut replay_lines = false;
+    let mut replay_close = false;
     if with_interface_mut(handle, |state| {
         if !state.uses_custom_stream {
             return false;
         }
         match event.as_str() {
-            "line" => state.line_callback = Some(callback),
-            "close" => state.close_callback = Some(callback),
+            "line" => {
+                state.line_callback = Some(callback);
+                replay_lines = !state.buffered_lines.is_empty();
+            }
+            "close" => {
+                state.close_callback = Some(callback);
+                replay_close = state.closed;
+            }
             _ => {}
         }
         true
     })
     .unwrap_or(false)
     {
+        if replay_lines {
+            loop {
+                let next =
+                    with_interface_mut(handle, |state| state.buffered_lines.pop_front()).flatten();
+                let Some(line) = next else {
+                    break;
+                };
+                let cb = with_interface(handle, |state| state.line_callback).flatten();
+                if let Some(cb_i64) = cb {
+                    js_closure_call1(cb_i64 as *const ClosureHeader, callback_arg(&line));
+                }
+            }
+        }
+        if replay_close {
+            let cb = with_interface(handle, |state| state.close_callback).flatten();
+            if let Some(cb_i64) = cb {
+                js_closure_call0(cb_i64 as *const ClosureHeader);
+            }
+            READLINE_INTERFACES.with(|interfaces| {
+                if let Some(slot) = interfaces.borrow_mut().get_mut(handle as usize) {
+                    *slot = None;
+                }
+            });
+        }
         return undefined();
     }
     match event.as_str() {

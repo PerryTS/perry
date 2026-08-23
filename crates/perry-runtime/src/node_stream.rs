@@ -99,6 +99,7 @@ const STREAM_END_EMITTED_KEY: &[u8] = b"__perryStreamEndEmitted";
 const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
 const STREAM_MAX_LISTENERS_KEY: &[u8] = b"__perryStreamMaxListeners";
 const STREAM_CAPTURE_REJECTIONS_KEY: &[u8] = b"__perryStreamCaptureRejections";
+const EVENT_EMITTER_ASYNC_RESOURCE_KEY: &[u8] = b"__perryEventEmitterAsyncResource";
 const WRITABLE_WRITE_KEY: &[u8] = b"__perryWritableWrite";
 const WRITABLE_FINISH_SCHEDULED_KEY: &[u8] = b"__perryWritableFinishScheduled";
 const WRITABLE_FINISH_EMITTED_KEY: &[u8] = b"__perryWritableFinishEmitted";

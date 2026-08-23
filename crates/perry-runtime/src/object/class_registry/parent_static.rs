@@ -125,10 +125,29 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
         if !super::super::native_module::is_native_module_constructor_export(&module, &method) {
             throw_object_type_error(b"Class extends value is not a constructor");
         }
-        if super::super::native_module::normalize_native_module_alias(&module) == "wasi"
-            && method == "WASI"
-        {
+        let module = super::super::native_module::normalize_native_module_alias(&module);
+        if module == "wasi" && method == "WASI" {
             register_class(class_id, crate::wasi::CLASS_ID_WASI);
+        }
+        if module == "async_hooks" {
+            let parent = match method.as_str() {
+                "AsyncLocalStorage" => 0xFFFF0078,
+                "AsyncResource" => 0xFFFF0079,
+                _ => 0,
+            };
+            if parent != 0 {
+                register_class(class_id, parent);
+            }
+        }
+        if module == "events" {
+            let parent = match method.as_str() {
+                "EventEmitter" => 0xFFFF0076,
+                "EventEmitterAsyncResource" => 0xFFFF0077,
+                _ => 0,
+            };
+            if parent != 0 {
+                register_class(class_id, parent);
+            }
         }
         return;
     }

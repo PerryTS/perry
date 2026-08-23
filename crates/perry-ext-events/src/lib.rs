@@ -20,9 +20,10 @@
 //! `events.getMaxListeners` / `events.setMaxListeners` helpers.
 
 use perry_ffi::{
-    error_value_with_code, js_array_alloc, js_array_get, js_array_push, js_array_set,
-    nanbox_string_bits, read_string, throw_with_code, ArrayHeader, ErrorKind, Handle, JsPromise,
-    JsString, JsValue, ObjectHeader, Promise, RawClosureHeader, StringHeader,
+    error_value_with_code, js_array_alloc, js_array_get, js_array_length, js_array_push,
+    js_array_set, js_object_alloc_with_shape, js_object_set_field, nanbox_string_bits, read_string,
+    throw_with_code, ArrayHeader, ErrorKind, Handle, JsPromise, JsString, JsValue, ObjectHeader,
+    Promise, RawClosureHeader, StringHeader, TransientRootScope,
 };
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -55,9 +56,10 @@ use target_helpers::{
 };
 mod module_iterators;
 use module_iterators::{
-    events_on_abort_listener, events_on_queue_listener, events_once_abort_listener,
-    events_once_event_target_listener, events_once_stream_reject_listener,
-    events_once_stream_resolve_listener,
+    events_on_abort_listener, events_on_close_listener, events_on_install_async_iterator,
+    events_on_queue_listener, events_on_state_new, events_on_state_set_target,
+    events_once_abort_listener, events_once_event_target_listener,
+    events_once_stream_reject_listener, events_once_stream_resolve_listener,
 };
 
 const MIN_HEAP_POINTER: u64 = 0x1000;
@@ -111,6 +113,11 @@ extern "C" {
     fn js_closure_set_capture_ptr(closure: *mut RawClosureHeader, slot: u32, ptr: i64);
     fn js_closure_get_capture_ptr(closure: *const RawClosureHeader, slot: u32) -> i64;
     fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader;
+    fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64;
+    fn js_promise_new() -> *mut Promise;
+    fn js_register_closure_arity(func_ptr: *const u8, arity: u32);
+    fn js_closure_get_capture_f64(closure: *const RawClosureHeader, slot: u32) -> f64;
+    fn js_closure_set_capture_f64(closure: *mut RawClosureHeader, slot: u32, value: f64);
     // #1557: AbortSignal listener attachment for events.addAbortListener.
     fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
     fn js_object_alloc(class_id: u32, field_count: u32) -> *mut ObjectHeader;
@@ -119,6 +126,7 @@ extern "C" {
     fn js_object_set_field_by_name(obj: *mut ObjectHeader, key: *const StringHeader, value: f64);
     fn js_symbol_for(key_f64: f64) -> f64;
     fn js_object_set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64;
+    fn js_symbol_well_known_async_iterator() -> f64;
     fn js_get_global_this() -> f64;
     fn js_array_is_array(value: f64) -> f64;
     fn js_abort_signal_add_listener(signal: *mut u8, event: f64, listener: f64);
@@ -163,6 +171,8 @@ extern "C" {
     fn js_native_call_value(func_value: f64, args_ptr: *const f64, args_len: usize) -> f64;
     fn js_value_is_promise(value: f64) -> i32;
     fn js_register_event_emitter_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
+    fn js_register_event_emitter_async_resource_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
+    fn js_register_event_emitter_async_resource_dispatch(f: unsafe extern "C" fn(i64, u32) -> f64);
     fn js_register_event_emitter_get_domain(f: unsafe extern "C" fn(i64) -> i64);
     fn js_register_event_emitter_set_domain(f: unsafe extern "C" fn(i64, i64) -> i32);
     fn js_register_event_emitter_on(f: unsafe extern "C" fn(i64, i64, i64) -> i64);
@@ -183,6 +193,14 @@ extern "C" {
     // stdlib and ext-events EventEmitter implementations stay byte-identical.
     fn js_validate_event_listener(listener_bits: i64, name_ptr: *const u8, name_len: u32) -> i64;
     fn js_register_closure_rest(fn_ptr: *const u8, fixed_arity: u32);
+    fn js_async_resource_new(type_value: f64, options: f64) -> i64;
+    fn js_async_resource_async_id(handle: i64) -> f64;
+    fn js_async_resource_trigger_async_id(handle: i64) -> f64;
+    fn js_async_resource_emit_destroy(handle: i64) -> i64;
+    fn js_async_resource_set_event_emitter(handle: i64, event_emitter: i64);
+    fn js_event_emitter_async_resource_subclass_backing(receiver: i64) -> i64;
+    fn js_async_hooks_provider_enter(async_id: u64);
+    fn js_async_hooks_provider_leave(async_id: u64);
 }
 
 /// #3072: validate an EventEmitter listener argument, returning the closure
@@ -271,6 +289,7 @@ pub struct EventEmitterHandle {
     max_listeners: f64,
     capture_rejections: bool,
     domain_handle: Option<Handle>,
+    async_resource_handle: i64,
 }
 
 // SAFETY: `*mut Promise` is not Send/Sync by default, but the registry's
@@ -297,6 +316,7 @@ impl EventEmitterHandle {
             max_listeners: 10.0,
             capture_rejections: false,
             domain_handle: None,
+            async_resource_handle: 0,
         }
     }
 
@@ -463,6 +483,20 @@ unsafe extern "C" fn event_emitter_handle_probe(handle: i64) -> bool {
     is_local_event_emitter_handle(handle)
 }
 
+unsafe extern "C" fn event_emitter_async_resource_handle_probe(handle: i64) -> bool {
+    get_event_emitter_mut(handle).is_some_and(|emitter| emitter.async_resource_handle != 0)
+}
+
+unsafe extern "C" fn event_emitter_async_resource_dispatch(handle: i64, operation: u32) -> f64 {
+    match operation {
+        0 => js_event_emitter_async_resource_async_id(handle),
+        1 => js_event_emitter_async_resource_trigger_async_id(handle),
+        2 => js_event_emitter_async_resource_async_resource(handle),
+        3 => js_event_emitter_async_resource_emit_destroy(handle),
+        _ => undefined_value(),
+    }
+}
+
 unsafe extern "C" fn event_emitter_on_hook(
     handle: i64,
     event_bits: i64,
@@ -482,20 +516,27 @@ unsafe extern "C" fn events_native_construct(
     args_len: usize,
 ) -> f64 {
     let class_name = std::slice::from_raw_parts(class_name_ptr, class_name_len);
-    if class_name != b"EventEmitter" {
-        return f64::from_bits(TAG_UNDEFINED_F64_BITS);
-    }
     let options = if !args_ptr.is_null() && args_len > 0 {
         *args_ptr
     } else {
         f64::from_bits(TAG_UNDEFINED_F64_BITS)
     };
-    nanbox_pointer_bits(js_event_emitter_new_with_options(options))
+    match class_name {
+        b"EventEmitter" => nanbox_pointer_bits(js_event_emitter_new_with_options(options)),
+        b"EventEmitterAsyncResource" => {
+            nanbox_pointer_bits(js_event_emitter_async_resource_new(options))
+        }
+        _ => f64::from_bits(TAG_UNDEFINED_F64_BITS),
+    }
 }
 
 fn ensure_runtime_hooks_registered() {
     EVENTS_RUNTIME_HOOKS_REGISTERED.call_once(|| unsafe {
         js_register_event_emitter_handle_probe(event_emitter_handle_probe);
+        js_register_event_emitter_async_resource_handle_probe(
+            event_emitter_async_resource_handle_probe,
+        );
+        js_register_event_emitter_async_resource_dispatch(event_emitter_async_resource_dispatch);
         js_register_event_emitter_get_domain(js_event_emitter_get_domain);
         js_register_event_emitter_set_domain(js_event_emitter_set_domain);
         js_register_event_emitter_on(event_emitter_on_hook);
@@ -931,6 +972,81 @@ pub unsafe extern "C" fn js_event_emitter_new_with_options(_options: f64) -> Han
     register_event_emitter_handle(emitter)
 }
 
+unsafe fn event_emitter_async_resource_name(options: f64) -> f64 {
+    if JsValue::from_bits(options.to_bits()).is_any_string() {
+        options
+    } else {
+        get_object_property(options, b"name").unwrap_or_else(undefined_value)
+    }
+}
+
+/// `new EventEmitterAsyncResource(nameOrOptions)` — an EventEmitter whose
+/// listener dispatch runs in one backing AsyncResource scope.
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_async_resource_new(options: f64) -> Handle {
+    ensure_runtime_hooks_registered();
+    ensure_gc_scanner_registered();
+    let name = event_emitter_async_resource_name(options);
+    let async_options = if JsValue::from_bits(options.to_bits()).is_any_string() {
+        undefined_value()
+    } else {
+        options
+    };
+    let async_resource_handle = js_async_resource_new(name, async_options);
+    let mut emitter = EventEmitterHandle::new();
+    emitter.capture_rejections = options_capture_rejections(options);
+    emitter.async_resource_handle = async_resource_handle;
+    let emitter_handle = register_event_emitter_handle(emitter);
+    js_async_resource_set_event_emitter(async_resource_handle, emitter_handle);
+    emitter_handle
+}
+
+fn async_resource_handle_for_receiver(handle: Handle) -> Option<i64> {
+    get_event_emitter_mut(handle)
+        .filter(|emitter| emitter.async_resource_handle != 0)
+        .map(|emitter| emitter.async_resource_handle)
+        .or_else(|| {
+            let resource = unsafe { js_event_emitter_async_resource_subclass_backing(handle) };
+            (resource != 0).then_some(resource)
+        })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_async_resource_async_id(handle: Handle) -> f64 {
+    async_resource_handle_for_receiver(handle)
+        .map(|resource| js_async_resource_async_id(resource))
+        .unwrap_or(0.0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_async_resource_trigger_async_id(handle: Handle) -> f64 {
+    async_resource_handle_for_receiver(handle)
+        .map(|resource| js_async_resource_trigger_async_id(resource))
+        .unwrap_or(0.0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_async_resource_async_resource(handle: Handle) -> f64 {
+    async_resource_handle_for_receiver(handle)
+        .map(nanbox_pointer_bits)
+        .unwrap_or_else(undefined_value)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_event_emitter_async_resource_emit_destroy(handle: Handle) -> f64 {
+    if let Some(resource) = async_resource_handle_for_receiver(handle) {
+        js_async_resource_emit_destroy(resource);
+    }
+    undefined_value()
+}
+
+fn event_emitter_async_id(handle: Handle) -> u64 {
+    get_event_emitter_mut(handle)
+        .filter(|emitter| emitter.async_resource_handle != 0)
+        .map(|emitter| unsafe { js_async_resource_async_id(emitter.async_resource_handle) as u64 })
+        .unwrap_or(0)
+}
+
 /// `emitter.on(eventName, listener)` — register a listener.
 /// Also serves as `addListener` (wired at the codegen layer).
 ///
@@ -1179,6 +1295,10 @@ pub unsafe extern "C" fn js_event_emitter_emit(
     let Some(event_name) = event_name_from_bits(event_bits) else {
         return TAG_FALSE_F64;
     };
+    let async_id = event_emitter_async_id(handle);
+    if async_id != 0 {
+        js_async_hooks_provider_enter(async_id);
+    }
     let mut had_listeners = false;
     let mut domain_error: Option<(Handle, f64)> = None;
     let mut throw_error: Option<f64> = None;
@@ -1232,16 +1352,23 @@ pub unsafe extern "C" fn js_event_emitter_emit(
     }
     if let Some((domain, error)) = domain_error {
         let _ = js_domain_emit_error(domain, error, nanbox_pointer_bits(handle), false);
+        if async_id != 0 {
+            js_async_hooks_provider_leave(async_id);
+        }
         return TAG_FALSE_F64;
     }
     if let Some(error) = throw_error {
         js_throw(error);
     }
-    if had_listeners {
+    let result = if had_listeners {
         TAG_TRUE_F64
     } else {
         TAG_FALSE_F64
+    };
+    if async_id != 0 {
+        js_async_hooks_provider_leave(async_id);
     }
+    result
 }
 
 /// `emitter.emit(eventName)` — no-args variant.
@@ -1260,6 +1387,10 @@ pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64)
     let Some(event_name) = event_name_from_bits(event_bits) else {
         return TAG_FALSE_F64;
     };
+    let async_id = event_emitter_async_id(handle);
+    if async_id != 0 {
+        js_async_hooks_provider_enter(async_id);
+    }
     let mut had_listeners = false;
     let mut domain_error: Option<(Handle, f64)> = None;
     let mut throw_error: Option<f64> = None;
@@ -1312,16 +1443,23 @@ pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64)
     }
     if let Some((domain, error)) = domain_error {
         let _ = js_domain_emit_error(domain, error, nanbox_pointer_bits(handle), false);
+        if async_id != 0 {
+            js_async_hooks_provider_leave(async_id);
+        }
         return TAG_FALSE_F64;
     }
     if let Some(error) = throw_error {
         js_throw(error);
     }
-    if had_listeners {
+    let result = if had_listeners {
         TAG_TRUE_F64
     } else {
         TAG_FALSE_F64
+    };
+    if async_id != 0 {
+        js_async_hooks_provider_leave(async_id);
     }
+    result
 }
 
 /// `emitter.removeListener(event, listener)`. Removes the most recently added
@@ -1809,11 +1947,10 @@ pub unsafe extern "C" fn js_events_once(
     raw
 }
 
-/// `events.on(emitter, eventName)` — returns an async-iterable queue of
-/// argument arrays. Perry's `for await` lowering already accepts plain arrays
-/// as async-iterable inputs, so the implementation backs the iterator with an
-/// Array and appends one `[arg]` entry per emitted event. Ported from
-/// `perry-stdlib/src/events.rs` (#1557).
+/// `events.on(emitter, eventName)` — returns a live promise-backed async
+/// iterator. Emissions are buffered until `next()` consumes them, and a
+/// pending `next()` remains blocked instead of treating a temporarily empty
+/// queue as completed.
 ///
 /// # Safety
 ///
@@ -1825,40 +1962,43 @@ pub unsafe extern "C" fn js_events_on(
     options: f64,
 ) -> *mut ArrayHeader {
     ensure_gc_scanner_registered();
+    let root_scope = TransientRootScope::enter();
     let target =
         event_helper_target(target_value).unwrap_or_else(|| throw_invalid_emitter(target_value));
     let queue = js_array_alloc(0);
+    let queue_root = root_scope.root_nanbox(nanbox_pointer_bits(queue as i64));
+    let state = events_on_state_new();
+    let state_root = root_scope.root_nanbox(nanbox_pointer_bits(state as i64));
+    events_on_install_async_iterator(
+        (queue_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader,
+        (state_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader,
+    );
     let Some(event_name) = event_name_from_bits(event_name_ptr as i64) else {
-        return queue;
+        return (queue_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader;
     };
     let event_name_ptr = string_header_ptr_from_arg(event_name_ptr);
     let signal = options_signal_or_throw(options);
     if signal.is_some_and(signal_is_aborted) {
         js_throw(js_abort_error_value());
     }
-    let abort_promise = if signal.is_some() {
-        JsPromise::new().as_raw()
-    } else {
-        std::ptr::null_mut()
-    };
-
-    let listener = js_closure_alloc(events_on_queue_listener as *const u8, 2);
-    js_closure_set_capture_ptr(listener, 0, queue as i64);
-    js_closure_set_capture_ptr(listener, 1, abort_promise as i64);
-    if !abort_promise.is_null() {
-        let _ = js_array_push_f64(queue, nanbox_pointer_bits(abort_promise as i64));
-    }
+    let listener = js_closure_alloc(events_on_queue_listener as *const u8, 1);
+    js_closure_set_capture_ptr(
+        listener,
+        0,
+        (state_root.get().to_bits() & POINTER_MASK) as i64,
+    );
+    let listener_root = root_scope.root_addr(listener as i64);
 
     let handle = match target {
         EventHelperTarget::EventEmitter(handle) => {
             if let Some(emitter) = get_event_emitter_mut(handle) {
-                emitter.add_listener(handle, &event_name, listener as i64, false, false);
+                emitter.add_listener(handle, &event_name, listener_root.get(), false, false);
             }
             handle
         }
         EventHelperTarget::EventTarget(target) => {
             if !event_name_ptr.is_null() {
-                js_event_target_add_event_listener(target, event_name_ptr, listener as i64);
+                js_event_target_add_event_listener(target, event_name_ptr, listener_root.get());
             }
             target as Handle
         }
@@ -1873,20 +2013,94 @@ pub unsafe extern "C" fn js_events_on(
         EventHelperTarget::Stream(handle) => {
             if !event_name_ptr.is_null() {
                 let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
-                let listener_value = nanbox_pointer_bits(listener as i64);
+                let listener_value = nanbox_pointer_bits(listener_root.get());
                 let _ = js_node_stream_method_on(handle, event, listener_value);
             }
             handle
         }
     };
+    events_on_state_set_target(
+        (state_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader,
+        handle,
+        listener_root.get() as *mut RawClosureHeader,
+    );
+
+    // Node accepts an array of event names that complete the iterator. Attach
+    // once listeners so values queued before the close still drain.
+    if let Some(close) = get_object_property(options, b"close") {
+        if js_array_is_array(close).to_bits() == TAG_TRUE_F64_BITS {
+            let close_array = (close.to_bits() & POINTER_MASK) as *mut ArrayHeader;
+            if !close_array.is_null() {
+                for index in 0..js_array_length(close_array) {
+                    let close_value = f64::from_bits(js_array_get(close_array, index).bits());
+                    let Some(close_name) = event_name_from_bits(close_value.to_bits() as i64)
+                    else {
+                        continue;
+                    };
+                    let close_ptr =
+                        js_string_from_bytes(close_name.as_ptr(), close_name.len() as u32);
+                    let close_listener = js_closure_alloc(events_on_close_listener as *const u8, 1);
+                    js_closure_set_capture_ptr(
+                        close_listener,
+                        0,
+                        (state_root.get().to_bits() & POINTER_MASK) as i64,
+                    );
+                    let close_listener_root = root_scope.root_addr(close_listener as i64);
+                    match target {
+                        EventHelperTarget::EventEmitter(emitter_handle) => {
+                            if let Some(emitter) = get_event_emitter_mut(emitter_handle) {
+                                emitter.add_listener(
+                                    emitter_handle,
+                                    &close_name,
+                                    close_listener_root.get(),
+                                    true,
+                                    false,
+                                );
+                            }
+                        }
+                        EventHelperTarget::EventTarget(event_target) => {
+                            js_event_target_add_event_listener(
+                                event_target,
+                                close_ptr,
+                                close_listener_root.get(),
+                            );
+                        }
+                        EventHelperTarget::NetSocket(handle)
+                        | EventHelperTarget::NativeHandle(handle) => {
+                            let close_event = f64::from_bits(nanbox_string_bits(close_ptr));
+                            let close_callback = nanbox_pointer_bits(close_listener_root.get());
+                            let _ = call_net_socket_method(
+                                handle,
+                                "once",
+                                &[close_event, close_callback],
+                            );
+                        }
+                        EventHelperTarget::Stream(stream_handle) => {
+                            let close_event = f64::from_bits(nanbox_string_bits(close_ptr));
+                            let close_callback = nanbox_pointer_bits(close_listener_root.get());
+                            let _ = js_node_stream_method_once(
+                                stream_handle,
+                                close_event,
+                                close_callback,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     if let Some(signal) = signal {
         if let Some(signal_ptr) = object_ptr_from_value(signal) {
             let abort_listener = js_closure_alloc(events_on_abort_listener as *const u8, 5);
             js_closure_set_capture_ptr(abort_listener, 0, handle);
-            js_closure_set_capture_ptr(abort_listener, 1, listener as i64);
+            js_closure_set_capture_ptr(abort_listener, 1, listener_root.get());
             js_closure_set_capture_ptr(abort_listener, 2, signal_ptr as i64);
-            js_closure_set_capture_ptr(abort_listener, 3, abort_promise as i64);
+            js_closure_set_capture_ptr(
+                abort_listener,
+                3,
+                (state_root.get().to_bits() & POINTER_MASK) as i64,
+            );
             js_closure_set_capture_ptr(abort_listener, 4, event_name_ptr as i64);
             js_abort_signal_add_listener(
                 signal_ptr as *mut u8,
@@ -1895,7 +2109,7 @@ pub unsafe extern "C" fn js_events_on(
             );
         }
     }
-    queue
+    (queue_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader
 }
 
 extern "C" fn events_abort_listener_dispose(closure: *const RawClosureHeader) -> f64 {

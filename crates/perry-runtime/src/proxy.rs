@@ -1069,7 +1069,33 @@ fn small_handle_from_value(value: f64) -> Option<i64> {
     None
 }
 
+/// Native `AsyncResource` values are process-stable `Box` pointers rather
+/// than GC `ObjectHeader`s or ids in the small-handle band.  Recognize their
+/// exact registry membership before any generic object walk can interpret the
+/// allocation (or its allocator prefix) as GC/object metadata.
+fn async_resource_handle_from_value(value: f64) -> Option<i64> {
+    let bits = value.to_bits();
+    let raw = match bits >> 48 {
+        top if top == (POINTER_TAG >> 48) => (bits & POINTER_MASK) as i64,
+        0 => bits as i64,
+        _ => return None,
+    };
+    crate::async_hooks::is_async_resource_handle(raw).then_some(raw)
+}
+
 fn set_handle_property(target: f64, key: f64, value: f64) -> Option<bool> {
+    if let Some(handle) = async_resource_handle_from_value(target) {
+        if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+            unsafe { crate::symbol::js_object_set_symbol_property(target, key, value) };
+            return Some(true);
+        }
+        let Some(name) = key_to_rust_string(key) else {
+            return Some(false);
+        };
+        crate::object::handle_expando::handle_expando_set(handle, &name, value);
+        return Some(true);
+    }
+
     let handle = small_handle_from_value(target)?;
     let Some(name) = key_to_rust_string(key) else {
         // A SYMBOL-keyed write on a small native handle (e.g. the
@@ -1403,8 +1429,11 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
     }
 
     if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
-        let value = unsafe { crate::symbol::js_object_get_symbol_property(target, key) };
-        if value.to_bits() == TAG_UNDEFINED {
+        // `undefined` is a valid value for an existing own property. Using a
+        // value read as the existence probe made the first overwrite of the
+        // symbol metadata installed by an async_hooks `init` callback take the
+        // absent-property path and disappear on native AsyncResource handles.
+        if !unsafe { crate::symbol::has_own_symbol_property(target, key) } {
             return None;
         }
         // An existing symbol-keyed own data property is non-writable when the

@@ -115,7 +115,7 @@ unsafe fn try_dispatch_external_http_client(
     };
     if !matches!(
         method_name,
-        "setEncoding" | "on" | "addListener" | "pipe" | "pause" | "resume"
+        "setEncoding" | "on" | "once" | "addListener" | "pipe" | "pause" | "resume"
     ) {
         return None;
     }

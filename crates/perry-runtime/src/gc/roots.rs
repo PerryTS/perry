@@ -1386,6 +1386,26 @@ impl<'a> RuntimeRootVisitor<'a> {
         }
     }
 
+    /// Visit a metadata-only NaN-boxed heap pointer.
+    ///
+    /// Unlike `visit_nanbox_f64_slot`, this repairs an address only during a
+    /// rewrite pass and never marks the referent. It is used by weak identity
+    /// side tables whose entries are pruned by the referent's finalizer.
+    pub fn visit_metadata_nanbox_f64_slot(&mut self, slot: &mut f64) -> bool {
+        let bits = slot.to_bits();
+        let tag = bits & TAG_MASK;
+        if !matches!(tag, POINTER_TAG | STRING_TAG | BIGINT_TAG) {
+            return false;
+        }
+        let addr = (bits & POINTER_MASK) as usize;
+        if let Some(new_addr) = self.visit_metadata_raw_addr(addr) {
+            *slot = f64::from_bits(tag | (new_addr as u64 & POINTER_MASK));
+            true
+        } else {
+            false
+        }
+    }
+
     /// Visit a raw metadata-only `usize` slot address.
     ///
     /// # Safety

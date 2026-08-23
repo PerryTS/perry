@@ -27,6 +27,12 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return v;
     }
 
+    if let Some(value) =
+        perry_runtime::async_hooks::try_async_resource_property_dispatch(handle, property_name)
+    {
+        return value;
+    }
+
     #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
     if let Some(value) = dispatch_event_emitter_property(handle, property_name) {
         return value;

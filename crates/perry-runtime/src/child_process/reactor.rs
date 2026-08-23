@@ -99,6 +99,9 @@ static CP_EVENT_QUEUE: Mutex<Vec<CpEvent>> = Mutex::new(Vec::new());
 struct LiveChild {
     /// NaN-boxed ChildProcess object — a GC root (see `cp_reactor_scan_roots_mut`).
     cp_bits: u64,
+    process_ids: crate::async_hooks::AsyncResourceIds,
+    pipe_ids: [crate::async_hooks::AsyncResourceIds; 3],
+    pipe_bits: [u64; 3],
     pid: i32,
     stdin: Option<CpWriter>,
     stdout_open: bool,
@@ -195,6 +198,24 @@ pub(super) struct CpExecPending {
 }
 
 static CP_LIVE: Mutex<Option<HashMap<u64, LiveChild>>> = Mutex::new(None);
+
+fn cp_init_async_resources(
+    cp: f64,
+    stdin_obj: f64,
+    stdout_obj: f64,
+    stderr_obj: f64,
+) -> (
+    crate::async_hooks::AsyncResourceIds,
+    [crate::async_hooks::AsyncResourceIds; 3],
+) {
+    let process_ids = crate::async_hooks::init_resource("PROCESSWRAP", cp, true);
+    let pipe_ids = [
+        crate::async_hooks::init_resource("PIPEWRAP", stdin_obj, true),
+        crate::async_hooks::init_resource("PIPEWRAP", stdout_obj, true),
+        crate::async_hooks::init_resource("PIPEWRAP", stderr_obj, true),
+    ];
+    (process_ids, pipe_ids)
+}
 
 thread_local! {
     /// Re-entrancy guard — an emitted handler may itself drive the event loop
@@ -486,6 +507,7 @@ fn cp_register_live_child_parts(
     for (_, stream, _) in &extra_pipes {
         cp_set_field(*stream, b"__cpHandle", handle_f);
     }
+    let (process_ids, pipe_ids) = cp_init_async_resources(cp, stdin_obj, stdout_obj, stderr_obj);
 
     // For fork, keep a clone of the IPC socket for send/disconnect; the reader
     // thread owns the original.
@@ -504,6 +526,13 @@ fn cp_register_live_child_parts(
             handle,
             LiveChild {
                 cp_bits: cp.to_bits(),
+                process_ids,
+                pipe_ids,
+                pipe_bits: [
+                    stdin_obj.to_bits(),
+                    stdout_obj.to_bits(),
+                    stderr_obj.to_bits(),
+                ],
                 pid: pid as i32,
                 stdin: stdin_pipe,
                 stdout_open,
@@ -1091,6 +1120,8 @@ pub(super) fn cp_exec_async(
                 exceeded: false,
                 timed_out: false,
             });
+            let (process_ids, pipe_ids) =
+                cp_init_async_resources(cp, TAG_NULL_F64, stdout_obj, stderr_obj);
 
             {
                 let mut guard = cp_live_lock();
@@ -1099,6 +1130,13 @@ pub(super) fn cp_exec_async(
                     handle,
                     LiveChild {
                         cp_bits: cp.to_bits(),
+                        process_ids,
+                        pipe_ids,
+                        pipe_bits: [
+                            TAG_NULL_F64.to_bits(),
+                            stdout_obj.to_bits(),
+                            stderr_obj.to_bits(),
+                        ],
                         pid: pid as i32,
                         stdin: None,
                         stdout_open,
@@ -1503,6 +1541,8 @@ fn cp_reactor_pump_inner() {
                             abort_signal_bits: lc.abort_signal_bits,
                             abort_listener_bits: lc.abort_listener_bits,
                             exec: lc.exec.take(),
+                            process_ids: lc.process_ids,
+                            pipe_ids: lc.pipe_ids,
                         });
                         lc.abort_signal_bits = 0;
                         lc.abort_listener_bits = 0;
@@ -1524,7 +1564,9 @@ fn cp_reactor_pump_inner() {
             cp_set_field(cp, b"exitCode", code_f);
             cp_set_field(cp, b"signalCode", signal_f);
             cp_emit(cp, "exit", &[code_f, signal_f]);
+            crate::async_hooks::enter_resource_scope(item.process_ids);
             cp_exec_fire_close(exec, item.code, item.signal, item.pid);
+            crate::async_hooks::leave_resource_scope(item.process_ids.async_id);
             cp_emit(cp, "close", &[code_f, signal_f]);
         } else {
             let cp = f64::from_bits(item.cp_bits);
@@ -1542,6 +1584,10 @@ fn cp_reactor_pump_inner() {
         if let Some(map) = cp_live_lock().as_mut() {
             map.remove(&item.handle);
         }
+        crate::async_hooks::destroy(item.process_ids.async_id);
+        for pipe in item.pipe_ids {
+            crate::async_hooks::destroy(pipe.async_id);
+        }
         CP_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
     }
 }
@@ -1557,6 +1603,8 @@ struct CpCloseItem {
     abort_signal_bits: u64,
     abort_listener_bits: u64,
     exec: Option<Box<CpExecPending>>,
+    process_ids: crate::async_hooks::AsyncResourceIds,
+    pipe_ids: [crate::async_hooks::AsyncResourceIds; 3],
 }
 
 #[inline]
@@ -1574,6 +1622,23 @@ fn cp_lookup_cp_bits(handle: u64) -> Option<u64> {
     cp_live_lock()
         .as_ref()
         .and_then(|map| map.get(&handle).map(|lc| lc.cp_bits))
+}
+
+pub(super) fn cp_async_scope_for_target(
+    handle: u64,
+    target: f64,
+) -> Option<crate::async_hooks::AsyncResourceIds> {
+    let target_bits = target.to_bits();
+    let guard = cp_live_lock();
+    let child = guard.as_ref()?.get(&handle)?;
+    if target_bits == child.cp_bits {
+        return Some(child.process_ids);
+    }
+    child
+        .pipe_bits
+        .iter()
+        .position(|bits| *bits == target_bits)
+        .map(|index| child.pipe_ids[index])
 }
 
 // ============================================================================

@@ -100,6 +100,8 @@ pub type FetchHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 /// as heap objects.
 pub type EventEmitterHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
 pub type EventEmitterAsyncResourceHandleProbeFn = unsafe extern "C" fn(handle: i64) -> bool;
+pub type EventEmitterAsyncResourceDispatchFn =
+    unsafe extern "C" fn(handle: i64, operation: u32) -> f64;
 pub type EventEmitterGetDomainFn = unsafe extern "C" fn(handle: i64) -> i64;
 pub type EventEmitterSetDomainFn = unsafe extern "C" fn(handle: i64, domain: i64) -> i32;
 
@@ -161,6 +163,7 @@ static FETCH_HANDLE_KIND_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut
 static EVENT_EMITTER_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR: AtomicPtr<()> =
     AtomicPtr::new(ptr::null_mut());
+static EVENT_EMITTER_ASYNC_RESOURCE_DISPATCH_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_GET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static EVENT_EMITTER_SET_DOMAIN_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 static NET_SOCKET_HANDLE_PROBE_PTR: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
@@ -481,6 +484,23 @@ pub unsafe extern "C" fn js_register_event_emitter_async_resource_handle_probe(
     f: EventEmitterAsyncResourceHandleProbeFn,
 ) {
     EVENT_EMITTER_ASYNC_RESOURCE_HANDLE_PROBE_PTR.store(f as *mut (), Ordering::Release);
+}
+
+#[inline]
+pub fn event_emitter_async_resource_dispatch() -> Option<EventEmitterAsyncResourceDispatchFn> {
+    let p = EVENT_EMITTER_ASYNC_RESOURCE_DISPATCH_PTR.load(Ordering::Acquire);
+    if p.is_null() {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute::<*mut (), EventEmitterAsyncResourceDispatchFn>(p) })
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_register_event_emitter_async_resource_dispatch(
+    f: EventEmitterAsyncResourceDispatchFn,
+) {
+    EVENT_EMITTER_ASYNC_RESOURCE_DISPATCH_PTR.store(f as *mut (), Ordering::Release);
 }
 
 #[inline]

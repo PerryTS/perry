@@ -109,6 +109,21 @@ pub extern "C" fn js_reflect_set(target: f64, key: f64, value: f64, receiver: f6
     if lookup(target).is_some() {
         return super::proxy_set_with_receiver(target, property_key, value, receiver);
     }
+    // ES-module namespace imports use the namespace exotic [[Set]] operation:
+    // their reflected data descriptors report writable=true, but writes still
+    // fail. `node:async_hooks` is materialized through Perry's shared native
+    // namespace object, so preserve that otherwise-unusual combination here.
+    let target_ptr = extract_pointer(target.to_bits());
+    if target_ptr != 0 {
+        let obj = target_ptr as *const crate::object::ObjectHeader;
+        if crate::object::is_valid_obj_ptr(obj as *const u8)
+            && unsafe { (*obj).class_id } == crate::object::NATIVE_MODULE_CLASS_ID
+            && unsafe { crate::object::read_native_module_name(obj) }.as_deref()
+                == Some("async_hooks")
+        {
+            return nanbox_bool(false);
+        }
+    }
     reflect_ordinary_set_with_receiver(target, property_key, value, receiver)
 }
 

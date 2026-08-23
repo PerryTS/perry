@@ -51,8 +51,8 @@ fn catch_fs_promises_throw(call: impl FnOnce() -> f64) -> Result<f64, f64> {
 
 fn promise_from_sync_value(call: impl FnOnce() -> f64) -> f64 {
     match catch_fs_promises_throw(call) {
-        Ok(value) => promise_value(value),
-        Err(err) => promise_rejected(err),
+        Ok(value) => crate::fs::promise_value_fs(value),
+        Err(err) => crate::fs::promise_rejected_fs(err),
     }
 }
 
@@ -61,28 +61,28 @@ fn promise_from_sync_undefined(call: impl FnOnce()) -> f64 {
         call();
         f64::from_bits(crate::value::TAG_UNDEFINED)
     }) {
-        Ok(_) => promise_undefined(),
-        Err(err) => promise_rejected(err),
+        Ok(_) => crate::fs::promise_undefined_fs(),
+        Err(err) => crate::fs::promise_rejected_fs(err),
     }
 }
 
 fn promise_from_result_undefined(call: impl FnOnce() -> Result<(), f64>) -> f64 {
     match catch_fs_promises_throw(|| match call() {
-        Ok(()) => promise_undefined(),
-        Err(err_val) => promise_rejected(err_val),
+        Ok(()) => crate::fs::promise_undefined_fs(),
+        Err(err_val) => crate::fs::promise_rejected_fs(err_val),
     }) {
         Ok(promise) => promise,
-        Err(err) => promise_rejected(err),
+        Err(err) => crate::fs::promise_rejected_fs(err),
     }
 }
 
 fn promise_from_result_value(call: impl FnOnce() -> Result<f64, f64>) -> f64 {
     match catch_fs_promises_throw(|| match call() {
-        Ok(value) => promise_value(value),
-        Err(err_val) => promise_rejected(err_val),
+        Ok(value) => crate::fs::promise_value_fs(value),
+        Err(err_val) => crate::fs::promise_rejected_fs(err_val),
     }) {
         Ok(promise) => promise,
-        Err(err) => promise_rejected(err),
+        Err(err) => crate::fs::promise_rejected_fs(err),
     }
 }
 
@@ -128,12 +128,19 @@ pub(crate) extern "C" fn thunk_fs_promises_open(
 ) -> f64 {
     match catch_fs_promises_throw(|| {
         match unsafe { crate::fs::js_fs_filehandle_open_result(path, flags) } {
-            Ok(handle) => promise_value(handle),
-            Err(err_val) => promise_rejected(err_val),
+            Ok(handle) => {
+                let promise = crate::fs::promise_value_fs(handle);
+                let ids = crate::async_hooks::init_resource("FILEHANDLE", handle, true);
+                // FILEHANDLE is owned by the public handle and remains live
+                // after open; Node does not emit before/after/destroy for it.
+                let _ = ids;
+                promise
+            }
+            Err(err_val) => crate::fs::promise_rejected_fs(err_val),
         }
     }) {
         Ok(promise) => promise,
-        Err(err) => promise_rejected(err),
+        Err(err) => crate::fs::promise_rejected_fs(err),
     }
 }
 
@@ -146,12 +153,12 @@ pub(crate) extern "C" fn thunk_fs_promises_writeFile(
 ) -> f64 {
     match catch_fs_promises_throw(|| {
         match unsafe { crate::fs::write_file_path_or_fd_result(path, data, options) } {
-            Ok(()) => promise_undefined(),
-            Err(err) => promise_rejected(err),
+            Ok(()) => crate::fs::promise_undefined_fs(),
+            Err(err) => crate::fs::promise_rejected_fs(err),
         }
     }) {
         Ok(promise) => promise,
-        Err(err) => promise_rejected(err),
+        Err(err) => crate::fs::promise_rejected_fs(err),
     }
 }
 
@@ -206,7 +213,7 @@ pub(crate) extern "C" fn thunk_fs_promises_lchmod(
         let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
         crate::node_submodules::register_error_code_pub(msg, "ERR_METHOD_NOT_IMPLEMENTED");
         let err = crate::error::js_error_new_with_message(msg);
-        return promise_rejected(crate::value::js_nanbox_pointer(err as i64));
+        return crate::fs::promise_rejected_fs(crate::value::js_nanbox_pointer(err as i64));
     }
     promise_from_result_undefined(|| unsafe { crate::fs::js_fs_lchmod_result(path, mode) })
 }
@@ -390,7 +397,13 @@ pub(crate) extern "C" fn thunk_fs_promises_opendir(
     _closure: *const ClosureHeader,
     path: f64,
 ) -> f64 {
-    promise_from_result_value(|| crate::fs::js_fs_opendir_value_with_path(path))
+    match crate::fs::js_fs_opendir_value_with_path(path) {
+        Ok(directory) => {
+            let _ = crate::async_hooks::init_resource("DIRHANDLE", directory, true);
+            crate::fs::promise_value_fs(directory)
+        }
+        Err(err) => crate::fs::promise_rejected_fs(err),
+    }
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_glob(

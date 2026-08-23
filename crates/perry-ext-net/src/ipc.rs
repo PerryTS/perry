@@ -32,6 +32,9 @@ fn allocate_socket() -> (i64, mpsc::UnboundedReceiver<SocketCommand>) {
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
+            tcp_async_id: 0,
+            connect_async_id: 0,
+            shutdown_async_id: 0,
             cmd_tx: tx,
             pending_rx: None,
             is_open: false,
@@ -99,6 +102,9 @@ pub(crate) fn register_accepted_transport(
     statics::sockets().lock().unwrap().insert(
         socket_id,
         SocketState {
+            tcp_async_id: 0,
+            connect_async_id: 0,
+            shutdown_async_id: 0,
             cmd_tx: tx,
             pending_rx: None,
             is_open: true,

@@ -56,7 +56,7 @@ mod ip;
 // `BytesMut` per read. See `buffer_pool.rs` for the rationale.
 mod buffer_pool;
 mod tls;
-pub use tls::js_tls_connect;
+pub use tls::{js_ext_tls_connect, js_tls_connect};
 // #2131 — lifecycle / EventEmitter surface for `net.Socket` + `net.Server`
 // (once / off / removeAllListeners / listenerCount / eventNames /
 // resetAndDestroy, plus `socket.address()`). Re-exports keep the
@@ -222,6 +222,7 @@ pub(crate) mod statics {
 /// reusing the socket listener map keeps the GC scanner walk single-
 /// pass instead of needing a second per-server scanner.
 pub(crate) struct ServerState {
+    pub async_id: u64,
     /// Set by `.listen()`, dropped by `.close()`. Send on this channel
     /// to break the accept loop's `tokio::select!`.
     pub shutdown_tx: Option<oneshot::Sender<()>>,
@@ -302,6 +303,9 @@ fn scan_net_roots(visitor: &mut GcRootVisitor<'_>) {
 }
 
 pub(crate) struct SocketState {
+    pub(crate) tcp_async_id: u64,
+    pub(crate) connect_async_id: u64,
+    pub(crate) shutdown_async_id: u64,
     pub(crate) cmd_tx: mpsc::UnboundedSender<SocketCommand>,
     /// `Some` only between `js_net_socket_alloc` and the first
     /// `js_net_socket_method_connect`. Held here so the deferred-connect
@@ -340,6 +344,9 @@ impl SocketState {
     /// command-path test, which only needs `cmd_tx` to reach `run_socket_task`.
     pub(crate) fn for_test(cmd_tx: mpsc::UnboundedSender<SocketCommand>) -> Self {
         SocketState {
+            tcp_async_id: 0,
+            connect_async_id: 0,
+            shutdown_async_id: 0,
             cmd_tx,
             pending_rx: None,
             is_open: true,
@@ -370,6 +377,10 @@ pub(crate) enum SocketCommand {
     /// the task starts — after the connect site has set the Node default ON,
     /// so an explicit opt-out wins.
     SetNoDelay(bool),
+    /// The main thread finished dispatching the accepted socket's
+    /// `connection` callback. Commands queued by that callback precede this
+    /// marker, so a peer FIN may now auto-close without dropping its response.
+    ServerConnectionReady,
     /// Test-only: report the live socket's `TCP_NODELAY` state back over a
     /// oneshot, so the command-path test can observe `setNoDelay` taking
     /// effect on the stream the task owns.
@@ -400,6 +411,10 @@ enum PendingNetEvent {
     /// so without this the connection lifecycle never completes and the
     /// test hangs.
     End(i64),
+    /// Completion of the writable-side shutdown requested by `socket.end()`.
+    /// This is distinct from `End`, which is the peer's readable-side FIN and
+    /// fires the public `end` event.
+    ShutdownComplete(i64),
     Close(i64),
     Error(i64, String),
     AbortError(i64),
@@ -435,12 +450,29 @@ enum PendingNetEvent {
 extern "C" {
     fn js_net_callback_ptr(value: f64) -> i64;
     fn js_get_string_pointer_unified(value: f64) -> i64;
+    fn js_async_hooks_provider_init(type_ptr: *const u8, type_len: usize) -> u64;
+    fn js_async_hooks_provider_init_with_trigger(
+        type_ptr: *const u8,
+        type_len: usize,
+        trigger_async_id: u64,
+    ) -> u64;
+    fn js_async_hooks_provider_enter(async_id: u64);
+    fn js_async_hooks_provider_leave(async_id: u64);
+    fn js_async_hooks_provider_destroy(async_id: u64);
     fn perry_cluster_worker_listening(
         addr_ptr: *const u8,
         addr_len: u32,
         port: i32,
         address_type: i32,
     );
+}
+
+unsafe fn init_provider(name: &'static [u8]) -> u64 {
+    js_async_hooks_provider_init(name.as_ptr(), name.len())
+}
+
+unsafe fn init_provider_with_trigger(name: &'static [u8], trigger_async_id: u64) -> u64 {
+    js_async_hooks_provider_init_with_trigger(name.as_ptr(), name.len(), trigger_async_id)
 }
 
 fn push_event(ev: PendingNetEvent) {
@@ -459,6 +491,90 @@ fn push_event(ev: PendingNetEvent) {
 
 fn mark_closed(id: i64) {
     server_state::mark_socket_closed(id);
+}
+
+struct ProviderScope(u64);
+
+impl ProviderScope {
+    unsafe fn enter(async_id: u64) -> Self {
+        if async_id != 0 {
+            js_async_hooks_provider_enter(async_id);
+        }
+        Self(async_id)
+    }
+}
+
+impl Drop for ProviderScope {
+    fn drop(&mut self) {
+        if self.0 != 0 {
+            unsafe { js_async_hooks_provider_leave(self.0) };
+        }
+    }
+}
+
+unsafe fn prepare_event_provider(ev: &PendingNetEvent) {
+    match ev {
+        PendingNetEvent::ServerConnection(server_id, socket_id, _) => {
+            let server_async_id = statics::servers()
+                .lock()
+                .ok()
+                .and_then(|servers| servers.get(server_id).map(|server| server.async_id))
+                .unwrap_or(0);
+            let needs_init = statics::sockets()
+                .lock()
+                .ok()
+                .and_then(|sockets| {
+                    sockets
+                        .get(socket_id)
+                        .map(|socket| socket.tcp_async_id == 0)
+                })
+                .unwrap_or(false);
+            if needs_init {
+                let async_id = init_provider_with_trigger(b"TCPWRAP", server_async_id);
+                if let Some(socket) = statics::sockets().lock().unwrap().get_mut(socket_id) {
+                    socket.tcp_async_id = async_id;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn event_provider_id(ev: &PendingNetEvent) -> u64 {
+    match ev {
+        PendingNetEvent::Connect(id, _) => statics::sockets()
+            .lock()
+            .ok()
+            .and_then(|sockets| sockets.get(id).map(|socket| socket.connect_async_id))
+            .unwrap_or(0),
+        PendingNetEvent::Data(id, _)
+        | PendingNetEvent::End(id)
+        | PendingNetEvent::Error(id, _)
+        | PendingNetEvent::AbortError(id)
+        | PendingNetEvent::Close(id) => statics::sockets()
+            .lock()
+            .ok()
+            .and_then(|sockets| sockets.get(id).map(|socket| socket.tcp_async_id))
+            .unwrap_or(0),
+        PendingNetEvent::ShutdownComplete(id) => statics::sockets()
+            .lock()
+            .ok()
+            .and_then(|sockets| sockets.get(id).map(|socket| socket.shutdown_async_id))
+            .unwrap_or(0),
+        PendingNetEvent::ServerConnection(_, socket_id, _) => statics::sockets()
+            .lock()
+            .ok()
+            .and_then(|sockets| sockets.get(socket_id).map(|socket| socket.tcp_async_id))
+            .unwrap_or(0),
+        PendingNetEvent::ServerListening(id)
+        | PendingNetEvent::ServerClose(id)
+        | PendingNetEvent::ServerError(id, _)
+        | PendingNetEvent::ServerDrop(id, _) => statics::servers()
+            .lock()
+            .ok()
+            .and_then(|servers| servers.get(id).map(|server| server.async_id))
+            .unwrap_or(0),
+    }
 }
 
 // ─── Spawning helper ─────────────────────────────────────────────────────────
@@ -603,9 +719,13 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
     dispatch::ensure_runtime_dispatch_registered();
     let id = next_id_or_throw();
     let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
+    let tcp_async_id = init_provider(b"TCPWRAP");
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
+            tcp_async_id,
+            connect_async_id: 0,
+            shutdown_async_id: 0,
             cmd_tx: tx,
             pending_rx: Some(rx),
             is_open: false,
@@ -652,6 +772,7 @@ pub unsafe extern "C" fn js_net_create_server(
     statics::servers().lock().unwrap().insert(
         id,
         ServerState {
+            async_id: 0,
             shutdown_tx: None,
             bound_port: 0,
             bound_host: String::new(),
@@ -675,6 +796,17 @@ pub unsafe extern "C" fn js_net_create_server(
         }
     }
     id
+}
+
+/// Collision-proof server factory for generated code. Pulling this distinct
+/// symbol from perry-ext-net also ensures the server/socket symbols in this
+/// archive win over bundled-stdlib twins with separate handle registries.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_create_server(
+    options_i64: i64,
+    connection_listener_i64: i64,
+) -> i64 {
+    js_net_create_server(options_i64, connection_listener_i64)
 }
 
 // ─── FFI: net.Server.listen / .close / .address / .on ────────────────────────
@@ -723,6 +855,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
             .unwrap_or_else(|| "0.0.0.0".to_string());
         (port as u16, host)
     };
+    let server_async_id = init_provider(b"TCPSERVERWRAP");
 
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
@@ -737,6 +870,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
             Some(s) => s,
             None => return,
         };
+        s.async_id = server_async_id;
         s.shutdown_tx = Some(shutdown_tx);
         s.bound_port = port_u16;
         s.bound_host = host.clone();
@@ -1034,10 +1168,19 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
     let port = port as u16;
     ipc::register_connect_cb(handle, callback);
 
-    let rx = {
+    let (rx, tcp_async_id) = {
         let mut guard = statics::sockets().lock().unwrap();
-        match guard.get_mut(&handle).and_then(|s| s.pending_rx.take()) {
-            Some(rx) => rx,
+        match guard.get_mut(&handle) {
+            Some(socket) => match socket.pending_rx.take() {
+                Some(rx) => (rx, socket.tcp_async_id),
+                None => {
+                    push_event(PendingNetEvent::Error(
+                        handle,
+                        "socket already connected (or unknown handle)".to_string(),
+                    ));
+                    return;
+                }
+            },
             None => {
                 push_event(PendingNetEvent::Error(
                     handle,
@@ -1047,6 +1190,10 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
             }
         }
     };
+    let connect_async_id = init_provider_with_trigger(b"TCPCONNECTWRAP", tcp_async_id);
+    if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
+        socket.connect_async_id = connect_async_id;
+    }
 
     let local_server = server_state::begin_local_connect(&host, port);
     spawn_socket_runner(move || {
@@ -1116,10 +1263,15 @@ where
         .is_none()
         .then(|| server_state::begin_local_connect(&host, port))
         .flatten();
+    let tcp_async_id = unsafe { init_provider(b"TCPWRAP") };
+    let connect_async_id = unsafe { init_provider_with_trigger(b"TCPCONNECTWRAP", tcp_async_id) };
 
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
+            tcp_async_id,
+            connect_async_id,
+            shutdown_async_id: 0,
             cmd_tx: tx,
             pending_rx: None,
             is_open: false,
@@ -1205,6 +1357,13 @@ pub(crate) async fn run_socket_task(
     rx: &mut mpsc::UnboundedReceiver<SocketCommand>,
 ) {
     let mut transport: Option<Transport> = Some(initial_transport);
+    let mut writable_ended = false;
+    let accepted_socket = statics::sockets()
+        .lock()
+        .ok()
+        .and_then(|sockets| sockets.get(&id).map(|socket| socket.server_id.is_some()))
+        .unwrap_or(false);
+    let mut server_connection_ready = !accepted_socket;
 
     loop {
         let t = match transport.as_mut() {
@@ -1246,18 +1405,71 @@ pub(crate) async fn run_socket_task(
                         // breaking, so a peer FIN doesn't leak its pooled
                         // capacity (the success path checks in below).
                         buffer_pool::checkin(buf);
-                        // #2154 raw mode: signal EOF on the buffer, suppress
-                        // JS events. Else (#1852) fire 'end' then 'close' per
-                        // Node's default `allowHalfOpen: false` teardown order.
-                        // Complete the writable half before dropping the
-                        // transport. For TLS this sends close_notify; without
-                        // it the peer observes an unclean EOF and emits only
-                        // 'close', skipping its 'end' event.
-                        let _ = t.shutdown().await;
-                        if !raw_bridge::mark_terminal(id, None) {
-                            push_event(PendingNetEvent::End(id));
-                            push_event(PendingNetEvent::Close(id));
+                        // #2154 raw mode owns its own terminal state. Accepted
+                        // sockets may receive a request plus FIN before their
+                        // delayed `connection` callback runs. Wait for the
+                        // callback-complete marker so its queued writes/end
+                        // commands are honored. Outgoing sockets start ready
+                        // and therefore retain Node's default auto-close after
+                        // readable EOF (#6764).
+                        if raw_bridge::mark_terminal(id, None) {
+                            // Complete the writable half before dropping a TLS
+                            // transport so the peer observes close_notify rather
+                            // than an unclean EOF (#8688).
+                            let _ = t.shutdown().await;
+                            mark_closed(id);
+                            break;
                         }
+                        push_event(PendingNetEvent::End(id));
+
+                        while accepted_socket && !writable_ended {
+                            let command = if server_connection_ready {
+                                match tokio::time::timeout(
+                                    std::time::Duration::from_millis(25),
+                                    rx.recv(),
+                                )
+                                .await
+                                {
+                                    Ok(command) => command,
+                                    Err(_) => break,
+                                }
+                            } else {
+                                rx.recv().await
+                            };
+                            match command {
+                                Some(SocketCommand::Write(bytes)) => {
+                                    if let Err(e) = t.write_all(&bytes).await {
+                                        push_event(PendingNetEvent::Error(id, format!("{}", e)));
+                                        break;
+                                    }
+                                }
+                                Some(SocketCommand::End) => {
+                                    let _ = t.shutdown().await;
+                                    writable_ended = true;
+                                    push_event(PendingNetEvent::ShutdownComplete(id));
+                                }
+                                Some(SocketCommand::SetNoDelay(enable)) => {
+                                    let _ = t.set_nodelay(enable);
+                                }
+                                Some(SocketCommand::ServerConnectionReady) => {
+                                    server_connection_ready = true;
+                                }
+                                #[cfg(test)]
+                                Some(SocketCommand::QueryNoDelay(reply)) => {
+                                    let _ = reply.send(t.nodelay().unwrap_or(false));
+                                }
+                                Some(SocketCommand::UpgradeTls { reply, .. }) => {
+                                    let _ = reply.send(Err(
+                                        "cannot upgrade a half-closed socket".to_string(),
+                                    ));
+                                }
+                                Some(SocketCommand::Destroy) | None => break,
+                            }
+                        }
+                        if !writable_ended {
+                            let _ = t.shutdown().await;
+                        }
+                        push_event(PendingNetEvent::Close(id));
                         mark_closed(id);
                         break;
                     }
@@ -1284,7 +1496,16 @@ pub(crate) async fn run_socket_task(
                         buffer_pool::checkin(buf);
                         let msg = format!("{}", e);
                         if !raw_bridge::mark_terminal(id, Some(msg.clone())) {
-                            push_event(PendingNetEvent::Error(id, msg));
+                            // rustls reports a peer that closes TCP without a
+                            // close_notify alert as UnexpectedEof. Node's TLS
+                            // socket treats that terminal read as the readable
+                            // side ending, so preserve the normal end→close
+                            // event order instead of silently losing `end`.
+                            if msg.contains("close_notify") || msg.contains("unexpected end of file") {
+                                push_event(PendingNetEvent::End(id));
+                            } else {
+                                push_event(PendingNetEvent::Error(id, msg));
+                            }
                             push_event(PendingNetEvent::Close(id));
                         }
                         mark_closed(id);
@@ -1312,11 +1533,16 @@ pub(crate) async fn run_socket_task(
                     }
                     Some(SocketCommand::End) => {
                         let _ = t.shutdown().await;
+                        writable_ended = true;
+                        push_event(PendingNetEvent::ShutdownComplete(id));
                     }
                     Some(SocketCommand::SetNoDelay(enable)) => {
                         // Best-effort, matching Node: a failed setsockopt (e.g.
                         // the peer already closed) does not error the socket.
                         let _ = t.set_nodelay(enable);
+                    }
+                    Some(SocketCommand::ServerConnectionReady) => {
+                        server_connection_ready = true;
                     }
                     #[cfg(test)]
                     Some(SocketCommand::QueryNoDelay(reply)) => {
@@ -1580,6 +1806,40 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
     let count = events.len() as i32;
 
     for ev in events.drain(..) {
+        prepare_event_provider(&ev);
+        let provider_id = event_provider_id(&ev);
+        let destroy_ids: Vec<u64> = match &ev {
+            PendingNetEvent::Connect(id, _) => statics::sockets()
+                .lock()
+                .ok()
+                .and_then(|sockets| sockets.get(id).map(|socket| vec![socket.connect_async_id]))
+                .unwrap_or_default(),
+            PendingNetEvent::ShutdownComplete(id) => statics::sockets()
+                .lock()
+                .ok()
+                .and_then(|sockets| sockets.get(id).map(|socket| vec![socket.shutdown_async_id]))
+                .unwrap_or_default(),
+            PendingNetEvent::Close(id) => statics::sockets()
+                .lock()
+                .ok()
+                .and_then(|sockets| {
+                    sockets.get(id).map(|socket| {
+                        vec![
+                            socket.connect_async_id,
+                            socket.shutdown_async_id,
+                            socket.tcp_async_id,
+                        ]
+                    })
+                })
+                .unwrap_or_default(),
+            PendingNetEvent::ServerClose(id) => statics::servers()
+                .lock()
+                .ok()
+                .and_then(|servers| servers.get(id).map(|server| vec![server.async_id]))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let provider_scope = ProviderScope::enter(provider_id);
         match ev {
             PendingNetEvent::Connect(id, local_server) => {
                 server_state::finish_local_connect(local_server);
@@ -1701,6 +1961,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 drop(frame);
                 lifecycle::drain_once_listeners(id, "end");
             }
+            PendingNetEvent::ShutdownComplete(_) => {}
             PendingNetEvent::Close(id) => {
                 extern "C" {
                     fn js_tls_client_record_closed(handle: i64);
@@ -1739,6 +2000,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                     // once-set may still be holding stale entries.
                     lifecycle::drain_once_listeners(server_id, "connection");
                     server_state::release_pending_server_data(socket_id);
+                    server_state::release_connection_callback(socket_id);
                     continue;
                 }
                 // Sockets returned by the codegen's `net.connect`
@@ -1767,6 +2029,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 drop(frame);
                 lifecycle::drain_once_listeners(server_id, "connection");
                 server_state::release_pending_server_data(socket_id);
+                server_state::release_connection_callback(socket_id);
             }
             PendingNetEvent::ServerListening(server_id) => {
                 // Take + drain the 'listening' listeners so the
@@ -1867,6 +2130,12 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 }
                 drop(frame);
                 lifecycle::drain_once_listeners(server_id, "drop");
+            }
+        }
+        drop(provider_scope);
+        for async_id in destroy_ids {
+            if async_id != 0 {
+                js_async_hooks_provider_destroy(async_id);
             }
         }
     }

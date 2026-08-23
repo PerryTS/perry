@@ -148,7 +148,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "createConnection",
         class_filter: None,
-        runtime: "js_net_socket_connect",
+        runtime: "js_ext_net_socket_connect",
         args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
@@ -163,7 +163,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "connect",
         class_filter: None,
-        runtime: "js_net_socket_connect",
+        runtime: "js_ext_net_socket_connect",
         args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
@@ -176,7 +176,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "createServer",
         class_filter: None,
-        runtime: "js_net_create_server",
+        runtime: "js_ext_net_create_server",
         args: &[NA_PTR, NA_PTR],
         ret: NR_PTR,
     },
@@ -185,7 +185,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "Server",
         class_filter: None,
-        runtime: "js_net_create_server",
+        runtime: "js_ext_net_create_server",
         args: &[NA_PTR, NA_PTR],
         ret: NR_PTR,
     },
@@ -309,14 +309,14 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "write",
         class_filter: Some("Socket"),
-        runtime: "js_net_socket_write",
+        runtime: "js_ext_net_socket_write3",
         // Issue #1131 — pass the full NaN-boxed JS value (NA_JSV) so
         // the runtime can probe Buffer-vs-string-vs-number and read
         // through the correct header layout. NA_PTR pre-stripped the
         // tag, so `sock.write("ping")` handed the runtime a bare
         // StringHeader pointer that it reinterpreted as a
         // BufferHeader → garbage on the wire.
-        args: &[NA_JSV],
+        args: &[NA_JSV, NA_JSV, NA_JSV],
         ret: NR_VOID,
     },
     NativeModSig {
@@ -324,12 +324,12 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "end",
         class_filter: Some("Socket"),
-        runtime: "js_net_socket_end",
+        runtime: "js_ext_net_socket_end3",
         // Issue #1852 — `socket.end([data])` writes the optional final
         // chunk before half-closing. NA_JSV carries the full NaN-boxed
         // value so the runtime can probe Buffer/string/number; the
         // no-arg `socket.end()` form pads this slot with `undefined`.
-        args: &[NA_JSV],
+        args: &[NA_JSV, NA_JSV, NA_JSV],
         ret: NR_VOID,
     },
     NativeModSig {
@@ -346,7 +346,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "on",
         class_filter: Some("Socket"),
-        runtime: "js_net_socket_on",
+        runtime: "js_ext_net_socket_on",
         args: &[NA_STR, NA_PTR],
         ret: NR_VOID,
     },
@@ -625,7 +625,11 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "once",
         class_filter: Some("Socket"),
-        runtime: "js_net_socket_once",
+        // Use ext-net's collision-proof symbol. The bundled stdlib exports a
+        // same-named `js_net_socket_once`; in an auto-optimized link the
+        // shared name can resolve to that empty registry and silently drop
+        // listeners on sockets owned by perry-ext-net.
+        runtime: "js_ext_net_socket_once",
         args: &[NA_STR, NA_PTR],
         ret: NR_PTR,
     },
@@ -634,7 +638,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "addListener",
         class_filter: Some("Socket"),
-        runtime: "js_net_socket_on",
+        runtime: "js_ext_net_socket_on",
         args: &[NA_STR, NA_PTR],
         ret: NR_VOID,
     },
@@ -750,7 +754,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         has_receiver: false,
         method: "connect",
         class_filter: None,
-        runtime: "js_tls_connect",
+        runtime: "js_ext_tls_connect",
         args: &[NA_F64, NA_F64, NA_F64, NA_F64],
         ret: NR_PTR,
     },
