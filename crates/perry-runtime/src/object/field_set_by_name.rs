@@ -53,9 +53,7 @@ pub extern "C" fn js_object_set_field_by_name(
         && crate::object::class_registry::is_class_object_ptr(obj.cast())
     {
         unsafe {
-            let name_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let name_len = (*key).byte_len as usize;
-            if std::slice::from_raw_parts(name_ptr, name_len) == b"prototype" {
+            if string_key_eq(key, b"prototype") {
                 crate::error::throw_immutable_write((*obj).class_id, "prototype");
             }
         }
