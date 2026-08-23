@@ -1306,6 +1306,7 @@ pub(crate) fn lower_module_decl(
                             ctx,
                             &class_decl.class.body,
                             &class,
+                            &class.name,
                         );
                     module
                         .init
@@ -1879,6 +1880,7 @@ pub(crate) fn lower_module_decl(
                             ctx,
                             &synth_class_decl.class.body,
                             &class,
+                            &class.name,
                         );
                     module
                         .init

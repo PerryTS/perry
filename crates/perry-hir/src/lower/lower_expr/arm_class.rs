@@ -142,6 +142,7 @@ pub(crate) fn lower_class_expr(
             ctx,
             &class_expr.class.body,
             &class,
+            &synthetic_name,
         );
     let computed_statics: Vec<(String, Expr)> = class
         .static_fields

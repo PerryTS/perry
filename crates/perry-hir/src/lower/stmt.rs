@@ -1237,6 +1237,7 @@ pub(crate) fn lower_stmt(
                             ctx,
                             &class_decl.class.body,
                             &class,
+                            &class.name,
                         );
                     module
                         .init

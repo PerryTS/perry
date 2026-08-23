@@ -288,6 +288,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         ctx,
                         &class_decl.class.body,
                         &class,
+                        &class.name,
                     );
                 result.extend(computed_name_evaluations.into_iter().map(Stmt::Expr));
                 // A function-nested class that captures enclosing locals

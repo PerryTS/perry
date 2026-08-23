@@ -56,6 +56,7 @@ pub(crate) fn prepare_ordered_class_computed_names(
     ctx: &mut LoweringContext,
     class_body: &[ast::ClassMember],
     class: &Class,
+    registration_class_name: &str,
 ) -> (Vec<Expr>, Vec<(String, Expr)>, Vec<Expr>) {
     let mut ordered: Vec<(usize, Expr)> = Vec::new();
     let mut field_keys = Vec::new();
@@ -98,7 +99,7 @@ pub(crate) fn prepare_ordered_class_computed_names(
         let mut resolved = member.clone();
         resolved.key_expr = Expr::LocalGet(local);
         member_registrations.push(class_computed_member_registration_expr(
-            &class.name,
+            registration_class_name,
             &resolved,
         ));
     }
