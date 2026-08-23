@@ -272,6 +272,7 @@ fn class_with_computed_member(id: u32, name: &str, fields: Vec<ClassField>) -> C
         },
         is_static: false,
         kind: ClassComputedMemberKind::Method,
+        source_order: 0,
     });
     class
 }
@@ -10421,6 +10422,7 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                     },
                     is_static: false,
                     kind: ClassComputedMemberKind::Method,
+                    source_order: 0,
                 });
         }
         "inherited_field_shadow" => {
