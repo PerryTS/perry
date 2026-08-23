@@ -59,6 +59,24 @@ pub(super) unsafe fn dispatch_primitive(
                 args.as_ptr(),
                 args.len(),
             ));
+        } else if class_id != 0
+            && matches!(
+                method_name,
+                "bind" | "call" | "apply" | "isPrototypeOf" | "toString"
+            )
+            && crate::object::class_registry::class_own_static_field_value(class_id, method_name)
+                .is_none()
+        {
+            // These are inherited Function/Object prototype operations, not
+            // static data members. Let `dispatch_common` handle them. Looking
+            // them up as a class property here reifies a bound method whose
+            // dispatch re-enters this same arm indefinitely (`C.call(...)`
+            // exhausted the native stack instead of throwing TypeError).
+            return match method_name {
+                "bind" => Some(crate::closure::js_function_bind(object, args_ptr, args_len)),
+                "call" | "apply" => super::proto_dispatch::throw_fn_proto_not_callable(method_name),
+                _ => None,
+            };
         } else if class_id != 0 && !method_name_ptr.is_null() && method_name_len > 0 {
             // #5437: `C.viaFn()` where `viaFn` is a static DATA property holding a
             // callable (`C.viaFn = fn` / `static viaFn = fn`), NOT a registered

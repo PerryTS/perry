@@ -758,6 +758,23 @@ pub(super) fn compile_closure(
             );
             let v = blk.bitcast_i64_to_double(&bits);
             blk.store(DOUBLE, &v, &slot);
+        } else if let Some(class_id) = enclosing_class
+            .as_ref()
+            .and_then(|class_name| class_ids.get(class_name))
+            .copied()
+            .filter(|class_id| *class_id != 0)
+        {
+            // Static field initialization substitutes lexical `this` with the
+            // class constructor and then drops the ordinary this-capture slot.
+            // `super.x` encodes its receiver implicitly, though, so there is no
+            // Expr::This node for that substitution to rewrite. Seed the
+            // closure's synthetic this slot with the enclosing ClassRef rather
+            // than the old 0.0 sentinel so arrows in static fields retain the
+            // class constructor as their SuperProperty receiver.
+            let class_ref = crate::nanbox::double_literal(f64::from_bits(
+                crate::nanbox::INT32_TAG | class_id as u64,
+            ));
+            blk.store(DOUBLE, &class_ref, &slot);
         } else {
             blk.store(DOUBLE, "0.0", &slot);
         }
@@ -934,6 +951,18 @@ pub(super) fn compile_closure(
         this_stack,
         new_target_stack,
         class_stack,
+        super_called_stack: Vec::new(),
+        shared_super_scope_active: false,
+        lexical_this_uses_derived_binding: captures_this
+            && enclosing_class
+                .as_ref()
+                .and_then(|name| classes.get(name).copied())
+                .is_some_and(|class| {
+                    class.extends.is_some()
+                        || class.extends_name.is_some()
+                        || class.native_extends.is_some()
+                        || class.extends_expr.is_some()
+                }),
         inline_ctor_return: Vec::new(),
         methods,
         module_globals,

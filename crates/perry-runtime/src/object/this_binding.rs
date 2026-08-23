@@ -252,3 +252,70 @@ pub fn scan_implicit_this_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<
         }
     });
 }
+
+crate::perry_thread_local! {
+    /// Active inline derived-constructor `super()` binding cells. An arrow
+    /// created inside a constructor has its own codegen context, so it cannot
+    /// name the outer function's alloca directly; this stack gives it the
+    /// exact live binding cell without turning the state into a process-global
+    /// boolean.
+    static DERIVED_SUPER_BINDING_STACK: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[no_mangle]
+pub extern "C" fn js_derived_super_scope_push(slot: *mut u8) {
+    DERIVED_SUPER_BINDING_STACK.with(|stack| stack.borrow_mut().push(slot as usize));
+}
+
+#[no_mangle]
+pub extern "C" fn js_derived_super_scope_pop() {
+    DERIVED_SUPER_BINDING_STACK.with(|stack| {
+        stack.borrow_mut().pop();
+    });
+}
+
+pub(crate) fn derived_super_binding_stack_savepoint() -> usize {
+    DERIVED_SUPER_BINDING_STACK.with(|stack| stack.borrow().len())
+}
+
+pub(crate) fn derived_super_binding_stack_restore(depth: usize) {
+    DERIVED_SUPER_BINDING_STACK.with(|stack| stack.borrow_mut().truncate(depth));
+}
+
+/// Bind the innermost derived constructor's `this` from a nested arrow. The
+/// base constructor has already run when this is called; a duplicate therefore
+/// throws at binding time, as required by EvaluateCall(super()).
+#[no_mangle]
+pub extern "C" fn js_derived_super_bind_current() -> f64 {
+    let slot = DERIVED_SUPER_BINDING_STACK.with(|stack| stack.borrow().last().copied());
+    let Some(slot) = slot else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let slot = slot as *mut u8;
+    unsafe {
+        if slot.read() != 0 {
+            return crate::error::js_throw_reference_error_this_before_super();
+        }
+        slot.write(1);
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Throw when a separately-emitted arrow reads the active derived
+/// constructor's lexical `this` before `super()` has initialized it.
+/// Ordinary functions have no active binding stack entry, so the helper is a
+/// cheap no-op for their `this` reads.
+#[no_mangle]
+pub extern "C" fn js_derived_this_check_current() -> f64 {
+    let slot = DERIVED_SUPER_BINDING_STACK.with(|stack| stack.borrow().last().copied());
+    if let Some(slot) = slot {
+        let slot = slot as *const u8;
+        unsafe {
+            if slot.read() == 0 {
+                return crate::error::js_throw_reference_error_this_before_super();
+            }
+        }
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}

@@ -521,6 +521,34 @@ pub extern "C" fn js_proxy_is_proxy(value: f64) -> i32 {
     }
 }
 
+/// Resolve the backing object used by Perry's private-element storage without
+/// invoking any Proxy trap.  Private names use the object's internal
+/// [[PrivateElements]] list in ECMAScript; they are deliberately not ordinary
+/// `[[Get]]`/`[[Set]]` operations.  Perry's Proxy is a stable registry handle,
+/// so its private storage lives on the backing target and all private-element
+/// entry points consistently resolve through this helper.
+pub(crate) fn private_element_receiver(mut value: f64) -> f64 {
+    for _ in 0..32 {
+        let Some(id) = lookup(value) else {
+            return value;
+        };
+        let (target, revoked) = PROXIES.with(|p| {
+            p.borrow()
+                .get(id as usize)
+                .and_then(|entry| entry.as_ref())
+                .map(|entry| (entry.target, entry.revoked))
+                .unwrap_or((f64::from_bits(TAG_UNDEFINED), false))
+        });
+        if revoked {
+            revoked_return_with_message(
+                "Cannot access a private element on a proxy that has been revoked",
+            );
+        }
+        value = target;
+    }
+    value
+}
+
 /// `IsArray`'s Proxy branch (ECMA-262 §7.2.2). If `value` is a live Proxy,
 /// returns `Some(target)` so the caller can recurse on the target; if the Proxy
 /// has been revoked, throws a `TypeError` (does not return). Returns `None` for
@@ -968,6 +996,36 @@ pub extern "C" fn js_proxy_get(proxy_boxed: f64, key: f64) -> f64 {
     target_get(target, key)
 }
 
+/// Resolve the ultimate target when a Proxy wraps a class constructor. Used
+/// by method-call dispatch to bind a static method's visible `this` to the
+/// Proxy receiver while retaining the target class as its lexical owner.
+pub(crate) fn proxy_target_class_id(mut value: f64) -> Option<u32> {
+    let mut depth = 0usize;
+    while let Some(id) = lookup(value) {
+        value = PROXIES.with(|proxies| {
+            proxies
+                .borrow()
+                .get(id as usize)
+                .and_then(|entry| entry.as_ref())
+                .map(|entry| entry.target)
+                .unwrap_or(f64::from_bits(TAG_UNDEFINED))
+        });
+        depth += 1;
+        if depth >= 32 {
+            return None;
+        }
+    }
+    if let Some(class_id) = crate::object::class_ref_id(value) {
+        return Some(class_id);
+    }
+    if crate::object::is_class_object_value(value) {
+        let raw = extract_pointer(value.to_bits()) as *const crate::ObjectHeader;
+        let class_id = crate::object::js_object_get_class_id(raw);
+        return (class_id != 0).then_some(class_id);
+    }
+    None
+}
+
 /// Extract a raw heap pointer (48-bit) from either a NaN-boxed value
 /// (POINTER_TAG / STRING_TAG) or a raw i64/f64-reinterpreted pointer
 /// (module-level globals store Arrays/Objects as raw I64s, not NaN-boxed).
@@ -1024,10 +1082,23 @@ fn target_get_property_key(target: f64, property_key: f64) -> f64 {
     if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
         return unsafe { crate::symbol::js_object_get_symbol_property(target, property_key) };
     }
-    let obj_ptr = extract_pointer(target.to_bits()) as *const crate::ObjectHeader;
     let key_ptr =
         crate::value::js_get_string_pointer_unified(property_key) as *const crate::StringHeader;
-    if obj_ptr.is_null() || key_ptr.is_null() {
+    if key_ptr.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    // Class constructors use Perry's INT32-tagged ClassRef representation,
+    // not a heap pointer. Preserve those bits exactly as the ordinary dynamic
+    // class-property path does; pointer extraction would turn the target into
+    // null and make `new Proxy(C, {}).staticMethod` read as `undefined`.
+    if crate::object::class_ref_id(target).is_some() {
+        return crate::object::js_object_get_field_by_name_f64(
+            target.to_bits() as *const crate::ObjectHeader,
+            key_ptr,
+        );
+    }
+    let obj_ptr = extract_pointer(target.to_bits()) as *const crate::ObjectHeader;
+    if obj_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
     crate::object::js_object_get_field_by_name_f64(obj_ptr, key_ptr)
@@ -1509,6 +1580,24 @@ unsafe fn build_create_data_descriptor(value: f64) -> f64 {
         POINTER_TAG
             | ((desc_handle.get_raw_mut_ptr::<crate::ObjectHeader>() as u64) & POINTER_MASK),
     )
+}
+
+/// Define a writable, enumerable, configurable own data property using the
+/// receiver's `[[DefineOwnProperty]]`. This is the operation used by public
+/// class fields: it bypasses inherited setters on ordinary objects and still
+/// drives a Proxy's `defineProperty` trap.
+pub(crate) fn create_data_property(receiver: f64, key: f64, value: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let key = scope.root_nanbox_f64(key);
+    let value = scope.root_nanbox_f64(value);
+    let descriptor = unsafe { build_create_data_descriptor(value.get_nanbox_f64()) };
+    let descriptor = scope.root_nanbox_f64(descriptor);
+    crate::value::js_is_truthy(js_reflect_define_property(
+        receiver.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        descriptor.get_nanbox_f64(),
+    )) != 0
 }
 
 /// #5129: build a `{ value }`-only property descriptor — the `valueDesc` of
@@ -2088,6 +2177,42 @@ pub extern "C" fn js_super_put_value_set(
     strict: i32,
 ) -> f64 {
     let receiver = normalize_accessor_receiver(receiver);
+    // Static-context super uses the parent CONSTRUCTOR as the lookup target,
+    // while retaining the child constructor as Receiver. A statically-known
+    // class parent is represented by a ClassRef; a function-valued parent is
+    // the value captured at class-definition time. The previous instance-only
+    // path looked at `Parent.prototype` and made valid static writes fail.
+    if let Some(child_id) = crate::object::class_ref_id(receiver) {
+        let target = if parent_class_id != 0 {
+            f64::from_bits(crate::value::INT32_TAG | parent_class_id as u64)
+        } else {
+            crate::object::js_get_dynamic_parent_value(child_id)
+        };
+        let tv = crate::value::JSValue::from_bits(target.to_bits());
+        if !tv.is_undefined() && !tv.is_null() {
+            return js_put_value_set(target, key, value, receiver, strict);
+        }
+        // A base class's constructor inherits from Function.prototype. Perry
+        // does not materialize that object for this path; when lookup misses,
+        // OrdinarySet creates the own property on Receiver.
+        target_set(receiver, key, value);
+        return value;
+    }
+    if parent_class_id == 0 && crate::object::is_class_object_value(receiver) {
+        let obj = crate::value::JSValue::from_bits(receiver.to_bits())
+            .as_pointer::<crate::ObjectHeader>();
+        let child_id = if obj.is_null() {
+            0
+        } else {
+            crate::object::js_object_get_class_id(obj)
+        };
+        let dynamic_parent = crate::object::js_get_dynamic_parent_value(child_id);
+        if crate::value::JSValue::from_bits(dynamic_parent.to_bits()).is_undefined() {
+            target_set(receiver, key, value);
+            return value;
+        }
+        return js_put_value_set(dynamic_parent, key, value, receiver, strict);
+    }
     let receiver_parent_class_id = receiver_super_parent_class_id(receiver);
     if let Some(ok) =
         class_super_accessor_set(parent_class_id, key, value, receiver).or_else(|| {

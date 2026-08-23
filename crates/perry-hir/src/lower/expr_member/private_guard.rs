@@ -12,6 +12,24 @@ use super::LoweringContext;
 pub(crate) const PRIV_OP_READ: u8 = 0;
 pub(crate) const PRIV_OP_WRITE: u8 = 1;
 
+/// Return the physical property key used for a private field value. Private
+/// methods and accessors live in the class registry and keep their source
+/// spelling for dispatch, but field values need a key that cannot collide with
+/// an ordinary computed property such as `["#x"]`.
+pub(crate) fn private_storage_property(ctx: &LoweringContext, field_name: &str) -> String {
+    match ctx.resolve_private(field_name) {
+        Some((_, class_id, member)) => {
+            let family = if member.kind == super::super::PrivKind::Field {
+                "value"
+            } else {
+                "member"
+            };
+            format!("#<perry:private-{family}:{class_id}:{field_name}>")
+        }
+        None => field_name.to_string(),
+    }
+}
+
 /// Wrap the receiver of a private member access `obj.#name` in a brand+kind
 /// guard so an access on a non-conforming receiver throws `TypeError`. If the
 /// name cannot be resolved to a declaring class in scope, the object is

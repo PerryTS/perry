@@ -19,6 +19,8 @@ pub fn lower_constructor(
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
+    let saved_current_strict = ctx.current_strict;
+    ctx.current_strict = true;
 
     // Track that we're inside a constructor body so `new.target` can resolve
     // to a placeholder object with `.name = class_name`. Saved/restored in
@@ -218,6 +220,7 @@ pub fn lower_constructor(
     crate::lower::expr_function::apply_class_expr_capture_refreshes(&mut body, class_expr_entries);
 
     ctx.exit_strict_mode();
+    ctx.current_strict = saved_current_strict;
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     ctx.in_constructor_class = saved_ctor_class;
@@ -483,6 +486,8 @@ pub fn lower_class_method_with_name(
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
+    let saved_current_strict = ctx.current_strict;
+    ctx.current_strict = true;
 
     // Add 'this' for instance methods
     if !method.is_static {
@@ -657,6 +662,7 @@ pub fn lower_class_method_with_name(
     }
 
     ctx.exit_strict_mode();
+    ctx.current_strict = saved_current_strict;
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
@@ -731,11 +737,22 @@ pub fn lower_getter_method_with_name(
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
+    let saved_current_strict = ctx.current_strict;
+    ctx.current_strict = true;
 
     // Add 'this' for instance getters
     ctx.define_local("this".to_string(), Type::Any);
 
-    // Getters have no parameters
+    // Getters have no user parameters, but still receive their own empty
+    // `arguments` object. Accessors use a fixed runtime ABI, so model that
+    // zero-argument value as a local array instead of adding a hidden formal
+    // (which would change the registered getter signature).
+    let arguments_id = method
+        .function
+        .body
+        .as_ref()
+        .is_some_and(|b| body_uses_arguments(&b.stmts))
+        .then(|| ctx.define_local("arguments".to_string(), Type::Any));
 
     // Extract return type. Phase 4: body-based inference when no annotation.
     let has_explicit_return_annotation = method.function.return_type.is_some();
@@ -747,11 +764,23 @@ pub fn lower_getter_method_with_name(
         .unwrap_or(Type::Any);
 
     // Lower body — see issue #569.
-    let body = if let Some(ref block) = method.function.body {
+    let mut body = if let Some(ref block) = method.function.body {
         lower_fn_body_block_stmt(ctx, block)?
     } else {
         Vec::new()
     };
+    if let Some(arguments_id) = arguments_id {
+        body.insert(
+            0,
+            Stmt::Let {
+                id: arguments_id,
+                name: "arguments".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Array(Vec::new())),
+            },
+        );
+    }
 
     // Phase 4: getters can't be async/generator by JS syntax, so just the
     // plain body-walk + unify path. Feeds `class.getters[i].1.return_type`
@@ -766,6 +795,7 @@ pub fn lower_getter_method_with_name(
     }
 
     ctx.exit_strict_mode();
+    ctx.current_strict = saved_current_strict;
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
@@ -813,12 +843,31 @@ pub fn lower_setter_method_with_name(
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
     ctx.enter_strict_mode(true);
+    let saved_current_strict = ctx.current_strict;
+    ctx.current_strict = true;
 
     // Add 'this' for instance setters
     ctx.define_local("this".to_string(), Type::Any);
 
     // Setters have exactly one parameter
     let mut params = Vec::new();
+    let user_has_arguments_param = method
+        .function
+        .params
+        .iter()
+        .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
+    let needs_arguments = !user_has_arguments_param
+        && (method
+            .function
+            .body
+            .as_ref()
+            .is_some_and(|b| body_uses_arguments(&b.stmts))
+            || params_use_arguments(&method.function.params));
+    // Like getters, setters have a fixed dispatch ABI. Bind `arguments`
+    // locally and initialize it from the raw setter value before applying any
+    // parameter defaults or destructuring.
+    let arguments_id =
+        needs_arguments.then(|| ctx.define_local("arguments".to_string(), Type::Any));
     // Issue #572: setter param can be a destructuring pattern (`set v({ x }) {...}`).
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
     for param in &method.function.params {
@@ -891,12 +940,30 @@ pub fn lower_setter_method_with_name(
         new_body.append(&mut body);
         body = new_body;
     }
+    if let Some(arguments_id) = arguments_id {
+        let raw_args = params
+            .iter()
+            .filter(|p| p.name != "this")
+            .map(|p| Expr::LocalGet(p.id))
+            .collect();
+        body.insert(
+            0,
+            Stmt::Let {
+                id: arguments_id,
+                name: "arguments".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Array(raw_args)),
+            },
+        );
+    }
     let class_expr_entries = ctx
         .body_class_expr_captures
         .split_off(class_expr_capture_mark);
     crate::lower::expr_function::apply_class_expr_capture_refreshes(&mut body, class_expr_entries);
 
     ctx.exit_strict_mode();
+    ctx.current_strict = saved_current_strict;
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
@@ -920,10 +987,11 @@ pub fn lower_setter_method_with_name(
 
 pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Result<ClassField> {
     // Computed property keys (`[Symbol.for("k")]`, `[Parent.Symbol.X]`, etc.)
-    // can't be reduced to a string at compile time — the key expression is
-    // evaluated at construction time. We capture the lowered key expression
-    // in `key_expr` and synthesize a placeholder `name` for HIR identity
-    // (string-keyed lookup paths skip these fields via `key_expr.is_some()`).
+    // can't be reduced to a string at compile time. ClassDefinitionEvaluation
+    // resolves it once and stores the resulting PropertyKey in a hidden class
+    // slot; instance construction later reads that slot. `name` is the hidden
+    // slot spelling as well as the HIR identity (ordinary string-keyed field
+    // paths skip it via `key_expr.is_some()`).
     let (name, key_expr) = match &prop.key {
         ast::PropName::Ident(ident) => (ident.sym.to_string(), None),
         ast::PropName::Str(s) => (s.value.as_str().unwrap_or("").to_string(), None),
@@ -938,7 +1006,7 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
             // HIR's field-list iterators that key on `name` will still see
             // distinct entries because each computed-key field lowers in its
             // own call.
-            let synth = format!("__computed_field_{}_{}", c.span.lo.0, c.span.hi.0);
+            let synth = format!("__perry_computed_field_key_{}_{}", c.span.lo.0, c.span.hi.0);
             (synth, Some(key))
         }
     };

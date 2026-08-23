@@ -889,15 +889,18 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
         // Statics' initializer values are ordinary reads and still rewrite.
         Expr::ClassExprFresh {
             named_statics,
-            symbol_statics,
+            computed_keys,
+            computed_statics,
             captured_args,
             ..
         } => {
             for (_, v) in named_statics.iter_mut() {
                 rewrite_expr(v, shared, index_uses);
             }
-            for (k, v) in symbol_statics.iter_mut() {
-                rewrite_expr(k, shared, index_uses);
+            for (_, key) in computed_keys.iter_mut() {
+                rewrite_expr(key, shared, index_uses);
+            }
+            for (_, v) in computed_statics.iter_mut() {
                 rewrite_expr(v, shared, index_uses);
             }
             for a in captured_args.iter_mut() {

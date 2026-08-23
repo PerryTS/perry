@@ -655,6 +655,32 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 }
             }
 
+            // `var GeneratorFunction = Object.getPrototypeOf(function*() {})
+            // .constructor; class G extends GeneratorFunction {}`. Perry is
+            // ahead-of-time compiled, so a constant construction site can use
+            // the same kind-aware fold as a direct dynamic-function-constructor
+            // call. The trivial explicit constructor supplies no arguments;
+            // the implicit constructor forwards the new-site arguments.
+            if let Some((kind, forward_args)) =
+                ctx.dynamic_function_subclasses.get(&class_name).copied()
+            {
+                let empty_args: &[ast::ExprOrSpread] = &[];
+                let args_slice = if forward_args {
+                    new_expr.args.as_deref().unwrap_or(empty_args)
+                } else {
+                    empty_args
+                };
+                if let Some(folded) = super::const_fold_fn::try_const_fold_function_construct_kind(
+                    ctx,
+                    args_slice,
+                    crate::eval_classifier::EvalSurface::NewFunction,
+                    new_expr.span,
+                    kind,
+                )? {
+                    return Ok(folded);
+                }
+            }
+
             // #1677 `new Function(...)` handling, when `Function` is not
             // shadowed. Phase 1 (#1679) first: when every argument is a
             // compile-time-constant string, fold the call into a real
@@ -1468,6 +1494,27 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         class_name = export.to_string();
                     }
                 }
+            }
+            // An identifier that resolves to no lexical, function, class,
+            // import, native-module, or global-constructor binding fails while
+            // evaluating the constructor reference.  That is a ReferenceError
+            // (`new Missing()`), distinct from the TypeError produced when a
+            // present binding's value is non-constructable.
+            if ctx.lookup_class(&class_name).is_none()
+                && ctx.resolve_class_alias(&class_name).is_none()
+                && ctx.lookup_local(&class_name).is_none()
+                && ctx.lookup_func(&class_name).is_none()
+                && ctx.lookup_imported_func(&class_name).is_none()
+                && ctx.lookup_native_module(&class_name).is_none()
+                && !is_reified_global_builtin_constructor(&class_name)
+            {
+                return Ok(Expr::NewDynamic {
+                    callee: Box::new(super::throw_reference_error_expr(
+                        "js_throw_reference_error_unresolved_get",
+                    )),
+                    args,
+                    byte_offset: new_byte_offset,
+                });
             }
             // Issue #212: classes nested in a function may capture
             // enclosing-scope locals. `lower_class_decl` extended the

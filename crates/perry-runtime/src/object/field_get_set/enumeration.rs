@@ -1269,7 +1269,7 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 Ok(s) => s,
                 Err(_) => continue,
             };
-            if (hide_private && (key_str.starts_with('#') || is_internal_runtime_key(key_str)))
+            if (hide_private && is_internal_runtime_key(key_str))
                 || (hide_wasi_state && key_str.starts_with("__wasi"))
             {
                 continue;
@@ -1289,10 +1289,8 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
 }
 
 /// Get the values of an object as an array
-/// True when `obj` is a class instance (`class_id != 0`) and `key_val` names a
-/// private element (`#x`). Private elements physically live in the instance
-/// keys_array but are never enumerable/reflectable properties. Plain object
-/// literals keep `class_id == 0`, so `{"#fff": 1}` stays visible.
+/// True when `key_val` names compiler/runtime-only private storage on a class
+/// instance. Public String keys such as `"#x"` remain visible.
 pub(crate) unsafe fn instance_private_key_hidden(
     obj: *const ObjectHeader,
     key_val: crate::JSValue,
@@ -1302,7 +1300,7 @@ pub(crate) unsafe fn instance_private_key_hidden(
     }
     let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     crate::string::js_string_key_bytes(key_val, &mut buf)
-        .map(|b| b.first() == Some(&b'#') || is_internal_runtime_key_bytes(b))
+        .map(is_internal_runtime_key_bytes)
         .unwrap_or(false)
 }
 
@@ -1329,6 +1327,8 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
     b == crate::object::map_set_subclass::BACKING_KEY
         || b == crate::weakref::WEAK_ENTRIES_KEY
         || b.starts_with(crate::node_stream::NATIVE_BASE_SUPER_PREFIX)
+        || b.starts_with(b"__perry_computed_field_key_")
+        || b.starts_with(b"#<perry:private-")
 }
 
 /// `&str` form of [`is_internal_runtime_key_bytes`].

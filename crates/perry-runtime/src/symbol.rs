@@ -225,6 +225,16 @@ pub(crate) unsafe fn symbol_description_text(
     description_bytes_from_header((*sym_ptr).description).map(std::sync::Arc::from)
 }
 
+/// SetFunctionName spelling for a Symbol property key: an undefined
+/// description produces the empty string, otherwise `[description]`.
+pub(crate) unsafe fn symbol_function_name(sym_key: usize) -> String {
+    let sym_ptr = sym_key as *const SymbolHeader;
+    match symbol_description_text(sym_ptr) {
+        Some(desc) => format!("[{}]", String::from_utf8_lossy(desc.as_ref())),
+        None => String::new(),
+    }
+}
+
 /// The raw payload bytes of a description `StringHeader`, WITHOUT UTF-8
 /// validation. `str_from_header` validates and would drop a WTF-8 description
 /// on the floor (#7246).

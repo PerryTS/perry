@@ -348,6 +348,15 @@ pub fn scan_dyn_eval_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
 ///     something outside the interpreter subset.
 pub fn dyn_function_from_strings(args: &[String]) -> f64 {
     let fn_id = prepare_function_args(args);
+    let function_length = lookup_fn(fn_id)
+        .map(|function| {
+            function
+                .params
+                .iter()
+                .take_while(|pat| !matches!(pat, ast::Pat::Assign(_) | ast::Pat::Rest(_)))
+                .count()
+        })
+        .unwrap_or(0);
     // Preserve Function-constructor semantics: each instance owns a private
     // sloppy-assignment root, while universal globals resolve in this realm.
     let base = roots_len();
@@ -375,6 +384,16 @@ pub fn dyn_function_from_strings(args: &[String]) -> f64 {
         true,
         true,
     );
+    let closure_idx = root_push(closure);
+    let closure_ptr = crate::value::js_nanbox_get_pointer(root_get(closure_idx))
+        as *mut crate::closure::ClosureHeader;
+    if !closure_ptr.is_null() {
+        crate::object::set_bound_native_closure_name(closure_ptr, "anonymous");
+        let closure_ptr = crate::value::js_nanbox_get_pointer(root_get(closure_idx))
+            as *mut crate::closure::ClosureHeader;
+        crate::object::set_builtin_closure_length(closure_ptr as usize, function_length as u32);
+    }
+    let closure = root_get(closure_idx);
     roots_truncate(base);
     closure
 }

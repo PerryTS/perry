@@ -350,6 +350,109 @@ fn collect_direct_top_level_reassigned_identifiers(ast_module: &ast::Module) -> 
     out
 }
 
+/// Class bindings can also be reassigned by a closure created before the class
+/// declaration (`var set = function(){ C = null }; class C {}`). Those reads
+/// and writes need the mutable class-binding bridge just like a direct module
+/// assignment. This deliberately scans only top-level function/arrow
+/// initializers and ignores names shadowed by their parameters or top-level
+/// local declarations; nested class/method bodies have their own class-name
+/// binding and are not part of this outer-binding scan.
+fn collect_top_level_closure_reassigned_identifiers(ast_module: &ast::Module) -> HashSet<String> {
+    fn bind_pat(pat: &ast::Pat, bound: &mut HashSet<String>) {
+        match pat {
+            ast::Pat::Ident(ident) => {
+                bound.insert(ident.id.sym.to_string());
+            }
+            ast::Pat::Assign(assign) => bind_pat(&assign.left, bound),
+            ast::Pat::Rest(rest) => bind_pat(&rest.arg, bound),
+            _ => {}
+        }
+    }
+
+    fn collect_expr(expr: &ast::Expr, bound: &HashSet<String>, out: &mut HashSet<String>) {
+        match expr {
+            ast::Expr::Assign(assign) => {
+                if let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) =
+                    &assign.left
+                {
+                    let name = ident.id.sym.to_string();
+                    if !bound.contains(&name) {
+                        out.insert(name);
+                    }
+                }
+                collect_expr(&assign.right, bound, out);
+            }
+            ast::Expr::Paren(paren) => collect_expr(&paren.expr, bound, out),
+            ast::Expr::Seq(seq) => {
+                for expr in &seq.exprs {
+                    collect_expr(expr, bound, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_stmts(stmts: &[ast::Stmt], params: &[ast::Pat], out: &mut HashSet<String>) {
+        let mut bound = HashSet::new();
+        for param in params {
+            bind_pat(param, &mut bound);
+        }
+        for stmt in stmts {
+            match stmt {
+                ast::Stmt::Decl(ast::Decl::Var(var)) => {
+                    for decl in &var.decls {
+                        bind_pat(&decl.name, &mut bound);
+                    }
+                }
+                ast::Stmt::Decl(ast::Decl::Fn(function)) => {
+                    bound.insert(function.ident.sym.to_string());
+                }
+                ast::Stmt::Decl(ast::Decl::Class(class)) => {
+                    bound.insert(class.ident.sym.to_string());
+                }
+                _ => {}
+            }
+        }
+        for stmt in stmts {
+            if let ast::Stmt::Expr(statement) = stmt {
+                collect_expr(&statement.expr, &bound, out);
+            }
+        }
+    }
+
+    let mut out = HashSet::new();
+    for item in &ast_module.body {
+        let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item else {
+            continue;
+        };
+        for decl in &var.decls {
+            let Some(init) = decl.init.as_deref() else {
+                continue;
+            };
+            match init {
+                ast::Expr::Fn(function) => {
+                    if let Some(body) = function.function.body.as_ref() {
+                        let params: Vec<ast::Pat> = function
+                            .function
+                            .params
+                            .iter()
+                            .map(|param| param.pat.clone())
+                            .collect();
+                        collect_stmts(&body.stmts, &params, &mut out);
+                    }
+                }
+                ast::Expr::Arrow(arrow) => {
+                    if let ast::BlockStmtOrExpr::BlockStmt(body) = arrow.body.as_ref() {
+                        collect_stmts(&body.stmts, &arrow.params, &mut out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 pub fn lower_module(
     ast_module: &ast::Module,
     name: &str,
@@ -599,6 +702,8 @@ pub fn lower_module_full(
     // `collect_direct_top_level_reassigned_identifiers`'s).
     ctx.reassigned_top_level_identifiers =
         collect_direct_top_level_reassigned_identifiers(ast_module);
+    ctx.reassigned_top_level_identifiers
+        .extend(collect_top_level_closure_reassigned_identifiers(ast_module));
     for item in &ast_module.body {
         // Extract function declaration from both regular statements and export declarations
         let fn_decl = match item {

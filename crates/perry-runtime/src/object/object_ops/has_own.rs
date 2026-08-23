@@ -191,32 +191,35 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         if let Some(class_id) = super::super::class_ref_id(obj_value) {
             let present = super::super::has_own_helpers::str_from_string_header(key_str)
                 .map(|key| {
-                    if key.starts_with('#') {
-                        // Private static elements are never reflectable own
-                        // properties of the class constructor.
+                    if super::super::field_get_set::is_internal_runtime_key(key) {
                         false
                     } else if super::super::class_registry::class_is_key_deleted(class_id, key) {
                         false
                     } else if matches!(key, "length" | "prototype") {
                         true
                     } else if key == "name"
-                        && super::super::class_registry::lookup_static_method_in_chain(class_id, key)
-                            .is_none()
+                        && super::super::class_registry::lookup_static_method_in_chain(
+                            class_id, key,
+                        )
+                        .is_none()
                     {
                         super::super::class_registry::class_name_for_id(class_id).is_some()
                     } else {
-                        CLASS_DYNAMIC_PROPS.with(|m| {
+                        let has_public_data = CLASS_DYNAMIC_PROPS.with(|m| {
                             m.borrow()
                                 .get(&class_id)
                                 .is_some_and(|props| props.contains_key(key))
-                        }) || super::super::class_registry::lookup_static_method_in_chain(class_id, key)
-                            .is_some()
-                            // A static accessor (`static get x()`) is an own
-                            // property of the constructor — own-only, mirroring
-                            // getOwnPropertyDescriptor (class/definition/
-                            // {getters,setters}-prop-desc `staticX`).
-                            || super::super::class_registry::class_own_static_accessor_ptrs(class_id, key)
+                        });
+                        has_public_data
+                            || (!key.starts_with('#')
+                                && (super::super::class_registry::lookup_static_method_in_chain(
+                                    class_id, key,
+                                )
                                 .is_some()
+                                    || super::super::class_registry::class_own_static_accessor_ptrs(
+                                        class_id, key,
+                                    )
+                                    .is_some()))
                     }
                 })
                 .unwrap_or(false);
@@ -419,8 +422,7 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
         // for them. Plain literals keep class_id 0.
         if (*obj).class_id != 0 {
             if let Some(key) = super::super::has_own_helpers::str_from_string_header(key_str) {
-                if key.starts_with('#') || super::super::field_get_set::is_internal_runtime_key(key)
-                {
+                if super::super::field_get_set::is_internal_runtime_key(key) {
                     return f64::from_bits(TAG_FALSE);
                 }
             }
@@ -442,9 +444,10 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             if let Some(key) = super::super::has_own_helpers::str_from_string_header(key_str) {
                 if !super::super::class_registry::class_is_key_deleted(cid, key)
                     && (key == "constructor"
-                        || super::super::class_registry::class_own_accessor_ptrs(cid, key)
-                            .is_some()
-                        || super::super::native_module::class_has_own_method(cid, key))
+                        || (!key.starts_with('#')
+                            && (super::super::class_registry::class_own_accessor_ptrs(cid, key)
+                                .is_some()
+                                || super::super::native_module::class_has_own_method(cid, key))))
                 {
                     return f64::from_bits(TAG_TRUE);
                 }
@@ -563,11 +566,12 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
                 if let Some(key_name) =
                     super::super::has_own_helpers::str_from_string_header(key_str)
                 {
-                    let is_static_field = !key_name.starts_with('#')
-                        && super::super::class_registry::class_own_static_field_value(
-                            class_id, key_name,
-                        )
-                        .is_some();
+                    let is_static_field =
+                        !super::super::field_get_set::is_internal_runtime_key(key_name)
+                            && super::super::class_registry::class_own_static_field_value(
+                                class_id, key_name,
+                            )
+                            .is_some();
                     return f64::from_bits(if is_static_field { TAG_TRUE } else { TAG_FALSE });
                 }
             }

@@ -122,6 +122,13 @@ struct ExceptionState {
     /// bypass a static method/accessor's normal pop, so catch entry restores
     /// the stack to its handler-entry state.
     static_private_owner_depths: Box<[usize]>,
+    /// Lexical private-brand dispatch stack depth at each handler. Generated
+    /// throws bypass normal method epilogues, so the catch path truncates the
+    /// orphaned entries exactly like the shadow and runtime-handle stacks.
+    private_lexical_brand_depths: Box<[usize]>,
+    /// Active derived-constructor binding cells at handler entry. A caught
+    /// throw can skip an inline constructor's normal scope pop.
+    derived_super_binding_depths: Box<[usize]>,
     /// #6559: dyn-eval interpreter state (rooted-stack length + interpreter
     /// call depth, packed) captured when each `try` was pushed. A throw
     /// `longjmp`s past interpreter Rust frames without running their
@@ -148,6 +155,8 @@ impl ExceptionState {
             call_method_depths: vec![0u32; MAX_TRY_DEPTH].into_boxed_slice(),
             prototype_resolution_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             static_private_owner_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
+            private_lexical_brand_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
+            derived_super_binding_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             #[cfg(feature = "dyn-eval")]
             dyn_eval_savepoints: vec![0u64; MAX_TRY_DEPTH].into_boxed_slice(),
             try_depth: 0,
@@ -209,6 +218,10 @@ fn try_push_with_kind(kind: HandlerKind) -> *mut i32 {
             crate::object::prototype_chain::resolution_stack_savepoint();
         (*s).static_private_owner_depths[depth] =
             crate::object::static_private_owner_stack_savepoint();
+        (*s).private_lexical_brand_depths[depth] =
+            crate::object::private_lexical_brand_stack_savepoint();
+        (*s).derived_super_binding_depths[depth] =
+            crate::object::derived_super_binding_stack_savepoint();
         // #6559: capture the dyn-eval interpreter's rooted-stack length +
         // call depth, so a caught throw restores interpreter state exactly
         // like the shadow stack.
@@ -330,6 +343,12 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
             (*s).prototype_resolution_depths[depth],
         );
         crate::object::static_private_owner_stack_restore((*s).static_private_owner_depths[depth]);
+        crate::object::private_lexical_brand_stack_restore(
+            (*s).private_lexical_brand_depths[depth],
+        );
+        crate::object::derived_super_binding_stack_restore(
+            (*s).derived_super_binding_depths[depth],
+        );
         // #6559: restore the dyn-eval interpreter's rooted stack + call depth
         // (interpreter Rust frames unwound by this longjmp never run their
         // truncate/decrement epilogues).

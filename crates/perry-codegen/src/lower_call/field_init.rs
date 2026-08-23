@@ -11,7 +11,7 @@ use perry_hir::{Expr, Stmt};
 
 use crate::expr::{lower_expr, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// The field name a constructor-prologue statement assigns from a plain
 /// parameter, or `None` if the statement is not of that shape.
@@ -638,8 +638,8 @@ pub(crate) fn apply_field_initializers_recursive(
                     .map(ctor_prologue_param_assigned_fields)
                     .unwrap_or_default()
             });
-        let mut init_pairs: Vec<(String, Expr)> = Vec::new();
-        let mut init_pairs_computed: Vec<(Expr, Expr)> = Vec::new();
+        let mut init_pairs: Vec<(String, Expr, bool)> = Vec::new();
+        let mut init_pairs_computed: Vec<(String, Expr)> = Vec::new();
         for field in &class_fields {
             // Wall 46: synthesized capture fields (`__perry_cap_*`) are populated
             // EXCLUSIVELY by the constructor's capture-param assignments — for a
@@ -673,18 +673,82 @@ pub(crate) fn apply_field_initializers_recursive(
                 None => Expr::Undefined,
             };
             match &field.key_expr {
-                Some(key) => init_pairs_computed.push((key.clone(), init)),
-                None => init_pairs.push((field.name.clone(), init)),
+                Some(_) => init_pairs_computed.push((field.name.clone(), init)),
+                None => init_pairs.push((field.name.clone(), init, field.is_private)),
             }
         }
-        if init_pairs.is_empty() && init_pairs_computed.is_empty() {
+        let (class_has_private_elements, class_has_private_brand) = ctx
+            .classes
+            .get(&class_name_in_chain)
+            .copied()
+            .map(|class| {
+                (
+                    class.has_private_instance_elements(),
+                    class.has_private_instance_brand(),
+                )
+            })
+            .unwrap_or((false, false));
+        if init_pairs.is_empty() && init_pairs_computed.is_empty() && !class_has_private_elements {
             continue;
         }
 
         // Temporarily swap class_stack so `this.field` in the init
         // resolves against the correct class.
         ctx.class_stack.push(class_name_in_chain.clone());
-        for (prop, init_expr) in init_pairs {
+        // Private methods/accessors are installed before fields and share a
+        // single per-class brand. Private fields are added individually below
+        // so their initializer ordering and duplicate check remain observable.
+        if class_has_private_brand {
+            let this_val = ctx
+                .this_stack
+                .last()
+                .cloned()
+                .map(|slot| ctx.block().load(DOUBLE, &slot))
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            let class_id = ctx
+                .class_ids
+                .get(&class_name_in_chain)
+                .copied()
+                .unwrap_or(0)
+                .to_string();
+            ctx.block().call(
+                DOUBLE,
+                "js_private_brand_add",
+                &[(DOUBLE, &this_val), (I32, &class_id)],
+            );
+        }
+        for (prop, init_expr, is_private) in init_pairs {
+            if is_private {
+                let value = lower_expr(ctx, &init_expr)?;
+                let this_val = ctx
+                    .this_stack
+                    .last()
+                    .cloned()
+                    .map(|slot| ctx.block().load(DOUBLE, &slot))
+                    .unwrap_or_else(|| {
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                    });
+                let key_idx = ctx.strings.intern(&prop);
+                let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let key = ctx.block().load(DOUBLE, &key_global);
+                let class_id = ctx
+                    .class_ids
+                    .get(&class_name_in_chain)
+                    .copied()
+                    .unwrap_or(0)
+                    .to_string();
+                ctx.block().call(
+                    DOUBLE,
+                    "js_private_field_add",
+                    &[
+                        (DOUBLE, &this_val),
+                        (I32, &class_id),
+                        (DOUBLE, &key),
+                        (DOUBLE, &value),
+                    ],
+                );
+                continue;
+            }
             // Issue #263: arrow-function class fields like
             // `arrowField = () => this.value` need their reserved `this`
             // capture slot patched with the constructor's `this` AFTER
@@ -738,42 +802,78 @@ pub(crate) fn apply_field_initializers_recursive(
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let blk = ctx.block();
                 let key_box = blk.load(DOUBLE, &key_handle_global);
-                let key_bits = blk.bitcast_double_to_i64(&key_box);
-                let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                let this_bits = blk.bitcast_double_to_i64(&this_val);
-                let this_raw = blk.and(I64, &this_bits, POINTER_MASK_I64);
-                blk.call_void(
-                    "js_object_set_field_by_name",
-                    &[(I64, &this_raw), (I64, &key_raw), (DOUBLE, &closure_val)],
+                blk.call(
+                    DOUBLE,
+                    "js_class_field_add",
+                    &[
+                        (DOUBLE, &this_val),
+                        (DOUBLE, &key_box),
+                        (DOUBLE, &closure_val),
+                    ],
                 );
                 continue;
             }
 
-            // Non-closure (or non-this-capturing closure) initializer:
-            // build a PropertySet { this, prop, init_expr } and lower
-            // through the existing path.
-            let set_expr = Expr::PropertySet {
-                object: Box::new(Expr::This),
-                property: prop,
-                value: Box::new(init_expr),
-            };
-            let _ = lower_expr(ctx, &set_expr)?;
+            // DefineField uses CreateDataProperty semantics: an inherited
+            // setter must not run, while a Proxy receiver must observe its
+            // `defineProperty` trap.
+            let value = lower_expr(ctx, &init_expr)?;
+            let this_val = ctx
+                .this_stack
+                .last()
+                .cloned()
+                .map(|slot| ctx.block().load(DOUBLE, &slot))
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            let key_idx = ctx.strings.intern(&prop);
+            let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            let key = ctx.block().load(DOUBLE, &key_global);
+            ctx.block().call(
+                DOUBLE,
+                "js_class_field_add",
+                &[(DOUBLE, &this_val), (DOUBLE, &key), (DOUBLE, &value)],
+            );
         }
 
-        // Computed-key fields: `[Parent.Symbol.X] = init` lowers to
-        // `this[Parent.Symbol.X] = init`. The key expression is evaluated
-        // at construction time per ES spec — `Object.defineProperty(this, k, …)`
-        // semantics through the IndexSet path. arrow-with-this-capture is
+        // Computed-key fields reuse the PropertyKey resolved once during
+        // ClassDefinitionEvaluation. DefineField uses CreateDataProperty
+        // semantics (including Proxy [[DefineOwnProperty]]), not assignment.
+        // arrow-with-this-capture is
         // unusual on a computed-key field; if it ever surfaces in real code
         // we extend this branch the same way the string-keyed loop above
         // does.
-        for (key_expr, init_expr) in init_pairs_computed {
-            let set_expr = Expr::IndexSet {
-                object: Box::new(Expr::This),
-                index: Box::new(key_expr),
-                value: Box::new(init_expr),
-            };
-            let _ = lower_expr(ctx, &set_expr)?;
+        for (key_slot, init_expr) in init_pairs_computed {
+            let value = lower_expr(ctx, &init_expr)?;
+            let this_val = ctx
+                .this_stack
+                .last()
+                .cloned()
+                .map(|slot| ctx.block().load(DOUBLE, &slot))
+                .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            let class_id = ctx
+                .class_ids
+                .get(&class_name_in_chain)
+                .copied()
+                .unwrap_or(0)
+                .to_string();
+            let key_idx = ctx.strings.intern(&key_slot);
+            let entry = ctx.strings.entry(key_idx);
+            let key_bytes = format!("@{}", entry.bytes_global);
+            let key_len = entry.byte_len.to_string();
+            let key = ctx.block().call(
+                DOUBLE,
+                "js_class_computed_field_key",
+                &[
+                    (DOUBLE, &this_val),
+                    (I32, &class_id),
+                    (PTR, &key_bytes),
+                    (I64, &key_len),
+                ],
+            );
+            ctx.block().call(
+                DOUBLE,
+                "js_class_field_add",
+                &[(DOUBLE, &this_val), (DOUBLE, &key), (DOUBLE, &value)],
+            );
         }
         ctx.class_stack.pop();
     }

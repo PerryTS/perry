@@ -35,7 +35,7 @@ fn overflow_store_bits(value: f64, obj: *mut ObjectHeader, new_index: usize) -> 
 /// of its NaN-box tag and vetted against the handle band, typed arrays, and
 /// the `arr.length` special case. Body moved verbatim.
 #[allow(unused_assignments)]
-pub(super) fn set_field_by_name_object_tail(
+pub(crate) fn set_field_by_name_object_tail(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
     value: f64,
@@ -266,49 +266,6 @@ pub(super) fn set_field_by_name_object_tail(
         let plan_fast = plan_eligible
             && super::prop_plan::store_plan_check(obj_class_id, interned_key as usize);
 
-        // A per-evaluation class expression is a heap class object rather than
-        // the INT32 ClassRef handled in the entry-point prelude. Private static
-        // setter assignments (`this.#m = value`) still need to consult the
-        // template class's registered static accessor, while passing THIS
-        // evaluation's class object as the receiver. Private names are scoped
-        // here deliberately: an ordinary string property literally named
-        // "#m" remains a separate public data property.
-        // `js_string_intern` above can allocate and evacuate all three rooted
-        // operands. Refresh before the first class-object/private-name probe;
-        // every dereference and the user-visible setter call below is then
-        // dominated by the post-allocation reload.
-        let private_static = obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
-            key_handle.with_const_ptr::<crate::StringHeader, _>(|key| {
-                if !crate::object::is_class_object_ptr(obj as *const u8)
-                    || key.is_null()
-                    || !crate::value::addr_class::is_above_handle_band(key as usize)
-                {
-                    return None;
-                }
-                let name_ptr = crate::string::string_data(key);
-                let name_len = (*key).byte_len as usize;
-                let name =
-                    std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)).ok()?;
-                name.starts_with('#').then(|| {
-                    (
-                        (*obj).class_id,
-                        name.to_string(),
-                        crate::value::js_nanbox_pointer(obj as i64),
-                    )
-                })
-            })
-        });
-        if let Some((class_id, name, receiver)) = private_static {
-            if super::class_registry::class_static_accessor_setter_apply(
-                class_id,
-                &name,
-                receiver,
-                value_handle.get_nanbox_f64(),
-            ) {
-                return;
-            }
-        }
-
         // Refs #486 (hono): class setter dispatch. JS spec: a `set X(...)`
         // accessor on the prototype intercepts `obj.X = value` writes
         // before they hit the instance's data slots. Hono's `set res(_res)
@@ -319,7 +276,9 @@ pub(super) fn set_field_by_name_object_tail(
         // hono-base's `if (!context.finalized) throw` fired on every
         // request. Walk the class -> parent chain mirroring the getter
         // dispatch in `js_object_get_field_by_name`.
-        if !plan_fast && !key.is_null() && (key as usize) > 0x10000 {
+        let receiver_has_own_key =
+            !key.is_null() && super::object_ops::own_key_present(obj as *mut ObjectHeader, key);
+        if !plan_fast && !receiver_has_own_key && !key.is_null() && (key as usize) > 0x10000 {
             let class_id = (*obj).class_id;
             if class_id != 0 {
                 if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {

@@ -354,6 +354,16 @@ pub(crate) struct FnCtx<'a> {
     /// Stack of `this` slot pointers — set when lowering inside a class
     /// constructor body. `Expr::This` loads from the top entry.
     pub this_stack: Vec<String>,
+    /// Per-inlined-constructor flag slots used by `super()`. A successful
+    /// super-constructor return binds derived `this` exactly once; a second
+    /// successful call must throw before instance elements run again.
+    pub super_called_stack: Vec<String>,
+    /// The outermost standalone derived-constructor binding was also exposed
+    /// to nested arrow functions through the runtime binding stack.
+    pub shared_super_scope_active: bool,
+    /// This separately-emitted closure captures lexical `this` from a derived
+    /// constructor and must consult that constructor's shared TDZ cell.
+    pub lexical_this_uses_derived_binding: bool,
     /// Stack of lexical `new.target` slot pointers. Arrow closures that
     /// reference `new.target` capture the enclosing value here.
     pub new_target_stack: Vec<String>,
@@ -2183,7 +2193,7 @@ mod static_field_meta;
 mod static_method;
 mod string_regex_proc;
 mod super_method;
-mod this_super_call;
+pub(crate) mod this_super_call;
 pub(crate) use this_super_call::is_other_builtin_constructor_name;
 mod unary;
 mod url_main;

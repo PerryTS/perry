@@ -855,8 +855,9 @@ pub(crate) fn lower_member_tail(
             // Private field access: this.#field -> PropertyGet with "#field".
             // Wrap the receiver in a brand+kind guard so accessing the private
             // member on a wrong receiver throws TypeError per spec.
-            let property = format!("#{}", private.name);
-            let object = wrap_private_guard(ctx, object, &property, PRIV_OP_READ);
+            let private_name = format!("#{}", private.name);
+            let object = wrap_private_guard(ctx, object, &private_name, PRIV_OP_READ);
+            let property = private_storage_property(ctx, &private_name);
             Ok(Expr::PropertyGet {
                 // #5247: `this.#field` — carry the member offset for nullish-receiver
                 // localization (consistency with the public-property path).

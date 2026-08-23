@@ -464,19 +464,32 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                         // current `this` as receiver. Without this it fell through
                         // to a generic property-get-then-call that lost the
                         // receiver binding (test262 super/prop-expr-cls-ref-this).
-                        if let ast::Expr::Lit(ast::Lit::Str(s)) = computed.expr.as_ref() {
-                            if let Some(method) = s.value.as_str() {
-                                if let Some(spread_args) = spread_args.clone() {
-                                    return Ok(Expr::SuperMethodCallSpread {
-                                        method: method.to_string(),
-                                        args: spread_args,
-                                    });
-                                }
-                                return Ok(Expr::SuperMethodCall {
-                                    method: method.to_string(),
-                                    args,
+                        let literal_method = match computed.expr.as_ref() {
+                            ast::Expr::Lit(ast::Lit::Str(s)) => {
+                                s.value.as_str().map(|s| s.to_string())
+                            }
+                            ast::Expr::Lit(ast::Lit::Num(n))
+                                if n.value.is_finite()
+                                    && n.value.fract() == 0.0
+                                    && n.value >= i64::MIN as f64
+                                    && n.value <= i64::MAX as f64 =>
+                            {
+                                Some(if n.value == 0.0 {
+                                    "0".to_string()
+                                } else {
+                                    (n.value as i64).to_string()
+                                })
+                            }
+                            _ => None,
+                        };
+                        if let Some(method) = literal_method {
+                            if let Some(spread_args) = spread_args.clone() {
+                                return Ok(Expr::SuperMethodCallSpread {
+                                    method,
+                                    args: spread_args,
                                 });
                             }
+                            return Ok(Expr::SuperMethodCall { method, args });
                         }
                     }
                 }

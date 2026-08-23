@@ -485,6 +485,9 @@ pub(super) fn compile_method(
         pending_labels: Vec::new(),
         classes,
         this_stack: vec![this_slot],
+        super_called_stack: Vec::new(),
+        shared_super_scope_active: false,
+        lexical_this_uses_derived_binding: false,
         inline_ctor_return: Vec::new(),
         new_target_stack: Vec::new(),
         class_stack: vec![class.name.clone()],
@@ -728,6 +731,14 @@ pub(super) fn compile_method(
     // as uninitialized register values (read as NaN-boxed undefined).
     let is_constructor_method = method.name == format!("{}_constructor", class.name);
     if is_constructor_method {
+        if class.extends.is_some()
+            || class.extends_name.is_some()
+            || class.native_extends.is_some()
+            || class.extends_expr.is_some()
+        {
+            crate::expr::this_super_call::push_shared_super_called_slot(&mut ctx);
+            ctx.shared_super_scope_active = true;
+        }
         // Stage field initializers around the parent body chain so leaf
         // fields can read state set by parent body (Refs #420):
         //   - has extends: apply only ancestors here; self-fields apply
@@ -953,7 +964,7 @@ pub(super) fn compile_method(
                         }
                         // Load `this` from the this_stack.
                         let this_slot = ctx.this_stack.last().cloned();
-                        let this_box = if let Some(slot) = this_slot {
+                        let this_box = if let Some(ref slot) = this_slot {
                             ctx.block().load(DOUBLE, &slot)
                         } else {
                             undef_lit.clone()
@@ -973,7 +984,20 @@ pub(super) fn compile_method(
                         // real signature (see codegen/mod.rs).
                         ctx.pending_declares
                             .push((ctor_sym.clone(), DOUBLE, ctor_param_types));
-                        let _ = ctx.block().call(DOUBLE, &ctor_sym, &ctor_args);
+                        let parent_result = ctx.block().call(DOUBLE, &ctor_sym, &ctor_args);
+                        if let Some(this_slot) = this_slot {
+                            let current_this = ctx.block().load(DOUBLE, &this_slot);
+                            let bound_this = ctx.block().call(
+                                DOUBLE,
+                                "js_ctor_return_override",
+                                &[
+                                    (DOUBLE, &current_this),
+                                    (DOUBLE, &parent_result),
+                                    (crate::types::I32, "0"),
+                                ],
+                            );
+                            ctx.block().store(DOUBLE, &bound_this, &this_slot);
+                        }
                     }
                 }
             }
@@ -1049,7 +1073,7 @@ pub(super) fn compile_method(
                         Some(slot) => ctx.block().load(DOUBLE, &slot),
                         None => undef_lit.clone(),
                     };
-                    let _ = ctx.block().call(
+                    let parent_result = ctx.block().call(
                         DOUBLE,
                         "js_fetch_or_value_super",
                         &[
@@ -1059,8 +1083,27 @@ pub(super) fn compile_method(
                             (I64, &args_len),
                         ],
                     );
+                    if let Some(this_slot) = ctx.this_stack.last().cloned() {
+                        let current_this = ctx.block().load(DOUBLE, &this_slot);
+                        let bound_this = ctx.block().call(
+                            DOUBLE,
+                            "js_ctor_return_override",
+                            &[
+                                (DOUBLE, &current_this),
+                                (DOUBLE, &parent_result),
+                                (crate::types::I32, "0"),
+                            ],
+                        );
+                        ctx.block().store(DOUBLE, &bound_this, &this_slot);
+                    }
                 }
             }
+
+            // The synthesized default derived constructor has now completed
+            // its implicit `super(...arguments)` path.  Publish that fact to
+            // both this standalone function and any arrow closures before
+            // evaluating the class's own instance fields.
+            crate::expr::this_super_call::bind_derived_this_after_super(&mut ctx);
 
             // Apply self field initializers AFTER the parent body chain has
             // run, so they can read state set by the parent body (e.g. drizzle's
@@ -1102,6 +1145,31 @@ pub(super) fn compile_method(
                     && !crate::lower_call::ctor_body_uses_this(&ctor.body))
                 && !crate::lower_call::ctor_body_has_value_return(&ctor.body)
         });
+    // Standalone constructor symbols use the same internal completion slot as
+    // an inlined `new`: every explicit/bare return funnels to one block, where
+    // constructor return-override semantics are applied against the CURRENT
+    // `this` binding. This matters for a derived `super()` whose base returns
+    // a replacement object — an implicit/bare return must publish that object
+    // to the caller, not `undefined` (which would make the caller retain its
+    // original pre-super allocation).
+    let standalone_ctor_return = if is_constructor_method && !ctor_no_super_throw {
+        let result_slot = ctx.func.alloca_entry(DOUBLE);
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        ctx.block().store(DOUBLE, &undef, &result_slot);
+        let after_idx = ctx.new_block("standalone.ctor.return.after");
+        let target = crate::expr::InlineCtorReturn {
+            result_slot,
+            after_label: ctx.block_label(after_idx),
+            is_derived: class.extends.is_some()
+                || class.extends_name.is_some()
+                || class.native_extends.is_some()
+                || class.extends_expr.is_some(),
+        };
+        ctx.inline_ctor_return.push(target.clone());
+        Some((target, after_idx))
+    } else {
+        None
+    };
     if ctor_no_super_throw {
         ctx.block()
             .call(DOUBLE, "js_throw_reference_error_this_before_super", &[]);
@@ -1119,8 +1187,39 @@ pub(super) fn compile_method(
         })?;
     }
 
+    if let Some((target, after_idx)) = standalone_ctor_return.as_ref() {
+        let _ = ctx
+            .inline_ctor_return
+            .pop()
+            .expect("standalone constructor return target");
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&target.after_label);
+        }
+        ctx.current_block = *after_idx;
+    }
+
     if !ctx.block().is_terminated() {
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        let return_value = if let Some((target, _)) = standalone_ctor_return.as_ref() {
+            let raw = ctx.block().load(DOUBLE, &target.result_slot);
+            let this_value = ctx
+                .this_stack
+                .last()
+                .cloned()
+                .map(|slot| ctx.block().load(DOUBLE, &slot))
+                .unwrap_or_else(|| undef.clone());
+            crate::lower_call::emit_ctor_return_override(
+                &mut ctx,
+                &this_value,
+                &raw,
+                target.is_derived,
+            )
+        } else {
+            undef.clone()
+        };
+        if ctx.shared_super_scope_active {
+            ctx.block().call_void("js_derived_super_scope_pop", &[]);
+        }
         if method.is_async {
             let handle = ctx
                 .block()
@@ -1128,7 +1227,7 @@ pub(super) fn compile_method(
             let boxed = crate::expr::nanbox_pointer_inline_pub(ctx.block(), &handle);
             ctx.block().ret(DOUBLE, &boxed);
         } else {
-            ctx.block().ret(DOUBLE, &undef);
+            ctx.block().ret(DOUBLE, &return_value);
         }
     }
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
@@ -1600,6 +1699,9 @@ pub(super) fn compile_static_method(
         pending_labels: Vec::new(),
         classes,
         this_stack: vec![this_slot],
+        super_called_stack: Vec::new(),
+        shared_super_scope_active: false,
+        lexical_this_uses_derived_binding: false,
         inline_ctor_return: Vec::new(),
         new_target_stack: Vec::new(),
         // A static method's `this` is the class constructor (bound above to

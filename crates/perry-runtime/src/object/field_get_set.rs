@@ -276,13 +276,17 @@ pub use has_property::{js_in_operator, js_object_has_property};
 #[cfg(test)]
 pub(crate) use ic_miss::primitive_proto_method_name_static;
 pub(crate) use ic_miss::{
-    bind_primitive_proto_method_static, is_array_method_value_name, set_method_value_name,
-    stamp_private_evaluation_brand, timer_handle_method_name_static,
+    bind_primitive_proto_method_static, is_array_method_value_name, private_evaluation_brand_value,
+    private_lexical_brand_pop, private_lexical_brand_push, private_lexical_brand_stack_restore,
+    private_lexical_brand_stack_savepoint, private_member_call_by_name, private_member_get_by_name,
+    private_member_set_by_name, scan_private_lexical_brand_roots_mut, set_method_value_name,
+    stamp_private_evaluation_brand, take_private_method_call_hint, take_private_method_owner_hint,
+    timer_handle_method_name_static,
 };
 pub use ic_miss::{
-    js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
-    js_object_get_field_ic_miss, js_object_set_field_by_property_id, js_private_brand_check,
-    js_private_guard, PicCache, PIC_CACHE_WORDS,
+    js_class_field_add, js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
+    js_object_get_field_ic_miss, js_object_set_field_by_property_id, js_private_brand_add,
+    js_private_brand_check, js_private_field_add, js_private_guard, PicCache, PIC_CACHE_WORDS,
 };
 
 #[cfg(test)]

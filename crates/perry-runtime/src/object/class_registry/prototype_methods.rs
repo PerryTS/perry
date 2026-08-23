@@ -2,6 +2,27 @@ use super::*;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
+const CLASS_LEXICAL_BINDING_KEY: &str = "#<perry:private-class-lexical-binding>";
+
+/// Read/write storage for the outer mutable binding introduced by a class
+/// declaration.  The class body's same-spelled inner binding is lowered
+/// directly to its ClassRef and never reaches these helpers.
+#[no_mangle]
+pub extern "C" fn js_class_lexical_binding_get(class_ref: f64) -> f64 {
+    let Some(class_id) = class_ref_id(class_ref) else {
+        return class_ref;
+    };
+    class_own_static_field_value(class_id, CLASS_LEXICAL_BINDING_KEY).unwrap_or(class_ref)
+}
+
+#[no_mangle]
+pub extern "C" fn js_class_lexical_binding_set(class_ref: f64, value: f64) -> f64 {
+    if let Some(class_id) = class_ref_id(class_ref) {
+        class_dynamic_prop_root_store(class_id, CLASS_LEXICAL_BINDING_KEY, value);
+    }
+    value
+}
+
 /// Register a static field value on a class so `Cls.field` (when `Cls` is
 /// accessed via dynamic dispatch — e.g. through an Any-typed local) finds
 /// the value via the runtime path. Codegen calls this at module init for
@@ -22,6 +43,33 @@ pub unsafe extern "C" fn js_class_register_static_field(
         return;
     };
     class_dynamic_prop_root_store(class_id, name, value);
+}
+
+/// Read a computed instance-field key resolved at ClassDefinitionEvaluation.
+/// Fresh class values carry the hidden slot on their heap class object; plain
+/// class references use the class-id static side table.
+#[no_mangle]
+pub unsafe extern "C" fn js_class_computed_field_key(
+    receiver: f64,
+    class_id: u32,
+    name_ptr: *const u8,
+    name_len: usize,
+) -> f64 {
+    if name_ptr.is_null() || name_len == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    if let Some(owner) = crate::object::private_evaluation_brand_value(receiver) {
+        let value = crate::object::js_object_get_own_field_or_undef(owner, name_ptr, name_len);
+        if value.to_bits() != crate::value::TAG_UNDEFINED {
+            return value;
+        }
+    }
+    let bytes = std::slice::from_raw_parts(name_ptr, name_len);
+    let Ok(name) = std::str::from_utf8(bytes) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    class_own_static_field_value(class_id, name)
+        .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
 crate::perry_thread_local! {

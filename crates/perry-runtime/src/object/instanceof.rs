@@ -521,6 +521,7 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
         "WeakSet" => 0xFFFF002D,
         "RegExp" => 0xFFFF0021,
         "ArrayBuffer" => 0xFFFF0025,
+        "SharedArrayBuffer" => 0xFFFF002E,
         "DataView" => 0xFFFF002B,
         "Array" => 0xFFFF0024,
         "Object" => 0xFFFF0050,
@@ -774,6 +775,7 @@ crate::perry_thread_local! {
 fn rhs_is_object_value(value: f64) -> bool {
     let bits = value.to_bits();
     let jsval = crate::JSValue::from_bits(bits);
+
     if jsval.is_null()
         || jsval.is_undefined()
         || jsval.is_bool()
@@ -1204,6 +1206,22 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     let bits = value.to_bits();
     let jsval = crate::JSValue::from_bits(bits);
 
+    // Native/exotic subclass instances (typed arrays, ArrayBuffers, boxed
+    // primitives, Dates, …) do not carry a Perry `ObjectHeader.class_id`.
+    // Their constructor records the distinct newTarget prototype in the
+    // prototype side table instead. Honor that chain for user class ids.
+    if is_class_id_registered(class_id) {
+        let addr = value_addr(value);
+        if addr != 0 && super::prototype_chain::object_static_prototype(addr).is_some() {
+            let constructor = super::class_constructor_ref_value(class_id);
+            return if ordinary_has_instance_prototype_walk(value, constructor) {
+                true_val
+            } else {
+                false_val
+            };
+        }
+    }
+
     // Special handling for Uint8Array/Buffer (class_id 0xFFFF0004)
     // Perry buffers are raw BufferHeader pointers bitcast to f64 (not NaN-boxed),
     // so the normal POINTER_TAG check doesn't work for them.
@@ -1228,7 +1246,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     // marked in a side registry. They can arrive either NaN-boxed or as raw
     // buffer pointers, matching the Buffer/Uint8Array path above.
     const CLASS_ID_ARRAY_BUFFER: u32 = 0xFFFF0025;
-    if class_id == CLASS_ID_ARRAY_BUFFER {
+    const CLASS_ID_SHARED_ARRAY_BUFFER: u32 = 0xFFFF002E;
+    if class_id == CLASS_ID_ARRAY_BUFFER || class_id == CLASS_ID_SHARED_ARRAY_BUFFER {
         let addr = if jsval.is_pointer() {
             (bits & 0x0000_FFFF_FFFF_FFFF) as usize
         } else {
@@ -1239,10 +1258,12 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                 0
             }
         };
-        if addr != 0
-            && crate::buffer::is_registered_buffer(addr)
-            && crate::buffer::is_array_buffer(addr)
-        {
+        let matches_brand = if class_id == CLASS_ID_SHARED_ARRAY_BUFFER {
+            crate::buffer::is_shared_array_buffer(addr)
+        } else {
+            crate::buffer::is_array_buffer(addr)
+        };
+        if addr != 0 && crate::buffer::is_registered_buffer(addr) && matches_brand {
             return true_val;
         }
         return false_val;

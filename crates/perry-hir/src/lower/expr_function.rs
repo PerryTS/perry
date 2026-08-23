@@ -707,7 +707,11 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     }
 
     let outer_strict = ctx.current_strict;
-    let is_strict = outer_strict || block_has_use_strict(fn_expr.function.body.as_ref());
+    // `strict` already combines the surrounding strict context with this
+    // function body's own directive prologue. In particular, a function
+    // expression evaluated as a class heritage expression inherits the class
+    // definition's strict mode even when its body has no `"use strict"`.
+    let is_strict = strict;
     ctx.current_strict = is_strict;
 
     // Annex B B.3.3 (#5297): this function-expression body owns its own

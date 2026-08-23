@@ -78,7 +78,7 @@ impl SH for Expr {
             Expr::Void(e) => { tag(h, 37); e.as_ref().hash(h); }
             Expr::InstanceOf { expr, ty, ty_expr } => { tag(h, 38); expr.as_ref().hash(h); ty.hash(h); ty_expr.hash(h); }
             Expr::In { property, object } => { tag(h, 39); property.as_ref().hash(h); object.as_ref().hash(h); }
-            Expr::PrivateBrandCheck { class_name, field_name, object } => { tag(h, 12401); class_name.hash(h); field_name.hash(h); object.as_ref().hash(h); }
+            Expr::PrivateBrandCheck { class_name, class_id, field_name, kind, is_static, object } => { tag(h, 12401); class_name.hash(h); class_id.hash(h); field_name.hash(h); kind.hash(h); is_static.hash(h); object.as_ref().hash(h); }
             Expr::PrivateGuard { class_name, class_id, field_name, kind, op, object } => { tag(h, 12402); class_name.hash(h); class_id.hash(h); field_name.hash(h); kind.hash(h); op.hash(h); object.as_ref().hash(h); }
             Expr::Await(e) => { tag(h, 40); e.as_ref().hash(h); }
             Expr::Yield { value, delegate } => { tag(h, 41); value.hash(h); delegate.hash(h); }
@@ -649,7 +649,7 @@ impl SH for Expr {
             Expr::RegisterClassStaticSymbol { class_name, key_expr, value_expr, } => { tag(h, 12025); class_name.hash(h); key_expr.as_ref().hash(h); value_expr.as_ref().hash(h); }
             Expr::RegisterClassComputedMethod { class_name, key_expr, method_name, is_static, param_count, has_rest } => { tag(h, 12233); class_name.hash(h); key_expr.as_ref().hash(h); method_name.hash(h); is_static.hash(h); param_count.hash(h); has_rest.hash(h); }
             Expr::RegisterClassComputedAccessor { class_name, key_expr, getter_name, setter_name, is_static } => { tag(h, 12234); class_name.hash(h); key_expr.as_ref().hash(h); getter_name.hash(h); setter_name.hash(h); is_static.hash(h); }
-            Expr::ClassExprFresh { template, named_statics, symbol_statics, captured_args, } => { tag(h, 12026); template.hash(h); for (n, v) in named_statics { n.hash(h); v.hash(h); } for (k, v) in symbol_statics { k.hash(h); v.hash(h); } for a in captured_args { a.hash(h); } }
+            Expr::ClassExprFresh { template, named_statics, computed_keys, computed_statics, captured_args, } => { tag(h, 12026); template.hash(h); for (n, v) in named_statics { n.hash(h); v.hash(h); } for (n, k) in computed_keys { n.hash(h); k.hash(h); } for (n, v) in computed_statics { n.hash(h); v.hash(h); } for a in captured_args { a.hash(h); } }
             Expr::SetFunctionPrototype { func, proto } => { tag(h, 448); func.as_ref().hash(h); proto.as_ref().hash(h); }
             Expr::RegisterPrototypeMethod { class_name, method_name, value, } => { tag(h, 463); class_name.hash(h); method_name.hash(h); value.as_ref().hash(h); }
             Expr::RegisterFunctionPrototypeMethod { func, method_name, value, } => { tag(h, 464); func.as_ref().hash(h); method_name.hash(h); value.as_ref().hash(h); }

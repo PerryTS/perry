@@ -1268,8 +1268,9 @@ pub extern "C" fn js_class_method_bind(
                 class_ref_id(instance).is_some() && class_prototype_ref_id(instance).is_none();
             if !receiver_is_constructor_ref && bound_native_method_length(name).is_none() {
                 if let Some(class_id) = class_id_from_method_receiver(instance) {
-                    if let Some(owner) =
-                        super::class_registry::method_owner_class_id(class_id, name)
+                    let private_owner = super::take_private_method_owner_hint(name);
+                    if let Some(owner) = private_owner
+                        .or_else(|| super::class_registry::method_owner_class_id(class_id, name))
                     {
                         // [[Get]] order: an OWN data property of this name
                         // shadows the prototype method. The ubiquitous
@@ -1282,7 +1283,8 @@ pub extern "C" fn js_class_method_bind(
                         // prototype-ref receiver has no own-property bag, so this
                         // check is naturally a no-op there.
                         let recv_jsv = JSValue::from_bits(instance.to_bits());
-                        if recv_jsv.is_pointer()
+                        if private_owner.is_none()
+                            && recv_jsv.is_pointer()
                             && !super::class_registry::is_registered_class_prototype_object(
                                 crate::value::js_nanbox_get_pointer(instance) as usize,
                             )
@@ -1302,7 +1304,9 @@ pub extern "C" fn js_class_method_bind(
                                 }
                             }
                         }
-                        let canonical = class_prototype_method_value_for_name(owner, name);
+                        let canonical = private_evaluation_brand_value(instance)
+                            .map(|brand| class_evaluation_method_value_for_name(owner, name, brand))
+                            .unwrap_or_else(|| class_prototype_method_value_for_name(owner, name));
                         if canonical.to_bits() != crate::value::TAG_UNDEFINED {
                             return canonical;
                         }
@@ -1363,6 +1367,15 @@ pub(crate) fn build_bound_method_closure(
     method_name_ptr: *const u8,
     method_name_len: usize,
 ) -> f64 {
+    build_bound_method_closure_with_private_brand(instance, method_name_ptr, method_name_len, None)
+}
+
+fn build_bound_method_closure_with_private_brand(
+    instance: f64,
+    method_name_ptr: *const u8,
+    method_name_len: usize,
+    private_brand: Option<f64>,
+) -> f64 {
     // `js_closure_alloc` can collect before it returns, so keep the receiver
     // live across that allocation. The metadata installation below allocates a
     // string for `.name` and can collect again; keep the newly-created closure
@@ -1373,9 +1386,10 @@ pub(crate) fn build_bound_method_closure(
     // method value at an immediately-following `typeof` check (#8036).
     let scope = crate::gc::RuntimeHandleScope::new();
     let instance_handle = scope.root_nanbox_f64(instance);
+    let private_brand_handle = private_brand.map(|brand| scope.root_nanbox_f64(brand));
     let closure_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
         crate::closure::BOUND_METHOD_FUNC_PTR,
-        3,
+        if private_brand_handle.is_some() { 4 } else { 3 },
     ));
     // Capture-slot writes are scoped arguments to non-allocating stores, so
     // the address cannot go stale inside the call. Each value is read from its
@@ -1385,6 +1399,9 @@ pub(crate) fn build_bound_method_closure(
         crate::closure::js_closure_set_capture_f64(closure, 0, instance_value);
         crate::closure::js_closure_set_capture_ptr(closure, 1, method_name_ptr as i64);
         crate::closure::js_closure_set_capture_ptr(closure, 2, method_name_len as i64);
+        if let Some(brand) = &private_brand_handle {
+            crate::closure::js_closure_set_capture_f64(closure, 3, brand.get_nanbox_f64());
+        }
     });
     #[cfg(test)]
     TEST_COLLECT_BOUND_METHOD_AFTER_CAPTURE_INIT.with(|armed| {
@@ -1432,12 +1449,13 @@ pub(crate) fn build_bound_method_closure(
     })
 }
 
+include!("native_module/class_method_values.rs");
+
 /// #6173: sentinel "method name" installed in the name-capture slots (1, 2) of
 /// a BOUND_METHOD closure whose target is a SYMBOL-keyed class method. A
 /// symbol method has no string name to re-resolve at call time, so the
 /// closure instead carries the already-resolved dispatch data in two extra
 /// capture slots:
-///
 ///   slot 0: receiver (NaN-boxed instance/prototype-ref, or the INT32 class
 ///           ref for a static method)
 ///   slot 1: `SYMBOL_BOUND_METHOD_NAME.as_ptr()` — the discriminant, compared
@@ -1467,6 +1485,7 @@ pub(crate) fn build_symbol_bound_method_closure(
     param_count: u32,
     has_rest: bool,
     is_static: bool,
+    display_name: &str,
 ) -> f64 {
     // The allocation itself is a safepoint. Keep the receiver current before
     // storing it into the freshly allocated closure.
@@ -1504,7 +1523,12 @@ pub(crate) fn build_symbol_bound_method_closure(
     };
     closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
         set_builtin_closure_length(closure as usize, spec_length);
-        crate::gc::runtime_write_barrier_root_heap_word(closure as u64);
+    });
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        set_bound_native_closure_name(closure, display_name)
+    });
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        crate::gc::runtime_write_barrier_root_heap_word(closure as u64)
     });
     closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
         crate::value::js_nanbox_pointer(closure as i64)

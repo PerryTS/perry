@@ -28,8 +28,18 @@ pub(super) unsafe fn dispatch_string(
     // receivers continue to use the inline `js_string_*` paths in
     // `lower_string_method.rs`; this dispatch only catches fallthroughs
     // where codegen couldn't statically prove the type.
-    if jsval.is_string() || jsval.is_short_string() {
-        let s_ptr = crate::value::js_get_string_pointer_unified(object_handle.get_nanbox_f64())
+    let string_receiver = if jsval.is_string() || jsval.is_short_string() {
+        Some(object_handle.get_nanbox_f64())
+    } else if crate::builtins::boxed_primitive_to_string_tag(object_handle.get_nanbox_f64())
+        == Some("String")
+    {
+        crate::builtins::boxed_primitive_payload(object_handle.get_nanbox_f64())
+            .map(|(_, payload)| payload)
+    } else {
+        None
+    };
+    if let Some(string_receiver) = string_receiver {
+        let s_ptr = crate::value::js_get_string_pointer_unified(string_receiver)
             as *const crate::StringHeader;
         if !s_ptr.is_null() {
             // NOTE: user-defined `String.prototype` methods on primitive string

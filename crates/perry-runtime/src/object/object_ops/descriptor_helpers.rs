@@ -762,6 +762,7 @@ pub(crate) unsafe fn define_property_force_store_value(
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let key_handle = scope.root_string_ptr(key_str);
+    let value_handle = scope.root_nanbox_f64(value);
     let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
     if obj.is_null() || (obj as usize) <= 0x10000 {
         return;
@@ -772,7 +773,39 @@ pub(crate) unsafe fn define_property_force_store_value(
     let saved = (*gc)._reserved;
     (*gc)._reserved &= !immutability;
     let key_str = key_handle.get_raw_const_ptr::<crate::StringHeader>();
-    js_object_set_field_by_name(obj, key_str, value);
+    // `js_object_set_field_by_name` implements [[Set]], including inherited
+    // setter lookup. DefineProperty must write the receiver's own slot
+    // directly. Ensure the shape entry exists, then locate its parallel value
+    // slot and store by index (or through object-owned overflow storage).
+    ensure_key_in_keys_array(obj, key_str);
+    obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let key_str = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+    let keys = crate::object::object_keys_array(obj);
+    if !keys.is_null() {
+        let count = crate::array::keys_array_len_capped_to_capacity(keys) as usize;
+        let (slots, slot_len) = crate::object::keys_array_dense_slots(keys);
+        for i in 0..count.min(slot_len) {
+            let stored = JSValue::from_bits((*slots.add(i)).to_bits());
+            if crate::string::js_string_key_matches(stored, key_str) {
+                let live_slots = crate::object::object_live_slot_count(obj) as usize;
+                let inline_limit = live_slots.max(crate::object::INLINE_SLOT_FLOOR);
+                if i < inline_limit {
+                    js_object_set_field(
+                        obj,
+                        i as u32,
+                        JSValue::from_bits(value_handle.get_nanbox_f64().to_bits()),
+                    );
+                } else {
+                    crate::object::overflow_set(
+                        obj as usize,
+                        i,
+                        value_handle.get_nanbox_f64().to_bits(),
+                    );
+                }
+                break;
+            }
+        }
+    }
     // Re-fetch after a possible evacuation, then restore the immutability bits.
     obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
     if !obj.is_null() && (obj as usize) > 0x10000 {

@@ -1641,12 +1641,16 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
             )
         }
         GcLayoutSlotKind::ObjectMeta => {
-            // Prototype is the prefix slot; spill and the private-evaluation
-            // brand are the two contiguous child slots that follow it.
+            // Prototype and the private-evaluation brand are explicit prefix
+            // edges. Keep the brand out of the payload selection: its class
+            // object can be reachable only through this metadata record, so
+            // treating it as ordinary payload lets a stale/partial layout
+            // mask silently collect the class evaluation identity.
             let meta = user_ptr as *mut crate::object::ObjectMeta;
             let proto_slot = Some(&mut (*meta).prototype as *mut u64);
-            let range = HeapSlotRange::new(&mut (*meta).spill as *mut u64, 2);
-            HeapChildSlotIterator::new(header, proto_slot, range)
+            let brand_slot = Some(&mut (*meta).private_evaluation_brand as *mut u64);
+            let range = HeapSlotRange::new(&mut (*meta).spill as *mut u64, 1);
+            HeapChildSlotIterator::new(header, proto_slot, range).with_meta_slot(brand_slot)
         }
         GcLayoutSlotKind::ClosureCaptures => {
             let closure = user_ptr as *mut crate::closure::ClosureHeader;

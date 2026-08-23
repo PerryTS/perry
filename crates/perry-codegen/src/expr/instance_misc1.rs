@@ -99,6 +99,7 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         "Set" => 0xFFFF0023,
         "Array" => 0xFFFF0024,
         "ArrayBuffer" => 0xFFFF0025,
+        "SharedArrayBuffer" => 0xFFFF002E,
         "DataView" => 0xFFFF002B,
         "WeakMap" => 0xFFFF002C,
         "WeakSet" => 0xFFFF002D,
@@ -464,6 +465,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `ArrayBuffer` — runtime detects BufferHeader storage marked
                 // with Perry's ArrayBuffer side registry.
                 "ArrayBuffer" => 0xFFFF0025u32,
+                "SharedArrayBuffer" => 0xFFFF002Eu32,
                 // WeakMap / WeakSet: real instances match via a runtime probe
                 // (CLASS_ID_WEAKMAP/CLASS_ID_WEAKSET in weakref.rs, #5834) —
                 // see the matching arm in perry-runtime/src/object/instanceof.rs.

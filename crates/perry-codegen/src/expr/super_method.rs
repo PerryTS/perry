@@ -15,6 +15,7 @@ use super::{emit_string_literal_global, lower_expr, nanbox_pointer_inline, FnCtx
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::SuperMethodCall { method, args } => {
+            super::this_super_call::check_derived_this_initialized(ctx);
             // Find the current class from the class_stack.
             let Some(current_class_name) = ctx.class_stack.last().cloned() else {
                 // No enclosing class — fall back to stub.
@@ -200,6 +201,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // dynamic path (which handles both native-prototype and user-class
         // JS parents).
         Expr::SuperMethodCallSpread { method, args } => {
+            super::this_super_call::check_derived_this_initialized(ctx);
             use perry_hir::CallArg;
             let Some(current_class_name) = ctx.class_stack.last().cloned() else {
                 for a in args {
@@ -271,6 +273,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Call-form `super.method(...)` never reaches this arm — it
         // is lowered to `Expr::SuperMethodCall` in lower_call.rs.
         Expr::SuperPropertyGet { property } => {
+            super::this_super_call::check_derived_this_initialized(ctx);
             let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let Some(current_class_name) = ctx.class_stack.last().cloned() else {
                 return Ok(undef);
@@ -301,9 +304,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .and_then(|p| ctx.class_ids.get(p))
                     .copied()
                     .unwrap_or(0);
-                if parent_cid == 0 {
-                    return Ok(undef);
-                }
                 let recv_v = if let Some(this_slot) = ctx.this_stack.last().cloned() {
                     ctx.block().load(DOUBLE, &this_slot)
                 } else {
@@ -358,6 +358,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             key,
             value,
         } => {
+            super::this_super_call::check_derived_this_initialized(ctx);
             let parent_cid = if *parent_class_id != 0 {
                 *parent_class_id
             } else if let Some(parent_name) = parent_class_name {

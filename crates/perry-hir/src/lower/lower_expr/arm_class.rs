@@ -34,21 +34,27 @@ pub(crate) fn lower_class_expr(
     // ClassRef directly, so the original name is not needed at module
     // scope. The `current_class` guard avoids renaming the rare
     // self-referential `class C { … new C() … }` expression form.
-    let ident_name = match ident_name {
+    let (ident_name, named_display_override) = match ident_name {
         Some(n)
             if (ctx.module_class_decl_names.contains(&n)
                 || ctx.lookup_class(&n).is_some()
-                || ctx.lookup_imported_func(&n).is_some())
+                || ctx.lookup_imported_func(&n).is_some()
+                // A named class expression's identifier is visible only in
+                // its ClassBody.  When the surrounding binding has a different
+                // name (or there is no inferred binding), never publish that
+                // inner identifier as the registry key visible to outer code.
+                || assignment_name.as_deref() != Some(n.as_str()))
                 && ctx.current_class.as_deref() != Some(n.as_str()) =>
         {
-            Some(format!("{}__class_expr_{}", n, ctx.fresh_class()))
+            let synthetic = format!("{}__class_expr_{}", n, ctx.fresh_class());
+            (Some(synthetic), Some(n))
         }
-        other => other,
+        other => (other, None),
     };
     // When the HIR registration key we pick below diverges from the
     // class's user-visible `.name`, record the real name here so codegen
     // registers it instead of the synthetic key (#5592).
-    let mut display_override: Option<String> = None;
+    let mut display_override: Option<String> = named_display_override;
     let synthetic_name = match ident_name {
         Some(n) => n,
         None => {
@@ -87,7 +93,12 @@ pub(crate) fn lower_class_expr(
                     display_override = Some(name.clone());
                     format!("{}__anon_dup_{}", name, ctx.fresh_class())
                 }
-                None => format!("__anon_class_{}", ctx.fresh_class()),
+                None => {
+                    // The registry key must be unique, but an uninferred
+                    // anonymous class expression has the observable name "".
+                    display_override = Some(String::new());
+                    format!("__anon_class_{}", ctx.fresh_class())
+                }
             }
         }
     };
@@ -126,12 +137,18 @@ pub(crate) fn lower_class_expr(
     // canonical case: `isSchema(C)` was called from Schema.ts's
     // own top-level `class extends transform(...)` chains, which
     // run before the module's `init_static_fields_late`.
-    let static_symbol_registrations: Vec<(Expr, Expr)> = class
+    let computed_keys = crate::lower_decl::computed_field_key_initializers(
+        &class_expr.class.body,
+        &class.fields,
+        &class.static_fields,
+    );
+    let computed_statics: Vec<(String, Expr)> = class
         .static_fields
         .iter()
-        .filter_map(|sf| match (sf.key_expr.as_ref(), sf.init.as_ref()) {
-            (Some(k), Some(v)) => Some((k.clone(), v.clone())),
-            _ => None,
+        .filter_map(|sf| {
+            sf.key_expr
+                .as_ref()
+                .map(|_| (sf.name.clone(), sf.init.clone().unwrap_or(Expr::Undefined)))
         })
         .collect();
     // Issue #1772: regular-named static fields with an initializer
@@ -230,7 +247,7 @@ pub(crate) fn lower_class_expr(
     };
     if !at_module_top
         && (!named_statics.is_empty()
-            || !static_symbol_registrations.is_empty()
+            || !computed_keys.is_empty()
             || !captured_args.is_empty()
             || has_private_elements)
     {
@@ -272,7 +289,8 @@ pub(crate) fn lower_class_expr(
         let fresh_expr = Expr::ClassExprFresh {
             template: synthetic_name.clone(),
             named_statics,
-            symbol_statics: static_symbol_registrations,
+            computed_keys,
+            computed_statics,
             captured_args,
         };
         let mut seq: Vec<Expr> = Vec::new();
@@ -341,11 +359,22 @@ pub(crate) fn lower_class_expr(
             captures: captured_args.clone(),
         });
     }
+    for (field_name, value) in computed_keys {
+        seq.push(Expr::StaticFieldSet {
+            class_name: synthetic_name.clone(),
+            field_name,
+            value: Box::new(value),
+        });
+    }
     seq.extend(computed_member_registrations);
-    for (k, v) in static_symbol_registrations {
+    for (slot, v) in computed_statics {
         seq.push(Expr::RegisterClassStaticSymbol {
             class_name: synthetic_name.clone(),
-            key_expr: Box::new(k),
+            key_expr: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::ClassRef(synthetic_name.clone())),
+                property: slot,
+                byte_offset: 0,
+            }),
             value_expr: Box::new(v),
         });
     }

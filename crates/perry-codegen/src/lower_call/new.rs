@@ -587,7 +587,14 @@ fn lower_new_impl_inner<'a>(
     // with `super(...)`/rest params) round-trip correctly through the call.
     let force_ctor_call = std::env::var_os("PERRY_INLINE_CTOR").is_none()
         && class.constructor.is_some()
-        && local_constructor_symbol_exists(ctx, class);
+        && local_constructor_symbol_exists(ctx, class)
+        // These bases create an exotic object in `super()`. Keep their own
+        // constructors inline so the replacement derived-this value remains
+        // authoritative at the surrounding `new` expression.
+        && !class
+            .extends_name
+            .as_deref()
+            .is_some_and(crate::expr::is_other_builtin_constructor_name);
     if ctx.class_stack.iter().any(|active| active == class_name)
         || ctor_alias_collision
         || force_ctor_call
@@ -915,7 +922,7 @@ fn lower_new_impl_inner<'a>(
     } else {
         ctx.block().store(DOUBLE, &obj_box, &this_slot);
     }
-    ctx.this_stack.push(this_slot);
+    ctx.this_stack.push(this_slot.clone());
     ctx.class_stack.push(class_name.to_string());
 
     // #2768/new.target: `new C()` is fully inlined here, so the runtime
@@ -1114,6 +1121,9 @@ fn lower_new_impl_inner<'a>(
             || class.extends_name.is_some()
             || class.native_extends.is_some()
             || class.extends_expr.is_some();
+        if is_derived_class {
+            crate::expr::this_super_call::push_shared_super_called_slot(ctx);
+        }
         // A closure-captured `super()` may run during construction, so it
         // suppresses the static throw — but only when the body never touches
         // `this` directly (a direct `this` in a no-direct-super derived ctor
@@ -1128,8 +1138,20 @@ fn lower_new_impl_inner<'a>(
                 .call(DOUBLE, "js_throw_reference_error_this_before_super", &[]);
             ctx.block().unreachable();
         } else {
-            // Lower the constructor body. Errors propagate.
-            crate::stmt::lower_stmts(ctx, &class.constructor.as_ref().unwrap().body)?;
+            // A constructor body is inlined into the surrounding function.
+            // Its `return` completes the constructor, not an enclosing
+            // source-level `try`, so return cleanup must count only handlers
+            // opened by the inlined body. The caller's LLVM EH scope remains
+            // active and still receives every throwing invoke.
+            let caller_try_depth = ctx.try_depth;
+            ctx.try_depth = 0;
+            let lower_result =
+                crate::stmt::lower_stmts(ctx, &class.constructor.as_ref().unwrap().body);
+            ctx.try_depth = caller_try_depth;
+            lower_result?;
+        }
+        if is_derived_class {
+            crate::expr::this_super_call::pop_shared_super_called_slot(ctx);
         }
 
         // Restore the enclosing function's local scope.
@@ -1170,7 +1192,70 @@ fn lower_new_impl_inner<'a>(
                     ctx.class_stack.pop();
                     ctx.class_stack.push(pname.to_string());
 
-                    crate::stmt::lower_stmts(ctx, &parent_ctor.body)?;
+                    // The inherited body is the `super(...args)` half of this
+                    // class's implicit default derived constructor.  A
+                    // `return <object>` in that ANCESTOR replaces the value of
+                    // `this`, but it does not complete the leaf constructor:
+                    // the leaf's instance fields and private elements still
+                    // have to be installed on the replacement object.
+                    //
+                    // Reusing the leaf's inline-return target made the parent
+                    // return branch straight to the end of `new C(...)`.
+                    // Besides skipping the leaf initializers, subsequent
+                    // lowering happened in an already-terminated block and
+                    // produced references to SSA names that were never
+                    // emitted.  Give the parent body its own completion slot,
+                    // apply its constructor return-override here, and publish
+                    // the resulting `this` through the rooted this-slot before
+                    // continuing with the leaf initialization.
+                    let parent_result_slot = ctx.func.alloca_entry(DOUBLE);
+                    ctx.block().store(
+                        DOUBLE,
+                        &double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                        &parent_result_slot,
+                    );
+                    let parent_after_idx = ctx.new_block("inherited.ctor.return.after");
+                    let parent_after_label = ctx.block_label(parent_after_idx);
+                    let parent_is_derived = parent_class.extends.is_some()
+                        || parent_class.extends_name.is_some()
+                        || parent_class.native_extends.is_some()
+                        || parent_class.extends_expr.is_some();
+                    ctx.inline_ctor_return.push(crate::expr::InlineCtorReturn {
+                        result_slot: parent_result_slot,
+                        after_label: parent_after_label.clone(),
+                        is_derived: parent_is_derived,
+                    });
+                    if parent_is_derived {
+                        crate::expr::this_super_call::push_shared_super_called_slot(ctx);
+                    }
+                    let caller_try_depth = ctx.try_depth;
+                    ctx.try_depth = 0;
+                    let lower_result = crate::stmt::lower_stmts(ctx, &parent_ctor.body);
+                    ctx.try_depth = caller_try_depth;
+                    lower_result?;
+                    if parent_is_derived {
+                        crate::expr::this_super_call::pop_shared_super_called_slot(ctx);
+                    }
+                    let parent_return = ctx
+                        .inline_ctor_return
+                        .pop()
+                        .expect("inherited constructor return target");
+                    if !ctx.block().is_terminated() {
+                        ctx.block().br(&parent_after_label);
+                    }
+                    ctx.current_block = parent_after_idx;
+                    let parent_raw = ctx.block().load(DOUBLE, &parent_return.result_slot);
+                    let inherited_this = ctx.block().load(DOUBLE, &this_slot);
+                    let effective_this = super::new_helpers::emit_ctor_return_override(
+                        ctx,
+                        &inherited_this,
+                        &parent_raw,
+                        parent_return.is_derived,
+                    );
+                    ctx.block().store(DOUBLE, &effective_this, &this_slot);
+                    if instance.protected {
+                        crate::expr::root_entry_alloca(ctx, &this_slot);
+                    }
 
                     // Restore class_stack to the child.
                     ctx.class_stack.pop();
@@ -1178,26 +1263,11 @@ fn lower_new_impl_inner<'a>(
 
                     restore_inline_constructor_scope(ctx, saved_scope);
 
-                    // Apply the field initializers of every class BELOW the
-                    // inherited-ctor class — the leaf and any intermediates —
-                    // now that the parent ctor body has run (the post-super()
-                    // step, mirroring the own-ctor path's SelfOnly-after). The
-                    // up-front pass above used `UpToInclusive(inherited)`, which
-                    // keeps `chain[0..=idx(inherited)]` and therefore EXCLUDES
-                    // the leaf, so without this a no-own-ctor subclass's own
-                    // field initializers never ran — e.g. zod's
-                    // `class ZodObject extends ZodType { private _cached = null }`
-                    // left `_cached` at the raw-0 slot, so `_getCached()`'s
-                    // `this._cached !== null` was true (0 !== null) and returned
-                    // 0; `_parse` then destructured `{ keys }` off 0, iterated
-                    // nothing, and every `z.object({...}).parse()` dropped all
-                    // fields.
-                    apply_field_initializers_recursive(
-                        ctx,
-                        class_name,
-                        FieldInitMode::BetweenExclusiveTo(pname.to_string()),
-                    )?;
-
+                    // The shared post-constructor tail below installs every
+                    // class below this inherited constructor exactly once.
+                    // Keeping a second copy here was harmless for ordinary
+                    // assignment-like fields, but became observable as a
+                    // duplicate private-element installation.
                     found_inherited_ctor = true;
                     break; // Found and inlined the parent ctor.
                 }
@@ -1254,6 +1324,65 @@ fn lower_new_impl_inner<'a>(
                     &obj_box,
                     &lowered_args,
                 );
+                found_inherited_ctor = true;
+            }
+        }
+        // The remaining native builtins require real exotic instances rather
+        // than state stamped onto Perry's initially allocated plain object.
+        // Invoke their [[Construct]] with this class as newTarget and replace
+        // the derived `this` binding with the returned branded value.
+        if !found_inherited_ctor && !has_imported_ctor {
+            if let Some(parent) = class.extends_name.as_deref().filter(|name| {
+                matches!(
+                    *name,
+                    "ArrayBuffer"
+                        | "SharedArrayBuffer"
+                        | "DataView"
+                        | "Boolean"
+                        | "Number"
+                        | "String"
+                        | "Date"
+                        | "RegExp"
+                        | "Function"
+                        | "BigInt"
+                        | "Symbol"
+                        | "Object"
+                        | "Int8Array"
+                        | "Uint8Array"
+                        | "Uint8ClampedArray"
+                        | "Int16Array"
+                        | "Uint16Array"
+                        | "Int32Array"
+                        | "Uint32Array"
+                        | "Float32Array"
+                        | "Float64Array"
+                        | "BigInt64Array"
+                        | "BigUint64Array"
+                )
+            }) {
+                let (args_ptr, args_len) = lower_js_args_array(ctx, &lowered_args);
+                let class_id = ctx
+                    .class_ids
+                    .get(class_name)
+                    .copied()
+                    .unwrap_or(0)
+                    .to_string();
+                let name_idx = ctx.strings.intern(parent);
+                let entry = ctx.strings.entry(name_idx);
+                let name_bytes = format!("@{}", entry.bytes_global);
+                let name_len = entry.byte_len.to_string();
+                let constructed = ctx.block().call(
+                    DOUBLE,
+                    "js_builtin_subclass_construct",
+                    &[
+                        (I32, &class_id),
+                        (PTR, &name_bytes),
+                        (I64, &name_len),
+                        (PTR, &args_ptr),
+                        (I64, &args_len),
+                    ],
+                );
+                ctx.block().store(DOUBLE, &constructed, &this_slot);
                 found_inherited_ctor = true;
             }
         }
@@ -1611,7 +1740,12 @@ fn lower_new_impl_inner<'a>(
             .extends_name
             .as_deref()
             .map(crate::expr::is_other_builtin_constructor_name)
-            .unwrap_or(false);
+            .unwrap_or(false)
+            // SharedArrayBuffer construction now returns a real branded
+            // buffer and honors the subclass newTarget/prototype in the
+            // runtime dispatcher. It must run rather than retaining Perry's
+            // provisional plain-object receiver.
+            && class.extends_name.as_deref() != Some("SharedArrayBuffer");
         if !found_inherited_ctor && class.extends_expr.is_some() && !parent_is_uncallable_builtin {
             if let Some(cid) = ctx.class_ids.get(class_name).copied().filter(|c| *c != 0) {
                 let parent_val = ctx.block().call(
@@ -1646,7 +1780,7 @@ fn lower_new_impl_inner<'a>(
                 // outer function's `this` (or undef at module scope). Use
                 // `obj_box` — the freshly-allocated object — directly.
                 let this_box = obj_box.clone();
-                let _ = ctx.block().call(
+                let parent_result = ctx.block().call(
                     DOUBLE,
                     "js_fetch_or_value_super",
                     &[
@@ -1656,6 +1790,19 @@ fn lower_new_impl_inner<'a>(
                         (I64, &args_len),
                     ],
                 );
+                // A function-valued base constructor can return a replacement
+                // object (notably a Proxy).  The implicit derived constructor
+                // binds that object as `this`; primitives retain the allocation.
+                // Keep the rooted slot authoritative so field initialization and
+                // the final `new` result both use the replacement.
+                let current_this = ctx.block().load(DOUBLE, &this_slot);
+                let effective_this = super::new_helpers::emit_ctor_return_override(
+                    ctx,
+                    &current_this,
+                    &parent_result,
+                    false,
+                );
+                ctx.block().store(DOUBLE, &effective_this, &this_slot);
             }
         }
     }
@@ -1708,11 +1855,35 @@ fn lower_new_impl_inner<'a>(
             apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AfterRoot)?;
         }
     }
+    // Close the inline constructor's control flow before emitting anything
+    // that consumes the constructed receiver.  An explicit `return` has
+    // already terminated the body block and branched to `after_idx`; emitting
+    // a receiver reload while that terminated block is still current only
+    // manufactures an SSA name with no defining instruction (invalid LLVM).
+    let inline_return = ctx.inline_ctor_return.pop();
+    if let Some(ret) = inline_return.as_ref() {
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&ret.after_label);
+        }
+        ctx.current_block = after_idx;
+    }
+
     // #7154: same re-read as the standalone-symbol path above. The inlined
     // constructor body (field initializers, `super(...)`, nested `new`s) can
     // reach a back-edge poll, and the evacuating minor there relocates the
     // instance out from under `obj_handle`/`obj_box`.
-    let (obj_handle, obj_box) = reload_instance(ctx, group, &instance, &obj_handle, &obj_box);
+    let (obj_handle, obj_box) = if instance.protected {
+        // `super()` is allowed to replace `this` (an ancestor constructor may
+        // return an object).  The rooted this-slot is the authoritative value
+        // after constructor execution; the allocation root still names the
+        // original leaf allocation in that case.
+        let boxed = ctx.block().load(DOUBLE, &this_slot);
+        let bits = ctx.block().bitcast_double_to_i64(&boxed);
+        let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+        (handle, boxed)
+    } else {
+        reload_instance(ctx, group, &instance, &obj_handle, &obj_box)
+    };
     emit_typed_shape_layout_init(ctx, class_name, &obj_handle);
 
     // Close the inline-constructor return: fall through (or branch) to the
@@ -1721,11 +1892,7 @@ fn lower_new_impl_inner<'a>(
     // (initial value) or the raw value from an explicit `return`. The override
     // runs HERE (outside any `try` in the body) so a derived ctor's
     // `try { return <primitive>; } catch {}` still throws uncaught.
-    let final_box = if let Some(ret) = ctx.inline_ctor_return.pop() {
-        if !ctx.block().is_terminated() {
-            ctx.block().br(&ret.after_label);
-        }
-        ctx.current_block = after_idx;
+    let final_box = if let Some(ret) = inline_return {
         let raw = ctx.block().load(DOUBLE, &ret.result_slot);
         super::new_helpers::emit_ctor_return_override(ctx, &obj_box, &raw, ret.is_derived)
     } else {

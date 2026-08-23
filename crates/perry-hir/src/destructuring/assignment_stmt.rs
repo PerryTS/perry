@@ -108,6 +108,38 @@ fn lower_array_assignment_from_expr(
 
     let mut body = Vec::new();
     for elem in &arr_pat.elems {
+        if let Some(ast::Pat::Rest(rest_pat)) = elem {
+            // AssignmentRestElement evaluates its target and drains every
+            // remaining iterator value into a fresh Array, then performs the
+            // assignment even when the iterator was already exhausted.  The
+            // old `PreparedTarget::Skip` arm silently discarded this entire
+            // operation, so `[...this.#x] = []` never performed its required
+            // private-brand check.
+            let (prepare, target, _) = prepare_assignment_target(ctx, &rest_pat.arg)?;
+            body.extend(prepare);
+            let (rest_id, rest_name) = fresh_destruct_local(ctx, "destruct_rest", Type::Any);
+            body.push(Stmt::Let {
+                id: rest_id,
+                name: rest_name,
+                ty: Type::Any,
+                mutable: false,
+                init: Some(runtime_iterator_call(
+                    "iteratorRestToArray",
+                    vec![Expr::LocalGet(iter_id), Expr::LocalGet(done_id)],
+                )),
+            });
+            body.push(Stmt::Expr(Expr::LocalSet(
+                done_id,
+                Box::new(Expr::Bool(true)),
+            )));
+            body.extend(assign_prepared_target(
+                ctx,
+                target,
+                Expr::LocalGet(rest_id),
+            )?);
+            break;
+        }
+
         let (value_id, value_name) = fresh_destruct_local(ctx, "destruct_value", Type::Any);
         body.push(Stmt::Let {
             id: value_id,
@@ -455,13 +487,14 @@ fn prepare_assignment_target(
                     // a getter-only accessor / private method) throws TypeError,
                     // matching `this.#field = v`.
                     ast::MemberProp::PrivateName(private) => {
-                        let property = format!("#{}", private.name);
+                        let private_name = format!("#{}", private.name);
                         let guarded = crate::lower::wrap_private_guard(
                             ctx,
                             Box::new(Expr::LocalGet(object_id)),
-                            &property,
+                            &private_name,
                             crate::lower::PRIV_OP_WRITE,
                         );
+                        let property = crate::lower::private_storage_property(ctx, &private_name);
                         Ok((
                             prepare,
                             PreparedTarget::Property {

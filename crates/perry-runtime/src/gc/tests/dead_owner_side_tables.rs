@@ -773,6 +773,46 @@ fn test_object_meta_prototype_survives_copied_minor_move() {
     js_shadow_slot_set(1, 0);
 }
 
+/// A class-evaluation object may be reachable only through an instance's
+/// hidden ObjectMeta brand. The edge must retain and rewrite that class object
+/// when a copied minor moves the owner, its metadata, and the brand together.
+#[test]
+fn test_object_meta_private_evaluation_brand_survives_copied_minor_move() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    let (class, _) = unsafe { alloc_nursery_test_object(0) };
+    unsafe {
+        crate::object::js_object_mark_class(class as i64);
+        let meta = crate::object::object_meta_ensure(owner);
+        (*meta).private_evaluation_brand = ptr_bits(class as usize);
+    }
+    let old_owner = owner as usize;
+    let old_class = class as usize;
+    js_shadow_slot_set(0, ptr_bits(old_owner));
+
+    let _ = gc_collect_minor();
+
+    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(new_owner, old_owner, "test premise: the owner must move");
+    let brand = unsafe {
+        let meta = (*(new_owner as *mut crate::object::ObjectHeader)).meta;
+        assert!(
+            !meta.is_null(),
+            "the moved owner must retain its meta record"
+        );
+        (*meta).private_evaluation_brand
+    };
+    let new_class = (brand & POINTER_MASK) as usize;
+    assert_ne!(new_class, old_class, "test premise: the brand must move");
+    assert!(
+        crate::object::is_class_object_value(f64::from_bits(brand)),
+        "the metadata edge must retain and rewrite the class evaluation brand"
+    );
+
+    js_shadow_slot_set(0, 0);
+}
+
 /// #6759 Phase C2: the per-key descriptor summary in the meta record gates
 /// table probes — exactly (no false negatives) for installed keys, and
 /// authoritatively negative for a fresh owner and for keys whose Bloom bit

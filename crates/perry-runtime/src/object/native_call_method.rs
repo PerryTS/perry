@@ -1074,6 +1074,22 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    if !method_name_ptr.is_null() && method_name_len > 0 {
+        let method_name_bytes =
+            std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
+        if method_name_bytes.starts_with(b"#<perry:private-member:") {
+            if let Ok(storage_name) = std::str::from_utf8(method_name_bytes) {
+                if let Some(result) = super::field_get_set::private_member_call_by_name(
+                    object,
+                    storage_name,
+                    args_ptr,
+                    args_len,
+                ) {
+                    return result;
+                }
+            }
+        }
+    }
     // PerformanceObserverEntryList is a native namespace receiver, and typed
     // feedback can dispatch its methods before the generic prototype/native-
     // module tower below. Validate the WebIDL-required filter argument at this
@@ -1643,11 +1659,22 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         let prev_this_h = prev_this_scope.root_nanbox_u64(
             IMPLICIT_THIS.with(|c| c.replace(object_handle.get_nanbox_f64().to_bits())),
         );
+        let proxy_class_id = crate::proxy::proxy_target_class_id(object_handle.get_nanbox_f64());
+        let is_static_class_method = proxy_class_id.is_some_and(|class_id| {
+            crate::object::class_registry::lookup_static_method_in_chain(class_id, method_name)
+                .is_some()
+        });
+        if is_static_class_method {
+            crate::object::static_this_arm(object_handle.get_nanbox_f64());
+        }
         let result = crate::closure::js_native_call_value(
             method_handle.get_nanbox_f64(),
             args.as_ptr(),
             args.len(),
         );
+        if is_static_class_method {
+            crate::object::static_this_disarm();
+        }
         IMPLICIT_THIS.with(|c| c.set(prev_this_h.get_nanbox_u64()));
         return result;
     }
@@ -2133,7 +2160,15 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                             }
                         }
                     }
-                    return object();
+                    if matches!(method_name, "pipe" | "annotations") {
+                        return object();
+                    }
+                    crate::error::js_throw_type_error_not_a_function(
+                        std::ptr::null(),
+                        0,
+                        method_name.as_ptr(),
+                        method_name.len(),
+                    );
                 }
             }
         }

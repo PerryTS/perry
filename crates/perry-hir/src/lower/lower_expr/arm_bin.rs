@@ -9,14 +9,18 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
     // Handle 'in' operator: property in object
     if matches!(bin.op, ast::BinaryOp::In) {
         if let ast::Expr::PrivateName(private) = bin.left.as_ref() {
-            let class_name = ctx.current_class.clone().ok_or_else(|| {
-                anyhow!("Private name brand check is only supported inside a class")
-            })?;
             let field_name = format!("#{}", private.name);
+            let (class_name, class_id, member) =
+                ctx.resolve_private(&field_name).ok_or_else(|| {
+                    anyhow!("Private name brand check is only supported inside its declaring class")
+                })?;
             let object = Box::new(lower_expr(ctx, &bin.right)?);
             return Ok(Expr::PrivateBrandCheck {
                 class_name,
+                class_id,
                 field_name,
+                kind: member.kind as u8,
+                is_static: member.is_static,
                 object,
             });
         }

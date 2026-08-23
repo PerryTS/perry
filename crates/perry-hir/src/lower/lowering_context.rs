@@ -998,6 +998,12 @@ pub struct LoweringContext {
     /// object literals, counters). Built once per module in
     /// `lower_module_full`; consumed by `const_fold_fn`.
     pub(crate) fn_ctor_env: super::fn_ctor_env::FnCtorEnv,
+    /// Direct subclasses of hidden dynamic-function constructors whose
+    /// construction can use the existing AOT CreateDynamicFunction fold.
+    /// The boolean is true for an implicit argument-forwarding constructor
+    /// and false for the exact `constructor() { super(); }` form.
+    pub(crate) dynamic_function_subclasses:
+        HashMap<String, (super::fn_ctor_env::DynFnCtorKind, bool)>,
     /// Current recursion depth of `lower_expr` (#5259). Incremented on entry,
     /// decremented on exit. Once it exceeds either the broad
     /// `MAX_EXPR_LOWER_DEPTH` ceiling or the lower stack-heavy chain ceiling,

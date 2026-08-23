@@ -396,6 +396,42 @@ unsafe fn resolve_proto_chain_field_inner(
                 unsafe { super::super::field_get_set::own_data_field_by_name(decl_proto, key) }
             {
                 if !value.is_undefined() {
+                    // Declared methods are mirrored onto the template's shared
+                    // reflective prototype. For a ClassExprFresh instance,
+                    // substitute the method closure owned by this particular
+                    // class evaluation; otherwise separate factory calls share
+                    // a lexical private brand and cross-calls incorrectly pass.
+                    if let Some(receiver) = receiver {
+                        let key_ptr =
+                            (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                        let key_len = (*key).byte_len as usize;
+                        if let Ok(name) =
+                            std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len))
+                        {
+                            if super::super::native_module::class_has_own_method(cid, name)
+                                && value.bits()
+                                    == super::super::native_module::class_prototype_method_value_for_name(
+                                        cid, name,
+                                    )
+                                    .to_bits()
+                            {
+                                if let Some(brand) =
+                                    super::super::private_evaluation_brand_value(receiver)
+                                {
+                                    let brand_obj = crate::value::JSValue::from_bits(brand.to_bits())
+                                        .as_pointer::<ObjectHeader>();
+                                    if !brand_obj.is_null()
+                                        && js_object_get_class_id(brand_obj) == cid
+                                    {
+                                        let method = super::super::native_module::class_evaluation_method_value_for_name(
+                                            cid, name, brand,
+                                        );
+                                        return Some(JSValue::from_bits(method.to_bits()));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     return Some(value);
                 }
             }

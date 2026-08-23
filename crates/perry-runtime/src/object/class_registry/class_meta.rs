@@ -23,6 +23,11 @@ pub unsafe extern "C" fn js_register_class_id(class_id: u32) {
 /// from `v8::Function::builder(...)` would collide every module under the
 /// same token. (#1021.)
 pub static CLASS_NAMES: RwLock<Option<HashMap<u32, String>>> = RwLock::new(None);
+/// Maps `class_id → ECMAScript constructor length` (formal parameters before
+/// the first default/rest parameter). Class refs are integer immediates rather
+/// than heap Function objects, so their own `length` property is reified from
+/// this table alongside `CLASS_NAMES`.
+pub static CLASS_LENGTHS: RwLock<Option<HashMap<u32, u32>>> = RwLock::new(None);
 
 /// Register the user-visible name of a class so the V8 bridge can label
 /// the V8-side wrapper for nice `metatype.name` reads. Idempotent.
@@ -55,6 +60,22 @@ pub unsafe extern "C" fn js_register_class_name(class_id: u32, name_ptr: *const 
 pub fn class_name_for_id(class_id: u32) -> Option<String> {
     let guard = CLASS_NAMES.read().ok()?;
     guard.as_ref()?.get(&class_id).cloned()
+}
+
+#[no_mangle]
+pub extern "C" fn js_register_class_length(class_id: u32, length: u32) {
+    if class_id == 0 {
+        return;
+    }
+    let mut guard = CLASS_LENGTHS.write().unwrap();
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard.as_mut().unwrap().insert(class_id, length);
+}
+
+pub fn class_length_for_id(class_id: u32) -> Option<u32> {
+    CLASS_LENGTHS.read().ok()?.as_ref()?.get(&class_id).copied()
 }
 
 /// Whether dynamic-dispatch miss diagnostics are enabled (`PERRY_DISPATCH_DIAG`,

@@ -136,7 +136,7 @@ pub(crate) fn class_own_enumerable_field_names(class_id: u32) -> Vec<String> {
             .map(|props| {
                 props
                     .keys()
-                    .filter(|k| !k.starts_with('#'))
+                    .filter(|k| !crate::object::is_internal_runtime_key(k))
                     // #7190: a key installed by `Object.defineProperty` without
                     // `enumerable: true` shares this table with static fields
                     // but is NOT enumerable.
@@ -576,7 +576,7 @@ pub(crate) fn class_decl_prototype_object(class_id: u32) -> *mut ObjectHeader {
     })
 }
 
-fn class_decl_prototype_method_names(class_id: u32) -> Vec<String> {
+pub(crate) fn class_decl_prototype_method_names(class_id: u32) -> Vec<String> {
     let mut names = Vec::new();
     if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
         if let Some(vtable) = registry.as_ref().and_then(|reg| reg.get(&class_id)) {
@@ -692,14 +692,24 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         unsafe { mirror_prototype_method_on_object(proto, &name, value_bits, enumerable) };
     }
 
-    let parent_proto_bits = get_parent_class_id(class_id)
-        .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
-        .and_then(|parent_id| {
-            let parent_proto = class_decl_prototype_value(parent_id);
-            let parent_bits = parent_proto.to_bits();
-            ((parent_bits >> 48) == 0x7FFD).then_some(parent_bits)
-        })
-        .or_else(global_object_prototype_bits);
+    let dynamic_parent = js_get_dynamic_parent_value(class_id);
+    let null_heritage = dynamic_parent.to_bits() == crate::value::TAG_NULL;
+    let parent_proto_bits = if null_heritage {
+        // A class extending null creates a prototype object whose
+        // [[Prototype]] is null, not Object.prototype.  Record TAG_NULL
+        // explicitly so "no custom link" is not mistaken for the ordinary
+        // Object.prototype default.
+        Some(crate::value::TAG_NULL)
+    } else {
+        get_parent_class_id(class_id)
+            .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
+            .and_then(|parent_id| {
+                let parent_proto = class_decl_prototype_value(parent_id);
+                let parent_bits = parent_proto.to_bits();
+                ((parent_bits >> 48) == 0x7FFD).then_some(parent_bits)
+            })
+            .or_else(global_object_prototype_bits)
+    };
     if let Some(bits) = parent_proto_bits {
         super::super::prototype_chain::object_set_static_prototype(proto as usize, bits);
     }

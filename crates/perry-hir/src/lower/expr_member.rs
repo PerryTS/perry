@@ -38,7 +38,9 @@ pub(crate) use native_dispatch::{
     is_native_dispatch_member, is_net_server_method_name, is_net_socket_method_name,
     is_stream_api_member, is_url_pattern_data_property, is_worker_instance_value_property,
 };
-pub(crate) use private_guard::{wrap_private_guard, PRIV_OP_READ, PRIV_OP_WRITE};
+pub(crate) use private_guard::{
+    private_storage_property, wrap_private_guard, PRIV_OP_READ, PRIV_OP_WRITE,
+};
 pub(crate) use process_literals::{process_allowed_node_flags_literal, process_features_literal};
 pub(crate) use process_props::{
     is_ws_ready_state_receiver, lower_process_named_property, process_metadata_native_property,
@@ -1089,25 +1091,25 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             e
         }
         let inner = unwrap_member_obj(member.obj.as_ref());
-        if let ast::Expr::Ident(obj_ident) = inner {
-            let obj_name = obj_ident.sym.to_string();
-            if ctx.is_proxy_local(&obj_name) {
-                let proxy_expr = if let Some(id) = ctx.lookup_local(&obj_name) {
-                    Expr::LocalGet(id)
-                } else {
-                    lower_expr(ctx, &member.obj)?
-                };
-                let key_expr = match &member.prop {
-                    ast::MemberProp::Ident(i) => Expr::String(i.sym.to_string()),
-                    ast::MemberProp::Computed(c) => lower_expr(ctx, &c.expr)?,
-                    ast::MemberProp::PrivateName(pn) => {
-                        Expr::String(format!("#{}", pn.name.as_str()))
-                    }
-                };
-                return Ok(Expr::ProxyGet {
-                    proxy: Box::new(proxy_expr),
-                    key: Box::new(key_expr),
-                });
+        if !matches!(member.prop, ast::MemberProp::PrivateName(_)) {
+            if let ast::Expr::Ident(obj_ident) = inner {
+                let obj_name = obj_ident.sym.to_string();
+                if ctx.is_proxy_local(&obj_name) {
+                    let proxy_expr = if let Some(id) = ctx.lookup_local(&obj_name) {
+                        Expr::LocalGet(id)
+                    } else {
+                        lower_expr(ctx, &member.obj)?
+                    };
+                    let key_expr = match &member.prop {
+                        ast::MemberProp::Ident(i) => Expr::String(i.sym.to_string()),
+                        ast::MemberProp::Computed(c) => lower_expr(ctx, &c.expr)?,
+                        ast::MemberProp::PrivateName(_) => unreachable!("guarded above"),
+                    };
+                    return Ok(Expr::ProxyGet {
+                        proxy: Box::new(proxy_expr),
+                        key: Box::new(key_expr),
+                    });
+                }
             }
         }
     }

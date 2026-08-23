@@ -9,12 +9,120 @@ use perry_hir::Expr;
 
 use crate::lower_call::{bind_inline_constructor_params, restore_inline_constructor_scope};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 use super::{
     lower_array_super_init, lower_event_emitter_subclass_init, lower_expr,
     lower_node_stream_super_init, lower_stream_super_init, nanbox_pointer_inline, FnCtx,
 };
+
+/// Enter one derived constructor's `super()` binding scope.
+pub(crate) fn push_super_called_slot(ctx: &mut FnCtx<'_>) {
+    let slot = ctx.func.alloca_entry(I1);
+    ctx.block().store(I1, "0", &slot);
+    ctx.super_called_stack.push(slot);
+}
+
+/// Leave the constructor scope established by [`push_super_called_slot`].
+pub(crate) fn pop_super_called_slot(ctx: &mut FnCtx<'_>) {
+    ctx.super_called_stack.pop();
+}
+
+/// Enter a constructor scope whose binding must also be visible to arrows
+/// compiled as separate LLVM functions.
+pub(crate) fn push_shared_super_called_slot(ctx: &mut FnCtx<'_>) {
+    push_super_called_slot(ctx);
+    let slot = ctx
+        .super_called_stack
+        .last()
+        .cloned()
+        .expect("shared super binding slot");
+    ctx.block()
+        .call_void("js_derived_super_scope_push", &[(PTR, &slot)]);
+}
+
+pub(crate) fn pop_shared_super_called_slot(ctx: &mut FnCtx<'_>) {
+    ctx.block().call_void("js_derived_super_scope_pop", &[]);
+    pop_super_called_slot(ctx);
+}
+
+/// Enforce the derived-constructor `this` TDZ before materializing a lexical
+/// `this` value.  The allocation used while running `super()` already exists,
+/// but ECMAScript does not initialize the constructor's `this` binding until
+/// that call returns successfully.
+pub(crate) fn check_derived_this_initialized(ctx: &mut FnCtx<'_>) {
+    if let Some(slot) = ctx.super_called_stack.last().cloned() {
+        // While an inlined base-constructor body is running, its own `this`
+        // is initialized even though the outer derived constructor's binding
+        // is not. `class_stack` follows the body currently being lowered, so
+        // only apply the local cell to a derived body.
+        let current_body_is_derived = ctx
+            .class_stack
+            .last()
+            .and_then(|name| ctx.classes.get(name).copied())
+            .is_some_and(|class| {
+                class.extends.is_some()
+                    || class.extends_name.is_some()
+                    || class.native_extends.is_some()
+                    || class.extends_expr.is_some()
+            });
+        if !current_body_is_derived {
+            return;
+        }
+        let initialized_idx = ctx.new_block("derived.this.initialized");
+        let uninitialized_idx = ctx.new_block("derived.this.uninitialized");
+        let initialized_label = ctx.block_label(initialized_idx);
+        let uninitialized_label = ctx.block_label(uninitialized_idx);
+        let initialized = ctx.block().load(I1, &slot);
+        ctx.block()
+            .cond_br(&initialized, &initialized_label, &uninitialized_label);
+
+        ctx.current_block = uninitialized_idx;
+        ctx.block()
+            .call(DOUBLE, "js_throw_reference_error_this_before_super", &[]);
+        ctx.block().unreachable();
+
+        ctx.current_block = initialized_idx;
+    } else if ctx.lexical_this_uses_derived_binding {
+        // Arrows are emitted as separate LLVM functions and therefore cannot
+        // name the enclosing constructor's alloca.  The runtime stack mirrors
+        // the active outer binding; outside a derived constructor this helper
+        // is deliberately a no-op.
+        let _ = ctx
+            .block()
+            .call(DOUBLE, "js_derived_this_check_current", &[]);
+    }
+}
+
+/// Bind derived `this` after a successful parent-constructor return. The
+/// parent is deliberately invoked before this check: a second `super()` runs
+/// the base constructor, then throws `ReferenceError` while binding `this`,
+/// and must not execute the derived class's fields a second time.
+pub(crate) fn bind_derived_this_after_super(ctx: &mut FnCtx<'_>) {
+    let Some(slot) = ctx.super_called_stack.last().cloned() else {
+        // Arrow functions compile in their own FnCtx. If they lexically occur
+        // inside an inline derived constructor, bind that constructor's cell.
+        let _ = ctx
+            .block()
+            .call(DOUBLE, "js_derived_super_bind_current", &[]);
+        return;
+    };
+    let duplicate_idx = ctx.new_block("super.bind.duplicate");
+    let continue_idx = ctx.new_block("super.bind.continue");
+    let duplicate_label = ctx.block_label(duplicate_idx);
+    let continue_label = ctx.block_label(continue_idx);
+    let already_called = ctx.block().load(I1, &slot);
+    ctx.block()
+        .cond_br(&already_called, &duplicate_label, &continue_label);
+
+    ctx.current_block = duplicate_idx;
+    ctx.block()
+        .call(DOUBLE, "js_throw_reference_error_this_before_super", &[]);
+    ctx.block().unreachable();
+
+    ctx.current_block = continue_idx;
+    ctx.block().store(I1, "1", &slot);
+}
 
 /// Built-in constructor names (beyond Error/stream/fetch, which have their own
 /// SuperCall arms) that can appear as a class heritage. `super(...)` to these
@@ -64,6 +172,7 @@ pub(crate) fn is_other_builtin_constructor_name(name: &str) -> bool {
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::This => {
+            check_derived_this_initialized(ctx);
             if let Some(slot) = ctx.this_stack.last().cloned() {
                 Ok(ctx.block().load(DOUBLE, &slot))
             } else {
@@ -511,7 +620,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             // back to the ordinary implicit-`this`-bound
                             // `js_native_call_value` (unchanged behavior for
                             // every other runtime-value parent).
-                            let _ = ctx.block().call(
+                            let parent_result = ctx.block().call(
                                 DOUBLE,
                                 "js_fetch_or_value_super",
                                 &[
@@ -521,6 +630,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     (I64, &args_len),
                                 ],
                             );
+                            // A duplicate `super()` still evaluates/calls the
+                            // parent, but it must throw before replacing the
+                            // already-initialized derived `this` binding with
+                            // the parent's second return object.
+                            bind_derived_this_after_super(ctx);
+                            // `super()` binds an object returned by a callable
+                            // base constructor (for example a Proxy) as the
+                            // derived `this`.  A primitive return is ignored.
+                            if let Some(this_slot) = ctx.this_stack.last().cloned() {
+                                let current_this = ctx.block().load(DOUBLE, &this_slot);
+                                let effective_this = crate::lower_call::emit_ctor_return_override(
+                                    ctx,
+                                    &current_this,
+                                    &parent_result,
+                                    false,
+                                );
+                                ctx.block().store(DOUBLE, &effective_this, &this_slot);
+                            }
 
                             // Per JS spec: subclass field initializers run AFTER
                             // super() returns. Same call the user-class branch makes
@@ -845,6 +972,86 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // so downstream `err.message` / `err.name` access works.
                     // `instanceof Error` walking the extends chain is handled
                     // elsewhere; this just makes `err.message` non-undefined.
+                    if matches!(
+                        parent_name.as_str(),
+                        "ArrayBuffer"
+                            | "SharedArrayBuffer"
+                            | "DataView"
+                            | "Boolean"
+                            | "Number"
+                            | "String"
+                            | "Date"
+                            | "RegExp"
+                            | "Function"
+                            | "BigInt"
+                            | "Symbol"
+                            | "Object"
+                            | "Int8Array"
+                            | "Uint8Array"
+                            | "Uint8ClampedArray"
+                            | "Int16Array"
+                            | "Uint16Array"
+                            | "Int32Array"
+                            | "Uint32Array"
+                            | "Float32Array"
+                            | "Float64Array"
+                            | "BigInt64Array"
+                            | "BigUint64Array"
+                    ) {
+                        let mut lowered_args = Vec::with_capacity(super_args.len());
+                        for arg in super_args {
+                            lowered_args.push(lower_expr(ctx, arg)?);
+                        }
+                        let (args_ptr, args_len) = if lowered_args.is_empty() {
+                            ("null".to_string(), "0".to_string())
+                        } else {
+                            let buf = ctx.func.alloca_entry_array(DOUBLE, lowered_args.len());
+                            for (index, value) in lowered_args.iter().enumerate() {
+                                let slot =
+                                    ctx.block().gep(DOUBLE, &buf, &[(I64, &index.to_string())]);
+                                ctx.block().store(DOUBLE, value, &slot);
+                            }
+                            let ptr = ctx.block().next_reg();
+                            ctx.block().emit_raw(format!(
+                                "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                                ptr,
+                                lowered_args.len(),
+                                buf
+                            ));
+                            (ptr, lowered_args.len().to_string())
+                        };
+                        let class_id = ctx
+                            .class_ids
+                            .get(&current_class_name)
+                            .copied()
+                            .unwrap_or(0)
+                            .to_string();
+                        let name_idx = ctx.strings.intern(&parent_name);
+                        let entry = ctx.strings.entry(name_idx);
+                        let name_bytes = format!("@{}", entry.bytes_global);
+                        let name_len = entry.byte_len.to_string();
+                        let constructed = ctx.block().call(
+                            DOUBLE,
+                            "js_builtin_subclass_construct",
+                            &[
+                                (I32, &class_id),
+                                (crate::types::PTR, &name_bytes),
+                                (I64, &name_len),
+                                (crate::types::PTR, &args_ptr),
+                                (I64, &args_len),
+                            ],
+                        );
+                        bind_derived_this_after_super(ctx);
+                        if let Some(this_slot) = ctx.this_stack.last().cloned() {
+                            ctx.block().store(DOUBLE, &constructed, &this_slot);
+                        }
+                        crate::lower_call::apply_field_initializers_recursive(
+                            ctx,
+                            &current_class_name,
+                            crate::lower_call::FieldInitMode::SelfOnly,
+                        )?;
+                        return Ok(constructed);
+                    }
                     let is_error_like = matches!(
                         parent_name.as_str(),
                         "Error"
@@ -1021,6 +1228,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 effective_parent_class = gp_class;
             }
 
+            let mut super_binding_done = false;
             if let Some(parent_ctor) = &effective_parent_class.constructor {
                 // The parent's synthesized `__perry_cap_*` params (a parent
                 // class that captures enclosing locals) are NOT in the
@@ -1085,9 +1293,63 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     parent_capture_fill,
                 );
 
+                let parent_is_derived = effective_parent_class.extends.is_some()
+                    || effective_parent_class.extends_name.is_some()
+                    || effective_parent_class.native_extends.is_some()
+                    || effective_parent_class.extends_expr.is_some();
+                let parent_result_slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.block().store(
+                    DOUBLE,
+                    &double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                    &parent_result_slot,
+                );
+                let parent_after_idx = ctx.new_block("super.parent.return.after");
+                let parent_after_label = ctx.block_label(parent_after_idx);
+                ctx.inline_ctor_return.push(super::InlineCtorReturn {
+                    result_slot: parent_result_slot,
+                    after_label: parent_after_label.clone(),
+                    is_derived: parent_is_derived,
+                });
                 ctx.class_stack.push(effective_parent_name.clone());
-                crate::stmt::lower_stmts(ctx, &parent_ctor.body)?;
+                if parent_is_derived {
+                    push_shared_super_called_slot(ctx);
+                }
+                // This body is inlined into the caller, but a `return` in the
+                // base constructor completes only that constructor.  It must
+                // not pop any `try` handlers belonging to the source-level
+                // `super()` call site. Keep the caller's EH scope active for
+                // emitted invokes while making return cleanup relative to the
+                // inlined body itself.
+                let caller_try_depth = ctx.try_depth;
+                ctx.try_depth = 0;
+                let lower_result = crate::stmt::lower_stmts(ctx, &parent_ctor.body);
+                ctx.try_depth = caller_try_depth;
+                lower_result?;
+                if parent_is_derived {
+                    pop_shared_super_called_slot(ctx);
+                }
                 ctx.class_stack.pop();
+                let parent_return = ctx
+                    .inline_ctor_return
+                    .pop()
+                    .expect("super parent constructor return target");
+                if !ctx.block().is_terminated() {
+                    ctx.block().br(&parent_after_label);
+                }
+                ctx.current_block = parent_after_idx;
+                let parent_raw = ctx.block().load(DOUBLE, &parent_return.result_slot);
+                if let Some(this_slot) = ctx.this_stack.last().cloned() {
+                    let inherited_this = ctx.block().load(DOUBLE, &this_slot);
+                    let effective_this = crate::lower_call::emit_ctor_return_override(
+                        ctx,
+                        &inherited_this,
+                        &parent_raw,
+                        parent_return.is_derived,
+                    );
+                    bind_derived_this_after_super(ctx);
+                    super_binding_done = true;
+                    ctx.block().store(DOUBLE, &effective_this, &this_slot);
+                }
 
                 restore_inline_constructor_scope(ctx, saved_scope);
             } else if let Some(error_kind) = {
@@ -1227,6 +1489,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Walk parent → ... → effective_parent_name (exclusive),
             // collect intermediate names. Apply SelfOnly for each in
             // root-most-first order, then for current_class_name.
+            if !super_binding_done {
+                bind_derived_this_after_super(ctx);
+            }
             let mut intermediates: Vec<String> = Vec::new();
             let mut walker = current_class.extends_name.as_deref().map(|s| s.to_string());
             while let Some(pname) = walker {

@@ -68,13 +68,13 @@ use crate::weakref::{
 /// `obj` must be a valid, readable `ObjectHeader` pointer (the caller has
 /// already validated it as a live heap object).
 pub unsafe fn try_weak_method_dispatch(
-    obj: *const ObjectHeader,
+    _obj: *const ObjectHeader,
     receiver: f64,
     method_name: &str,
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
-    let class_id = (*obj).class_id;
+    let class_id = weak_wrapper_class_id(receiver)?;
     if !matches!(
         class_id,
         CLASS_ID_WEAKMAP | CLASS_ID_WEAKSET | CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_REGISTRY
@@ -162,6 +162,19 @@ pub fn weak_wrapper_class_id(receiver: f64) -> Option<u32> {
             CLASS_ID_WEAKMAP | CLASS_ID_WEAKSET | CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_REGISTRY
         ) {
             return Some(cid);
+        }
+        // User subclasses keep their own class id but their registered parent
+        // chain terminates at the reserved WeakMap/WeakSet constructor ids.
+        const CLASS_ID_WEAKMAP_RESERVED: u32 = 0xFFFF_002C;
+        const CLASS_ID_WEAKSET_RESERVED: u32 = 0xFFFF_002D;
+        let mut current = cid;
+        for _ in 0..64 {
+            match crate::object::get_parent_class_id(current) {
+                Some(CLASS_ID_WEAKMAP_RESERVED) => return Some(CLASS_ID_WEAKMAP),
+                Some(CLASS_ID_WEAKSET_RESERVED) => return Some(CLASS_ID_WEAKSET),
+                Some(parent) => current = parent,
+                None => break,
+            }
         }
     }
     None

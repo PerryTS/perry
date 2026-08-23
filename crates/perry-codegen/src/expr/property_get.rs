@@ -1391,7 +1391,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .get(&class_name)
                     .map(|c| c.static_accessor_names.iter().any(|n| n == property))
                     .unwrap_or(false);
-                if receiver_class_is_proven && !is_static_accessor {
+                if receiver_class_is_proven
+                    && !is_static_accessor
+                    // A source `#name` registry entry is a PrivateName, not a
+                    // String-named accessor. Public computed `obj["#name"]`
+                    // must perform ordinary own-property lookup instead.
+                    && !property.starts_with('#')
+                {
                     if let Some(fn_name) = ctx.methods.get(&getter_key).cloned() {
                         let recv_box = lower_expr(ctx, object)?;
                         return Ok(ctx.block().call(DOUBLE, &fn_name, &[(DOUBLE, &recv_box)]));
@@ -1917,7 +1923,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // prototype methods — every method reference returned
                 // `undefined`.
                 let method_key = (class_name.clone(), property.clone());
-                if receiver_class_is_proven && ctx.methods.contains_key(&method_key) {
+                if receiver_class_is_proven
+                    && !property.starts_with('#')
+                    && ctx.methods.contains_key(&method_key)
+                {
                     return lower_class_method_bind(ctx, object, property);
                 }
             }

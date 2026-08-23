@@ -920,6 +920,11 @@ pub fn gc_init() {
     // under concurrent load) must rewrite the cell, or the body's next
     // `this`-derived dispatch derefs a relocated receiver → SIGSEGV.
     reg_scanner!(crate::object::scan_implicit_this_roots_mut);
+    // Fresh class evaluations are lexical environments, not merely template
+    // class ids. Method dispatch keeps the active evaluation here so private
+    // accesses remain exact across `.call`/`.apply`; root and rewrite those
+    // class objects while a moving collection runs inside the method body.
+    reg_scanner!(crate::object::scan_private_lexical_brand_roots_mut);
     // Connected inspector sessions are retained only by the inspector's
     // thread-local registry while they receive protocol notifications.
     reg_scanner!(crate::node_inspector::scan_inspector_roots_mut);

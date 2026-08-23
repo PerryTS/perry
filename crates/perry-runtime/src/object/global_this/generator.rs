@@ -112,6 +112,11 @@ pub(crate) fn generator_function_prototype_of(closure_ptr: usize) -> Option<f64>
     }
     let obj_value = obj_h.get_nanbox_f64();
     crate::closure::closure_set_dynamic_prop(closure_ptr, "prototype", obj_value);
+    super::super::set_builtin_property_attrs(
+        closure_ptr,
+        "prototype".to_string(),
+        super::super::PropertyAttrs::new(true, false, false),
+    );
     Some(obj_h.get_nanbox_f64())
 }
 
