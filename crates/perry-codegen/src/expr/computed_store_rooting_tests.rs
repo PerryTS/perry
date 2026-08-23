@@ -796,7 +796,7 @@ fn collecting_masked_window_index_declines_the_hoisted_pointer_tier() {
 
     let collecting = masked_window_index_coercion_loop(Type::Any);
     assert!(
-        calls(&collecting, "js_number_coerce"),
+        calls(&collecting, "js_dynamic_pos"),
         "unary + over an any key must exercise the collecting coercion witness:\n{collecting}"
     );
     assert!(
@@ -819,7 +819,7 @@ fn collecting_rhs_between_masked_reads_declines_the_hoisted_pointer_tier() {
 
     let collecting = masked_window_rhs_coercion_loop(Type::Any);
     assert!(
-        calls(&collecting, "js_number_coerce"),
+        calls(&collecting, "js_dynamic_pos"),
         "the any-typed RHS must exercise the user-coercion witness:\n{collecting}"
     );
     assert!(
@@ -842,7 +842,7 @@ fn collecting_rhs_declines_the_straight_line_masked_region() {
 
     let collecting = masked_window_rhs_coercion_region(Type::Any);
     assert!(
-        calls(&collecting, "js_number_coerce"),
+        calls(&collecting, "js_dynamic_pos"),
         "the any-typed region RHS must exercise the user-coercion witness:\n{collecting}"
     );
     assert!(
