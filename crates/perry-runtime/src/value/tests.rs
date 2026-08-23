@@ -216,3 +216,14 @@ fn test_jsvalue_equals_numbers() {
     assert_eq!(js_jsvalue_equals(null, undef), 0); // strict: null !== undefined
     assert_eq!(js_jsvalue_equals(null, 0.0), 0);
 }
+
+#[test]
+fn test_jsvalue_equals_distinct_box_allocated_symbols() {
+    let left = crate::symbol::well_known_symbol("iterator") as usize;
+    let right = crate::symbol::well_known_symbol("species") as usize;
+    assert_ne!(left, right);
+
+    let left = f64::from_bits(POINTER_TAG | (left as u64 & POINTER_MASK));
+    let right = f64::from_bits(POINTER_TAG | (right as u64 & POINTER_MASK));
+    assert_eq!(js_jsvalue_equals(left, right), 0);
+}

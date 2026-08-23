@@ -185,13 +185,17 @@ pub extern "C" fn js_jsvalue_equals(a: f64, b: f64) -> i32 {
 /// mirroring `clean_arr_ptr`'s forwarding walk. Returns `addr` unchanged when
 /// it is not a forwarded heap pointer (handle/proxy-band registry ids, small
 /// slab allocations, out-of-heap addresses, or live non-forwarded objects), so
-/// callers can compare resolved addresses for object identity. `try_read_gc_-
-/// header` performs the band/heap classification (never dereferencing a
-/// non-heap id). Depth-capped to defend against corrupted GC cycles.
+/// callers can compare resolved addresses for object identity.
+/// `try_read_tracked_gc_header` proves arena membership or an exact malloc
+/// registry hit before touching the header. That ownership check is required:
+/// registered symbols also carry `POINTER_TAG`, but their process-lifetime
+/// `Box` allocations have no `GcHeader`. Depth-capped to defend against
+/// corrupted GC cycles.
 pub(crate) fn resolve_forwarding(mut addr: usize) -> usize {
     unsafe {
         let mut steps = 0u32;
-        while let Some(header) = crate::value::addr_class::try_read_gc_header(addr) {
+        while let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) {
+            let header = header.as_ref();
             if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
                 break;
             }

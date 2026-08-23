@@ -257,16 +257,6 @@ fn lower_string_literal_strict_eq(
     ctx.block().phi(I1, &incoming)
 }
 
-/// Magnitude comparands for the inline heap-address test in
-/// [`lower_strict_eq_inline_any`]. These mirror
-/// `perry-runtime::value::addr_class::{HANDLE_BAND_MAX, is_valid_obj_ptr}`:
-/// a `POINTER_TAG` payload below `HANDLE_BAND_MAX` is a registry id
-/// (net.Socket, fetch, zlib, revocable Proxy, UI widget), NOT an address, and
-/// dereferencing one reads unmapped low memory. Anything outside the window
-/// takes the runtime call instead of a header load.
-const HANDLE_BAND_MAX_I64: &str = "1048576";
-const HEAP_ADDR_CEILING_I64: &str = "140737488355328";
-
 /// Inline prefix for the generic `===`/`!==` tail — the arm where BOTH
 /// operands are statically unconstrained, which emitted one
 /// `js_eq` → `js_jsvalue_equals` call per comparison and nothing else.
@@ -277,7 +267,7 @@ const HEAP_ADDR_CEILING_I64: &str = "140737488355328";
 /// **misses**, so a fast path that settles only the hit is worth nothing —
 /// each case below settles one direction of the real traffic.
 ///
-/// Four cases leave without a call. Each is an exact restatement of what
+/// Three cases leave without a call. Each is an exact restatement of what
 /// `js_jsvalue_equals` computes for that input, not an approximation:
 ///
 /// * **identical bits** ⇒ equal, *unless* the value is a plain (untagged)
@@ -291,16 +281,12 @@ const HEAP_ADDR_CEILING_I64: &str = "140737488355328";
 ///   pattern — which is the argument `lower_string_strict_eq_inline` and the
 ///   runtime's own both-short-string arm already rely on.
 /// * **both INT32, different bits** ⇒ different integers, same argument.
-/// * **both `POINTER_TAG`, different payloads, and neither header carries
-///   `GC_FLAG_FORWARDED`** ⇒ distinct objects. The runtime's pointer arm is
-///   `resolve_forwarding(a) == resolve_forwarding(b)`, and
-///   `resolve_forwarding` returns its argument unchanged when the forwarding
-///   bit is clear — so two *unforwarded* distinct addresses are exactly its
-///   `0` case. Anything forwarded (a post-`js_array_grow` alias, a stale
-///   pre-evacuation pointer) takes the call and gets the full walk. The
-///   header read is the same one `expr/array_push.rs` emits — `gc_flags` at
-///   `ptr - 7`, mask `GC_FLAG_FORWARDED` (0x80) — behind the same magnitude
-///   guard the runtime applies before any `GcHeader` dereference.
+///
+/// Distinct `POINTER_TAG` values always take the runtime call. Not every
+/// pointer-tag payload is a GC allocation: registered and well-known symbols,
+/// for example, are process-lifetime `Box` allocations with no `GcHeader`.
+/// Generated code has no access to the runtime's allocation registries, so an
+/// address-magnitude check cannot make reading `ptr - GC_HEADER_SIZE` safe.
 ///
 /// Everything else — a raw-bits module-level object slot (top16 zero), a heap
 /// string, a bigint, a mixed pair, a boxed wrapper — falls through to
@@ -314,18 +300,12 @@ fn lower_strict_eq_inline_any(ctx: &mut FnCtx<'_>, l: &str, r: &str) -> String {
 
     let same_idx = ctx.new_block("anyeq.same");
     let diff_idx = ctx.new_block("anyeq.diff");
-    let canon_idx = ctx.new_block("anyeq.canon");
-    let band_idx = ctx.new_block("anyeq.band");
-    let fwd_idx = ctx.new_block("anyeq.fwd");
     let slow_idx = ctx.new_block("anyeq.slow");
     let true_idx = ctx.new_block("anyeq.true");
     let false_idx = ctx.new_block("anyeq.false");
     let merge_idx = ctx.new_block("anyeq.merge");
     let same_l = ctx.block_label(same_idx);
     let diff_l = ctx.block_label(diff_idx);
-    let canon_l = ctx.block_label(canon_idx);
-    let band_l = ctx.block_label(band_idx);
-    let fwd_l = ctx.block_label(fwd_idx);
     let slow_l = ctx.block_label(slow_idx);
     let true_l = ctx.block_label(true_idx);
     let false_l = ctx.block_label(false_idx);
@@ -349,21 +329,12 @@ fn lower_strict_eq_inline_any(ctx: &mut FnCtx<'_>, l: &str, r: &str) -> String {
     let same_ok = ctx.block().or(I1, &tagged, &not_nan);
     ctx.block().cond_br(&same_ok, &true_l, &slow_l);
 
-    // Different bits: only a same-tag pair whose encoding is canonical, or a
-    // pair of unforwarded heap pointers, is decidable here.
+    // Different bits: only a same-tag pair whose encoding is canonical is
+    // decidable here. Pointer pairs need the runtime's allocation registries
+    // before either payload can safely be treated as a GC allocation.
     ctx.current_block = diff_idx;
     let l_tag = ctx.block().lshr(I64, &l_bits, "48");
     let r_tag = ctx.block().lshr(I64, &r_bits, "48");
-    let l_ptr = ctx
-        .block()
-        .icmp_eq(I64, &l_tag, crate::nanbox::POINTER_TAG_TOP16_I64);
-    let r_ptr = ctx
-        .block()
-        .icmp_eq(I64, &r_tag, crate::nanbox::POINTER_TAG_TOP16_I64);
-    let both_ptr = ctx.block().and(I1, &l_ptr, &r_ptr);
-    ctx.block().cond_br(&both_ptr, &band_l, &canon_l);
-
-    ctx.current_block = canon_idx;
     let l_sso = ctx
         .block()
         .icmp_eq(I64, &l_tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
@@ -380,32 +351,6 @@ fn lower_strict_eq_inline_any(ctx: &mut FnCtx<'_>, l: &str, r: &str) -> String {
     let both_i32 = ctx.block().and(I1, &l_i32, &r_i32);
     let canonical = ctx.block().or(I1, &both_sso, &both_i32);
     ctx.block().cond_br(&canonical, &false_l, &slow_l);
-
-    // Both POINTER_TAG. Classify by magnitude before touching a header.
-    ctx.current_block = band_idx;
-    let l_addr = ctx.block().and(I64, &l_bits, POINTER_MASK_I64);
-    let r_addr = ctx.block().and(I64, &r_bits, POINTER_MASK_I64);
-    let l_above = ctx.block().icmp_uge(I64, &l_addr, HANDLE_BAND_MAX_I64);
-    let l_below = ctx.block().icmp_ult(I64, &l_addr, HEAP_ADDR_CEILING_I64);
-    let r_above = ctx.block().icmp_uge(I64, &r_addr, HANDLE_BAND_MAX_I64);
-    let r_below = ctx.block().icmp_ult(I64, &r_addr, HEAP_ADDR_CEILING_I64);
-    let l_heap = ctx.block().and(I1, &l_above, &l_below);
-    let r_heap = ctx.block().and(I1, &r_above, &r_below);
-    let both_heap = ctx.block().and(I1, &l_heap, &r_heap);
-    ctx.block().cond_br(&both_heap, &fwd_l, &slow_l);
-
-    ctx.current_block = fwd_idx;
-    let l_flags_addr = ctx.block().sub(I64, &l_addr, "7");
-    let l_flags_ptr = ctx.block().inttoptr(I64, &l_flags_addr);
-    let l_flags = ctx.block().load(I8, &l_flags_ptr);
-    let r_flags_addr = ctx.block().sub(I64, &r_addr, "7");
-    let r_flags_ptr = ctx.block().inttoptr(I64, &r_flags_addr);
-    let r_flags = ctx.block().load(I8, &r_flags_ptr);
-    let either = ctx.block().or(I8, &l_flags, &r_flags);
-    // GC_FLAG_FORWARDED = 0x80; LLVM i8 literals are signed.
-    let fwd_bits = ctx.block().and(I8, &either, "-128");
-    let no_fwd = ctx.block().icmp_eq(I8, &fwd_bits, "0");
-    ctx.block().cond_br(&no_fwd, &false_l, &slow_l);
 
     ctx.current_block = slow_idx;
     let slow_res = ctx

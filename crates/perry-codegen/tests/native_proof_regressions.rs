@@ -151,6 +151,31 @@ fn compile_ir_for_module_with_opts(module: Module, opts: CompileOptions) -> anyh
     Ok(String::from_utf8(compile_module(&module, opts)?)?)
 }
 
+#[test]
+fn generic_strict_equality_does_not_read_unverified_pointer_headers() {
+    let module = module_with_classes_and_params(
+        "generic_strict_equality_pointer_safety.ts",
+        Vec::new(),
+        vec![param(1, "left", Type::Any), param(2, "right", Type::Any)],
+        Type::Boolean,
+        vec![Stmt::Return(Some(Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(local(1)),
+            right: Box::new(local(2)),
+        }))],
+    );
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+
+    assert!(
+        ir.contains("anyeq.slow") && ir.contains("call i64 @js_eq"),
+        "distinct generic pointer values need the registry-aware runtime fallback:\n{ir}"
+    );
+    assert!(
+        !ir.contains("anyeq.fwd"),
+        "generic equality must not read a GC header after only a pointer-tag/magnitude check:\n{ir}"
+    );
+}
+
 fn contains_inline_direct_method_shape_guard(ir: &str) -> bool {
     ir.contains("method_direct.inline_deref")
         && ir.contains("load atomic i8, ptr @PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED acquire")
