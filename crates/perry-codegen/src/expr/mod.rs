@@ -87,7 +87,7 @@ pub(crate) use helpers::{
 };
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region,
-    imul_operand_i32_lowerable_in_current_region, is_known_finite, lower_expr_as_i32,
+    imul_operand_i32_lowerable_in_current_region, is_known_i32_range, lower_expr_as_i32,
     lower_expr_native, lower_imul_operand_i32, lower_packed_u32_loop_index_get,
     try_flat_const_2d_int, try_lower_flat_const_index_get,
 };
@@ -2913,10 +2913,17 @@ fn lower_bitwise_operand_i32(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<
     }
 
     // Region proofs cover bounds-checked typed-array reads such as
-    // `P[++i]`.  `lower_expr_value` intentionally does not expose every such
+    // `P[++i]`. `lower_expr_value` intentionally does not expose every such
     // read, but the native-i32 lowering has the exact checked access path we
     // need for a bitwise operand.
-    if can_lower_expr_as_i32_in_current_region(ctx, expr) {
+    //
+    // A bare local without an actual i32 slot is different: membership in
+    // `integer_locals` proves integer-valued writes, not an i32-range value.
+    // Sending such a local through `lower_expr_native_i32` falls back to a
+    // bare `fptosi f64 -> i32`. After `c *= 1103515245; c += 12345`, that is
+    // poison rather than ECMAScript ToInt32. Let the F64 arm below apply its
+    // program-point range proof and otherwise use `toint32_wrap`.
+    if !matches!(expr, Expr::LocalGet(_)) && can_lower_expr_as_i32_in_current_region(ctx, expr) {
         return Ok(Some(
             lower_expr_native(ctx, expr, ExpectedNativeRep::I32)?.value,
         ));
@@ -2934,7 +2941,7 @@ fn lower_bitwise_operand_i32(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<
                 if ctx.number_by_construction_locals.contains(id)) =>
         {
             let value = lower_expr(ctx, expr)?;
-            return Ok(Some(if is_known_finite(ctx, expr) {
+            return Ok(Some(if is_known_i32_range(ctx, expr) {
                 ctx.block().toint32_fast(&value)
             } else {
                 ctx.block().toint32_wrap(&value)
@@ -2965,7 +2972,7 @@ fn lower_bitwise_operand_i32(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<
             ctx.block().zext(I1, &raw, I32)
         }
         NativeRep::F64 => {
-            if is_known_finite(ctx, expr) {
+            if is_known_i32_range(ctx, expr) {
                 ctx.block().toint32_fast(&lowered.value)
             } else {
                 ctx.block().toint32_wrap(&lowered.value)

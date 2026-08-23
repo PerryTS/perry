@@ -597,8 +597,8 @@ pub(crate) fn load_canonical_local_boxed(ctx: &mut FnCtx<'_>, id: u32) -> Option
 /// finite value (an OOB int-typed-array read is a NaN-boxed `undefined`) must
 /// enter the slot as spec `ToInt32` — raw `fptosi` of a NaN is poison on
 /// x86-64. `rhs` (when available) lets known-finite writes keep the cheaper
-/// `fptosi→i64→trunc`, bit-identical for finite values; pass `None` for
-/// values of unknown provenance (always `toint32_wrap`).
+/// `fptosi→i64→trunc`, bit-identical for signed-i32-range values; pass
+/// `None` for values of unknown provenance (always `toint32_wrap`).
 ///
 /// Returns `true` when the local was canonical and the store was emitted.
 pub(crate) fn store_canonical_local_from_double(
@@ -610,8 +610,8 @@ pub(crate) fn store_canonical_local_from_double(
     let Some((slot, _rep)) = canonical_local_i32_slot(ctx, id) else {
         return false;
     };
-    let known_finite = rhs.is_some_and(|e| super::is_known_finite(ctx, e));
-    let v_i32 = if known_finite {
+    let known_i32_range = rhs.is_some_and(|e| super::is_known_i32_range(ctx, e));
+    let v_i32 = if known_i32_range {
         let v_i64 = ctx.block().fptosi(DOUBLE, value, I64);
         ctx.block().trunc(I64, &v_i64, I32)
     } else {

@@ -1936,10 +1936,10 @@ pub(crate) fn lower_let(
                 // sentinel on x86-64 — so it is NOT portable. `int_valued_ta`
                 // locals (and any other i32-shadow local with a non-known-finite
                 // init) are only ever observed through ToInt32, so seeding with
-                // the exact ToInt32 keeps every arm identical. Known-finite
-                // inits keep the cheaper `fptosi→i64→trunc` (bit-identical for
-                // finite values), so existing i32-shadow locals are unchanged.
-                let v_i32 = if crate::expr::is_known_finite(ctx, init_expr) {
+                // the exact ToInt32 keeps every arm identical. Proven-i32-range
+                // inits keep the cheaper `fptosi→i64→trunc`, so existing
+                // i32-shadow locals are unchanged.
+                let v_i32 = if crate::expr::is_known_i32_range(ctx, init_expr) {
                     let v_i64 = ctx.block().fptosi(DOUBLE, &v, crate::types::I64);
                     ctx.block().trunc(crate::types::I64, &v_i64, I32)
                 } else {

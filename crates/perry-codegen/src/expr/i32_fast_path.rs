@@ -27,89 +27,19 @@ use native_narrow::{
     lower_expr_native_u8,
 };
 
-/// Returns true if `e` provably produces a finite double whose magnitude is
-/// small enough (`|v| < 2^63`) for the unguarded `toint32_fast` lowering.
-/// Used to skip the NaN/Inf/range guard in `toint32` for integer-arithmetic
-/// hot paths — saving 5 instructions per bitwise op.
-pub(crate) fn is_known_finite(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    known_finite_magnitude_bits(ctx, e).is_some_and(|bits| bits <= 62)
-}
-
-/// Conservative magnitude bound for `e`'s numeric value: `Some(b)` proves the
-/// value is finite AND `|v| < 2^b`. `toint32_fast` is a bare
-/// `fptosi f64 → i64` + `trunc` — exactly JS ToInt32 for every `|v| < 2^63`,
-/// but LLVM *poison* at or beyond it. Finiteness alone is NOT enough:
-/// `(1e20) | 0` and nested integer multiplies (`(a*a)*a | 0` with i32-range
-/// `a`) are finite yet exceed 2^63, and pre-fix produced NaN instead of the
-/// ToInt32-wrapped value (CodeRabbit review on #5466; the same hole shipped
-/// on main). Composition keeps the proof airtight where the old boolean
-/// recursion silently escalated: Add/Sub grow the bound by one bit, Mul sums
-/// the operand bounds, and anything unprovable returns `None` so callers fall
-/// back to the guarded `toint32` runtime helper.
-fn known_finite_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
-    match e {
-        Expr::Integer(n) => Some(64 - n.unsigned_abs().leading_zeros()),
-        // Pod layout sizes/alignments/offsets are u32-class quantities.
-        Expr::PodLayoutSizeOf { .. }
-        | Expr::PodLayoutAlignOf { .. }
-        | Expr::PodLayoutOffsetOf { .. } => Some(32),
-        // Number literals can be NaN or ±Infinity (e.g., `Number(NaN)`,
-        // `Number(f64::INFINITY)`). Inspect the value: `fptosi NaN` is
-        // poison in LLVM and produced subnormal-double output (which
-        // downstream code interpreted as a NaN-boxed string with
-        // STRING_TAG bits, leading to garbled `console.log` output).
-        Expr::Number(n) => {
-            if !n.is_finite() {
-                return None;
-            }
-            let magnitude = n.abs();
-            if magnitude < 1.0 {
-                Some(0)
-            } else {
-                Some(magnitude.log2() as u32 + 1)
-            }
-        }
-        Expr::LocalGet(id) | Expr::Update { id, .. } => (ctx.integer_locals.contains(id)
-            || ctx.unsigned_i32_locals.contains(id))
-        .then_some(32),
-        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => Some(8),
-        // In-bounds loads from an int-element typed array are integers in
-        // i32 range by construction (see `ta_int_elem_load_is_i32_provable`),
-        // as are i32-tier masked-window plain-array loads (the dense-i32
-        // range guard proved every window value is an i32 integer).
-        Expr::IndexGet { object, index }
-            if ta_int_elem_load_is_i32_provable(ctx, object, index)
-                || super::masked_window::masked_window_i32_load_is_provable(ctx, object, index) =>
-        {
-            Some(32)
-        }
-        Expr::MathImul(_, _) => Some(32), // Math.imul returns i32 → always finite
-        Expr::Call { callee, .. } => {
-            matches!(callee.as_ref(), Expr::FuncRef(fid) if ctx.integer_returning_functions.contains(fid))
-                .then_some(32)
-        }
-        Expr::Binary { op, left, right } => match op {
-            BinaryOp::Add | BinaryOp::Sub => {
-                let l = known_finite_magnitude_bits(ctx, left)?;
-                let r = known_finite_magnitude_bits(ctx, right)?;
-                Some(l.max(r) + 1)
-            }
-            BinaryOp::Mul => {
-                let l = known_finite_magnitude_bits(ctx, left)?;
-                let r = known_finite_magnitude_bits(ctx, right)?;
-                Some(l + r)
-            }
-            // Bitwise results are already ToInt32/ToUint32-wrapped.
-            BinaryOp::BitAnd
-            | BinaryOp::BitOr
-            | BinaryOp::BitXor
-            | BinaryOp::Shl
-            | BinaryOp::Shr
-            | BinaryOp::UShr => Some(32),
-            _ => None,
-        },
-        _ => None,
-    }
+/// Returns true if `e` is proven to fit a signed i32 at this program point.
+///
+/// `toint32_fast` currently emits `fptosi f64 -> i64` followed by `trunc`, but
+/// LLVM's optimized output may combine that pair into `fptosi f64 -> i32`.
+/// Its caller therefore needs an i32-range proof, not merely finiteness or an
+/// i64-range magnitude bound. In particular, `integer_locals` proves only that
+/// every write is integer-valued: a mutable local can hold the out-of-i32
+/// result of a prior `*=` or `+=`. Treating that coarse fact as a 32-bit bound
+/// made the final `c &= 0x7fffffff` in #7232 convert a ~1.5e18 double with
+/// poison and print `0` instead of applying ECMAScript ToInt32 wrapping.
+pub(crate) fn is_known_i32_range(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    super::range_facts::int_range_expr(ctx, e)
+        .is_some_and(|range| range.min >= i64::from(i32::MIN) && range.max <= i64::from(i32::MAX))
 }
 
 /// (Issue #50) If `IndexGet { object, index }` is a flat-const access
@@ -355,10 +285,9 @@ fn is_i32_chain_op(op: BinaryOp) -> bool {
 
 /// Magnitude bound of `left <op> right` from the operands' bounds.
 ///
-/// `Add`/`Sub` grow the bound by one bit and `Mul` sums them — the same
-/// composition [`known_finite_magnitude_bits`] uses — but capped at 2^53
-/// instead of 2^63, because this bound gates *exact integer arithmetic* rather
-/// than a single `fptosi`.
+/// `Add`/`Sub` grow the bound by one bit and `Mul` sums them, capped at 2^53
+/// because this bound gates exact integer arithmetic rather than ToInt32
+/// materialization.
 ///
 /// The ToInt32/ToUint32-wrapped operators reset the bound to 32. Two of them
 /// carry a tighter one, which is what keeps masked/shifted hash mixing on the
@@ -1438,7 +1367,7 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
                 // Index/internal i32 materialization — packed-store RHS and
                 // numeric-index consumers prove their ranges upstream, so
                 // keep the lean guard here (see toint32 vs toint32_wrap).
-                if is_known_finite(ctx, e) {
+                if is_known_i32_range(ctx, e) {
                     Some(ctx.block().toint32_fast(&lowered.value))
                 } else {
                     Some(ctx.block().toint32(&lowered.value))
