@@ -16,11 +16,11 @@ use crate::common::get_handle_mut;
 
 pub(super) unsafe fn call_net_socket_method(handle: i64, name: &str, args: &[f64]) -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let name = scope.root_string_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32));
     let args = args
         .iter()
         .map(|value| scope.root_nanbox_f64(*value))
         .collect::<Vec<_>>();
+    let name = scope.root_string_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32));
     let args = args
         .iter()
         .map(|value| value.get_nanbox_f64())

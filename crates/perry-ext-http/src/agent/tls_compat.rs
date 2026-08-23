@@ -57,12 +57,12 @@ pub(crate) fn client_for_agent_tls(
         .clone())
 }
 
-pub(crate) fn tls_session_for_request(handle: Handle, key: &str) -> (u64, bool) {
+pub(crate) fn tls_session_for_request(handle: Handle, key: &str, port: u16) -> (u64, bool) {
     let Some(agent) = get_handle_mut::<AgentHandle>(handle) else {
         return (1, false);
     };
     if agent.max_cached_sessions > 0 {
-        if let Some(session) = agent.tls_sessions.get(key).copied() {
+        if let Some((session, _)) = agent.tls_sessions.get(key).copied() {
             return (session, true);
         }
     }
@@ -76,7 +76,7 @@ pub(crate) fn tls_session_for_request(handle: Handle, key: &str) -> (u64, bool) 
                 break;
             }
         }
-        agent.tls_sessions.insert(key.to_string(), session);
+        agent.tls_sessions.insert(key.to_string(), (session, port));
         agent.tls_session_order.push_back(key.to_string());
     }
     (session, false)
@@ -91,10 +91,13 @@ pub(crate) fn merge_tls_defaults(handle: Handle, request: &mut crate::tls_client
 }
 
 pub(crate) fn invalidate_tls_sessions_for_server_port(port: u16) {
-    let marker = format!(":{port}:");
     iter_handles_of_mut::<AgentHandle, _>(|agent| {
-        agent.tls_sessions.retain(|key, _| !key.contains(&marker));
-        agent.tls_session_order.retain(|key| !key.contains(&marker));
+        agent
+            .tls_sessions
+            .retain(|_, (_, session_port)| *session_port != port);
+        agent
+            .tls_session_order
+            .retain(|key| agent.tls_sessions.contains_key(key));
     });
 }
 fn default_https_agent_handle() -> Handle {

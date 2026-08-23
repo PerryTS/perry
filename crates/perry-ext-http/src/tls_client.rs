@@ -992,11 +992,13 @@ pub(crate) unsafe fn check_server_identity_error(
         fn js_error_get_message(error: *mut u8) -> *mut perry_ffi::StringHeader;
     }
     let scope = perry_ffi::TransientRootScope::enter();
+    let callback = scope.root_addr(callback);
     let host = scope.root_nanbox(f64::from_bits(
         perry_ffi::JsValue::from_string_ptr(perry_ffi::alloc_string(host).as_raw()).bits(),
     ));
     let cert = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
-    let closure = perry_ffi::JsClosure::from_raw(callback as *const perry_ffi::RawClosureHeader);
+    let closure =
+        perry_ffi::JsClosure::from_raw(callback.get() as *const perry_ffi::RawClosureHeader);
     let result = closure.call2(host.get(), cert.get());
     let is_error = perry_ffi::JsValue::from_bits(js_error_is_error(result).to_bits());
     if !is_error.is_bool() || !is_error.to_bool() {

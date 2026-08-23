@@ -158,7 +158,7 @@ pub unsafe extern "C" fn js_http_set_timeout_full(
             req.listeners
                 .entry("timeout".to_string())
                 .or_default()
-                .push(cb);
+                .push(ClientEventListener::persistent(cb));
         });
     }
     client_request_set_timeout_impl(handle, ms);
@@ -192,4 +192,19 @@ pub(crate) fn arm_client_timeout(request_handle: Handle, ms: u64) {
         std::hint::black_box(&jh);
         std::mem::forget(jh);
     });
+}
+
+/// Emit Node's `TimeoutOverflowWarning` for an out-of-range socket timeout.
+/// Socket timeouts clamp to `TIMEOUT_MAX`, unlike the global timer path.
+pub(crate) unsafe fn emit_socket_timeout_overflow_warning(ms: f64) {
+    let value_text = if ms.is_finite() && ms.fract() == 0.0 {
+        format!("{}", ms as i64)
+    } else {
+        format!("{ms}")
+    };
+    let message = format!(
+        "{value_text} does not fit into a 32-bit signed integer.\n\
+         Timer duration was truncated to 2147483647."
+    );
+    perry_ffi::emit_warning(&message, "TimeoutOverflowWarning");
 }

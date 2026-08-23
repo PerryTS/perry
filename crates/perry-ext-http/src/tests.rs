@@ -75,7 +75,18 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
     let request_once_wrapper = young_gc_root();
     let incoming_listener = young_gc_root();
     let mut request_listeners = HashMap::new();
-    request_listeners.insert("error".to_string(), vec![request_listener]);
+    request_listeners.insert(
+        "error".to_string(),
+        vec![ClientEventListener::persistent(request_listener)],
+    );
+    request_listeners.insert(
+        "timeout".to_string(),
+        vec![ClientEventListener {
+            callback: request_once_callback,
+            raw_wrapper: request_once_wrapper,
+            once: true,
+        }],
+    );
     let request_handle = register_handle(ClientRequestHandle {
         method: "GET".to_string(),
         url: "http://localhost/".to_string(),
@@ -84,13 +95,6 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         response_callback,
         response_raw_wrapper,
         listeners: request_listeners,
-        once_listeners: HashMap::from([(
-            "timeout".to_string(),
-            vec![ClientOnceListener {
-                callback: request_once_callback,
-                raw_wrapper: request_once_wrapper,
-            }],
-        )]),
         timeout_ms: None,
         ended: false,
         flushed_early: false,
@@ -124,6 +128,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         body: Vec::new(),
         listeners: incoming_listeners,
         encoding: None,
+        decoder_pending: Vec::new(),
         pipes: Vec::new(),
         socket_handle: 0,
         request_handle,
@@ -136,14 +141,11 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
             .expect("request handle should remain live");
         assert_rewritten(response_callback, req.response_callback);
         assert_rewritten(response_raw_wrapper, req.response_raw_wrapper);
-        assert_rewritten(request_listener, req.listeners["error"][0]);
-        assert_rewritten(
-            request_once_callback,
-            req.once_listeners["timeout"][0].callback,
-        );
+        assert_rewritten(request_listener, req.listeners["error"][0].callback);
+        assert_rewritten(request_once_callback, req.listeners["timeout"][0].callback);
         assert_rewritten(
             request_once_wrapper,
-            req.once_listeners["timeout"][0].raw_wrapper,
+            req.listeners["timeout"][0].raw_wrapper,
         );
         let msg = get_handle::<IncomingMessageHandle>(incoming_handle)
             .expect("incoming message handle should remain live");
@@ -180,7 +182,6 @@ fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
         response_callback: 0,
         response_raw_wrapper: 0,
         listeners: HashMap::new(),
-        once_listeners: HashMap::new(),
         timeout_ms: None,
         ended: false,
         flushed_early: false,
@@ -264,6 +265,42 @@ fn streamed_response_reassembles_chunks_byte_identically() {
 }
 
 #[test]
+fn streamed_text_decoder_preserves_base64_and_utf16_boundaries() {
+    let _guard = GcTestGuard::new();
+
+    let mut pending = Vec::new();
+    assert!(
+        client_surface::streaming_body_chunk_value(b"a", Some("base64"), &mut pending, false,)
+            .is_none()
+    );
+    assert!(
+        client_surface::streaming_body_chunk_value(b"b", Some("base64"), &mut pending, false,)
+            .is_none()
+    );
+    let final_chunk =
+        client_surface::streaming_body_chunk_value(b"", Some("base64"), &mut pending, true)
+            .expect("base64 remainder must flush at end");
+    assert_eq!(
+        unsafe { extract_string_value(final_chunk) }.as_deref(),
+        Some("YWI=")
+    );
+
+    let mut pending = Vec::new();
+    assert!(client_surface::streaming_body_chunk_value(
+        &[b'a'],
+        Some("utf16le"),
+        &mut pending,
+        false,
+    )
+    .is_none());
+    let chunk =
+        client_surface::streaming_body_chunk_value(&[0], Some("utf16le"), &mut pending, false)
+            .expect("split UTF-16 code unit must decode when completed");
+    assert_eq!(unsafe { extract_string_value(chunk) }.as_deref(), Some("a"));
+    assert!(pending.is_empty());
+}
+
+#[test]
 fn has_pending_zero_when_idle() {
     // Serialize with tests that queue real events (the in-flight-guard test
     // below) — clearing the shared queue under their feet would break them.
@@ -316,7 +353,6 @@ fn dispatch_request_stays_visible_to_exit_gate_until_response_queued() {
         response_callback: 0,
         response_raw_wrapper: 0,
         listeners: HashMap::new(),
-        once_listeners: HashMap::new(),
         timeout_ms: None,
         ended: false,
         flushed_early: false,

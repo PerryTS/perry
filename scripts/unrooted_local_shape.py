@@ -109,7 +109,6 @@ COLLECTION_POINTS = ALLOCATORS + (
 # A function that opens a handle scope has adopted the rooting API; its bindings
 # are `raw_handle_debt.py`'s denominator, not this one's.
 ROOTED_MARKERS = (
-    "RuntimeHandleScope",
     "across_mut",
     "across_const",
     "across_nanbox",
@@ -119,7 +118,19 @@ ROOTED_MARKERS = (
 # an allocator nested inside the expression. Do not start tracking the token as
 # though it were itself a heap address. Unlike ROOTED_MARKERS this is local to
 # the binding and does not exempt the rest of the function.
-ROOT_HANDLE_BINDINGS = ("root_nanbox(", "root_addr(", "root_addrs(")
+ROOT_HANDLE_BINDINGS = (
+    "root_addr(",
+    "root_addrs(",
+    "root_bigint_ptr(",
+    "root_heap_word_u64(",
+    "root_nanbox(",
+    "root_nanbox_f64(",
+    "root_nanbox_f64_slice(",
+    "root_nanbox_u64(",
+    "root_raw_const_ptr(",
+    "root_raw_mut_ptr(",
+    "root_string_ptr(",
+)
 
 FN_START = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+|async\s+|unsafe\s+|extern\s+\"[^\"]*\"\s+)*fn\s+(\w+)")
 LET_BIND = re.compile(r"^\s*let\s+(?:mut\s+)?(\w+)\s*(?::[^=]+)?=\s*(.+)$")
@@ -182,9 +193,18 @@ def scan_function(name: str, lines: list[str], start: int, end: int):
     bound: dict[str, int] = {}
     crossed: dict[str, int] = {}
     findings = []
+    lexical_depth = 0
+    runtime_scopes: list[tuple[str, int]] = []
     for offset, line in enumerate(body):
         m = LET_BIND.match(line)
         expression = m.group(2) if m else line
+        runtime_scopes = [
+            (local, depth)
+            for local, depth in runtime_scopes
+            if lexical_depth >= depth and f"drop({local})" not in line
+        ]
+        if m and "RuntimeHandleScope::new(" in expression:
+            runtime_scopes.append((m.group(1), lexical_depth))
 
         # Inspect every expression, not only calls that are themselves
         # collection points. In `let copied = (*raw).field`, `raw` occurs only
@@ -194,14 +214,15 @@ def scan_function(name: str, lines: list[str], start: int, end: int):
         # to later expressions.
         used_here = set(IDENT.findall(expression))
         for local in sorted(used_here & crossed.keys()):
-            findings.append(
-                (
-                    start + offset + 1,
-                    local,
-                    start + bound[local] + 1,
-                    start + crossed[local] + 1,
+            if not runtime_scopes:
+                findings.append(
+                    (
+                        start + offset + 1,
+                        local,
+                        start + bound[local] + 1,
+                        start + crossed[local] + 1,
+                    )
                 )
-            )
 
         if calls_any(expression, COLLECTION_POINTS):
             for local in bound:
@@ -216,6 +237,7 @@ def scan_function(name: str, lines: list[str], start: int, end: int):
             crossed.pop(local, None)
             if calls_any(rhs, POINTER_SOURCES) and not calls_any(rhs, ROOT_HANDLE_BINDINGS):
                 bound[local] = offset
+        lexical_depth += line.count("{") - line.count("}")
     return findings
 
 
@@ -276,11 +298,29 @@ unsafe fn clean_ffi_transient_root() -> *mut ArrayHeader {
     rooted.get() as *mut ArrayHeader
 }
 
+unsafe fn clean_active_runtime_scope() {
+    let scope = RuntimeHandleScope::new();
+    let raw = js_array_alloc(1);
+    let _rooted = scope.root_raw_mut_ptr(raw);
+    let _other = js_array_alloc(0);
+    consume(raw);
+}
+
 unsafe fn planted_after_transient_scope() -> *mut ArrayHeader {
     let stale = js_array_alloc(1);
     {
         let scope = TransientRootScope::enter();
         let _rooted = scope.root_nanbox(js_nanbox_pointer(stale as i64));
+    }
+    let _other = js_array_alloc(0);
+    stale
+}
+
+unsafe fn planted_after_runtime_scope() -> *mut ArrayHeader {
+    let stale = js_array_alloc(1);
+    {
+        let scope = RuntimeHandleScope::new();
+        let _rooted = scope.root_raw_mut_ptr(stale);
     }
     let _other = js_array_alloc(0);
     stale
@@ -382,6 +422,7 @@ def self_test() -> int:
         "planted_plain_return",
         "planted_later_rhs",
         "planted_after_transient_scope",
+        "planted_after_runtime_scope",
     }
     missing = required - names
     if missing:
@@ -391,6 +432,7 @@ def self_test() -> int:
         "clean_single_alloc",
         "clean_use_on_first_collection",
         "clean_ffi_transient_root",
+        "clean_active_runtime_scope",
     } & names
     if forbidden:
         print(f"SELF-TEST FAIL: flagged clean control(s): {sorted(forbidden)}", file=sys.stderr)

@@ -79,6 +79,8 @@ pub(crate) fn fire_upgrade_listeners(
     if listeners.is_empty() {
         return;
     }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let listeners = scope.root_addrs(&listeners);
 
     let req_f64 = handle_to_pointer_f64(im_handle);
     // Encode ws_id as NaN-boxed POINTER_TAG so `unbox_to_i64` (the
@@ -95,16 +97,17 @@ pub(crate) fn fire_upgrade_listeners(
         let header = alloc_string(&s);
         f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK))
     };
+    let head_str = scope.root_nanbox(head_str);
 
-    for cb in &listeners {
-        if *cb == 0 {
+    for cb in listeners {
+        if cb.get() == 0 {
             continue;
         }
         unsafe {
-            let raw = *cb as *const RawClosureHeader;
+            let raw = cb.get() as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call3(req_f64, ws_id_f64, head_str);
+                let _ = closure.call3(req_f64, ws_id_f64, head_str.get());
             }
             js_promise_run_microtasks();
         }

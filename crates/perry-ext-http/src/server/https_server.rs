@@ -46,11 +46,11 @@ use crate::server::tls::{
 /// no encoding is supplied) — see `json_value_to_pem_bytes`. Falls
 /// back to empty PEMs (which the cert-chain parser then rejects) on
 /// any extraction failure so the user sees a clear bind error.
-unsafe fn parse_https_opts(opts_f64: f64) -> (Vec<u8>, Vec<u8>, bool, Option<Vec<u8>>, i64) {
+unsafe fn parse_https_opts(opts_f64: f64) -> (Vec<u8>, Vec<u8>, bool, Option<Vec<u8>>, i64, u32) {
     use perry_ffi::JsValue;
     let mut v = JsValue::from_bits(opts_f64.to_bits());
     if !v.is_pointer_or_raw() {
-        return (Vec::new(), Vec::new(), true, Some(default_alpn()), 0);
+        return (Vec::new(), Vec::new(), true, Some(default_alpn()), 0, 300);
     }
     // Native-call lowering may pass a heap options object as its legacy raw
     // pointer. `json_stringify` expects the canonical POINTER_TAG shape.
@@ -59,11 +59,11 @@ unsafe fn parse_https_opts(opts_f64: f64) -> (Vec<u8>, Vec<u8>, bool, Option<Vec
     }
     let json = match perry_ffi::json_stringify(v) {
         Some(j) => j,
-        None => return (Vec::new(), Vec::new(), true, Some(default_alpn()), 0),
+        None => return (Vec::new(), Vec::new(), true, Some(default_alpn()), 0, 300),
     };
     let parsed: serde_json::Value = match serde_json::from_str(&json) {
         Ok(p) => p,
-        Err(_) => return (Vec::new(), Vec::new(), true, Some(default_alpn()), 0),
+        Err(_) => return (Vec::new(), Vec::new(), true, Some(default_alpn()), 0, 300),
     };
     let key_pem = json_value_to_pem_bytes(parsed.get("key"));
     let cert_pem = json_value_to_pem_bytes(parsed.get("cert"));
@@ -97,7 +97,19 @@ unsafe fn parse_https_opts(opts_f64: f64) -> (Vec<u8>, Vec<u8>, bool, Option<Vec
                 .unwrap_or_else(default_alpn),
         )
     };
-    (key_pem, cert_pem, enable_h2, alpn_protocols, alpn_callback)
+    let session_timeout = parsed
+        .get("sessionTimeout")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(300);
+    (
+        key_pem,
+        cert_pem,
+        enable_h2,
+        alpn_protocols,
+        alpn_callback,
+        session_timeout,
+    )
 }
 
 fn default_alpn() -> Vec<u8> {
@@ -145,11 +157,14 @@ pub unsafe extern "C" fn js_node_https_create_server(mut opts_f64: f64, mut hand
         opts_f64 = f64::from_bits(crate::server::types::TAG_UNDEFINED);
     }
 
-    let (key_pem, cert_pem, enable_http2_alpn, alpn_protocols, alpn_callback) =
+    let (key_pem, cert_pem, enable_http2_alpn, alpn_protocols, alpn_callback, session_timeout) =
         parse_https_opts(opts_f64);
     let mut base = HttpServer::with_handler(handler);
     crate::server::server::apply_server_options(&mut base, opts_f64);
-    let ticket_key = NodeTicketKey::random().unwrap_or_else(|error| panic!("{error}"));
+    let ticket_key = NodeTicketKey::random(session_timeout).unwrap_or_else(|error| {
+        eprintln!("[node:https] {error}; TLS session tickets disabled");
+        NodeTicketKey::disabled(session_timeout)
+    });
 
     let cert_chain = parse_cert_chain(&cert_pem);
     let certificate_cn = cert_chain
@@ -892,6 +907,7 @@ fn emit_keylog_lines(server_handle: i64, socket: f64, lines: &[Vec<u8>]) {
             .unwrap_or_default();
         let scope = perry_ffi::TransientRootScope::enter();
         let listeners = scope.root_addrs(&listeners);
+        let socket = scope.root_nanbox(socket);
         let line = perry_ffi::alloc_buffer(line);
         let line = scope.root_nanbox(f64::from_bits(JsValue::from_object_ptr(line).bits()));
         for callback in &listeners {
@@ -902,7 +918,7 @@ fn emit_keylog_lines(server_handle: i64, socket: f64, lines: &[Vec<u8>]) {
             unsafe {
                 let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
                 if !closure.is_null() {
-                    let _ = closure.call2(line.get(), socket);
+                    let _ = closure.call2(line.get(), socket.get());
                 }
             }
         }
