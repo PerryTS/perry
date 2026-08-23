@@ -449,11 +449,11 @@ pub extern "C" fn js_typed_array_new_from_array(
     if method_bits == crate::value::TAG_UNDEFINED || method_bits == crate::value::TAG_NULL {
         let len = rooted.with_const_ptr::<ArrayHeader, _>(|arr| crate::array::js_array_length(arr));
         for index in 0..len {
-            raw.push(
-                scope.root_nanbox_f64(rooted.with_const_ptr::<ArrayHeader, _>(|arr| {
-                    crate::array::js_array_get_f64(arr, index)
-                })),
-            );
+            raw.push(scope.root_nanbox_f64(
+                rooted.with_const_ptr::<ArrayHeader, _>(|arr| {
+                    crate::array::array_spec_get(arr, index)
+                }),
+            ));
         }
     } else {
         let method = scope.root_nanbox_f64(method);

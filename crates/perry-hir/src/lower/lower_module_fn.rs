@@ -9,7 +9,7 @@
 
 use crate::types::{LocalId, Type};
 use anyhow::Result;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use swc_ecma_ast as ast;
 
 use super::*;
@@ -20,7 +20,7 @@ use crate::lower_types::hoisted_text_codec::{
 
 fn reflect_script_var_initializers(
     stmts: Vec<Stmt>,
-    script_var_ids: &HashSet<LocalId>,
+    script_vars: &HashMap<LocalId, String>,
 ) -> Vec<Stmt> {
     let mut reflected = Vec::with_capacity(stmts.len());
     for mut stmt in stmts {
@@ -31,19 +31,20 @@ fn reflect_script_var_initializers(
                 ..
             } => {
                 *then_branch =
-                    reflect_script_var_initializers(std::mem::take(then_branch), script_var_ids);
+                    reflect_script_var_initializers(std::mem::take(then_branch), script_vars);
                 if let Some(branch) = else_branch {
-                    *branch =
-                        reflect_script_var_initializers(std::mem::take(branch), script_var_ids);
+                    *branch = reflect_script_var_initializers(std::mem::take(branch), script_vars);
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                *body = reflect_script_var_initializers(std::mem::take(body), script_var_ids);
+                *body = reflect_script_var_initializers(std::mem::take(body), script_vars);
             }
-            Stmt::For { init, body, .. } => {
+            Stmt::For {
+                init, update, body, ..
+            } => {
                 if let Some(init_stmt) = init.take() {
                     let mut expanded =
-                        reflect_script_var_initializers(vec![*init_stmt], script_var_ids);
+                        reflect_script_var_initializers(vec![*init_stmt], script_vars);
                     if expanded.len() == 1 {
                         *init = expanded.pop().map(Box::new);
                     } else {
@@ -54,12 +55,44 @@ fn reflect_script_var_initializers(
                         reflected.append(&mut expanded);
                     }
                 }
-                *body = reflect_script_var_initializers(std::mem::take(body), script_var_ids);
+                if let Some(update_expr) = update.take() {
+                    let mut updated_globals: Vec<_> = script_vars
+                        .iter()
+                        .filter(|(id, _)| expr_updates_local(&update_expr, **id))
+                        .map(|(id, name)| (*id, name.clone()))
+                        .collect();
+                    updated_globals.sort_unstable_by_key(|(id, _)| *id);
+                    if updated_globals.is_empty() {
+                        *update = Some(update_expr);
+                    } else {
+                        let mut sequence = Vec::with_capacity(1 + updated_globals.len());
+                        sequence.push(update_expr);
+                        sequence.extend(updated_globals.into_iter().map(|(id, name)| {
+                            Expr::PropertySet {
+                                object: Box::new(Expr::GlobalThisExpr),
+                                property: name,
+                                value: Box::new(Expr::LocalGet(id)),
+                            }
+                        }));
+                        *update = Some(Expr::Sequence(sequence));
+                    }
+                }
+                *body = reflect_script_var_initializers(std::mem::take(body), script_vars);
             }
             Stmt::Labeled { body, .. } => {
                 let inner = std::mem::replace(body, Box::new(Stmt::Break));
-                let mut expanded = reflect_script_var_initializers(vec![*inner], script_var_ids);
-                *body = if expanded.len() == 1 {
+                let mut expanded = reflect_script_var_initializers(vec![*inner], script_vars);
+                *body = if expanded.len() > 1 && matches!(expanded.last(), Some(Stmt::For { .. })) {
+                    // A reflected `for (var ...)` init expands to the init,
+                    // its global mirror, and the loop. Keep those one-shot
+                    // statements immediately before the labeled loop: wrapping
+                    // the whole expansion in `do { ... } while (false)` would
+                    // make `continue label` target the wrapper instead of the
+                    // original `for` statement.
+                    let loop_stmt = expanded.pop().expect("reflected labeled for statement");
+                    reflected.append(&mut expanded);
+                    Box::new(loop_stmt)
+                } else if expanded.len() == 1 {
                     Box::new(expanded.pop().expect("one reflected labeled statement"))
                 } else {
                     // Non-loop labels are already represented as run-once
@@ -77,23 +110,23 @@ fn reflect_script_var_initializers(
                 catch,
                 finally,
             } => {
-                *body = reflect_script_var_initializers(std::mem::take(body), script_var_ids);
+                *body = reflect_script_var_initializers(std::mem::take(body), script_vars);
                 if let Some(catch) = catch {
                     catch.body = reflect_script_var_initializers(
                         std::mem::take(&mut catch.body),
-                        script_var_ids,
+                        script_vars,
                     );
                 }
                 if let Some(finally) = finally {
                     *finally =
-                        reflect_script_var_initializers(std::mem::take(finally), script_var_ids);
+                        reflect_script_var_initializers(std::mem::take(finally), script_vars);
                 }
             }
             Stmt::Switch { cases, .. } => {
                 for case in cases {
                     case.body = reflect_script_var_initializers(
                         std::mem::take(&mut case.body),
-                        script_var_ids,
+                        script_vars,
                     );
                 }
             }
@@ -111,7 +144,7 @@ fn reflect_script_var_initializers(
         }
 
         let global_var = match &stmt {
-            Stmt::Let { id, name, .. } if script_var_ids.contains(id) => Some((*id, name.clone())),
+            Stmt::Let { id, name, .. } if script_vars.contains_key(id) => Some((*id, name.clone())),
             _ => None,
         };
         reflected.push(stmt);
@@ -124,6 +157,14 @@ fn reflect_script_var_initializers(
         }
     }
     reflected
+}
+
+fn expr_updates_local(expr: &Expr, target: LocalId) -> bool {
+    match expr {
+        Expr::LocalSet(id, _) | Expr::Update { id, .. } => *id == target,
+        Expr::Sequence(exprs) => exprs.iter().any(|expr| expr_updates_local(expr, target)),
+        _ => false,
+    }
 }
 
 fn should_enable_react_automatic_jsx(name: &str, ast_module: &ast::Module) -> bool {
@@ -1334,10 +1375,10 @@ pub fn lower_module_full(
     let is_esm_entry =
         !module.imports.is_empty() || !module.exports.is_empty() || module.has_top_level_await;
     if ctx.is_entry_module && !is_esm_entry && module.references_global_this {
-        let script_var_decl_ids: HashSet<_> = ctx
+        let script_vars: HashMap<_, _> = ctx
             .script_var_decl_names
             .iter()
-            .filter_map(|name| ctx.lookup_local(name))
+            .filter_map(|name| ctx.lookup_local(name).map(|id| (id, name.clone())))
             .collect();
         // Script `var` bindings are properties of the global object. Mirror
         // every write at its actual execution point, including declarations
@@ -1345,7 +1386,7 @@ pub fn lower_module_full(
         // by LocalId prevents a same-named lexical shadow from leaking onto
         // globalThis (ES modules keep their module binding only).
         module.init =
-            reflect_script_var_initializers(std::mem::take(&mut module.init), &script_var_decl_ids);
+            reflect_script_var_initializers(std::mem::take(&mut module.init), &script_vars);
     }
     if ctx.is_entry_module && !is_esm_entry {
         const RESTRICTED_GLOBAL_NAMES: [&str; 3] = ["undefined", "NaN", "Infinity"];

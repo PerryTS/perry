@@ -29,6 +29,30 @@ nullIteratorSource[Symbol.iterator] = null;
 const nullIterator = new Uint8Array(nullIteratorSource);
 console.log("from array with null iterator:", nullIterator[0], nullIterator[1]);
 
+// Array-like indexed Get preserves the source as `this` when an inherited
+// accessor supplies the element.
+const inheritedIndexSource: any = new Array(1);
+inheritedIndexSource[Symbol.iterator] = null;
+let inheritedIndexReceiverMatches = false;
+let inheritedIndexGetterCalls = 0;
+const indexedPrototype: any = [];
+Object.defineProperty(indexedPrototype, "0", {
+  configurable: true,
+  get() {
+    inheritedIndexGetterCalls++;
+    inheritedIndexReceiverMatches = this === inheritedIndexSource;
+    return inheritedIndexReceiverMatches ? 73 : 74;
+  },
+});
+Object.setPrototypeOf(inheritedIndexSource, indexedPrototype);
+const inheritedIndexResult = new Int16Array(inheritedIndexSource);
+console.log(
+  "from inherited indexed getter:",
+  inheritedIndexResult[0],
+  inheritedIndexReceiverMatches,
+  inheritedIndexGetterCalls,
+);
+
 // --- Uint8Array read/write ---
 const u3 = new Uint8Array(3);
 u3[0] = 100;

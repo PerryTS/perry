@@ -64,10 +64,11 @@ pub(crate) fn ensure_function_prototype_object(
     });
 
     if let Some(object_proto_bits) = global_object_prototype_bits() {
+        let object_proto = scope.root_nanbox_u64(object_proto_bits);
         proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| {
             super::super::prototype_chain::object_set_static_prototype(
                 proto as usize,
-                object_proto_bits,
+                object_proto.get_nanbox_u64(),
             )
         });
     }

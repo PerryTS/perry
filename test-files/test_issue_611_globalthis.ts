@@ -34,3 +34,21 @@ console.log(
   (globalThis as any).caughtScriptVar,
   (globalThis as any).finalScriptVar,
 );
+
+const seen: number[] = [];
+outer: for (var loopScriptVar = 0; loopScriptVar < 3; loopScriptVar++) {
+  if (loopScriptVar === 0) continue outer;
+  seen.push(loopScriptVar);
+}
+console.log(
+  "labeled loop:",
+  (globalThis as any).loopScriptVar,
+  seen.join(","),
+);
+
+switch (1) {
+  case 1:
+    var switchScriptVar = "case";
+    break;
+}
+console.log("switch var:", (globalThis as any).switchScriptVar);
