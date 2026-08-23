@@ -34,6 +34,11 @@ pub(super) extern "C" fn snapshot_set_default_serializers(
     if !is_array_value(serializers) {
         throw_invalid_arg_type("serializers", "Array", serializers);
     }
+    for serializer in array_values(serializers).unwrap_or_default() {
+        if !is_callable_value(serializer) {
+            throw_invalid_arg_type("serializers", "Array of functions", serializer);
+        }
+    }
     undefined_value()
 }
 

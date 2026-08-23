@@ -156,8 +156,9 @@ use stream_promises::{thunk_streamP_finished, thunk_streamP_pipeline, value_from
 #[cfg(feature = "mod-node-test")]
 use test::{
     thunk_reporter_dot, thunk_reporter_junit, thunk_reporter_lcov, thunk_reporter_spec,
-    thunk_reporter_tap, thunk_test, thunk_test_hook, thunk_test_only, thunk_test_run,
-    thunk_test_skip, thunk_test_todo,
+    thunk_reporter_tap, thunk_test, thunk_test_after, thunk_test_after_each, thunk_test_before,
+    thunk_test_before_each, thunk_test_only, thunk_test_run, thunk_test_skip, thunk_test_suite,
+    thunk_test_todo,
 };
 use timers::{
     timers_ns_clear_immediate, timers_ns_clear_interval, timers_ns_clear_timeout,
@@ -689,11 +690,11 @@ static SUBMOD_TEST: SubmoduleSpec = SubmoduleSpec {
         },
         ExportSpec {
             name: "suite",
-            thunk: ExportThunk::Fn3(thunk_test),
+            thunk: ExportThunk::Fn3(thunk_test_suite),
         },
         ExportSpec {
             name: "describe",
-            thunk: ExportThunk::Fn3(thunk_test),
+            thunk: ExportThunk::Fn3(thunk_test_suite),
         },
         ExportSpec {
             name: "it",
@@ -701,19 +702,19 @@ static SUBMOD_TEST: SubmoduleSpec = SubmoduleSpec {
         },
         ExportSpec {
             name: "before",
-            thunk: ExportThunk::Fn1(thunk_test_hook),
+            thunk: ExportThunk::Fn1(thunk_test_before),
         },
         ExportSpec {
             name: "after",
-            thunk: ExportThunk::Fn1(thunk_test_hook),
+            thunk: ExportThunk::Fn1(thunk_test_after),
         },
         ExportSpec {
             name: "beforeEach",
-            thunk: ExportThunk::Fn1(thunk_test_hook),
+            thunk: ExportThunk::Fn1(thunk_test_before_each),
         },
         ExportSpec {
             name: "afterEach",
-            thunk: ExportThunk::Fn1(thunk_test_hook),
+            thunk: ExportThunk::Fn1(thunk_test_after_each),
         },
         ExportSpec {
             name: "run",
@@ -1177,7 +1178,11 @@ fn maybe_decorate_test_export(
             "default" | "test" | "suite" | "describe" | "it"
         )
     {
-        Some(test::decorate_test_export(allocated, key_name == "test"))
+        Some(test::decorate_test_export(
+            allocated,
+            key_name == "test",
+            matches!(export.name, "suite" | "describe"),
+        ))
     } else {
         None
     }

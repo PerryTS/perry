@@ -23,6 +23,8 @@ mod mock_options;
 mod property_mock;
 #[path = "test_reporters.rs"]
 mod reporters;
+#[path = "test_runner.rs"]
+mod runner;
 #[path = "test_snapshot.rs"]
 mod snapshot;
 
@@ -31,6 +33,11 @@ use mock_options::{mock_option_times, parse_mock_fn_options};
 pub(crate) use reporters::{
     thunk_reporter_dot, thunk_reporter_junit, thunk_reporter_lcov, thunk_reporter_spec,
     thunk_reporter_tap,
+};
+pub(crate) use runner::{
+    thunk_test, thunk_test_after, thunk_test_after_each, thunk_test_before, thunk_test_before_each,
+    thunk_test_only, thunk_test_run, thunk_test_skip, thunk_test_suite, thunk_test_suite_only,
+    thunk_test_suite_skip, thunk_test_suite_todo, thunk_test_todo,
 };
 use snapshot::{
     assert_file_snapshot, assert_snapshot, snapshot_object_value, snapshot_set_default_serializers,
@@ -1474,6 +1481,7 @@ fn test_context_value(name: &str) -> f64 {
         boxed_ptr(decorate_test_export(
             test_fn_ptr as *mut ClosureHeader,
             false,
+            false,
         ))
     } else {
         test_fn
@@ -1511,300 +1519,6 @@ enum TestMode {
     Skip,
     Todo,
     Only,
-}
-
-fn run_test_registration(
-    mode: TestMode,
-    name_or_callback: f64,
-    options_or_callback: f64,
-    callback: f64,
-) -> f64 {
-    let (name, options, cb) = if is_callable_value(name_or_callback) {
-        (
-            "<anonymous>".to_string(),
-            undefined_value(),
-            name_or_callback,
-        )
-    } else if is_callable_value(options_or_callback) {
-        let name = value_to_string(name_or_callback);
-        let options = if name.is_some() {
-            undefined_value()
-        } else {
-            name_or_callback
-        };
-        (
-            name.unwrap_or_else(|| "test".to_string()),
-            options,
-            options_or_callback,
-        )
-    } else if is_callable_value(callback) {
-        (
-            value_to_string(name_or_callback).unwrap_or_else(|| "test".to_string()),
-            options_or_callback,
-            callback,
-        )
-    } else {
-        (
-            value_to_string(name_or_callback).unwrap_or_else(|| "test".to_string()),
-            options_or_callback,
-            undefined_value(),
-        )
-    };
-
-    let option_skip = object_property(options, b"skip")
-        .is_some_and(|value| crate::value::js_is_truthy(value) != 0);
-    let option_todo = object_property(options, b"todo")
-        .is_some_and(|value| crate::value::js_is_truthy(value) != 0);
-    let mut mode = if mode == TestMode::Skip || option_skip {
-        TestMode::Skip
-    } else if mode == TestMode::Todo || option_todo {
-        TestMode::Todo
-    } else {
-        mode
-    };
-
-    CURRENT_TEST_NAME.with(|slot| *slot.borrow_mut() = Some(name.clone()));
-    CURRENT_DIAGNOSTICS.with(|diagnostics| diagnostics.borrow_mut().clear());
-    CURRENT_SNAPSHOT_INDEX.with(|idx| idx.set(0));
-    CURRENT_ASSERT_COUNT.with(|count| count.set(0));
-    CURRENT_PLAN.with(|plan| plan.set(None));
-    CURRENT_TEST_OVERRIDE.with(|slot| slot.set(TEST_OVERRIDE_NONE));
-
-    let mut failed = None;
-    if mode != TestMode::Skip && is_callable_value(cb) {
-        let cb_ptr = raw_ptr_from_value(cb) as *const ClosureHeader;
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let ctx = scope.root_nanbox_f64(test_context_value(&name));
-        failed = catch_js(|| js_closure_call1(cb_ptr, ctx.get_nanbox_f64())).err();
-        let forced_mode = CURRENT_TEST_OVERRIDE.with(|slot| slot.get());
-        if failed.is_none() && forced_mode == TEST_OVERRIDE_NONE {
-            let assertion_count = CURRENT_ASSERT_COUNT.with(|count| count.get());
-            let plan = CURRENT_PLAN.with(|slot| slot.get());
-            if let Some(expected) = plan {
-                if expected != assertion_count {
-                    let message = format!(
-                        "plan expected {expected} assertions but received {assertion_count}"
-                    );
-                    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-                    let err = crate::error::js_error_new_with_message(msg);
-                    failed = Some(crate::value::js_nanbox_pointer(err as i64));
-                }
-            }
-        }
-        if failed.is_none() {
-            mode = match forced_mode {
-                TEST_OVERRIDE_SKIP => TestMode::Skip,
-                TEST_OVERRIDE_TODO => TestMode::Todo,
-                _ => mode,
-            };
-        }
-    }
-
-    CURRENT_TEST_NAME.with(|slot| *slot.borrow_mut() = None);
-    let diagnostics =
-        CURRENT_DIAGNOSTICS.with(|diagnostics| std::mem::take(&mut *diagnostics.borrow_mut()));
-    CURRENT_SNAPSHOT_INDEX.with(|idx| idx.set(0));
-    CURRENT_ASSERT_COUNT.with(|count| count.set(0));
-    CURRENT_PLAN.with(|plan| plan.set(None));
-    CURRENT_TEST_OVERRIDE.with(|slot| slot.set(TEST_OVERRIDE_NONE));
-
-    match (mode, failed) {
-        (TestMode::Skip, _) => {
-            println!("﹣ {name} (0ms) # SKIP");
-            for diagnostic in diagnostics {
-                println!("ℹ {diagnostic}");
-            }
-            println!("ℹ tests 1");
-            println!("ℹ suites 0");
-            println!("ℹ pass 0");
-            println!("ℹ fail 0");
-            println!("ℹ cancelled 0");
-            println!("ℹ skipped 1");
-            println!("ℹ todo 0");
-            println!("ℹ duration_ms 0");
-            undefined_value()
-        }
-        (TestMode::Todo, _) => {
-            println!("✔ {name} (0ms) # TODO");
-            for diagnostic in diagnostics {
-                println!("ℹ {diagnostic}");
-            }
-            println!("ℹ tests 1");
-            println!("ℹ suites 0");
-            println!("ℹ pass 0");
-            println!("ℹ fail 0");
-            println!("ℹ cancelled 0");
-            println!("ℹ skipped 0");
-            println!("ℹ todo 1");
-            println!("ℹ duration_ms 0");
-            undefined_value()
-        }
-        (_, Some(err)) => {
-            println!("✖ {name} (0ms)");
-            for diagnostic in diagnostics {
-                println!("ℹ {diagnostic}");
-            }
-            println!("ℹ tests 1");
-            println!("ℹ suites 0");
-            println!("ℹ pass 0");
-            println!("ℹ fail 1");
-            println!("ℹ cancelled 0");
-            println!("ℹ skipped 0");
-            println!("ℹ todo 0");
-            println!("ℹ duration_ms 0");
-            crate::exception::js_throw(err)
-        }
-        _ => {
-            println!("✔ {name} (0ms)");
-            for diagnostic in diagnostics {
-                println!("ℹ {diagnostic}");
-            }
-            println!("ℹ tests 1");
-            println!("ℹ suites 0");
-            println!("ℹ pass 1");
-            println!("ℹ fail 0");
-            println!("ℹ cancelled 0");
-            println!("ℹ skipped 0");
-            println!("ℹ todo 0");
-            println!("ℹ duration_ms 0");
-            undefined_value()
-        }
-    }
-}
-
-pub(crate) extern "C" fn thunk_test(
-    _closure: *const ClosureHeader,
-    name_or_callback: f64,
-    options_or_callback: f64,
-    callback: f64,
-) -> f64 {
-    run_test_registration(
-        TestMode::Normal,
-        name_or_callback,
-        options_or_callback,
-        callback,
-    )
-}
-
-pub(crate) extern "C" fn thunk_test_skip(
-    _closure: *const ClosureHeader,
-    name_or_callback: f64,
-    options_or_callback: f64,
-    callback: f64,
-) -> f64 {
-    run_test_registration(
-        TestMode::Skip,
-        name_or_callback,
-        options_or_callback,
-        callback,
-    )
-}
-
-pub(crate) extern "C" fn thunk_test_todo(
-    _closure: *const ClosureHeader,
-    name_or_callback: f64,
-    options_or_callback: f64,
-    callback: f64,
-) -> f64 {
-    run_test_registration(
-        TestMode::Todo,
-        name_or_callback,
-        options_or_callback,
-        callback,
-    )
-}
-
-pub(crate) extern "C" fn thunk_test_only(
-    _closure: *const ClosureHeader,
-    name_or_callback: f64,
-    options_or_callback: f64,
-    callback: f64,
-) -> f64 {
-    run_test_registration(
-        TestMode::Only,
-        name_or_callback,
-        options_or_callback,
-        callback,
-    )
-}
-
-pub(crate) extern "C" fn thunk_test_hook(_closure: *const ClosureHeader, callback: f64) -> f64 {
-    if is_callable_value(callback) {
-        let cb = raw_ptr_from_value(callback) as *const ClosureHeader;
-        js_closure_call0(cb);
-    }
-    undefined_value()
-}
-
-pub(crate) extern "C" fn thunk_test_run(_closure: *const ClosureHeader, _options: f64) -> f64 {
-    let arr = crate::array::js_array_alloc(0);
-    crate::node_stream::js_node_stream_readable_from(boxed_ptr(arr))
-}
-
-#[no_mangle]
-pub extern "C" fn js_node_test_register(
-    name_or_callback: f64,
-    options_or_callback: f64,
-    callback: f64,
-) -> f64 {
-    thunk_test(
-        std::ptr::null(),
-        name_or_callback,
-        options_or_callback,
-        callback,
-    )
-}
-
-#[no_mangle]
-pub extern "C" fn js_node_test_skip(
-    name_or_callback: f64,
-    options_or_callback: f64,
-    callback: f64,
-) -> f64 {
-    thunk_test_skip(
-        std::ptr::null(),
-        name_or_callback,
-        options_or_callback,
-        callback,
-    )
-}
-
-#[no_mangle]
-pub extern "C" fn js_node_test_todo(
-    name_or_callback: f64,
-    options_or_callback: f64,
-    callback: f64,
-) -> f64 {
-    thunk_test_todo(
-        std::ptr::null(),
-        name_or_callback,
-        options_or_callback,
-        callback,
-    )
-}
-
-#[no_mangle]
-pub extern "C" fn js_node_test_only(
-    name_or_callback: f64,
-    options_or_callback: f64,
-    callback: f64,
-) -> f64 {
-    thunk_test_only(
-        std::ptr::null(),
-        name_or_callback,
-        options_or_callback,
-        callback,
-    )
-}
-
-#[no_mangle]
-pub extern "C" fn js_node_test_hook(callback: f64) -> f64 {
-    thunk_test_hook(std::ptr::null(), callback)
-}
-
-#[no_mangle]
-pub extern "C" fn js_node_test_run(options: f64) -> f64 {
-    thunk_test_run(std::ptr::null(), options)
 }
 
 #[no_mangle]
@@ -1914,6 +1628,7 @@ pub extern "C" fn js_node_test_mock_timers_reset() -> f64 {
 pub(crate) fn decorate_test_export(
     closure: *mut ClosureHeader,
     include_test_alias: bool,
+    suite: bool,
 ) -> *mut ClosureHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure_handle = scope.root_raw_mut_ptr(closure);
@@ -1924,11 +1639,20 @@ pub(crate) fn decorate_test_export(
             boxed_ptr(closure_handle.get_raw_mut_ptr::<ClosureHeader>()),
         );
     }
-    for (name, func) in [
-        ("skip", thunk_test_skip as *const u8),
-        ("todo", thunk_test_todo as *const u8),
-        ("only", thunk_test_only as *const u8),
-    ] {
+    let decorators = if suite {
+        [
+            ("skip", thunk_test_suite_skip as *const u8),
+            ("todo", thunk_test_suite_todo as *const u8),
+            ("only", thunk_test_suite_only as *const u8),
+        ]
+    } else {
+        [
+            ("skip", thunk_test_skip as *const u8),
+            ("todo", thunk_test_todo as *const u8),
+            ("only", thunk_test_only as *const u8),
+        ]
+    };
+    for (name, func) in decorators {
         let method = scope.root_nanbox_f64(closure_value(func, 3));
         crate::closure::closure_set_dynamic_prop(
             closure_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
@@ -1983,6 +1707,7 @@ pub(crate) fn scan_test_module_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
         }
     });
     property_mock::scan_roots_mut(visitor);
+    runner::scan_roots_mut(visitor);
 }
 
 #[cfg(test)]
