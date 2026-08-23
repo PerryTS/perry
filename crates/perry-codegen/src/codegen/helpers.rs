@@ -405,13 +405,30 @@ fn root_spill_relocation_threshold() -> usize {
 /// The relocation estimate for a function with `slot_count` GC-root slots and
 /// a body containing `safepoint_sites` call-like expressions. Saturating so a
 /// pathological product cannot wrap.
+/// The root population RS4GC actually relocates: named pointer locals plus
+/// ~one live pointer temporary per call result (#8583). Production and the
+/// threshold tests must agree on this composition — computing it in only one
+/// of the two is how the endpoint tests silently stop guarding the real
+/// formula.
+pub(crate) fn spill_live_root_count(slot_count: usize, safepoint_sites: usize) -> usize {
+    slot_count.saturating_add(safepoint_sites)
+}
+
 pub(crate) fn root_relocation_estimate(slot_count: usize, safepoint_sites: usize) -> usize {
     slot_count.saturating_mul(safepoint_sites)
 }
 
 #[cfg(test)]
 mod root_spill_default_tests {
-    use super::{root_relocation_estimate, DEFAULT_ROOT_SPILL_RELOCATIONS};
+    use super::{root_relocation_estimate, spill_live_root_count, DEFAULT_ROOT_SPILL_RELOCATIONS};
+
+    /// Exactly what `maybe_spill_roots_to_shadow_frame` computes, so these
+    /// endpoint tests track the production formula instead of a stale copy of
+    /// it (#8633 changed the composition; before this helper the tests still
+    /// asserted on the pre-#8633 `slot_count x sites`).
+    fn production_estimate(slot_count: usize, sites: usize) -> usize {
+        root_relocation_estimate(spill_live_root_count(slot_count, sites), sites)
+    }
 
     /// #8620: the default is pinned to the measured RS4GC fan-out cliff — the
     /// largest estimate whose fan-out finished in bounded time (32M finished in
@@ -427,8 +444,8 @@ mod root_spill_default_tests {
     /// under the new default it stays on native statepoints.
     #[test]
     fn moderate_fan_out_stays_on_statepoints() {
-        let est = root_relocation_estimate(4000, 2001);
-        assert_eq!(est, 8_004_000);
+        let est = production_estimate(4000, 2001);
+        assert_eq!(est, 12_008_001);
         assert!(
             est <= DEFAULT_ROOT_SPILL_RELOCATIONS,
             "moderate estimate {est} must not exceed the default (would spill)",
@@ -440,7 +457,7 @@ mod root_spill_default_tests {
     /// still spill under the new default.
     #[test]
     fn catastrophic_fan_out_still_spills() {
-        let est = root_relocation_estimate(795, 106_000);
+        let est = production_estimate(795, 106_000);
         assert!(
             est > DEFAULT_ROOT_SPILL_RELOCATIONS,
             "catastrophic estimate {est} must exceed the default (should spill)",
@@ -483,7 +500,7 @@ pub(super) fn maybe_spill_roots_to_shadow_frame(
     // Count each safepoint as contributing ~one live pointer temporary. This is
     // an over-approximation biased toward spilling — the intended direction (a
     // false-positive shadow frame is cheap; a missed fan-out is not).
-    let live_roots = slot_count.saturating_add(sites);
+    let live_roots = spill_live_root_count(slot_count, sites);
     let estimate = root_relocation_estimate(live_roots, sites);
     if estimate <= threshold {
         return;
