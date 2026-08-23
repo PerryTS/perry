@@ -315,6 +315,16 @@ pub(crate) fn emit_shadow_slot_bind_ptr(ctx: &mut FnCtx<'_>, slot_idx: u32, slot
 /// `monotonic`, matching the runtime's Rust `Relaxed` readers: the counter is
 /// only a gate and does not publish accompanying memory.
 pub(crate) fn emit_persistent_shadow_root_barrier(ctx: &mut FnCtx<'_>, value_bits: &str) {
+    // #8583-followup: if computing the value diverged (a throwing sub-expression
+    // — e.g. a TDZ access on a captured `let` — emitted `unreachable`), the
+    // current block is terminated. `LlBlock` drops instructions emitted after a
+    // terminator, so `value_bits`' defining instruction was silently discarded;
+    // the barrier block created below would then reference an undefined register
+    // ("register %rN used but never defined"). The root store is unreachable on
+    // this path, so emit no barrier.
+    if ctx.block().is_terminated() {
+        return;
+    }
     let active =
         ctx.block()
             .load_atomic_monotonic(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);

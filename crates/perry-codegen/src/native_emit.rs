@@ -255,18 +255,58 @@ fn stream_frozen_functions<'ctx>(
             .map_err(|e| anyhow!("native IR construction failed in @{}: {e:#}", f.name))?;
         for item in &f.items {
             use crate::function::FinalItem as FI;
-            match item {
-                FrozenItem::Label(s) => stream.item(&FI::Label(s))?,
-                FrozenItem::Blank => stream.item(&FI::Blank)?,
-                FrozenItem::Text(s) => stream.item(&FI::Text(s))?,
-                FrozenItem::Inst(i) => stream.item(&FI::Inst(i))?,
-            }
+            let res = match item {
+                FrozenItem::Label(s) => stream.item(&FI::Label(s)),
+                FrozenItem::Blank => stream.item(&FI::Blank),
+                FrozenItem::Text(s) => stream.item(&FI::Text(s)),
+                FrozenItem::Inst(i) => stream.item(&FI::Inst(i)),
+            };
+            res.map_err(|e| dump_dialect_failure(f, e))?;
         }
-        let (t, r) = stream.finish()?;
+        let (t, r) = stream.finish().map_err(|e| dump_dialect_failure(f, e))?;
         typed += t;
         raw += r;
     }
     Ok((typed, raw))
+}
+
+/// Diagnostic for a dialect construction failure (e.g. "register %rN was used
+/// but never defined"): name the offending function and, when
+/// `PERRY_DIALECT_DUMP=<dir>` is set, write the function's full constructed IR
+/// text (typed insts rendered via `render_into`) to `<dir>/<name>.ll` so the
+/// malformed use site is visible. The failing unit never parses, so the normal
+/// `PERRY_SAVE_LL` post-parse dump cannot capture it.
+fn dump_dialect_failure(f: &FrozenFunction, e: anyhow::Error) -> anyhow::Error {
+    if let Ok(dir) = std::env::var("PERRY_DIALECT_DUMP") {
+        let _ = std::fs::create_dir_all(&dir);
+        let mut buf = String::new();
+        buf.push_str(&f.header);
+        buf.push('\n');
+        for item in &f.items {
+            match item {
+                FrozenItem::Label(s) => {
+                    buf.push_str(s);
+                    buf.push('\n');
+                }
+                FrozenItem::Blank => buf.push('\n'),
+                FrozenItem::Text(s) => {
+                    buf.push_str(s);
+                    buf.push('\n');
+                }
+                FrozenItem::Inst(i) => {
+                    i.render_into(&mut buf);
+                    buf.push('\n');
+                }
+            }
+        }
+        let safe: String = f
+            .name
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+            .collect();
+        let _ = std::fs::write(format!("{dir}/{safe}.ll"), &buf);
+    }
+    anyhow!("native IR construction failed in @{}: {e:#}", f.name)
 }
 
 /// Native construction for a module large enough to split into codegen
