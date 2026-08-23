@@ -737,8 +737,22 @@ pub(super) fn compile_method(
             || class.native_extends.is_some()
             || class.extends_expr.is_some()
         {
-            crate::expr::this_super_call::push_shared_super_called_slot(&mut ctx);
-            ctx.shared_super_scope_active = true;
+            // #8648: only a closure in this body can need the RUNTIME cell.
+            // An arrow compiles as its own LLVM function and reaches the
+            // binding through `js_derived_super_bind_current` /
+            // `js_derived_this_check_current`, which read the thread-local
+            // stack this push maintains. With no closure here, nothing can
+            // perform that lookup, and `bind_derived_this_after_super` uses
+            // the local alloca directly -- so the push/pop pair is a
+            // thread-local round trip per construction for a cell no one
+            // reads. Measured: 1.89x on a two-class `new B(x, y)` loop,
+            // 3.14x on `shapes.ts`.
+            if crate::collectors::body_contains_closure(&method.body) {
+                crate::expr::this_super_call::push_shared_super_called_slot(&mut ctx);
+                ctx.shared_super_scope_active = true;
+            } else {
+                crate::expr::this_super_call::push_super_called_slot(&mut ctx);
+            }
         }
         // Stage field initializers around the parent body chain so leaf
         // fields can read state set by parent body (Refs #420):

@@ -33,6 +33,43 @@ pub fn body_contains_call(stmts: &[perry_hir::Stmt]) -> bool {
     any_top_level_expr(stmts, &mut expr_contains_call)
 }
 
+/// #8648: does this body create a closure anywhere?
+///
+/// A derived constructor's `super()` binding normally lives in a plain `i1`
+/// alloca that `bind_derived_this_after_super` reads directly. The RUNTIME
+/// form (`js_derived_super_scope_push`/`pop`, a thread-local stack) exists for
+/// exactly one reason, stated on `push_shared_super_called_slot`: an arrow
+/// inside the constructor compiles as its OWN LLVM function, so it cannot name
+/// the outer alloca and has to find the cell through
+/// `js_derived_super_bind_current` / `js_derived_this_check_current`.
+///
+/// A derived constructor with no closure in it therefore pays a thread-local
+/// push and pop per construction for a cell nothing else can look up. #8630
+/// emitted the shared form for every derived constructor, which cost 1.89x on
+/// a two-class `new B(x, y)` loop and 3.14x on `shapes.ts` (six `extends`,
+/// 120k constructions).
+///
+/// Deliberately conservative: ANY closure in the body selects the shared form,
+/// without asking whether that closure actually mentions `this` or `super`.
+/// The cheap answer is only taken when there is provably no separate LLVM
+/// function to serve.
+pub fn body_contains_closure(stmts: &[perry_hir::Stmt]) -> bool {
+    any_top_level_expr(stmts, &mut expr_contains_closure)
+}
+
+fn expr_contains_closure(expr: &perry_hir::Expr) -> bool {
+    if matches!(expr, perry_hir::Expr::Closure { .. }) {
+        return true;
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child: &perry_hir::Expr| {
+        if !found && expr_contains_closure(child) {
+            found = true;
+        }
+    });
+    found
+}
+
 /// The statement skeleton both predicates walk. `pred` is applied to each
 /// top-level expression; it is responsible for its own subexpression
 /// recursion.
