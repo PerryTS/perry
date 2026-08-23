@@ -223,23 +223,37 @@ fn native_or_plain_key(name: &str, overridden: bool) -> *mut crate::string::Stri
 /// "no fixed receiver — read IMPLICIT_THIS", which `Function.prototype.call`/
 /// `.apply` sets to the borrowed `this`.
 pub(crate) fn install_event_emitter_prototype_methods(proto: *mut ObjectHeader) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_raw_mut_ptr(proto);
     register_stub_arities();
     let methods = super::emitter_methods();
-    let mut on_method: Option<f64> = None;
+    let mut on_method: Option<crate::gc::RuntimeHandle<'_>> = None;
     for (name, func) in methods {
         if name == "addListener" {
-            if let Some(val) = on_method {
-                js_object_set_field_by_name(proto, hidden_key(name.as_bytes()), val);
+            if let Some(val) = &on_method {
+                let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
+                proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+                    key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                        js_object_set_field_by_name(proto, key, val.get_nanbox_f64())
+                    })
+                });
                 continue;
             }
         }
         let closure = js_closure_alloc(func as *const u8, 1);
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
-        let val = f64::from_bits(JSValue::pointer(closure as *const u8).bits());
+        let val = scope.root_nanbox_f64(f64::from_bits(
+            JSValue::pointer(closure as *const u8).bits(),
+        ));
         if name == "on" {
             on_method = Some(val);
         }
-        js_object_set_field_by_name(proto, hidden_key(name.as_bytes()), val);
+        let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
+        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                js_object_set_field_by_name(proto, key, val.get_nanbox_f64())
+            })
+        });
     }
 }
 

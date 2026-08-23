@@ -702,6 +702,18 @@ pub unsafe extern "C" fn js_dynamic_neg(a: f64) -> f64 {
     -a
 }
 
+/// Unary plus performs ToNumber, not the explicit `Number()` conversion:
+/// after ToPrimitive an Object-wrapped BigInt must therefore throw instead of
+/// being lossily converted to f64.
+#[no_mangle]
+pub unsafe extern "C" fn js_dynamic_pos(a: f64) -> f64 {
+    let numeric = to_numeric(a);
+    if JSValue::from_bits(numeric.to_bits()).is_bigint() {
+        throw_add_type_error(b"Cannot convert a BigInt value to a number");
+    }
+    numeric
+}
+
 /// Dynamic bitwise NOT: `~BigInt` stays BigInt, otherwise use JS ToInt32.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_bitnot(a: f64) -> f64 {

@@ -17,6 +17,7 @@
 //! next to the array iterator one; `flat_clone.rs` detects the class id so
 //! `[...m.entries()]` / `Array.from(s.values())` drive `.next()`.
 
+use crate::array::ArrayHeader;
 use crate::map::MapHeader;
 use crate::object::{js_object_alloc, js_object_get_field, js_object_set_field, ObjectHeader};
 use crate::set::SetHeader;
@@ -58,26 +59,33 @@ fn iterator_class_id(addr: usize) -> Option<u32> {
 }
 
 unsafe fn alloc_iterator(class_id: u32, coll_nanboxed: f64, kind: i32) -> f64 {
-    let obj = js_object_alloc(class_id, 5);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let coll_h = scope.root_nanbox_f64(coll_nanboxed);
+    let obj_h = scope.root_raw_mut_ptr(js_object_alloc(class_id, 5));
+    let obj = || obj_h.across_mut::<ObjectHeader, _>(|| ()).1;
     // Field 0: backing collection (NaN-boxed pointer so the GC scanner keeps it).
-    js_object_set_field(obj, 0, JSValue::from_bits(coll_nanboxed.to_bits()));
+    js_object_set_field(
+        obj(),
+        0,
+        JSValue::from_bits(coll_h.get_nanbox_f64().to_bits()),
+    );
     // Field 1: cursor index (index just past the last-returned entry), starts at 0.
-    js_object_set_field(obj, 1, JSValue::number(0.0));
+    js_object_set_field(obj(), 1, JSValue::number(0.0));
     // Field 2: iterator kind.
-    js_object_set_field(obj, 2, JSValue::number(kind as f64));
+    js_object_set_field(obj(), 2, JSValue::number(kind as f64));
     // Field 3: collection size observed at the last `next()`. `-1` sentinel means
     // "not started" (no entry returned yet). Used to detect a mid-iteration
     // delete (which compacts the entries array, shifting live entries below the
     // cursor) so the cursor can be re-derived from the last key (#6075).
-    js_object_set_field(obj, 3, JSValue::number(-1.0));
+    js_object_set_field(obj(), 3, JSValue::number(-1.0));
     // Field 4: the KEY of the last-returned entry (a Map key / Set value), used
     // to re-derive the cursor after a delete-shift. Undefined until started.
-    js_object_set_field(obj, 4, JSValue::undefined());
+    js_object_set_field(obj(), 4, JSValue::undefined());
     // Link `[[Prototype]]` to the shared `%MapIteratorPrototype%` /
     // `%SetIteratorPrototype%` singleton so `Object.getPrototypeOf(it)` and the
     // inherited `.next` read resolve.
-    crate::object::attach_iterator_prototype(obj, class_id);
-    js_nanbox_pointer(obj as i64)
+    crate::object::attach_iterator_prototype(obj(), class_id);
+    js_nanbox_pointer(obj() as i64)
 }
 
 /// Build a fresh Map iterator object for `map` (raw pointer) of the given
@@ -178,11 +186,17 @@ use crate::iter_result::make_iter_result;
 
 /// `[key, value]` pair array for Map entries / Set entries (`[v, v]`).
 unsafe fn make_pair_array(a: f64, b: f64) -> f64 {
-    let pair = crate::array::js_array_alloc(2);
-    crate::array::store_array_slot(pair, 0, a.to_bits());
-    crate::array::store_array_slot(pair, 1, b.to_bits());
-    (*pair).length = 2;
-    crate::array::rebuild_array_layout_exact(pair);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let a = scope.root_nanbox_f64(a);
+    let b = scope.root_nanbox_f64(b);
+    let pair = scope.root_raw_mut_ptr(crate::array::js_array_alloc(2));
+    pair.with_mut_ptr::<ArrayHeader, _>(|pair| {
+        crate::array::store_array_slot(pair, 0, a.get_nanbox_u64());
+        crate::array::store_array_slot(pair, 1, b.get_nanbox_u64());
+        (*pair).length = 2;
+        crate::array::rebuild_array_layout_exact(pair);
+    });
+    let (_, pair) = pair.across_mut::<ArrayHeader, _>(|| ());
     js_nanbox_pointer(pair as i64)
 }
 
@@ -219,50 +233,62 @@ fn next_read_index(cursor: u32, last_key_in_place: bool, find_last: impl FnOnce(
 
 /// Dispatch `.next()` / `[Symbol.iterator]()` on a Map iterator object.
 pub unsafe fn dispatch_map_iterator_method(iter_obj: *mut ObjectHeader, method_name: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter_h = scope.root_nanbox_f64(js_nanbox_pointer(iter_obj as i64));
+    let iter_obj = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
     match method_name {
         "next" => {
-            let backing = f64::from_bits(js_object_get_field(iter_obj, 0).bits());
-            let map = js_nanbox_get_pointer(backing) as *const MapHeader;
-            let kind = f64::from_bits(js_object_get_field(iter_obj, 2).bits()) as i32;
-            if map.is_null() {
+            if let Some(result) =
+                crate::object::call_overridden_iterator_next(iter_obj(), MAP_ITERATOR_CLASS_ID)
+            {
+                return result;
+            }
+            let backing = f64::from_bits(js_object_get_field(iter_obj(), 0).bits());
+            let map_h = scope.root_nanbox_f64(backing);
+            let map = || js_nanbox_get_pointer(map_h.get_nanbox_f64()) as *const MapHeader;
+            let kind = f64::from_bits(js_object_get_field(iter_obj(), 2).bits()) as i32;
+            if map().is_null() {
                 return make_iter_result(JSValue::undefined(), true);
             }
-            let cursor = f64::from_bits(js_object_get_field(iter_obj, 1).bits()) as u32;
-            let last_key = js_object_get_field(iter_obj, 4);
-            let size = crate::map::js_map_size(map);
+            let cursor = f64::from_bits(js_object_get_field(iter_obj(), 1).bits()) as u32;
+            let last_key = js_object_get_field(iter_obj(), 4);
+            let size = crate::map::js_map_size(map());
             // Is the last-returned key still at cursor-1? (SameValueZero, so a
             // NaN key matches itself.) If so, no delete shifted an entry at/below
             // the cursor.
             let in_place = cursor > 0 && {
-                let prev = crate::map::js_map_entry_key_at(map, cursor - 1);
+                let prev = crate::map::js_map_entry_key_at(map(), cursor - 1);
                 crate::value::js_jsvalue_same_value_zero(prev, f64::from_bits(last_key.bits())) != 0
             };
             let idx = next_read_index(cursor, in_place, || {
-                crate::map::find_key_index(map, f64::from_bits(last_key.bits()))
+                crate::map::find_key_index(map(), f64::from_bits(last_key.bits()))
             });
             if idx >= size {
-                js_object_set_field(iter_obj, 1, JSValue::number(size as f64));
+                js_object_set_field(iter_obj(), 1, JSValue::number(size as f64));
+                // Once a collection iterator is exhausted it stays exhausted,
+                // even if entries are appended later.
+                js_object_set_field(iter_obj(), 0, JSValue::undefined());
                 return make_iter_result(JSValue::undefined(), true);
             }
 
-            let entry_key = crate::map::js_map_entry_key_at(map, idx);
+            let entry_key = crate::map::js_map_entry_key_at(map(), idx);
             // Record state for the next re-derive BEFORE any allocation below.
-            js_object_set_field(iter_obj, 1, JSValue::number((idx + 1) as f64));
-            js_object_set_field(iter_obj, 4, JSValue::from_bits(entry_key.to_bits()));
+            js_object_set_field(iter_obj(), 1, JSValue::number((idx + 1) as f64));
+            js_object_set_field(iter_obj(), 4, JSValue::from_bits(entry_key.to_bits()));
 
             let value = match kind {
                 KIND_KEYS => JSValue::from_bits(entry_key.to_bits()),
                 KIND_VALUES => {
-                    JSValue::from_bits(crate::map::js_map_entry_value_at(map, idx).to_bits())
+                    JSValue::from_bits(crate::map::js_map_entry_value_at(map(), idx).to_bits())
                 }
                 _ => {
-                    let val = crate::map::js_map_entry_value_at(map, idx);
+                    let val = crate::map::js_map_entry_value_at(map(), idx);
                     JSValue::from_bits(make_pair_array(entry_key, val).to_bits())
                 }
             };
             make_iter_result(value, false)
         }
-        "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj as i64),
+        "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj() as i64),
         "return" | "throw" => make_iter_result(JSValue::undefined(), true),
         _ => f64::from_bits(TAG_UNDEFINED),
     }
@@ -270,32 +296,42 @@ pub unsafe fn dispatch_map_iterator_method(iter_obj: *mut ObjectHeader, method_n
 
 /// Dispatch `.next()` / `[Symbol.iterator]()` on a Set iterator object.
 pub unsafe fn dispatch_set_iterator_method(iter_obj: *mut ObjectHeader, method_name: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter_h = scope.root_nanbox_f64(js_nanbox_pointer(iter_obj as i64));
+    let iter_obj = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
     match method_name {
         "next" => {
-            let backing = f64::from_bits(js_object_get_field(iter_obj, 0).bits());
-            let set = js_nanbox_get_pointer(backing) as *const SetHeader;
-            let kind = f64::from_bits(js_object_get_field(iter_obj, 2).bits()) as i32;
-            if set.is_null() {
+            if let Some(result) =
+                crate::object::call_overridden_iterator_next(iter_obj(), SET_ITERATOR_CLASS_ID)
+            {
+                return result;
+            }
+            let backing = f64::from_bits(js_object_get_field(iter_obj(), 0).bits());
+            let set_h = scope.root_nanbox_f64(backing);
+            let set = || js_nanbox_get_pointer(set_h.get_nanbox_f64()) as *const SetHeader;
+            let kind = f64::from_bits(js_object_get_field(iter_obj(), 2).bits()) as i32;
+            if set().is_null() {
                 return make_iter_result(JSValue::undefined(), true);
             }
-            let cursor = f64::from_bits(js_object_get_field(iter_obj, 1).bits()) as u32;
-            let last_val = js_object_get_field(iter_obj, 4);
-            let size = crate::set::js_set_size(set);
+            let cursor = f64::from_bits(js_object_get_field(iter_obj(), 1).bits()) as u32;
+            let last_val = js_object_get_field(iter_obj(), 4);
+            let size = crate::set::js_set_size(set());
             let in_place = cursor > 0 && {
-                let prev = crate::set::js_set_value_at(set, cursor - 1);
+                let prev = crate::set::js_set_value_at(set(), cursor - 1);
                 crate::value::js_jsvalue_same_value_zero(prev, f64::from_bits(last_val.bits())) != 0
             };
             let idx = next_read_index(cursor, in_place, || {
-                crate::set::find_value_index(set, f64::from_bits(last_val.bits()))
+                crate::set::find_value_index(set(), f64::from_bits(last_val.bits()))
             });
             if idx >= size {
-                js_object_set_field(iter_obj, 1, JSValue::number(size as f64));
+                js_object_set_field(iter_obj(), 1, JSValue::number(size as f64));
+                js_object_set_field(iter_obj(), 0, JSValue::undefined());
                 return make_iter_result(JSValue::undefined(), true);
             }
 
-            let elem = crate::set::js_set_value_at(set, idx);
-            js_object_set_field(iter_obj, 1, JSValue::number((idx + 1) as f64));
-            js_object_set_field(iter_obj, 4, JSValue::from_bits(elem.to_bits()));
+            let elem = crate::set::js_set_value_at(set(), idx);
+            js_object_set_field(iter_obj(), 1, JSValue::number((idx + 1) as f64));
+            js_object_set_field(iter_obj(), 4, JSValue::from_bits(elem.to_bits()));
 
             let value = match kind {
                 // For Sets, keys === values; entries yields [v, v] pairs.
@@ -304,7 +340,7 @@ pub unsafe fn dispatch_set_iterator_method(iter_obj: *mut ObjectHeader, method_n
             };
             make_iter_result(value, false)
         }
-        "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj as i64),
+        "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj() as i64),
         "return" | "throw" => make_iter_result(JSValue::undefined(), true),
         _ => f64::from_bits(TAG_UNDEFINED),
     }

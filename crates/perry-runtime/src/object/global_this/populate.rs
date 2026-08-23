@@ -106,6 +106,11 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let value = crate::value::js_nanbox_pointer(singleton() as i64);
         js_object_set_field_by_name(singleton(), key, value);
+        super::super::set_builtin_property_attrs(
+            singleton() as usize,
+            "globalThis".to_string(),
+            super::super::PropertyAttrs::new(true, false, true),
+        );
     }
     {
         // #4511: Node exposes the global object as `global` too
@@ -195,6 +200,9 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             "WeakSet" => weak_set_constructor_call_thunk as *const u8,
             "WeakRef" => weak_ref_constructor_call_thunk as *const u8,
             "Promise" => promise_constructor_call_thunk as *const u8,
+            "ArrayBuffer" | "SharedArrayBuffer" | "DataView" => {
+                construct_only_builtin_call_thunk as *const u8
+            }
             _ => global_this_builtin_noop_thunk as *const u8,
         };
         let closure_ptr = crate::closure::js_closure_alloc(func_ptr, 0);
@@ -486,6 +494,10 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             super::super::PropertyAttrs::new(true, false, true),
         );
     }
+    // The hidden `%AsyncFunction%` tower is allocated before the constructor
+    // loop, but its two parents are the `Function` values installed by that
+    // loop. Complete those links now that both are available.
+    wire_async_function_intrinsic_parents();
     // Callable global functions: ClosureHeader-backed values with real
     // dispatch so direct property reads and rebound calls match bare calls.
     for name in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied() {

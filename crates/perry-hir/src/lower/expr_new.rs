@@ -225,6 +225,30 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     // Try to extract class name from callee
     match callee_expr {
         ast::Expr::Ident(ident) => {
+            // Hidden dynamic-function constructors reached through
+            // `<function literal>.constructor` are pre-classified by
+            // `fn_ctor_env`. Their call form already const-folds; construction
+            // must use the same kind-aware path (`new GeneratorFunction()`,
+            // `new AsyncFunction(...)`, and async generators) instead of the
+            // generic object-construction fallback.
+            if ctx.local_decl_scope_depth(ident.sym.as_ref()) == Some(0) {
+                if let Some(super::fn_ctor_env::FnCtorShape::DynCtor(kind)) =
+                    ctx.fn_ctor_env.entries.get(ident.sym.as_str()).cloned()
+                {
+                    let args = new_expr.args.as_deref().unwrap_or(&[]);
+                    if let Some(folded) =
+                        super::const_fold_fn::try_const_fold_function_construct_kind(
+                            ctx,
+                            args,
+                            crate::eval_classifier::EvalSurface::NewFunction,
+                            new_expr.span,
+                            kind,
+                        )?
+                    {
+                        return Ok(folded);
+                    }
+                }
+            }
             // The inner name of the class currently being lowered is a lexical
             // binding that wins over same-named OUTER locals. A nearer method
             // parameter/local still shadows it: `class C { static make(C) {
@@ -914,8 +938,25 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }
                 }
             }
-            if matches!(class_name.as_str(), "Symbol" | "BigInt" | "Math" | "JSON")
-                && !shadowed_by_user_binding
+            if matches!(
+                class_name.as_str(),
+                "Symbol"
+                    | "BigInt"
+                    | "Math"
+                    | "JSON"
+                    | "Atomics"
+                    | "Reflect"
+                    | "global"
+                    | "decodeURI"
+                    | "decodeURIComponent"
+                    | "encodeURI"
+                    | "encodeURIComponent"
+                    | "eval"
+                    | "isFinite"
+                    | "isNaN"
+                    | "parseFloat"
+                    | "parseInt"
+            ) && !shadowed_by_user_binding
             {
                 let args = new_expr
                     .args

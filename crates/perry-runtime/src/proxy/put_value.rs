@@ -185,6 +185,16 @@ pub extern "C" fn js_put_value_set(
         if set_integer_indexed_exotic(target, property_key, value) {
             return value;
         }
+        if target.to_bits() == receiver.to_bits() {
+            if let Some(stored) = set_nonindexed_buffer_named_self(target, property_key, value) {
+                if !stored && strict != 0 {
+                    let key_name =
+                        key_to_rust_string(property_key).unwrap_or_else(|| "property".to_string());
+                    crate::error::throw_immutable_write(0, &key_name);
+                }
+                return value;
+            }
+        }
         // Integer-Indexed exotic objects: a key that is *not* a CanonicalNumeric
         // index does OrdinarySet, creating/looking-up a normal own property on
         // the typed array (ECMA-262 §10.4.5.5). The generic

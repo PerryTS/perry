@@ -975,7 +975,7 @@ pub fn transform_generator_function_with_extra_captures(
             Expr::LocalGet(return_param_id),
             true,
         ))));
-        if !is_async_generator && has_yielding_finally {
+        if has_yielding_finally {
             // #4438 B2-finally: route `.return(v)` into the innermost enclosing
             // yielding finally (record the pending return + jump in), then fall
             // through to the continuation loop so the finally's `yield`s suspend;

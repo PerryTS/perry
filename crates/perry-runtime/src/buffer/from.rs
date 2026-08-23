@@ -898,7 +898,7 @@ pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: 
         throw_dataview_buffer_not_object();
     }
     let addr = v.as_pointer::<u8>() as usize;
-    if addr == 0 || !is_registered_buffer(addr) {
+    if addr == 0 || !is_registered_buffer(addr) || !is_any_array_buffer(addr) {
         throw_dataview_buffer_not_object();
     }
     // Steps 4-6: offset = ToIndex(byteOffset) (RangeError if negative). Runs

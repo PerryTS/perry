@@ -87,11 +87,18 @@ pub(super) fn install_primitive_proto_methods(
             );
         }
         "BigInt" => {
-            ipm(
+            let to_string = ipm(
                 proto_obj,
                 "toString",
                 bigint_proto_to_string_thunk as *const u8,
                 1,
+            );
+            // The optional radix does not contribute to the observable
+            // function length, but the native thunk still needs one ABI slot
+            // so a missing argument arrives as undefined rather than garbage.
+            super::native_module::set_builtin_closure_length(
+                crate::value::js_nanbox_get_pointer(to_string) as usize,
+                0,
             );
             ipm(
                 proto_obj,
@@ -133,11 +140,14 @@ pub(crate) fn primitive_proto_method_value(builtin_name: &str, method_name: &str
         ("BigInt", "valueOf") => (bigint_proto_value_of_thunk as *const u8, 0),
         _ => return None,
     };
-    Some(primitive_proto_method_closure_value(
-        method_name,
-        func_ptr,
-        arity,
-    ))
+    let value = primitive_proto_method_closure_value(method_name, func_ptr, arity);
+    if builtin_name == "BigInt" && method_name == "toString" {
+        super::native_module::set_builtin_closure_length(
+            crate::value::js_nanbox_get_pointer(value) as usize,
+            0,
+        );
+    }
+    Some(value)
 }
 
 fn primitive_proto_method_closure_value(method_name: &str, func_ptr: *const u8, arity: u32) -> f64 {

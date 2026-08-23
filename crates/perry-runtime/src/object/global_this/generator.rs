@@ -1,5 +1,25 @@
 use super::*;
 
+#[cfg(test)]
+pub(crate) fn append_async_function_root_snapshot(roots: &mut Vec<(&'static str, usize, u64)>) {
+    for (name, slot) in [
+        (
+            "ASYNC_FUNCTION_INTRINSIC_PTR",
+            &crate::object::ASYNC_FUNCTION_INTRINSIC_PTR,
+        ),
+        (
+            "ASYNC_FUNCTION_INTRINSIC_PROTO_PTR",
+            &crate::object::ASYNC_FUNCTION_INTRINSIC_PROTO_PTR,
+        ),
+    ] {
+        roots.push((
+            name,
+            slot.test_slot_addr(),
+            slot.load(Ordering::Acquire) as u64,
+        ));
+    }
+}
+
 /// Distinguishes plain vs async generator closures for the intrinsic-tower
 /// lookups.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -30,6 +50,18 @@ fn closure_generator_kind(closure_ptr: usize) -> Option<GeneratorKind> {
     }
 }
 
+/// Plain async closures have their own hidden `%AsyncFunction%` intrinsic
+/// tower. Async generators are intentionally excluded: they use the separate
+/// async-generator tower classified above.
+fn is_plain_async_function(closure_ptr: usize) -> bool {
+    let closure = closure_ptr as *const crate::closure::ClosureHeader;
+    let func_ptr = crate::closure::get_valid_func_ptr(closure);
+    !func_ptr.is_null()
+        && crate::closure::is_registered_async_function(func_ptr)
+        && !crate::closure::is_registered_generator_function(func_ptr)
+        && !crate::closure::is_registered_async_generator_function(func_ptr)
+}
+
 fn intrinsic_pointer_value(slot: i64) -> Option<f64> {
     if slot != 0 {
         Some(crate::value::js_nanbox_pointer(slot))
@@ -43,6 +75,12 @@ fn intrinsic_pointer_value(slot: i64) -> Option<f64> {
 /// `None` for non-generator closures so the caller keeps its existing
 /// `closure_static_prototype` / null resolution. (#3664)
 pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
+    if is_plain_async_function(closure_ptr) {
+        ensure_generator_intrinsics();
+        return intrinsic_pointer_value(
+            crate::object::ASYNC_FUNCTION_INTRINSIC_PROTO_PTR.load(Ordering::Acquire),
+        );
+    }
     let kind = closure_generator_kind(closure_ptr)?;
     // The towers are normally built in `populate_global_this_builtins`, but a
     // program that reflects on a generator without ever touching `globalThis`
@@ -55,6 +93,72 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
         }
     };
     intrinsic_pointer_value(slot)
+}
+
+/// Build the hidden `%AsyncFunction%` constructor and its ordinary,
+/// non-callable `.prototype` object. The parent links are attached separately
+/// once the global `Function` constructor has been populated.
+fn build_async_function_tower() {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let noop = global_this_builtin_noop_thunk as *const u8;
+    let ctor = crate::closure::js_closure_alloc(noop, 0);
+    let proto = js_object_alloc(0, 0);
+    if ctor.is_null() || proto.is_null() {
+        return;
+    }
+    let configurable = super::super::PropertyAttrs::new(false, false, true);
+    let fixed = super::super::PropertyAttrs::new(false, false, false);
+
+    crate::closure::js_register_closure_arity(noop, 1);
+    super::super::native_module::set_bound_native_closure_name(ctor, "AsyncFunction");
+    super::super::native_module::set_builtin_closure_length(ctor as usize, 1);
+    super::super::set_builtin_property_attrs(ctor as usize, "name".to_string(), configurable);
+    super::super::set_builtin_property_attrs(ctor as usize, "length".to_string(), configurable);
+    set_intrinsic_data_prop(
+        ctor as *mut ObjectHeader,
+        "prototype",
+        crate::value::js_nanbox_pointer(proto as i64),
+        fixed,
+    );
+    set_intrinsic_data_prop(
+        proto,
+        "constructor",
+        crate::value::js_nanbox_pointer(ctor as i64),
+        configurable,
+    );
+    set_intrinsic_to_string_tag(proto, "AsyncFunction");
+
+    crate::object::ASYNC_FUNCTION_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
+    crate::object::ASYNC_FUNCTION_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
+}
+
+/// Complete `%AsyncFunction%.__proto__ = Function` and
+/// `%AsyncFunction.prototype%.__proto__ = Function.prototype` after the
+/// global constructor table exists.
+pub(crate) fn wire_async_function_intrinsic_parents() {
+    let ctor = crate::object::ASYNC_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire);
+    let proto = crate::object::ASYNC_FUNCTION_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
+    if ctor == 0 || proto == 0 {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor = scope.root_raw_mut_ptr(ctor as *mut crate::closure::ClosureHeader);
+    let proto = scope.root_raw_mut_ptr(proto as *mut ObjectHeader);
+    let function_ctor = js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
+    if crate::value::JSValue::from_bits(function_ctor.to_bits()).is_pointer() {
+        ctor.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ctor| {
+            crate::closure::closure_set_static_prototype(ctor as usize, function_ctor.to_bits())
+        });
+    }
+    let function_proto = builtin_prototype_value("Function");
+    if crate::value::JSValue::from_bits(function_proto.to_bits()).is_pointer() {
+        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+            super::super::prototype_chain::object_set_static_prototype(
+                proto as usize,
+                function_proto.to_bits(),
+            )
+        });
+    }
 }
 
 /// `g.constructor` for a generator-function closure `g` → `%GeneratorFunction%`
@@ -79,10 +183,16 @@ pub(crate) fn generator_function_constructor_of(closure_ptr: usize) -> Option<f6
 /// A live generator instance's `[[Prototype]]` is set to this object (Phase 3b),
 /// completing the spec chain `g() → g.prototype → %Generator.prototype%`. (#3664)
 pub(crate) fn generator_function_prototype_of(closure_ptr: usize) -> Option<f64> {
-    let kind = closure_generator_kind(closure_ptr)?;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure_h = scope.root_raw_const_ptr(closure_ptr as *const crate::closure::ClosureHeader);
+    let kind = closure_h.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        closure_generator_kind(closure as usize)
+    })?;
     // A previously-created (or user-assigned) `prototype` wins — preserves
     // identity and lets `g.prototype = X` overrides stick.
-    let existing = crate::closure::closure_get_dynamic_prop(closure_ptr, "prototype");
+    let existing = closure_h.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        crate::closure::closure_get_dynamic_prop(closure as usize, "prototype")
+    });
     if existing.to_bits() != crate::value::TAG_UNDEFINED {
         return Some(f64::from_bits(existing.to_bits()));
     }
@@ -99,7 +209,6 @@ pub(crate) fn generator_function_prototype_of(closure_ptr: usize) -> Option<f64>
     if obj.is_null() {
         return None;
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
     let obj_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
 
     let gen_proto = generator_prototype_ptr(matches!(kind, GeneratorKind::Async));
@@ -111,12 +220,15 @@ pub(crate) fn generator_function_prototype_of(closure_ptr: usize) -> Option<f64>
         );
     }
     let obj_value = obj_h.get_nanbox_f64();
-    crate::closure::closure_set_dynamic_prop(closure_ptr, "prototype", obj_value);
-    super::super::set_builtin_property_attrs(
-        closure_ptr,
-        "prototype".to_string(),
-        super::super::PropertyAttrs::new(true, false, false),
-    );
+    closure_h.with_const_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        let closure = closure as usize;
+        crate::closure::closure_set_dynamic_prop(closure, "prototype", obj_value);
+        super::super::set_builtin_property_attrs(
+            closure,
+            "prototype".to_string(),
+            super::super::PropertyAttrs::new(true, false, false),
+        );
+    });
     Some(obj_h.get_nanbox_f64())
 }
 
@@ -340,6 +452,11 @@ fn install_proto_symbol_self_method(
             crate::value::js_nanbox_pointer(closure as i64),
         );
     }
+    crate::symbol::set_symbol_property_attrs(
+        proto as usize,
+        sym as usize,
+        super::super::PropertyAttrs::new(true, false, true),
+    );
 }
 
 /// Stamp `NO_THIS_REBIND_FLAG` onto the `next`/`return`/`throw` step-closure
@@ -707,7 +824,18 @@ fn build_generator_tower(
             generator_proto_iterator_thunk as *const u8,
         )
     };
-    install_proto_symbol_self_method(gen_proto, symbol_name, display_name, thunk);
+    if is_async {
+        // `%AsyncGenerator.prototype%` inherits from a distinct
+        // `%AsyncIteratorPrototype%`; reflection reaches that parent with two
+        // `Object.getPrototypeOf` calls from an async generator function's
+        // `.prototype`.
+        let async_iterator_proto = js_object_alloc(0, 0);
+        install_proto_symbol_self_method(async_iterator_proto, symbol_name, display_name, thunk);
+        let parent_bits = crate::value::js_nanbox_pointer(async_iterator_proto as i64).to_bits();
+        super::super::prototype_chain::object_set_static_prototype(gen_proto as usize, parent_bits);
+    } else {
+        install_proto_symbol_self_method(gen_proto, symbol_name, display_name, thunk);
+    }
     set_intrinsic_to_string_tag(gen_proto, inst_tag);
 
     ctor_slot.store(ctor as i64, Ordering::Release);
@@ -718,6 +846,9 @@ fn build_generator_tower(
 /// Build both generator intrinsic towers. Idempotent within the current
 /// agent; called during its global bootstrap or by the lazy accessors. (#3664)
 pub(crate) fn ensure_generator_intrinsics() {
+    if crate::object::ASYNC_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire) == 0 {
+        build_async_function_tower();
+    }
     if crate::object::GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire) == 0 {
         build_generator_tower(
             false,

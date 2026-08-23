@@ -97,6 +97,22 @@ pub extern "C" fn js_object_delete_field(
                 key,
             );
         }
+        // ArrayBuffer / SharedArrayBuffer / DataView are registered
+        // BufferHeaders with ordinary named expandos.  They must not fall
+        // through to the ObjectHeader keys-array walk.
+        if crate::buffer::is_registered_buffer(obj as usize) {
+            if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                if let Some(attrs) = get_property_attrs(obj as usize, name) {
+                    if !attrs.configurable() {
+                        return 0;
+                    }
+                }
+                crate::buffer::buffer_delete_own_prop(obj as usize, name);
+                super::clear_accessor_descriptor(obj as usize, name);
+                super::clear_property_attrs(obj as usize, name);
+            }
+            return 1;
+        }
         if let Some(result) = super::arguments_object_before_delete(obj, key) {
             return result;
         }
@@ -115,6 +131,12 @@ pub extern "C" fn js_object_delete_field(
                     return 0;
                 }
                 super::exotic_expando::value_remove(kind, obj as usize, name);
+                if kind == ExoticKind::Error {
+                    crate::error::js_error_delete_builtin_own_property(
+                        obj as *mut crate::error::ErrorHeader,
+                        name,
+                    );
+                }
                 super::clear_accessor_descriptor(obj as usize, name);
                 super::clear_property_attrs(obj as usize, name);
             }

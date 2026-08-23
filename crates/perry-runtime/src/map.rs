@@ -2278,11 +2278,25 @@ pub extern "C" fn js_map_from_array(arr: *const crate::array::ArrayHeader) -> *m
 pub extern "C" fn js_map_from_iterable(value: f64) -> *mut MapHeader {
     use crate::collection_iter::{constructor_iter, ConstructorIter};
 
+    // The constructor returns before Get(map, "set") for a nullish iterable.
+    // In particular, a throwing accessor installed on Map.prototype.set must
+    // not affect `new Map()` / `new Map(null)`.
+    if crate::collection_iter::is_null_or_undefined(value) {
+        return js_map_alloc(4);
+    }
+
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_handle = scope.root_nanbox_f64(value);
+    let map_handle = scope.root_raw_mut_ptr(js_map_alloc(4));
 
     let adder = crate::collection_iter::require_callable(
-        crate::collection_iter::builtin_prototype_method("Map", "set"),
+        map_handle.with_mut_ptr::<MapHeader, _>(|map| {
+            crate::collection_iter::builtin_prototype_adder(
+                "Map",
+                "set",
+                crate::value::js_nanbox_pointer(map as i64),
+            )
+        }),
         "Map.prototype.set",
     );
     let adder = crate::collection_iter::normalize_callable_value(adder);
@@ -2325,11 +2339,9 @@ pub extern "C" fn js_map_from_iterable(value: f64) -> *mut MapHeader {
     }
 
     match constructor_iter(value_handle.get_nanbox_f64()) {
-        ConstructorIter::Empty => js_map_alloc(4),
+        ConstructorIter::Empty => map_handle.across_mut::<MapHeader, _>(|| ()).1,
         ConstructorIter::Array(arr_value) => {
             let arr_handle = scope.root_nanbox_f64(arr_value);
-            let map = js_map_alloc(4);
-            let map_handle = scope.root_raw_mut_ptr(map);
             let arr_ptr = crate::value::js_nanbox_get_pointer(arr_handle.get_nanbox_f64())
                 as *mut crate::array::ArrayHeader;
             if !arr_ptr.is_null() {
@@ -2351,8 +2363,6 @@ pub extern "C" fn js_map_from_iterable(value: f64) -> *mut MapHeader {
         }
         ConstructorIter::Iterator(iter) => {
             let iter_handle = scope.root_nanbox_f64(iter);
-            let map = js_map_alloc(4);
-            let map_handle = scope.root_raw_mut_ptr(map);
             loop {
                 let iter = iter_handle.get_nanbox_f64();
                 let next = crate::collection_iter::iterator_next_value(iter);

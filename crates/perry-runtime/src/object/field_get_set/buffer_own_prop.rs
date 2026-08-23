@@ -25,6 +25,13 @@ pub(super) fn buffer_own_prop_or_method(
     key_bytes: &[u8],
 ) -> Option<JSValue> {
     let name = std::str::from_utf8(key_bytes).ok()?;
+    if let Some(accessor) = super::get_accessor_descriptor(obj as usize, name) {
+        if accessor.get == 0 {
+            return Some(JSValue::undefined());
+        }
+        let receiver = crate::value::js_nanbox_pointer(obj as i64);
+        return Some(unsafe { super::invoke_accessor_getter(accessor.get, receiver) });
+    }
     if let Some(v) = crate::buffer::buffer_get_own_prop(obj as usize, name) {
         return Some(JSValue::from_bits(v.to_bits()));
     }

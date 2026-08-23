@@ -59,3 +59,23 @@ console.log(JSON.stringify([].values().next())); // {"done":true}
 const e2 = [100, 200].entries();
 const [, first] = e2.next().value;
 console.log(first); // 100
+
+// (7) A user replacement can throw. The iterator dispatcher temporarily
+// installs the iterator as the implicit receiver; abrupt completion must
+// restore the surrounding method's receiver before its catch block resumes.
+const iteratorPrototype: any = Object.getPrototypeOf([][Symbol.iterator]());
+const originalNext = iteratorPrototype.next;
+iteratorPrototype.next = function () {
+  throw new Error("replacement next");
+};
+const outerReceiver = {
+  marker: "outer",
+  run(this: any) {
+    try {
+      [1].values().next();
+    } catch (_error) {}
+    return this.marker;
+  },
+};
+console.log("throw restores this:", outerReceiver.run()); // outer
+iteratorPrototype.next = originalNext;

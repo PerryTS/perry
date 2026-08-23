@@ -781,14 +781,6 @@
       "name": "FUNCTION_CLASS_IDS"
     },
     {
-      "file": "crates/perry-runtime/src/object/collection_proto_thunks.rs",
-      "name": "BUILTIN_MAP_SET_VALUE_BITS"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/collection_proto_thunks.rs",
-      "name": "BUILTIN_SET_ADD_VALUE_BITS"
-    },
-    {
       "file": "crates/perry-runtime/src/object/field_get_set/field_ops.rs",
       "name": "WARN_NULL_PTR_STATE"
     },
@@ -829,6 +821,14 @@
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
       "name": "STRING_ITERATOR_PROTOTYPE_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "ASYNC_FUNCTION_INTRINSIC_PROTO_PTR_SLOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "ASYNC_FUNCTION_INTRINSIC_PTR_SLOT"
     },
     {
       "file": "crates/perry-runtime/src/object/mod.rs",

@@ -55,6 +55,32 @@ pub fn buffer_set_own_prop(addr: usize, prop: &str, value: f64) {
     if addr == 0 {
         return;
     }
+    if let Some(accessor) = crate::object::get_accessor_descriptor(addr, prop) {
+        if accessor.set != 0 {
+            unsafe {
+                crate::object::invoke_accessor_setter(
+                    accessor.set,
+                    crate::value::js_nanbox_pointer(addr as i64),
+                    value,
+                );
+            }
+        }
+        return;
+    }
+    if crate::object::get_property_attrs(addr, prop).is_some_and(|attrs| !attrs.writable())
+        && buffer_get_own_prop(addr, prop).is_some()
+    {
+        return;
+    }
+    buffer_define_own_data_prop(addr, prop, value);
+}
+
+/// Descriptor installation bypasses ordinary [[Set]] interception after it
+/// has validated the redefinition and selected the new property kind.
+pub fn buffer_define_own_data_prop(addr: usize, prop: &str, value: f64) {
+    if addr == 0 {
+        return;
+    }
     BUFFER_OWN_PROPS_EVER.store(true, Ordering::Release);
     if let Ok(mut props) = buffer_props().lock() {
         props
@@ -74,6 +100,34 @@ pub fn buffer_get_own_prop(addr: usize, prop: &str) -> Option<f64> {
         .ok()
         .and_then(|props| props.get(&addr).and_then(|m| m.get(prop)).copied())
         .map(f64::from_bits)
+}
+
+/// Read an own buffer expando with ordinary `[[Get]]` semantics.
+///
+/// Accessor descriptors keep an `undefined` placeholder in the data table so
+/// enumeration retains their key order. Readers must therefore consult the
+/// accessor table first and invoke the getter instead of returning that
+/// placeholder. The receiver and getter are rooted across the user call.
+pub fn buffer_read_own_prop(addr: usize, prop: &str) -> Option<f64> {
+    if addr == 0 {
+        return None;
+    }
+    if let Some(accessor) = crate::object::get_accessor_descriptor(addr, prop) {
+        if accessor.get == 0 {
+            return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(addr as i64));
+        let getter = scope.root_nanbox_u64(accessor.get);
+        let value = unsafe {
+            crate::object::invoke_accessor_getter(
+                getter.get_nanbox_u64(),
+                receiver.get_nanbox_f64(),
+            )
+        };
+        return Some(f64::from_bits(value.bits()));
+    }
+    buffer_get_own_prop(addr, prop)
 }
 
 /// Every own dynamic prop key recorded for `addr`, in insertion-independent
@@ -104,6 +158,28 @@ pub fn buffer_own_prop_names(addr: usize) -> Vec<String> {
 /// Whether the buffer carries any own dynamic prop under `prop`.
 pub fn buffer_has_own_prop(addr: usize, prop: &str) -> bool {
     buffer_get_own_prop(addr, prop).is_some()
+        || crate::object::get_accessor_descriptor(addr, prop).is_some()
+}
+
+/// Delete an ordinary named own property from a registered buffer/view.
+/// Returns whether the property was present.
+pub fn buffer_delete_own_prop(addr: usize, prop: &str) -> bool {
+    if addr == 0 || !buffer_own_props_possible() {
+        return false;
+    }
+    let Ok(mut props) = buffer_props().lock() else {
+        return false;
+    };
+    let Some(entries) = props.get_mut(&addr) else {
+        return false;
+    };
+    let removed = entries.remove(prop).is_some();
+    crate::object::clear_accessor_descriptor(addr, prop);
+    crate::object::clear_property_attrs(addr, prop);
+    if entries.is_empty() {
+        props.remove(&addr);
+    }
+    removed
 }
 
 /// GC: trace stored values in every phase (a stored closure is reachable ONLY

@@ -119,6 +119,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
 
     // ========== NaN-boxing / typeof / is_* ==========
     module.declare_function("js_dynamic_neg", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_dynamic_pos", DOUBLE, &[DOUBLE]);
     module.declare_function("js_dynamic_string_equals", I32, &[DOUBLE, DOUBLE]);
     module.declare_function("js_is_nan", DOUBLE, &[DOUBLE]);
     module.declare_function("js_jsvalue_compare", I32, &[DOUBLE, DOUBLE]);

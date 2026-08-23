@@ -374,9 +374,16 @@ pub extern "C" fn js_boxed_bigint_new(value: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_boxed_symbol_new(value: f64) -> f64 {
-    let obj = crate::object::js_object_alloc(CLASS_ID_BOXED_SYMBOL, 0);
-    register_boxed_primitive_payload(obj, value);
-    attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_SYMBOL);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CLASS_ID_BOXED_SYMBOL, 0));
+    obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        register_boxed_primitive_payload(obj, value.get_nanbox_f64())
+    });
+    obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_SYMBOL)
+    });
+    let (_, obj) = obj.across_mut::<crate::object::ObjectHeader, _>(|| ());
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
