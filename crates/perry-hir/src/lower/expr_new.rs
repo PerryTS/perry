@@ -225,6 +225,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     // Try to extract class name from callee
     match callee_expr {
         ast::Expr::Ident(ident) => {
+            let source_class_name = ident.sym.as_str();
             // The inner name of the class currently being lowered is a lexical
             // binding that wins over same-named OUTER locals. A nearer method
             // parameter/local still shadows it: `class C { static make(C) {
@@ -249,7 +250,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             let mut class_name = if is_current_class_self {
                 ctx.current_class.clone().unwrap()
             } else {
-                ctx.resolve_class_name(ident.sym.as_str())
+                ctx.resolve_class_name(source_class_name)
             };
             // Snapshot the callee identifier's local/param binding at the TOP
             // of the ident arm, before any argument lowering or native-module
@@ -341,7 +342,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     || callee_local_at_entry.is_some()
                     || ctx.lookup_func(&class_name).is_some()
                     || ctx.lookup_imported_func(&class_name).is_some()
-                    || ctx.forward_class_names.contains(class_name.as_str()));
+                    || ctx.forward_class_names.contains(source_class_name));
             if matches!(
                 ctx.lookup_native_module(&class_name),
                 Some(("url", Some("Url")))
@@ -1506,7 +1507,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 && ctx.lookup_func(&class_name).is_none()
                 && ctx.lookup_imported_func(&class_name).is_none()
                 && ctx.lookup_native_module(&class_name).is_none()
-                && !ctx.forward_class_names.contains(class_name.as_str())
+                && !ctx.forward_class_names.contains(source_class_name)
                 && !is_reified_global_builtin_constructor(&class_name)
             {
                 return Ok(Expr::NewDynamic {

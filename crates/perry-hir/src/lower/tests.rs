@@ -921,6 +921,49 @@ fn nested_method_constructs_forward_declared_sibling_class() {
     );
 }
 
+/// Forward-declaration bookkeeping uses source identifiers, while a sibling
+/// class may use a collision-safe registration name. Constructor resolution
+/// must compare the source identifier before rejecting the forward binding.
+#[test]
+fn nested_method_constructs_collision_renamed_forward_sibling_class() {
+    let source = r#"
+        function first() {
+            class Child {}
+            return Child;
+        }
+        function make() {
+            class Base {
+                makeChild(): any {
+                    return new Child();
+                }
+            }
+            class Child extends Base {}
+            return Base;
+        }
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let make_child = hir
+        .classes
+        .iter()
+        .find(|class| class.name == "Base")
+        .expect("Base class is lowered")
+        .methods
+        .iter()
+        .find(|method| method.name == "makeChild")
+        .expect("makeChild method is lowered");
+
+    assert!(
+        matches!(
+            make_child.body.as_slice(),
+            [crate::Stmt::Return(Some(crate::Expr::New { class_name, .. }))]
+                if class_name.starts_with("Child$")
+        ),
+        "collision-renamed forward sibling construction must remain a static class construct: {:#?}",
+        make_child.body
+    );
+}
+
 /// A collision-safe registration key is compiler-internal; the evaluated
 /// class declaration must still bind and read through its source-level name.
 #[test]
