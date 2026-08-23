@@ -82,7 +82,36 @@ pub extern "C" fn js_string_match(
         let global = (*re).global;
         let has_indices = (*re).has_indices;
 
-        if let Some(fre) = lookup_fancy_regex(re) {
+        if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+            if global {
+                let matches: Vec<OwnedCapture> = repeat_matcher
+                    .regex
+                    .find_iter(str_data)
+                    .map(|matched| {
+                        OwnedCapture::from_range(str_data, matched.start(), matched.end())
+                    })
+                    .collect();
+                if matches.is_empty() {
+                    return ptr::null_mut();
+                }
+                OwnedStringMatch::Global(matches)
+            } else {
+                let Some(matched) = repeat_matcher.regex.find(str_data) else {
+                    LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
+                    return ptr::null_mut();
+                };
+                OwnedStringMatch::NonGlobal(
+                    OwnedExecMatch::from_repeat_matcher(
+                        str_data,
+                        0,
+                        &repeat_matcher,
+                        &matched,
+                        has_indices,
+                    ),
+                    has_indices,
+                )
+            }
+        } else if let Some(fre) = lookup_fancy_regex(re) {
             if global {
                 let matches: Vec<OwnedCapture> = fre
                     .find_iter(str_data)

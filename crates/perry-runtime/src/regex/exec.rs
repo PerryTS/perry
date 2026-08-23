@@ -60,7 +60,30 @@ pub extern "C" fn js_regexp_exec(
         }
         let search_str = &str_data[search_start_byte..];
 
-        let owned = if let Some(fre) = lookup_fancy_regex(re) {
+        let owned = if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+            repeat_matcher
+                .regex
+                .find(search_str)
+                .filter(|matched| !sticky || matched.start() == 0)
+                .map(|matched| {
+                    if use_last_index {
+                        set_last_index_throwing(
+                            re,
+                            super::exec_array::byte_index_to_utf16_index(
+                                str_data,
+                                search_start_byte + matched.end(),
+                            ),
+                        );
+                    }
+                    OwnedExecMatch::from_repeat_matcher(
+                        str_data,
+                        search_start_byte,
+                        &repeat_matcher,
+                        &matched,
+                        has_indices,
+                    )
+                })
+        } else if let Some(fre) = lookup_fancy_regex(re) {
             match fre.captures(search_str) {
                 Ok(Some(caps)) if !sticky || caps.get(0).is_some_and(|full| full.start() == 0) => {
                     let full = caps.get(0).expect("capture zero is the full match");

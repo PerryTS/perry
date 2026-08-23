@@ -150,6 +150,41 @@ impl OwnedExecMatch {
             match_index,
         }
     }
+
+    pub(super) fn from_repeat_matcher(
+        str_data: &str,
+        search_start_byte: usize,
+        regex: &super::repeat_matcher::RepeatMatcherRegex,
+        matched: &regress::Match,
+        has_indices: bool,
+    ) -> Self {
+        let captures: Vec<Option<OwnedCapture>> = matched
+            .groups()
+            .map(|capture| {
+                capture.map(|range| {
+                    OwnedCapture::from_range_with_indices(
+                        str_data,
+                        search_start_byte + range.start,
+                        search_start_byte + range.end,
+                        has_indices,
+                    )
+                })
+            })
+            .collect();
+        let named = regex
+            .capture_names
+            .iter()
+            .enumerate()
+            .filter_map(|(index, name)| name.as_ref().map(|name| (name.clone(), index + 1)))
+            .collect();
+        let match_index =
+            byte_index_to_utf16_index(str_data, search_start_byte + matched.start()) as f64;
+        Self {
+            captures,
+            named,
+            match_index,
+        }
+    }
 }
 
 /// Match-result metadata helper taking the `input` property as an already-boxed

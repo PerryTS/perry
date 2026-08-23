@@ -89,14 +89,14 @@ mod-node-test = []
 # degrade gracefully when off (auto-optimize leaves this off unless the program
 # uses a heap-snapshot / `process.report` API, which the compiler detects).
 diagnostics = []
-# The user's regular-expression engine (`regex` + `fancy-regex`, ~1.2 MB of
-# DFA/NFA machinery). A program that never evaluates a regex literal, `RegExp`,
+# The user's regular-expression engines (`regex`, `fancy-regex`, and `regress`).
+# A program that never evaluates a regex literal, `RegExp`,
 # a regex-coercing string method, or a glob API can't produce a RegExp at
 # runtime, so the compiler leaves this off and the engine is never linked. The
 # RegExp object's identity/display layer (header, `is_regex_pointer`, `toString`)
 # stays always compiled, so console-formatting / value-to-string paths keep
 # working with no engine present.
-regex-engine = ["dep:regex", "dep:fancy-regex"]
+regex-engine = ["dep:regex", "dep:fancy-regex", "dep:regress"]
 # The TC39 `Temporal.*` API (`temporal_rs` + its transitive tz/calendar deps:
 # jiff-tzdb, icu_calendar, timezone_provider, calendrical_calculations —
 # ~580 KB). Independent of JS `Date` (which has its own `date.rs` impl), so a
@@ -261,6 +261,7 @@ libc.workspace = true
 gimli = { version = "0.34", default-features = false, features = ["read"] }
 rand = "0.10"
 regex = { workspace = true, optional = true }
+regress = { workspace = true, optional = true }
 # Taffy — flexbox / grid layout engine for the perry/tui module
 # (#358 Phase 3). Same crate Bevy and Dioxus use; pure Rust, no FFI.
 taffy = { version = "0.13", default-features = false, features = ["std", "flexbox", "taffy_tree"] }

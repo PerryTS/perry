@@ -161,6 +161,15 @@ pub extern "C" fn js_regexp_compile_value(
             None => std::ptr::null(),
         }
     });
+    let repeat_matcher_ptr: *const () = super::REPEAT_MATCHER_CACHE.with(|cache| {
+        match cache
+            .borrow()
+            .get(&(pattern_str.to_string(), flags_str.to_string()))
+        {
+            Some(arc) => Arc::into_raw(arc.clone()) as *const (),
+            None => std::ptr::null(),
+        }
+    });
     let (canonical_flags_ptr, _) =
         re_handle.across_mut::<RegExpHeader, _>(|| js_string_from_str(flags_str));
     let canonical_flags_handle = scope.root_string_ptr(canonical_flags_ptr);
@@ -171,8 +180,10 @@ pub extern "C" fn js_regexp_compile_value(
     unsafe {
         let old_regex_ptr = (*re).regex_ptr;
         let old_fancy_ptr = (*re).fancy_ptr;
+        let old_repeat_matcher_ptr = (*re).repeat_matcher_ptr;
         (*re).regex_ptr = regex_ptr;
         (*re).fancy_ptr = fancy_ptr;
+        (*re).repeat_matcher_ptr = repeat_matcher_ptr;
         // Release the receiver's PREVIOUS owned references now that the new
         // ones are installed (recompiling the same pattern is fine: the fresh
         // `into_raw` reference above keeps the shared program alive).
@@ -181,6 +192,11 @@ pub extern "C" fn js_regexp_compile_value(
         }
         if !old_fancy_ptr.is_null() {
             drop(Arc::from_raw(old_fancy_ptr as *const fancy_regex::Regex));
+        }
+        if !old_repeat_matcher_ptr.is_null() {
+            drop(Arc::from_raw(
+                old_repeat_matcher_ptr as *const super::repeat_matcher::RepeatMatcherRegex,
+            ));
         }
         (*re).pattern_ptr = pattern_ptr;
         (*re).flags_ptr = canonical_flags_ptr;
