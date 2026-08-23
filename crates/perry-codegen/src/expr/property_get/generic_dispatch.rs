@@ -34,6 +34,27 @@ pub(crate) const PIC_WAYS: usize = 4;
 /// both skip them. Mirrors the runtime's `PIC_WAY_STATE`.
 pub(crate) const PIC_WAY_STATE: usize = 3;
 
+/// Materialise the pooled property-key `StringHeader*` in the CURRENT block.
+///
+/// Every consumer of the key — `js_object_get_field_ic_miss`, the two
+/// `js_object_get_field_by_name_f64` arms, the class-ref helper — sits on a
+/// COLD edge of the dispatch diamond, but the load used to be emitted once up
+/// front, in the entry block, so the hit path of every generic property read
+/// paid a dependent load of a global it never used. Emitting it per consumer
+/// duplicates dead-cheap code into blocks that are already making a call, and
+/// takes the load off the fast path entirely.
+///
+/// The pool entry is a *mutable* global — GC evacuation rewrites it — so
+/// re-reading it at each consumer is not merely cheap, it is the correct
+/// reading: every cold block sees the pool's current address rather than one
+/// captured before whatever collected.
+fn emit_key_handle(ctx: &mut FnCtx<'_>, key_handle_global: &str) -> String {
+    let blk = ctx.block();
+    let key_box = blk.load(DOUBLE, key_handle_global);
+    let key_bits = blk.bitcast_double_to_i64(&key_box);
+    blk.and(I64, &key_bits, POINTER_MASK_I64)
+}
+
 /// The generic per-site monomorphic inline-cache dispatch for `obj.property`.
 /// This is the fall-through tail of the general catch-all arm: all earlier
 /// specializations have been ruled out.
@@ -62,9 +83,12 @@ pub(crate) fn lower_generic_property_get(
     let blk = ctx.block();
     let obj_bits = blk.bitcast_double_to_i64(&obj_box);
     let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
-    let key_box = blk.load(DOUBLE, &key_handle_global);
-    let key_bits = blk.bitcast_double_to_i64(&key_box);
-    let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    // The key handle is materialised per consumer (see `emit_key_handle`), all
+    // of which are cold. The one exception is the typed-feedback OBSERVE call,
+    // which sits in the hot `pget.pic` block — so under `--typed-feedback` the
+    // handle is still produced once, up front, exactly as before.
+    let key_handle_observed = crate::expr::typed_feedback_emission_enabled()
+        .then(|| emit_key_handle(ctx, &key_handle_global));
     let feedback_site_id = emit_typed_feedback_register_site(
         ctx,
         TypedFeedbackKind::PropertyGet,
@@ -91,6 +115,7 @@ pub(crate) fn lower_generic_property_get(
             .push((format!("__ic_decl_{}", cache_site), DOUBLE, vec![]));
         ctx.ic_globals.push(cache_name.clone());
         let cache_ref = format!("@{}", cache_name);
+        let key_handle = emit_key_handle(ctx, &key_handle_global);
         let val = ctx.block().call(
             DOUBLE,
             "js_object_get_field_ic",
@@ -214,6 +239,7 @@ pub(crate) fn lower_generic_property_get(
     // `constructor` lookup. Pass full obj_bits (NOT obj_handle —
     // the runtime needs the unmasked top16 to detect the tag).
     ctx.current_block = class_ref_idx;
+    let key_handle = emit_key_handle(ctx, &key_handle_global);
     let class_ref_result = ctx.block().call(
         DOUBLE,
         "js_typed_feedback_object_get_field_by_name_f64",
@@ -227,13 +253,14 @@ pub(crate) fn lower_generic_property_get(
     ctx.block().br(&final_merge_label);
 
     ctx.current_block = pic_idx;
+    let observed_key = key_handle_observed.clone().unwrap_or_default();
     crate::expr::emit_typed_feedback_record_call(
         ctx.block(),
         "js_typed_feedback_observe_property_get",
         &[
             (I64, &feedback_site_id),
             (I64, &obj_handle),
-            (I64, &key_handle),
+            (I64, &observed_key),
         ],
     );
 
@@ -385,36 +412,55 @@ pub(crate) fn lower_generic_property_get(
     ctx.current_block = tok_idx;
 
     // The receiver token is derived solely from its authoritative ShapeId.
-    // Invalid/unstamped payloads produce zero and miss closed.
+    // Invalid/unstamped payloads miss closed.
     // #8113: the ShapeId word moved from header offset 8 to 4.
     let pcid_addr = ctx.block().add(I64, &obj_handle, "4");
     let pcid_ptr = ctx.block().inttoptr(I64, &pcid_addr);
     let pcid = ctx.block().load(I32, &pcid_ptr);
-    // In-range test via wrapping add + ult: (pcid - 0x8000_0000) < 0x4000_0000.
-    // (-2147483648 is the i32 spelling of the 0x8000_0000 subtrahend.)
-    let pcid_rel = ctx.block().add(I32, &pcid, "-2147483648");
-    let is_stamp = ctx.block().icmp_ult(I32, &pcid_rel, "1073741824");
     let pcid64 = ctx.block().zext(I32, &pcid, I64);
-    // PIC_ID_TOKEN_BIT = 1 << 62.
-    let id_token = ctx.block().or(I64, &pcid64, "4611686018427387904");
-    let token = ctx.block().select(I1, &is_stamp, I64, &id_token, "0");
+    // PIC_ID_TOKEN_BIT = 1 << 62. The token is formed UNCONDITIONALLY — the
+    // in-range test the emitted code used to run first
+    // (`(pcid - 0x8000_0000) <u 0x4000_0000`, then a `select` to zero, then a
+    // separate non-zero compare) was redundant against the cache compare below,
+    // and cost six AArch64 instructions on the hit path of EVERY generic
+    // property read.
+    //
+    // # Why the range test was implied
+    //
+    // `pic_prime_get` is the only writer of word 0 (`js_put_value_set_ic_miss`
+    // writes a *different*, set-side cache), and it is only ever handed
+    // `object_shape_stamp(obj) | PIC_ID_TOKEN_BIT` — and `object_shape_stamp`
+    // answers `0` for anything outside `SHAPE_ID_BASE..SHAPE_ID_END`. So a
+    // cached token's low 32 bits are either a *valid ShapeId* or *zero*:
+    //
+    // * cached low32 is a valid ShapeId ⇒ `pcid == cached_low32` puts `pcid`
+    //   inside the id range, which is exactly what `is_stamp` tested. An equal
+    //   token therefore proves the receiver carries that shape, as before.
+    // * cached low32 is zero (primed by an unstamped receiver) ⇒ the only
+    //   `pcid` that could alias it is `0`, and `pcid != 0` below excludes it.
+    //   That single compare replaces the range test: it is what keeps a
+    //   `parent_class_id == 0` receiver — a class instance with no parent, or
+    //   an `Object.create(proto)` result with no own string props (#809) —
+    //   from spuriously hitting the empty slot instead of taking the
+    //   prototype-chain walk in `js_object_get_field_by_name`.
+    //
+    // A receiver whose `parent_class_id` holds a real (non-shape) parent class
+    // id keeps missing exactly as it did: its token is `id | bit62`, and no
+    // cached token can ever carry a non-shape low32.
+    //
+    // `token_nonnull` keeps its old NAME and its old JOB (#809 — a keyless
+    // receiver must reach `js_object_get_field_by_name`'s prototype-chain walk
+    // instead of hitting an empty cache), only now it tests the stamp word
+    // rather than the derived token. The ways below AND it in for the same
+    // reason: a way primed from an unstamped receiver holds exactly
+    // `PIC_ID_TOKEN_BIT`, which is what a `pcid == 0` receiver would compute.
+    let token = ctx.block().or(I64, &pcid64, "4611686018427387904");
+    let token_nonnull = ctx.block().icmp_ne(I32, &pcid, "0");
 
     // Load the cached token from the per-site global.
     let cache_keys_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
     let cached_token = ctx.block().load(I64, &cache_keys_ptr);
     let token_eq = ctx.block().icmp_eq(I64, &token, &cached_token);
-    // #809: an object with `keys_array == null` (e.g. an
-    // `Object.create(proto)` result, or any object with no own
-    // string props) has no cacheable own-slot. The per-site cache
-    // global is zero-initialized, so a zero token would spuriously
-    // "hit" and the hit path would return the empty slot[0] — never
-    // invoking the miss handler, so the runtime's prototype-chain
-    // walk in `js_object_get_field_by_name` is skipped and
-    // `Object.create(P).m()` reads `undefined`. Require a non-zero
-    // token for a hit so keyless receivers fall to the slow path
-    // (which resolves inherited props correctly). Id tokens always
-    // carry bit 62, so they are never zero.
-    let token_nonnull = ctx.block().icmp_ne(I64, &token, "0");
     let hit = ctx.block().and(I1, &token_eq, &token_nonnull);
 
     ctx.block().cond_br(&hit, &hit_label, &miss_label);
@@ -605,10 +651,15 @@ pub(crate) fn lower_generic_property_get(
 
     // PIC miss: slow path with cache population.
     ctx.current_block = call_idx;
+    let miss_key_handle = emit_key_handle(ctx, &key_handle_global);
     let val_miss = ctx.block().call(
         DOUBLE,
         "js_object_get_field_ic_miss",
-        &[(I64, &obj_handle), (I64, &key_handle), (PTR, &cache_ref)],
+        &[
+            (I64, &obj_handle),
+            (I64, &miss_key_handle),
+            (PTR, &cache_ref),
+        ],
     );
     let miss_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
@@ -682,10 +733,11 @@ pub(crate) fn lower_generic_property_get(
     // pattern via `DATE_REGISTRY` and returns the global Date
     // constructor closure). Date-fns `constructFrom` blocker.
     ctx.current_block = undef_idx;
+    let undef_key_handle = emit_key_handle(ctx, &key_handle_global);
     let undef_val = ctx.block().call(
         DOUBLE,
         "js_object_get_field_by_name_f64",
-        &[(I64, &obj_bits), (I64, &key_handle)],
+        &[(I64, &obj_bits), (I64, &undef_key_handle)],
     );
     let invalid_end_label = ctx.block().label.clone();
     ctx.block().br(&final_merge_label);
@@ -704,10 +756,11 @@ pub(crate) fn lower_generic_property_get(
         let len_byte = ctx.block().and(I64, &len_shifted, "255");
         ctx.block().uitofp(I64, &len_byte, DOUBLE)
     } else {
+        let sso_key_handle = emit_key_handle(ctx, &key_handle_global);
         ctx.block().call(
             DOUBLE,
             "js_object_get_field_by_name_f64",
-            &[(I64, &obj_bits), (I64, &key_handle)],
+            &[(I64, &obj_bits), (I64, &sso_key_handle)],
         )
     };
     let sso_end_label = ctx.block().label.clone();
