@@ -1,6 +1,8 @@
 //! ClientRequest metadata and client IncomingMessage FFI surface.
 
 use super::*;
+use base64::Engine as _;
+use std::fmt::Write as _;
 
 /// `IncomingMessage.setEncoding(encoding)` for client responses. The same
 /// static `IncomingMessage` class tag is used for server requests, so a client
@@ -120,12 +122,17 @@ pub unsafe extern "C" fn js_http_client_request_listener_count(
     };
     with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
         let explicit = req.listeners.get(&event).map(|v| v.len()).unwrap_or(0);
+        let once = req
+            .once_listeners
+            .get(&event)
+            .map(|listeners| listeners.len())
+            .unwrap_or(0);
         let implicit_response = if event == "response" && req.response_callback != 0 {
             1
         } else {
             0
         };
-        (explicit + implicit_response) as f64
+        (explicit + once + implicit_response) as f64
     })
     .unwrap_or(0.0)
 }
@@ -256,8 +263,29 @@ fn server_incoming_property(handle: Handle, property_name: &str) -> Option<f64> 
 
 pub(crate) fn body_chunk_value(body: &[u8], encoding: Option<&str>) -> f64 {
     match encoding {
-        Some(_) => {
-            let s = String::from_utf8_lossy(body).into_owned();
+        Some(encoding) => {
+            let normalized = encoding.to_ascii_lowercase().replace(['-', '_'], "");
+            let s = match normalized.as_str() {
+                "base64" => base64::engine::general_purpose::STANDARD.encode(body),
+                "base64url" => base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(body),
+                "hex" => {
+                    let mut encoded = String::with_capacity(body.len() * 2);
+                    for byte in body {
+                        let _ = write!(&mut encoded, "{byte:02x}");
+                    }
+                    encoded
+                }
+                "latin1" | "binary" => body.iter().map(|byte| char::from(*byte)).collect(),
+                "ascii" => body.iter().map(|byte| char::from(*byte & 0x7f)).collect(),
+                "utf16le" | "ucs2" => {
+                    let words = body
+                        .chunks_exact(2)
+                        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                        .collect::<Vec<_>>();
+                    String::from_utf16_lossy(&words)
+                }
+                _ => String::from_utf8_lossy(body).into_owned(),
+            };
             let header = alloc_string(&s);
             f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK))
         }

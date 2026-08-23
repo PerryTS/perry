@@ -28,6 +28,10 @@ class NormalizeTests(unittest.TestCase):
         value = "Date: tomorrow\ncreated Sat, 22 Aug 2026 20:15:36 GMT"
         self.assertEqual(MODULE.normalize(value), value)
 
+    def test_preserves_impossible_numeric_http_dates(self):
+        value = "Date: Sat, 99 Aug 2026 29:78:61 GMT"
+        self.assertEqual(MODULE.normalize(value), value)
+
 
 if __name__ == "__main__":
     unittest.main()

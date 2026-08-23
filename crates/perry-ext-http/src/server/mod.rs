@@ -125,6 +125,7 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     fn scan_base_server_roots(server: &mut HttpServer, visitor: &mut GcRootVisitor<'_>) {
         visitor.visit_i64_slot(&mut server.handler);
         scan_listener_roots(&mut server.listeners, visitor);
+        scan_listener_roots(&mut server.once_listeners, visitor);
         // #4903 — listen callbacks queued for the deferred `'listening'`
         // emit; a GC between `listen()` and the pump tick must not sweep
         // them.
@@ -344,6 +345,21 @@ mod tests {
     }
 
     #[test]
+    fn server_once_listeners_are_drained_after_one_emit() {
+        let mut server = HttpServer::with_handler(0);
+        server.listeners.insert("request".into(), vec![11]);
+        server.once_listeners.insert("request".into(), vec![22]);
+        assert_eq!(
+            crate::server::server::take_server_event_listeners(&mut server, "request"),
+            vec![11, 22]
+        );
+        assert_eq!(
+            crate::server::server::take_server_event_listeners(&mut server, "request"),
+            vec![11]
+        );
+    }
+
+    #[test]
     fn http_server_options_store_keep_alive_timeout_buffer() {
         let _guard = GcTestGuard::new_with_slots(1);
         let options_json = perry_ffi::alloc_string(
@@ -369,14 +385,19 @@ mod tests {
 
         let http_handler = young_gc_root();
         let http_listener = young_gc_root();
-        let http_handle = register_handle(http_server(
-            http_handler,
-            listener_map("request", http_listener),
-        ));
+        let http_once_listener = young_gc_root();
+        let http_listen_callback = young_gc_root();
+        let http_close_callback = young_gc_root();
+        let mut http = http_server(http_handler, listener_map("request", http_listener));
+        http.once_listeners = listener_map("connection", http_once_listener);
+        http.deferred_listen_cbs.push(http_listen_callback);
+        http.deferred_close_cbs.push(http_close_callback);
+        let http_handle = register_handle(http);
 
         let https_handler = young_gc_root();
         let https_base_handler = young_gc_root();
         let https_listener = young_gc_root();
+        let https_alpn_callback = young_gc_root();
         let https_handle = register_handle(HttpsServer {
             handler: https_handler,
             tls_config: None,
@@ -385,8 +406,9 @@ mod tests {
                 listener_map("listening", https_listener),
             ),
             alpn_protocols: Some(vec![8, b'h', b't', b't', b'p', b'/', b'1', b'.', b'1']),
-            alpn_callback: 0,
-            keylog_emitted: false,
+            alpn_callback: https_alpn_callback,
+            ticket_key: crate::server::tls::NodeTicketKey::random().unwrap(),
+            certificate_cn: None,
         });
 
         let h2_handler = young_gc_root();
@@ -434,11 +456,15 @@ mod tests {
             let http = get_handle::<HttpServer>(http_handle).expect("http server");
             assert_rewritten(http_handler, http.handler);
             assert_rewritten(http_listener, http.listeners["request"][0]);
+            assert_rewritten(http_once_listener, http.once_listeners["connection"][0]);
+            assert_rewritten(http_listen_callback, http.deferred_listen_cbs[0]);
+            assert_rewritten(http_close_callback, http.deferred_close_cbs[0]);
 
             let https = get_handle::<HttpsServer>(https_handle).expect("https server");
             assert_rewritten(https_handler, https.handler);
             assert_rewritten(https_base_handler, https.base.handler);
             assert_rewritten(https_listener, https.base.listeners["listening"][0]);
+            assert_rewritten(https_alpn_callback, https.alpn_callback);
 
             let h2 = get_handle::<Http2SecureServer>(h2_handle).expect("http2 server");
             assert_rewritten(h2_handler, h2.handler);

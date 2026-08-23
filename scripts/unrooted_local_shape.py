@@ -110,11 +110,16 @@ COLLECTION_POINTS = ALLOCATORS + (
 # are `raw_handle_debt.py`'s denominator, not this one's.
 ROOTED_MARKERS = (
     "RuntimeHandleScope",
-    "TransientRootScope",
     "across_mut",
     "across_const",
     "across_nanbox",
 )
+
+# These expressions return a root-handle token, not the raw pointer returned by
+# an allocator nested inside the expression. Do not start tracking the token as
+# though it were itself a heap address. Unlike ROOTED_MARKERS this is local to
+# the binding and does not exempt the rest of the function.
+ROOT_HANDLE_BINDINGS = ("root_nanbox(", "root_addr(", "root_addrs(")
 
 FN_START = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+|async\s+|unsafe\s+|extern\s+\"[^\"]*\"\s+)*fn\s+(\w+)")
 LET_BIND = re.compile(r"^\s*let\s+(?:mut\s+)?(\w+)\s*(?::[^=]+)?=\s*(.+)$")
@@ -209,7 +214,7 @@ def scan_function(name: str, lines: list[str], start: int, end: int):
             local, rhs = m.groups()
             bound.pop(local, None)
             crossed.pop(local, None)
-            if calls_any(rhs, POINTER_SOURCES):
+            if calls_any(rhs, POINTER_SOURCES) and not calls_any(rhs, ROOT_HANDLE_BINDINGS):
                 bound[local] = offset
     return findings
 
@@ -269,6 +274,16 @@ unsafe fn clean_ffi_transient_root() -> *mut ArrayHeader {
     let rooted = scope.root_nanbox(js_nanbox_pointer(js_array_alloc(1) as i64));
     let _other = js_array_alloc(0);
     rooted.get() as *mut ArrayHeader
+}
+
+unsafe fn planted_after_transient_scope() -> *mut ArrayHeader {
+    let stale = js_array_alloc(1);
+    {
+        let scope = TransientRootScope::enter();
+        let _rooted = scope.root_nanbox(js_nanbox_pointer(stale as i64));
+    }
+    let _other = js_array_alloc(0);
+    stale
 }
 '''
 
@@ -362,7 +377,12 @@ def self_test() -> int:
         hits = scan_file(p)
     names = {h[0] for h in hits}
     ok = True
-    required = {"planted_collecting_use", "planted_plain_return", "planted_later_rhs"}
+    required = {
+        "planted_collecting_use",
+        "planted_plain_return",
+        "planted_later_rhs",
+        "planted_after_transient_scope",
+    }
     missing = required - names
     if missing:
         print(f"SELF-TEST FAIL: did not flag planted shape(s): {sorted(missing)}", file=sys.stderr)

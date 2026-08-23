@@ -19,8 +19,8 @@
 //! ## Honored faithfully
 //!
 //! `rejectUnauthorized: false` / `NODE_TLS_REJECT_UNAUTHORIZED=0` map to
-//! reqwest's `danger_accept_invalid_certs(true)`; `ca` entries are added
-//! as additional trust anchors via `add_root_certificate`.
+//! reqwest's `danger_accept_invalid_certs(true)`; explicit `ca` entries replace
+//! the public root set, matching Node/OpenSSL's trust-store semantics.
 //!
 //! ## Compatibility layer
 //!
@@ -34,6 +34,79 @@
 //!   the Node-compatible Common Name layer. It also accepts an explicitly
 //!   trusted self-signed CA when that exact certificate is the endpoint leaf,
 //!   matching OpenSSL's behavior without disabling verification globally.
+
+lazy_static::lazy_static! {
+    static ref INTERNAL_HTTPS_SERVERS: std::sync::Mutex<
+        std::collections::HashMap<u16, InternalHttpsServer>,
+    > =
+        std::sync::Mutex::new(std::collections::HashMap::new());
+}
+
+#[derive(Clone)]
+struct InternalHttpsServer {
+    forward_token: String,
+    certificate_cn: Option<String>,
+}
+
+fn new_internal_forward_token() -> String {
+    use ring::rand::{SecureRandom, SystemRandom};
+
+    let mut bytes = [0u8; 32];
+    if SystemRandom::new().fill(&mut bytes).is_err() {
+        return String::new();
+    }
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub(crate) fn register_internal_https_server(port: u16, certificate_cn: Option<String>) {
+    let token = new_internal_forward_token();
+    if !token.is_empty() {
+        INTERNAL_HTTPS_SERVERS.lock().unwrap().insert(
+            port,
+            InternalHttpsServer {
+                forward_token: token,
+                certificate_cn,
+            },
+        );
+    }
+}
+
+pub(crate) fn unregister_internal_https_server(port: u16) {
+    INTERNAL_HTTPS_SERVERS.lock().unwrap().remove(&port);
+}
+
+pub(crate) fn internal_https_token_for_port(port: u16) -> Option<String> {
+    INTERNAL_HTTPS_SERVERS
+        .lock()
+        .unwrap()
+        .get(&port)
+        .map(|server| server.forward_token.clone())
+}
+
+fn internal_https_server_for_url(url: &str) -> Option<InternalHttpsServer> {
+    let url = reqwest::Url::parse(url).ok()?;
+    let host = url.host_str()?;
+    let is_loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if !is_loopback {
+        return None;
+    }
+    INTERNAL_HTTPS_SERVERS
+        .lock()
+        .unwrap()
+        .get(&url.port_or_known_default()?)
+        .cloned()
+}
+
+pub(crate) fn internal_https_token_for_url(url: &str) -> Option<String> {
+    internal_https_server_for_url(url).map(|server| server.forward_token)
+}
+
+pub(crate) fn internal_https_peer_certificate_cn_for_url(url: &str) -> Option<String> {
+    internal_https_server_for_url(url).and_then(|server| server.certificate_cn)
+}
 
 /// Parsed client-side TLS options. `Default` is "no TLS customization",
 /// in which case the caller keeps using the pooled default client.
@@ -109,7 +182,8 @@ impl TlsOptions {
         // only the hostname result (our Node-CN compatibility layer owns it),
         // and accepts that one exact-leaf trust case.
         let custom_tls_config = !self.client_pfx.is_empty()
-            || (!self.ca_pems.is_empty() && !self.accept_invalid_certs());
+            || (!self.accept_invalid_certs()
+                && (!self.ca_pems.is_empty() || self.servername.is_some()));
         if custom_tls_config {
             builder = builder.use_preconfigured_tls(build_node_tls_config(
                 &self.ca_pems,
@@ -187,6 +261,13 @@ struct NodeCaVerifier {
 
 #[derive(Debug)]
 struct AcceptInvalidCertificates;
+
+fn webpki_certificate_error(error: &rustls::Error) -> Option<&rustls_webpki::Error> {
+    let rustls::Error::InvalidCertificate(rustls::CertificateError::Other(other)) = error else {
+        return None;
+    };
+    other.0.downcast_ref::<rustls_webpki::Error>()
+}
 
 impl rustls::client::danger::ServerCertVerifier for AcceptInvalidCertificates {
     fn verify_server_cert(
@@ -271,9 +352,15 @@ impl rustls::client::danger::ServerCertVerifier for NodeCaVerifier {
                     .exact_trust
                     .iter()
                     .any(|trusted| trusted.as_slice() == end_entity.as_ref())
-                    && format!("{error:?}").contains("CaUsedAsEndEntity");
+                    && matches!(
+                        webpki_certificate_error(&error),
+                        Some(rustls_webpki::Error::CaUsedAsEndEntity)
+                    );
                 let legacy_direct_chain = intermediates.is_empty()
-                    && format!("{error:?}").contains("UnsupportedCertVersion")
+                    && matches!(
+                        webpki_certificate_error(&error),
+                        Some(rustls_webpki::Error::UnsupportedCertVersion)
+                    )
                     && self.exact_trust.iter().any(|trusted| {
                         legacy_direct_certificate_is_valid(end_entity.as_ref(), trusted, now)
                     });
@@ -299,8 +386,10 @@ impl rustls::client::danger::ServerCertVerifier for NodeCaVerifier {
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         match self.inner.verify_tls12_signature(message, cert, dss) {
             Err(error)
-                if format!("{error:?}").contains("UnsupportedCertVersion")
-                    && legacy_handshake_signature_is_valid(message, cert.as_ref(), dss) =>
+                if matches!(
+                    webpki_certificate_error(&error),
+                    Some(rustls_webpki::Error::UnsupportedCertVersion)
+                ) && legacy_handshake_signature_is_valid(message, cert.as_ref(), dss) =>
             {
                 Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
             }
@@ -316,8 +405,10 @@ impl rustls::client::danger::ServerCertVerifier for NodeCaVerifier {
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         match self.inner.verify_tls13_signature(message, cert, dss) {
             Err(error)
-                if format!("{error:?}").contains("UnsupportedCertVersion")
-                    && legacy_handshake_signature_is_valid(message, cert.as_ref(), dss) =>
+                if matches!(
+                    webpki_certificate_error(&error),
+                    Some(rustls_webpki::Error::UnsupportedCertVersion)
+                ) && legacy_handshake_signature_is_valid(message, cert.as_ref(), dss) =>
             {
                 Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
             }
@@ -435,7 +526,9 @@ fn build_node_tls_config(
     client_pfx: Option<&(Vec<u8>, String)>,
 ) -> Result<rustls::ClientConfig, String> {
     let mut roots = rustls::RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    if ca_pems.is_empty() {
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
     let mut exact_trust = Vec::new();
     for pem in ca_pems {
         let mut cursor = std::io::Cursor::new(pem);
@@ -846,7 +939,7 @@ fn pfx_private_keys(pfx: &p12::PFX, passphrase: &str) -> Result<Vec<Vec<u8>>, St
     Ok(keys)
 }
 
-fn certificate_common_name(certificate_der: &[u8]) -> Option<String> {
+pub(crate) fn certificate_common_name(certificate_der: &[u8]) -> Option<String> {
     use x509_cert::der::Decode;
 
     let certificate = x509_cert::Certificate::from_der(certificate_der).ok()?;
@@ -898,13 +991,13 @@ pub(crate) unsafe fn check_server_identity_error(
         fn js_error_is_error(value: f64) -> f64;
         fn js_error_get_message(error: *mut u8) -> *mut perry_ffi::StringHeader;
     }
-    let host = perry_ffi::alloc_string(host);
-    let cert = perry_ffi::alloc_object();
+    let scope = perry_ffi::TransientRootScope::enter();
+    let host = scope.root_nanbox(f64::from_bits(
+        perry_ffi::JsValue::from_string_ptr(perry_ffi::alloc_string(host).as_raw()).bits(),
+    ));
+    let cert = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
     let closure = perry_ffi::JsClosure::from_raw(callback as *const perry_ffi::RawClosureHeader);
-    let result = closure.call2(
-        f64::from_bits(perry_ffi::JsValue::from_string_ptr(host.as_raw()).bits()),
-        f64::from_bits(cert.bits()),
-    );
+    let result = closure.call2(host.get(), cert.get());
     let is_error = perry_ffi::JsValue::from_bits(js_error_is_error(result).to_bits());
     if !is_error.is_bool() || !is_error.to_bool() {
         return None;
@@ -1023,7 +1116,7 @@ mod tests {
         let mut t = TlsOptions::default();
         t.ca_pems.push(b"pem".to_vec());
         assert!(t.needs_custom_client());
-        // ca alone does NOT bypass verification — it adds trust anchors.
+        // ca alone does NOT bypass verification — it replaces the trust roots.
         assert!(!t.accept_invalid_certs());
 
         let mut t = TlsOptions::default();
@@ -1053,6 +1146,20 @@ mod tests {
             let built = options.build_client(None);
             assert!(built.is_ok(), "{built:?}");
         }
+    }
+
+    #[test]
+    fn internal_server_metadata_is_loopback_scoped() {
+        let port = 61_237;
+        register_internal_https_server(port, Some("fixture.example".to_string()));
+        assert!(internal_https_token_for_url(&format!("https://localhost:{port}/")).is_some());
+        assert_eq!(
+            internal_https_peer_certificate_cn_for_url(&format!("https://127.0.0.1:{port}/"))
+                .as_deref(),
+            Some("fixture.example")
+        );
+        assert!(internal_https_token_for_url(&format!("https://example.com:{port}/")).is_none());
+        unregister_internal_https_server(port);
     }
 
     #[test]

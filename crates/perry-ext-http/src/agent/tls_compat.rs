@@ -90,10 +90,11 @@ pub(crate) fn merge_tls_defaults(handle: Handle, request: &mut crate::tls_client
     }
 }
 
-pub(crate) fn invalidate_all_tls_sessions() {
+pub(crate) fn invalidate_tls_sessions_for_server_port(port: u16) {
+    let marker = format!(":{port}:");
     iter_handles_of_mut::<AgentHandle, _>(|agent| {
-        agent.tls_sessions.clear();
-        agent.tls_session_order.clear();
+        agent.tls_sessions.retain(|key, _| !key.contains(&marker));
+        agent.tls_session_order.retain(|key| !key.contains(&marker));
     });
 }
 fn default_https_agent_handle() -> Handle {
@@ -146,10 +147,11 @@ pub(super) fn sync_default_https_agent(handle: Handle) {
     else {
         return;
     };
-    let sockets = handle_map_object_f64(&sockets);
-    let free_sockets = handle_map_object_f64(&free_sockets);
-    let requests = handle_map_object_f64(&requests);
-    unsafe { js_https_global_agent_sync_maps(sockets, free_sockets, requests) };
+    let scope = perry_ffi::TransientRootScope::enter();
+    let sockets = scope.root_nanbox(handle_map_object_f64(&sockets));
+    let free_sockets = scope.root_nanbox(handle_map_object_f64(&free_sockets));
+    let requests = scope.root_nanbox(handle_map_object_f64(&requests));
+    unsafe { js_https_global_agent_sync_maps(sockets.get(), free_sockets.get(), requests.get()) };
 }
 
 pub(super) fn emit_default_https_agent(handle: Handle, event: &str, arg0: f64, arg1: f64) {

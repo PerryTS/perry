@@ -332,7 +332,12 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
             undef
         }
         "setTicketKeys" => {
-            crate::agent::invalidate_all_tls_sessions();
+            if is_https {
+                crate::server::https_server::set_ticket_keys(
+                    handle,
+                    args.first().copied().unwrap_or(undef),
+                );
+            }
             self_ref
         }
         "address" => {
@@ -352,7 +357,7 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 f64::from_bits(js_json_parse(s))
             }
         }
-        "on" | "addListener" | "once" if args.len() >= 2 => {
+        "on" | "addListener" if args.len() >= 2 => {
             let event_ptr = string_arg(args[0]);
             if event_ptr.is_null() {
                 return self_ref;
@@ -364,6 +369,39 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 js_node_https_server_on(handle, event_ptr, cb);
             } else {
                 js_node_http_server_on(handle, event_ptr, cb);
+            }
+            self_ref
+        }
+        "once" if args.len() >= 2 => {
+            let event =
+                read_string_header(string_arg(args[0]) as *mut StringHeader).unwrap_or_default();
+            let callback = closure_arg(Some(args[1]));
+            if !event.is_empty() && callback != 0 {
+                if is_h2 {
+                    if let Some(server) = get_handle_mut::<Http2SecureServer>(handle) {
+                        server
+                            .base
+                            .once_listeners
+                            .entry(event)
+                            .or_default()
+                            .push(callback);
+                    }
+                } else if is_https {
+                    if let Some(server) = get_handle_mut::<HttpsServer>(handle) {
+                        server
+                            .base
+                            .once_listeners
+                            .entry(event)
+                            .or_default()
+                            .push(callback);
+                    }
+                } else if let Some(server) = get_handle_mut::<HttpServer>(handle) {
+                    server
+                        .once_listeners
+                        .entry(event)
+                        .or_default()
+                        .push(callback);
+                }
             }
             self_ref
         }
@@ -383,6 +421,18 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                     .and_then(|server| server.listeners.get(&event).cloned())
             }
             .unwrap_or_default();
+            let once = if is_h2 {
+                get_handle::<Http2SecureServer>(handle)
+                    .and_then(|server| server.base.once_listeners.get(&event).cloned())
+            } else if is_https {
+                get_handle::<HttpsServer>(handle)
+                    .and_then(|server| server.base.once_listeners.get(&event).cloned())
+            } else {
+                get_handle::<HttpServer>(handle)
+                    .and_then(|server| server.once_listeners.get(&event).cloned())
+            }
+            .unwrap_or_default();
+            listeners.extend(once);
             if event == "request" {
                 let handler = if is_h2 {
                     get_handle::<Http2SecureServer>(handle).map(|server| server.handler)
@@ -393,7 +443,7 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 }
                 .unwrap_or(0);
                 if handler != 0 && !listeners.contains(&handler) {
-                    listeners.push(handler);
+                    listeners.insert(0, handler);
                 }
             }
             let scope = perry_ffi::TransientRootScope::enter();
@@ -418,16 +468,28 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 if let Some(server) = get_handle_mut::<Http2SecureServer>(handle) {
                     if event_ptr.is_null() {
                         server.base.listeners.clear();
+                        server.base.once_listeners.clear();
+                        server.handler = 0;
                     } else if let Some(event) = read_string_header(event_ptr as *mut StringHeader) {
                         server.base.listeners.remove(&event);
+                        server.base.once_listeners.remove(&event);
+                        if event == "request" {
+                            server.handler = 0;
+                        }
                     }
                 }
             } else if is_https {
                 if let Some(server) = get_handle_mut::<HttpsServer>(handle) {
                     if event_ptr.is_null() {
                         server.base.listeners.clear();
+                        server.base.once_listeners.clear();
+                        server.handler = 0;
                     } else if let Some(event) = read_string_header(event_ptr as *mut StringHeader) {
                         server.base.listeners.remove(&event);
+                        server.base.once_listeners.remove(&event);
+                        if event == "request" {
+                            server.handler = 0;
+                        }
                     }
                 }
             } else {
@@ -447,7 +509,29 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                     get_handle_mut::<Http2SecureServer>(handle),
                 ) {
                     if let Some(listeners) = server.base.listeners.get_mut(&event) {
-                        listeners.retain(|listener| *listener != cb);
+                        if let Some(position) =
+                            listeners.iter().rposition(|listener| *listener == cb)
+                        {
+                            listeners.remove(position);
+                        } else if let Some(once) = server.base.once_listeners.get_mut(&event) {
+                            if let Some(position) =
+                                once.iter().rposition(|listener| *listener == cb)
+                            {
+                                once.remove(position);
+                            } else if event == "request" && server.handler == cb {
+                                server.handler = 0;
+                            }
+                        } else if event == "request" && server.handler == cb {
+                            server.handler = 0;
+                        }
+                    } else if let Some(once) = server.base.once_listeners.get_mut(&event) {
+                        if let Some(position) = once.iter().rposition(|listener| *listener == cb) {
+                            once.remove(position);
+                        } else if event == "request" && server.handler == cb {
+                            server.handler = 0;
+                        }
+                    } else if event == "request" && server.handler == cb {
+                        server.handler = 0;
                     }
                 }
             } else if is_https {
@@ -456,7 +540,29 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                     get_handle_mut::<HttpsServer>(handle),
                 ) {
                     if let Some(listeners) = server.base.listeners.get_mut(&event) {
-                        listeners.retain(|listener| *listener != cb);
+                        if let Some(position) =
+                            listeners.iter().rposition(|listener| *listener == cb)
+                        {
+                            listeners.remove(position);
+                        } else if let Some(once) = server.base.once_listeners.get_mut(&event) {
+                            if let Some(position) =
+                                once.iter().rposition(|listener| *listener == cb)
+                            {
+                                once.remove(position);
+                            } else if event == "request" && server.handler == cb {
+                                server.handler = 0;
+                            }
+                        } else if event == "request" && server.handler == cb {
+                            server.handler = 0;
+                        }
+                    } else if let Some(once) = server.base.once_listeners.get_mut(&event) {
+                        if let Some(position) = once.iter().rposition(|listener| *listener == cb) {
+                            once.remove(position);
+                        } else if event == "request" && server.handler == cb {
+                            server.handler = 0;
+                        }
+                    } else if event == "request" && server.handler == cb {
+                        server.handler = 0;
                     }
                 }
             } else {

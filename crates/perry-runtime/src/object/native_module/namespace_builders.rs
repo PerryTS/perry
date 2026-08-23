@@ -461,16 +461,22 @@ extern "C" fn global_agent_add_request_thunk(
                 let existing = requests.with_mut_ptr(|requests_ptr| {
                     key.with_const_ptr(|key_ptr| js_object_get_field_by_name(requests_ptr, key_ptr))
                 });
-                let mut queued = if crate::array::js_array_is_array(f64::from_bits(existing.bits()))
-                    .to_bits()
-                    == crate::value::TAG_TRUE
-                {
-                    existing.as_pointer::<crate::array::ArrayHeader>() as *mut _
-                } else {
-                    crate::array::js_array_alloc_with_length(0)
-                };
-                queued = crate::array::js_array_push_f64(queued, req.get_nanbox_f64());
-                let queued_value = crate::value::js_nanbox_pointer(queued as i64);
+                let queued: *mut crate::array::ArrayHeader =
+                    if crate::array::js_array_is_array(f64::from_bits(existing.bits())).to_bits()
+                        == crate::value::TAG_TRUE
+                    {
+                        existing.as_pointer::<crate::array::ArrayHeader>() as *mut _
+                    } else {
+                        crate::array::js_array_alloc_with_length(0)
+                    };
+                let queued = scope.root_raw_mut_ptr(queued);
+                let pushed = queued.with_mut_ptr::<crate::array::ArrayHeader, _>(|queued| {
+                    crate::array::js_array_push_f64(queued, req.get_nanbox_f64())
+                });
+                queued.set_raw_mut_ptr(pushed);
+                let queued_value = queued.with_mut_ptr::<crate::array::ArrayHeader, _>(|queued| {
+                    crate::value::js_nanbox_pointer(queued as i64)
+                });
                 requests.with_mut_ptr(|requests_ptr| {
                     key.with_const_ptr(|key_ptr| {
                         js_object_set_field_by_name(requests_ptr, key_ptr, queued_value)
@@ -599,13 +605,26 @@ pub unsafe extern "C" fn js_https_global_agent_sync_maps(
     let Some(agent_ptr) = global_agent_object_ptr(agent).map(|ptr| ptr as *mut ObjectHeader) else {
         return;
     };
-    for (field, value) in [
-        ("sockets", sockets),
-        ("freeSockets", free_sockets),
-        ("requests", requests),
-    ] {
-        let key = crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
-        js_object_set_field_by_name(agent_ptr, key, value);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let agent = scope.root_raw_mut_ptr(agent_ptr);
+    let values = [
+        scope.root_nanbox_f64(sockets),
+        scope.root_nanbox_f64(free_sockets),
+        scope.root_nanbox_f64(requests),
+    ];
+    for (field, value) in ["sockets", "freeSockets", "requests"]
+        .into_iter()
+        .zip(values)
+    {
+        let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            field.as_ptr(),
+            field.len() as u32,
+        ));
+        agent.with_mut_ptr(|agent| {
+            key.with_const_ptr(|key| {
+                js_object_set_field_by_name(agent, key, value.get_nanbox_f64())
+            })
+        });
     }
 }
 

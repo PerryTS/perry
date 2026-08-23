@@ -55,6 +55,7 @@ pub(crate) fn dispatch_request(
     };
     let tls_servername = tls.servername.clone();
     let tls_peer_certificate_cn = tls.peer_certificate_cn.clone();
+    let internal_tls_token = tls_client::internal_https_token_for_url(&url);
     spawn_blocking(move || {
         // Defeat LTO dead-stripping of tokio's CONTEXT statics — same
         // workaround perry-ext-net needs (see spawn_socket_runner).
@@ -109,18 +110,21 @@ pub(crate) fn dispatch_request(
             for (k, v) in &headers {
                 req = req.header(k.as_str(), v.as_str());
             }
-            if let Some(servername) = tls_servername.as_deref() {
-                req = req.header(
-                    "x-perry-tls-servername",
-                    if servername.is_empty() {
-                        "<false>"
-                    } else {
-                        servername
-                    },
-                );
-            }
-            if let Some(common_name) = tls_peer_certificate_cn.as_deref() {
-                req = req.header("x-perry-tls-peer-cn", common_name);
+            if let Some(token) = internal_tls_token.as_deref() {
+                req = req.header("x-perry-internal-tls-token", token);
+                if let Some(servername) = tls_servername.as_deref() {
+                    req = req.header(
+                        "x-perry-tls-servername",
+                        if servername.is_empty() {
+                            "<false>"
+                        } else {
+                            servername
+                        },
+                    );
+                }
+                if let Some(common_name) = tls_peer_certificate_cn.as_deref() {
+                    req = req.header("x-perry-tls-peer-cn", common_name);
+                }
             }
             // Node's default agent is keep-alive (v19+) and sends the
             // header explicitly; servers reading `req.headers.connection`

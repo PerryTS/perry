@@ -100,6 +100,9 @@ use response_headers::build_response_headers_object;
 mod request_headers;
 use request_headers::headers_from_options;
 
+mod root_scanner;
+use root_scanner::scan_http_roots;
+
 use bytes::Bytes;
 use lazy_static::lazy_static;
 use perry_ffi::{
@@ -384,51 +387,6 @@ pub(crate) fn ensure_gc_scanner_registered() {
     });
 }
 
-/// GC root scanner: walks every ClientRequestHandle (response_callback
-/// + listeners), IncomingMessageHandle (listeners), and AgentHandle
-/// (createConnection / createSocket overrides). Closures stored as raw
-/// i64 pointers are handed to the runtime as mutable slots.
-fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
-    iter_handles_of_mut::<ClientRequestHandle, _>(|req| {
-        visitor.visit_i64_slot(&mut req.response_callback);
-        visitor.visit_i64_slot(&mut req.end_callback);
-        if req.abort_signal_bits != 0 {
-            visitor.visit_nanbox_u64_slot(&mut req.abort_signal_bits);
-        }
-        if req.abort_listener_bits != 0 {
-            visitor.visit_nanbox_u64_slot(&mut req.abort_listener_bits);
-        }
-        for cb in &mut req.pending_write_callbacks {
-            visitor.visit_i64_slot(cb);
-        }
-        for cbs in req.listeners.values_mut() {
-            for cb in cbs {
-                visitor.visit_i64_slot(cb);
-            }
-        }
-        if req.tls.check_server_identity_callback != 0 {
-            visitor.visit_i64_slot(&mut req.tls.check_server_identity_callback);
-        }
-    });
-
-    iter_handles_of_mut::<IncomingMessageHandle, _>(|msg| {
-        for cbs in msg.listeners.values_mut() {
-            for cb in cbs {
-                visitor.visit_i64_slot(cb);
-            }
-        }
-        // `.pipe(dest)` destinations are live JS values held until the body
-        // streams through them; relocate them if the copying GC moves them.
-        for dest in &mut msg.pipes {
-            visitor.visit_nanbox_u64_slot(dest);
-        }
-    });
-
-    // #2154: stored `agent.createConnection` / `.createSocket` closures.
-    agent::scan_agent_roots(visitor);
-    client_request_surface::scan_roots(visitor);
-}
-
 pub(crate) fn push_event(ev: PendingHttpEvent) {
     if let Ok(mut q) = HTTP_PENDING_EVENTS.lock() {
         q.push(ev);
@@ -470,9 +428,11 @@ pub struct ClientRequestHandle {
     headers: HashMap<String, String>,
     body: Vec<u8>,
     response_callback: i64,
+    response_raw_wrapper: i64,
     /// `.on(event, cb)` listeners (`'response'` / `'error'` / `'timeout'`
     /// / `'finish'` / `'close'`).
     listeners: HashMap<String, Vec<i64>>,
+    once_listeners: HashMap<String, Vec<ClientOnceListener>>,
     timeout_ms: Option<u64>,
     ended: bool,
     /// `flushHeaders()` dispatched the exchange before `end()` was called;
@@ -537,6 +497,12 @@ pub struct ClientRequestHandle {
     /// #5080 — set while the continue exchange task is waiting for the
     /// deferred body; `end()` sends the buffered body here (once).
     continue_body_tx: Option<tokio::sync::oneshot::Sender<Vec<u8>>>,
+}
+
+#[derive(Clone, Copy)]
+struct ClientOnceListener {
+    callback: i64,
+    raw_wrapper: i64,
 }
 
 // SAFETY: closure pointers point into program-global code/data and
@@ -693,7 +659,9 @@ fn make_request_handle(
         headers,
         body: Vec::new(),
         response_callback: callback,
+        response_raw_wrapper: 0,
         listeners: HashMap::new(),
+        once_listeners: HashMap::new(),
         timeout_ms,
         ended: false,
         flushed_early: false,
@@ -716,6 +684,13 @@ fn make_request_handle(
         expects_continue: false,
         continue_body_tx: None,
     });
+    if callback != 0 {
+        let wrapper =
+            client_request_surface::create_client_once_wrapper(handle, "response", callback, true);
+        with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+            request.response_raw_wrapper = wrapper;
+        });
+    }
     // Node assigns an Agent socket slot (or queues the request) during
     // ClientRequest construction, before `end()` is called. This makes the
     // public `agent.sockets` / `agent.requests` maps immediately observable.
@@ -812,11 +787,18 @@ unsafe fn attach_tls_options(handle: Handle, opts_f64: f64) {
     let (servername_ptr, servername_len) = servername
         .map(|value| (value.as_ptr(), value.len()))
         .unwrap_or((std::ptr::null(), 0));
+    let peer_certificate_cn = tls_client::internal_https_peer_certificate_cn_for_url(&url);
+    let (peer_certificate_cn_ptr, peer_certificate_cn_len) = peer_certificate_cn
+        .as_ref()
+        .map(|value| (value.as_ptr(), value.len()))
+        .unwrap_or((std::ptr::null(), 0));
     perry_ext_net::js_ext_net_set_tls_metadata(
         socket,
         i32::from(authorized),
         servername_ptr,
         servername_len,
+        peer_certificate_cn_ptr,
+        peer_certificate_cn_len,
         session_id,
         i32::from(reused),
     );

@@ -211,9 +211,24 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         }
         return f64::from_bits(TAG_FALSE);
     }
-    // Native http(s).Agent values carry the generic callable export's own
-    // `@@hasInstance`, whose ordinary prototype walk cannot see small native
-    // handles. Brand-check them before that generic hook consumes the request.
+    // Spec step (InstanceofOperator): an OWN user-defined `@@hasInstance`
+    // overrides even native constructor brand checks. The native generic hook
+    // lives on Function.prototype, so the own-property gate distinguishes an
+    // explicit override from that inherited default without recursion.
+    {
+        let hi_sym = crate::symbol::well_known_symbol("hasInstance");
+        if !hi_sym.is_null() {
+            let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
+            if unsafe { crate::symbol::js_object_has_own_symbol(type_ref, hi_f64) } {
+                let cb = unsafe { crate::symbol::js_object_get_symbol_property(type_ref, hi_f64) };
+                if let HasInstanceOutcome::Result(result) = dispatch_own_has_instance(cb, value) {
+                    return result;
+                }
+            }
+        }
+    }
+    // Native http(s).Agent handles have no heap prototype chain. After any own
+    // override above has had first refusal, retain their native brand check.
     if let Some((module, method)) = unsafe { bound_native_callable_module_and_method(type_ref) } {
         if matches!(module.as_str(), "http" | "https") && method == "Agent" {
             let matched = small_native_handle_id(value)
@@ -224,48 +239,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             } else {
                 TAG_FALSE
             });
-        }
-    }
-    // Spec step (InstanceofOperator): consult the RHS's OWN `@@hasInstance`
-    // first. zod 4 builds `ZodType` as a plain FUNCTION and installs its brand
-    // check via `Object.defineProperty(ZodTypeFn, Symbol.hasInstance, { value })`,
-    // so the function RHS would otherwise fall through to the prototype-walk tail
-    // and return false. Read OWN only (`has_own` ⇒ `get` returns the own value,
-    // never the inherited Function.prototype default thunk → no recursion). Also
-    // catches a dynamic class-ref RHS (own @@hasInstance lives in CLASS_STATIC_SYMBOLS).
-    {
-        let hi_sym = crate::symbol::well_known_symbol("hasInstance");
-        if !hi_sym.is_null() {
-            let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
-            if unsafe { crate::symbol::js_object_has_own_symbol(type_ref, hi_f64) } {
-                let cb = unsafe { crate::symbol::js_object_get_symbol_property(type_ref, hi_f64) };
-                // A present-but-non-callable own `@@hasInstance` throws; only a
-                // `null`/`undefined` value falls through to the default below.
-                if let HasInstanceOutcome::Result(r) = dispatch_own_has_instance(cb, value) {
-                    return r;
-                }
-            }
-        }
-    }
-    // Spec step (InstanceofOperator): consult the RHS's OWN `@@hasInstance`
-    // first. zod 4 builds `ZodType` as a plain FUNCTION and installs its brand
-    // check via `Object.defineProperty(ZodTypeFn, Symbol.hasInstance, { value })`,
-    // so the function RHS would otherwise fall through to the prototype-walk tail
-    // and return false. Read OWN only (`has_own` ⇒ `get` returns the own value,
-    // never the inherited Function.prototype default thunk → no recursion). Also
-    // catches a dynamic class-ref RHS (own @@hasInstance lives in CLASS_STATIC_SYMBOLS).
-    {
-        let hi_sym = crate::symbol::well_known_symbol("hasInstance");
-        if !hi_sym.is_null() {
-            let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
-            if unsafe { crate::symbol::js_object_has_own_symbol(type_ref, hi_f64) } {
-                let cb = unsafe { crate::symbol::js_object_get_symbol_property(type_ref, hi_f64) };
-                // A present-but-non-callable own `@@hasInstance` throws; only a
-                // `null`/`undefined` value falls through to the default below.
-                if let HasInstanceOutcome::Result(r) = dispatch_own_has_instance(cb, value) {
-                    return r;
-                }
-            }
         }
     }
     let bits = type_ref.to_bits();

@@ -203,6 +203,12 @@ pub(crate) mod statics {
         static E: OnceLock<Mutex<HashMap<i64, String>>> = OnceLock::new();
         E.get_or_init(|| Mutex::new(HashMap::new()))
     }
+
+    /// Per-socket EventEmitter warning thresholds set through `events.*`.
+    pub fn max_listeners() -> &'static Mutex<HashMap<i64, f64>> {
+        static M: OnceLock<Mutex<HashMap<i64, f64>>> = OnceLock::new();
+        M.get_or_init(|| Mutex::new(HashMap::new()))
+    }
 }
 
 /// Backing state for an `net.Server` handle (`net.createServer(...)`).
@@ -1642,6 +1648,8 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 statics::sockets().lock().unwrap().remove(&id);
                 statics::once_flags().lock().unwrap().remove(&id);
                 statics::encodings().lock().unwrap().remove(&id);
+                statics::http_agent_phases().lock().unwrap().remove(&id);
+                statics::max_listeners().lock().unwrap().remove(&id);
                 server_state::discard_pending_server_data(id);
             }
             // Issue #1123 followup — server-side events. The

@@ -22,6 +22,7 @@ h2 = "0.4"
 http-body-util.workspace = true
 tokio-rustls.workspace = true
 rustls = { workspace = true, features = ["std", "ring", "tls12"] }
+rustls_webpki = { package = "rustls-webpki", version = "0.103" }
 rustls-pemfile.workspace = true
 tokio-tungstenite = { workspace = true }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "http2"], default-features = false }

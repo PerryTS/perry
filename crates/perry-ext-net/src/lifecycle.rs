@@ -714,6 +714,29 @@ pub unsafe extern "C" fn js_ext_net_socket_listener_count(handle: i64, event_ptr
     js_net_socket_listener_count(handle, event_ptr)
 }
 
+/// Module-level `events.getMaxListeners(socket)` bridge.
+#[no_mangle]
+pub extern "C" fn js_ext_net_socket_get_max_listeners(handle: i64) -> f64 {
+    crate::statics::max_listeners()
+        .lock()
+        .unwrap()
+        .get(&handle)
+        .copied()
+        .unwrap_or(10.0)
+}
+
+/// Module-level `events.setMaxListeners(n, socket)` bridge.
+#[no_mangle]
+pub extern "C" fn js_ext_net_socket_set_max_listeners(handle: i64, n: f64) -> f64 {
+    if crate::is_net_socket_handle(handle) {
+        crate::statics::max_listeners()
+            .lock()
+            .unwrap()
+            .insert(handle, n);
+    }
+    n
+}
+
 /// `socket.eventNames()` — return an array of registered event names.
 /// Emits JSON for the codegen's `NR_OBJ_FROM_JSON_STR` return kind so
 /// callers get a true array, not a string.

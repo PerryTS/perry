@@ -1700,6 +1700,48 @@ pub unsafe extern "C" fn js_events_once(
         js_closure_set_capture_ptr(listener, 2, 0);
         js_closure_set_capture_ptr(listener, 3, 0);
         let listener = scope.root_addr(listener as i64);
+        if event_name != "error" {
+            js_register_closure_rest(events_once_stream_reject_listener as *const u8, 0);
+            let error_event_ptr = js_string_from_bytes(b"error".as_ptr(), 5);
+            let error_event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
+                error_event_ptr as *mut StringHeader,
+            )));
+            let reject_listener =
+                js_closure_alloc(events_once_stream_reject_listener as *const u8, 4);
+            let reject_listener = scope.root_addr(reject_listener as i64);
+            let event_name_ptr = (event.get().to_bits() & POINTER_MASK) as i64;
+            js_closure_set_capture_ptr(
+                reject_listener.get() as *mut RawClosureHeader,
+                0,
+                raw as i64,
+            );
+            js_closure_set_capture_ptr(reject_listener.get() as *mut RawClosureHeader, 1, handle);
+            js_closure_set_capture_ptr(
+                reject_listener.get() as *mut RawClosureHeader,
+                2,
+                event_name_ptr,
+            );
+            js_closure_set_capture_ptr(
+                reject_listener.get() as *mut RawClosureHeader,
+                3,
+                listener.get(),
+            );
+            js_closure_set_capture_ptr(
+                listener.get() as *mut RawClosureHeader,
+                2,
+                reject_listener.get(),
+            );
+            js_closure_set_capture_ptr(
+                listener.get() as *mut RawClosureHeader,
+                3,
+                (error_event.get().to_bits() & POINTER_MASK) as i64,
+            );
+            let args = [
+                error_event.get(),
+                nanbox_pointer_bits(reject_listener.get()),
+            ];
+            let _ = call_net_socket_method(handle, "once", &args);
+        }
         let args = [event.get(), nanbox_pointer_bits(listener.get())];
         let _ = call_net_socket_method(handle, "once", &args);
         return raw;
@@ -1709,6 +1751,10 @@ pub unsafe extern "C" fn js_events_once(
         if event_name_ptr.is_null() {
             return raw;
         }
+        let scope = perry_ffi::TransientRootScope::enter();
+        let event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
+            event_name_ptr as *mut StringHeader,
+        )));
         js_register_closure_rest(events_once_stream_resolve_listener as *const u8, 0);
         js_register_closure_rest(events_once_stream_reject_listener as *const u8, 0);
         let listener = js_closure_alloc(events_once_stream_resolve_listener as *const u8, 4);
@@ -1716,25 +1762,49 @@ pub unsafe extern "C" fn js_events_once(
         js_closure_set_capture_ptr(listener, 1, handle);
         js_closure_set_capture_ptr(listener, 2, 0);
         js_closure_set_capture_ptr(listener, 3, 0);
-        let event_value = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
-        let listener_value = nanbox_pointer_bits(listener as i64);
+        let listener = scope.root_addr(listener as i64);
         if event_name != "error" {
-            let error_event_name = b"error";
-            let error_event_ptr =
-                js_string_from_bytes(error_event_name.as_ptr(), error_event_name.len() as u32);
+            let error_event_ptr = js_string_from_bytes(b"error".as_ptr(), 5);
+            let error_event = scope.root_nanbox(f64::from_bits(nanbox_string_bits(
+                error_event_ptr as *mut StringHeader,
+            )));
             let reject_listener =
                 js_closure_alloc(events_once_stream_reject_listener as *const u8, 4);
-            js_closure_set_capture_ptr(reject_listener, 0, raw as i64);
-            js_closure_set_capture_ptr(reject_listener, 1, handle);
-            js_closure_set_capture_ptr(reject_listener, 2, event_name_ptr as i64);
-            js_closure_set_capture_ptr(reject_listener, 3, listener as i64);
-            js_closure_set_capture_ptr(listener, 2, reject_listener as i64);
-            js_closure_set_capture_ptr(listener, 3, error_event_ptr as i64);
-            let error_event = f64::from_bits(nanbox_string_bits(error_event_ptr));
-            let reject_listener_value = nanbox_pointer_bits(reject_listener as i64);
-            let _ = js_node_stream_method_once(handle, error_event, reject_listener_value);
+            let reject_listener = scope.root_addr(reject_listener as i64);
+            js_closure_set_capture_ptr(
+                reject_listener.get() as *mut RawClosureHeader,
+                0,
+                raw as i64,
+            );
+            js_closure_set_capture_ptr(reject_listener.get() as *mut RawClosureHeader, 1, handle);
+            js_closure_set_capture_ptr(
+                reject_listener.get() as *mut RawClosureHeader,
+                2,
+                (event.get().to_bits() & POINTER_MASK) as i64,
+            );
+            js_closure_set_capture_ptr(
+                reject_listener.get() as *mut RawClosureHeader,
+                3,
+                listener.get(),
+            );
+            js_closure_set_capture_ptr(
+                listener.get() as *mut RawClosureHeader,
+                2,
+                reject_listener.get(),
+            );
+            js_closure_set_capture_ptr(
+                listener.get() as *mut RawClosureHeader,
+                3,
+                (error_event.get().to_bits() & POINTER_MASK) as i64,
+            );
+            let _ = js_node_stream_method_once(
+                handle,
+                error_event.get(),
+                nanbox_pointer_bits(reject_listener.get()),
+            );
         }
-        let _ = js_node_stream_method_once(handle, event_value, listener_value);
+        let _ =
+            js_node_stream_method_once(handle, event.get(), nanbox_pointer_bits(listener.get()));
     }
     raw
 }
@@ -1793,9 +1863,11 @@ pub unsafe extern "C" fn js_events_on(
             target as Handle
         }
         EventHelperTarget::NetSocket(handle) | EventHelperTarget::NativeHandle(handle) => {
-            let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
-            let listener_value = nanbox_pointer_bits(listener as i64);
-            let _ = call_net_socket_method(handle, "on", &[event, listener_value]);
+            if !event_name_ptr.is_null() {
+                let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
+                let listener_value = nanbox_pointer_bits(listener as i64);
+                let _ = call_net_socket_method(handle, "on", &[event, listener_value]);
+            }
             handle
         }
         EventHelperTarget::Stream(handle) => {

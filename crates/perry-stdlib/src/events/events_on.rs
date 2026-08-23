@@ -273,14 +273,14 @@ extern "C" fn events_on_abort_listener(closure: *const ClosureHeader) -> f64 {
             } else if perry_runtime::object::net_socket_handle_probe()
                 .is_some_and(|probe| probe(handle))
             {
-                extern "C" {
-                    fn js_ext_net_socket_remove_listener(
-                        handle: i64,
-                        event_ptr: i64,
-                        callback: i64,
-                    ) -> i64;
-                }
-                js_ext_net_socket_remove_listener(handle, event_name_ptr as i64, data_listener);
+                let _ = super::module_helpers::call_net_socket_method(
+                    handle,
+                    "removeListener",
+                    &[
+                        js_nanbox_string(event_name_ptr as i64),
+                        js_nanbox_pointer(data_listener),
+                    ],
+                );
             } else if stream_value_from_handle(handle).is_some() {
                 let event = js_nanbox_string(event_name_ptr as i64);
                 let listener = js_nanbox_pointer(data_listener);
@@ -370,10 +370,14 @@ pub unsafe extern "C" fn js_events_on(
             target as Handle
         }
         EventHelperTarget::NetSocket(handle) => {
-            extern "C" {
-                fn js_ext_net_socket_on(handle: i64, event_ptr: i64, callback: i64);
-            }
-            js_ext_net_socket_on(handle, event_name_ptr as i64, listener as i64);
+            let _ = module_helpers::call_net_socket_method(
+                handle,
+                "on",
+                &[
+                    js_nanbox_string(event_name_ptr as i64),
+                    js_nanbox_pointer(listener as i64),
+                ],
+            );
             handle
         }
         EventHelperTarget::Stream(handle) => {

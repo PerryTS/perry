@@ -6011,6 +6011,7 @@ dependencies = [
  "ring",
  "rustls",
  "rustls-pemfile",
+ "rustls-webpki",
  "serde_json",
  "socket2",
  "tokio",
@@ -6098,6 +6099,7 @@ dependencies = [
  "perry-runtime",
  "rustls",
  "rustls-native-certs",
+ "serde_json",
  "tokio",
  "tokio-rustls",
 ]

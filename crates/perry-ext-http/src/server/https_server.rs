@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -36,7 +36,7 @@ use crate::server::server::{
 };
 use crate::server::tls::{
     build_certless_server_config, build_server_config, has_pem_material, json_value_to_pem_bytes,
-    parse_cert_chain, parse_private_key,
+    parse_cert_chain, parse_private_key, ConnectionKeyLog, NodeTicketKey,
 };
 
 /// Decode `{ key, cert, alpnProtocols? }` from a NaN-boxed JsValue
@@ -80,7 +80,14 @@ unsafe fn parse_https_opts(opts_f64: f64) -> (Vec<u8>, Vec<u8>, bool, Option<Vec
     let enable_h2 = alpn_values
         .map(|arr| arr.iter().any(|v| v.as_str() == Some("h2")))
         .unwrap_or(false);
-    let alpn_callback = raw_closure_field(opts_f64, "ALPNCallback");
+    let alpn_callback = raw_closure_field(f64::from_bits(v.bits()), "ALPNCallback");
+    if alpn_callback != 0 && alpn_values.is_some() {
+        perry_ffi::throw_with_code(
+            "The ALPNCallback and ALPNProtocols TLS options are mutually exclusive",
+            "ERR_TLS_ALPN_CALLBACK_WITH_PROTOCOLS",
+            perry_ffi::ErrorKind::TypeError,
+        );
+    }
     let alpn_protocols = if alpn_callback != 0 {
         None
     } else {
@@ -142,8 +149,12 @@ pub unsafe extern "C" fn js_node_https_create_server(mut opts_f64: f64, mut hand
         parse_https_opts(opts_f64);
     let mut base = HttpServer::with_handler(handler);
     crate::server::server::apply_server_options(&mut base, opts_f64);
+    let ticket_key = NodeTicketKey::random().unwrap_or_else(|error| panic!("{error}"));
 
     let cert_chain = parse_cert_chain(&cert_pem);
+    let certificate_cn = cert_chain
+        .first()
+        .and_then(|certificate| crate::tls_client::certificate_common_name(certificate.as_ref()));
     let has_tls_material = has_pem_material(&key_pem, &cert_pem);
     if !has_tls_material {
         // `https.createServer()` with no key/cert — Node constructs and
@@ -151,13 +162,16 @@ pub unsafe extern "C" fn js_node_https_create_server(mut opts_f64: f64, mut hand
         // `None` config here used to make `listen()` refuse outright
         // ("tls config unavailable"), so the 'listening' callback never
         // fired (#4974).
+        let mut tls_config = build_certless_server_config(enable_http2_alpn);
+        crate::server::tls::install_ticket_key(&mut tls_config, ticket_key.clone());
         return register_handle(HttpsServer {
             handler,
-            tls_config: Some(build_certless_server_config(enable_http2_alpn)),
+            tls_config: Some(tls_config),
             base,
             alpn_protocols,
             alpn_callback,
-            keylog_emitted: false,
+            ticket_key,
+            certificate_cn,
         });
     }
     let private_key = match parse_private_key(&key_pem) {
@@ -173,12 +187,16 @@ pub unsafe extern "C" fn js_node_https_create_server(mut opts_f64: f64, mut hand
                 base,
                 alpn_protocols,
                 alpn_callback,
-                keylog_emitted: false,
+                ticket_key,
+                certificate_cn,
             });
         }
     };
     let tls_config = match build_server_config(cert_chain, private_key, enable_http2_alpn) {
-        Ok(c) => Some(c),
+        Ok(mut config) => {
+            crate::server::tls::install_ticket_key(&mut config, ticket_key.clone());
+            Some(config)
+        }
         Err(e) => {
             eprintln!("[node:https] {}", e);
             None
@@ -191,7 +209,8 @@ pub unsafe extern "C" fn js_node_https_create_server(mut opts_f64: f64, mut hand
         base,
         alpn_protocols,
         alpn_callback,
-        keylog_emitted: false,
+        ticket_key,
+        certificate_cn,
     })
 }
 
@@ -203,7 +222,181 @@ pub struct HttpsServer {
     pub base: HttpServer,
     pub alpn_protocols: Option<Vec<u8>>,
     pub alpn_callback: i64,
-    pub keylog_emitted: bool,
+    pub ticket_key: Arc<NodeTicketKey>,
+    pub certificate_cn: Option<String>,
+}
+
+struct PendingTlsClientError {
+    server_handle: i64,
+    message: String,
+}
+
+struct PendingTlsKeylog {
+    server_handle: i64,
+    lines: Vec<Vec<u8>>,
+}
+
+static PENDING_TLS_CLIENT_ERRORS: Mutex<Vec<PendingTlsClientError>> = Mutex::new(Vec::new());
+static PENDING_TLS_KEYLOGS: Mutex<Vec<PendingTlsKeylog>> = Mutex::new(Vec::new());
+
+fn queue_tls_client_error(server_handle: i64, message: String) {
+    if let Ok(mut pending) = PENDING_TLS_CLIENT_ERRORS.lock() {
+        pending.push(PendingTlsClientError {
+            server_handle,
+            message,
+        });
+    }
+    perry_ffi::notify_main_thread();
+}
+
+fn queue_tls_keylog(server_handle: i64, lines: Vec<Vec<u8>>) {
+    if lines.is_empty() {
+        return;
+    }
+    if let Ok(mut pending) = PENDING_TLS_KEYLOGS.lock() {
+        pending.push(PendingTlsKeylog {
+            server_handle,
+            lines,
+        });
+    }
+    perry_ffi::notify_main_thread();
+}
+
+/// Emit rustls key-log output after every successful handshake, even when the
+/// peer closes before sending an HTTP request. JS still runs exclusively on
+/// the main thread; the TLS worker only parks owned byte records here.
+pub(crate) fn process_pending_tls_keylogs(server_handle: i64) -> i32 {
+    let events = PENDING_TLS_KEYLOGS
+        .lock()
+        .map(|mut pending| {
+            let mut selected = Vec::new();
+            let mut index = 0;
+            while index < pending.len() {
+                if pending[index].server_handle == server_handle {
+                    selected.push(pending.remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            selected
+        })
+        .unwrap_or_default();
+    if events.is_empty() {
+        return 0;
+    }
+    let scope = perry_ffi::TransientRootScope::enter();
+    for event in &events {
+        let socket = perry_ffi::alloc_null_proto_object(&[
+            ("encrypted", JsValue::from_bool(true)),
+            ("destroyed", JsValue::from_bool(false)),
+            ("servername", JsValue::from_bool(false)),
+        ]);
+        let socket = scope.root_nanbox(f64::from_bits(socket.bits()));
+        emit_keylog_lines(server_handle, socket.get(), &event.lines);
+    }
+    events.len() as i32
+}
+
+/// Dispatch failed TLS handshakes from the main JS thread. The socket value is
+/// a minimal destroyed TLSSocket-compatible facade because rustls never yields
+/// a decrypted stream that can be adopted after a failed handshake.
+pub(crate) fn process_pending_tls_client_errors(server_handle: i64) -> i32 {
+    let events = PENDING_TLS_CLIENT_ERRORS
+        .lock()
+        .map(|mut pending| {
+            let mut selected = Vec::new();
+            let mut index = 0;
+            while index < pending.len() {
+                if pending[index].server_handle == server_handle {
+                    selected.push(pending.remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            selected
+        })
+        .unwrap_or_default();
+    if events.is_empty() {
+        return 0;
+    }
+    let this_value = handle_to_pointer_f64(server_handle);
+    for event in &events {
+        let listeners = get_handle_mut::<HttpsServer>(server_handle)
+            .map(|server| {
+                crate::server::server::take_server_event_listeners(
+                    &mut server.base,
+                    "tlsClientError",
+                )
+            })
+            .unwrap_or_default();
+        let scope = perry_ffi::TransientRootScope::enter();
+        let listeners = scope.root_addrs(&listeners);
+        let error = perry_ffi::error_value_with_code(
+            &event.message,
+            "ERR_SSL_TLS_HANDSHAKE",
+            perry_ffi::ErrorKind::Error,
+        );
+        let error = scope.root_nanbox(f64::from_bits(error.bits()));
+        let socket = perry_ffi::alloc_null_proto_object(&[
+            ("encrypted", JsValue::from_bool(true)),
+            ("destroyed", JsValue::from_bool(true)),
+            ("servername", JsValue::from_bool(false)),
+        ]);
+        let socket = scope.root_nanbox(f64::from_bits(socket.bits()));
+        for listener in &listeners {
+            let listener = listener.get();
+            if listener == 0 {
+                continue;
+            }
+            let closure = unsafe { JsClosure::from_raw(listener as *const RawClosureHeader) };
+            if !closure.is_null() {
+                with_implicit_this(this_value, || unsafe {
+                    let _ = closure.call2(error.get(), socket.get());
+                });
+            }
+        }
+    }
+    events.len() as i32
+}
+
+/// Validate and install Node's 48-byte server ticket-key blob. The rustls
+/// provider is shared by future per-connection configs, so rotation takes
+/// effect without replacing the accept loop or touching another server.
+pub(crate) fn set_ticket_keys(server_handle: i64, value: f64) {
+    let Some(bytes) = perry_ffi::value_byte_slice(JsValue::from_bits(value.to_bits())) else {
+        perry_ffi::throw_with_code(
+            "The session ticket keys argument must be a Buffer or TypedArray",
+            "ERR_INVALID_ARG_TYPE",
+            perry_ffi::ErrorKind::TypeError,
+        );
+    };
+    if bytes.len() != 48 {
+        perry_ffi::throw_with_code(
+            "Session ticket keys must be a 48-byte buffer",
+            "ERR_INVALID_ARG_VALUE",
+            perry_ffi::ErrorKind::TypeError,
+        );
+    }
+    let mut keys = [0_u8; 48];
+    keys.copy_from_slice(bytes);
+    let (ticket_key, port) = get_handle::<HttpsServer>(server_handle)
+        .map(|server| (server.ticket_key.clone(), server.base.bound_port))
+        .unwrap_or_else(|| {
+            perry_ffi::throw_with_code(
+                "setTicketKeys requires an HTTPS server",
+                "ERR_INVALID_THIS",
+                perry_ffi::ErrorKind::TypeError,
+            )
+        });
+    if let Err(error) = ticket_key.set_keys(&keys) {
+        perry_ffi::throw_with_code(&error, "ERR_TLS_TICKET_KEYS", perry_ffi::ErrorKind::Error);
+    }
+    // Perry exposes an opaque public session id alongside rustls' real cache.
+    // Invalidate only identities for this receiving server so the facade tracks
+    // the server-side ticket rotation without discarding unrelated sessions.
+    if port != 0 {
+        crate::agent::invalidate_tls_sessions_for_server_port(port);
+    }
 }
 
 /// `httpsServer.listen(port?, host?, backlog?, cb?)` — binds + starts
@@ -252,14 +445,15 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
     // config, so the accept loop can apply it per connection without re-locking
     // the handle map. Mirrors the HTTP/1 + HTTP/2 paths in server.rs.
     let no_delay;
-    let tls_config = if let Some(s) = get_handle_mut::<HttpsServer>(server_handle) {
+    let (tls_config, certificate_cn) = if let Some(s) = get_handle_mut::<HttpsServer>(server_handle)
+    {
         s.base.bound_port = actual_port;
         s.base.bound_host = host.clone();
         s.base.listening = true;
         s.base.shutdown_tx = Some(shutdown_tx);
         s.base.request_rx = Some(request_rx);
         no_delay = s.base.no_delay;
-        s.tls_config.clone()
+        (s.tls_config.clone(), s.certificate_cn.clone())
     } else {
         return server_handle;
     };
@@ -271,13 +465,14 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
             return server_handle;
         }
     };
+    crate::tls_client::register_internal_https_server(actual_port, certificate_cn);
 
     // TLS accept workers queue Rust request handles; JS callbacks run from
     // the main-thread HTTP pump, so listener lifetime is GC-safe.
 
     let request_tx = Arc::new(request_tx);
     let request_tx_for_spawn = request_tx.clone();
-    let acceptor = TlsAcceptor::from(tls_config);
+    let tls_config_for_spawn = tls_config;
 
     perry_ffi::spawn_blocking_with_reactor(move || {
         tokio::spawn(async move {
@@ -298,7 +493,7 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
                                 // (default true) on the raw TCP socket before the
                                 // TLS handshake; the option persists through rustls.
                                 crate::server::server::apply_accept_no_delay(&stream, no_delay);
-                                let acceptor = acceptor.clone();
+                                let tls_config = tls_config_for_spawn.clone();
                                 let request_tx = request_tx_for_spawn.clone();
                                 // #4905/#4971 — register the connection so
                                 // close()/closeAllConnections/
@@ -324,9 +519,17 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
                                     q.push(server_handle);
                                 }
                                 tokio::spawn(async move {
+                                    let keylog = Arc::new(ConnectionKeyLog::default());
+                                    let mut connection_config = (*tls_config).clone();
+                                    connection_config.key_log = keylog.clone();
+                                    let acceptor = TlsAcceptor::from(Arc::new(connection_config));
                                     let tls_stream = match acceptor.accept(stream).await {
                                         Ok(s) => s,
-                                        Err(_error) => {
+                                        Err(error) => {
+                                            queue_tls_client_error(
+                                                server_handle,
+                                                format!("TLS handshake failed: {error}"),
+                                            );
                                             CONNECTIONS.lock().unwrap().remove(&conn_id);
                                             return;
                                         }
@@ -336,6 +539,7 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
                                         .1
                                         .server_name()
                                         .map(String::from);
+                                    queue_tls_keylog(server_handle, keylog.drain());
                                     // Track read activity on the DECRYPTED
                                     // stream — handshake bytes must not mark
                                     // a request-less socket non-idle (#4971).
@@ -431,11 +635,28 @@ async fn handle_https_request(
     };
     let mut headers_lower = HashMap::new();
     let mut raw_headers = Vec::new();
+    let trusted_internal = req
+        .headers()
+        .get("x-perry-internal-tls-token")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|token| {
+            get_handle::<HttpsServer>(server_handle)
+                .and_then(|server| {
+                    crate::tls_client::internal_https_token_for_port(server.base.bound_port)
+                })
+                .is_some_and(|expected| token == expected)
+        });
     let mut forwarded_servername: Option<Option<String>> = None;
     let mut forwarded_peer_cn: Option<String> = None;
     for (n, v) in req.headers() {
         if let Ok(vs) = v.to_str() {
-            if n.as_str().eq_ignore_ascii_case("x-perry-tls-servername") {
+            if trusted_internal
+                && n.as_str()
+                    .eq_ignore_ascii_case("x-perry-internal-tls-token")
+            {
+                continue;
+            }
+            if trusted_internal && n.as_str().eq_ignore_ascii_case("x-perry-tls-servername") {
                 forwarded_servername = Some(if vs == "<false>" {
                     None
                 } else {
@@ -443,7 +664,7 @@ async fn handle_https_request(
                 });
                 continue;
             }
-            if n.as_str().eq_ignore_ascii_case("x-perry-tls-peer-cn") {
+            if trusted_internal && n.as_str().eq_ignore_ascii_case("x-perry-tls-peer-cn") {
                 forwarded_peer_cn = Some(vs.to_string());
                 continue;
             }
@@ -487,21 +708,13 @@ async fn handle_https_request(
         Some(connection_close),
         Some(transport_destroyed.clone()),
     );
-    let (request_listeners, handler, keep_alive_timeout, check_continue_listeners) =
-        match get_handle::<HttpsServer>(server_handle) {
-            Some(s) => (
-                s.base.listeners.get("request").cloned().unwrap_or_default(),
-                s.handler,
-                s.base.keep_alive_timeout,
-                s.base
-                    .listeners
-                    .get("checkContinue")
-                    .cloned()
-                    .unwrap_or_default(),
-            ),
-            None => (Vec::new(), 0, 5_000.0, Vec::new()),
-        };
-    let is_check_continue = expects_continue && !check_continue_listeners.is_empty();
+    let keep_alive_timeout = get_handle::<HttpsServer>(server_handle)
+        .map(|server| server.base.keep_alive_timeout)
+        .unwrap_or(5_000.0);
+    let is_check_continue = expects_continue
+        && get_handle::<HttpsServer>(server_handle).is_some_and(|server| {
+            crate::server::server::server_has_event_listener(&server.base, "checkContinue")
+        });
     let pending = HttpPendingRequest {
         server_handle,
         request_handle: im_handle,
@@ -509,8 +722,6 @@ async fn handle_https_request(
         skip_default_response: false,
         h2_stream_handle: 0,
         h2_stream_headers: Vec::new(),
-        request_listeners,
-        handler,
         is_check_continue,
     };
     if request_tx.send(pending).await.is_err() {
@@ -582,22 +793,25 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
     // #4903 — Node invokes `'request'` listeners (and the `createServer`
     // handler, which is one) with `this` bound to the server.
     let server_this = handle_to_pointer_f64(pending.server_handle);
-    emit_keylog_once(pending.server_handle, req_f64);
     // #8082 (same as the HTTP path): the channel-parked snapshot's closure
     // addresses are copies no scanner rewrites — re-read them from the
     // scanner-maintained server handle at dispatch, then root the refreshed
     // values across the callbacks (each can run a moving collection). The
     // routing decision keeps the arrival-time `is_check_continue` snapshot.
     let (fresh_request_listeners, fresh_check_continue_listeners, fresh_handler) =
-        match get_handle::<HttpsServer>(pending.server_handle) {
-            Some(s) => (
-                s.base.listeners.get("request").cloned().unwrap_or_default(),
-                s.base
-                    .listeners
-                    .get("checkContinue")
-                    .cloned()
-                    .unwrap_or_default(),
-                s.base.handler,
+        match get_handle_mut::<HttpsServer>(pending.server_handle) {
+            Some(server) if pending.is_check_continue => (
+                Vec::new(),
+                crate::server::server::take_server_event_listeners(
+                    &mut server.base,
+                    "checkContinue",
+                ),
+                server.handler,
+            ),
+            Some(server) => (
+                crate::server::server::take_server_event_listeners(&mut server.base, "request"),
+                Vec::new(),
+                server.handler,
             ),
             None => (Vec::new(), Vec::new(), 0),
         };
@@ -627,13 +841,9 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
         crate::server::server::finalize_or_park_request(&pending);
         return;
     }
-    for cb in &request_rooted {
-        let addr = cb.get();
-        if addr == 0 {
-            continue;
-        }
+    if handler_rooted.get() != 0 {
         unsafe {
-            let raw = addr as *const RawClosureHeader;
+            let raw = handler_rooted.get() as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
                 with_implicit_this(server_this, || {
@@ -643,9 +853,13 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
             js_promise_run_microtasks();
         }
     }
-    if handler_rooted.get() != 0 {
+    for cb in &request_rooted {
+        let addr = cb.get();
+        if addr == 0 {
+            continue;
+        }
         unsafe {
-            let raw = handler_rooted.get() as *const RawClosureHeader;
+            let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
                 with_implicit_this(server_this, || {
@@ -663,24 +877,23 @@ pub(crate) fn process_pending_https(pending: HttpPendingRequest) {
     crate::server::server::finalize_or_park_request(&pending);
 }
 
-fn emit_keylog_once(server_handle: i64, socket: f64) {
-    let listeners = match get_handle_mut::<HttpsServer>(server_handle) {
-        Some(server) if !server.keylog_emitted => {
-            server.keylog_emitted = true;
-            server
-                .base
-                .listeners
-                .get("keylog")
-                .cloned()
-                .unwrap_or_default()
-        }
-        _ => return,
-    };
-    let scope = perry_ffi::TransientRootScope::enter();
-    let listeners = scope.root_addrs(&listeners);
-    for index in 0..10 {
-        let line = perry_ffi::alloc_buffer(format!("PERRY_TLS_KEYLOG {}", index).as_bytes());
-        let line = f64::from_bits(JsValue::from_object_ptr(line).bits());
+fn emit_keylog_lines(server_handle: i64, socket: f64, lines: &[Vec<u8>]) {
+    if lines.is_empty() {
+        return;
+    }
+    for line in lines {
+        // Re-read persistent listeners for every record and drain once
+        // listeners only for the first record. Snapshotting once for the
+        // whole handshake would invoke `once('keylog')` repeatedly.
+        let listeners = get_handle_mut::<HttpsServer>(server_handle)
+            .map(|server| {
+                crate::server::server::take_server_event_listeners(&mut server.base, "keylog")
+            })
+            .unwrap_or_default();
+        let scope = perry_ffi::TransientRootScope::enter();
+        let listeners = scope.root_addrs(&listeners);
+        let line = perry_ffi::alloc_buffer(line);
+        let line = scope.root_nanbox(f64::from_bits(JsValue::from_object_ptr(line).bits()));
         for callback in &listeners {
             let callback = callback.get();
             if callback == 0 {
@@ -689,7 +902,7 @@ fn emit_keylog_once(server_handle: i64, socket: f64) {
             unsafe {
                 let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
                 if !closure.is_null() {
-                    let _ = closure.call2(line, socket);
+                    let _ = closure.call2(line.get(), socket);
                 }
             }
         }
@@ -725,6 +938,7 @@ pub extern "C" fn js_node_https_server_address_json(handle: i64) -> *mut StringH
 #[no_mangle]
 pub unsafe extern "C" fn js_node_https_server_close(handle: i64, callback: i64) {
     if let Some(s) = get_handle_mut::<HttpsServer>(handle) {
+        crate::tls_client::unregister_internal_https_server(s.base.bound_port);
         s.base.listening = false;
         s.base.connections_checking_interval_destroyed = true;
         s.base.shutdown_tx.take();

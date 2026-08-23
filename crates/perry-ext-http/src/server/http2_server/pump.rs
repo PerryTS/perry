@@ -69,16 +69,9 @@ pub(crate) async fn handle_h2_request(
     im.http_version = "2.0".to_string();
     let im_handle = alloc_incoming_message(im);
     let (response_tx, response_rx) = oneshot::channel::<HyperResponseShape>();
-    let (request_listeners, stream_listeners, handler) =
-        match get_handle::<Http2SecureServer>(server_handle) {
-            Some(s) => (
-                s.base.listeners.get("request").cloned().unwrap_or_default(),
-                s.base.listeners.get("stream").cloned().unwrap_or_default(),
-                s.handler,
-            ),
-            None => (Vec::new(), Vec::new(), 0),
-        };
-    let has_stream_listener = !stream_listeners.is_empty();
+    let has_stream_listener = get_handle::<Http2SecureServer>(server_handle)
+        .map(|server| crate::server::server::server_has_event_listener(&server.base, "stream"))
+        .unwrap_or(false);
     let (sr_handle, h2_stream_handle, h2_stream_headers) = if has_stream_listener {
         let (dummy_tx, _dummy_rx) = oneshot::channel::<HyperResponseShape>();
         let stream_handle = register_handle(Http2StreamHandle {
@@ -121,8 +114,6 @@ pub(crate) async fn handle_h2_request(
         skip_default_response: has_stream_listener,
         h2_stream_handle,
         h2_stream_headers,
-        request_listeners,
-        handler,
         is_check_continue: false,
     };
     if request_tx.send(pending).await.is_err() {
@@ -170,12 +161,20 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
     // #4903 — Node invokes `'request'` listeners (and the `createServer`
     // handler, which is one) with `this` bound to the server.
     let server_this = handle_to_pointer_f64(pending.server_handle);
-    for cb in &pending.request_listeners {
-        if *cb == 0 {
-            continue;
-        }
+    let (request_listeners, handler) =
+        match get_handle_mut::<Http2SecureServer>(pending.server_handle) {
+            Some(server) => (
+                crate::server::server::take_server_event_listeners(&mut server.base, "request"),
+                server.handler,
+            ),
+            None => (Vec::new(), 0),
+        };
+    let scope = perry_ffi::TransientRootScope::enter();
+    let request_listeners = scope.root_addrs(&request_listeners);
+    let handler = scope.root_addr(handler);
+    if handler.get() != 0 {
         unsafe {
-            let raw = *cb as *const RawClosureHeader;
+            let raw = handler.get() as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
                 with_implicit_this(server_this, || {
@@ -185,9 +184,13 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
             js_promise_run_microtasks();
         }
     }
-    if pending.handler != 0 {
+    for cb in &request_listeners {
+        let callback = cb.get();
+        if callback == 0 {
+            continue;
+        }
         unsafe {
-            let raw = pending.handler as *const RawClosureHeader;
+            let raw = callback as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
                 with_implicit_this(server_this, || {
@@ -200,18 +203,23 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
     if pending.h2_stream_handle != 0 {
         let stream_f64 = handle_to_pointer_f64(pending.h2_stream_handle);
         let headers_f64 = pairs_to_js_object(&pending.h2_stream_headers);
-        let stream_listeners = get_handle::<Http2SecureServer>(pending.server_handle)
-            .and_then(|s| s.base.listeners.get("stream").cloned())
+        let stream_listeners = get_handle_mut::<Http2SecureServer>(pending.server_handle)
+            .map(|server| {
+                crate::server::server::take_server_event_listeners(&mut server.base, "stream")
+            })
             .unwrap_or_default();
+        let stream_listeners = scope.root_addrs(&stream_listeners);
+        let headers_f64 = scope.root_nanbox(headers_f64);
         for cb in &stream_listeners {
-            if *cb == 0 {
+            let callback = cb.get();
+            if callback == 0 {
                 continue;
             }
             unsafe {
-                let raw = *cb as *const RawClosureHeader;
+                let raw = callback as *const RawClosureHeader;
                 let closure = JsClosure::from_raw(raw);
                 if !closure.is_null() {
-                    let _ = closure.call2(stream_f64, headers_f64);
+                    let _ = closure.call2(stream_f64, headers_f64.get());
                 }
                 js_promise_run_microtasks();
             }
@@ -302,8 +310,13 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                     });
                     continue;
                 }
-                let listeners = get_handle::<Http2SecureServer>(server_handle)
-                    .and_then(|s| s.base.listeners.get("session").cloned())
+                let listeners = get_handle_mut::<Http2SecureServer>(server_handle)
+                    .map(|server| {
+                        crate::server::server::take_server_event_listeners(
+                            &mut server.base,
+                            "session",
+                        )
+                    })
                     .unwrap_or_default();
                 let arg = handle_to_pointer_f64(session_handle);
                 if let Some(session) = get_handle_mut::<Http2SessionHandle>(session_handle) {

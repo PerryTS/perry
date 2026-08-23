@@ -20,6 +20,8 @@ pub unsafe extern "C" fn js_ext_net_set_tls_metadata(
     authorized: i32,
     servername_ptr: *const u8,
     servername_len: usize,
+    peer_certificate_cn_ptr: *const u8,
+    peer_certificate_cn_len: usize,
     session_id: u64,
     session_reused: i32,
 ) {
@@ -32,6 +34,17 @@ pub unsafe extern "C" fn js_ext_net_set_tls_metadata(
             Some(
                 String::from_utf8_lossy(std::slice::from_raw_parts(servername_ptr, servername_len))
                     .into_owned(),
+            )
+        };
+        socket.tls.peer_certificate_cn = if peer_certificate_cn_ptr.is_null() {
+            None
+        } else {
+            Some(
+                String::from_utf8_lossy(std::slice::from_raw_parts(
+                    peer_certificate_cn_ptr,
+                    peer_certificate_cn_len,
+                ))
+                .into_owned(),
             )
         };
         socket.tls.session = session_id.to_be_bytes().to_vec();
@@ -105,9 +118,9 @@ pub unsafe extern "C" fn js_ext_net_socket_peer_certificate_json(handle: i64) ->
         .get(&handle)
         .and_then(|socket| socket.tls.peer_certificate_cn.clone());
     let value = cn
-        .map(|cn| format!(r#"{{"subject":{{"CN":{cn:?}}}}}"#))
-        .unwrap_or_else(|| "{}".to_string());
-    alloc_string(&value).as_raw()
+        .map(|cn| serde_json::json!({"subject": {"CN": cn}}))
+        .unwrap_or_else(|| serde_json::json!({}));
+    alloc_string(&value.to_string()).as_raw()
 }
 
 #[no_mangle]

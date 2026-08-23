@@ -12,10 +12,17 @@ extern "C" {
 }
 
 pub(super) unsafe fn call_net_socket_method(handle: Handle, name: &str, args: &[f64]) -> f64 {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let args = args
+        .iter()
+        .map(|value| scope.root_nanbox(*value))
+        .collect::<Vec<_>>();
     let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let name = scope.root_nanbox(f64::from_bits(nanbox_string_bits(name_ptr)));
+    let args = args.iter().map(|value| value.get()).collect::<Vec<_>>();
     js_native_call_method_str_key(
         nanbox_pointer_bits(handle),
-        name_ptr as i64,
+        (name.get().to_bits() & POINTER_MASK) as i64,
         args.as_ptr(),
         args.len(),
     )
@@ -53,9 +60,20 @@ pub unsafe extern "C" fn js_events_get_event_listeners(
             js_event_target_get_event_listeners(target, event_name_ptr)
         }
         EventHelperTarget::NetSocket(handle) | EventHelperTarget::NativeHandle(handle) => {
+            if event_name_ptr.is_null() {
+                return js_array_alloc(0);
+            }
             let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
             let value = call_net_socket_method(handle, "listeners", &[event]);
-            (value.to_bits() & POINTER_MASK) as *mut ArrayHeader
+            if !JsValue::from_bits(value.to_bits()).is_pointer() {
+                return js_array_alloc(0);
+            }
+            let array = (value.to_bits() & POINTER_MASK) as *mut ArrayHeader;
+            if array.is_null() {
+                js_array_alloc(0)
+            } else {
+                array
+            }
         }
         EventHelperTarget::Stream(handle) => {
             stream_listeners_for_heap_object(handle, event_name_ptr)
@@ -119,7 +137,9 @@ pub unsafe extern "C" fn js_events_get_max_listeners(target_value: f64) -> f64 {
     }) {
         EventHelperTarget::EventEmitter(handle) => js_event_emitter_get_max_listeners(handle),
         EventHelperTarget::EventTarget(target) => js_event_target_get_max_listeners(target),
-        EventHelperTarget::NetSocket(_) | EventHelperTarget::NativeHandle(_) => 10.0,
+        EventHelperTarget::NetSocket(handle) | EventHelperTarget::NativeHandle(handle) => {
+            call_net_socket_method(handle, "getMaxListeners", &[])
+        }
         EventHelperTarget::Stream(handle) => js_node_stream_method_get_max_listeners(handle),
     }
 }
@@ -154,7 +174,9 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
                 EventHelperTarget::EventTarget(target) => {
                     let _ = js_event_target_set_max_listeners(target, n);
                 }
-                EventHelperTarget::NetSocket(_) | EventHelperTarget::NativeHandle(_) => {}
+                EventHelperTarget::NetSocket(handle) | EventHelperTarget::NativeHandle(handle) => {
+                    let _ = call_net_socket_method(handle, "setMaxListeners", &[n]);
+                }
                 EventHelperTarget::Stream(handle) => {
                     let _ = js_node_stream_method_set_max_listeners(handle, n);
                 }

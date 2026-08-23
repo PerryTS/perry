@@ -52,7 +52,7 @@ where
             if !std::mem::take(&mut s.pending_listening_emit) {
                 return 0;
             }
-            let snapshot = s.listeners.get("listening").cloned().unwrap_or_default();
+            let snapshot = take_server_event_listeners(s, "listening");
             // The `listen(port, cb)` callbacks are once-listeners: now that
             // this emit has snapshotted them, drop them from the live list
             // so a future emit / listener introspection doesn't see them.
@@ -101,7 +101,7 @@ where
             if !std::mem::take(&mut base.pending_close_emit) {
                 return 0;
             }
-            let callbacks = base.listeners.get("close").cloned().unwrap_or_default();
+            let callbacks = take_server_event_listeners(base, "close");
             let once = std::mem::take(&mut base.deferred_close_cbs);
             if let Some(listeners) = base.listeners.get_mut("close") {
                 for callback in once {

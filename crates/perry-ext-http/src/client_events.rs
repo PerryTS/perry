@@ -56,13 +56,23 @@ unsafe fn forward_pipe_end(dest_bits: u64) {
 ///
 /// Listener entries are raw closure headers registered via `.on()`; they
 /// stay live for the program's lifetime (GC scanner pins them).
+fn take_request_event_listeners(request: &mut ClientRequestHandle, event: &str) -> Vec<i64> {
+    let mut listeners = request.listeners.get(event).cloned().unwrap_or_default();
+    if let Some(once) = request.once_listeners.remove(event) {
+        listeners.extend(once.into_iter().map(|listener| listener.callback));
+    }
+    listeners
+}
+
 pub(crate) unsafe fn fire_request_event_listeners(request_handle: Handle, event: &str) {
     let listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
-        .and_then(|r| r.listeners.get(event).cloned())
+        .map(|request| take_request_event_listeners(request, event))
         .unwrap_or_default();
+    let scope = perry_ffi::TransientRootScope::enter();
+    let listeners = scope.root_addrs(&listeners);
     for cb in listeners {
-        if cb != 0 {
-            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
             let _ = closure.call0();
         }
     }
@@ -73,7 +83,7 @@ pub(crate) unsafe fn fire_request_socket_event(request_handle: Handle) {
         .map(|request| {
             (
                 request.socket_handle,
-                request.listeners.get("socket").cloned().unwrap_or_default(),
+                take_request_event_listeners(request, "socket"),
             )
         })
         .unwrap_or_default();
@@ -81,9 +91,11 @@ pub(crate) unsafe fn fire_request_socket_event(request_handle: Handle) {
         return;
     }
     let value = f64::from_bits(POINTER_TAG | (socket as u64 & PTR_MASK));
+    let scope = perry_ffi::TransientRootScope::enter();
+    let listeners = scope.root_addrs(&listeners);
     for callback in listeners {
-        if callback != 0 {
-            let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
+        if callback.get() != 0 {
+            let closure = JsClosure::from_raw(callback.get() as *const RawClosureHeader);
             let _ = closure.call1(value);
         }
     }
@@ -129,12 +141,15 @@ unsafe fn handle_incoming_transport_abort(request_handle: Handle, incoming: Hand
 /// Same listener-liveness contract as [`fire_request_event_listeners`].
 pub(crate) unsafe fn fire_request_error_listeners(request_handle: Handle, arg: f64) {
     let listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
-        .and_then(|r| r.listeners.get("error").cloned())
+        .map(|request| take_request_event_listeners(request, "error"))
         .unwrap_or_default();
+    let scope = perry_ffi::TransientRootScope::enter();
+    let listeners = scope.root_addrs(&listeners);
+    let arg = scope.root_nanbox(arg);
     for cb in listeners {
-        if cb != 0 {
-            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
-            let _ = closure.call1(arg);
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
+            let _ = closure.call1(arg.get());
         }
     }
 }
@@ -215,10 +230,6 @@ pub(crate) unsafe fn handle_response_event(
     }
     client_abort::cleanup_request_signal(request_handle);
 
-    let response_callback = get_handle_mut::<ClientRequestHandle>(request_handle)
-        .map(|r| r.response_callback)
-        .unwrap_or(0);
-
     let mut trailers_map = HashMap::new();
     for (k, v) in trailers {
         trailers_map.insert(k, v);
@@ -244,18 +255,26 @@ pub(crate) unsafe fn handle_response_event(
     // Hand the IncomingMessage handle to the user's `(res) => { ... }`
     // callback. POINTER_TAG so the closure-arg unboxer extracts the i64.
     let arg = f64::from_bits(POINTER_TAG | (incoming as u64 & PTR_MASK));
-    if response_callback != 0 {
-        let closure = JsClosure::from_raw(response_callback as *const RawClosureHeader);
+    let (response_callback, response_listeners) =
+        get_handle_mut::<ClientRequestHandle>(request_handle)
+            .map(|request| {
+                let callback = std::mem::take(&mut request.response_callback);
+                request.response_raw_wrapper = 0;
+                (callback, take_request_event_listeners(request, "response"))
+            })
+            .unwrap_or_default();
+    let scope = perry_ffi::TransientRootScope::enter();
+    let response_callback = scope.root_addr(response_callback);
+    let response_listeners = scope.root_addrs(&response_listeners);
+    if response_callback.get() != 0 {
+        let closure = JsClosure::from_raw(response_callback.get() as *const RawClosureHeader);
         let _ = closure.call1(arg);
     }
     // #4909 — `.on('response', cb)` listeners fire too (the factory
     // callback is just Node's pre-registered once-listener).
-    let response_listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
-        .and_then(|r| r.listeners.get("response").cloned())
-        .unwrap_or_default();
     for cb in response_listeners {
-        if cb != 0 {
-            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
             let _ = closure.call1(arg);
         }
     }
@@ -352,23 +371,26 @@ pub(crate) unsafe fn handle_response_head_event(
         socket_handle,
         request_handle,
     });
-    let response_callback = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
-        req.incoming_handle = incoming;
-        req.response_callback
-    })
-    .unwrap_or(0);
+    let (response_callback, response_listeners) =
+        with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |request| {
+            request.incoming_handle = incoming;
+            let callback = std::mem::take(&mut request.response_callback);
+            request.response_raw_wrapper = 0;
+            (callback, take_request_event_listeners(request, "response"))
+        })
+        .unwrap_or_default();
 
     let arg = f64::from_bits(POINTER_TAG | (incoming as u64 & PTR_MASK));
-    if response_callback != 0 {
-        let closure = JsClosure::from_raw(response_callback as *const RawClosureHeader);
+    let scope = perry_ffi::TransientRootScope::enter();
+    let response_callback = scope.root_addr(response_callback);
+    let response_listeners = scope.root_addrs(&response_listeners);
+    if response_callback.get() != 0 {
+        let closure = JsClosure::from_raw(response_callback.get() as *const RawClosureHeader);
         let _ = closure.call1(arg);
     }
-    let response_listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
-        .and_then(|r| r.listeners.get("response").cloned())
-        .unwrap_or_default();
     for cb in response_listeners {
-        if cb != 0 {
-            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
             let _ = closure.call1(arg);
         }
     }
@@ -595,7 +617,7 @@ pub(crate) unsafe fn handle_timeout_event(request_handle: Handle) {
     }
 
     let timeout_listeners = get_handle_mut::<ClientRequestHandle>(request_handle)
-        .and_then(|r| r.listeners.get("timeout").cloned())
+        .map(|request| take_request_event_listeners(request, "timeout"))
         .unwrap_or_default();
     if timeout_listeners.is_empty() {
         if ended {
@@ -607,9 +629,11 @@ pub(crate) unsafe fn handle_timeout_event(request_handle: Handle) {
         }
         return;
     }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let timeout_listeners = scope.root_addrs(&timeout_listeners);
     for cb in timeout_listeners {
-        if cb != 0 {
-            let closure = JsClosure::from_raw(cb as *const RawClosureHeader);
+        if cb.get() != 0 {
+            let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
             let _ = closure.call0();
         }
     }

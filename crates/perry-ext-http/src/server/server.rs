@@ -6,10 +6,8 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::Poll;
 use std::time::Instant;
 
 use lazy_static::lazy_static;
@@ -20,7 +18,6 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{body::Incoming, Request, Response};
 use hyper_util::rt::TokioIo;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
@@ -56,6 +53,8 @@ pub(crate) use in_flight::{
 mod deferred_events;
 use deferred_events::{drain_deferred_close_for, drain_deferred_listen_for, server_is_active};
 pub(crate) use deferred_events::{queue_deferred_close_emit, queue_deferred_listening_emit};
+mod io_activity;
+pub(crate) use io_activity::ReadActivity;
 
 /// Apply a server's per-connection `noDelay` (Node's `socket.setNoDelay`
 /// default, ON) to a freshly accepted TCP stream before it is served. Node
@@ -79,6 +78,9 @@ pub struct HttpServer {
     /// Server-level event listeners (`'request'`, `'connection'`,
     /// `'close'`, `'listening'`, `'error'`, `'upgrade'`).
     pub listeners: HashMap<String, Vec<i64>>,
+    /// One-shot server listeners. Drained before their first matching emit so
+    /// re-entrant emission cannot invoke them twice.
+    pub once_listeners: HashMap<String, Vec<i64>>,
     /// Bound port — populated after `.listen()` resolves.
     pub bound_port: u16,
     /// Bound host (e.g. `"0.0.0.0"`).
@@ -168,6 +170,7 @@ impl HttpServer {
         Self {
             handler,
             listeners: HashMap::new(),
+            once_listeners: HashMap::new(),
             bound_port: 0,
             bound_host: String::new(),
             listening: false,
@@ -194,6 +197,28 @@ impl HttpServer {
     }
 }
 
+pub(crate) fn server_has_event_listener(server: &HttpServer, event: &str) -> bool {
+    server
+        .listeners
+        .get(event)
+        .is_some_and(|listeners| !listeners.is_empty())
+        || server
+            .once_listeners
+            .get(event)
+            .is_some_and(|listeners| !listeners.is_empty())
+}
+
+/// Snapshot persistent listeners and detach one-shot listeners before JS runs.
+/// This follows EventEmitter's re-entrancy rule: a once listener is already
+/// absent if its callback emits the same event recursively.
+pub(crate) fn take_server_event_listeners(server: &mut HttpServer, event: &str) -> Vec<i64> {
+    let mut listeners = server.listeners.get(event).cloned().unwrap_or_default();
+    if let Some(once) = server.once_listeners.remove(event) {
+        listeners.extend(once);
+    }
+    listeners
+}
+
 /// Pending request from the hyper service fn to the main thread.
 pub struct HttpPendingRequest {
     pub server_handle: i64,
@@ -202,10 +227,6 @@ pub struct HttpPendingRequest {
     pub skip_default_response: bool,
     pub h2_stream_handle: i64,
     pub h2_stream_headers: Vec<(String, String)>,
-    /// `'request'` listeners snapshotted at request time so the
-    /// dispatch loop doesn't need to re-borrow the server handle.
-    pub request_listeners: Vec<i64>,
-    pub handler: i64,
     /// #5080 — routing only: when set, the `'checkContinue'` listeners fire
     /// *instead of* the `'request'` listeners + handler (Node dispatches an
     /// `Expect: 100-continue` request to `'checkContinue'` when a listener
@@ -263,153 +284,6 @@ lazy_static! {
 }
 
 pub(crate) static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
-
-/// AsyncRead/AsyncWrite passthrough that flips `saw_bytes` on every
-/// read that produces data. Wrapped around the server-side stream (the
-/// decrypted one, for HTTPS — handshake traffic must not count) so
-/// idleness can see "client started sending a request whose head hasn't
-/// parsed yet": hyper only invokes the service (and bumps `busy`) once
-/// a complete head arrives. The flag resets at service entry; while a
-/// request is in flight `busy > 0` covers activity, and a quiet
-/// keep-alive socket after the response reads as idle again. #4971.
-pub(crate) struct ReadActivity<S> {
-    inner: S,
-    saw_bytes: Arc<AtomicBool>,
-    response_version_rewrite_offset: Option<usize>,
-    rewrite_chunked_header: Arc<AtomicBool>,
-    pending_write: Vec<u8>,
-    pending_original_len: usize,
-}
-
-impl<S> ReadActivity<S> {
-    pub(crate) fn new(
-        inner: S,
-        saw_bytes: Arc<AtomicBool>,
-        rewrite_chunked_header: Arc<AtomicBool>,
-    ) -> Self {
-        Self {
-            inner,
-            saw_bytes,
-            response_version_rewrite_offset: None,
-            rewrite_chunked_header,
-            pending_write: Vec::new(),
-            pending_original_len: 0,
-        }
-    }
-}
-
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
-impl<S: AsyncRead + Unpin> AsyncRead for ReadActivity<S> {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        let this = self.get_mut();
-        let before = buf.filled().len();
-        let poll = Pin::new(&mut this.inner).poll_read(cx, buf);
-        if matches!(poll, Poll::Ready(Ok(()))) && buf.filled().len() > before {
-            this.saw_bytes.store(true, Ordering::SeqCst);
-        }
-        poll
-    }
-}
-
-impl<S: AsyncWrite + Unpin> AsyncWrite for ReadActivity<S> {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        let this = self.get_mut();
-        if !this.pending_write.is_empty() {
-            return match Pin::new(&mut this.inner).poll_write(cx, &this.pending_write) {
-                Poll::Ready(Ok(written)) if written == this.pending_write.len() => {
-                    this.pending_write.clear();
-                    Poll::Ready(Ok(std::mem::take(&mut this.pending_original_len)))
-                }
-                Poll::Ready(Ok(written)) if written > 0 => {
-                    this.pending_write.drain(..written);
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-                Poll::Ready(Ok(_)) => {
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-                Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
-                Poll::Pending => Poll::Pending,
-            };
-        }
-        if this.response_version_rewrite_offset.is_none() && buf.starts_with(b"HTTP/1.0 ") {
-            this.response_version_rewrite_offset = Some(0);
-        }
-        let rewrite_chunked = this.rewrite_chunked_header.load(Ordering::Acquire);
-        if this.response_version_rewrite_offset.is_none() && !rewrite_chunked {
-            return Pin::new(&mut this.inner).poll_write(cx, buf);
-        }
-        let mut rewritten = buf.to_vec();
-        if let Some(offset) = this.response_version_rewrite_offset {
-            if offset <= 7 && 7 - offset < rewritten.len() {
-                rewritten[7 - offset] = b'1';
-            }
-        }
-        if rewrite_chunked {
-            const CONTENT_LENGTH: &[u8] = b"Content-Length: ";
-            if let Some(start) = find_bytes(&rewritten, CONTENT_LENGTH) {
-                let value_start = start + CONTENT_LENGTH.len();
-                if let Some(relative_end) = find_bytes(&rewritten[value_start..], b"\r\n") {
-                    let end = value_start + relative_end;
-                    rewritten.splice(start..end, b"Transfer-Encoding: chunked".iter().copied());
-                    this.rewrite_chunked_header.store(false, Ordering::Release);
-                }
-            }
-        }
-        let poll = Pin::new(&mut this.inner).poll_write(cx, &rewritten);
-        match poll {
-            Poll::Ready(Ok(written)) if written == rewritten.len() => {
-                if let Some(offset) = this.response_version_rewrite_offset {
-                    let next = offset.saturating_add(buf.len());
-                    this.response_version_rewrite_offset = (next < 9).then_some(next);
-                }
-                Poll::Ready(Ok(buf.len()))
-            }
-            Poll::Ready(Ok(written)) if written > 0 => {
-                this.pending_write.extend_from_slice(&rewritten[written..]);
-                this.pending_original_len = buf.len();
-                this.response_version_rewrite_offset = None;
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
-            Poll::Ready(Ok(_)) => {
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
-            Poll::Ready(Err(error)) => {
-                this.response_version_rewrite_offset = None;
-                Poll::Ready(Err(error))
-            }
-            Poll::Pending => Poll::Pending,
-        }
-    }
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
-    }
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
-    }
-}
 
 /// Server handles whose accept loop saw a new connection since the last
 /// pump tick. Drained by `js_node_http_server_process_pending` to fire
@@ -743,12 +617,7 @@ fn serve_http_connection(
         // with NO response on the wire (Node semantics). Other
         // connections replay the peeked bytes to hyper.
         let has_upgrade_listeners = get_handle::<HttpServer>(server_handle)
-            .map(|s| {
-                s.listeners
-                    .get("upgrade")
-                    .map(|v| !v.is_empty())
-                    .unwrap_or(false)
-            })
+            .map(|server| server_has_event_listener(server, "upgrade"))
             .unwrap_or(false);
         let stream = if has_upgrade_listeners {
             match crate::server::raw_upgrade::peek_and_maybe_dispatch_raw_upgrade(
@@ -1219,8 +1088,14 @@ pub unsafe extern "C" fn js_node_http_server_remove_all_listeners(
     if let Some(s) = get_handle_mut::<HttpServer>(handle) {
         if event_name_ptr.is_null() {
             s.listeners.clear();
+            s.once_listeners.clear();
+            s.handler = 0;
         } else if let Some(event) = read_string_header(event_name_ptr as *mut _) {
             s.listeners.remove(&event);
+            s.once_listeners.remove(&event);
+            if event == "request" {
+                s.handler = 0;
+            }
         }
     }
     handle_to_pointer_f64(handle)
@@ -1239,9 +1114,26 @@ pub unsafe extern "C" fn js_node_http_server_remove_listener(
 ) -> f64 {
     let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
     if let Some(s) = get_handle_mut::<HttpServer>(handle) {
-        if let Some(cbs) = s.listeners.get_mut(&event) {
-            if let Some(pos) = cbs.iter().rposition(|&c| c == callback) {
-                cbs.remove(pos);
+        let removed = if let Some(callbacks) = s.listeners.get_mut(&event) {
+            if let Some(position) = callbacks.iter().rposition(|entry| *entry == callback) {
+                callbacks.remove(position);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !removed {
+            let mut removed_once = false;
+            if let Some(callbacks) = s.once_listeners.get_mut(&event) {
+                if let Some(position) = callbacks.iter().rposition(|entry| *entry == callback) {
+                    callbacks.remove(position);
+                    removed_once = true;
+                }
+            }
+            if !removed_once && event == "request" && s.handler == callback {
+                s.handler = 0;
             }
         }
     }
@@ -1307,12 +1199,7 @@ async fn handle_request(
     // listener was attached at accept time.
     if crate::server::upgrade::is_websocket_upgrade(&req) {
         let has_upgrade_listeners = get_handle::<HttpServer>(server_handle)
-            .map(|s| {
-                s.listeners
-                    .get("upgrade")
-                    .map(|v| !v.is_empty())
-                    .unwrap_or(false)
-            })
+            .map(|server| server_has_event_listener(server, "upgrade"))
             .unwrap_or(false);
         if has_upgrade_listeners && req.headers().contains_key("sec-websocket-key") {
             return handle_websocket_upgrade(
@@ -1362,21 +1249,13 @@ async fn handle_request(
         Some(transport_destroyed.clone()),
     );
 
-    let (request_listeners, handler, keep_alive_timeout, check_continue_listeners) =
-        match get_handle::<HttpServer>(server_handle) {
-            Some(s) => (
-                s.listeners.get("request").cloned().unwrap_or_default(),
-                s.handler,
-                s.keep_alive_timeout,
-                s.listeners
-                    .get("checkContinue")
-                    .cloned()
-                    .unwrap_or_default(),
-            ),
-            None => (Vec::new(), 0, 5_000.0, Vec::new()),
-        };
+    let keep_alive_timeout = get_handle::<HttpServer>(server_handle)
+        .map(|server| server.keep_alive_timeout)
+        .unwrap_or(5_000.0);
 
-    let is_check_continue = expects_continue && !check_continue_listeners.is_empty();
+    let is_check_continue = expects_continue
+        && get_handle::<HttpServer>(server_handle)
+            .is_some_and(|server| server_has_event_listener(server, "checkContinue"));
 
     let pending = HttpPendingRequest {
         server_handle,
@@ -1385,8 +1264,6 @@ async fn handle_request(
         skip_default_response: false,
         h2_stream_handle: 0,
         h2_stream_headers: Vec::new(),
-        request_listeners,
-        handler,
         is_check_continue,
     };
 
@@ -1635,11 +1512,11 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     for server_handle in connection_events {
         // The handle may back an HttpServer or an HttpsServer (whose
         // accept loop pushes here too since #4971) — probe both.
-        let listeners = get_handle::<HttpServer>(server_handle)
-            .and_then(|s| s.listeners.get("connection").cloned())
+        let listeners = get_handle_mut::<HttpServer>(server_handle)
+            .map(|server| take_server_event_listeners(server, "connection"))
             .or_else(|| {
-                get_handle::<crate::server::https_server::HttpsServer>(server_handle)
-                    .and_then(|s| s.base.listeners.get("connection").cloned())
+                get_handle_mut::<crate::server::https_server::HttpsServer>(server_handle)
+                    .map(|server| take_server_event_listeners(&mut server.base, "connection"))
             })
             .unwrap_or_default();
         if listeners.is_empty() {
@@ -1712,6 +1589,8 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         count += drain_deferred_close_for::<crate::server::https_server::HttpsServer, _>(h, |s| {
             &mut s.base
         });
+        count += crate::server::https_server::process_pending_tls_keylogs(h);
+        count += crate::server::https_server::process_pending_tls_client_errors(h);
         while let Some(p) = crate::server::https_server::try_recv_pending_https_nonblocking(h) {
             crate::server::https_server::process_pending_https(p);
             count += 1;
@@ -1832,14 +1711,16 @@ fn process_pending(pending: HttpPendingRequest) {
     // because each callback below can itself run a moving collection.
     // (`req_f64`/`res_f64`/`server_this` are small handle ids — no move.)
     let (fresh_request_listeners, fresh_check_continue_listeners, fresh_handler) =
-        match get_handle::<HttpServer>(pending.server_handle) {
-            Some(s) => (
-                s.listeners.get("request").cloned().unwrap_or_default(),
-                s.listeners
-                    .get("checkContinue")
-                    .cloned()
-                    .unwrap_or_default(),
-                s.handler,
+        match get_handle_mut::<HttpServer>(pending.server_handle) {
+            Some(server) if pending.is_check_continue => (
+                Vec::new(),
+                take_server_event_listeners(server, "checkContinue"),
+                server.handler,
+            ),
+            Some(server) => (
+                take_server_event_listeners(server, "request"),
+                Vec::new(),
+                server.handler,
             ),
             // Server gone: nothing safe to dispatch to.
             None => (Vec::new(), Vec::new(), 0),
@@ -1870,24 +1751,8 @@ fn process_pending(pending: HttpPendingRequest) {
         return;
     }
 
-    for cb in &request_rooted {
-        let addr = cb.get();
-        if addr == 0 {
-            continue;
-        }
-        unsafe {
-            let raw = addr as *const RawClosureHeader;
-            let closure = JsClosure::from_raw(raw);
-            if !closure.is_null() {
-                with_implicit_this(server_this, || {
-                    let _ = closure.call2(req_f64, res_f64);
-                });
-            }
-            js_promise_run_microtasks();
-        }
-    }
-
-    // Main handler. Per the issue #604 architectural change documented
+    // The createServer handler is the first registered request listener.
+    // Per the issue #604 architectural change documented
     // on `js_node_http_server_process_pending`, we no longer
     // synchronously block on the handler's returned Promise — that
     // would re-introduce the listen()-blocks-main-thread problem at
@@ -1903,6 +1768,22 @@ fn process_pending(pending: HttpPendingRequest) {
             if !closure.is_null() {
                 // `createServer(handler)` registers `handler` as a
                 // `'request'` listener — same `this` = server binding.
+                with_implicit_this(server_this, || {
+                    let _ = closure.call2(req_f64, res_f64);
+                });
+            }
+            js_promise_run_microtasks();
+        }
+    }
+    for cb in &request_rooted {
+        let addr = cb.get();
+        if addr == 0 {
+            continue;
+        }
+        unsafe {
+            let raw = addr as *const RawClosureHeader;
+            let closure = JsClosure::from_raw(raw);
+            if !closure.is_null() {
                 with_implicit_this(server_this, || {
                     let _ = closure.call2(req_f64, res_f64);
                 });

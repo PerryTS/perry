@@ -69,7 +69,10 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
     perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_roots);
 
     let response_callback = young_gc_root();
+    let response_raw_wrapper = young_gc_root();
     let request_listener = young_gc_root();
+    let request_once_callback = young_gc_root();
+    let request_once_wrapper = young_gc_root();
     let incoming_listener = young_gc_root();
     let mut request_listeners = HashMap::new();
     request_listeners.insert("error".to_string(), vec![request_listener]);
@@ -79,7 +82,15 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         headers: HashMap::new(),
         body: Vec::new(),
         response_callback,
+        response_raw_wrapper,
         listeners: request_listeners,
+        once_listeners: HashMap::from([(
+            "timeout".to_string(),
+            vec![ClientOnceListener {
+                callback: request_once_callback,
+                raw_wrapper: request_once_wrapper,
+            }],
+        )]),
         timeout_ms: None,
         ended: false,
         flushed_early: false,
@@ -124,7 +135,16 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         let req = get_handle::<ClientRequestHandle>(request_handle)
             .expect("request handle should remain live");
         assert_rewritten(response_callback, req.response_callback);
+        assert_rewritten(response_raw_wrapper, req.response_raw_wrapper);
         assert_rewritten(request_listener, req.listeners["error"][0]);
+        assert_rewritten(
+            request_once_callback,
+            req.once_listeners["timeout"][0].callback,
+        );
+        assert_rewritten(
+            request_once_wrapper,
+            req.once_listeners["timeout"][0].raw_wrapper,
+        );
         let msg = get_handle::<IncomingMessageHandle>(incoming_handle)
             .expect("incoming message handle should remain live");
         assert_rewritten(incoming_listener, msg.listeners["data"][0]);
@@ -158,7 +178,9 @@ fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
         headers: HashMap::new(),
         body: Vec::new(),
         response_callback: 0,
+        response_raw_wrapper: 0,
         listeners: HashMap::new(),
+        once_listeners: HashMap::new(),
         timeout_ms: None,
         ended: false,
         flushed_early: false,
@@ -292,7 +314,9 @@ fn dispatch_request_stays_visible_to_exit_gate_until_response_queued() {
         headers: HashMap::new(),
         body: Vec::new(),
         response_callback: 0,
+        response_raw_wrapper: 0,
         listeners: HashMap::new(),
+        once_listeners: HashMap::new(),
         timeout_ms: None,
         ended: false,
         flushed_early: false,

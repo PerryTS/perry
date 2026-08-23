@@ -2,6 +2,10 @@
 
 use super::*;
 
+extern "C" {
+    fn js_closure_call_array(closure: i64, args: *const f64, args_len: i64) -> f64;
+}
+
 type HttpAgentSocketEventHook = extern "C" fn(i64, *const u8, usize);
 
 fn http_agent_socket_event_hook() -> &'static Mutex<Option<HttpAgentSocketEventHook>> {
@@ -48,11 +52,7 @@ pub unsafe extern "C" fn js_ext_net_socket_emit(
     } else {
         std::slice::from_raw_parts(args_ptr, args_len)
     };
-    let arg_bits = args
-        .iter()
-        .take(2)
-        .map(|arg| arg.to_bits())
-        .collect::<Vec<_>>();
+    let arg_bits = args.iter().map(|arg| arg.to_bits()).collect::<Vec<_>>();
     let mut frame = dispatch_custody::DispatchFrame::park(listeners_for(handle, &event));
     frame.set_payloads(&arg_bits);
     for index in 0..frame.len() {
@@ -68,11 +68,17 @@ pub unsafe extern "C" fn js_ext_net_socket_emit(
             1 => {
                 let _ = closure.call1(f64::from_bits(frame.payload_bits()));
             }
-            _ => {
+            2 => {
                 let _ = closure.call2(
                     f64::from_bits(frame.payload_bits_at(0)),
                     f64::from_bits(frame.payload_bits_at(1)),
                 );
+            }
+            _ => {
+                let args = (0..arg_bits.len())
+                    .map(|index| f64::from_bits(frame.payload_bits_at(index)))
+                    .collect::<Vec<_>>();
+                let _ = js_closure_call_array(callback, args.as_ptr(), args.len() as i64);
             }
         }
     }
@@ -87,7 +93,8 @@ pub unsafe extern "C" fn js_ext_net_socket_emit(
         if event == "error" {
             js_ext_net_destroy_socket(handle);
         }
-        if let Some(hook) = *http_agent_socket_event_hook().lock().unwrap() {
+        let hook = *http_agent_socket_event_hook().lock().unwrap();
+        if let Some(hook) = hook {
             hook(handle, event.as_ptr(), event.len());
         }
     }

@@ -51,8 +51,8 @@ use std::sync::{Mutex, Once};
 
 mod tls_compat;
 pub(crate) use tls_compat::{
-    client_for_agent_tls, emit_client_keylog, invalidate_all_tls_sessions, merge_tls_defaults,
-    parsed_pfx_identity, request_key_from_options, resolve_https_agent_handle,
+    client_for_agent_tls, emit_client_keylog, invalidate_tls_sessions_for_server_port,
+    merge_tls_defaults, parsed_pfx_identity, request_key_from_options, resolve_https_agent_handle,
     tls_session_for_request,
 };
 use tls_compat::{emit_default_https_agent, sync_default_https_agent};
@@ -408,15 +408,16 @@ extern "C" fn agent_connection_abort_listener(closure: *const RawClosureHeader) 
                 listener: f64,
             );
         }
-        let signal = js_abort_signal_resolve_ptr(signal_value);
+        let scope = perry_ffi::TransientRootScope::enter();
+        let signal_value = scope.root_nanbox(signal_value);
+        let listener_value =
+            scope.root_nanbox(f64::from_bits(POINTER_TAG | (closure as u64 & PTR_MASK)));
+        let event = scope.root_nanbox(f64::from_bits(
+            JsValue::from_string_ptr(alloc_string("abort").as_raw()).bits(),
+        ));
+        let signal = js_abort_signal_resolve_ptr(signal_value.get());
         if !signal.is_null() {
-            let event = alloc_string("abort");
-            let listener = f64::from_bits(POINTER_TAG | (closure as u64 & PTR_MASK));
-            js_abort_signal_remove_listener(
-                signal,
-                f64::from_bits(JsValue::from_string_ptr(event.as_raw()).bits()),
-                listener,
-            );
+            js_abort_signal_remove_listener(signal, event.get(), listener_value.get());
         }
     }
     perry_ext_net::js_ext_net_socket_emit_abort_error(socket);
@@ -433,7 +434,9 @@ unsafe fn install_connection_abort_signal(options: f64, socket: Handle) {
         fn js_abort_signal_is_aborted(signal: *mut ObjectHeader) -> i32;
         fn js_abort_signal_add_listener(signal: *mut ObjectHeader, event_type: f64, listener: f64);
     }
-    let signal = js_abort_signal_resolve_ptr(signal_value);
+    let scope = perry_ffi::TransientRootScope::enter();
+    let signal_value = scope.root_nanbox(signal_value);
+    let signal = js_abort_signal_resolve_ptr(signal_value.get());
     if signal.is_null() {
         return;
     }
@@ -442,14 +445,18 @@ unsafe fn install_connection_abort_signal(options: f64, socket: Handle) {
         return;
     }
     let listener = perry_ffi::alloc_closure(agent_connection_abort_listener as *const u8, 2);
+    if listener.is_null() {
+        return;
+    }
+    let listener_value =
+        scope.root_nanbox(f64::from_bits(POINTER_TAG | (listener as u64 & PTR_MASK)));
     perry_ffi::set_closure_capture_f64(listener, 0, socket as f64);
-    perry_ffi::set_closure_capture_f64(listener, 1, signal_value);
-    let event = alloc_string("abort");
-    js_abort_signal_add_listener(
-        signal,
-        f64::from_bits(JsValue::from_string_ptr(event.as_raw()).bits()),
-        f64::from_bits(POINTER_TAG | (listener as u64 & PTR_MASK)),
-    );
+    perry_ffi::set_closure_capture_f64(listener, 1, signal_value.get());
+    let event = scope.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(alloc_string("abort").as_raw()).bits(),
+    ));
+    let signal = js_abort_signal_resolve_ptr(signal_value.get());
+    js_abort_signal_add_listener(signal, event.get(), listener_value.get());
 }
 
 /// Extract a closure pointer field (e.g. `options.agent.createConnection`)
@@ -534,15 +541,25 @@ fn handle_map_object_f64(values: &HashMap<String, Vec<Handle>>) -> f64 {
         JsValue::from_object_ptr(object as *mut u8).bits(),
     ));
     for (index, (_, handles)) in entries.iter().enumerate() {
-        let mut array = unsafe { perry_ffi::js_array_alloc(handles.len() as u32) };
-        for handle in handles.iter().copied() {
-            array = unsafe {
-                perry_ffi::js_array_push(array, JsValue::from_bits(handle_value(handle).to_bits()))
-            };
-        }
-        let array = scope.root_nanbox(f64::from_bits(
-            JsValue::from_object_ptr(array as *mut u8).bits(),
+        let mut array = scope.root_nanbox(f64::from_bits(
+            JsValue::from_object_ptr(
+                unsafe { perry_ffi::js_array_alloc(handles.len() as u32) } as *mut u8
+            )
+            .bits(),
         ));
+        for handle in handles.iter().copied() {
+            let current =
+                JsValue::from_bits(array.get().to_bits()).as_pointer::<perry_ffi::ArrayHeader>();
+            let pushed = unsafe {
+                perry_ffi::js_array_push(
+                    current,
+                    JsValue::from_bits(handle_value(handle).to_bits()),
+                )
+            };
+            array = scope.root_nanbox(f64::from_bits(
+                JsValue::from_object_ptr(pushed as *mut u8).bits(),
+            ));
+        }
         let object_ptr = JsValue::from_bits(object.get().to_bits()).as_pointer::<ObjectHeader>();
         unsafe {
             perry_ffi::js_object_set_field(
@@ -794,13 +811,13 @@ fn release_request_inner(
                 );
             }
             let key = key.to_string();
-            std::thread::spawn(move || {
+            perry_ffi::spawn_async(async move {
                 // reqwest owns the physical pooled connection, so the public
                 // net.Socket facade cannot receive its idle read/EOF edge.
                 // Conservatively retire an unclaimed facade after the I/O
                 // guard window; immediate/next-tick reuse cancels this via the
                 // generation check below.
-                std::thread::sleep(std::time::Duration::from_millis(40));
+                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
                 crate::push_event(crate::PendingHttpEvent::AgentIdleExpire {
                     agent_handle: handle,
                     key,
@@ -927,7 +944,8 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_property(
         "freeSockets" => js_http_agent_free_sockets(handle),
         "requests" => js_http_agent_requests(handle),
         "_sessionCache" => {
-            let map = empty_object_f64();
+            let scope = perry_ffi::TransientRootScope::enter();
+            let map = scope.root_nanbox(empty_object_f64());
             let (packed, shape_id) = perry_ffi::build_object_shape(&["map"]);
             let object = perry_ffi::js_object_alloc_with_shape(
                 shape_id,
@@ -938,7 +956,7 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_property(
             if object.is_null() {
                 f64::from_bits(TAG_UNDEFINED)
             } else {
-                perry_ffi::js_object_set_field(object, 0, JsValue::from_bits(map.to_bits()));
+                perry_ffi::js_object_set_field(object, 0, JsValue::from_bits(map.get().to_bits()));
                 f64::from_bits(JsValue::from_object_ptr(object as *mut u8).bits())
             }
         }

@@ -214,7 +214,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         fn js_net_socket_reset_and_destroy(handle: i64) -> i64;
         // Issue #2211 — listeners()/rawListeners() return a *mut ArrayHeader
         // cast to i64; NaN-box with POINTER_TAG to surface as a real JS array.
-        fn js_net_socket_listeners(handle: i64, event_ptr: i64) -> i64;
+        fn js_ext_net_socket_listeners(handle: i64, event_ptr: i64) -> i64;
         fn js_net_socket_raw_listeners(handle: i64, event_ptr: i64) -> i64;
         fn js_net_socket_get_type_of_service(handle: i64) -> f64;
         fn js_net_socket_set_type_of_service(handle: i64, value: f64) -> i64;
@@ -311,7 +311,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         // NaN-box with POINTER_TAG (0x7FFD) so callers see a real JS array.
         "listeners" if !args.is_empty() => {
             let event_ptr = unbox_to_i64(args[0]);
-            let arr = js_net_socket_listeners(handle, event_ptr);
+            let arr = js_ext_net_socket_listeners(handle, event_ptr);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | (arr as u64 & 0x0000_FFFF_FFFF_FFFF))
         }
         "rawListeners" if !args.is_empty() => {

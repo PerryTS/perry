@@ -876,6 +876,9 @@ pub(crate) fn mark_incoming_peer_certificate(handle: i64, common_name: Option<St
     }
 }
 
+/// Record only that the response wrote at least one byte. The req/res facade
+/// does not currently share the transport's exact byte counter, so this is a
+/// deliberate nonzero approximation rather than Node's precise total.
 pub(crate) fn mark_connection_written(handle: i64) {
     if let Some(message) = get_handle_mut::<IncomingMessage>(handle) {
         message.connection_bytes_written = message.connection_bytes_written.max(1);
