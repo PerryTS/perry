@@ -93,6 +93,19 @@ pub(crate) fn lower_index_set_fast(
     value_is_canonical_raw_f64: bool,
     feedback_site_id: &str,
 ) -> Result<()> {
+    // #8583-followup: if evaluating an operand diverged — a throwing
+    // sub-expression (e.g. a TDZ access on a captured `let`) emitted a
+    // `js_throw_error_with_code` + `unreachable` — the current block is
+    // terminated. `LlBlock` silently drops any instruction emitted after a
+    // terminator, so the element setup below (`arr_bits`/`arr_handle`/`idx_i32`)
+    // is dropped, but the guarded fast path still creates fresh blocks that
+    // reference those dropped registers, which the dialect builder rejects as
+    // "register %rN used but never defined". The index-set is unreachable on
+    // this path, so emit nothing.
+    if ctx.block().is_terminated() {
+        return Ok(());
+    }
+
     // Capture the local slot for the realloc path.
     let slot = ctx
         .locals
