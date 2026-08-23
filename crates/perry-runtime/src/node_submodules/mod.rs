@@ -115,7 +115,7 @@ mod fs_promises;
 mod hono_jsx;
 mod stream_promises;
 #[cfg(feature = "mod-node-test")]
-mod test;
+pub(crate) mod test;
 mod timers;
 mod trace_events;
 mod zlib;

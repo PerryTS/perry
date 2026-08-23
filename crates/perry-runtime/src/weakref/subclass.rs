@@ -14,9 +14,6 @@ pub extern "C" fn js_weak_collection_subclass_init(this: f64, kind: i32, iterabl
     if !is_object {
         return this.get_nanbox_f64();
     }
-    let object = scope.root_raw_mut_ptr(
-        crate::value::js_nanbox_get_pointer(this.get_nanbox_f64()) as *mut ObjectHeader,
-    );
     let entries = js_array_alloc(0);
     let entries = scope.root_raw_mut_ptr(entries);
     let key = crate::string::js_string_from_bytes(WEAK_ENTRIES_KEY.as_ptr(), 18);

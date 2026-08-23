@@ -815,9 +815,10 @@ pub(crate) unsafe fn define_property_force_store_value(
         }
     }
     // Re-fetch after a possible evacuation, then restore the immutability bits.
-    obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-    if !obj.is_null() && (obj as usize) > 0x10000 {
-        let gc = gc_header_for(obj);
-        (*gc)._reserved = ((*gc)._reserved & !immutability) | (saved & immutability);
-    }
+    obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        if !obj.is_null() && (obj as usize) > 0x10000 {
+            let gc = gc_header_for(obj);
+            (*gc)._reserved = ((*gc)._reserved & !immutability) | (saved & immutability);
+        }
+    });
 }

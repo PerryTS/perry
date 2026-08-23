@@ -103,8 +103,6 @@ enum HookKind {
 crate::perry_thread_local! {
     static TEST_RUNNER: RefCell<RunnerState> = RefCell::new(RunnerState::new());
     static ACTIVE_CHILDREN: RefCell<Vec<Vec<TestResult>>> = const { RefCell::new(Vec::new()) };
-    static ACTIVE_ANCESTORS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
-    static DONE_CALLED: Cell<bool> = const { Cell::new(false) };
 }
 
 fn ensure_runner_scheduled() {
@@ -364,7 +362,6 @@ fn take_directive_reason(
 }
 
 extern "C" fn test_done(_closure: *const ClosureHeader, error: f64) -> f64 {
-    DONE_CALLED.with(|called| called.set(true));
     if !is_undefined_value(error) && !JSValue::from_bits(error.to_bits()).is_null() {
         crate::exception::js_throw(error);
     }
@@ -381,7 +378,6 @@ fn call_test_callback(callback: f64, name: &str) -> Result<f64, f64> {
     let arity = crate::closure::closure_length(callback_ptr).unwrap_or(0);
     catch_js(|| {
         if arity >= 2 {
-            DONE_CALLED.with(|called| called.set(false));
             let done = scope.root_nanbox_f64(closure_value(test_done as *const u8, 1));
             crate::closure::js_closure_call2(
                 callback_ptr,
@@ -526,7 +522,6 @@ fn execute_test(def: TestDef, ancestors: &[usize], blocked: bool) -> TestResult 
 
     let prior = enter_context(&def.name);
     ACTIVE_CHILDREN.with(|children| children.borrow_mut().push(Vec::new()));
-    ACTIVE_ANCESTORS.with(|slot| *slot.borrow_mut() = ancestors.to_vec());
     if !failed {
         match call_test_callback(def.callback, &def.name) {
             Ok(value) => {
@@ -921,7 +916,7 @@ pub extern "C" fn js_node_test_run(options: f64) -> f64 {
     thunk_test_run(std::ptr::null(), options)
 }
 
-pub(super) fn scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+pub(crate) fn scan_node_test_runner_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     TEST_RUNNER.with(|runner| {
         let mut runner = runner.borrow_mut();
         for test in &mut runner.tests {

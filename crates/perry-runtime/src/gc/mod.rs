@@ -982,6 +982,8 @@ pub fn gc_init() {
     // (nothing else holds them — they live for the program's lifetime
     // via codegen `getter` calls, not via a user-visible JSValue root).
     reg_scanner!(crate::node_submodules::scan_node_submodule_singleton_roots_mut,);
+    #[cfg(feature = "mod-node-test")]
+    reg_scanner!(crate::node_submodules::test::runner::scan_node_test_runner_roots_mut,);
     // Box-capture root scanner (mutable closure captures, esp. the
     // generator state-machine's `__iter` and `__step` boxes that hold
     // the iter object + step closure across awaits).
