@@ -57,44 +57,6 @@ pub fn body_contains_closure(stmts: &[perry_hir::Stmt]) -> bool {
     any_top_level_expr(stmts, &mut expr_contains_closure)
 }
 
-/// #8648: can this constructor body hand back a replacement `this`?
-///
-/// ECMAScript lets a constructor `return` an object, which becomes the
-/// construction's result (`js_ctor_return_override`). That replacement may be a
-/// Proxy, and DefineField must reach a Proxy's `defineProperty` trap rather
-/// than its `set`. With no value-returning `return` anywhere on the chain, the
-/// instance a field initializer writes to is provably the freshly allocated
-/// ordinary object, so `CreateDataProperty` and a plain own-slot store agree.
-pub fn body_returns_value(stmts: &[perry_hir::Stmt]) -> bool {
-    stmts_have_value_return(stmts)
-}
-
-/// `Stmt::Return(Some(_))` at any statement depth.
-fn stmts_have_value_return(stmts: &[perry_hir::Stmt]) -> bool {
-    use perry_hir::Stmt;
-    for s in stmts {
-        let hit = match s {
-            Stmt::Return(Some(_)) => true,
-            Stmt::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                stmts_have_value_return(then_branch)
-                    || else_branch
-                        .as_ref()
-                        .is_some_and(|b| stmts_have_value_return(b))
-            }
-            Stmt::While { body, .. } | Stmt::For { body, .. } => stmts_have_value_return(body),
-            _ => false,
-        };
-        if hit {
-            return true;
-        }
-    }
-    false
-}
-
 fn expr_contains_closure(expr: &perry_hir::Expr) -> bool {
     if matches!(expr, perry_hir::Expr::Closure { .. }) {
         return true;

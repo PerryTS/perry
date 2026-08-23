@@ -476,6 +476,51 @@ pub(crate) fn ctor_body_has_value_return(body: &[perry_hir::Stmt]) -> bool {
     )
 }
 
+/// #8648: can `new <leaf>(…)` complete with a `this` other than the instance
+/// the allocator just handed out?
+///
+/// Exactly three things substitute the receiver, and all three are statically
+/// decidable from the heritage chain:
+///
+/// * a constructor anywhere on the chain with a value-bearing `return` — the
+///   `js_ctor_return_override` route, and the only way a Proxy or any other
+///   foreign object can become the construction result;
+/// * a native base (`native_extends`) or a heritage the compiler cannot resolve
+///   (`extends_expr`, an id-only `extends` edge, a class this module never
+///   declared), whose `super()` materializes an exotic object.
+///
+/// Conservative on every edge it cannot see: unknown answers `true`.
+pub(crate) fn ctor_chain_can_replace_this(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    leaf: &str,
+) -> bool {
+    let mut name = leaf.to_string();
+    for _ in 0..32 {
+        let Some(class) = classes.get(&name).copied() else {
+            return true;
+        };
+        if class.native_extends.is_some() || class.extends_expr.is_some() {
+            return true;
+        }
+        if class
+            .constructor
+            .as_ref()
+            .is_some_and(|ctor| ctor_body_has_value_return(&ctor.body))
+        {
+            return true;
+        }
+        // `extends` is a class id; `extends_name` is the textual parent. Only
+        // the latter can be followed through `classes`, so an id-only edge is
+        // treated as unknown.
+        match class.extends_name.as_ref() {
+            Some(parent) => name = parent.clone(),
+            None if class.extends.is_some() => return true,
+            None => return false,
+        }
+    }
+    true
+}
+
 pub(super) fn node_stream_parent_kind(
     ctx: &FnCtx<'_>,
     class: &perry_hir::Class,

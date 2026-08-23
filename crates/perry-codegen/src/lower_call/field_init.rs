@@ -836,7 +836,8 @@ pub(crate) fn apply_field_initializers_recursive(
             // `PropertySet` path (inline shape precheck -> direct slot store)
             // exactly as this did before #8630. Anything else keeps the full
             // DefineField call.
-            let chain_can_replace_this = chain_constructor_returns_value(ctx, &class_name_in_chain);
+            let chain_can_replace_this =
+                crate::lower_call::ctor_chain_can_replace_this(ctx.classes, &class_name_in_chain);
             let no_accessor_on_chain =
                 crate::type_analysis::class_field_global_index(ctx, &class_name_in_chain, &prop)
                     .is_some();
@@ -914,36 +915,3 @@ pub(crate) fn apply_field_initializers_recursive(
 
 #[cfg(test)]
 mod tests;
-
-/// #8648: does any constructor on `leaf`'s inheritance chain `return` a value?
-///
-/// A value-returning constructor can hand back a replacement `this`
-/// (`js_ctor_return_override`), and that replacement may be a Proxy — which
-/// DefineField must reach through `defineProperty`, not `set`. Conservative on
-/// every edge it cannot see: a native base, a dynamic `extends`, or a class
-/// missing from `ctx.classes` all answer `true`.
-fn chain_constructor_returns_value(ctx: &crate::expr::FnCtx<'_>, leaf: &str) -> bool {
-    let mut name = leaf.to_string();
-    for _ in 0..32 {
-        let Some(class) = ctx.classes.get(&name).copied() else {
-            return true;
-        };
-        if class.native_extends.is_some() || class.extends_expr.is_some() {
-            return true;
-        }
-        if let Some(ctor) = class.methods.iter().find(|m| m.name == "constructor") {
-            if crate::collectors::body_returns_value(&ctor.body) {
-                return true;
-            }
-        }
-        // `extends` is a class id; `extends_name` is the textual parent. Only
-        // the latter can be followed through `ctx.classes`, so an id-only edge
-        // is treated as unknown.
-        match class.extends_name.as_ref() {
-            Some(parent) => name = parent.clone(),
-            None if class.extends.is_some() => return true,
-            None => return false,
-        }
-    }
-    true
-}
