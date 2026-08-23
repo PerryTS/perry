@@ -26,7 +26,9 @@ pub use attr_variants::{
     js_object_set_field_by_name_nonconfigurable, js_object_set_field_by_name_nonenum,
 };
 pub use fast_paths::js_object_set_field_by_name_transition_fast;
-pub(crate) use fast_paths::try_existing_own_data_overwrite;
+pub(crate) use fast_paths::{
+    try_existing_own_data_overwrite, try_existing_own_data_overwrite_transient_key,
+};
 pub(crate) use tail::set_field_by_name_object_tail;
 pub(crate) use write_helpers::nm_field_set_override;
 use write_helpers::string_key_eq;

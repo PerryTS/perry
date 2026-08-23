@@ -1591,6 +1591,38 @@ pub(crate) fn create_data_property(receiver: f64, key: f64, value: f64) -> bool 
     let receiver = scope.root_nanbox_f64(receiver);
     let key = scope.root_nanbox_f64(key);
     let value = scope.root_nanbox_f64(value);
+
+    // Compiled class instances are born with their declared public-field keys
+    // and default data-property attributes already represented by the shape.
+    // In that common case, CreateDataProperty is exactly an existing own-data
+    // overwrite: no inherited setter can intercept it, and there is no custom
+    // descriptor to reset. Reuse the ordinary write path's fully validated,
+    // barriered helper before allocating a four-property descriptor object.
+    //
+    // This is deliberately fail-closed. Proxies/handles, computed or SSO
+    // keys, missing own keys, exotic receivers, prototype overrides, and any
+    // receiver with custom descriptors fall through to the complete
+    // [[DefineOwnProperty]] path below. The rooted field-name string need not
+    // be interned: the transient-key entry point scans by content and never
+    // caches that pointer.
+    let receiver_bits = receiver.get_nanbox_f64().to_bits();
+    let key_bits = key.get_nanbox_f64().to_bits();
+    if (receiver_bits & !POINTER_MASK) == POINTER_TAG
+        && (key_bits & !POINTER_MASK) == crate::value::STRING_TAG
+    {
+        let object = (receiver_bits & POINTER_MASK) as *mut crate::ObjectHeader;
+        let key_ptr = (key_bits & POINTER_MASK) as *const crate::StringHeader;
+        if unsafe {
+            crate::object::try_existing_own_data_overwrite_transient_key(
+                object,
+                key_ptr,
+                value.get_nanbox_f64(),
+            )
+        } {
+            return true;
+        }
+    }
+
     let descriptor = unsafe { build_create_data_descriptor(value.get_nanbox_f64()) };
     let descriptor = scope.root_nanbox_f64(descriptor);
     crate::value::js_is_truthy(js_reflect_define_property(
@@ -2462,6 +2494,47 @@ mod tests {
     fn obj_value() -> f64 {
         let obj = crate::object::js_object_alloc(0, 0);
         f64::from_bits(POINTER_TAG | ((obj as u64) & POINTER_MASK))
+    }
+
+    #[test]
+    fn class_field_create_data_property_keeps_a_pristine_declared_shape() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const CID: u32 = 0x0C1A_5501;
+        let packed = b"declared_field";
+        let keys =
+            crate::object::js_build_class_keys_array(CID, 1, packed.as_ptr(), packed.len() as u32);
+        let shape_id = crate::object::shapes::js_object_shape_id_for_keys(keys as usize as u64, 1);
+        let object =
+            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 1, keys, shape_id);
+
+        let raw_key = crate::string::js_string_from_bytes(packed.as_ptr(), packed.len() as u32);
+        let receiver = f64::from_bits(POINTER_TAG | (object as u64 & POINTER_MASK));
+        let key_value = f64::from_bits(crate::value::STRING_TAG | (raw_key as u64 & POINTER_MASK));
+
+        let key_header = unsafe {
+            &*((raw_key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
+        };
+        assert_eq!(
+            key_header.gc_flags & crate::gc::GC_FLAG_INTERNED,
+            0,
+            "the regression path uses the same transient field-name representation as codegen"
+        );
+
+        assert!(create_data_property(receiver, key_value, 42.0));
+        assert_eq!(unsafe { (*object).parent_class_id }, shape_id);
+        let header = unsafe {
+            &*((object as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
+        };
+        assert_eq!(
+            header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS,
+            0,
+            "all-default class-field attributes need no descriptor side table"
+        );
+        assert!(crate::object::get_property_attrs(object as usize, "declared_field").is_none());
+        assert_eq!(
+            f64::from_bits(crate::object::js_object_get_field_by_name(object, raw_key).bits()),
+            42.0
+        );
     }
 
     /// #8213: an id past the end of the revocable-Proxy band does not merely

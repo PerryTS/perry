@@ -21,6 +21,31 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     key: *const crate::StringHeader,
     value: f64,
 ) -> bool {
+    unsafe { try_existing_own_data_overwrite_impl(obj, key, value, false) }
+}
+
+/// Existing-own-data overwrite for a rooted, transient heap-string key.
+///
+/// Unlike [`try_existing_own_data_overwrite`], this entry point does not
+/// require the input key pointer to be interned. It compares the key by
+/// content and deliberately neither reads nor records a property plan under
+/// that transient address. The caller must keep `key` rooted for the call.
+#[inline]
+pub(crate) unsafe fn try_existing_own_data_overwrite_transient_key(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> bool {
+    unsafe { try_existing_own_data_overwrite_impl(obj, key, value, true) }
+}
+
+#[inline]
+unsafe fn try_existing_own_data_overwrite_impl(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+    allow_transient_key: bool,
+) -> bool {
     let obj_addr = obj as usize;
     let key_addr = key as usize;
     if obj.is_null() || key.is_null() {
@@ -63,9 +88,10 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     let Some(key_gc) = crate::value::addr_class::try_read_gc_header(key_addr) else {
         return false;
     };
+    let key_is_interned = key_gc.gc_flags & crate::gc::GC_FLAG_INTERNED != 0;
     if key_gc.obj_type != crate::gc::GC_TYPE_STRING
-        || key_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_INTERNED)
-            != crate::gc::GC_FLAG_INTERNED
+        || key_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || (!allow_transient_key && !key_is_interned)
     {
         return false;
     }
@@ -84,7 +110,11 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
         return false;
     }
 
-    let mut own_idx = super::prop_plan::read_plan_lookup(keys_addr, key_addr);
+    let mut own_idx = if key_is_interned {
+        super::prop_plan::read_plan_lookup(keys_addr, key_addr)
+    } else {
+        None
+    };
     if own_idx.is_none() {
         let key_count = crate::array::keys_array_len_capped_to_capacity(keys);
         if key_count > 4096 {
@@ -93,7 +123,9 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
         for i in 0..key_count {
             let kv = crate::array::js_array_get(keys, i as u32);
             if crate::string::js_string_key_matches(kv, key) {
-                super::prop_plan::read_plan_record(keys_addr, key_addr, i as u32);
+                if key_is_interned {
+                    super::prop_plan::read_plan_record(keys_addr, key_addr, i as u32);
+                }
                 own_idx = Some(i as u32);
                 break;
             }
