@@ -56,6 +56,21 @@ fn is_safepoint(e: &Expr) -> bool {
             | Expr::Await(_)
             | Expr::Yield { .. }
             | Expr::AsyncFirstCall { .. }
+            // #8583 (unit-4 / `__33499`): object and array literals allocate via
+            // a runtime call (`js_array_from_values`, `js_object_*`) that can
+            // collect, so RS4GC inserts a statepoint at each. A minified data
+            // table is a single giant array-of-arrays — `__33499` lowered to
+            // 11,104 `js_array_from_values` calls, none of which is an `Expr::Call`,
+            // so the pre-fix count saw almost no safepoints, the function was not
+            // spilled, and RS4GC then fanned out for >3 h. Counting these keeps
+            // the estimate an over-approximation biased toward spilling (the safe
+            // direction; a hoisted/constant literal that emits no call only costs
+            // a cheap shadow frame).
+            | Expr::Object(_)
+            | Expr::ObjectSpread { .. }
+            | Expr::ObjectAssign { .. }
+            | Expr::Array(_)
+            | Expr::ArraySpread(_)
     )
 }
 
@@ -215,5 +230,31 @@ mod tests {
         // f(g(), h()) is three calls.
         let nested = call(vec![call(vec![]), call(vec![])]);
         assert_eq!(count_safepoint_sites(&[Stmt::Expr(nested)]), 3);
+    }
+
+    #[test]
+    fn array_and_object_literals_are_safepoints() {
+        // #8583: allocating literals lower to a collecting runtime call
+        // (`js_array_from_values` / `js_object_*`) and must count. A minified
+        // data table is a giant array-of-arrays with no `Expr::Call` at all —
+        // the pre-fix count saw zero safepoints and the function was not spilled.
+        let inner = |a, b| Expr::Array(vec![Expr::Number(a as f64), Expr::Number(b as f64)]);
+        // [[..],[..],[..]] — one outer Array + three inner Arrays = 4 safepoints.
+        let table = Expr::Array(vec![inner(1, 2), inner(3, 4), inner(5, 6)]);
+        assert_eq!(count_safepoint_sites(&[Stmt::Expr(table)]), 4);
+
+        // An object literal is also an allocating safepoint.
+        let obj = Expr::Object(vec![("k".to_string(), Expr::Number(1.0))]);
+        assert_eq!(count_safepoint_sites(&[Stmt::Expr(obj)]), 1);
+    }
+
+    #[test]
+    fn nested_array_literals_recurse() {
+        // Deeply nested constant arrays count every allocating level — the
+        // `__33499` shape (11,104 `js_array_from_values` from one literal).
+        let leaf = || Expr::Array(vec![Expr::Number(0.0)]);
+        let rows: Vec<Expr> = (0..10).map(|_| leaf()).collect();
+        // 1 outer + 10 inner = 11.
+        assert_eq!(count_safepoint_sites(&[Stmt::Expr(Expr::Array(rows))]), 11);
     }
 }

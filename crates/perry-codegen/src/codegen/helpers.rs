@@ -468,16 +468,32 @@ pub(super) fn maybe_spill_roots_to_shadow_frame(
         return;
     }
     let sites = crate::collectors::count_safepoint_sites(body);
-    let estimate = root_relocation_estimate(slot_count, sites);
+    // #8583 (unit-4 / `__33499` of the Claude Code bundle): `slot_count` is the
+    // shadow-slot map size — the count of *named* pointer-typed locals — but
+    // that is NOT the root population RS4GC relocates. A call-heavy minified
+    // closure produces one pointer-typed *temporary* per call result (the
+    // constructed IR carries ~one `alloca ptr addrspace(1)` per call), and each
+    // is live across the later safepoints; those temporaries dominate the true
+    // root count yet are invisible to `collect_pointer_typed_locals`. `__33499`
+    // measured ~20.3k named-and-anonymous pointer roots × ~20.3k safepoints, but
+    // its `slot_count` alone was ~100x smaller, so `slot_count × sites` fell
+    // under the threshold, the function stayed on statepoints, and RS4GC then
+    // fanned out for >3 h / ~30 GiB (never reaching the #8586 post-rewrite
+    // budget assertion, which only fires *after* the rewrite it never finishes).
+    // Count each safepoint as contributing ~one live pointer temporary. This is
+    // an over-approximation biased toward spilling — the intended direction (a
+    // false-positive shadow frame is cheap; a missed fan-out is not).
+    let live_roots = slot_count.saturating_add(sites);
+    let estimate = root_relocation_estimate(live_roots, sites);
     if estimate <= threshold {
         return;
     }
     func.request_shadow_frame_spill();
     eprintln!(
-        "perry: `{fn_name}` keeps its {slot_count} GC roots in a shadow frame instead of \
-         statepoints: an estimated {estimate} relocations ({slot_count} roots × {sites} \
-         safepoints) would make rewrite-statepoints-for-gc fan-out super-linear in the \
-         optimizer (> {threshold}). The function is still compiled at the requested \
+        "perry: `{fn_name}` keeps its {live_roots} GC roots (incl. call-result temporaries) in a \
+         shadow frame instead of statepoints: an estimated {estimate} relocations ({live_roots} \
+         roots × {sites} safepoints) would make rewrite-statepoints-for-gc fan-out super-linear in \
+         the optimizer (> {threshold}). The function is still compiled at the requested \
          optimization level; only its GC-root representation changes, and its roots stay \
          precise (#8583). Override with PERRY_ROOT_SPILL_RELOCATIONS."
     );
