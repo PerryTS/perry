@@ -91,7 +91,11 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
                         "prototype",
                     );
                     let value_js = JSValue::from_bits(value.to_bits());
-                    value_js.is_pointer().then_some(value.to_bits())
+                    if value.to_bits() == crate::value::TAG_NULL {
+                        Some(crate::value::TAG_NULL)
+                    } else {
+                        value_js.is_pointer().then_some(value.to_bits())
+                    }
                 } else {
                     None
                 }

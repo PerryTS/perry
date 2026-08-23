@@ -1417,7 +1417,11 @@ pub extern "C" fn js_object_get_field_by_name(
                 // fallback after own computed fields, static methods, and
                 // static accessors of the same name have had a chance to win.
                 if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
-                    return JSValue::from_bits(class_value.to_bits());
+                    let constructor = super::super::js_get_global_this_builtin_value(
+                        b"Function".as_ptr(),
+                        b"Function".len(),
+                    );
+                    return JSValue::from_bits(constructor.to_bits());
                 }
             }
             return JSValue::undefined();

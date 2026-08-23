@@ -304,6 +304,55 @@ function makeOrderedDeclarationStatics(label: string): any {
 
 makeOrderedDeclarationStatics("fresh declaration order");
 
+const sharedTemplateEvents: string[] = [];
+const SharedTemplateOrder = class {
+    static first = (sharedTemplateEvents.push("first"), 1);
+
+    static {
+        sharedTemplateEvents.push("block");
+    }
+
+    static last = (sharedTemplateEvents.push("last"), 2);
+};
+check(
+    "shared-template static order",
+    sharedTemplateEvents.join(",") === "first,block,last" &&
+        SharedTemplateOrder.last === 2
+);
+
+function makeMutableParameter(value: string): any {
+    class MutableParameter {
+        read(): string {
+            return value;
+        }
+
+        write(next: string): void {
+            value = next;
+        }
+    }
+
+    return new MutableParameter();
+}
+
+function makeUnrelatedParameter(value: string): any {
+    class UnrelatedParameter {
+        read(): string {
+            return value;
+        }
+    }
+
+    return new UnrelatedParameter();
+}
+
+const mutableParameter = makeMutableParameter("mutable");
+const unrelatedParameter = makeUnrelatedParameter("unrelated");
+mutableParameter.write("changed");
+check("shared parameter mutation", mutableParameter.read() === "changed");
+check(
+    "shared parameter owner isolation",
+    unrelatedParameter.read() === "unrelated"
+);
+
 function makeDynamicAccessor(tag: string): any {
     return class {
         static #brand = 0;
@@ -349,6 +398,40 @@ check(
 accessorA.dynamic = "changed";
 check("dynamic accessor retained setter", accessorA.readTag() === "changed");
 check("dynamic accessor sibling isolated", accessorB.dynamic === "b");
+
+function NullPrototypeParent(): void {}
+NullPrototypeParent.prototype = null;
+function makeNullPrototypeChild(): any {
+    return class extends NullPrototypeParent {
+        static #brand = 0;
+    };
+}
+const nullPrototypeChild = makeNullPrototypeChild();
+check(
+    "fresh null parent prototype",
+    Object.getPrototypeOf(nullPrototypeChild.prototype) === null
+);
+check(
+    "fresh class Function constructor",
+    nullPrototypeChild.constructor === Function
+);
+
+const internalPrefixObject: any = {};
+internalPrefixObject["#<perry:user>"] = 1;
+check(
+    "user perry-prefix key enumerable",
+    Object.keys(internalPrefixObject).includes("#<perry:user>")
+);
+
+const lazyJson = "[" + new Array(600).fill("0").join(",") + "]";
+function ReturnLazyArray(): any {
+    return JSON.parse(lazyJson);
+}
+const lazyConstructorResult = new (ReturnLazyArray as any)();
+check(
+    "lazy array constructor return override",
+    Array.isArray(lazyConstructorResult) && lazyConstructorResult.length === 600
+);
 
 function makePrototypeParent(tag: string): any {
     return class {

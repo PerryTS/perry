@@ -370,40 +370,46 @@ pub(crate) fn lower_class_expr(
         });
     }
     seq.extend(computed_member_registrations);
-    for (slot, v) in computed_statics {
-        seq.push(Expr::RegisterClassStaticSymbol {
-            class_name: synthetic_name.clone(),
-            key_expr: Box::new(Expr::PropertyGet {
-                object: Box::new(Expr::ClassRef(synthetic_name.clone())),
-                property: slot,
-                byte_offset: 0,
-            }),
-            value_expr: Box::new(v),
-        });
-    }
-    // Inline the named static field/element initializers at the point
-    // the class expression evaluates (source order), mirroring the
-    // class-declaration path. Without this the shared-template path
-    // relied solely on the late `init_static_fields_late` pass, which
-    // runs AFTER the surrounding top-level statements — so a read like
-    // `C.x` immediately after `var C = class { static x = 1 }` saw the
-    // uninitialized (0.0) slot. (Private statics carry a `#`-prefixed
-    // name and flow through the same StaticFieldSet path.)
-    for (name, v) in named_statics {
-        seq.push(Expr::StaticFieldSet {
-            class_name: synthetic_name.clone(),
-            field_name: name,
-            value: Box::new(v),
-        });
-    }
-    // Static blocks run right after the static-field initializers, in
-    // source order, with the class as `this`.
-    for block_name in static_block_names {
-        seq.push(Expr::StaticMethodCall {
-            class_name: synthetic_name.clone(),
-            method_name: block_name,
-            args: Vec::new(),
-        });
+    // The shared-template path must obey the same source-order plan as the
+    // fresh-object path. Computed names were all resolved above, but their
+    // initializers still interleave with named fields and static blocks.
+    for step in static_init_order {
+        match step {
+            ClassFreshStaticInit::Named(index) => {
+                let Some((name, value)) = named_statics.get(index as usize).cloned() else {
+                    continue;
+                };
+                seq.push(Expr::StaticFieldSet {
+                    class_name: synthetic_name.clone(),
+                    field_name: name,
+                    value: Box::new(value),
+                });
+            }
+            ClassFreshStaticInit::Computed(index) => {
+                let Some((slot, value)) = computed_statics.get(index as usize).cloned() else {
+                    continue;
+                };
+                seq.push(Expr::RegisterClassStaticSymbol {
+                    class_name: synthetic_name.clone(),
+                    key_expr: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::ClassRef(synthetic_name.clone())),
+                        property: slot,
+                        byte_offset: 0,
+                    }),
+                    value_expr: Box::new(value),
+                });
+            }
+            ClassFreshStaticInit::Block(index) => {
+                let Some(block_name) = static_block_names.get(index as usize).cloned() else {
+                    continue;
+                };
+                seq.push(Expr::StaticMethodCall {
+                    class_name: synthetic_name.clone(),
+                    method_name: block_name,
+                    args: Vec::new(),
+                });
+            }
+        }
     }
     if seq.is_empty() {
         Ok(Expr::ClassRef(synthetic_name))

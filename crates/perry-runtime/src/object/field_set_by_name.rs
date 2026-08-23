@@ -54,7 +54,7 @@ pub extern "C" fn js_object_set_field_by_name(
         obj
     };
     if !key.is_null()
-        && crate::value::addr_class::is_above_handle_band(normalized_obj as usize)
+        && crate::value::addr_class::is_plausible_heap_addr(normalized_obj as usize)
         && crate::object::class_registry::is_class_object_ptr(normalized_obj.cast())
     {
         unsafe {

@@ -191,7 +191,10 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         if super::class_registry::is_class_object_value(obj_value)
             && crate::symbol::js_is_symbol(key_value) == 0
         {
+            let metadata_scope = crate::gc::RuntimeHandleScope::new();
+            let metadata_obj_value = metadata_scope.root_heap_word_u64(obj_value.to_bits());
             if let Some(method_name) = metadata_key_to_string(key_value) {
+                let obj_value = f64::from_bits(metadata_obj_value.get_heap_word_u64());
                 let class_obj = extract_obj_ptr(obj_value);
                 if !class_obj.is_null() {
                     let class_id = super::js_object_get_class_id(class_obj);
@@ -728,7 +731,11 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         }
         if crate::array::is_array_subclass_value(obj_value) && key_rust.as_deref() == Some("length")
         {
-            let length = crate::object::js_object_get_field_by_name(obj, key_str);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_raw_mut_ptr(obj);
+            let (length, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
+                crate::object::js_object_get_field_by_name(obj, key_str)
+            });
             let frozen =
                 (*crate::object::gc_header_for(obj))._reserved & crate::gc::OBJ_FLAG_FROZEN != 0;
             let writable = !frozen

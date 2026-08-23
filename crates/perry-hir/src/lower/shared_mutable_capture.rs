@@ -71,6 +71,12 @@ fn is_cap_name_of(name: &str, ids: &HashSet<LocalId>) -> bool {
     crate::cap_fields::cap_field_outer_id(name).is_some_and(|id| ids.contains(&id))
 }
 
+#[derive(Default)]
+struct BodySharedCaptures {
+    ids: HashSet<LocalId>,
+    by_class: HashMap<String, HashSet<LocalId>>,
+}
+
 pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
     // Bisection escape hatch (#5951): disable the desugar to isolate its effect.
     if std::env::var("PERRY_NO_5951").is_ok() {
@@ -103,7 +109,7 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
             .iter()
             .map(|c| (c.name.as_str(), c))
             .collect();
-        let fn_shared: Vec<HashSet<LocalId>> = module
+        let fn_shared: Vec<BodySharedCaptures> = module
             .functions
             .iter()
             .map(|f| detect_shared_in_body(&f.body, &classes))
@@ -115,8 +121,8 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
     // once across deep `Let`s + nested closure params — see
     // `retain_unambiguous`). Nested closures restart their id spaces, so a
     // numeric rewrite over the whole body is only sound for unique ids.
-    for (f, s) in module.functions.iter().zip(fn_shared.iter_mut()) {
-        if s.is_empty() {
+    for (f, shared) in module.functions.iter().zip(fn_shared.iter_mut()) {
+        if shared.ids.is_empty() {
             continue;
         }
         let mut counts: HashMap<LocalId, u32> = HashMap::new();
@@ -126,26 +132,46 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
         for st in &f.body {
             collect_declared_counts_stmt(st, &mut counts);
         }
-        retain_unambiguous(s, &counts);
+        retain_unambiguous(&mut shared.ids, &counts);
+        let retained = &shared.ids;
+        for ids in shared.by_class.values_mut() {
+            ids.retain(|id| retained.contains(id));
+        }
+        shared.by_class.retain(|_, ids| !ids.is_empty());
     }
-    if !init_shared.is_empty() {
+    if !init_shared.ids.is_empty() {
         let mut counts: HashMap<LocalId, u32> = HashMap::new();
         for st in &module.init {
             collect_declared_counts_stmt(st, &mut counts);
         }
-        retain_unambiguous(&mut init_shared, &counts);
+        retain_unambiguous(&mut init_shared.ids, &counts);
+        let retained = &init_shared.ids;
+        for ids in init_shared.by_class.values_mut() {
+            ids.retain(|id| retained.contains(id));
+        }
+        init_shared.by_class.retain(|_, ids| !ids.is_empty());
     }
-    let mut all_shared: HashSet<LocalId> = init_shared.iter().copied().collect();
-    for s in &fn_shared {
-        all_shared.extend(s.iter().copied());
+    let mut all_shared: HashSet<LocalId> = init_shared.ids.iter().copied().collect();
+    for shared in &fn_shared {
+        all_shared.extend(shared.ids.iter().copied());
     }
     if all_shared.is_empty() {
         return;
     }
+    let mut shared_by_class: HashMap<String, HashSet<LocalId>> = HashMap::new();
+    for shared in fn_shared.iter().chain(std::iter::once(&init_shared)) {
+        for (class_name, ids) in &shared.by_class {
+            shared_by_class
+                .entry(class_name.clone())
+                .or_default()
+                .extend(ids.iter().copied());
+        }
+    }
 
     // ---- declaring bodies: rewrite with ONLY the ids detected in them -------
-    for (f, s) in module.functions.iter_mut().zip(fn_shared.iter()) {
-        if !s.is_empty() {
+    for (f, shared) in module.functions.iter_mut().zip(fn_shared.iter()) {
+        let ids = &shared.ids;
+        if !ids.is_empty() {
             // Parameters have no `Stmt::Let` for `rewrite_stmt` to wrap. Turn
             // each flagged parameter into the same one-element shared cell at
             // function entry, then let the already-rewritten body use
@@ -158,7 +184,7 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
                 .params
                 .iter_mut()
                 .filter_map(|param| {
-                    if s.contains(&param.id) {
+                    if ids.contains(&param.id) {
                         param.ty = Type::Any;
                         Some(param.id)
                     } else {
@@ -166,7 +192,7 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
                     }
                 })
                 .collect();
-            rewrite_stmts(&mut f.body, s, s);
+            rewrite_stmts(&mut f.body, ids, ids);
             for id in shared_params.into_iter().rev() {
                 f.body.insert(
                     0,
@@ -178,8 +204,8 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
             }
         }
     }
-    if !init_shared.is_empty() {
-        rewrite_stmts(&mut module.init, &init_shared, &init_shared);
+    if !init_shared.ids.is_empty() {
+        rewrite_stmts(&mut module.init, &init_shared.ids, &init_shared.ids);
     }
 
     // ---- lifted class members: per-member rebind ids ------------------------
@@ -190,9 +216,9 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
     // Match them BY NAME within each member and rewrite only that member's body
     // with its own ids (never the declaring `shared` set — the declaring `Let`
     // that gets array-wrapped lives outside the class).
-    let targets: &HashSet<LocalId> = &all_shared;
     let no_shared: HashSet<LocalId> = HashSet::new();
     for c in &mut module.classes {
+        let targets = shared_by_class.get(&c.name).unwrap_or(&no_shared);
         for m in &mut c.methods {
             rewrite_member_scoped(m, &targets, &no_shared);
         }
@@ -272,17 +298,17 @@ pub(crate) fn desugar_shared_mutable_captures(module: &mut Module) {
     // handle — #5951 e4). Retype them to `Any` so they use the generic pointer
     // representation, matching the array they now hold.
     if std::env::var("PERRY_5951_NO_RETYPE").is_err() {
-        retype_capture_holders(module, &all_shared);
+        retype_capture_holders(module, &shared_by_class);
     }
     if std::env::var("PERRY_5951_TRACE").as_deref() == Ok("1") {
         let mut per_fn: Vec<String> = Vec::new();
-        for (f, s) in module.functions.iter().zip(fn_shared.iter()) {
-            if !s.is_empty() {
-                per_fn.push(format!("{}:{:?}", f.name, s));
+        for (f, shared) in module.functions.iter().zip(fn_shared.iter()) {
+            if !shared.ids.is_empty() {
+                per_fn.push(format!("{}:{:?}", f.name, shared.ids));
             }
         }
-        if !init_shared.is_empty() {
-            per_fn.push(format!("<init>:{init_shared:?}"));
+        if !init_shared.ids.is_empty() {
+            per_fn.push(format!("<init>:{:?}", init_shared.ids));
         }
         eprintln!(
             "[5951] module={} desugared {}",
@@ -384,9 +410,13 @@ fn collect_declared_counts_expr(expr: &Expr, out: &mut HashMap<LocalId, u32>) {
     walk_expr_children(expr, &mut |e| collect_declared_counts_expr(e, out));
 }
 
-fn retype_capture_holders(module: &mut Module, shared: &HashSet<LocalId>) {
-    let targets: &HashSet<LocalId> = shared;
+fn retype_capture_holders(
+    module: &mut Module,
+    shared_by_class: &HashMap<String, HashSet<LocalId>>,
+) {
+    let no_shared = HashSet::new();
     for c in &mut module.classes {
+        let targets = shared_by_class.get(&c.name).unwrap_or(&no_shared);
         for f in &mut c.fields {
             if is_cap_name_of(&f.name, targets) {
                 f.ty = Type::Any;
@@ -492,8 +522,8 @@ fn retype_lets_in_expr(expr: &mut Expr, targets: &HashSet<LocalId>) {
 /// Detect the shared-mutable capture ids declared in ONE body. The returned
 /// ids are meaningful only within that body's scope — callers must not apply
 /// them to other functions (LocalIds repeat across scopes; see #6089).
-fn detect_shared_in_body(body: &[Stmt], classes: &HashMap<&str, &Class>) -> HashSet<LocalId> {
-    let mut shared = HashSet::new();
+fn detect_shared_in_body(body: &[Stmt], classes: &HashMap<&str, &Class>) -> BodySharedCaptures {
+    let mut shared = BodySharedCaptures::default();
     let mut regs = Vec::new();
     for s in body {
         find_regs_stmt(s, &mut regs);
@@ -505,18 +535,31 @@ fn detect_shared_in_body(body: &[Stmt], classes: &HashMap<&str, &Class>) -> Hash
     for s in body {
         collect_assigned_deep_stmt(s, &mut assigned);
     }
-    for (class_name, ids) in regs {
+    for (class_name, ids) in &regs {
         for id in ids {
             // Declaring-function-side mutation (`c = 99` after `new T()`).
-            if assigned.contains(&id) {
-                shared.insert(id);
+            if assigned.contains(id) {
+                shared.ids.insert(*id);
                 continue;
             }
             // Class-side mutation: a member assigns rebind local `__perry_cap_<id>`.
             if let Some(c) = classes.get(class_name.as_str()) {
-                if class_mutates_capture(c, id) {
-                    shared.insert(id);
+                if class_mutates_capture(c, *id) {
+                    shared.ids.insert(*id);
                 }
+            }
+        }
+    }
+    // Every class that captures a boxed id must treat its synthesized holder
+    // as the array handle, even if a sibling class is the one that mutates it.
+    for (class_name, ids) in regs {
+        for id in ids {
+            if shared.ids.contains(&id) {
+                shared
+                    .by_class
+                    .entry(class_name.clone())
+                    .or_default()
+                    .insert(id);
             }
         }
     }

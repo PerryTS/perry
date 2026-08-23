@@ -899,26 +899,15 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                             super::super::class_constructors::replay_class_object_constructor(
                                 parent_val, parent_cid, obj, args_ptr, args_len,
                             );
-                            return undef;
-                        }
-                    }
-                }
-            }
-            let usable = if bits & TAG_MASK == POINTER_TAG {
-                let p = (bits & PTR_MASK) as usize;
-                if super::super::class_registry::is_class_object_ptr(p as *const u8) {
-                    let parent_cid = crate::object::js_object_get_class_id(p as *const _);
-                    if parent_cid != 0 {
-                        if let Some(obj) = subclass_this_object_ptr(this_box) {
-                            super::super::class_constructors::replay_class_object_constructor(
-                                parent_val, parent_cid, obj, args_ptr, args_len,
-                            );
                         }
                     }
                     return undef;
                 }
-                // A real callability test: a closure, or a per-evaluation class
-                // OBJECT (constructor). The prior `class_id != 0` accepted any
+            }
+            let usable = if bits & TAG_MASK == POINTER_TAG {
+                let p = (bits & PTR_MASK) as usize;
+                // A real callability test for the remaining pointer values.
+                // The prior `class_id != 0` accepted any
                 // pointer-tagged object with a class id — including non-callable
                 // instances — so a stale captured slot holding one of those
                 // skipped the `parent_closure_in_chain` recovery below and
