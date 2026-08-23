@@ -1951,6 +1951,7 @@ mod computed_and_field_async_tests {
             function: empty_fn(2, vec![Stmt::Expr(async_closure_with_await(70))]),
             is_static: false,
             kind: ClassComputedMemberKind::Method,
+            source_order: 0,
         });
         module.classes.push(class);
 
