@@ -1110,8 +1110,19 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
             return TAG_UNDEFINED_F64;
         }
 
+        // A raw memmove is only equivalent to Shift when every observable
+        // indexed operation is an ordinary dense-array access. Indexed
+        // descriptors and prototype properties require the specified live
+        // HasProperty/Get/Set/Delete order; their accessors can also freeze the
+        // receiver or make `length` non-writable before the final length Set.
+        if crate::array::array_iteration_is_exotic(arr) {
+            return shift_array_spec_path(arr);
+        }
+
+        // `TAG_HOLE` is an internal storage sentinel. Even on the dense path,
+        // Get(O, "0") must expose it as `undefined`.
+        let value = crate::array::js_array_get_f64(arr, 0);
         let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-        let value = *elements_ptr;
 
         // Shift all elements down
         // GC_STORE_AUDIT(BARRIERED): shift memmove is followed by layout/barrier rebuild.
@@ -1119,6 +1130,77 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
         (*arr).length = length - 1;
         rebuild_array_layout(arr);
         value
+    }
+}
+
+/// ECMA-262 Array.prototype.shift for a real array whose indexed operations
+/// are observable. The loop keeps the original length while consulting live
+/// presence and values, and roots both the receiver and carried values across
+/// accessors which may allocate or move either one.
+unsafe fn shift_array_spec_path(arr: *mut ArrayHeader) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    let first_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
+    let from_value_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
+    let len = (*arr).length;
+
+    let (first, _) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+        arr_handle.with_mut_ptr(|current| crate::array::array_spec_get(current, 0))
+    });
+    first_handle.set_nanbox_f64(first);
+
+    for from in 1..len {
+        let from_present = arr_handle.with_mut_ptr::<ArrayHeader, _>(|current| {
+            crate::array::array_spec_has_index(current, from)
+        });
+        let to = from - 1;
+        if from_present {
+            let (value, _) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+                arr_handle.with_mut_ptr(|current| crate::array::array_spec_get(current, from))
+            });
+            from_value_handle.set_nanbox_f64(value);
+            shift_array_spec_set(&arr_handle, to, &from_value_handle);
+        } else {
+            shift_array_spec_delete(&arr_handle, to);
+        }
+    }
+
+    shift_array_spec_delete(&arr_handle, len - 1);
+
+    // Set(O, "length", len - 1, true) occurs after every indexed operation.
+    // Re-read the receiver state because any getter/setter above may have
+    // frozen it or replaced `length` with a non-writable descriptor.
+    arr_handle.with_mut_ptr::<ArrayHeader, _>(|current| {
+        let current = clean_arr_ptr_mut(current);
+        if array_is_frozen(current) {
+            throw_frozen_array_mutation();
+        }
+        guard_writable_length(current);
+        (*current).length = len - 1;
+        rebuild_array_layout(current);
+    });
+    first_handle.get_nanbox_f64()
+}
+
+fn shift_array_spec_set(
+    arr_handle: &crate::gc::RuntimeHandle<'_>,
+    index: u32,
+    value_handle: &crate::gc::RuntimeHandle<'_>,
+) {
+    let _ = arr_handle.across_mut::<ArrayHeader, _>(|| {
+        let value = value_handle.get_nanbox_f64();
+        arr_handle.with_mut_ptr(|current| {
+            crate::array::js_array_set_f64_extend(current, index, value);
+        });
+    });
+}
+
+fn shift_array_spec_delete(arr_handle: &crate::gc::RuntimeHandle<'_>, index: u32) {
+    let (deleted, _) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+        arr_handle.with_mut_ptr(|current| crate::array::js_array_delete(current, index))
+    });
+    if deleted == 0 {
+        throw_cannot_delete_array_index(index);
     }
 }
 
