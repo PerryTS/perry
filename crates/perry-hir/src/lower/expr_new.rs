@@ -1571,12 +1571,26 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // evaluating the constructor reference.  That is a ReferenceError
             // (`new Missing()`), distinct from the TypeError produced when a
             // present binding's value is non-constructable.
+            //
+            // Consult the native-module registry under BOTH the (possibly
+            // rewritten) `class_name` AND the original `source_class_name`.
+            // The alias-rewrite block just above replaces `class_name` with a
+            // native class's EXPORT name (`Wj4` → `BlockList`) so the
+            // construction path below matches the un-aliased form, but the
+            // registry is keyed on the LOCAL import name (`Wj4`), so
+            // `lookup_native_module(&class_name)` misses under the export name.
+            // Checking `source_class_name` recognizes the aliased native import
+            // as resolved; without it, an aliased `import { BlockList as Wj4 }`
+            // / `{ AsyncLocalStorage as J_z }` / `{ PassThrough as Lrz }` (none
+            // of which are reified global builtins) fell through to this throw
+            // at module init even though the binding is perfectly resolvable.
             if ctx.lookup_class(&class_name).is_none()
                 && ctx.resolve_class_alias(&class_name).is_none()
                 && ctx.lookup_local(&class_name).is_none()
                 && ctx.lookup_func(&class_name).is_none()
                 && ctx.lookup_imported_func(&class_name).is_none()
                 && ctx.lookup_native_module(&class_name).is_none()
+                && ctx.lookup_native_module(source_class_name).is_none()
                 && !ctx.forward_class_names.contains(source_class_name)
                 && !is_reified_global_builtin_constructor(&class_name)
             {

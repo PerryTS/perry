@@ -516,13 +516,19 @@ pub fn transform_generator_function_with_extra_captures(
     // #4374: clone the state-dispatch loop so the .throw() closure can
     // *continue* the state machine after running a catch handler.
     let while_body_for_throw = while_body.clone();
-    // #4438 B2-finally: the `.return()` closure needs the same continuation loop
-    // when it routes into a yielding finally (so the finally's `yield`s suspend).
-    // #6709: the `.return()` closure is NOT an async-step driver (it cannot
-    // chain an inner `await` through `CurrentStepClosure`), so its dispatch
-    // keeps the busy-wait `await` shape — matching pre-#6709 `.return()`.
+    // #4438 B2-finally: a `.return()` that routes into a yielding finally must
+    // keep driving the state machine so the finally's `yield`s/`await`s run.
+    // #8715: async generators delegate that continuation to the shared `__agstep`
+    // step driver (see the `has_yielding_finally` branch below), so an `await`
+    // inside the finally suspends on the microtask queue via `AsyncStepChain`
+    // exactly as it does on the `.next()`/`.throw()` paths. Building an
+    // async_step=false dispatch loop here instead would lower every such `await`
+    // to a blocking busy-wait (`__sent = await v; continue`) — the finally analog
+    // of the #8681 catch deadlock — so async generators build none. Sync
+    // generators keep the busy-wait clone: they have no `await` states, so it
+    // stays correct, and their `.return()` is a plain (non-driver) closure.
     let while_body_for_return = if is_async_generator {
-        build_dispatch_while_body(&states, false, state_id, done_id, sent_id)
+        Vec::new()
     } else {
         while_body.clone()
     };
@@ -577,7 +583,10 @@ pub fn transform_generator_function_with_extra_captures(
     } else {
         while_body_for_throw
     };
-    let while_body_for_return = if wrap_dispatch {
+    // #8715: async generators no longer run a local `.return()` dispatch loop
+    // (`while_body_for_return` is empty — they delegate to `__agstep`), so skip
+    // wrapping it. Sync generators still wrap their busy-wait clone.
+    let while_body_for_return = if wrap_dispatch && !is_async_generator {
         let disp_err_id = alloc_local(next_local_id);
         wrap_dispatch_loop(
             while_body_for_return,
@@ -977,10 +986,10 @@ pub fn transform_generator_function_with_extra_captures(
         ))));
         if has_yielding_finally {
             // #4438 B2-finally: route `.return(v)` into the innermost enclosing
-            // yielding finally (record the pending return + jump in), then fall
-            // through to the continuation loop so the finally's `yield`s suspend;
-            // its completion check re-raises the return. Catches don't catch a
-            // return completion, so only finally routes apply.
+            // yielding finally — record the pending return and jump to
+            // `finally_entry_state`. Catches don't catch a return completion, so
+            // only finally routes apply; on no match, `return_fallback` completes
+            // the generator directly (never reaching the continuation below).
             return_resume_body.extend(build_abrupt_routing(
                 &catches,
                 &finallys,
@@ -994,10 +1003,36 @@ pub fn transform_generator_function_with_extra_captures(
                 false,
                 return_fallback,
             ));
-            return_resume_body.push(Stmt::While {
-                condition: Expr::Bool(true),
-                body: while_body_for_return,
-            });
+            if is_async_generator {
+                // #8715: a matched route has set `state = finally_entry_state`
+                // and recorded the pending return in the shared boxed locals.
+                // Hand off to the shared `__agstep` driver (a fresh, non-error
+                // resume) rather than run a local async_step=false loop, so a
+                // finally `await` suspends on the microtask queue (`AsyncStepChain`
+                // re-entering `__agstep`) instead of block-waiting — the fix for
+                // this issue. `__agstep` dispatches from `finally_entry_state`,
+                // runs the finally (its `yield`s settle this `.return()`'s
+                // promise, its `await`s suspend), and its completion-check state
+                // re-raises the pending return as `{value, done: true}`. This
+                // mirrors how `.next()`/`.throw()` already drive a yielding
+                // finally. `wrap_generator_resume_body` clears `executing` before
+                // this return, so `__agstep`'s re-entrancy guard passes.
+                let agstep_local_id =
+                    agstep_id.expect("agstep_id is set for async generators");
+                return_resume_body.push(Stmt::Return(Some(Expr::AsyncGenResume {
+                    step_closure: Box::new(Expr::LocalGet(agstep_local_id)),
+                    value: Box::new(Expr::Undefined),
+                    is_error: false,
+                })));
+            } else {
+                // Sync generators re-drive the finally inline in this closure —
+                // no microtask suspend is needed (they have no `await`), and the
+                // finally's `yield`s return `{value, done: false}` directly.
+                return_resume_body.push(Stmt::While {
+                    condition: Expr::Bool(true),
+                    body: while_body_for_return,
+                });
+            }
         } else {
             return_resume_body.extend(return_fallback);
         }
