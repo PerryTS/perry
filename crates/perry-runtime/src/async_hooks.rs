@@ -200,7 +200,7 @@ pub(crate) fn resolve_async_resource_handle(receiver: i64) -> Option<i64> {
         return Some(receiver);
     }
     let raw = receiver as usize;
-    if !crate::object::is_valid_obj_ptr(raw as *const u8) {
+    if !crate::value::addr_class::is_plausible_heap_addr(raw) {
         return None;
     }
     let key = js_string_from_bytes(
@@ -862,11 +862,13 @@ pub fn run_provider_completion(type_name: &'static str, completion: impl FnOnce(
     let scope = crate::gc::RuntimeHandleScope::new();
     let resource = crate::object::js_object_alloc_null_proto(0, 0);
     let resource_handle = scope.root_raw_mut_ptr(resource);
-    let ids = init_resource(
-        type_name,
-        crate::value::js_nanbox_pointer(resource_handle.get_raw_mut_ptr::<ObjectHeader>() as i64),
-        true,
-    );
+    let ids = resource_handle.with_mut_ptr::<ObjectHeader, _>(|resource| {
+        init_resource(
+            type_name,
+            crate::value::js_nanbox_pointer(resource as i64),
+            true,
+        )
+    });
     before(ids.async_id, ids.trigger_async_id);
     let result = scope.root_nanbox_f64(completion());
     after(ids.async_id);
@@ -1001,7 +1003,7 @@ fn string_header_to_string(ptr: *const StringHeader) -> String {
     }
     unsafe {
         let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+        let data = crate::string::string_data(ptr);
         String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
     }
 }
@@ -1309,7 +1311,7 @@ pub extern "C" fn js_async_resource_subclass_init(
     );
     let current_this = this_handle.get_nanbox_f64();
     let raw = crate::value::js_nanbox_get_pointer(current_this) as *mut ObjectHeader;
-    if !raw.is_null() && crate::object::is_valid_obj_ptr(raw as *const u8) {
+    if !raw.is_null() && crate::value::addr_class::is_plausible_heap_addr(raw as usize) {
         let key = js_string_from_bytes(
             ASYNC_RESOURCE_SUBCLASS_KEY.as_ptr(),
             ASYNC_RESOURCE_SUBCLASS_KEY.len() as u32,
@@ -1987,202 +1989,10 @@ pub fn scan_async_hooks_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
 }
 
 #[cfg(test)]
-pub fn reset_for_tests() {
-    HOOKS.lock().unwrap().clear();
-    RESOURCES.lock().unwrap().clear();
-    GC_DESTROY_QUEUE.lock().unwrap().clear();
-    CONTEXT_SNAPSHOTS.lock().unwrap().clear();
-    ASYNC_WRAP_PROVIDERS.store(0, Ordering::Relaxed);
-    TOP_LEVEL_RESOURCE.store(0, Ordering::Relaxed);
-    HOOKS_ACTIVE.store(0, Ordering::Relaxed);
-    PROMISE_HOOKS_ACTIVE.store(0, Ordering::Relaxed);
-    NEXT_ASYNC_ID.store(2, Ordering::Relaxed);
-    NEXT_CONTEXT_SNAPSHOT_ID.store(1, Ordering::Relaxed);
-    CURRENT_EXECUTION_ID.with(|c| c.set(0));
-    CURRENT_TRIGGER_ID.with(|c| c.set(0));
-    EXECUTION_STACK.with(|s| s.borrow_mut().clear());
-}
-
+mod test_support;
 #[cfg(test)]
-pub(crate) fn test_seed_async_hooks_scanner_roots(callback: *const ClosureHeader, resource: f64) {
-    reset_for_tests();
-    HOOKS.lock().unwrap().push(HookRecord {
-        callbacks: HookCallbacks {
-            init: callback,
-            before: callback,
-            after: callback,
-            destroy: callback,
-            promise_resolve: callback,
-        },
-        enabled: true,
-        track_promises: true,
-    });
-    HOOKS_ACTIVE.store(1, Ordering::Relaxed);
-    PROMISE_HOOKS_ACTIVE.store(1, Ordering::Relaxed);
-    RESOURCES.lock().unwrap().insert(
-        1,
-        ResourceMeta {
-            type_name: "test".to_string(),
-            trigger_async_id: 0,
-            resource,
-            context: crate::async_context::AsyncContextSnapshot::default(),
-            destroyed: false,
-        },
-    );
-}
-
+pub use test_support::reset_for_tests;
 #[cfg(test)]
-pub(crate) fn test_async_hooks_scanner_snapshot() -> (usize, u64) {
-    let callback = HOOKS
-        .lock()
-        .unwrap()
-        .first()
-        .map(|hook| hook.callbacks.init as usize)
-        .unwrap_or(0);
-    let resource_bits = RESOURCES
-        .lock()
-        .unwrap()
-        .get(&1)
-        .map(|meta| meta.resource.to_bits())
-        .unwrap_or(0);
-    (callback, resource_bits)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // #7680: no lock needed here anymore. `NEXT_ASYNC_ID` / `HOOKS` /
-    // `RESOURCES` / etc. are `per_test_global!`, so this thread's
-    // `reset_for_tests()` and `init_resource` calls touch only this thread's
-    // own instances — a concurrent test on another thread cannot land a
-    // `+2` between the two `init_resource` calls below, which is exactly
-    // the #7672 shape this test's own docstring warns about (a wrong VALUE,
-    // not a hang).
-
-    #[test]
-    fn resource_ids_are_monotonic_even_without_hooks() {
-        reset_for_tests();
-        let a = init_resource("A", TAG_UNDEFINED_F64, true);
-        let b = init_resource("B", TAG_UNDEFINED_F64, true);
-        // Ids start above 1 (Node reserves 1 for the root context) and are
-        // monotonic.
-        assert!(a.async_id > 1);
-        assert_eq!(b.async_id, a.async_id + 1);
-    }
-
-    #[test]
-    fn before_after_restore_execution_ids() {
-        reset_for_tests();
-        let ids = init_resource("A", TAG_UNDEFINED_F64, true);
-        before(ids.async_id, ids.trigger_async_id);
-        assert_eq!(execution_async_id_u64(), ids.async_id);
-        after(ids.async_id);
-        assert_eq!(execution_async_id_u64(), 0);
-    }
-
-    #[test]
-    fn track_promises_filters_hooks_and_activity() {
-        reset_for_tests();
-        let mut callbacks = HookCallbacks::empty();
-        callbacks.init = std::ptr::NonNull::<ClosureHeader>::dangling().as_ptr();
-        HOOKS.lock().unwrap().extend([
-            HookRecord {
-                callbacks,
-                enabled: false,
-                track_promises: false,
-            },
-            HookRecord {
-                callbacks,
-                enabled: false,
-                track_promises: true,
-            },
-        ]);
-        let suppressed = AsyncHookHandle { index: 0 };
-        let tracked = AsyncHookHandle { index: 1 };
-
-        js_async_hook_enable(&suppressed as *const AsyncHookHandle as i64);
-        assert!(hooks_active());
-        assert!(!promise_hooks_active());
-
-        js_async_hook_enable(&tracked as *const AsyncHookHandle as i64);
-        assert!(promise_hooks_active());
-        assert_eq!(enabled_callbacks(false).len(), 2);
-        assert_eq!(enabled_callbacks(true).len(), 1);
-
-        js_async_hook_disable(&tracked as *const AsyncHookHandle as i64);
-        assert!(hooks_active());
-        assert!(!promise_hooks_active());
-        js_async_hook_disable(&suppressed as *const AsyncHookHandle as i64);
-        assert!(!hooks_active());
-        reset_for_tests();
-    }
-
-    /// #7680: plants the #7672 shape directly rather than relying on a
-    /// scheduling accident — install a resource on THIS thread, run
-    /// `reset_for_tests()` (what all four of the pre-fix lock domains
-    /// eventually call) on ANOTHER thread, and assert the resource survived.
-    /// Revert the `per_test_global!` conversion above (back to bare
-    /// `static`s) and this fails with the resource gone — a foreign
-    /// thread's `reset_for_tests()` wiped `NEXT_ASYNC_ID` out from under a
-    /// resource this thread had already allocated, id and all.
-    #[test]
-    fn async_hooks_state_survives_a_foreign_reset_for_tests() {
-        reset_for_tests();
-        let ids = init_resource("survivor", TAG_UNDEFINED_F64, true);
-        assert!(
-            RESOURCES.lock().unwrap().contains_key(&ids.async_id),
-            "the probe installed nothing, so survived-vs-wiped would be vacuous"
-        );
-
-        std::thread::spawn(reset_for_tests)
-            .join()
-            .expect("the clearing thread panicked");
-
-        assert!(
-            RESOURCES.lock().unwrap().contains_key(&ids.async_id),
-            "a resource installed on this thread was destroyed by a GC test guard's \
-             async_hooks reset running on another thread (#7680). Per-thread storage \
-             (`per_test_global!`) is what prevents this."
-        );
-        assert!(
-            NEXT_ASYNC_ID.load(Ordering::Relaxed) > ids.async_id,
-            "NEXT_ASYNC_ID must not have been rewound by the foreign reset either"
-        );
-        reset_for_tests();
-    }
-
-    #[test]
-    fn native_async_resource_accepts_string_and_symbol_expandos() {
-        reset_for_tests();
-        crate::symbol::test_clear_symbol_side_table_roots();
-
-        let type_ptr = js_string_from_bytes(b"ExpandoResource".as_ptr(), 15);
-        let type_value = crate::value::js_nanbox_string(type_ptr as i64);
-        let handle = js_async_resource_new(type_value, TAG_UNDEFINED_F64);
-        assert!(is_async_resource_handle(handle));
-        let resource = crate::value::js_nanbox_pointer(handle);
-
-        let symbol = unsafe { crate::symbol::js_symbol_new_empty() };
-        unsafe {
-            crate::symbol::js_object_set_symbol_property(resource, symbol, TAG_UNDEFINED_F64);
-        }
-        crate::value::js_dyn_index_set(resource, symbol, 41.0);
-        assert_eq!(
-            unsafe { crate::symbol::js_object_get_symbol_property(resource, symbol) }.to_bits(),
-            41.0f64.to_bits(),
-            "computed Symbol assignment must not inspect the Box as a GC ObjectHeader"
-        );
-
-        let name_ptr = js_string_from_bytes(b"label".as_ptr(), 5);
-        let name = crate::value::js_nanbox_string(name_ptr as i64);
-        crate::proxy::js_put_value_set(resource, name, 42.0, resource, 1);
-        assert_eq!(
-            try_async_resource_property_dispatch(handle, "label").map(f64::to_bits),
-            Some(42.0f64.to_bits()),
-            "string expandos must be stored on the public AsyncResource object"
-        );
-
-        reset_for_tests();
-    }
-}
+pub(crate) use test_support::{
+    test_async_hooks_scanner_snapshot, test_seed_async_hooks_scanner_roots,
+};

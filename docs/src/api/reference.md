@@ -1752,6 +1752,8 @@ Total: 3015 entries across 137 modules.
 - `on` — instance *(class: `HttpServer`)*
 - `on` — instance *(class: `IncomingMessage`)*
 - `on` — instance *(class: `ServerResponse`)*
+- `once` — instance *(class: `IncomingMessage`)*
+- `once` — instance *(class: `ClientRequest`)*
 - `pause` — instance *(class: `IncomingMessage`)*
 - `protocol` — instance *(class: `Agent`)*
 - `read` — instance *(class: `IncomingMessage`)*

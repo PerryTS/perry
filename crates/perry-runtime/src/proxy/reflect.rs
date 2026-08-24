@@ -116,7 +116,7 @@ pub extern "C" fn js_reflect_set(target: f64, key: f64, value: f64, receiver: f6
     let target_ptr = extract_pointer(target.to_bits());
     if target_ptr != 0 {
         let obj = target_ptr as *const crate::object::ObjectHeader;
-        if crate::object::is_valid_obj_ptr(obj as *const u8)
+        if crate::value::addr_class::is_plausible_heap_addr(target_ptr as usize)
             && unsafe { (*obj).class_id } == crate::object::NATIVE_MODULE_CLASS_ID
             && unsafe { crate::object::read_native_module_name(obj) }.as_deref()
                 == Some("async_hooks")

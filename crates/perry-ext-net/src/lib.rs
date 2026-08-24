@@ -79,7 +79,12 @@ pub use socket_emit::{
 };
 // #2154 — raw-consumer bridge so perry-ext-http can drive an HTTP exchange
 // over a socket produced by `agent.createConnection` (split out for the gate).
+mod provider_lifecycle;
 mod raw_bridge;
+use provider_lifecycle::{
+    event_provider_id, init_provider, init_provider_with_trigger, prepare_event_provider,
+    ProviderScope,
+};
 use raw_bridge::RawReadState;
 // #2013 — chainable option-setter no-ops + Node arg-validation bridge to
 // perry-runtime (split out to keep lib.rs under the 2000-line gate). The
@@ -467,14 +472,6 @@ extern "C" {
     );
 }
 
-unsafe fn init_provider(name: &'static [u8]) -> u64 {
-    js_async_hooks_provider_init(name.as_ptr(), name.len())
-}
-
-unsafe fn init_provider_with_trigger(name: &'static [u8], trigger_async_id: u64) -> u64 {
-    js_async_hooks_provider_init_with_trigger(name.as_ptr(), name.len(), trigger_async_id)
-}
-
 fn push_event(ev: PendingNetEvent) {
     if let PendingNetEvent::ServerConnection(server_id, socket_id, false) = &ev {
         if !server_state::queue_server_connection(*server_id, *socket_id) {
@@ -491,103 +488,6 @@ fn push_event(ev: PendingNetEvent) {
 
 fn mark_closed(id: i64) {
     server_state::mark_socket_closed(id);
-}
-
-struct ProviderScope(u64);
-
-impl ProviderScope {
-    unsafe fn enter(async_id: u64) -> Self {
-        if async_id != 0 {
-            js_async_hooks_provider_enter(async_id);
-        }
-        Self(async_id)
-    }
-}
-
-impl Drop for ProviderScope {
-    fn drop(&mut self) {
-        if self.0 != 0 {
-            unsafe { js_async_hooks_provider_leave(self.0) };
-        }
-    }
-}
-
-unsafe fn prepare_event_provider(ev: &PendingNetEvent) {
-    match ev {
-        PendingNetEvent::ServerConnection(server_id, socket_id, _) => {
-            let server_async_id = statics::servers()
-                .lock()
-                .ok()
-                .and_then(|servers| servers.get(server_id).map(|server| server.async_id))
-                .unwrap_or(0);
-            let needs_init = statics::sockets()
-                .lock()
-                .ok()
-                .and_then(|sockets| {
-                    sockets
-                        .get(socket_id)
-                        .map(|socket| socket.tcp_async_id == 0)
-                })
-                .unwrap_or(false);
-            if needs_init {
-                let async_id = init_provider_with_trigger(b"TCPWRAP", server_async_id);
-                if let Some(socket) = statics::sockets().lock().unwrap().get_mut(socket_id) {
-                    socket.tcp_async_id = async_id;
-                }
-            }
-        }
-        PendingNetEvent::ShutdownComplete(id) => {
-            let trigger = statics::sockets().lock().ok().and_then(|sockets| {
-                sockets.get(id).and_then(|socket| {
-                    (socket.shutdown_async_id == 0).then_some(socket.tcp_async_id)
-                })
-            });
-            if let Some(trigger) = trigger {
-                let async_id = init_provider_with_trigger(b"SHUTDOWNWRAP", trigger);
-                if let Some(socket) = statics::sockets().lock().unwrap().get_mut(id) {
-                    socket.shutdown_async_id = async_id;
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn event_provider_id(ev: &PendingNetEvent) -> u64 {
-    match ev {
-        PendingNetEvent::Connect(id, _) => statics::sockets()
-            .lock()
-            .ok()
-            .and_then(|sockets| sockets.get(id).map(|socket| socket.connect_async_id))
-            .unwrap_or(0),
-        PendingNetEvent::Data(id, _)
-        | PendingNetEvent::End(id)
-        | PendingNetEvent::Error(id, _)
-        | PendingNetEvent::AbortError(id)
-        | PendingNetEvent::Close(id) => statics::sockets()
-            .lock()
-            .ok()
-            .and_then(|sockets| sockets.get(id).map(|socket| socket.tcp_async_id))
-            .unwrap_or(0),
-        PendingNetEvent::ShutdownComplete(id) => statics::sockets()
-            .lock()
-            .ok()
-            .and_then(|sockets| sockets.get(id).map(|socket| socket.shutdown_async_id))
-            .unwrap_or(0),
-        PendingNetEvent::ServerConnection(_, socket_id, _) => statics::sockets()
-            .lock()
-            .ok()
-            .and_then(|sockets| sockets.get(socket_id).map(|socket| socket.tcp_async_id))
-            .unwrap_or(0),
-        PendingNetEvent::ServerListening(id)
-        | PendingNetEvent::ServerClose(id)
-        | PendingNetEvent::ServerError(id, _)
-        | PendingNetEvent::ServerDrop(id, _) => statics::servers()
-            .lock()
-            .ok()
-            .and_then(|servers| servers.get(id).map(|server| server.async_id))
-            .unwrap_or(0),
-    }
 }
 
 // ─── Spawning helper ─────────────────────────────────────────────────────────
@@ -1087,28 +987,6 @@ pub unsafe extern "C" fn js_net_server_address(handle: i64) -> *mut StringHeader
         Err(_) => "null".to_string(),
     };
     alloc_string(&json).as_raw()
-}
-
-/// `server.on(event, cb)` — register a server-level listener for
-/// `'connection'`, `'listening'`, `'close'`, or `'error'`. Reuses
-/// the shared listener map keyed on the server id (server ids and
-/// socket ids are drawn from the same monotonic counter so they
-/// never collide).
-///
-/// # Safety
-///
-/// `event_ptr` must be null or a Perry-runtime `StringHeader`. `cb`
-/// is a raw `*const ClosureHeader` cast to `i64`.
-#[no_mangle]
-pub unsafe extern "C" fn js_net_server_on(handle: i64, event_ptr: i64, cb: i64) {
-    ensure_gc_scanner_registered();
-    let event = match string_from_header_i64(event_ptr) {
-        Some(e) => e,
-        None => return,
-    };
-    let mut listeners = statics::listeners().lock().unwrap();
-    let entry = listeners.entry(handle).or_default();
-    entry.entry(event).or_default().push(cb);
 }
 
 // ─── FFI: socket.connect(port, host) (instance method on existing handle) ─────
@@ -2167,106 +2045,14 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
     count
 }
 
-fn listeners_for(id: i64, event: &str) -> Vec<i64> {
-    statics::listeners()
-        .lock()
-        .unwrap()
-        .get(&id)
-        .and_then(|m| m.get(event).cloned())
-        .unwrap_or_default()
-}
-
-// `drain_once_listeners` lives in `lifecycle::drain_once_listeners` so
-// the file-size gate keeps a single owner for the EventEmitter surface.
-
-/// Returns 1 if queued events or live net handles keep the loop alive.
-#[no_mangle]
-pub extern "C" fn js_net_has_pending() -> i32 {
-    server_state::has_active_handles() as i32
-}
-
-/// True iff `handle` is a currently-registered net socket id. Mirrors the
-/// perry-stdlib export so codegen's `HANDLE_METHOD_DISPATCH` keeps working.
-pub fn is_net_socket_handle(handle: i64) -> bool {
-    statics::sockets().lock().unwrap().contains_key(&handle)
-}
-
-/// True iff `handle` is a currently-registered net server id.
-pub fn is_net_server_handle(handle: i64) -> bool {
-    statics::servers().lock().unwrap().contains_key(&handle)
-}
-
-/// `server.listening` — boolean state exposed through handle property dispatch.
-#[no_mangle]
-pub extern "C" fn js_net_server_listening(handle: i64) -> i32 {
-    match statics::servers().lock() {
-        Ok(servers) => servers
-            .get(&handle)
-            .map(|server| if server.listening { 1 } else { 0 })
-            .unwrap_or(0),
-        Err(_) => 0,
-    }
-}
-
-/// `extern "C"` form of `is_net_socket_handle` — used by
-/// perry-stdlib's `common::dispatch::dispatch_handle_method`
-/// (HANDLE_METHOD_DISPATCH) when bundled-net is stripped and
-/// the well-known flip routes 'net' to perry-ext-net. Returns
-/// 1 for a registered socket handle, 0 otherwise.
-///
-/// Closes the issue #91 regression: Map.get'd / struct-field /
-/// wrapper-function receivers where codegen lost the static type
-/// fall through to `js_native_call_method` →
-/// `dispatch_handle_method` → this query → `dispatch_net_socket`.
-/// Without the extern, the dispatch tower's `is_net_socket_handle`
-/// reference resolved to perry-stdlib's no-op stub (compiled-out
-/// when bundled-net is off) and Map-retrieved sockets silently
-/// dispatched to undefined.
-/// Distinct-symbol aliases for the socket EVENT-LISTENER surface (#5021's
-/// twin-symbol disease). perry-stdlib exports same-named `js_net_socket_on` /
-/// `_once` / `_remove_listener` twins, so in a build that links BOTH archives
-/// the shared names bind to the bundled twin's EMPTY socket registry and the
-/// listener registration is silently dropped: the socket connects, the reader
-/// task delivers bytes, and the pump finds ZERO 'data' listeners — mysql2's
-/// handshake then hangs to ETIMEDOUT. `write`/`end`/`destroy` were split out
-/// for exactly this reason (#5010/#5021); the listener calls were not.
-#[no_mangle]
-pub unsafe extern "C" fn js_ext_net_socket_on(handle: i64, event_ptr: i64, cb: i64) {
-    js_net_socket_on(handle, event_ptr, cb)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_ext_net_socket_once(handle: i64, event_ptr: i64, cb: i64) -> i64 {
-    js_net_socket_once(handle, event_ptr, cb)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_ext_net_socket_remove_listener(
-    handle: i64,
-    event_ptr: i64,
-    cb: i64,
-) -> i64 {
-    js_net_socket_remove_listener(handle, event_ptr, cb)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_ext_net_socket_remove_all_listeners(
-    handle: i64,
-    event_ptr: i64,
-) -> i64 {
-    js_net_socket_remove_all_listeners(handle, event_ptr)
-}
-
-/// `extern "C"` form of `is_net_server_handle` for method-value/property
-/// dispatch on `net.Server` handles.
-#[no_mangle]
-pub extern "C" fn js_ext_net_is_server_handle(handle: i64) -> i32 {
-    if is_net_server_handle(handle) {
-        1
-    } else {
-        0
-    }
-}
+mod handle_exports;
+use handle_exports::listeners_for;
+pub use handle_exports::{
+    is_net_server_handle, is_net_socket_handle, js_ext_net_is_server_handle, js_ext_net_socket_on,
+    js_ext_net_socket_once, js_ext_net_socket_remove_all_listeners,
+    js_ext_net_socket_remove_listener, js_net_has_pending, js_net_server_listening,
+    js_net_server_on,
+};
 
 #[cfg(test)]
 mod tests;

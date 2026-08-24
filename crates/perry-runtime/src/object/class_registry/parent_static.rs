@@ -1779,6 +1779,10 @@ pub fn method_owner_class_id(class_id: u32, name: &str) -> Option<u32> {
 }
 
 #[cfg(test)]
+#[path = "parent_static/unstamped_tests.rs"]
+mod unstamped_tests;
+
+#[cfg(test)]
 mod shape_authority_tests_8067 {
     fn key<'scope>(
         scope: &'scope crate::gc::RuntimeHandleScope,
@@ -1796,70 +1800,6 @@ mod shape_authority_tests_8067 {
         // extern entry point must validate before reading a preceding header.
         super::js_object_mark_class(0x40000);
         super::js_object_mark_class(1);
-    }
-
-    /// #8113 replaces #8067's "saved lineage beats an interim self-heal" test.
-    ///
-    /// The self-heal it modelled is GONE: `typed_feedback::object_shape` used to
-    /// mint a lineage-free descriptor for an unstamped receiver, which under
-    /// #8113 would also publish a live inline-slot bound of ZERO — a read-only
-    /// observation path silently truncating the object's payload. The property
-    /// worth pinning is now the stronger one: an unstamped receiver MISSES, and
-    /// observing it publishes nothing at all.
-    ///
-    /// The clear here is manufactured with a test-only helper. No production
-    /// path clears a stamp any more (`shapes::clear_object_shape_stamp` is
-    /// `#[cfg(test)]`), which is what makes the window this used to model
-    /// unreachable rather than merely narrow.
-    #[test]
-    fn an_unstamped_receiver_misses_instead_of_being_self_healed() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        unsafe {
-            const CID: u32 = 0x8068;
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let obj_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 1));
-            let ((), obj) = obj_handle.across_mut::<crate::ObjectHeader, _>(|| {
-                obj_handle.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
-                    super::js_object_mark_class(obj as i64)
-                })
-            });
-            let predecessor = crate::object::shapes::object_shape_descriptor(obj)
-                .expect("marked class descriptor");
-            assert_eq!(
-                predecessor.object_kind,
-                crate::object::shapes::ShapeObjectKind::Class
-            );
-            assert_eq!(predecessor.live_inline_slot_count, 1);
-
-            assert!(crate::object::shapes::clear_object_shape_stamp(obj));
-            let (interim, obj) = obj_handle.across_mut::<crate::ObjectHeader, _>(|| {
-                crate::typed_feedback::test_object_shape_token(obj as usize)
-            });
-            assert_eq!(
-                interim, 0,
-                "an unstamped receiver must MISS; minting a lineage-free \
-                 descriptor for it would publish a zero live-slot bound"
-            );
-            assert!(
-                crate::object::shapes::object_shape_descriptor(obj).is_none(),
-                "observing an unstamped receiver must not publish a descriptor"
-            );
-
-            // The mutator's saved lineage still restores both facts exactly.
-            crate::object::shapes::synchronize_object_shape_descriptor_from(
-                obj,
-                Some(predecessor),
-                predecessor.live_inline_slot_count,
-            );
-            let restored =
-                crate::object::shapes::object_shape_descriptor(obj).expect("restored descriptor");
-            assert_eq!(
-                restored.object_kind,
-                crate::object::shapes::ShapeObjectKind::Class,
-                "the mutator's saved semantic lineage must survive the window"
-            );
-            assert_eq!(restored.live_inline_slot_count, 1);
-        }
     }
 
     #[test]

@@ -539,7 +539,7 @@ pub extern "C" fn js_object_get_field_by_name(
     {
         if !key.is_null() {
             unsafe {
-                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let key_ptr = crate::string::string_data(key);
                 let key_len = (*key).byte_len as usize;
                 let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
                 let ta = addr as *const crate::typedarray::TypedArrayHeader;

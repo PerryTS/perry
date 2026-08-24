@@ -1260,10 +1260,14 @@ fn resolver_object(initial_servers: Vec<String>) -> *mut ObjectHeader {
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
-    let _ = crate::async_hooks::init_resource(
-        "DNSCHANNEL",
-        js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64),
-        true,
-    );
-    obj.get_raw_mut_ptr()
+    let (_, obj_ptr) = obj.across_mut::<ObjectHeader, _>(|| {
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| {
+            let _ = crate::async_hooks::init_resource(
+                "DNSCHANNEL",
+                js_nanbox_pointer(obj_ptr as i64),
+                true,
+            );
+        });
+    });
+    obj_ptr
 }

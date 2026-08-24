@@ -89,44 +89,53 @@ fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> 
     unsafe {
         // GC_STORE_AUDIT(INIT): initializes freshly allocated Promise storage before the promise is published.
         ptr::write(promise, Promise::new());
-        let parent = parent_handle.get_raw_mut_ptr::<Promise>();
-        let trigger_async_id = if parent.is_null() {
-            crate::async_hooks::execution_async_id_u64()
-        } else {
-            (*parent).async_id
-        };
+        let trigger_async_id = parent_handle.with_mut_ptr::<Promise, _>(|parent| {
+            if parent.is_null() {
+                crate::async_hooks::execution_async_id_u64()
+            } else {
+                (*parent).async_id
+            }
+        });
         if async_hooks_active {
-            let promise = promise_handle.get_raw_mut_ptr::<Promise>();
-            let resource =
-                f64::from_bits(0x7FFD_0000_0000_0000 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF));
-            let ids = crate::async_hooks::init_resource_with_trigger(
-                "PROMISE",
-                resource,
-                false,
-                trigger_async_id,
-            );
-            let promise = promise_handle.get_raw_mut_ptr::<Promise>();
-            (*promise).async_id = ids.async_id;
-            (*promise).trigger_async_id = ids.trigger_async_id;
+            let ids = promise_handle.with_mut_ptr::<Promise, _>(|promise| {
+                let resource = f64::from_bits(
+                    0x7FFD_0000_0000_0000 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF),
+                );
+                crate::async_hooks::init_resource_with_trigger(
+                    "PROMISE",
+                    resource,
+                    false,
+                    trigger_async_id,
+                )
+            });
+            promise_handle.with_mut_ptr::<Promise, _>(|promise| {
+                (*promise).async_id = ids.async_id;
+                (*promise).trigger_async_id = ids.trigger_async_id;
+            });
         } else {
             // Node assigns every Promise an id, not only promises created
             // while an observer is enabled. Keep this reservation out of the
             // resource table so an unobserved promise is not made immortal by
             // a strong resource root.
             let ids = crate::async_hooks::reserve_resource_ids(trigger_async_id);
-            let promise = promise_handle.get_raw_mut_ptr::<Promise>();
-            (*promise).async_id = ids.async_id;
-            (*promise).trigger_async_id = ids.trigger_async_id;
+            promise_handle.with_mut_ptr::<Promise, _>(|promise| {
+                (*promise).async_id = ids.async_id;
+                (*promise).trigger_async_id = ids.trigger_async_id;
+            });
         }
     }
-    crate::v8::promise_hook_init(
-        promise_handle.get_raw_mut_ptr::<Promise>(),
-        parent_handle.get_raw_mut_ptr::<Promise>(),
-    );
-    let promise = promise_handle.get_raw_mut_ptr::<Promise>();
-    // #5142: a recycled address may carry expando properties (`p.status = …`)
-    // left by a previously-collected promise; a fresh promise must start clean.
-    crate::object::exotic_expando::expando_clear_on_alloc(promise as usize);
+    promise_handle.with_mut_ptr::<Promise, _>(|promise| {
+        parent_handle.with_mut_ptr::<Promise, _>(|parent| {
+            crate::v8::promise_hook_init(promise, parent);
+        });
+    });
+    let (_, promise) = promise_handle.across_mut::<Promise, _>(|| {
+        promise_handle.with_mut_ptr::<Promise, _>(|promise| {
+            // #5142: a recycled address may carry expando properties (`p.status = …`)
+            // left by a previously-collected promise; a fresh promise must start clean.
+            crate::object::exotic_expando::expando_clear_on_alloc(promise as usize);
+        });
+    });
     promise
 }
 

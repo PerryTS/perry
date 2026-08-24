@@ -1724,113 +1724,13 @@ pub use pump::{js_readline_has_active, js_readline_process_pending};
 // Tests
 // ---------------------------------------------------------------------------
 
-/// Test-only helper: bypass the stdin reader and inject a line into the
-/// queue.
-#[doc(hidden)]
 #[cfg(test)]
-fn test_inject_line(line: &str) {
-    PENDING_LINES.lock().unwrap().push(line.to_string());
-}
-
-#[doc(hidden)]
-#[cfg(test)]
-fn test_inject_chunk(chunk: &[u8]) {
-    PENDING_DATA.lock().unwrap().push(chunk.to_vec());
-}
+mod test_support;
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::*;
     use super::*;
-    use std::sync::{Mutex, MutexGuard};
-
-    /// All readline tests share PENDING_LINES / PENDING_DATA / EOF_REACHED
-    /// / CLOSE_FIRED / RAW_MODE / the thread_local callback cells, so
-    /// `cargo test`'s default parallel runner races them — most visibly,
-    /// `has_active_reflects_state`'s `test_inject_line("x")` →
-    /// `assert has_active == 1` window can be observed mid-flight by
-    /// `injected_line_drains_via_test_helper`'s `reset()` (which clears
-    /// PENDING_LINES) and flake. Serialize every state-touching test
-    /// through one process-global lock acquired by `reset()`. Pure-
-    /// function tests (`parse_keypress_*`) don't call `reset()` and
-    /// continue running in parallel.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-    thread_local! {
-        static DATA_COUNT: RefCell<usize> = const { RefCell::new(0) };
-        static KEYPRESS_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    }
-
-    extern "C" fn count_data_callback(_closure: *const ClosureHeader, _chunk: f64) -> f64 {
-        DATA_COUNT.with(|count| *count.borrow_mut() += 1);
-        undefined()
-    }
-
-    fn data_counter_callback() -> i64 {
-        js_closure_alloc(count_data_callback as *const u8, 0) as i64
-    }
-
-    extern "C" fn count_readable_callback(_closure: *const ClosureHeader) -> f64 {
-        DATA_COUNT.with(|count| *count.borrow_mut() += 1);
-        undefined()
-    }
-
-    fn readable_counter_callback() -> i64 {
-        js_closure_alloc(count_readable_callback as *const u8, 0) as i64
-    }
-
-    extern "C" fn record_keypress_callback(
-        _closure: *const ClosureHeader,
-        _seq: f64,
-        key_obj: f64,
-    ) -> f64 {
-        let name = object_field(key_obj, b"name")
-            .map(value_to_string)
-            .unwrap_or_default();
-        KEYPRESS_NAMES.with(|names| names.borrow_mut().push(name));
-        undefined()
-    }
-
-    fn keypress_recorder_callback() -> i64 {
-        js_closure_alloc(record_keypress_callback as *const u8, 0) as i64
-    }
-
-    fn event_name(name: &str) -> *mut StringHeader {
-        js_string_from_bytes(name.as_ptr(), name.len() as u32)
-    }
-
-    fn reset() -> MutexGuard<'static, ()> {
-        let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        DATA_COUNT.with(|count| *count.borrow_mut() = 0);
-        KEYPRESS_NAMES.with(|names| names.borrow_mut().clear());
-        QUESTION_CALLBACK.with(|c| *c.borrow_mut() = None);
-        LINE_CALLBACK.with(|c| *c.borrow_mut() = None);
-        CLOSE_CALLBACK.with(|c| *c.borrow_mut() = None);
-        if let Ok(mut v) = DATA_CALLBACKS.lock() {
-            v.clear();
-        }
-        if let Ok(mut v) = KEYPRESS_CALLBACKS.lock() {
-            v.clear();
-        }
-        if let Ok(mut v) = READABLE_CALLBACKS.lock() {
-            v.clear();
-        }
-        PENDING_LINES.lock().unwrap().clear();
-        PENDING_DATA.lock().unwrap().clear();
-        PENDING_ESCAPE.lock().unwrap().clear();
-        EOF_REACHED.store(false, Ordering::Release);
-        READABLE_EOF_NOTIFIED.store(false, Ordering::Release);
-        STDIN_PAUSED.store(false, Ordering::Release);
-        STDIN_REFED.store(true, Ordering::Release);
-        STDIN_DESTROYED.store(false, Ordering::Release);
-        CLOSE_FIRED.with(|f| *f.borrow_mut() = false);
-        RAW_MODE.store(false, Ordering::Release);
-        STDIN_DATA_FLOWING.store(false, Ordering::Release);
-        READLINE_INTERFACES.with(|interfaces| interfaces.borrow_mut().clear());
-        NEXT_READLINE_HANDLE.with(|next| *next.borrow_mut() = 2);
-        // ensure_reader_started never spawns a real thread under cfg(test),
-        // so the started flag is safe to clear between tests.
-        READER_STARTED.store(false, Ordering::Release);
-        guard
-    }
 
     #[test]
     fn close_without_callbacks_is_noop() {

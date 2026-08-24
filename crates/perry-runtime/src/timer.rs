@@ -621,14 +621,20 @@ pub(crate) fn timer_constructor_value(id: i64) -> Option<f64> {
         name.as_ptr(),
         name.len() as u32,
     ));
-    crate::object::js_object_set_field_by_name(
-        obj.get_raw_mut_ptr(),
-        key.get_raw_mut_ptr(),
-        f64::from_bits(crate::value::JSValue::string_ptr(value.get_raw_mut_ptr()).bits()),
-    );
-    Some(crate::value::js_nanbox_pointer(
-        obj.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64,
-    ))
+    let (_, obj_ptr) = obj.across_mut::<crate::object::ObjectHeader, _>(|| {
+        obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj_ptr| {
+            key.with_mut_ptr::<crate::StringHeader, _>(|key_ptr| {
+                value.with_mut_ptr::<crate::StringHeader, _>(|value_ptr| {
+                    crate::object::js_object_set_field_by_name(
+                        obj_ptr,
+                        key_ptr,
+                        f64::from_bits(crate::value::JSValue::string_ptr(value_ptr).bits()),
+                    );
+                });
+            });
+        });
+    });
+    Some(crate::value::js_nanbox_pointer(obj_ptr as i64))
 }
 
 pub use ref_states::is_known_timer_id;

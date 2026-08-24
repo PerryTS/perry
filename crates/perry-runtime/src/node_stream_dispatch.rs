@@ -272,7 +272,7 @@ fn event_emitter_async_resource_backing(receiver: f64) -> Option<EventEmitterAsy
             return Some(EventEmitterAsyncResourceBacking::ExternalEmitter(handle));
         }
         let raw = handle as usize;
-        if crate::object::is_valid_obj_ptr(raw as *const u8) {
+        if crate::value::addr_class::is_plausible_heap_addr(raw) {
             let key = hidden_key(EVENT_EMITTER_ASYNC_RESOURCE_KEY);
             let value = js_object_get_field_by_name_f64(raw as *const ObjectHeader, key);
             if value.to_bits() >> 48 == 0x7FFD {
