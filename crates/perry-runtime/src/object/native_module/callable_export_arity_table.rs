@@ -49,7 +49,7 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         ("async_hooks", "executionAsyncResource") => Some(0),
         ("url", "URL") => Some(1),
         ("url", "URLPattern") => Some(0),
-        ("tls", "getCiphers") => Some(0),
+        ("tls", "getCiphers" | "getCertificateCompressionAlgorithms") => Some(0),
         ("tls", "getCACertificates" | "setDefaultCACertificates" | "createSecureContext") => {
             Some(1)
         }
