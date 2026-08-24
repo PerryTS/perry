@@ -62,6 +62,41 @@ Perry maps UI widgets to Win32 controls:
 | Canvas | GDI drawing |
 | Form/Section | GroupBox |
 
+## WinUI 3 (Fluent) target
+
+`--target windows-winui` is an opt-in backend for apps that want native WinUI
+3 controls and Fluent window chrome. The default `--target windows` path is
+unchanged and continues to use Win32/GDI.
+
+The Fluent backend currently maps Text, Button, TextField, SecureField,
+Toggle, Slider, ProgressView, VStack, HStack, ZStack, Spacer, Divider,
+ScrollView, Form, Section, and LazyVStack through Windows Reactor. Platform
+services continue to reuse the established Win32 implementation. Other visual
+controls retain their ABI entry points and will gain Fluent mappings
+incrementally.
+
+Perry emits a framework-dependent, unpackaged WinUI app. Install the stable
+[Windows App SDK 2.0 runtime](https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads)
+for the executable's architecture (x64 or ARM64) on every target machine.
+Version 2.0.1 or newer is accepted. Microsoft documents the runtime and
+bootstrap requirements in its
+[deployment guide for unpackaged apps](https://learn.microsoft.com/windows/apps/windows-app-sdk/deploy-unpackaged-apps).
+
+Build and run the ToDo sample from a Perry checkout:
+
+```powershell
+cargo build --release -p perry-ui-windows-winui
+cargo run --release -p perry -- compile docs/examples/ui/state/todo_app.ts `
+  --target windows-winui -o todo-winui.exe
+.\todo-winui.exe
+```
+
+The compiler copies `Microsoft.WindowsAppRuntime.Bootstrap.dll` and
+`resources.pri` beside the generated executable, including on link-cache hits.
+Keep both files next to the `.exe` when redistributing it. If the Windows App
+SDK runtime cannot be initialized, Perry reports the reason when
+`PERRY_WINUI_DIAG=1` is set and uses the Win32 backend instead.
+
 ## Windows-Specific APIs
 
 - **Menu bar**: HMENU / SetMenu

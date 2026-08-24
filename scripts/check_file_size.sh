@@ -34,6 +34,12 @@
 #     auxiliary enums and impls were already peeled into siblings;
 #     the variant list itself is irreducible.
 #
+# Vendored third-party sources are also allowlisted (currently
+# third_party/windows-winui/*): they are an upstream snapshot, not
+# Perry review surface, and must stay byte-identical so the vendor
+# drop can be re-diffed. Each still carries its own one-line
+# rationale in the ALLOWLIST block below.
+#
 set -euo pipefail
 
 THRESHOLD="${PERRY_FILE_SIZE_THRESHOLD:-2000}"
@@ -136,6 +142,21 @@ crates/perry-stdlib/src/streams.rs
 # phase/debt/budget groups should be split together in the tracked #1435 file
 # decomposition rather than mixed into an unrelated runtime fast-path PR.
 crates/perry-runtime/src/gc/policy.rs
+# --- Vendored third-party sources (third_party/windows-winui/, see its
+# VENDORED.md): a verbatim snapshot of Microsoft windows-rs / Windows Reactor
+# at commit 65066a7109c214f317ed66261cfb7518160b8aaf. These are NOT Perry
+# review surface and must stay byte-identical to upstream so the snapshot can
+# be re-diffed and re-pulled; splitting them would fork them permanently. ---
+# Machine-generated WinRT metadata bindings for Windows.Foundation.Collections.
+third_party/windows-winui/windows-collections/src/bindings.rs
+# Machine-generated WinRT metadata bindings for Windows.Foundation (IAsyncInfo).
+third_party/windows-winui/windows-future/src/bindings.rs
+# Machine-generated WinRT metadata bindings for Microsoft.UI.Xaml — the whole
+# WinUI 3 control surface in one generated file (26k lines).
+third_party/windows-winui/windows-reactor/src/bindings.rs
+# Upstream Windows Reactor XAML backend: the single Element -> Microsoft.UI.Xaml
+# realization/diff trunk shipped as one module by upstream.
+third_party/windows-winui/windows-reactor/src/winui/backend/mod.rs
 EOF
 )
 

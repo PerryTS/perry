@@ -971,6 +971,11 @@ pub(crate) fn build_and_run_link(
             find_ui_library(target)
         };
         if let Some(ui_lib) = ui_lib_option {
+            let winui_import_library = if matches!(target, Some("windows-winui")) {
+                Some(winui_assets::winui_bootstrap_import_library(&ui_lib)?)
+            } else {
+                None
+            };
             // The UI staticlib bundles perry_runtime + Rust std. When perry-stdlib
             // is also linked (which bundles the same), duplicate symbols cause
             // crashes (conflicting static state initialization). Strip fully
@@ -1048,6 +1053,9 @@ pub(crate) fn build_and_run_link(
                 // undefined when the lib is scanned. /WHOLEARCHIVE forces all
                 // objects from the archive to be included unconditionally.
                 cmd.arg(format!("/WHOLEARCHIVE:{}", ui_lib.display()));
+                if let Some(import_library) = winui_import_library {
+                    cmd.arg(import_library);
+                }
             } else {
                 cmd.arg(&ui_lib);
             }
@@ -1890,6 +1898,7 @@ pub(crate) fn build_and_run_link(
         if let Some(path) = embedded_info_plist_path {
             let _ = fs::remove_file(path);
         }
+        winui_assets::deploy_winui_runtime_assets(target, ctx.needs_ui, exe_path)?;
         return Ok(link_cache_status);
     }
 
@@ -1954,6 +1963,8 @@ pub(crate) fn build_and_run_link(
     if !status.success() {
         return Err(anyhow!("Linking failed"));
     }
+
+    winui_assets::deploy_winui_runtime_assets(target, ctx.needs_ui, exe_path)?;
 
     Ok(link_cache_status)
 }

@@ -9,7 +9,12 @@ pub mod dpi_compat;
 pub mod drag_drop;
 #[cfg(target_os = "windows")]
 pub mod dwm;
-mod gc;
+// `pub` so the opt-in WinUI backend (`perry-ui-windows-winui`) can chain this
+// crate's scanner. On the Fluent path that crate shadows `app_create`, so
+// `app::app_create` below never runs and would otherwise never register it,
+// leaving the Win32 tables this crate still owns (menu/tray/toolbar/window/
+// drag_drop/media_playback/pointer/widgets) unscanned.
+pub mod gc;
 pub mod issue_552_stub;
 #[cfg(target_os = "windows")]
 pub mod keyboard;
@@ -166,4 +171,5 @@ pub mod geisterhand_style;
 // FFI exports — split topically into `ffi/*` sub-modules. Each `#[no_mangle]
 // pub extern "C" fn perry_ui_<...>` symbol is preserved exactly so codegen-
 // generated callsites resolve at link time.
+#[cfg(feature = "ffi-exports")]
 pub mod ffi;

@@ -1,6 +1,6 @@
 // demonstrates: complete reactive todo app combining State, ForEach, and widget tree mutation
 // docs: docs/src/ui/state.md
-// platforms: macos, linux, windows
+// platforms: macos, linux, windows, windows-winui
 // targets: ios-simulator, tvos-simulator, watchos-simulator, web, wasm
 
 import {

@@ -1,0 +1,23 @@
+[package]
+name = "windows-collections"
+version = "0.3.2"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+description = "Windows collection types"
+repository = "https://github.com/microsoft/windows-rs"
+categories = ["os::windows-apis"]
+readme = "readme.md"
+
+[dependencies]
+windows-core = { path = "../windows-core", default-features = false }
+
+[dev-dependencies]
+windows-strings = { path = "../windows-strings" }
+
+[features]
+default = ["std"]
+std = ["windows-core/std"]
+
+[package.metadata.docs.rs]
+targets = []

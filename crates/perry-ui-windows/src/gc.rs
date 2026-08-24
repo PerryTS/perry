@@ -2,7 +2,7 @@ use std::sync::Once;
 
 static GC_SCANNER_REGISTERED: Once = Once::new();
 
-pub(crate) fn ensure_gc_scanner_registered() {
+pub fn ensure_gc_scanner_registered() {
     perry_ui::ensure_gc_scanner_registered();
     GC_SCANNER_REGISTERED.call_once(|| {
         perry_ffi::gc_register_mutable_root_scanner_named(

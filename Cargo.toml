@@ -81,6 +81,24 @@ members = [
     "crates/perry-stdlib-static",
     "docs/examples/_fixtures/native-libraries/my-bindings",
 ]
+# Vendored upstream windows-rs / Windows Reactor sources used by the opt-in
+# WinUI 3 backend (`third_party/windows-winui/`, see its VENDORED.md). They are
+# PATH DEPENDENCIES of `perry-ui-windows-winui`, not Perry crates: excluding
+# them keeps them out of the workspace member set, so `cargo test --workspace`
+# never compiles them and Perry's `[workspace.lints]` policy is never applied
+# to third-party code. `perry-ui-windows-winui` still resolves them normally
+# through its `path = "../../third_party/..."` dependency edge.
+#
+# They live OUTSIDE `crates/` on purpose. Cargo's `exclude` loses to an
+# explicit `members` entry that is a path PREFIX of the excluded directory
+# (`is_excluded` returns `!explicit_member && excluded`), so while these sat in
+# `crates/perry-ui-windows-winui/vendor/` they were implicit members and NO
+# `exclude` entry could remove them. Keeping them out of `crates/` also keeps
+# them out of the `crates/perry-ui*` globs used by the GC/lint census gates.
+exclude = [
+    "third_party/windows-winui",
+]
+
 # Build only the host-independent product set by default.
 # Platform UI manifests keep their source and dependencies behind target cfgs.
 # Build each platform package explicitly for its applicable target.

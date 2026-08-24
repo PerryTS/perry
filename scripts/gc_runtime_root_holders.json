@@ -1487,6 +1487,12 @@
       "why": "Text registry maps Rust string ids to numeric native widget handles; it contains no JavaScript value."
     },
     {
+      "file": "crates/perry-ui-windows-winui/src/app.rs",
+      "name": "APPS",
+      "verdict": "not_a_gc_pointer",
+      "why": "AppState holds a Rust-owned title String, the two f64 window dimensions, an i64 WIDGET handle (root: a 1-based index into widgets::NODES, not an address), two Option<(f64, f64)> size constraints and a PresenterKind enum \u2014 no NaN-boxed JavaScript value, so rule S fired on the f64/i64 fields rather than on a heap pointer. This module's real callback roots (ON_ACTIVATE / ON_TERMINATE / PENDING_TIMERS, each a raw closure pointer unboxed by js_nanbox_get_pointer) are visited by scan_winui_app_gc_roots."
+    },
+    {
       "file": "crates/perry-ui-windows/src/app.rs",
       "name": "APPS",
       "verdict": "not_a_gc_pointer",

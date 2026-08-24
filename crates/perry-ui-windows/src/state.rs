@@ -275,25 +275,9 @@ pub fn state_set(handle: i64, value: f64) {
                     // Format as number
                     formatted.clone()
                 };
-                #[cfg(target_os = "windows")]
-                {
-                    if let Some(hwnd) = widgets::get_hwnd(binding.textfield_handle) {
-                        binding.suppress.set(true);
-                        let wide: Vec<u16> =
-                            text.encode_utf16().chain(std::iter::once(0)).collect();
-                        unsafe {
-                            let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(
-                                hwnd,
-                                windows::core::PCWSTR(wide.as_ptr()),
-                            );
-                        }
-                        binding.suppress.set(false);
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = text;
-                }
+                binding.suppress.set(true);
+                widgets::textfield::set_string_str(binding.textfield_handle, &text);
+                binding.suppress.set(false);
             }
         }
     });
@@ -487,21 +471,6 @@ pub fn bind_textfield(state_handle: i64, textfield_handle: i64) {
     let str_ptr = unsafe { js_get_string_pointer_unified(value) };
     if !str_ptr.is_null() {
         let text = unsafe { str_from_header(str_ptr) };
-        #[cfg(target_os = "windows")]
-        {
-            if let Some(hwnd) = widgets::get_hwnd(textfield_handle) {
-                let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-                unsafe {
-                    let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(
-                        hwnd,
-                        windows::core::PCWSTR(wide.as_ptr()),
-                    );
-                }
-            }
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = text;
-        }
+        widgets::textfield::set_string_str(textfield_handle, &text);
     }
 }
