@@ -27,6 +27,7 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
+use inkwell::values::AsValueRef;
 use inkwell::OptimizationLevel;
 
 use crate::linker::STATEPOINT_REWRITE_PASSES;
@@ -383,12 +384,10 @@ fn module_instruction_census(
 
 /// Instruction budget for ONE function after `rewrite-statepoints-for-gc`.
 ///
-/// This is an assertion about the estimate that keeps relocation fan-out out
-/// of LLVM's input (#8583), not an optimization policy: a function past it is
-/// refused loudly, never demoted. The #8421 contract — every function is
-/// optimized at the level the plan asked for — stays intact; what this adds
-/// is that an estimator miss fails in seconds with the function's name and
-/// sizes instead of hanging the build for hours.
+/// This is the measured backstop for the estimate that keeps relocation
+/// fan-out out of LLVM's optimizer input (#8583). A function past it is sent
+/// back to codegen for a shadow-frame spill and then compiled again at the
+/// requested optimization level (#8679); it is never demoted or refused.
 ///
 /// Calibrated between the two measured points of #8128 on the Next 16.3.0
 /// production bundle: the largest post-rewrite function that finished
@@ -403,6 +402,52 @@ enum RewriteBudget {
     Off,
     Error(usize),
     Warn(usize),
+}
+
+/// One function that must be re-lowered onto a shadow frame before LLVM can
+/// safely optimize its codegen unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Rs4gcBudgetViolation {
+    /// LLVM symbol of the function to spill.
+    pub name: String,
+    /// Instruction count before RS4GC, when the caller requested a census.
+    pub pre_instructions: Option<usize>,
+    /// Instruction count after RS4GC and before the optimizer.
+    pub post_instructions: usize,
+    /// Active per-function instruction limit.
+    pub cap: usize,
+}
+
+/// Typed backend signal consumed by the codegen retry loops. Keeping this as
+/// an error lets every existing LLVM API stop before the super-linear
+/// optimizer, while the type (preserved through `anyhow` contexts) prevents
+/// callers from scraping a diagnostic string for function names.
+#[derive(Debug)]
+struct Rs4gcBudgetExceeded {
+    violations: Vec<Rs4gcBudgetViolation>,
+}
+
+impl std::fmt::Display for Rs4gcBudgetExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, violation) in self.violations.iter().enumerate() {
+            if index != 0 {
+                writeln!(f)?;
+            }
+            write!(f, "{}", rewrite_budget_message(violation, true))?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for Rs4gcBudgetExceeded {}
+
+/// Recover an RS4GC spill request through any diagnostic contexts added by
+/// the native or text transport layers.
+pub(crate) fn rs4gc_budget_retry(error: &anyhow::Error) -> Option<Vec<Rs4gcBudgetViolation>> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<Rs4gcBudgetExceeded>())
+        .map(|request| request.violations.clone())
 }
 
 fn parse_rewrite_budget(value: Option<&str>) -> RewriteBudget {
@@ -427,21 +472,92 @@ fn parse_rewrite_budget(value: Option<&str>) -> RewriteBudget {
 }
 
 fn rs4gc_instruction_budget() -> RewriteBudget {
+    #[cfg(test)]
+    if let Some(budget) = TEST_RS4GC_BUDGET.with(std::cell::Cell::get) {
+        return budget;
+    }
     parse_rewrite_budget(std::env::var("PERRY_LL_RS4GC_MAX_INSTRS").ok().as_deref())
 }
 
-/// Every defined function whose post-rewrite body exceeds `cap`.
+#[cfg(test)]
+thread_local! {
+    static TEST_RS4GC_BUDGET: std::cell::Cell<Option<RewriteBudget>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+/// Thread-local budget seam for native-construction tests. Unlike mutating
+/// `PERRY_LL_RS4GC_MAX_INSTRS`, this cannot make concurrently-running LLVM
+/// tests spuriously spill or fail.
+#[cfg(test)]
+pub(crate) fn with_test_rs4gc_budget<T>(cap: usize, run: impl FnOnce() -> T) -> T {
+    struct Restore(Option<RewriteBudget>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_RS4GC_BUDGET.set(self.0);
+        }
+    }
+    let old = TEST_RS4GC_BUDGET.replace(Some(RewriteBudget::Error(cap)));
+    let _restore = Restore(old);
+    run()
+}
+
+#[cfg(test)]
+/// Return the producer thread's test-only error budget for worker inheritance.
+pub(crate) fn test_rs4gc_budget_cap() -> Option<usize> {
+    TEST_RS4GC_BUDGET.with(|budget| match budget.get() {
+        Some(RewriteBudget::Error(cap)) => Some(cap),
+        _ => None,
+    })
+}
+
+#[cfg(test)]
+/// Install the producer's test budget around one worker-thread backend call.
+pub(crate) fn with_inherited_test_rs4gc_budget<T>(
+    cap: Option<usize>,
+    run: impl FnOnce() -> T,
+) -> T {
+    match cap {
+        Some(cap) => with_test_rs4gc_budget(cap, run),
+        None => run(),
+    }
+}
+
+/// Names of functions that actually entered RS4GC. A shadow-spilled function
+/// still lives in a native-roots module, but carries no GC strategy and must
+/// not trip the retry budget a second time merely because its ordinary body
+/// is large.
+fn rs4gc_functions(module: &inkwell::module::Module<'_>) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    let mut function = module.get_first_function();
+    while let Some(f) = function {
+        if f.count_basic_blocks() > 0 {
+            let gc = unsafe { llvm_sys::core::LLVMGetGC(f.as_value_ref()) };
+            if !gc.is_null()
+                && unsafe { std::ffi::CStr::from_ptr(gc) }.to_bytes() == b"statepoint-example"
+            {
+                names.insert(f.get_name().to_string_lossy().into_owned());
+            }
+        }
+        function = f.get_next_function();
+    }
+    names
+}
+
+/// Every RS4GC-participating function whose post-rewrite body exceeds `cap`.
 fn rs4gc_budget_violations(
     module: &inkwell::module::Module<'_>,
     cap: usize,
+    rewritten_functions: &std::collections::HashSet<String>,
 ) -> Vec<(String, usize)> {
     let mut over = Vec::new();
     let mut function = module.get_first_function();
     while let Some(f) = function {
         if f.count_basic_blocks() > 0 {
+            let name = f.get_name().to_string_lossy().into_owned();
             let n = function_instruction_count(f);
-            if n > cap {
-                over.push((f.get_name().to_string_lossy().into_owned(), n));
+            if n > cap && rewritten_functions.contains(&name) {
+                over.push((name, n));
             }
         }
         function = f.get_next_function();
@@ -449,18 +565,23 @@ fn rs4gc_budget_violations(
     over
 }
 
-fn rewrite_budget_message(name: &str, post: usize, cap: usize, pre: Option<usize>) -> String {
-    let before = pre
+fn rewrite_budget_message(violation: &Rs4gcBudgetViolation, retry: bool) -> String {
+    let before = violation
+        .pre_instructions
         .map(|n| format!(" (it was {n} before the rewrite)"))
         .unwrap_or_default();
+    let outcome = if retry {
+        "Perry will re-lower this function with precise roots in a shadow frame, then retry the \
+         unit at the requested optimization level"
+    } else {
+        "the warning-only budget override leaves the function for LLVM to optimize"
+    };
     format!(
-        "rewrite-statepoints-for-gc grew `{name}` to {post} instructions{before}; the \
-         per-function budget is {cap}. LLVM's optimizer is super-linear on statepoint \
-         relocation fan-out of this size and the compile would not finish in practical \
-         time, so the unit is refused instead of being left to hang. Perry does not lower \
-         the optimization level for it: the fix is to keep this function's GC roots out \
-         of the relocation set or to split it (#8583). Override with \
-         PERRY_LL_RS4GC_MAX_INSTRS=<n> (raise), =warn:<n> (warn only) or =0 (disable)."
+        "rewrite-statepoints-for-gc grew `{}` to {} instructions{before}; the \
+         per-function budget is {}. LLVM's optimizer is super-linear on statepoint \
+         relocation fan-out of this size; {outcome} (#8679). Override with \
+         PERRY_LL_RS4GC_MAX_INSTRS=<n> (raise), =warn:<n> (warn only) or =0 (disable).",
+        violation.name, violation.post_instructions, violation.cap
     )
 }
 
@@ -470,25 +591,34 @@ fn enforce_rs4gc_instruction_budget(
     module: &inkwell::module::Module<'_>,
     budget: RewriteBudget,
     pre: &std::collections::HashMap<String, usize>,
+    rewritten_functions: &std::collections::HashSet<String>,
 ) -> Result<()> {
     let (cap, fatal) = match budget {
         RewriteBudget::Off => return Ok(()),
         RewriteBudget::Error(cap) => (cap, true),
         RewriteBudget::Warn(cap) => (cap, false),
     };
-    let over = rs4gc_budget_violations(module, cap);
+    let over = rs4gc_budget_violations(module, cap, rewritten_functions);
     if over.is_empty() {
         return Ok(());
     }
-    let messages: Vec<String> = over
-        .iter()
-        .map(|(name, post)| rewrite_budget_message(name, *post, cap, pre.get(name).copied()))
+    let violations: Vec<Rs4gcBudgetViolation> = over
+        .into_iter()
+        .map(|(name, post_instructions)| Rs4gcBudgetViolation {
+            pre_instructions: pre.get(&name).copied(),
+            name,
+            post_instructions,
+            cap,
+        })
         .collect();
     if fatal {
-        return Err(anyhow!("{}", messages.join("\n")));
+        return Err(anyhow::Error::new(Rs4gcBudgetExceeded { violations }));
     }
-    for m in messages {
-        eprintln!("perry: warning: {m}");
+    for violation in &violations {
+        eprintln!(
+            "perry: warning: {}",
+            rewrite_budget_message(violation, false)
+        );
     }
     Ok(())
 }
@@ -593,6 +723,7 @@ fn optimize_and_emit(
         // Sizes before the rewrite: the budget message below names them, and
         // the per-unit report compares them with the post-rewrite census.
         let budget = rs4gc_instruction_budget();
+        let rewritten_functions = rs4gc_functions(module);
         let pre_sizes = if budget == RewriteBudget::Off && stats.is_none() {
             std::collections::HashMap::new()
         } else {
@@ -635,8 +766,11 @@ fn optimize_and_emit(
             stats.post_rewrite_instructions = total;
             stats.post_rewrite_widest = widest;
         }
-        // The relocation-fan-out assertion (#8583): refuse, never demote.
-        enforce_rs4gc_instruction_budget(module, budget, &pre_sizes)?;
+        // The relocation-fan-out backstop (#8583/#8679): stop before the
+        // super-linear optimizer and ask codegen to retry the named functions
+        // with precise shadow-frame roots. The retry keeps this same pipeline
+        // and optimization level; only the GC-root representation changes.
+        enforce_rs4gc_instruction_budget(module, budget, &pre_sizes, &rewritten_functions)?;
     }
 
     let pipeline = match opt {
@@ -820,6 +954,7 @@ mod tests {
         let before = parse_ir_text(&context, &fixture, "fanout_before").expect("fixture parses");
         let after = parse_ir_text(&context, &rewritten, "fanout_after").expect("rewritten parses");
         let pre = pre_rewrite_sizes(&before);
+        let rewritten_functions = rs4gc_functions(&before);
         let pre_f = pre["f"];
         let (_, post_total, post_widest) = module_instruction_census(&after);
         let post_f = post_widest.as_ref().map(|(_, n)| *n).unwrap_or(0);
@@ -831,10 +966,10 @@ mod tests {
         let cap = pre_f + (post_f - pre_f) / 2;
 
         assert!(
-            rs4gc_budget_violations(&before, cap).is_empty(),
+            rs4gc_budget_violations(&before, cap, &rewritten_functions).is_empty(),
             "the pre-rewrite module is under the budget by construction"
         );
-        let over = rs4gc_budget_violations(&after, cap);
+        let over = rs4gc_budget_violations(&after, cap, &rewritten_functions);
         assert_eq!(
             over.len(),
             1,
@@ -843,8 +978,19 @@ mod tests {
         assert_eq!(over[0].0, "f");
         assert_eq!(over[0].1, post_f);
 
-        let err = enforce_rs4gc_instruction_budget(&after, RewriteBudget::Error(cap), &pre)
-            .expect_err("the default spelling refuses the unit");
+        let err = enforce_rs4gc_instruction_budget(
+            &after,
+            RewriteBudget::Error(cap),
+            &pre,
+            &rewritten_functions,
+        )
+        .expect_err("the default spelling requests a spill retry");
+        let retry = rs4gc_budget_retry(&err).expect("the request stays typed");
+        assert_eq!(retry.len(), 1);
+        assert_eq!(retry[0].name, "f");
+        assert_eq!(retry[0].pre_instructions, Some(pre_f));
+        assert_eq!(retry[0].post_instructions, post_f);
+        assert_eq!(retry[0].cap, cap);
         let msg = format!("{err:#}");
         for needle in [
             "`f`",
@@ -852,7 +998,8 @@ mod tests {
             &format!("it was {pre_f} before"),
             &format!("budget is {cap}"),
             "PERRY_LL_RS4GC_MAX_INSTRS",
-            "#8583",
+            "re-lower",
+            "#8679",
         ] {
             assert!(
                 msg.contains(needle),
@@ -863,12 +1010,35 @@ mod tests {
             !msg.contains("optnone"),
             "the budget is an assertion, never a demotion:\n{msg}"
         );
-        enforce_rs4gc_instruction_budget(&after, RewriteBudget::Warn(cap), &pre)
-            .expect("warn spelling does not refuse");
-        enforce_rs4gc_instruction_budget(&after, RewriteBudget::Off, &pre)
-            .expect("off spelling does not refuse");
-        enforce_rs4gc_instruction_budget(&after, RewriteBudget::Error(post_f), &pre)
-            .expect("a budget at the exact size is not exceeded");
+        enforce_rs4gc_instruction_budget(
+            &after,
+            RewriteBudget::Warn(cap),
+            &pre,
+            &rewritten_functions,
+        )
+        .expect("warn spelling does not retry");
+        enforce_rs4gc_instruction_budget(&after, RewriteBudget::Off, &pre, &rewritten_functions)
+            .expect("off spelling does not retry");
+        enforce_rs4gc_instruction_budget(
+            &after,
+            RewriteBudget::Error(post_f),
+            &pre,
+            &rewritten_functions,
+        )
+        .expect("a budget at the exact size is not exceeded");
+
+        // The retry removes the function's GC strategy. Its ordinary shadow
+        // body may itself exceed a deliberately tiny test cap, but it must not
+        // request the same spill forever: only functions that entered RS4GC
+        // are governed by this relocation-fan-out budget.
+        let no_rewritten_functions = std::collections::HashSet::new();
+        enforce_rs4gc_instruction_budget(
+            &after,
+            RewriteBudget::Error(cap),
+            &pre,
+            &no_rewritten_functions,
+        )
+        .expect("a shadow-spilled function is outside the RS4GC budget");
     }
 
     fn constant_fold_order_fixture(folded: bool) -> String {

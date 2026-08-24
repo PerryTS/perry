@@ -130,7 +130,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Self-test the verdict logic
@@ -148,7 +148,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -181,13 +181,11 @@ jobs:
 
       - name: Install Rust toolchain
         if: steps.relevance.outputs.run == 'true'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
         if: steps.relevance.outputs.run == 'true'
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: steps.relevance.outputs.run == 'true'
         with:
           # Shared with gc-stress/gc-moving-witnesses (same package set), so

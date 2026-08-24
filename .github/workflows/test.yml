@@ -105,7 +105,7 @@ jobs:
       plan: ${{ steps.plan.outputs.plan }}
       tier: ${{ steps.plan.outputs.tier }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -170,7 +170,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Changeset gate (was its own job): PRs touching crates/ must ship
       # changelog.d/<PR>-<slug>.md (see changelog.d/README.md; fragments fold
@@ -205,7 +205,7 @@ jobs:
           exit 1
 
       - name: Setup Node.js for benchmark harness tests
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # Kept in lockstep with benchmark.yml's peer-comparison Node via the
           # shared .node-version pin — these harness tests exercise the same
@@ -225,13 +225,10 @@ jobs:
         run: ./tests/test_stage_npm_windows_llvm.sh
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
-          components: rustfmt, clippy
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal --component rustfmt --component clippy
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           # PRs read from cache; only main writes new entries.
@@ -738,16 +735,13 @@ jobs:
     # a perf budget — margin costs nothing on healthy runs.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
-          components: clippy
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal --component clippy
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -827,26 +821,24 @@ jobs:
       SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       - name: Restore sccache objects
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -875,7 +867,7 @@ jobs:
       # branched from.
       - name: Save sccache objects (main-line runs only)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -941,16 +933,14 @@ jobs:
       SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       # Persist the sccache disk cache across runs. The github.job +
       # github.run_id key makes every run (including PRs) save its own fresh
@@ -959,14 +949,14 @@ jobs:
       # cache from ANY of them. The object cache therefore warms continuously
       # and cross-pollinates instead of starting cold each run.
       - name: Restore sccache objects
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1168,7 +1158,7 @@ jobs:
       # branched from.
       - name: Save sccache objects (main-line runs only)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -1222,7 +1212,7 @@ jobs:
     steps:
       # Nothing here pushes back to the repo, and the job compiles third-party
       # crates (build scripts run), so don't leave a git credential on disk.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -1267,26 +1257,24 @@ jobs:
 
       - name: Install Rust toolchain
         if: steps.scope.outputs.rust_work == 'true'
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
         if: steps.scope.outputs.rust_work == 'true'
 
       - name: Install sccache
         if: steps.scope.outputs.rust_work == 'true'
-        uses: mozilla-actions/sccache-action@v0.0.11
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       - name: Restore sccache objects
         if: steps.scope.outputs.rust_work == 'true'
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: steps.scope.outputs.rust_work == 'true'
         with:
           shared-key: "${{ runner.os }}-perry"
@@ -1391,7 +1379,7 @@ jobs:
       # branched from.
       - name: Save sccache objects (main-line runs only)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -1425,7 +1413,7 @@ jobs:
     # timeout on a required-path job is a deterministic PR blocker).
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # This job compiles PR-controlled build scripts / proc macros;
           # don't leave the workflow token in .git/config for them to read
@@ -1455,17 +1443,15 @@ jobs:
           python benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version-file: .node-version
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1555,14 +1541,12 @@ jobs:
     runs-on: windows-11-arm
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Set up ARM64 MSVC environment
@@ -1570,11 +1554,11 @@ jobs:
         # PowerShell environment does not include the SDK's ARM64 library
         # directories. Populate LIB / INCLUDE / PATH so the final PE link can
         # resolve system import libraries such as user32.lib.
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: amd64_arm64
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-${{ runner.arch }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1669,15 +1653,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1688,7 +1670,7 @@ jobs:
           sudo apt-get install -y clang
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # matrix oracle (we byte-diff against it), so the version is a
@@ -1750,7 +1732,7 @@ jobs:
 
       - name: Upload matrix report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gc-repsel-matrix
           path: gc-repsel-matrix.json
@@ -1790,16 +1772,14 @@ jobs:
       SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       # Persist the sccache disk cache across runs. The github.job +
       # github.run_id key makes every run (including PRs) save its own fresh
@@ -1808,14 +1788,14 @@ jobs:
       # cache from ANY of them. The object cache therefore warms continuously
       # and cross-pollinates instead of starting cold each run.
       - name: Restore sccache objects
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1911,7 +1891,7 @@ jobs:
 
       - name: Upload compiler-output artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: compiler-output-regression
           path: target/compiler-output-regression/
@@ -1925,7 +1905,7 @@ jobs:
       # branched from.
       - name: Save sccache objects (main-line runs only)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -1988,26 +1968,24 @@ jobs:
       # because it rebuilds runtime libs the census never links.
       PERRY_NO_AUTO_OPTIMIZE: "1"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       - name: Restore sccache objects
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -2119,7 +2097,7 @@ jobs:
 
       - name: Upload census reports
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: repsel-census
           path: target/repsel-census/
@@ -2133,7 +2111,7 @@ jobs:
       # branched from.
       - name: Save sccache objects (main-line runs only)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -2162,26 +2140,24 @@ jobs:
       SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       - name: Restore sccache objects
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-native-abi-evidence-${{ github.run_id }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -2201,7 +2177,7 @@ jobs:
 
       - name: Upload native ABI evidence packet
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: native-abi-evidence-packet
           path: target/native-abi-evidence-packet/
@@ -2215,7 +2191,7 @@ jobs:
       # branched from.
       - name: Save sccache objects (main-line runs only)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-native-abi-evidence-${{ github.run_id }}
@@ -2226,9 +2202,57 @@ jobs:
   # in the full tier (scripts/ci_plan.py GAP_SUITE). The `gate` fan-in below is
   # what branch protection requires; a single shard's red bubbles up through it.
   # ---------------------------------------------------------------------------
-  gap-suite:
+  # Builds the fast-mode gap-suite's shared release archives ONCE instead of
+  # redundantly rebuilding the identical archives in every shard (measured
+  # ~10 min per shard, repeated across all 6 PR-tier shards -- ~50 min of
+  # pure redundant compute per run). Full mode is unaffected: its shards
+  # build their own feature-stripped runtime per distinct test through
+  # run_gap_tests.sh's own auto-optimize path, which this job does not
+  # attempt to share.
+  gap-suite-build:
     needs: plan
-    if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite
+    if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite && fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build compiler + runtime archives (fast mode, shared across shards)
+        # Release profile, codegen-units=1: the parity harness's own build
+        # command. cu=16 miscompiles the release runtime (see CLAUDE.md).
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+
+      # Only the three files the fast-mode harness actually links against
+      # (PERRY_BIN / PERRY_RUNTIME_DIR below) -- not the rest of target/release,
+      # which is Rust-internal build state the downloading shard doesn't need.
+      - name: Upload the shared fast-mode build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gap-suite-fast-build
+          path: |
+            target/release/perry
+            target/release/libperry_runtime.a
+            target/release/libperry_stdlib.a
+          if-no-files-found: error
+          retention-days: 1
+
+  gap-suite:
+    needs: [plan, gap-suite-build]
+    # `always()` so a SKIPPED gap-suite-build (full mode, where it never
+    # runs) doesn't cascade into skipping gap-suite too -- only a genuine
+    # build FAILURE should stop the shards from starting.
+    if: >-
+      always() &&
+      fromJSON(needs.plan.outputs.plan).jobs.gap_suite &&
+      (needs.gap-suite-build.result == 'success' || needs.gap-suite-build.result == 'skipped')
     # 2026-07-02 audit §11: nothing on the default PR path exercised
     # TypeScript SEMANTICS — lint/cargo-test/api-docs-drift build and unit-
     # test the compiler but never diff a compiled program against node, so
@@ -2280,21 +2304,19 @@ jobs:
     # the #6456 reshard lands.
     timeout-minutes: 110
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -2310,23 +2332,31 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       # Two harness modes, chosen by the plan (see ci_plan.py GAP_SUITE):
-      #   fast: build the release compiler + runtime archives ONCE here, then
-      #         PERRY_SKIP_BUILD=1 so every test links the prebuilt archives
-      #         (~1.5 s/test). Only ext-routed tests (http/net/ws/zlib/events)
-      #         still take the per-test auto-optimize path, because no single
+      #   fast: PERRY_SKIP_BUILD=1 so every test links the prebuilt archives
+      #         (~1.5 s/test) that gap-suite-build compiled ONCE and shared
+      #         below. Only ext-routed tests (http/net/ws/zlib/events) still
+      #         take the per-test auto-optimize path, because no single
       #         prebuilt stdlib can serve them (#7629). PR + sweep tiers.
       #   full: the harness's default -- every test compiles through
       #         auto-optimize, which rebuilds a feature-stripped runtime per
       #         distinct feature set (~200 s each; measured 96% of a shard's
       #         wall time). It is the arm that sees auto-optimize-only bugs,
-      #         so it stays in the nightly/release tier at 8 shards.
+      #         so it stays in the nightly/release tier at 8 shards, and never
+      #         downloads a shared build.
       # Both compare against the SAME committed Linux snapshot; a divergence
       # between them is a real auto-optimize-specific finding, not noise.
-      - name: Build compiler + runtime archives (fast mode)
+      - name: Download the shared fast-mode build
         if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
-        # Release profile, codegen-units=1: the parity harness's own build
-        # command. cu=16 miscompiles the release runtime (see CLAUDE.md).
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: gap-suite-fast-build
+          path: target/release
+
+      # Belt-and-suspenders: make sure the downloaded binary is runnable
+      # regardless of how the artifact round-trip handled its permission bits.
+      - name: Ensure the downloaded perry binary is executable
+        if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
+        run: chmod +x target/release/perry
 
       - name: Run gap suite (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).gap.total }}, ${{ fromJSON(needs.plan.outputs.plan).gap.mode }} mode)
         env:
@@ -2352,14 +2382,14 @@ jobs:
       # gap_snapshot.json -- see docs/src/testing/ci-tiers.md "Re-baselining".
       - name: Upload re-baselined gap snapshot
         if: fromJSON(needs.plan.outputs.plan).gap.update_snapshot
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gap-snapshot-update
           path: test-parity/gap_snapshot.json
 
       - name: Upload gap report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gap-suite-report-${{ fromJSON(needs.plan.outputs.plan).gap.mode }}-shard-${{ matrix.shard }}
           path: test-parity/reports/
@@ -2398,18 +2428,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -2434,7 +2462,7 @@ jobs:
           --known test-parity/known_failures.json
       - name: Upload shard report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: parity-shard-${{ matrix.shard }}
           path: |
@@ -2449,7 +2477,7 @@ jobs:
       # error message rather than inferring from the test family.
       - name: Upload compile-error logs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: parity-compile-errors-${{ runner.os }}-shard-${{ matrix.shard }}
           path: test-parity/output/*.compile_error.log
@@ -2474,9 +2502,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Download shard reports
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: parity-shard-*
           path: parity-shards
@@ -2519,7 +2547,7 @@ jobs:
           cat test-parity/reports/parity_matrix_latest.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload merged parity report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: parity-report
           path: |
@@ -2560,15 +2588,13 @@ jobs:
     # `run_extended_tests=true` runs this job on demand.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -2840,7 +2866,7 @@ jobs:
 
       - name: Upload compile-smoke error logs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: compile-smoke-error-logs
           path: /tmp/perry_smoke_logs/*.compile_error.log
@@ -2903,7 +2929,7 @@ jobs:
 
       - name: Upload GC evidence artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gc-evidence-${{ runner.os }}
           path: ${{ runner.temp }}/gc-evidence
@@ -2952,15 +2978,13 @@ jobs:
     # (cargo-test/lint/api-docs-drift/compiler-output-regression) still gate.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -3016,21 +3040,19 @@ jobs:
           --health-timeout=3s
           --health-retries=20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -3085,21 +3107,19 @@ jobs:
     # Aspirational smoke (informational) — see harmonyos-smoke. Does not block publish.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -3117,7 +3137,7 @@ jobs:
 
       - name: Upload Ink fixture logs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ink-link-smoke-logs
           path: |
@@ -3141,21 +3161,19 @@ jobs:
     if: fromJSON(needs.plan.outputs.plan).jobs.effect_basic_smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -3173,7 +3191,7 @@ jobs:
 
       - name: Upload Effect fixture logs
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: effect-basic-smoke-logs
           path: |
@@ -3295,7 +3313,7 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # macos-14 ships with ~14 GB free disk after the preinstalled Xcode +
       # iOS/tvOS/watchOS simulator runtime images. Several `cargo build
@@ -3315,9 +3333,7 @@ jobs:
           echo "Disk free: ${BEFORE} -> ${AFTER}"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Set up MSVC environment (Windows)
@@ -3326,7 +3342,7 @@ jobs:
         # shell session has no clue where, and perry's LNK1181 fatal
         # errors looking for Windows SDK libs.
         if: matrix.os == 'windows-2022'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
       - name: Install GTK4 + GStreamer + Xvfb + PulseAudio headers (Linux)
         if: matrix.os == 'ubuntu-24.04'
@@ -3402,7 +3418,7 @@ jobs:
         if: matrix.os == 'macos-14' || matrix.os == 'ubuntu-24.04'
         run: rustup target add aarch64-linux-android
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -3444,14 +3460,14 @@ jobs:
 
       - name: Upload doc-tests report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: doc-tests-report-${{ matrix.os }}
           path: docs/examples/_reports/latest.json
 
       - name: Upload gallery screenshot + diff artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gallery-screenshots-${{ matrix.os }}
           path: |
@@ -3469,15 +3485,13 @@ jobs:
     if: fromJSON(needs.plan.outputs.plan).jobs.binary_size
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -3494,7 +3508,7 @@ jobs:
           cat /tmp/sizes.md
 
       - name: Upload size report
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: binary-sizes
           path: /tmp/sizes.md

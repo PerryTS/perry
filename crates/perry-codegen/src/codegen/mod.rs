@@ -3354,28 +3354,30 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             progress.phase(3, "object ready; releasing generated IR");
             return result;
         }
-        let units = llmod.render_codegen_units(n_units);
-        log::debug!(
-            "perry-codegen: split '{}' into {} codegen units",
-            hir.name,
-            units.len()
-        );
-        // #7154: dump the units. The comment above used to claim `PERRY_SAVE_LL`
-        // took the single-text path — it never did; this `return` fires before
-        // the `PERRY_SAVE_LL` write below. So `--trace llvm` silently emitted
-        // NOTHING for any module past `MIN_CALLABLES_TO_SPLIT`, i.e. exactly the
-        // largest modules, which is where a static IR audit
-        // (`scripts/gc_root_dominance_check.py`) most needs to look — a corpus
-        // that quietly omits its biggest members makes a clean verdict
-        // meaningless. One file per unit, not one concatenation: the units are
-        // already materialized here, so this adds no peak.
-        if let Ok(save_dir) = std::env::var("PERRY_SAVE_LL") {
-            for (i, unit) in units.iter().enumerate() {
-                let filename = format!("{}/{}.unit{}.ll", save_dir, module_prefix, i);
-                let _ = std::fs::write(&filename, unit);
+        loop {
+            let units = llmod.render_codegen_units(n_units);
+            log::debug!(
+                "perry-codegen: split '{}' into {} codegen units",
+                hir.name,
+                units.len()
+            );
+            // #7154: dump the units. The comment above used to claim
+            // `PERRY_SAVE_LL` took the single-text path — it never did; this
+            // return fires before the write below. One file per unit, not one
+            // concatenation: the units are already materialized here, so this
+            // adds no peak.
+            if let Ok(save_dir) = std::env::var("PERRY_SAVE_LL") {
+                for (i, unit) in units.iter().enumerate() {
+                    let filename = format!("{}/{}.unit{}.ll", save_dir, module_prefix, i);
+                    let _ = std::fs::write(&filename, unit);
+                }
+            }
+            match crate::linker::compile_units_to_object(&units, opts.target.as_deref()) {
+                Ok(object) => return Ok(object),
+                Err(error) if apply_rs4gc_budget_retry(&mut llmod, &error)? => continue,
+                Err(error) => return Err(error),
             }
         }
-        return crate::linker::compile_units_to_object(&units, opts.target.as_deref());
     }
 
     // exp/llvm-inprocess Phase 2: `PERRY_LLVM_INPROCESS=native` constructs
@@ -3383,27 +3385,58 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // textual); `=diff` builds both arms and diffs them. Unit-split and
     // emit_ir_only paths above stay textual (they fall into the in-process
     // *transport* under these values, so no clang subprocess either way).
-    if let Some(result) = try_native_construction(&llmod, opts.target.as_deref(), &module_prefix) {
+    if let Some(result) =
+        try_native_construction(&mut llmod, opts.target.as_deref(), &module_prefix)
+    {
         return result;
     }
 
-    let ll_text = llmod.to_ir();
-    log::debug!(
-        "perry-codegen: emitted {} bytes of LLVM IR for '{}' ({} interned strings)",
-        ll_text.len(),
-        hir.name,
-        strings.len()
-    );
-    // Save .ll files when PERRY_SAVE_LL=<dir> is set
-    if let Ok(save_dir) = std::env::var("PERRY_SAVE_LL") {
-        let filename = format!("{}/{}.ll", save_dir, module_prefix);
-        let _ = std::fs::write(&filename, &ll_text);
+    loop {
+        let ll_text = llmod.to_ir();
+        log::debug!(
+            "perry-codegen: emitted {} bytes of LLVM IR for '{}' ({} interned strings)",
+            ll_text.len(),
+            hir.name,
+            strings.len()
+        );
+        // Save .ll files when PERRY_SAVE_LL=<dir> is set
+        if let Ok(save_dir) = std::env::var("PERRY_SAVE_LL") {
+            let filename = format!("{}/{}.ll", save_dir, module_prefix);
+            let _ = std::fs::write(&filename, &ll_text);
+        }
+        if opts.emit_ir_only {
+            return Ok(ll_text.into_bytes());
+        }
+        match crate::linker::compile_ll_to_object(&ll_text, opts.target.as_deref()) {
+            Ok(object) => return Ok(object),
+            Err(error) if apply_rs4gc_budget_retry(&mut llmod, &error)? => continue,
+            Err(error) => return Err(error),
+        }
     }
-    if opts.emit_ir_only {
-        Ok(ll_text.into_bytes())
-    } else {
-        crate::linker::compile_ll_to_object(&ll_text, opts.target.as_deref())
-    }
+}
+
+/// Consume the typed post-RS4GC budget signal on text-transport paths. The
+/// native constructors have the same loop closer to their LLVM modules; text
+/// compilation returns through `linker`, so its retry belongs at the last
+/// point where the lowering-owned `LlModule` is still available.
+#[cfg(feature = "llvm-inprocess")]
+fn apply_rs4gc_budget_retry(
+    llmod: &mut crate::module::LlModule,
+    error: &anyhow::Error,
+) -> Result<bool> {
+    let Some(violations) = crate::inprocess::rs4gc_budget_retry(error) else {
+        return Ok(false);
+    };
+    crate::native_emit::apply_budget_spill_retry(llmod.functions_mut(), &violations)?;
+    Ok(true)
+}
+
+#[cfg(not(feature = "llvm-inprocess"))]
+fn apply_rs4gc_budget_retry(
+    _llmod: &mut crate::module::LlModule,
+    _error: &anyhow::Error,
+) -> Result<bool> {
+    Ok(false)
 }
 
 /// exp/llvm-inprocess: unit-split twin of [`try_native_construction`].
@@ -3445,7 +3478,7 @@ fn try_native_units(
 /// in-process mode is requested, so the flag can never silently no-op.
 #[cfg(feature = "llvm-inprocess")]
 fn try_native_construction(
-    llmod: &crate::module::LlModule,
+    llmod: &mut crate::module::LlModule,
     target: Option<&str>,
     module_prefix: &str,
 ) -> Option<Result<Vec<u8>>> {
@@ -3472,7 +3505,7 @@ fn try_native_construction(
 
 #[cfg(not(feature = "llvm-inprocess"))]
 fn try_native_construction(
-    _llmod: &crate::module::LlModule,
+    _llmod: &mut crate::module::LlModule,
     _target: Option<&str>,
     _module_prefix: &str,
 ) -> Option<Result<Vec<u8>>> {

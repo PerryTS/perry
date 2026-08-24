@@ -78,7 +78,7 @@ jobs:
     steps:
       # This job compiles PR-controlled build scripts; don't leave the workflow
       # token in .git/config for them to read.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -113,26 +113,24 @@ jobs:
 
       - name: Install Rust toolchain
         if: steps.scope.outputs.pkgs != ''
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - if: steps.scope.outputs.pkgs != ''
         uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
         if: steps.scope.outputs.pkgs != ''
-        uses: mozilla-actions/sccache-action@v0.0.11
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       - name: Cache sccache objects
         if: steps.scope.outputs.pkgs != ''
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: steps.scope.outputs.pkgs != ''
         with:
           shared-key: "${{ runner.os }}-perry"

@@ -69,7 +69,7 @@ jobs:
     outputs:
       build-run-id: ${{ steps.resolve.outputs.build-run-id }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Resolve or dispatch the stage-mode build
         id: resolve
         env:
@@ -174,12 +174,12 @@ jobs:
       PUBLISH: ${{ inputs.publish }}
       SOCKET_API_TOKEN: ${{ secrets.SOCKET_API_TOKEN }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # DELIBERATE EXEMPTION from the repo-wide .node-version pin: this Node is
       # a publishing toolchain (npm registry auth), not a test oracle.
       # Registered in scripts/check_node_version_consistency.py.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "26"
           registry-url: "https://registry.npmjs.org"
@@ -201,7 +201,7 @@ jobs:
           echo "npm $cur satisfies the publish-flow floor (>= $floor)."
 
       - name: Download build artifacts from the stage-mode build run
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: release-artifacts/
           github-token: ${{ github.token }}
