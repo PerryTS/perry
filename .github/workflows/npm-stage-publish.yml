@@ -76,10 +76,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
           EXPECTED_SHA: ${{ inputs.candidate-sha }}
         run: |
           set -euo pipefail
+          if [[ "$REF" != refs/heads/* ]] || [ "$REF_NAME" = "main" ]; then
+            echo "::error::A real staged publish requires a named non-main candidate branch; got $REF." >&2
+            exit 1
+          fi
           if [ -z "$EXPECTED_SHA" ]; then
             echo "::error::candidate-sha is required for a real staged publish. Use the local npm run publish:stage command." >&2
             exit 1
@@ -88,9 +94,10 @@ jobs:
             echo "::error::Candidate branch moved: workflow is on $SHA, but the dispatcher pinned $EXPECTED_SHA." >&2
             exit 1
           fi
-          tests=$(gh api "/repos/$REPO/actions/workflows/test.yml/runs?head_sha=$SHA&per_page=20")
+          tests=$(gh api --paginate --slurp \
+            "/repos/$REPO/actions/workflows/test.yml/runs?head_sha=$SHA&per_page=100")
           full_run=""
-          for run_id in $(echo "$tests" | jq -r '.workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .id'); do
+          for run_id in $(echo "$tests" | jq -r '.[] | .workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .id'); do
             if gh api "/repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
                  --jq '.jobs[] | select(.name == "full-suite-gate" and .conclusion == "success") | .name' \
                  | grep -q full-suite-gate; then
@@ -102,9 +109,10 @@ jobs:
             echo "::error::No successful full-tier test.yml run (full-suite-gate) exists on $SHA. Dispatch test.yml with tier=full first." >&2
             exit 1
           fi
-          sim_run=$(gh api "/repos/$REPO/actions/workflows/simctl-tests.yml/runs?head_sha=$SHA&per_page=20" \
-            --jq '.workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .id' \
-            | head -1)
+          sim_runs=$(gh api --paginate --slurp \
+            "/repos/$REPO/actions/workflows/simctl-tests.yml/runs?head_sha=$SHA&per_page=100")
+          sim_run=$(echo "$sim_runs" | jq -r \
+            'first(.[] | .workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .id) // empty')
           if [ -z "$sim_run" ]; then
             echo "::error::No successful simctl-tests.yml run exists on $SHA. Dispatch it first." >&2
             exit 1

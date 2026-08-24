@@ -424,6 +424,10 @@ test('pipeline.mts: --scan-only sets a failing exit code on an incomplete/blocke
 
 test('pipeline.mts: stage dispatch and release receipt are pinned to one commit', () => {
   const src = readFileSync(path.join(PUBLISH_DIR, 'pipeline.mts'), 'utf8')
+  const workflow = readFileSync(
+    path.join(PUBLISH_DIR, '../../.github/workflows/npm-stage-publish.yml'),
+    'utf8',
+  )
   assert.match(src, /'--ref',\s*candidate\.ref/)
   assert.match(src, /`candidate-sha=\$\{candidate\.sha\}`/)
   assert.match(src, /r\.headSha === candidate\.sha/)
@@ -431,6 +435,9 @@ test('pipeline.mts: stage dispatch and release receipt are pinned to one commit'
   assert.match(src, /downloadStageProof\(runId\)/)
   assert.match(src, /requirePinnedCandidate\(state\)/)
   assert.match(src, /ensureTagAndRelease\(gate\.version, candidate\.sha\)/)
+  assert.match(workflow, /\[ "\$REF_NAME" = "main" \]/)
+  assert.match(workflow, /"\$REF" != refs\/heads\/\*/)
+  assert.match(workflow, /gh api --paginate --slurp/)
 })
 
 test('release runbook pins the staged-publish OIDC identity and action', () => {
