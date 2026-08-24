@@ -24,7 +24,7 @@ jobs:
       run:
         working-directory: packages/hono-perry-server
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # DELIBERATE EXEMPTION from the repo-wide .node-version pin: this Node is a
       # *publishing* toolchain, not a test oracle — it never runs a parity diff.
@@ -40,7 +40,7 @@ jobs:
       # that publishes releases. Registered in
       # scripts/check_node_version_consistency.py, which keeps this major in
       # step with .node-version's major. Was "24" until the Node-26 sweep.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "26"
 

@@ -72,7 +72,7 @@ jobs:
       # label (#confirmed republish version-drift finding).
       checkout-ref: ${{ steps.resolve.outputs.checkout-ref }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0   # republish mode needs `git show <tag>:Cargo.toml` below
 
@@ -389,15 +389,12 @@ jobs:
       # version (15.x) than being linked (14.x)` across every stdlib .o.
       MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.preflight.outputs.checkout-ref }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
-          targets: ${{ matrix.target }}
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal --target ${{ matrix.target }}
       # The old-sysroot image carries LLVM 22 under /usr/lib/llvm-22.
       # Its host-side GTK4 build does not depend on perry-codegen, so avoid
       # installing a second LLVM copy on the noble runner for these two legs.
@@ -409,7 +406,7 @@ jobs:
       # release-tag on the same Cargo.lock reuses the compiled crates —
       # webkit6/gstreamer/swc/etc. dominate cold cargo and recompile takes
       # 10-15 min per matrix entry. Cache hit drops that to ~30s.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "release-${{ matrix.target }}"
           workspaces: |
@@ -968,7 +965,7 @@ jobs:
       # artifact instead.
       - name: Upload packaged archive (Unix, for publish-assets job)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-archive-${{ matrix.artifact }}
           # update.json only exists when a tag was resolved (not on stage-only
@@ -980,7 +977,7 @@ jobs:
 
       - name: Upload packaged archive (Windows, for publish-assets job)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-archive-${{ matrix.artifact }}
           path: |
@@ -990,14 +987,14 @@ jobs:
 
       - name: Upload build artifact (Unix, for deb + npm-publish jobs)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact }}
           path: staging/
 
       - name: Upload build artifact (Windows, for npm-publish job)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.artifact }}
           path: staging/
@@ -1089,22 +1086,19 @@ jobs:
       # users on macOS 13.
       MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ needs.preflight.outputs.checkout-ref }}
 
       - name: Install Rust toolchain + cross target
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
-          targets: ${{ matrix.target }}
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal --target ${{ matrix.target }}
       - uses: ./.github/actions/setup-llvm22
 
       # Same cache shape as `build:` so the cross legs share crate compiles
       # across release cycles. Keyed on (target, Cargo.lock) — first run on a
       # new target is cold, but every subsequent release-tag reuses the
       # SWC/llvm-sys/webkit etc. precompile from the prior cycle.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "release-cross-${{ matrix.target }}"
 
@@ -1343,7 +1337,7 @@ jobs:
       # dispatches onto the PREVIOUS release. The artifact also lets a
       # maintainer pull the bundle off a stage-only run directly.
       - name: Upload cross build artifact (for publish-assets job + inspection)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: perry-cross-${{ matrix.target }}
           path: |
@@ -1370,7 +1364,7 @@ jobs:
       needs.build-cross.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Create tag + GitHub Release (notes from changelog.d)
         env:
@@ -1434,7 +1428,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download packaged host archives
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: release-archive-*
           merge-multiple: true
@@ -1444,7 +1438,7 @@ jobs:
         # continue-on-error: a fully-red build-cross (legacy modes) must not
         # stop the host archives from shipping.
         continue-on-error: true
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: perry-cross-*
           merge-multiple: true
@@ -1613,7 +1607,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download build artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ matrix.artifact }}
           path: staging/
@@ -1786,7 +1780,7 @@ jobs:
           done
 
       - name: Upload .deb artifacts (for apt-repo job)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: deb-${{ matrix.arch }}
           path: "*.deb"
@@ -1808,7 +1802,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download .deb packages
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: deb-*
           merge-multiple: true
@@ -2005,7 +1999,7 @@ jobs:
       contents: read
       id-token: write          # REQUIRED for OIDC + npm --provenance
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # republish mode pins this to the tag's exact commit (see
           # preflight's checkout-ref) — without it, npm publishes whatever
@@ -2025,7 +2019,7 @@ jobs:
       # Was "20" until the Node-26 sweep. Node 20 reached end-of-life on
       # 2026-04-30, and this is the repo's most privileged job (`id-token: write`,
       # OIDC-publishes every platform package) — an EOL runtime is a defect there.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "26"
           registry-url: "https://registry.npmjs.org"
@@ -2039,7 +2033,7 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: release-artifacts/
 

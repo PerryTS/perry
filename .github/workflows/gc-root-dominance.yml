@@ -120,7 +120,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -216,9 +216,7 @@ jobs:
         run: python3 scripts/gc_root_dominance_check.py --audit-immovable-sources
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       # ★ The dependency-scale corpus needs the dependency.
@@ -228,14 +226,14 @@ jobs:
       # else in that file -- not a fixture invented for this job.
       # `--ignore-scripts` because nothing here needs a lifecycle script to
       # run, and a corpus generator is a bad place to execute one.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version-file: .node-version
       - name: Install the npm dependencies the dep corpus compiles
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Cache cargo
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -408,7 +406,7 @@ jobs:
 
       - name: Upload the IR corpus on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gc-root-dominance-ir
           path: |
@@ -450,7 +448,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -493,16 +491,14 @@ jobs:
       # (statepoints are the default on aarch64 and x86-64) reported nothing
       # at all, while its shadow-frame sibling stayed green and made the gate
       # look healthy.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version-file: .node-version
       - name: Install the npm dependencies the dep corpus compiles
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       # This also puts a matched LLVM 22 `opt` on disk and exports
       # LLVM_SYS_221_PREFIX, which is how the corpus script finds it. The
       # native corpus is `--trace llvm` output PLUS the production statepoint
@@ -511,7 +507,7 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
 
       - name: Cache cargo
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -768,7 +764,7 @@ jobs:
 
       - name: Upload the IR corpus on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gc-root-dominance-statepoint-ir
           path: ir-corpus-native
