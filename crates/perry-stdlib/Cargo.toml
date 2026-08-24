@@ -200,8 +200,16 @@ external-events-construct = []
 # TLS — direct `tls.connect()` and `socket.upgradeToTLS()` (Postgres SSLRequest flow).
 # Uses rustls (not native-tls) to avoid OpenSSL on every platform and keep Android
 # cross-compile unblocked; matches reqwest/tokio-tungstenite/mongodb feature flags.
-tls = [
-    "bundled-net",
+#
+# `tls-runtime` contains the shared TLS server/preflight implementation. The
+# `external-net-tls` adapter uses that implementation while resolving
+# `js_tls_connect` from perry-ext-net; compiling bundled net beside the wrapper
+# would reintroduce duplicate `js_net_*` / `js_tls_connect` symbols. The public
+# `tls` umbrella retains its historical bundled-net behavior.
+tls = ["bundled-net", "tls-runtime"]
+external-net-tls = ["tls-runtime"]
+tls-runtime = [
+    "async-runtime",
     "dep:tokio-rustls",
     "dep:rustls",
     "dep:rustls-native-certs",

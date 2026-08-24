@@ -17,6 +17,24 @@ use super::{
     TLS_DISPATCH_MISSING_BITS,
 };
 
+#[cfg(feature = "bundled-net")]
+unsafe fn dispatch_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64 {
+    crate::net::js_tls_connect(arg1, arg2, arg3, arg4)
+}
+
+#[cfg(all(not(feature = "bundled-net"), feature = "external-net-tls"))]
+unsafe fn dispatch_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64 {
+    unsafe extern "C" {
+        fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64;
+    }
+    js_tls_connect(arg1, arg2, arg3, arg4)
+}
+
+#[cfg(not(any(feature = "bundled-net", feature = "external-net-tls")))]
+unsafe fn dispatch_tls_connect(_arg1: f64, _arg2: f64, _arg3: f64, _arg4: f64) -> i64 {
+    0
+}
+
 fn split_subject_alt_names(san: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for part in san.split(',') {
@@ -292,7 +310,7 @@ pub unsafe extern "C" fn js_tls_native_dispatch(
             // Pass the args through raw — js_tls_connect resolves Node's
             // `connect(options[, cb])` / `connect(port[, host][, options][,
             // cb])` overloads plus the legacy positional form itself (#4971).
-            let handle = crate::net::js_tls_connect(arg(0), arg(1), arg(2), arg(3));
+            let handle = dispatch_tls_connect(arg(0), arg(1), arg(2), arg(3));
             if handle == 0 {
                 // Unresolvable args (e.g. no port) — undefined beats a
                 // NaN-boxed null pointer that every later method call
