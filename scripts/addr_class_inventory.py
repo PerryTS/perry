@@ -215,6 +215,26 @@ def band_predicate_near(lines: list[str], idx: int) -> bool:
 SIBLING_CONDITIONAL_RE = re.compile(r"^\s*(?:\}\s*)?(?:else\s+)?(?:if|while|for|match)\b")
 
 
+def apply_brace_deltas(depth: int, code: str) -> int:
+    """Advance `depth` by `code`'s braces, IN SOURCE ORDER, floored at zero.
+
+    A net per-line count (`code.count("{") - code.count("}")`) gets an `}
+    else if ... {` line wrong: net zero reads as "still at the same depth",
+    but the leading `}` closes the ENCLOSING block first, so the following
+    `{` actually opens a brand-new nested one — depth should end at one
+    level deeper, not unchanged. Processing character by character (with
+    the floor so a leading close belonging to an outer block we don't track
+    can't push depth negative) gets this right.
+    """
+
+    for char in code:
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth = max(depth - 1, 0)
+    return depth
+
+
 def lone_band_predicate_near(lines: list[str], idx: int) -> bool:
     """`band_predicate_near`, scoped to the current guard's own statement.
 
@@ -229,7 +249,7 @@ def lone_band_predicate_near(lines: list[str], idx: int) -> bool:
 
     start = max(0, idx - BAND_PREDICATE_LOOKBACK)
     context = [strip_comment(line) for line in lines[start : idx + 1]]
-    depth = context[-1].count("{") - context[-1].count("}")
+    depth = apply_brace_deltas(0, context[-1])
     taken = 0
     cursor = idx + 1
     while cursor < len(lines) and taken < BAND_PREDICATE_LOOKAHEAD_CODE:
@@ -239,7 +259,7 @@ def lone_band_predicate_near(lines: list[str], idx: int) -> bool:
                 break
             context.append(code)
             taken += 1
-            depth += code.count("{") - code.count("}")
+            depth = apply_brace_deltas(depth, code)
         cursor += 1
     return bool(BAND_PREDICATE_RE.search("\n".join(context)))
 
@@ -510,6 +530,27 @@ def run_self_tests() -> int:
         ),
         "lone-valid-obj-ptr must accept a band predicate NESTED inside the "
         "guard's own block",
+    )
+    # CodeRabbit (PR #8685, third pass): the guard itself following an `else
+    # if` chain (`} else if is_valid_obj_ptr(ptr) {`) must not miscompute its
+    # own starting depth as zero — a net per-line brace count treats the
+    # leading close and the trailing open as cancelling out, when the close
+    # belongs to the PRIOR branch and the open starts the guard's own block.
+    else_if_guard = (
+        "    if some_other_check() {\n"
+        "        do_other_thing();\n"
+        "    } else if is_valid_obj_ptr(ptr) {\n"
+        "        if is_above_handle_band(ptr as usize) {\n"
+        "            (*ptr).class_id\n"
+        "        }\n"
+        "    }\n"
+    )
+    expect(
+        not any(
+            f.rule == "lone-valid-obj-ptr" for f in scan_text(runtime, else_if_guard)
+        ),
+        "lone-valid-obj-ptr must accept a nested band predicate when the "
+        "guard itself is an `else if` branch",
     )
 
     # Band literals in code are caught; comment-only mentions are not.
