@@ -1349,17 +1349,29 @@ function_contains = "scalarReplacementChecksum"
 regex_none = ["@js_object_get_field", "@js_object_set_field", "@js_array_get", "@js_array_set"]
 detail = "scalar-replaced literals do not use runtime property or array access helpers"
 
+[[workloads.scalar_replacement_literals.ir_checks]]
+name = "known_aggregate_call_no_object_or_array_heap_alloc"
+function_contains = "scalarAggregateCallChecksum"
+regex_none = ["@js_object_alloc", "@js_object_alloc_with_shape", "@js_array_alloc"]
+detail = "known fixed-aggregate consumers scalar-replace descriptor objects and carrier arrays"
+
+[[workloads.scalar_replacement_literals.ir_checks]]
+name = "known_aggregate_call_no_property_or_array_runtime_access"
+function_contains = "scalarAggregateCallChecksum"
+regex_none = ["@js_object_get_field", "@js_object_set_field", "@js_array_get", "@js_array_set"]
+detail = "known fixed-aggregate consumers read scalar fields without runtime aggregate helpers"
+
 [[workloads.scalar_replacement_literals.stdout_checks]]
 name = "scalar_replacement_checksum"
-equals = "17\n"
+equals = "17\n3000000\n"
 detail = "scalar-replacement fixture stdout checksum"
 
 [workloads.scalar_replacement_literals.native_rep_checks]
-function_contains = "scalarReplacementChecksum"
 allow_materialization_reasons = ["runtime_api"]
 
 [[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
 name = "scalar_object_literal_store"
+source_function = "scalarReplacementChecksum"
 expr_kind = "ScalarObjectLiteralInit"
 consumer = "scalar_object_field_store"
 native_rep_name = "js_value"
@@ -1367,6 +1379,7 @@ access_mode = "none"
 
 [[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
 name = "scalar_object_field_get"
+source_function = "scalarReplacementChecksum"
 expr_kind = "ScalarObjectFieldGet"
 consumer = "scalar_object_field_load"
 native_rep_name = "js_value"
@@ -1374,6 +1387,7 @@ access_mode = "none"
 
 [[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
 name = "scalar_object_field_set"
+source_function = "scalarReplacementChecksum"
 expr_kind = "ScalarObjectFieldSet"
 consumer = "scalar_object_field_store"
 native_rep_name = "js_value"
@@ -1381,6 +1395,7 @@ access_mode = "none"
 
 [[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
 name = "scalar_array_literal_store"
+source_function = "scalarReplacementChecksum"
 expr_kind = "ScalarArrayLiteralInit"
 consumer = "scalar_array_element_store"
 native_rep_name = "js_value"
@@ -1388,10 +1403,21 @@ access_mode = "none"
 
 [[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
 name = "scalar_array_index_get"
+source_function = "scalarReplacementChecksum"
 expr_kind = "ScalarArrayIndexGet"
 consumer = "scalar_array_element_load"
 native_rep_name = "js_value"
 access_mode = "none"
+
+[[workloads.scalar_replacement_literals.native_rep_checks.require_records]]
+name = "known_aggregate_call_scalar_fields"
+source_function = "scalarAggregateCallChecksum"
+expr_kind = "ScalarAggregateFieldInit"
+consumer = "scalar_object_field_store"
+native_rep_name = "js_value"
+access_mode = "none"
+notes_contains = "carrier_array=elided"
+min = 4
 
 [workloads.width_aware_buffer_kernels]
 source = "benchmarks/compiler_output/fixtures/width_aware_buffer_kernels.ts"

@@ -6,6 +6,7 @@
 //! - Optimization passes (function inlining)
 //! - i18n string localization
 
+mod aggregate_scalar;
 pub mod async_to_generator;
 pub mod closure;
 pub mod deforest;
@@ -47,5 +48,6 @@ pub use unroll::unroll_static_loops;
 ///   the order here stops the two facts from drifting apart.)
 pub fn post_inline_cleanups(module: &mut perry_hir::Module) {
     unroll_static_loops(module);
+    aggregate_scalar::run(module);
     prop_cse::run(module);
 }

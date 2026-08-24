@@ -6,6 +6,7 @@ use super::let_buffer_views::{math_min_length_buffer_ids, register_noalias_buffe
 use super::let_stmt_facts::{
     buffer_local_alias_source, collect_scalar_class_data, native_i32_alias_source,
     note_ptr_shape_scalar_replaced, pod_view_count_source, record_pod_rejection,
+    record_scalar_aggregate_field,
 };
 use super::unused_expr::lower_unused_expr;
 use crate::expr::{
@@ -1901,6 +1902,7 @@ pub(crate) fn lower_let(
                     }
                 }
             }
+            record_scalar_aggregate_field(ctx, id, name, &v);
             v
         } else {
             String::new() // unused below; cleanup blocks check used_i32_init

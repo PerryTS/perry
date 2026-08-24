@@ -166,6 +166,152 @@ pub fn is_inlinable(func: &Function) -> bool {
     true
 }
 
+/// A deliberately narrow extension of the ordinary inliner for issue #8691.
+///
+/// Fixed aggregate literals are especially expensive when a tiny helper walks
+/// them with the canonical `for (let i = 0; i < values.length; i++)` loop. The
+/// general inliner rejects every loop, which prevents the later static-loop
+/// unroller and aggregate scalar-replacement pass from ever seeing the
+/// consumer next to the literal. Admit only a single, bounded, forward loop
+/// over one parameter and only when every use of that parameter is a length
+/// read or an indexed read. The call-site path separately requires a short
+/// array of plain object literals; all other calls keep the normal ABI.
+pub fn scalar_aggregate_loop_param(func: &Function) -> Option<LocalId> {
+    if func.is_async
+        || func.is_generator
+        || !func.captures.is_empty()
+        || func.params.iter().any(|param| param.is_rest)
+        || func.body.len() != 1
+        || body_references_dynamic_this(&func.body)
+        || body_calls_func(&func.body, func.id)
+    {
+        return None;
+    }
+
+    let Stmt::For {
+        init: Some(init),
+        condition: Some(condition),
+        update: Some(update),
+        body,
+    } = &func.body[0]
+    else {
+        return None;
+    };
+    let Stmt::Let {
+        id: index_id,
+        init: Some(Expr::Integer(0)),
+        ..
+    } = init.as_ref()
+    else {
+        return None;
+    };
+    let Expr::Compare {
+        op: perry_hir::CompareOp::Lt,
+        left,
+        right,
+    } = condition
+    else {
+        return None;
+    };
+    if !matches!(left.as_ref(), Expr::LocalGet(id) if id == index_id)
+        || !matches!(
+            update,
+            Expr::Update {
+                id,
+                op: perry_hir::UpdateOp::Increment,
+                ..
+            } if id == index_id
+        )
+    {
+        return None;
+    }
+    let Expr::PropertyGet {
+        object, property, ..
+    } = right.as_ref()
+    else {
+        return None;
+    };
+    let Expr::LocalGet(param_id) = object.as_ref() else {
+        return None;
+    };
+    if property != "length" || !func.params.iter().any(|param| param.id == *param_id) {
+        return None;
+    }
+
+    fn expr_uses_param_safely(expr: &Expr, param_id: LocalId, index_id: LocalId) -> bool {
+        match expr {
+            Expr::IndexGet { object, index } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) =>
+            {
+                matches!(index.as_ref(), Expr::LocalGet(id) if *id == index_id)
+            }
+            Expr::PropertyGet {
+                object, property, ..
+            } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) => {
+                property == "length"
+            }
+            Expr::LocalGet(id) if *id == param_id => false,
+            Expr::Closure { captures, .. } if captures.contains(&param_id) => false,
+            // Calls and constructors can observe or mutate module state while
+            // module-init locals are cached. The dedicated path does not need
+            // either shape, so keep its body call-free.
+            Expr::Call { .. } | Expr::CallSpread { .. } | Expr::New { .. } => false,
+            _ => {
+                let mut safe = true;
+                perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                    safe &= expr_uses_param_safely(child, param_id, index_id);
+                });
+                safe
+            }
+        }
+    }
+
+    fn stmts_use_param_safely(
+        stmts: &[Stmt],
+        param_id: LocalId,
+        index_id: LocalId,
+        statement_budget: &mut usize,
+    ) -> bool {
+        for stmt in stmts {
+            *statement_budget += 1;
+            if *statement_budget > MAX_INLINE_STMTS {
+                return false;
+            }
+            let safe = match stmt {
+                Stmt::Let { init, .. } => init
+                    .as_ref()
+                    .is_none_or(|expr| expr_uses_param_safely(expr, param_id, index_id)),
+                Stmt::Expr(expr) | Stmt::Throw(expr) => {
+                    expr_uses_param_safely(expr, param_id, index_id)
+                }
+                Stmt::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    expr_uses_param_safely(condition, param_id, index_id)
+                        && stmts_use_param_safely(then_branch, param_id, index_id, statement_budget)
+                        && else_branch.as_deref().is_none_or(|branch| {
+                            stmts_use_param_safely(branch, param_id, index_id, statement_budget)
+                        })
+                }
+                Stmt::PreallocateBoxes(_)
+                | Stmt::PreallocateTdzBoxes(_)
+                | Stmt::ReleaseBoxes(_) => true,
+                // Returns and nested/abrupt control flow need a labeled inline
+                // boundary. Keep the first slice intentionally smaller.
+                _ => false,
+            };
+            if !safe {
+                return false;
+            }
+        }
+        true
+    }
+
+    let mut statement_budget = 0;
+    stmts_use_param_safely(body, *param_id, *index_id, &mut statement_budget).then_some(*param_id)
+}
+
 /// Inlinability for a *method* invoked with a known (exact) receiver. Identical
 /// to [`is_inlinable`] except the dynamic-`this` rejection is relaxed: the
 /// method-inliner substitutes `this` for the concrete receiver

@@ -112,6 +112,9 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_STATIC_STRING_LOWERING",
     "PERRY_STRING_INIT_CHUNK_SIZE",
     "PERRY_TA_PARAM_F64_READ",
+    // #8692: disables guarded direct Uint32Array read-modify-write lowering;
+    // toggling it changes the generated CFG and helper calls.
+    "PERRY_TYPED_ARRAY_RMW",
     "PERRY_WATCHOS_ARM64_32",
     // #8105 — number-by-construction locals (see the collector of the same
     // name); `=0` empties the fact and changes every affected function's IR.

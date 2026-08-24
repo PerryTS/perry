@@ -754,6 +754,14 @@ pub(crate) fn lower(
             index,
             value,
         } => {
+            if let Some(result) =
+                super::typed_array_rmw::try_lower_guarded_uint32_add(ctx, object, index, value)?
+            {
+                if value_discarded {
+                    return Ok(double_literal(0.0));
+                }
+                return Ok(result);
+            }
             // Issue #611: `globalThis[<key>] = value` writes to the
             // persistent global-this singleton (see the matching IndexGet
             // arm above for context).

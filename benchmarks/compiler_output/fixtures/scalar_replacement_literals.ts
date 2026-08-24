@@ -10,4 +10,29 @@ function scalarReplacementChecksum(): number {
   return values[0] + values[1] + values[2] + values.length;
 }
 
+class Position {}
+class Velocity {}
+
+let aggregateChecksum = 0;
+
+function consumeAggregate(initializers: { component: unknown }[]): void {
+  for (let i = 0; i < initializers.length; i++) {
+    const initializer = initializers[i];
+    if (initializer.component === Position) aggregateChecksum += 1;
+    if (initializer.component === Velocity) aggregateChecksum += 2;
+  }
+}
+
+function scalarAggregateCallChecksum(): number {
+  aggregateChecksum = 0;
+  const iterations = 500_000;
+  for (let i = 0; i < iterations; i++) {
+    consumeAggregate([{ component: Position }, { component: Velocity }]);
+    consumeAggregate([{ component: Position }]);
+    consumeAggregate([{ component: Velocity }]);
+  }
+  return aggregateChecksum;
+}
+
 console.log(scalarReplacementChecksum());
+console.log(scalarAggregateCallChecksum());
