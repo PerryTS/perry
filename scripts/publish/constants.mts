@@ -42,6 +42,9 @@ export const ALL_PACKAGES: readonly string[] = [
 /** npm dist-tag floor — `latest` is what an untagged install resolves to. */
 export const DEFAULT_DIST_TAG = 'latest'
 
+/** Canonical public registry; release liveness must never resolve a mirror. */
+export const NPM_PUBLIC_REGISTRY = 'https://registry.npmjs.org'
+
 /** The GitHub release repo. */
 export const RELEASE_REPO = 'PerryTS/perry'
 

@@ -72,7 +72,8 @@ entries.
 ```bash
 npm --version                 # must be >= 11.17.0
 # If needed: npm install -g npm@latest
-npm whoami                    # must succeed as an @perryts package maintainer
+npm whoami --registry=https://registry.npmjs.org
+                               # must succeed as an @perryts package maintainer
 ```
 
 One-time GitHub setup: create the environment named in the OIDC identity and
@@ -104,7 +105,7 @@ trusted-publisher slot and is not part of the canonical release.
 In particular, verify the ARM64 Windows package:
 
 ```bash
-npm view @perryts/perry-win32-arm64 name
+npm view @perryts/perry-win32-arm64 name --registry=https://registry.npmjs.org
 ```
 
 If that returns `E404`, an `@perryts` npm owner must make the initial public

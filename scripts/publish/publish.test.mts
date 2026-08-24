@@ -37,13 +37,18 @@ import {
   perryStagedEntries,
 } from './npm/approve.mts'
 import { tagExists } from './npm/bump.mts'
+import { npmUploadArgs } from './npm/publish-command.mts'
 import { verifyStagedEntry } from './npm/staged.mts'
 import { freshStageState, isCompleteScanReceipt } from './pipeline.mts'
 import {
   INLINE_RELEASE_NOTES_MAX_BYTES,
   planReleaseNotes,
 } from './release.mts'
-import { ALL_PACKAGES, NPM_MIN_VERSION } from './constants.mts'
+import {
+  ALL_PACKAGES,
+  NPM_MIN_VERSION,
+  NPM_PUBLIC_REGISTRY,
+} from './constants.mts'
 
 const PUBLISH_DIR = path.dirname(fileURLToPath(import.meta.url))
 
@@ -141,6 +146,14 @@ test('normalizePublishedShasum: accepts only a successful bare sha1', () => {
   assert.equal(normalizePublishedShasum('not found', 1), undefined)
   assert.equal(normalizePublishedShasum(`warning\n${'a'.repeat(40)}`, 0), undefined)
   assert.equal(normalizePublishedShasum('a'.repeat(39), 0), undefined)
+})
+
+test('npmUploadArgs: uploads are pinned to the public npm registry', () => {
+  const args = npmUploadArgs({ mode: 'staged' })
+  assert.deepEqual(
+    args.slice(args.indexOf('--registry')),
+    ['--registry', NPM_PUBLIC_REGISTRY],
+  )
 })
 
 test('perryStagedEntries: approval is restricted to the candidate version', () => {

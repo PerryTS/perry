@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
+import { NPM_PUBLIC_REGISTRY } from '../constants.mts'
 import { extractFirstJson, rootPath, runCapture } from '../shared.mts'
 
 /** A normalized staged entry from `npm stage list --json`. */
@@ -108,7 +109,11 @@ export function parseStageListJson(text: string): StagedEntry[] {
 
 /** Run `npm stage list --json` and return normalized staged entries. */
 export async function listStagedEntries(cwd: string): Promise<StagedEntry[]> {
-  const { stdout, code } = await runCapture('npm', ['stage', 'list', '--json'], cwd)
+  const { stdout, code } = await runCapture(
+    'npm',
+    ['stage', 'list', '--json', '--registry', NPM_PUBLIC_REGISTRY],
+    cwd,
+  )
   if (code !== 0) return []
   return parseStageListJson(stdout)
 }
@@ -133,7 +138,11 @@ export async function fetchPublishedVersion(
   name: string,
   version: string,
 ): Promise<boolean> {
-  const { code } = await runCapture('npm', ['view', `${name}@${version}`, 'version'], rootPath)
+  const { code } = await runCapture(
+    'npm',
+    ['view', `${name}@${version}`, 'version', '--registry', NPM_PUBLIC_REGISTRY],
+    rootPath,
+  )
   return code === 0
 }
 
@@ -155,7 +164,13 @@ export async function fetchPublishedShasum(
 ): Promise<string | undefined> {
   const { code, stdout } = await runCapture(
     'npm',
-    ['view', `${name}@${version}`, 'dist.shasum'],
+    [
+      'view',
+      `${name}@${version}`,
+      'dist.shasum',
+      '--registry',
+      NPM_PUBLIC_REGISTRY,
+    ],
     rootPath,
   )
   return normalizePublishedShasum(stdout, code)

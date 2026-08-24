@@ -22,6 +22,7 @@ import {
   publishAuthPostflight,
   publishAuthPreflight,
 } from '../auth-posture.mts'
+import { NPM_PUBLIC_REGISTRY } from '../constants.mts'
 import { logger, provenanceAllowed, runInheritTee } from '../shared.mts'
 
 export type NpmUploadMode = 'direct' | 'staged'
@@ -51,7 +52,15 @@ export function npmUploadArgs(config: {
     tag = 'latest',
   } = config
   const args = mode === 'staged' ? ['stage', 'publish'] : ['publish']
-  args.push('--access', 'public', '--tag', tag, '--ignore-scripts')
+  args.push(
+    '--access',
+    'public',
+    '--tag',
+    tag,
+    '--ignore-scripts',
+    '--registry',
+    NPM_PUBLIC_REGISTRY,
+  )
   if (provenance) args.push('--provenance')
   if (dryRun) args.push('--dry-run')
   return args

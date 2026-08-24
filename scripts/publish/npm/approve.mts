@@ -16,7 +16,7 @@
 
 import process from 'node:process'
 
-import { ALL_PACKAGES } from '../constants.mts'
+import { ALL_PACKAGES, NPM_PUBLIC_REGISTRY } from '../constants.mts'
 import { logger, NON_INTERACTIVE_RENDER_ENV, runInheritTty } from '../shared.mts'
 import {
   preflightSocketScanAuth,
@@ -94,7 +94,13 @@ export async function approveEntry(
   entry: StagedEntry,
   opts: ApproveOptions,
 ): Promise<boolean> {
-  const args = ['stage', 'approve', entry.stageId]
+  const args = [
+    'stage',
+    'approve',
+    entry.stageId,
+    '--registry',
+    NPM_PUBLIC_REGISTRY,
+  ]
   // Pass the OTP through NPM_CONFIG_OTP (npm's `npm_config_*` env channel)
   // rather than `--otp <code>`, so the ~30s-expiring code is not visible in
   // the process argument list. npm reads this env var at the enforced floor
