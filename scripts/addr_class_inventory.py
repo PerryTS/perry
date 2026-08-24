@@ -194,6 +194,44 @@ def band_predicate_near(lines: list[str], idx: int) -> bool:
     return bool(BAND_PREDICATE_RE.search("\n".join(context)))
 
 
+# A new sibling conditional at the top of a code line — the boundary
+# `lone_band_predicate_near` refuses to cross. `handle-floor`'s own #6321 fix
+# shape deliberately spans two separate `if` statements (a coarse range
+# pre-filter, then the real band-predicate gate a few lines below), so
+# `band_predicate_near`'s generic forward scan must keep allowing that. But
+# `lone-valid-obj-ptr`'s real safe shape is "guard early-returns, the very
+# next statement is the band-predicate call" (see array/subclass.rs) — it
+# never needs to reach into an unrelated LATER conditional to find its
+# predicate. Stopping there closes the false negative a CodeRabbit review
+# caught: an `is_valid_obj_ptr`-only guard that already dereferences inside
+# its own block must not be cleared by some other, disconnected `if
+# is_handle_band(...)` a few statements later.
+SIBLING_CONDITIONAL_RE = re.compile(r"^\s*(?:\}\s*)?(?:else\s+)?(?:if|while|for|match)\b")
+
+
+def lone_band_predicate_near(lines: list[str], idx: int) -> bool:
+    """`band_predicate_near`, scoped to the current guard's own statement.
+
+    Same backward window; the forward scan stops (without including) at the
+    first later line that opens a new sibling conditional, since the real
+    fix shape never needs to reach past that boundary.
+    """
+
+    start = max(0, idx - BAND_PREDICATE_LOOKBACK)
+    context = [strip_comment(line) for line in lines[start : idx + 1]]
+    taken = 0
+    cursor = idx + 1
+    while cursor < len(lines) and taken < BAND_PREDICATE_LOOKAHEAD_CODE:
+        code = strip_comment(lines[cursor])
+        if code.strip():
+            if SIBLING_CONDITIONAL_RE.search(code):
+                break
+            context.append(code)
+            taken += 1
+        cursor += 1
+    return bool(BAND_PREDICATE_RE.search("\n".join(context)))
+
+
 def scan_text(rel_path: str, text: str) -> list[Finding]:
     findings: list[Finding] = []
     if any(rel_path.startswith(prefix) for prefix in EXCLUDED_PREFIXES):
@@ -214,7 +252,7 @@ def scan_text(rel_path: str, text: str) -> list[Finding]:
             findings.append(Finding(rel_path, line_no, "handle-floor", raw))
         if VALID_OBJ_PTR_RE.search(code) and "fn is_valid_obj_ptr" not in code:
             # A band predicate anywhere in the enclosing guard clears it.
-            if not band_predicate_near(lines, idx):
+            if not lone_band_predicate_near(lines, idx):
                 findings.append(
                     Finding(rel_path, line_no, "lone-valid-obj-ptr", raw)
                 )
@@ -409,6 +447,40 @@ def run_self_tests() -> int:
             for f in scan_text(runtime, "pub fn is_valid_obj_ptr(ptr: *const u8) -> bool {\n")
         ),
         "lone-valid-obj-ptr must not flag the definition",
+    )
+    # The real safe shape (array/subclass.rs): a guard that only early-returns,
+    # then the very next statement is the band predicate.
+    early_return_then_predicate = (
+        "    if obj.is_null() || !is_valid_obj_ptr(obj.cast::<u8>()) {\n"
+        "        return None;\n"
+        "    }\n"
+        "    let header = unsafe { try_read_gc_header(obj as usize)? };\n"
+    )
+    expect(
+        not any(
+            f.rule == "lone-valid-obj-ptr"
+            for f in scan_text(runtime, early_return_then_predicate)
+        ),
+        "lone-valid-obj-ptr must accept a guard that early-returns "
+        "then reads the band predicate in the very next statement",
+    )
+    # CodeRabbit (PR #8685): a dereference inside an UNGUARDED is_valid_obj_ptr
+    # block must still be flagged even when a wholly unrelated, later sibling
+    # `if` happens to test a band predicate — that predicate does not guard
+    # the dereference above it.
+    separated_statement = (
+        "    if is_valid_obj_ptr(ptr) {\n"
+        "        (*ptr).class_id\n"
+        "    }\n"
+        "    if is_handle_band(other) {}\n"
+    )
+    expect(
+        any(
+            f.rule == "lone-valid-obj-ptr"
+            for f in scan_text(runtime, separated_statement)
+        ),
+        "lone-valid-obj-ptr must still flag a dereference cleared only by "
+        "a disconnected LATER sibling conditional's band predicate",
     )
 
     # Band literals in code are caught; comment-only mentions are not.
