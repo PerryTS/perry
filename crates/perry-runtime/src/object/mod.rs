@@ -145,11 +145,11 @@ mod regex_proto_thunks;
 // names they use (the rest stay internal to `spill`).
 mod spill;
 pub(crate) use spill::{
-    learned_inline_field_count, learned_inline_fields_hot_addr, overflow_get, overflow_set,
-    reserve_object_spill,
+    learned_inline_field_count, learned_inline_fields_hot_addr, object_spill_enabled, overflow_get,
+    overflow_set, reserve_object_spill,
 };
 #[cfg(test)]
-use spill::{object_spill_enabled, spill_capable_owner, spill_get, SPILL_MAX_FIELD_INDEX};
+use spill::{spill_capable_owner, spill_get, SPILL_MAX_FIELD_INDEX};
 #[cfg(test)]
 pub(crate) use spill::{test_set_spill_safepoint_hook, SpillSafepointHook};
 mod string_proto_thunks;

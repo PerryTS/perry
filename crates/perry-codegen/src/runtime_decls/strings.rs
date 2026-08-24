@@ -686,6 +686,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // based on the receiver's NaN-box tag at runtime. Used by IndexGet's
     // fallback path when codegen can't statically prove the receiver type.
     module.declare_function("js_dyn_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
+    // #8655: guarded packed-array / dense Array-subclass read before the
+    // fully generic dynamic dispatcher. Used by unknown-receiver loop reads.
+    module.declare_function(
+        "js_packed_arraylike_index_get",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, PTR],
+    );
     // Issue #957: tag-aware dynamic index write. Used by `Expr::IndexUpdate`
     // codegen to write back the incremented value without rebuilding the
     // IndexSet dispatch tree. Routes to `js_array_set_index_or_string` for
