@@ -86,7 +86,10 @@ fn assert_rewritten(before: i64, after: i64) {
 #[test]
 fn gc_mutable_scanner_rewrites_listener_roots() {
     let _guard = GcTestGuard::new();
-    perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-net", scan_net_roots);
+    perry_ffi::gc_register_mutable_root_scanner_named(
+        "perry-ext-net",
+        crate::gc_roots::scan_net_roots,
+    );
 
     // Keep an ordinary shadow-stack root as the control. Its rewrite proves
     // the collection copied live objects independently of scan_net_roots, so

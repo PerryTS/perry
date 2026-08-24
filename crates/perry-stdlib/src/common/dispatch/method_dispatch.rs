@@ -1,4 +1,5 @@
-use super::super::handle::*;
+#[cfg(any(feature = "crypto", feature = "database-redis"))]
+use super::super::handle::with_handle;
 use super::*;
 
 /// Route external zlib stream methods before the generic dispatcher creates

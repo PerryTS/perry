@@ -40,7 +40,6 @@ use perry_ffi::{
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -71,12 +70,16 @@ mod handle_ids;
 pub(crate) use handle_ids::{next_id, next_id_or_throw};
 mod dispatch;
 mod dispatch_custody;
+mod gc_roots;
 mod ipc;
+pub(crate) use gc_roots::ensure_gc_scanner_registered;
 mod socket_emit;
 pub use socket_emit::{
     js_ext_net_register_http_agent_socket_event_hook, js_ext_net_set_http_agent_phase,
     js_ext_net_socket_emit, js_ext_net_socket_emit_abort_error,
 };
+mod task_spawn;
+use task_spawn::spawn_socket_runner;
 // #2154 — raw-consumer bridge so perry-ext-http can drive an HTTP exchange
 // over a socket produced by `agent.createConnection` (split out for the gate).
 mod provider_lifecycle;
@@ -242,69 +245,6 @@ pub(crate) struct ServerState {
     pub pending_local_connect_events: usize,
     pub max_connections: Option<usize>,
     pub drop_max_connection: Option<bool>,
-}
-
-static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
-
-extern "C" {
-    fn js_register_net_socket_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
-}
-
-unsafe extern "C" fn ext_net_socket_handle_probe(handle: i64) -> bool {
-    is_net_socket_handle(handle)
-}
-
-/// Register the net GC root scanner exactly once. Safe to call from any
-/// `js_net_*` entry point on the main thread.
-pub(crate) fn ensure_gc_scanner_registered() {
-    NET_GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner_named("perry-ext-net", scan_net_roots);
-        unsafe {
-            js_register_net_socket_handle_probe(ext_net_socket_handle_probe);
-        }
-        // #2154 — publish the raw-consumer vtable for perry-ext-http (runs on
-        // the first net FFI entry, before http could reference a socket).
-        raw_bridge::register();
-    });
-}
-
-/// GC root scanner for net.Socket event listener closures.
-///
-/// Without this, any GC cycle between `.on()` and the next dispatch would
-/// sweep the closure; the next `closure.call*()` would dereference freed
-/// memory. Same pattern as perry-stdlib's net mod and perry-ext-events.
-fn scan_net_roots(visitor: &mut GcRootVisitor<'_>) {
-    if let Ok(mut listeners) = statics::listeners().lock() {
-        for per_socket in listeners.values_mut() {
-            for cb_vec in per_socket.values_mut() {
-                for cb in cb_vec.iter_mut() {
-                    visitor.visit_i64_slot(cb);
-                }
-            }
-        }
-    }
-    // `once_flags()` keys membership by the closure's ADDRESS BITS. The
-    // canonical copy in `listeners()` above keeps the closure alive and is
-    // rewritten when the copying GC moves it — but a `HashSet<i64>` element
-    // cannot be rewritten in place, so without this rebuild the set still
-    // holds the OLD address after evacuation: the once-membership test in
-    // `lifecycle.rs` then misses, the listener is never auto-removed, and a
-    // "once" callback fires on every subsequent event. Drain, forward each
-    // element through the visitor, and reinsert under the new identity.
-    if let Ok(mut once) = statics::once_flags().lock() {
-        for per_handle in once.values_mut() {
-            for set in per_handle.values_mut() {
-                let old: Vec<i64> = set.drain().collect();
-                for mut cb in old {
-                    visitor.visit_i64_slot(&mut cb);
-                    set.insert(cb);
-                }
-            }
-        }
-    }
-    // #8259 — the pump's in-flight dispatch frames (snapshotted callbacks +
-    // parked payloads), which the table walks above cannot see.
-    dispatch_custody::scan(visitor);
 }
 
 pub(crate) struct SocketState {
@@ -488,34 +428,6 @@ fn push_event(ev: PendingNetEvent) {
 
 fn mark_closed(id: i64) {
     server_state::mark_socket_closed(id);
-}
-
-// ─── Spawning helper ─────────────────────────────────────────────────────────
-//
-// perry-ffi v0.5.x's only async-runtime entry point is `spawn_blocking`,
-// which boxes a `FnOnce()` to run on tokio's blocking pool. We bridge to
-// async-Rust by calling `tokio::runtime::Handle::current().block_on(...)`
-// inside the closure — same pattern axios / better-sqlite3 / iroh use.
-// One thread per socket for its lifetime; the perry-stdlib version uses
-// the same shared tokio runtime via `crate::common::async_bridge::spawn`,
-// which is a regular `tokio::spawn` (cooperative). Neither approach is
-// "wrong" — the cooperative version is denser, the blocking-pool version
-// is simpler. Wrapper-side simplicity wins for a v0 port.
-fn spawn_socket_runner<F>(fut_factory: F)
-where
-    F: FnOnce() -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + 'static,
-{
-    // Run each socket future cooperatively on Perry's shared multi-thread
-    // runtime via `spawn_async`, instead of tying up one blocking-pool thread
-    // plus a throwaway current-thread runtime for the socket's whole lifetime.
-    // The shared runtime carries the I/O reactor, so `TcpStream` / TLS work
-    // without relying on the FFI callback's ambient `Handle` (the brittleness
-    // under release/LTO that the per-socket runtime worked around). The socket
-    // is registered in `sockets()` synchronously before this spawn, so
-    // `js_ext_net_has_active_handles` keeps the event loop alive for its life.
-    perry_ffi::spawn_async(async move {
-        fut_factory().await;
-    });
 }
 
 // ─── FFI: net.createConnection / net.connect ─────────────────────────────────

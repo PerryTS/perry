@@ -1663,6 +1663,7 @@ mod stream_tests {
 
     fn no_consumer_state() -> ZlibStreamState {
         ZlibStreamState {
+            async_id: 0,
             codec: Codec::Gzip,
             level: Compression::default(),
             codec_state: None,
@@ -1690,6 +1691,7 @@ mod stream_tests {
             pipes: Vec::new(),
             output_buffer: b"buffered".to_vec(),
             end_buffered: true,
+            async_id: 0,
         }
     }
 

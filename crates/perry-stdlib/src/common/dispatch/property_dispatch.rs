@@ -1,4 +1,5 @@
-use super::super::handle::*;
+#[cfg(any(feature = "crypto", feature = "http-client"))]
+use super::super::handle::with_handle;
 use super::*;
 
 /// Dispatch a property access on a handle-based object.

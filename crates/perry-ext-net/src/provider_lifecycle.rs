@@ -75,7 +75,8 @@ pub(super) fn event_provider_id(ev: &PendingNetEvent) -> u64 {
             .ok()
             .and_then(|sockets| sockets.get(id).map(|socket| socket.connect_async_id))
             .unwrap_or(0),
-        PendingNetEvent::Data(id, _)
+        PendingNetEvent::SecureConnect(id)
+        | PendingNetEvent::Data(id, _)
         | PendingNetEvent::End(id)
         | PendingNetEvent::Error(id, _)
         | PendingNetEvent::AbortError(id)
