@@ -1,16 +1,16 @@
 //! Guarded loop versions for counted Array and Array-subclass iteration.
 //!
 //! A one-time runtime admission publishes scalar layout facts. The fast copy
-//! reloads the receiver root at iteration entry, compares compact header words,
-//! and performs the indexed load directly. Any failed proof resumes the
-//! unchanged generic loop at the current counter.
+//! is entered only after its emitted blocks are proven call-free, so its
+//! preheader-cached receiver and storage bases stay valid for the whole copy.
+//! Failed admission runs the unchanged generic loop from the current counter.
 
 use anyhow::Result;
 use perry_hir::{CompareOp, Expr, Stmt, UpdateOp};
 
 use crate::expr::{FnCtx, StablePackedLoopFact, StablePackedNumericAccess};
 use crate::native_value::{BoundsState, BufferAccessMode, LoweredValue, MaterializationReason};
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 #[derive(Clone, Copy)]
 enum LoopBound {
@@ -291,88 +291,6 @@ fn record_artifacts(ctx: &mut FnCtx<'_>, array_id: u32, receiver: &str) {
     );
 }
 
-pub(super) fn emit_iteration_guard(ctx: &mut FnCtx<'_>) -> Result<bool> {
-    let Some(fact) = ctx.stable_packed_loop_facts.last().cloned() else {
-        return Ok(false);
-    };
-    if fact.preheader_stable {
-        return Ok(true);
-    }
-    let receiver = crate::expr::lower_expr(ctx, &Expr::LocalGet(fact.array_local_id))?;
-    let bits = ctx.block().bitcast_double_to_i64(&receiver);
-    let raw = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-    let tag = ctx.block().lshr(I64, &bits, "48");
-    let is_pointer = ctx.block().icmp_eq(I64, &tag, "32765");
-    let floor =
-        crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
-    let ceiling =
-        crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
-    let above = ctx.block().icmp_uge(I64, &raw, &floor);
-    let below = ctx.block().icmp_ult(I64, &raw, &ceiling);
-    let in_heap = ctx.block().and(I1, &above, &below);
-    let safe = ctx.block().and(I1, &is_pointer, &in_heap);
-
-    let deref_idx = ctx.new_block("stable_packed.iteration.deref");
-    let plain_idx = ctx.new_block("stable_packed.iteration.plain");
-    let object_idx = ctx.new_block("stable_packed.iteration.object");
-    let fast_idx = ctx.new_block("stable_packed.iteration.fast");
-    let deref_label = ctx.block_label(deref_idx);
-    let plain_label = ctx.block_label(plain_idx);
-    let object_label = ctx.block_label(object_idx);
-    let fast_label = ctx.block_label(fast_idx);
-    ctx.block()
-        .cond_br(&safe, &deref_label, &fact.side_exit_label);
-
-    ctx.current_block = deref_idx;
-    let gc_addr = ctx.block().sub(I64, &raw, "8");
-    let gc_ptr = ctx.block().inttoptr(I64, &gc_addr);
-    let live_gc = ctx.block().load_aligned(I64, &gc_ptr, 8);
-    let receiver_ptr = ctx.block().inttoptr(I64, &raw);
-    let live_header = ctx.block().load(I64, &receiver_ptr);
-    let expected_gc = descriptor_word(ctx, &fact.descriptor, 1);
-    let expected_header = descriptor_word(ctx, &fact.descriptor, 2);
-    let gc_ok = ctx.block().icmp_eq(I64, &live_gc, &expected_gc);
-    let header_ok = ctx.block().icmp_eq(I64, &live_header, &expected_header);
-    let header_words_ok = ctx.block().and(I1, &gc_ok, &header_ok);
-    let kind = descriptor_word(ctx, &fact.descriptor, 0);
-    let is_plain = ctx.block().icmp_eq(I64, &kind, "1");
-    let header_and_plain = ctx.block().and(I1, &header_words_ok, &is_plain);
-    ctx.block()
-        .cond_br(&header_and_plain, &plain_label, &object_label);
-
-    ctx.current_block = plain_idx;
-    let invalidated = ctx
-        .block()
-        .load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
-    let prototype_ok = ctx.block().icmp_eq(I8, &invalidated, "0");
-    ctx.block()
-        .cond_br(&prototype_ok, &fast_label, &fact.side_exit_label);
-
-    ctx.current_block = object_idx;
-    let is_object = ctx.block().icmp_eq(I64, &kind, "2");
-    let mut object_ok = ctx.block().and(I1, &header_words_ok, &is_object);
-    let length_slot = descriptor_word(ctx, &fact.descriptor, 3);
-    let object_header_size =
-        crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
-    let length_bytes = ctx.block().shl(I64, &length_slot, "3");
-    let length_offset = ctx.block().add(I64, &length_bytes, &object_header_size);
-    let length_addr = ctx.block().add(I64, &raw, &length_offset);
-    let length_ptr = ctx.block().inttoptr(I64, &length_addr);
-    let live_length = ctx.block().load(DOUBLE, &length_ptr);
-    let bound64 = descriptor_word(ctx, &fact.descriptor, 6);
-    let bound = ctx.block().uitofp(I64, &bound64, DOUBLE);
-    let length_covers_bound = ctx.block().fcmp("oge", &live_length, &bound);
-    object_ok = ctx.block().and(I1, &object_ok, &length_covers_bound);
-    ctx.block()
-        .cond_br(&object_ok, &fast_label, &fact.side_exit_label);
-
-    ctx.current_block = fast_idx;
-    if let Some(active) = ctx.stable_packed_loop_facts.last_mut() {
-        active.live_receiver_handle = Some(raw);
-    }
-    Ok(true)
-}
-
 pub(crate) fn try_lower_index_get(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -540,8 +458,7 @@ pub(crate) fn has_numeric_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
         return false;
     };
     ctx.stable_packed_loop_facts.iter().rev().any(|fact| {
-        fact.preheader_stable
-            && fact.numeric_elements
+        fact.numeric_elements
             && fact.array_local_id == *array_id
             && fact.counter_local_id == *counter_id
     })
@@ -708,7 +625,6 @@ pub(super) fn lower(
         descriptor,
         live_receiver_handle: Some(fast_raw),
         numeric_elements: candidate.numeric_elements,
-        preheader_stable: true,
         numeric_access,
     });
     super::loops::lower_for_after_init_with_i32_bound(

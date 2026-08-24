@@ -1583,6 +1583,51 @@ fn typed_feedback_class_field_set_guard_fails_for_frozen_object() {
     assert_eq!(site.fallback_calls, 0);
 }
 
+/// #8690: a packed Array-subclass numeric proof is authoritative even for
+/// pointer-free values. The class-field set guard must miss while the bit is
+/// active so the runtime setter can retire it for SSO and boolean overwrites.
+#[test]
+fn typed_feedback_class_field_set_guard_retires_packed_numeric_proof_for_tagged_values() {
+    let _guard = typed_feedback_test_lock();
+    reset_typed_feedback_for_tests();
+    register(8_690, TypedFeedbackSiteKind::PropertySet, "obj.x=");
+
+    let class_id = 0x7EED_8690;
+    let (obj, _, key, receiver) = class_instance(class_id, b"x");
+    let expected_shape_id = shape_id(obj);
+    crate::object::js_object_set_field(obj, 0, crate::JSValue::number(1.0));
+    let header =
+        unsafe { (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader };
+    let short = crate::value::JSValue::try_short_string(b"s").expect("inline SSO");
+
+    for (name, value_bits) in [("SSO", short.bits()), ("boolean", crate::value::TAG_TRUE)] {
+        unsafe {
+            (*header)._reserved |= crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
+        }
+        let value = f64::from_bits(value_bits);
+        assert_eq!(
+            js_typed_feedback_class_field_set_guard(
+                8_690,
+                receiver,
+                class_id,
+                expected_shape_id,
+                key,
+                0,
+                value,
+                0,
+            ),
+            0,
+            "{name} must not bypass packed numeric proof invalidation"
+        );
+        crate::object::js_object_set_field(obj, 0, crate::JSValue::from_bits(value_bits));
+        assert_eq!(
+            unsafe { (*header)._reserved } & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
+            0,
+            "the runtime setter must retire proof authority for {name}"
+        );
+    }
+}
+
 #[test]
 fn typed_feedback_class_field_set_guard_falls_back_for_class_setter() {
     let _guard = typed_feedback_test_lock();

@@ -21,11 +21,11 @@ const GC_TYPE_OBJECT: &str = "2";
 //
 //   gtype == GC_TYPE_OBJECT
 //   flags & GC_FLAG_FORWARDED == 0
-//   reserved & OBJ_FLAG_HAS_DESCRIPTORS == 0
+//   reserved & (OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_PACKED_NUMERIC_PROOF) == 0
 //
-// Mask: 0x0800_0000 (descriptor bit) | 0x0000_8000 (forwarded bit) |
-// 0x0000_00ff (the complete gtype byte).
-const GC_OBJECT_METHOD_GUARD_MASK_I32: &str = "134250751"; // 0x0800_80ff
+// Mask: 0x0800_0000 (descriptor bit) | 0x0080_0000 (packed proof bit) |
+// 0x0000_8000 (forwarded bit) | 0x0000_00ff (the complete gtype byte).
+const GC_OBJECT_METHOD_GUARD_MASK_I32: &str = "142639359"; // 0x0880_80ff
 const SHAPE_ID_BASE_NEG_I32: &str = "-2147483648"; // subtract 0x8000_0000
 const SHAPE_ID_RANGE_LEN: &str = "1073741824"; // 0x4000_0000
 
@@ -136,13 +136,15 @@ mod packed_guard_tests {
         let obj_type_mask = 0x0000_00ffu32;
         let forwarded = u32::from(0x80u8) << 8;
         let has_descriptors = 0x0800u32 << 16;
-        let mask = obj_type_mask | forwarded | has_descriptors;
+        let packed_numeric_proof = 0x0080u32 << 16;
+        let mask = obj_type_mask | forwarded | has_descriptors | packed_numeric_proof;
         let expected = u32::from(2u8);
 
         assert_eq!(GC_OBJECT_METHOD_GUARD_MASK_I32, mask.to_string());
         assert_eq!(expected & mask, expected);
         assert_ne!((expected | forwarded) & mask, expected);
         assert_ne!((expected | has_descriptors) & mask, expected);
+        assert_ne!((expected | packed_numeric_proof) & mask, expected);
         assert_ne!((expected ^ 1) & mask, expected);
     }
 

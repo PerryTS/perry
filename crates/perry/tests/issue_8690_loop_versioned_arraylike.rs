@@ -224,6 +224,16 @@ function packedSum(a: any): number {
   return sum;
 }
 
+// A declared Number is not a runtime proof: callers may still provide a
+// String or BigInt through `any`. This exercises the assignment-side `| 0`
+// lowering used by the numeric clone without letting it skip ToNumber or the
+// required mixed-BigInt TypeError.
+function declaredToInt32(value: number): number {
+  let result = 0;
+  result = value | 0;
+  return result;
+}
+
 function breakAfterEffect(a: any): string {
   let out = "";
   for (let i = 0; i < a.length; i++) {
@@ -235,6 +245,9 @@ function breakAfterEffect(a: any): string {
 }
 
 console.log("break=" + breakAfterEffect([31, 32]));
+console.log("declared-string=" + declaredToInt32("7" as any));
+try { declaredToInt32(1n as any); console.log("declared-bigint=no-throw"); }
+catch (_error) { console.log("declared-bigint=throw"); }
 
 const grow: any[] = [1, 2];
 console.log("grow=" + live(grow, (a: any) => a.push(3)));
@@ -341,6 +354,8 @@ console.log("moving-proof-after=" + packedSum(moved));
 "#;
     let (bin, _stderr) = compile(dir.path(), source, false);
     let expected = "break=31\n\
+                    declared-string=7\n\
+                    declared-bigint=throw\n\
                     grow=1;2;3;\n\
                     shrink=1;\n\
                     snapshot=1;2;\n\

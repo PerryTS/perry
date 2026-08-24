@@ -14,7 +14,7 @@ use crate::lower_string_concat::{
 };
 use crate::nanbox::double_literal;
 use crate::native_value::ExpectedNativeRep;
-use crate::type_analysis::{is_map_expr, is_numeric_expr, is_set_expr, receiver_class_name};
+use crate::type_analysis::{is_map_expr, is_set_expr, receiver_class_name};
 use crate::types::{DOUBLE, I32, I64};
 
 use super::{
@@ -637,20 +637,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // still see the current value.
             if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
                 let structurally_i32 = can_lower_expr_as_i32_in_current_region(ctx, value);
-                // When `x` is proven numeric, `x | 0` may feed the canonical
+                // When `x` is a canonical raw Number, `x | 0` may feed the canonical
                 // i32 slot directly: materializing a double here only to
                 // convert it back would duplicate the spec ToInt32. Keep the
-                // numeric gate explicit — an untyped `x` can be a String, and
-                // its `+` expression must preserve concatenation before `|0`.
+                // canonical gate explicit — declared Number types are erased,
+                // so a local can still hold a String or BigInt at runtime.
                 let explicit_numeric_toint32 = matches!(
-                    value.as_ref(),
-                    Expr::Binary {
-                        op: BinaryOp::BitOr,
-                        left,
-                        right,
-                        ..
-                    } if matches!(right.as_ref(), Expr::Integer(0))
-                        && is_numeric_expr(ctx, left)
+                value.as_ref(),
+                Expr::Binary {
+                    op: BinaryOp::BitOr,
+                    left,
+                    right,
+                    ..
+                } if matches!(right.as_ref(), Expr::Integer(0))
+                    && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left)
                 );
                 if !ctx.closure_captures.contains_key(id)
                     && !(ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id))

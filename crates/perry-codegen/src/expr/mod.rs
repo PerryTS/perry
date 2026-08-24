@@ -1616,10 +1616,6 @@ pub(crate) struct StablePackedLoopFact {
     /// an untagged IEEE Number. This is requested only when the indexed value
     /// appears below a numeric operator in the cloned body.
     pub numeric_elements: bool,
-    /// The clone was emitted against a preheader-cached receiver. Its entry is
-    /// enabled only after an emitted-IR scan proves the whole clone call-free,
-    /// so no allocation, collection, or proof-revoking runtime funnel can run.
-    pub preheader_stable: bool,
     /// Preheader-derived numeric storage bases. Admission proved the complete
     /// range is raw f64 and the call-free clone keeps these addresses stable.
     pub numeric_access: Option<StablePackedNumericAccess>,

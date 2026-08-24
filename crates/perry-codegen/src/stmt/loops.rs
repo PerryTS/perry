@@ -4965,11 +4965,11 @@ pub(super) fn lower_for_after_init_with_i32_bound(
     // Saves ~25-30% on `for (let i = 0; i < arr.length; i++) arr[i] = i`
     // and `for (let i = 0; i < arr.length; i++) for (let j = 0; j <
     // arr.length; j++) ...` patterns.
-    let raw_hoist_classification: Option<LengthHoist> = if precomputed_i32_bound.is_some() {
-        None
-    } else {
-        condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body))
-    };
+    // A precomputed bound replaces only the emitted length LOAD. Keep the
+    // structural classification: bounded-index facts, buffer-width facts and
+    // the counter's i32 slot are independent proofs consumed inside clones.
+    let raw_hoist_classification: Option<LengthHoist> =
+        condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body));
     let hoist_rejection = if raw_hoist_classification.is_none() && precomputed_i32_bound.is_none() {
         condition.and_then(|cond| classify_for_length_hoist_rejection(ctx, cond, update, body))
     } else {
@@ -5024,8 +5024,10 @@ pub(super) fn lower_for_after_init_with_i32_bound(
     // i32 counter slot below are proofs and storage, not emitted work, and the
     // clone's other lowering may depend on them; suppressing those too would
     // trade one silent loss for another.
-    let in_call_free_clone =
-        !ctx.element_shape_loop_facts.is_empty() || !ctx.class_field_loop_facts.is_empty();
+    let in_call_free_clone = !ctx.element_shape_loop_facts.is_empty()
+        || !ctx.class_field_loop_facts.is_empty()
+        || !ctx.stable_packed_loop_facts.is_empty()
+        || precomputed_i32_bound.is_some();
     let hoisted_length_slot: Option<String> = if let Some(hoist) = hoist_classification {
         let hoisted_slot = if in_call_free_clone {
             None
@@ -5405,7 +5407,6 @@ pub(super) fn lower_for_after_init_with_i32_bound(
 
     // Body block.
     ctx.current_block = body_idx;
-    super::stable_packed_loop::emit_iteration_guard(ctx)?;
     super::versioned_indexed_loop::emit_iteration_guard(ctx);
     if let Some(cond) = condition {
         let mut guarded =
@@ -5632,10 +5633,7 @@ pub(crate) fn emit_gc_loop_safepoint(
     // scope is popped — keeps its poll either way.
     if !ctx.element_shape_loop_facts.is_empty()
         || !ctx.class_field_loop_facts.is_empty()
-        || ctx
-            .stable_packed_loop_facts
-            .last()
-            .is_some_and(|fact| fact.preheader_stable)
+        || !ctx.stable_packed_loop_facts.is_empty()
     {
         return;
     }
