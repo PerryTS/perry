@@ -2392,7 +2392,12 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gap-suite-report-${{ fromJSON(needs.plan.outputs.plan).gap.mode }}-shard-${{ matrix.shard }}
-          path: test-parity/reports/
+          # The harness persists compiler stderr separately from the JSON
+          # report. Retain it too: a bare `compile_fail` cannot distinguish an
+          # undefined symbol from an environment/toolchain failure.
+          path: |
+            test-parity/reports/
+            test-parity/output/*.compile_error.log
 
   # ---------------------------------------------------------------------------
   # Parity tests (Perry output vs Node.js)
