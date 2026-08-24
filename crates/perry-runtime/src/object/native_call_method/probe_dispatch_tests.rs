@@ -64,6 +64,42 @@ fn classify(addr: usize) -> Option<(*const u8, u8)> {
     unsafe { test_gc_pointer_and_type_from_value(nanboxed(addr)) }
 }
 
+/// The `obj_type` `match` at the tail of `gc_pointer_and_type_from_value`,
+/// mirrored with the byte it switches on supplied by the CALLER instead of read
+/// from `addr - GC_HEADER_SIZE`.
+///
+/// #8728: reading that byte for a `Box`-leaked symbol reads memory this test
+/// does not own — such a symbol has no `GcHeader`, so those bytes are allocator
+/// metadata or a neighbour's tail. It also made the mirror non-deterministic,
+/// because the `GC_TYPE_REGEXP` arm answers `true` *without looking at the
+/// address at all*: whenever the stray byte happened to equal `GC_TYPE_REGEXP`
+/// (20) the mirror reported "excluded" and the assertion below fired. In
+/// isolation the byte is stable — 1000/1000 runs of this test alone passed — so
+/// it only showed up once the rest of the suite had churned the allocator,
+/// which is exactly the shape that reads as a flake.
+///
+/// Taking `obj_type` as a parameter lets the caller quantify over the WHOLE
+/// domain of that byte rather than sample the one value that happens to be
+/// there. That is sound, deterministic, and a strictly stronger statement than
+/// the single-sample version it replaces.
+///
+/// Kept FAITHFUL on purpose: the `GC_TYPE_REGEXP` arm is a bare `true`, not
+/// `regex::is_registered_regex(addr)`, because a bare `true` is what production
+/// does — "RegExp has the dedicated `GC_TYPE_REGEXP` kind", so the header is
+/// treated as authoritative and no registry is consulted. A predicate does
+/// exist (`regex::is_registered_regex`), but the mirror must not call it: it
+/// would prove something about a function this dispatch path never invokes,
+/// and it reaches `try_read_gc_header`, i.e. the very `addr - 8` read this fix
+/// removes.
+fn excluded_by_the_header_arms(addr: usize, obj_type: u8) -> bool {
+    match obj_type {
+        crate::gc::GC_TYPE_SET => crate::set::is_registered_set(addr),
+        crate::gc::GC_TYPE_MAP => crate::map::is_registered_map(addr),
+        crate::gc::GC_TYPE_REGEXP => true,
+        _ => false,
+    }
+}
+
 /// The saving, asserted rather than assumed: with the symbol latch ARMED — the
 /// state every realistic program is in — a plain-object dispatch must not enter
 /// `is_registered_symbol` at all, nor the map/set registries.
@@ -236,30 +272,40 @@ fn the_magic_screen_covers_every_symbol_and_no_ordinary_object() {
         "a gc_malloc'd Symbol must carry SYMBOL_MAGIC too"
     );
 
-    // Soundness sabotage, expressed as data rather than a switch: without the
-    // screen a leaked symbol would be classified by the bytes at `ptr - 8`,
-    // which belong to the allocator and not to us. This mirrors the production
-    // `match` DELIBERATELY — it asserts that no other arm covers these, i.e.
-    // that the screen is the only thing keeping them out. If someone adds an arm
-    // that does cover them, this mirror goes stale and the assertion below
-    // fails, which is the right way round.
+    // Soundness, expressed as data rather than a switch: without the screen a
+    // leaked symbol is classified by whatever `obj_type` the arms are handed,
+    // and `ptr - 8` for such a symbol is allocator bytes that can read as ANY
+    // value. So don't sample that byte (#8728 — that is what made this
+    // assertion fail intermittently, and it read memory the test does not own).
+    // Ask the mirror for the ENTIRE domain of the byte instead, and pin the
+    // answer exactly.
+    //
+    // Exactly one value may exclude these symbols: `GC_TYPE_REGEXP`, whose arm
+    // is a bare `true` and never consults the address — so its exclusion is an
+    // accident of the production `match`, not evidence that anything recognises
+    // a symbol. The other 255 fall through to `_ => false`, i.e. production
+    // WOULD hand a leaked symbol back as an ordinary object. `may_be_symbol_header`
+    // is the only thing standing between them and that, which is what makes the
+    // `classify(sym).is_none()` assertions above non-vacuous.
+    //
+    // This fails in BOTH directions, and both are the right way round: an added
+    // arm that covers leaked symbols grows the set, and giving the RegExp arm a
+    // real predicate shrinks it. Either way the mirror must be re-derived from
+    // `gc_pointer_and_type_from_value` rather than left to drift.
     for i in 0..8 {
         let sym = leaked_symbol(&format!("perry-7850-magic-{i}"));
-        let obj_type = unsafe {
-            (*((sym as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader))
-                .obj_type
-        };
-        let excluded_without_the_screen = match obj_type {
-            crate::gc::GC_TYPE_SET => crate::set::is_registered_set(sym),
-            crate::gc::GC_TYPE_MAP => crate::map::is_registered_map(sym),
-            crate::gc::GC_TYPE_REGEXP => true,
-            _ => false,
-        };
-        assert!(
-            !excluded_without_the_screen,
-            "leaked symbol {sym:#x} (allocator bytes read as obj_type {obj_type}) would \
-             be excluded even without the magic screen — the screen is then not \
-             load-bearing and this suite is vacuous"
+        let excluding: Vec<u8> = (0..=u8::MAX)
+            .filter(|&obj_type| excluded_by_the_header_arms(sym, obj_type))
+            .collect();
+        assert_eq!(
+            excluding,
+            vec![crate::gc::GC_TYPE_REGEXP],
+            "leaked symbol {sym:#x}: the production `obj_type` match must exclude it for \
+             EXACTLY the one byte value whose arm excludes unconditionally \
+             (GC_TYPE_REGEXP), and for no other. Got {excluding:?}. More values ⇒ some \
+             arm now recognises leaked symbols, so the magic screen is no longer the \
+             only thing keeping them out and every `classify(sym).is_none()` above is \
+             vacuous. Fewer ⇒ the production match changed and this mirror is stale."
         );
     }
 
