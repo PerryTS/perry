@@ -1,0 +1,1 @@
+Fixed `SyntaxError` not being raised for legacy decimal/octal numeric literals inside a strict-mode direct `eval`. Constant direct-eval bodies are now re-lexed under the caller's inherited strict mode, and the deferred legacy-numeric diagnostics surface as `SyntaxError`. Modern octal literals (`0o…`) and numeric-looking text inside comments or strings stay valid. Refs #5894.
