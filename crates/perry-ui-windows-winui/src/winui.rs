@@ -1,10 +1,8 @@
 //! WinUI 3 / Fluent backend internals — issue #4680.
 //!
-//! This module is where the Win32 widget creation is progressively replaced by
-//! `Microsoft.UI.Xaml` controls. It is empty of real XAML today (scaffold);
-//! see the crate-level docs for the incremental plan. Each future widget gets a
-//! submodule here that drives the corresponding XAML control and is wired into
-//! the dispatch path in place of the `perry-ui-windows` Win32 path.
+//! Core controls are mapped to `Microsoft.UI.Xaml` by the adapter in
+//! `widgets.rs`; this module owns the runtime bootstrap and stable backend
+//! selection used by that adapter.
 
 /// Windows App SDK bootstrap (#4680 step 2).
 ///
@@ -13,18 +11,15 @@
 /// bootstrapper entry points (`MddBootstrapInitialize2` /
 /// `MddBootstrapInitialize`) in `Microsoft.WindowsAppRuntime.Bootstrap.dll`.
 ///
-/// # Why dynamic loading (not a link dependency)
+/// # Why Perry probes dynamically
 ///
-/// Perry's defining constraint is the single self-contained `.exe`. Linking
-/// `Microsoft.WindowsAppRuntime.Bootstrap.lib` would make *every*
-/// `windows-winui` binary hard-require the Windows App SDK at load time — the
-/// process would fail to start on a machine that doesn't have it, even though
-/// the scaffold can fall back to the Win32 backend and run fine. So instead of
-/// a link-time import we resolve the bootstrapper at runtime with
-/// `LoadLibraryW` + `GetProcAddress`. If the DLL isn't present (no Windows App
-/// SDK installed), [`initialize`] reports [`InitStatus::RuntimeMissing`] and
-/// the caller falls back to Win32 rather than crashing. This keeps the binary
-/// dependency-free; the SDK is consumed only when the host actually has it.
+/// Windows Reactor links the bootstrap import library for the Fluent app
+/// lifecycle, and Perry deploys the corresponding bootstrap DLL next to each
+/// generated executable. Before constructing any XAML objects, Perry resolves
+/// that DLL with `LoadLibraryW` + `GetProcAddress` and probes for a compatible
+/// Windows App SDK runtime. If the runtime package is unavailable or cannot be
+/// initialized, [`initialize`] reports [`InitStatus::RuntimeMissing`] and the
+/// caller uses the existing Win32 rendering path.
 ///
 /// The result is cached after the first call: the runtime is process-wide and
 /// initialized at most once, so repeated [`initialize`] calls are cheap and
@@ -173,23 +168,11 @@ pub mod bootstrap {
         /// `MddBootstrapInitializeOptions_None`.
         const MDD_BOOTSTRAP_OPTIONS_NONE: i32 = 0;
 
-        /// Packed `major << 16 | minor` Windows App SDK release the binary was
-        /// built against. Defaults to 1.6 (the current servicing baseline) and
-        /// is overridable at runtime with `PERRY_WINAPPSDK_VERSION="major.minor"`
-        /// so a host with a different SDK can be targeted without a rebuild.
+        /// Packed `major << 16 | minor` Windows App SDK release the vendored
+        /// Reactor snapshot was generated against. This must stay in lockstep
+        /// with `WINDOWSAPPSDK_RELEASE_MAJORMINOR` in Reactor's bindings.
         fn target_major_minor() -> u32 {
-            const DEFAULT_MAJOR: u32 = 1;
-            const DEFAULT_MINOR: u32 = 6;
-            if let Ok(raw) = std::env::var("PERRY_WINAPPSDK_VERSION") {
-                if let Some((maj, min)) = raw.split_once('.') {
-                    if let (Ok(maj), Ok(min)) =
-                        (maj.trim().parse::<u16>(), min.trim().parse::<u16>())
-                    {
-                        return ((maj as u32) << 16) | (min as u32);
-                    }
-                }
-            }
-            (DEFAULT_MAJOR << 16) | DEFAULT_MINOR
+            0x0002_0000
         }
 
         fn wide_nul(s: &str) -> Vec<u16> {
@@ -208,10 +191,11 @@ pub mod bootstrap {
             }
 
             let major_minor = target_major_minor();
-            // Stable release channel uses an empty version tag; minimum package
-            // version 0 accepts any installed framework at/above major_minor.
+            // Stable release channel uses an empty version tag. Keep the
+            // minimum package version in lockstep with Reactor's
+            // `WINDOWSAPPSDK_RUNTIME_VERSION_UINT64` (2.0.1.0).
             let version_tag = wide_nul("");
-            let min_version: u64 = 0;
+            let min_version: u64 = 562_949_953_486_848;
 
             // SAFETY: the function pointers come from this freshly-loaded module
             // and are transmuted to the documented `MddBootstrap.h` signatures.

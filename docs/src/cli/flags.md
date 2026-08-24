@@ -42,7 +42,7 @@ Use `--target` to cross-compile:
 | `windows` | Windows | Win32/GDI executable for the native Windows host architecture; x64 when cross-compiling from another OS |
 | `windows-x86_64` | Windows x64 | Explicit x64 MSVC target |
 | `windows-aarch64` | Windows ARM64 | Explicit ARM64 MSVC target (`windows-arm64` is accepted as an alias) |
-| `windows-winui` | Windows (Fluent) | Opt-in WinUI 3 / Fluent backend (#4680). **Scaffold:** currently renders via Win32 while the XAML widget mapping lands incrementally; selects the `perry-ui-windows-winui` static library. Build that lib first: `cargo build --release -p perry-ui-windows-winui`. |
+| `windows-winui` | Windows (Fluent) | Opt-in WinUI 3 / Fluent backend for core Perry controls. Requires the Windows App SDK 2.0 runtime; see [Windows](../platforms/windows.md#winui-3-fluent-target). |
 | `linux` | Linux | GTK4 executable |
 
 ## Output Types

@@ -165,4 +165,5 @@ pub mod geisterhand_style;
 // FFI exports — split topically into `ffi/*` sub-modules. Each `#[no_mangle]
 // pub extern "C" fn perry_ui_<...>` symbol is preserved exactly so codegen-
 // generated callsites resolve at link time.
+#[cfg(feature = "ffi-exports")]
 pub mod ffi;

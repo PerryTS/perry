@@ -343,12 +343,16 @@ pub fn get_string(handle: i64) -> i64 {
 /// Set the text value of a TextField programmatically.
 pub fn set_string_value(handle: i64, text_ptr: *const u8) {
     let text = unsafe { str_from_header(text_ptr) };
+    set_string_str(handle, &text);
+}
 
+/// Set the text value from backend-neutral state binding code.
+pub fn set_string_str(handle: i64, text: &str) {
     #[cfg(target_os = "windows")]
     {
         if let Some(hwnd) = super::get_hwnd(handle) {
             SUPPRESS_CHANGE.with(|s| *s.borrow_mut() = true);
-            let wide = to_wide(&text);
+            let wide = to_wide(text);
             unsafe {
                 let _ = SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr()));
             }

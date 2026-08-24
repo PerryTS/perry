@@ -109,4 +109,9 @@ windows-xaml = { package = "windows", version = "0.35", features = [
 ] }
 
 [features]
+default = ["ffi-exports"]
+# Keep the C ABI in the default Win32 staticlib, while allowing the WinUI
+# backend to reuse the implementation modules and provide its own dispatching
+# exports without duplicate `perry_ui_*` symbols in the final archive.
+ffi-exports = []
 geisterhand = []

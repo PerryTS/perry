@@ -1,0 +1,30 @@
+[package]
+name = "windows-core"
+version = "0.62.2"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+description = "Core type support for COM and Windows"
+repository = "https://github.com/microsoft/windows-rs"
+categories = ["os::windows-apis"]
+readme = "readme.md"
+
+[dependencies]
+windows-implement = { path = "../windows-implement", optional = true }
+windows-interface = { path = "../windows-interface", optional = true }
+windows-link = { path = "../windows-link" }
+windows-result = { path = "../windows-result" }
+windows-strings = { path = "../windows-strings" }
+
+[features]
+default = ["std", "proc-macros"]
+std = ["windows-result/std", "windows-strings/std"]
+# Re-exports the `#[implement]` and `#[interface]` proc-macro attributes.
+# Disable to drop the `syn`, `quote`, and `proc-macro2` build-time dependencies.
+# Bindgen-generated bindings do not require this feature; only hand-written
+# uses of `#[implement]` / `#[interface]` do.
+proc-macros = ["dep:windows-implement", "dep:windows-interface"]
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
+targets = []

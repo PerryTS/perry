@@ -1364,9 +1364,8 @@ pub(super) fn find_ui_library(target: Option<&str>) -> Option<PathBuf> {
         Some("tvos-simulator") | Some("tvos") => "libperry_ui_tvos.a",
         Some("linux") => "libperry_ui_gtk4.a",
         Some("macos") => "libperry_ui_macos.a",
-        // Opt-in WinUI 3 backend (#4680) — its own staticlib. It bundles the
-        // perry-ui-windows Win32 symbols today (scaffold), so the FFI surface
-        // is identical to the `windows` lib.
+        // Opt-in WinUI 3 backend (#4680) with the same Perry FFI surface as
+        // the default Win32 library.
         Some("windows-winui") => "perry_ui_windows_winui.lib",
         target if is_windows_target(target) => "perry_ui_windows.lib",
         _ => {
