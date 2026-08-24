@@ -956,7 +956,7 @@ pub(crate) fn registered_buffer_own_keys(addr: usize) -> Option<Vec<String>> {
 /// The value each key of [`registered_buffer_own_keys`] names: the byte for an
 /// in-bounds index of a byte-indexed buffer, else the stored own property.
 pub(crate) fn registered_buffer_own_value(addr: usize, key: &str) -> f64 {
-    if let Some(v) = crate::buffer::buffer_get_own_prop(addr, key) {
+    if let Some(v) = crate::buffer::buffer_read_own_prop(addr, key) {
         return v;
     }
     if crate::buffer::is_byte_indexed_buffer(addr) {
@@ -973,30 +973,69 @@ pub(crate) fn registered_buffer_own_value(addr: usize, key: &str) -> f64 {
 /// Build the `Object.keys` / `.values` / `.entries` answer for a registered
 /// buffer from [`registered_buffer_own_keys`].
 fn registered_buffer_enum(addr: usize, what: MapSetEnum) -> Option<*mut ArrayHeader> {
-    let keys = registered_buffer_own_keys(addr)?;
-    let mut out = crate::array::js_array_alloc(keys.len().max(1) as u32);
+    if addr == 0 || !crate::buffer::is_registered_buffer(addr) {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_raw_mut_ptr(addr as *mut crate::buffer::BufferHeader);
+    let keys = receiver.with_mut_ptr::<crate::buffer::BufferHeader, _>(|receiver| {
+        registered_buffer_own_keys(receiver as usize)
+    })?;
+    let out = scope.root_raw_mut_ptr(crate::array::js_array_alloc(keys.len().max(1) as u32));
     for key in keys {
         let key_str = || crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
         match what {
             MapSetEnum::Keys => {
-                out = crate::array::js_array_push(out, JSValue::string_ptr(key_str()));
+                let key = scope.root_string_ptr(key_str());
+                let next = out.with_mut_ptr::<ArrayHeader, _>(|out| {
+                    key.with_mut_ptr::<crate::StringHeader, _>(|key| {
+                        crate::array::js_array_push(out, JSValue::string_ptr(key))
+                    })
+                });
+                out.set_raw_mut_ptr(next);
             }
             MapSetEnum::Values => {
-                out = crate::array::js_array_push_f64(out, registered_buffer_own_value(addr, &key));
+                let value =
+                    scope.root_nanbox_f64(receiver.with_mut_ptr::<crate::buffer::BufferHeader, _>(
+                        |receiver| registered_buffer_own_value(receiver as usize, &key),
+                    ));
+                let next = out.with_mut_ptr::<ArrayHeader, _>(|out| {
+                    crate::array::js_array_push_f64(out, value.get_nanbox_f64())
+                });
+                out.set_raw_mut_ptr(next);
             }
             MapSetEnum::Entries => {
-                let pair = crate::array::js_array_alloc(2);
-                let pair = crate::array::js_array_push(pair, JSValue::string_ptr(key_str()));
-                let pair =
-                    crate::array::js_array_push_f64(pair, registered_buffer_own_value(addr, &key));
-                out = crate::array::js_array_push(
-                    out,
-                    JSValue::from_bits(JSValue::pointer(pair as *const u8).bits()),
-                );
+                let pair = scope.root_raw_mut_ptr(crate::array::js_array_alloc(2));
+                let key_value = scope.root_string_ptr(key_str());
+                let next = pair.with_mut_ptr::<ArrayHeader, _>(|pair| {
+                    key_value.with_mut_ptr::<crate::StringHeader, _>(|key| {
+                        crate::array::js_array_push(pair, JSValue::string_ptr(key))
+                    })
+                });
+                pair.set_raw_mut_ptr(next);
+                let value =
+                    scope.root_nanbox_f64(receiver.with_mut_ptr::<crate::buffer::BufferHeader, _>(
+                        |receiver| registered_buffer_own_value(receiver as usize, &key),
+                    ));
+                let next = pair.with_mut_ptr::<ArrayHeader, _>(|pair| {
+                    crate::array::js_array_push_f64(pair, value.get_nanbox_f64())
+                });
+                pair.set_raw_mut_ptr(next);
+                let pair_value =
+                    scope.root_nanbox_f64(pair.with_mut_ptr::<ArrayHeader, _>(|pair| {
+                        crate::value::js_nanbox_pointer(pair as i64)
+                    }));
+                let next = out.with_mut_ptr::<ArrayHeader, _>(|out| {
+                    crate::array::js_array_push(
+                        out,
+                        JSValue::from_bits(pair_value.get_nanbox_u64()),
+                    )
+                });
+                out.set_raw_mut_ptr(next);
             }
         }
     }
-    Some(out)
+    Some(out.with_mut_ptr::<ArrayHeader, _>(|out| out))
 }
 
 /// Get the keys of an object as an array of strings.

@@ -141,7 +141,7 @@
 27 crates/perry-runtime/src/thread.rs
 7 crates/perry-runtime/src/timer.rs
 1 crates/perry-runtime/src/typed_feedback.rs
-4 crates/perry-runtime/src/typedarray/construct.rs
+1 crates/perry-runtime/src/typedarray/construct.rs
 2 crates/perry-runtime/src/typedarray/transform.rs
 4 crates/perry-runtime/src/url/node_compat.rs
 7 crates/perry-runtime/src/url/search_params.rs
@@ -151,7 +151,7 @@
 10 crates/perry-runtime/src/v8.rs
 6 crates/perry-runtime/src/value/dyn_index.rs
 6 crates/perry-runtime/src/value/dynamic_arith.rs
-3 crates/perry-runtime/src/value/to_string.rs
+2 crates/perry-runtime/src/value/to_string.rs
 19 crates/perry-runtime/src/wasi.rs
 6 crates/perry-runtime/src/weakref.rs
 20 crates/perry-runtime/src/webassembly.rs

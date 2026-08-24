@@ -20,6 +20,11 @@
 //! made it into the final link — code/data attribution, duplicate function
 //! bodies, duplicate crate instances, generic-monomorphization cost, and a
 //! few named cost patterns (panics, `Debug`/`Display` formatting, vtables).
+//! The duplicate-crate-instance check also screens out a real false-positive
+//! class: a coincidental name collision with a crate `std` itself vendors
+//! internally for backtrace support (see `STD_INTERNAL_BACKTRACE_CRATES`)
+//! is not a build duplication Perry produced, so it is excluded from the
+//! finding and reported separately instead.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -83,6 +88,18 @@ struct DuplicateCrateInstance {
     total_bytes: u64,
 }
 
+/// A crate instance excluded from `duplicate_crate_instances` because its
+/// symbols look like Rust's own standard library's internal, toolchain-
+/// baked copy of that crate name (see `STD_INTERNAL_BACKTRACE_CRATES`) —
+/// not a real second build Perry's own compilation produced.
+#[derive(Serialize)]
+struct ExcludedStdInternalCopy {
+    crate_name: String,
+    hash: String,
+    bytes: u64,
+    symbol_count: usize,
+}
+
 #[derive(Serialize)]
 struct PatternTotal {
     name: &'static str,
@@ -111,6 +128,7 @@ struct SizeReport {
     generic_families: Vec<GenericFamily>,
     duplicate_bodies: Vec<DuplicateBody>,
     duplicate_crate_instances: Vec<DuplicateCrateInstance>,
+    std_internal_excluded: Vec<ExcludedStdInternalCopy>,
     patterns: Vec<PatternTotal>,
     suggestions: Vec<Suggestion>,
 }
@@ -277,6 +295,10 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
     let mut family_totals: BTreeMap<(String, String), (usize, u64)> = BTreeMap::new();
     let mut crate_hashes: BTreeMap<String, std::collections::BTreeSet<String>> = BTreeMap::new();
     let mut crate_hash_bytes: BTreeMap<(String, String), u64> = BTreeMap::new();
+    // Only populated for `STD_INTERNAL_BACKTRACE_CRATES` — the full symbol
+    // list per (crate, hash) is only needed to classify those few crate
+    // names, so this stays cheap regardless of binary size.
+    let mut crate_hash_symbols: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     let mut body_bytes: BTreeMap<&[u8], Vec<(String, u64)>> = BTreeMap::new(); // exact bytes -> [(symbol, size)]
     let mut pattern_totals: BTreeMap<&'static str, (u64, usize)> = BTreeMap::new();
 
@@ -303,6 +325,12 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
             *crate_hash_bytes
                 .entry((crate_name.clone(), hash.clone()))
                 .or_insert(0) += sym.size;
+            if STD_INTERNAL_BACKTRACE_CRATES.contains(&crate_name.as_str()) {
+                crate_hash_symbols
+                    .entry((crate_name.clone(), hash.clone()))
+                    .or_default()
+                    .push(demangled.clone());
+            }
         }
 
         if crate_name != "native/other" {
@@ -380,6 +408,45 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
     duplicate_bodies.sort_by_key(|a| std::cmp::Reverse(a.wasted_bytes));
     duplicate_bodies.truncate(REPORT_TOP_DUPLICATES);
 
+    // Exclude hash-variants that look like `std`'s own internal, toolchain-
+    // baked copy of a crate it vendors for backtrace support, before
+    // deciding whether a crate name has more than one REAL instance —
+    // otherwise a coincidental name collision with a std-internal component
+    // (confirmed for `gimli`: std's own DWARF unwinder) gets reported as a
+    // fixable build duplication it is not.
+    let mut std_internal_excluded: Vec<ExcludedStdInternalCopy> = Vec::new();
+    for (crate_name, hashes) in crate_hashes.iter_mut() {
+        if !STD_INTERNAL_BACKTRACE_CRATES.contains(&crate_name.as_str()) {
+            continue;
+        }
+        let suspect: Vec<String> = hashes
+            .iter()
+            .filter(|h| {
+                crate_hash_symbols
+                    .get(&(crate_name.clone(), (*h).clone()))
+                    .is_some_and(|syms| looks_like_std_internal_backtrace_copy(crate_name, syms))
+            })
+            .cloned()
+            .collect();
+        for hash in suspect {
+            hashes.remove(&hash);
+            std_internal_excluded.push(ExcludedStdInternalCopy {
+                crate_name: crate_name.clone(),
+                bytes: crate_hash_bytes
+                    .get(&(crate_name.clone(), hash.clone()))
+                    .copied()
+                    .unwrap_or(0),
+                symbol_count: crate_hash_symbols
+                    .get(&(crate_name.clone(), hash.clone()))
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                hash,
+            });
+        }
+    }
+    crate_hashes.retain(|_, hashes| !hashes.is_empty());
+    std_internal_excluded.sort_by_key(|e| std::cmp::Reverse(e.bytes));
+
     let mut duplicate_crate_instances: Vec<DuplicateCrateInstance> = crate_hashes
         .into_iter()
         .filter(|(_, hashes)| hashes.len() > 1)
@@ -439,6 +506,7 @@ fn build_report(exe_path: &Path) -> anyhow::Result<SizeReport> {
         generic_families,
         duplicate_bodies,
         duplicate_crate_instances,
+        std_internal_excluded,
         patterns,
         suggestions,
     })
@@ -568,6 +636,92 @@ const PATTERNS: &[PatternMatcher] = &[
         d.contains("{vtable}") || d.contains("vtable_for")
     }),
 ];
+
+/// Crate names Rust's own standard library vendors internally for
+/// `std::backtrace`/panic-unwinding support (`library/std/Cargo.toml` in
+/// rust-lang/rust). A build can end up with a second, unrelated instance of
+/// one of these names: the real Cargo-resolved dependency (if the program
+/// also uses it directly, e.g. for its own symbolication), plus a
+/// completely separate copy baked into the prebuilt `std` rlib shipped with
+/// the toolchain. That second copy is invisible to `cargo tree`/the unit
+/// graph (it was never a resolvable dependency of THIS build at all — Rust
+/// itself's release process built and shipped it), so there is nothing
+/// Perry's build can deduplicate.
+const STD_INTERNAL_BACKTRACE_CRATES: &[&str] = &[
+    "gimli",
+    "addr2line",
+    "miniz_oxide",
+    "object",
+    "rustc_demangle",
+];
+
+/// Symbol-path markers specific to DWARF CFI/EH-frame unwinding — the
+/// narrow slice of `gimli`'s API surface `std`'s own unwinder uses
+/// (confirmed by demangling real symbols under a suspect hash: every
+/// gimli-rooted one was `gimli::read::cfi::{EhFrame,
+/// CommonInformationEntry, Augmentation, PartialFrameDescriptionEntry,
+/// UnwindSection, UnwindTable, ...}` or the `common`/`eh_walker` types that
+/// exist only to support that path).
+const CFI_MARKERS: &[&str] = &[
+    "::cfi::",
+    "EhFrame",
+    "CommonInformationEntry",
+    "PartialFrameDescriptionEntry",
+    "UnwindSection",
+    "UnwindTable",
+    "UnwindContext",
+    "FrameDescriptionEntry",
+    "Augmentation",
+    "CfaRule",
+    "RegisterRule",
+    "EhFrameOffset",
+    "eh_walker",
+];
+
+/// Symbol-path markers specific to ordinary DWARF debug-info reading — the
+/// surface a real application dependency on `gimli` actually uses
+/// (confirmed against the OTHER, real hash in the same binary: every
+/// symbol was `gimli::read::abbrev::Abbreviation`). `std`'s CFI-only
+/// internal copy never touches this surface, so any of these appearing
+/// under a hash rules out "this is std's internal copy" even though that
+/// hash's OWN shared reader/utility code (`EndianSlice`, `Reader::
+/// read_uleb128`, …) has no CFI marker of its own.
+const DEBUG_INFO_MARKERS: &[&str] = &[
+    "::abbrev::",
+    "Abbreviation",
+    "::line::",
+    "LineProgram",
+    "::rnglists::",
+    "::loclists::",
+    "::unit::",
+    "UnitHeader",
+    "::dwarf::",
+    "DebugAbbrev",
+    "DebugInfo",
+    "DebugLine",
+    "DebugStr",
+    "DebugRanges",
+];
+
+/// Whether a (crate, hash) group's symbols look like `std`'s own internal
+/// backtrace-support copy rather than a real second build of the
+/// application's dependency: at least one CFI-specific marker present, and
+/// zero debug-info-specific markers. Requiring "at least one" rather than
+/// "all" matters because the CFI path's own shared reader/utility code
+/// (`EndianSlice`, `Reader::read_uleb128`, error types, …) carries no CFI-
+/// specific name of its own but is compiled alongside it in the same unit.
+fn looks_like_std_internal_backtrace_copy(crate_name: &str, symbols: &[String]) -> bool {
+    if !STD_INTERNAL_BACKTRACE_CRATES.contains(&crate_name) || symbols.is_empty() {
+        return false;
+    }
+    let has_cfi_marker = symbols
+        .iter()
+        .any(|s| CFI_MARKERS.iter().any(|marker| s.contains(marker)));
+    let has_debug_info_marker = symbols
+        .iter()
+        .any(|s| DEBUG_INFO_MARKERS.iter().any(|marker| s.contains(marker)));
+    has_cfi_marker && !has_debug_info_marker
+}
 
 /// Demangle a Rust symbol name. `rustc_demangle` returns non-Rust input
 /// unchanged — the normal case for libc/system symbols — and `crate_of`
@@ -736,6 +890,28 @@ fn render_markdown(report: &SizeReport) -> String {
         }
     }
 
+    if !report.std_internal_excluded.is_empty() {
+        out.push_str("\n## Excluded: std-internal copies\n\n");
+        out.push_str(
+            "Crate instances that looked like a duplicate above but were excluded: their \
+             symbols matched the narrow API surface Rust's own standard library uses \
+             internally for `std::backtrace`/panic-unwinding support (e.g. `gimli`'s DWARF \
+             CFI/EH-frame reader). That copy is baked into the prebuilt `std` shipped with the \
+             toolchain — it was never a resolvable dependency of this build, so there is \
+             nothing here for Perry (or Cargo) to deduplicate; the name collision alone would \
+             otherwise misreport it as a fixable duplicate.\n\n",
+        );
+        out.push_str("| Bytes | Symbols | Crate |\n|---|---|---|\n");
+        for excluded in &report.std_internal_excluded {
+            out.push_str(&format!(
+                "| {} | {} | `{}` |\n",
+                human_bytes(excluded.bytes),
+                excluded.symbol_count,
+                excluded.crate_name,
+            ));
+        }
+    }
+
     if !report.generic_families.is_empty() {
         out.push_str("\n## Generic monomorphization\n\n");
         out.push_str("| Total | Instantiations | Crate | Family |\n|---|---|---|---|\n");
@@ -808,6 +984,67 @@ fn human_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn std_internal_backtrace_copy_detected_from_real_cfi_symbols() {
+        // Real demangled symbols pulled from a compiled binary's second
+        // gimli instance — all gimli::read::cfi::*.
+        let symbols = vec![
+            "<gimli::read::cfi::EhFrame<gimli::read::endian_slice::EndianSlice<gimli::read::endianity::LittleEndian>> as gimli::read::cfi::UnwindSection<gimli::read::endian_slice::EndianSlice<gimli::read::endianity::LittleEndian>>>::cie_from_offset".to_string(),
+            "<gimli::read::cfi::CommonInformationEntry<gimli::read::endian_slice::EndianSlice<gimli::read::endianity::LittleEndian>, usize>>::parse".to_string(),
+            "<gimli::read::cfi::Augmentation>::parse".to_string(),
+        ];
+        assert!(looks_like_std_internal_backtrace_copy("gimli", &symbols));
+    }
+
+    #[test]
+    fn std_internal_backtrace_copy_not_detected_for_real_dependency_usage() {
+        // A real application dependency on gimli reads debug info
+        // (abbrev/line/rnglists), not CFI/EH-frame data.
+        let symbols = vec![
+            "gimli::read::abbrev::Abbreviation::new_internal".to_string(),
+            "gimli::read::line::LineProgram::header".to_string(),
+        ];
+        assert!(!looks_like_std_internal_backtrace_copy("gimli", &symbols));
+    }
+
+    #[test]
+    fn std_internal_backtrace_copy_not_detected_outside_the_known_crate_list() {
+        // A crate outside STD_INTERNAL_BACKTRACE_CRATES never gets excluded,
+        // even if its symbols happen to mention "EhFrame" in passing.
+        let symbols = vec!["some_crate::EhFrame::wrapper".to_string()];
+        assert!(!looks_like_std_internal_backtrace_copy(
+            "some_crate",
+            &symbols
+        ));
+    }
+
+    #[test]
+    fn std_internal_backtrace_copy_tolerates_shared_reader_utility_symbols() {
+        // Real finding: the CFI build's own shared reader/utility code
+        // (EndianSlice, Reader::read_uleb128, the CapacityFull error type)
+        // carries no CFI-specific name of its own, but is compiled
+        // alongside gimli::read::cfi in the SAME hash group — "at least one
+        // CFI marker" (not "all symbols") is what correctly includes it.
+        let symbols = vec![
+            "gimli::read::cfi::EhFrame::parse".to_string(),
+            "<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian> as gimli::read::reader::Reader>::read_uleb128".to_string(),
+            "<gimli::read::util::sealed::CapacityFull as core::fmt::Debug>::fmt".to_string(),
+        ];
+        assert!(looks_like_std_internal_backtrace_copy("gimli", &symbols));
+    }
+
+    #[test]
+    fn std_internal_backtrace_copy_a_single_debug_info_marker_vetoes_exclusion() {
+        // A debug-info marker anywhere in the group is enough to keep it as
+        // a (possibly real) finding rather than excluding it, even
+        // alongside a CFI-looking symbol.
+        let symbols = vec![
+            "gimli::read::cfi::EhFrame::parse".to_string(),
+            "gimli::read::abbrev::Abbreviation::new_internal".to_string(),
+        ];
+        assert!(!looks_like_std_internal_backtrace_copy("gimli", &symbols));
+    }
 
     #[test]
     fn crate_of_extracts_the_first_path_segment() {

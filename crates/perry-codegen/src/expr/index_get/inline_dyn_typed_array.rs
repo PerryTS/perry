@@ -12,10 +12,10 @@
 //! `expr::temp_root` symbol, so only the sabotage arm makes the line an
 //! assertion. The audit that earned it: the entry point receives the receiver
 //! and index already lowered, lowers no user expression, and emits only pure
-//! IR (guards, GEPs, loads) plus the out-of-line `js_dyn_index_get` fallback —
-//! so no register of a GC value spans a lowering here.
+//! IR (guards, GEPs, loads) plus an out-of-line semantic fallback, so no
+//! register of a GC value spans a lowering here.
 
-use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
+use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 
 use super::FnCtx;
 
@@ -149,7 +149,7 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     // ---- load: per-kind direct element load (data = header + 16) ----
     ctx.current_block = load_idx;
     // (value, end_label) for each per-kind load block, collected for the merge.
-    let kind_incoming: Vec<(String, String)>;
+    let mut kind_incoming: Vec<(String, String)>;
     {
         // Per-kind load blocks. Each computes the element address from
         // `data = raw + 16` and `off = idx * elem_size`, loads the native
@@ -316,12 +316,205 @@ pub(super) fn lower_inline_dyn_typed_array_get(
         kind_incoming = incoming;
     }
 
-    // ---- slow: the unchanged runtime dispatcher ----
+    // ---- typed-array miss: Array-subclass shape IC, then dispatcher ----
     ctx.current_block = slow_idx;
+    let site_id = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let cache_name = super::super::inline_cache_global_name(ctx, site_id);
+    ctx.ic_globals.push(cache_name.clone());
+    let cache_ref = format!("@{cache_name}");
+
+    let object_header_idx = ctx.new_block("arrlike.ic.header");
+    let object_bounds_idx = ctx.new_block("arrlike.ic.bounds");
+    let object_inline_idx = ctx.new_block("arrlike.ic.inline");
+    let object_spill_idx = ctx.new_block("arrlike.ic.spill");
+    let object_spill_ptr_idx = ctx.new_block("arrlike.ic.spill_ptr");
+    let object_spill_load_idx = ctx.new_block("arrlike.ic.spill_load");
+    let object_miss_idx = ctx.new_block("arrlike.ic.miss");
+    let object_header_label = ctx.block_label(object_header_idx);
+    let object_bounds_label = ctx.block_label(object_bounds_idx);
+    let object_inline_label = ctx.block_label(object_inline_idx);
+    let object_spill_label = ctx.block_label(object_spill_idx);
+    let object_spill_ptr_label = ctx.block_label(object_spill_ptr_idx);
+    let object_spill_load_label = ctx.block_label(object_spill_load_idx);
+    let object_miss_label = ctx.block_label(object_miss_idx);
+
+    // Reject every non-pointer / handle-band / noncanonical-index case before
+    // touching a managed header. The miss helper retains full ToPropertyKey,
+    // Proxy, string, descriptor, hole and prototype-chain semantics.
+    let heap_floor =
+        crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
+    let heap_ceiling =
+        crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
+    let (object_raw, object_entry_ok) = {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(obj_box);
+        let raw = blk.and(I64, &bits, pointer_mask);
+        let tag = blk.and(I64, &bits, &tag_mask);
+        let is_ptr = blk.icmp_eq(I64, &tag, pointer_tag);
+        let above_floor = blk.icmp_uge(I64, &raw, &heap_floor);
+        let below_ceiling = blk.icmp_ult(I64, &raw, &heap_ceiling);
+        let idx_ge0 = blk.fcmp("oge", idx_d, "0.0");
+        let idx_lt = blk.fcmp("olt", idx_d, "4294967295.0");
+        let valid_ptr = blk.and(I1, &is_ptr, &above_floor);
+        let valid_ptr = blk.and(I1, &valid_ptr, &below_ceiling);
+        let valid_idx = blk.and(I1, &idx_ge0, &idx_lt);
+        (raw, blk.and(I1, &valid_ptr, &valid_idx))
+    };
+    ctx.block()
+        .cond_br(&object_entry_ok, &object_header_label, &object_miss_label);
+
+    // Exact class + semantic ShapeId identity. The runtime primes only a
+    // prototype-unmodified dense Array-subclass shape with no relevant
+    // accessors, and publishes no heap pointer in this cache.
+    ctx.current_block = object_header_idx;
+    let object_idx_i64 = ctx.block().fptosi(DOUBLE, idx_d, I64);
+    let object_idx_back = ctx.block().sitofp(I64, &object_idx_i64, DOUBLE);
+    let object_idx_is_int = ctx.block().fcmp("oeq", &object_idx_back, idx_d);
+    let gc_type_addr = ctx.block().sub(I64, &object_raw, "8");
+    let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
+    let gc_type = ctx.block().load(I8, &gc_type_ptr);
+    let is_object = ctx.block().icmp_eq(I8, &gc_type, "2");
+    let gc_flags_addr = ctx.block().sub(I64, &object_raw, "7");
+    let gc_flags_ptr = ctx.block().inttoptr(I64, &gc_flags_addr);
+    let gc_flags = ctx.block().load(I8, &gc_flags_ptr);
+    let forwarded = ctx.block().and(I8, &gc_flags, "1");
+    let not_forwarded = ctx.block().icmp_eq(I8, &forwarded, "0");
+    let object_ptr = ctx.block().inttoptr(I64, &object_raw);
+    let class_id = ctx.block().load(I32, &object_ptr);
+    let shape_addr = ctx.block().add(I64, &object_raw, "4");
+    let shape_ptr = ctx.block().inttoptr(I64, &shape_addr);
+    let shape_id = ctx.block().load(I32, &shape_ptr);
+    let class64 = ctx.block().zext(I32, &class_id, I64);
+    let shape64 = ctx.block().zext(I32, &shape_id, I64);
+    let class_high = ctx.block().shl(I64, &class64, "32");
+    let live_key = ctx.block().or(I64, &class_high, &shape64);
+    let cached_key_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
+    let cached_key = ctx.block().load(I64, &cached_key_ptr);
+    let key_matches = ctx.block().icmp_eq(I64, &live_key, &cached_key);
+    let key_nonzero = ctx.block().icmp_ne(I64, &cached_key, "0");
+    let object_ok = ctx.block().and(I1, &object_idx_is_int, &is_object);
+    let object_ok = ctx.block().and(I1, &object_ok, &not_forwarded);
+    let object_ok = ctx.block().and(I1, &object_ok, &key_matches);
+    let object_ok = ctx.block().and(I1, &object_ok, &key_nonzero);
+    ctx.block()
+        .cond_br(&object_ok, &object_bounds_label, &object_miss_label);
+
+    // The exact shape proves the cached length slot is live and inline. Check
+    // its current value and the proved dense prefix on every hit; growing
+    // `length` without creating properties therefore cannot expose holes.
+    ctx.current_block = object_bounds_idx;
+    let length_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
+    let length_slot = ctx.block().load(I64, &length_slot_ptr);
+    let element_base_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "2")]);
+    let element_base = ctx.block().load(I64, &element_base_ptr);
+    let dense_prefix_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "3")]);
+    let dense_prefix = ctx.block().load(I64, &dense_prefix_ptr);
+    let inline_bound_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "4")]);
+    let inline_bound = ctx.block().load(I64, &inline_bound_ptr);
+    let object_header_size =
+        crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let length_bytes = ctx.block().shl(I64, &length_slot, "3");
+    let length_offset = ctx.block().add(I64, &length_bytes, &object_header_size);
+    let length_addr = ctx.block().add(I64, &object_raw, &length_offset);
+    let length_ptr = ctx.block().inttoptr(I64, &length_addr);
+    let live_length = ctx.block().load(DOUBLE, &length_ptr);
+    let below_length = ctx.block().fcmp("olt", idx_d, &live_length);
+    let below_prefix = ctx.block().icmp_ult(I64, &object_idx_i64, &dense_prefix);
+    let in_dense_range = ctx.block().and(I1, &below_length, &below_prefix);
+    let object_slot = ctx.block().add(I64, &element_base, &object_idx_i64);
+    let slot_is_inline = ctx.block().icmp_ult(I64, &object_slot, &inline_bound);
+    let inline_ok = ctx.block().and(I1, &in_dense_range, &slot_is_inline);
+    let slot_is_spilled = ctx.block().xor(I1, &slot_is_inline, "true");
+    let range_but_spilled = ctx.block().and(I1, &in_dense_range, &slot_is_spilled);
+    let spill_or_miss_idx = ctx.new_block("arrlike.ic.spill_or_miss");
+    let spill_or_miss_label = ctx.block_label(spill_or_miss_idx);
+    ctx.block()
+        .cond_br(&inline_ok, &object_inline_label, &spill_or_miss_label);
+    ctx.current_block = spill_or_miss_idx;
+    ctx.block()
+        .cond_br(&range_but_spilled, &object_spill_label, &object_miss_label);
+
+    ctx.current_block = object_inline_idx;
+    let inline_bytes = ctx.block().shl(I64, &object_slot, "3");
+    let inline_offset = ctx.block().add(I64, &inline_bytes, &object_header_size);
+    let inline_addr = ctx.block().add(I64, &object_raw, &inline_offset);
+    let inline_ptr = ctx.block().inttoptr(I64, &inline_addr);
+    let inline_raw = ctx.block().load(DOUBLE, &inline_ptr);
+    let inline_value = if coerce_slow_to_number {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &inline_raw)])
+    } else {
+        inline_raw
+    };
+    let inline_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    // Wide subclass instances store absolute field slots in the object-owned
+    // spill Array. Reload both moving pointers from the live receiver; the IC
+    // itself contains only scalar offsets.
+    ctx.current_block = object_spill_idx;
+    let meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        4
+    } else {
+        8
+    };
+    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
+        - meta_ptr_size)
+        .to_string();
+    let meta_addr = ctx.block().add(I64, &object_raw, &meta_offset);
+    let meta_slot_ptr = ctx.block().inttoptr(I64, &meta_addr);
+    let meta_loaded = ctx
+        .block()
+        .load(if meta_ptr_size == 4 { I32 } else { I64 }, &meta_slot_ptr);
+    let meta_i64 = if meta_ptr_size == 4 {
+        ctx.block().zext(I32, &meta_loaded, I64)
+    } else {
+        meta_loaded
+    };
+    let has_meta = ctx.block().icmp_ne(I64, &meta_i64, "0");
+    ctx.block()
+        .cond_br(&has_meta, &object_spill_ptr_label, &object_miss_label);
+
+    ctx.current_block = object_spill_ptr_idx;
+    let meta_ptr = ctx.block().inttoptr(I64, &meta_i64);
+    let spill_slot_ptr = ctx.block().gep(I64, &meta_ptr, &[(I64, "4")]);
+    let spill_i64 = ctx.block().load(I64, &spill_slot_ptr);
+    let has_spill = ctx.block().icmp_ne(I64, &spill_i64, "0");
+    // Keep the hot path to one bounds branch without speculatively loading
+    // through a null spill pointer: ObjectMeta is live here and is a safe
+    // address for the ignored length load when `spill_i64 == 0`.
+    let safe_spill_i64 = ctx
+        .block()
+        .select(I1, &has_spill, I64, &spill_i64, &meta_i64);
+    let spill_ptr = ctx.block().inttoptr(I64, &safe_spill_i64);
+    let spill_len = ctx.block().load(I32, &spill_ptr);
+    let spill_len_i64 = ctx.block().zext(I32, &spill_len, I64);
+    let spill_in_bounds = ctx.block().icmp_ult(I64, &object_slot, &spill_len_i64);
+    let spill_ok = ctx.block().and(I1, &has_spill, &spill_in_bounds);
+    ctx.block()
+        .cond_br(&spill_ok, &object_spill_load_label, &object_miss_label);
+
+    ctx.current_block = object_spill_load_idx;
+    let spill_element_word = ctx.block().add(I64, &object_slot, "1");
+    let spill_element_ptr =
+        ctx.block()
+            .gep_inbounds(I64, &spill_ptr, &[(I64, &spill_element_word)]);
+    let spill_raw = ctx.block().load(DOUBLE, &spill_element_ptr);
+    let spill_value = if coerce_slow_to_number {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &spill_raw)])
+    } else {
+        spill_raw
+    };
+    let spill_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = object_miss_idx;
     let slow_raw = ctx.block().call(
         DOUBLE,
-        "js_dyn_index_get",
-        &[(DOUBLE, obj_box), (DOUBLE, idx_d)],
+        "js_packed_arraylike_index_get",
+        &[(DOUBLE, obj_box), (DOUBLE, idx_d), (PTR, &cache_ref)],
     );
     // In a number context, coerce the (possibly boxed) slow result here so the
     // merge phi is uniformly a Number and the arithmetic caller skips its own
@@ -336,6 +529,9 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     };
     let slow_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
+
+    kind_incoming.push((inline_value, inline_end_label));
+    kind_incoming.push((spill_value, spill_end_label));
 
     // ---- final merge: one phi over every per-kind fast end + the slow end ----
     ctx.current_block = merge_idx;

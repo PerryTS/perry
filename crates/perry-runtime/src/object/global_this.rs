@@ -93,19 +93,20 @@ pub(crate) use builtin_thunks::{
 };
 pub use ctor_thunks::js_webcrypto_illegal_constructor;
 pub(crate) use ctor_thunks::{
-    builtin_prototype_value, cryptokey_algorithm_getter_thunk, cryptokey_extractable_getter_thunk,
-    cryptokey_type_getter_thunk, cryptokey_usages_getter_thunk, error_constructor_call_thunk,
-    eval_error_constructor_call_thunk, global_this_crypto_getter_thunk,
-    global_this_url_pattern_call_thunk, is_array_prototype_method_value,
-    is_function_prototype_object_value, map_constructor_call_thunk, normalize_eval_this_body,
-    promise_constructor_call_thunk, range_error_constructor_call_thunk,
-    reference_error_constructor_call_thunk, regexp_constructor_call_thunk,
-    set_constructor_call_thunk, subtle_crypto_method_value, syntax_error_constructor_call_thunk,
-    type_error_constructor_call_thunk, typed_array_constructor_call_thunk,
-    uri_error_constructor_call_thunk, weak_map_constructor_call_thunk,
-    weak_ref_constructor_call_thunk, weak_set_constructor_call_thunk,
-    webcrypto_get_random_values_thunk, webcrypto_illegal_constructor_thunk, webcrypto_method_value,
-    webcrypto_random_uuid_thunk, webcrypto_subtle_getter_thunk,
+    builtin_prototype_value, construct_only_builtin_call_thunk, cryptokey_algorithm_getter_thunk,
+    cryptokey_extractable_getter_thunk, cryptokey_type_getter_thunk, cryptokey_usages_getter_thunk,
+    error_constructor_call_thunk, eval_error_constructor_call_thunk,
+    global_this_crypto_getter_thunk, global_this_url_pattern_call_thunk,
+    is_array_prototype_method_value, is_function_prototype_object_value,
+    map_constructor_call_thunk, normalize_eval_this_body, promise_constructor_call_thunk,
+    range_error_constructor_call_thunk, reference_error_constructor_call_thunk,
+    regexp_constructor_call_thunk, set_constructor_call_thunk, subtle_crypto_method_value,
+    syntax_error_constructor_call_thunk, type_error_constructor_call_thunk,
+    typed_array_constructor_call_thunk, uri_error_constructor_call_thunk,
+    weak_map_constructor_call_thunk, weak_ref_constructor_call_thunk,
+    weak_set_constructor_call_thunk, webcrypto_get_random_values_thunk,
+    webcrypto_illegal_constructor_thunk, webcrypto_method_value, webcrypto_random_uuid_thunk,
+    webcrypto_subtle_getter_thunk,
 };
 #[cfg(feature = "temporal")]
 pub(crate) use fetch_globals::temporal_subclass_super;
@@ -120,9 +121,12 @@ pub use fetch_globals::{
     js_fetch_or_value_super, js_get_global_this, js_global_or_console_property_by_name,
     js_module_top_this, js_request_subclass_init, js_response_subclass_init,
 };
+#[cfg(test)]
+pub(crate) use generator::append_async_function_root_snapshot;
 pub(crate) use generator::{
     ensure_generator_intrinsics, generator_function_constructor_of, generator_function_proto_of,
     generator_function_prototype_of, set_intrinsic_data_prop, set_intrinsic_to_string_tag,
+    wire_async_function_intrinsic_parents,
 };
 pub use generator::{js_generator_attach_closure_prototype, js_generator_attach_prototype};
 pub use install_static::js_promise_static_function_value;
@@ -149,8 +153,9 @@ pub(crate) use proto_methods::{
     install_error_prototype_data_properties, populate_builtin_prototype_methods,
 };
 pub(crate) use typed_array::{
-    array_buffer_byte_length_getter_thunk, array_buffer_is_view_thunk,
+    array_buffer_byte_length_getter_thunk, array_buffer_is_view_thunk, array_buffer_slice_thunk,
     ensure_typed_array_intrinsic, install_function_has_instance_symbol,
     shared_array_buffer_byte_length_getter_thunk, shared_array_buffer_slice_thunk,
     typed_array_constructor_this_kind, typed_array_intrinsic_proto_ptr,
+    validate_array_buffer_species_constructor,
 };

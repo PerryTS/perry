@@ -177,6 +177,12 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     if raw < 0x1000 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    // Symbols share GC_TYPE_STRING storage for tracing, but they are primitive
+    // values, not String exotic objects. A numeric property access boxes the
+    // Symbol transiently and therefore observes no indexed property.
+    if crate::symbol::is_registered_symbol(raw as usize) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     // #5525 fast path: cached typed-array kind lookup + inline load, ahead of
     // the thread-local `typed_array_get_numeric_index` registry dispatch.
     // `typed_array_fast_index_get` returns `Some(value)` for an in-bounds read
@@ -202,7 +208,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         && crate::buffer::is_non_indexed_buffer_view(raw as usize)
     {
         if let Some(key) = crate::buffer::canonical_index_key(idx) {
-            return crate::buffer::buffer_get_own_prop(raw as usize, &key)
+            return crate::buffer::buffer_read_own_prop(raw as usize, &key)
                 .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
         }
     }
@@ -217,7 +223,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             // pass wrote into a zero-length Buffer (RangeError
             // [ERR_OUT_OF_RANGE] at the MySQL handshake).
             if let Some(name) = buffer_key_name(idx) {
-                if let Some(v) = crate::buffer::buffer_get_own_prop(raw as usize, &name) {
+                if let Some(v) = crate::buffer::buffer_read_own_prop(raw as usize, &name) {
                     return v;
                 }
                 // The bound closure keeps the name POINTER and re-reads it at
@@ -285,7 +291,16 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             return unsafe { rooted_property_key_get(raw, idx) };
         }
     }
-    if gc_type == crate::gc::GC_TYPE_OBJECT || gc_type == crate::gc::GC_TYPE_CLOSURE {
+    if gc_type == crate::gc::GC_TYPE_OBJECT {
+        if let Some(index) = numeric_key_u32_index(idx) {
+            let receiver = f64::from_bits(crate::value::POINTER_TAG | raw);
+            if let Some(value) = crate::array::array_subclass_fast_index_get(receiver, index) {
+                return value;
+            }
+        }
+        return unsafe { rooted_property_key_get(raw, idx) };
+    }
+    if gc_type == crate::gc::GC_TYPE_CLOSURE {
         return unsafe { rooted_property_key_get(raw, idx) };
     }
     if crate::set::is_registered_set(raw as usize) || crate::map::is_registered_map(raw as usize) {

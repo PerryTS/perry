@@ -41,6 +41,9 @@ struct AsyncGeneratorRequest {
 struct AsyncGeneratorQueueState {
     active: bool,
     drain_scheduled: bool,
+    started: bool,
+    completed: bool,
+    original_throw: *const ClosureHeader,
     queue: VecDeque<AsyncGeneratorRequest>,
 }
 
@@ -91,22 +94,27 @@ pub(crate) fn wrap_async_generator_instance(obj: *mut ObjectHeader) {
     let next_h = scope.root_nanbox_f64(js_nanbox_pointer(next as i64));
     let ret_h = scope.root_nanbox_f64(js_nanbox_pointer(ret as i64));
     let throw_h = scope.root_nanbox_f64(js_nanbox_pointer(throw as i64));
+    let closure_now = |h: &crate::gc::RuntimeHandle<'_>| {
+        js_nanbox_get_pointer(h.get_nanbox_f64()) as *const ClosureHeader
+    };
 
     let state_id = STATES.with(|states| {
         let mut states = states.borrow_mut();
         let id = states.len() + 1;
+        let original_throw = closure_now(&throw_h);
+        crate::gc::runtime_write_barrier_root_raw_ptr(original_throw);
         states.push(AsyncGeneratorQueueState {
             active: false,
             drain_scheduled: false,
+            started: false,
+            completed: false,
+            original_throw,
             queue: VecDeque::new(),
         });
         id
     });
 
     let obj_now = || js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader;
-    let closure_now = |h: &crate::gc::RuntimeHandle<'_>| {
-        js_nanbox_get_pointer(h.get_nanbox_f64()) as *const ClosureHeader
-    };
 
     for (name, original_h, func) in [
         (
@@ -136,6 +144,7 @@ pub(crate) fn scan_async_generator_queue_roots_mut(
 ) {
     STATES.with(|states| {
         for state in states.borrow_mut().iter_mut() {
+            visitor.visit_raw_const_ptr_slot(&mut state.original_throw);
             for request in state.queue.iter_mut() {
                 visitor.visit_raw_const_ptr_slot(&mut request.original);
                 visitor.visit_nanbox_f64_slot(&mut request.arg);
@@ -362,16 +371,46 @@ fn dispatch_return_with_await(
     arg: f64,
     out: *mut Promise,
 ) {
-    let arg_promise = crate::promise::js_promise_resolved(arg);
-    let fulfill = make_return_step_wrapper(state_id, original, out, true);
-    let reject = make_return_step_wrapper(state_id, original, out, false);
-    js_promise_attach_settle_listener(arg_promise, fulfill, reject);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let original_h = scope.root_raw_const_ptr(original);
+    let out_h = scope.root_raw_mut_ptr(out);
+    let arg_h = scope.root_nanbox_f64(arg);
+    let arg_promise = match crate::promise::js_promise_resolved_catching(arg_h.get_nanbox_f64()) {
+        Ok(promise) => promise,
+        Err(reason) => {
+            let suspended_throw = STATES.with(|states| {
+                states
+                    .borrow()
+                    .get(state_id - 1)
+                    .filter(|state| state.started && !state.completed)
+                    .map(|state| state.original_throw)
+            });
+            if let Some(throw_original) = suspended_throw {
+                let throw_h = scope.root_raw_const_ptr(throw_original);
+                let result = throw_h.with_const_ptr(|throw| call_original(throw, reason));
+                out_h.with_mut_ptr(|out| after_queued_result(state_id, out, result));
+            } else {
+                out_h.with_mut_ptr(|out| {
+                    finish_after_immediate_queued_result(state_id, out, false, reason)
+                });
+            }
+            return;
+        }
+    };
+    let arg_promise_h = scope.root_raw_mut_ptr(arg_promise);
+    let fulfill = make_return_step_wrapper(state_id, &original_h, &out_h, true);
+    let fulfill_h = scope.root_raw_mut_ptr(fulfill);
+    let reject = make_return_step_wrapper(state_id, &original_h, &out_h, false);
+    arg_promise_h.with_mut_ptr(|arg_promise| {
+        fulfill_h
+            .with_mut_ptr(|fulfill| js_promise_attach_settle_listener(arg_promise, fulfill, reject))
+    });
 }
 
 fn make_return_step_wrapper(
     state_id: usize,
-    original: *const ClosureHeader,
-    out: *mut Promise,
+    original: &crate::gc::RuntimeHandle<'_>,
+    out: &crate::gc::RuntimeHandle<'_>,
     is_fulfilled: bool,
 ) -> *mut ClosureHeader {
     let func = if is_fulfilled {
@@ -381,8 +420,10 @@ fn make_return_step_wrapper(
     };
     let wrapper = js_closure_alloc(func, 3);
     js_closure_set_capture_f64(wrapper, 0, state_id as f64);
-    js_closure_set_capture_ptr(wrapper, 1, original as i64);
-    js_closure_set_capture_ptr(wrapper, 2, out as i64);
+    original.with_const_ptr::<ClosureHeader, _>(|original| {
+        js_closure_set_capture_ptr(wrapper, 1, original as i64)
+    });
+    out.with_mut_ptr::<Promise, _>(|out| js_closure_set_capture_ptr(wrapper, 2, out as i64));
     wrapper
 }
 
@@ -459,6 +500,11 @@ fn after_initial_result(state_id: usize, result: f64) {
             attach_pending_settle(state_id, promise, std::ptr::null_mut());
             return;
         }
+        if state == PromiseState::Fulfilled {
+            note_step_settlement(state_id, true, unsafe { (*promise).value });
+        } else if state == PromiseState::Rejected {
+            note_step_settlement(state_id, false, unsafe { (*promise).reason });
+        }
     }
     schedule_drain(state_id);
 }
@@ -532,6 +578,7 @@ fn finish_after_pending_result(state_id: usize, out: *mut Promise, fulfilled: bo
     // pending path is now always taken; before #6709 `.next()` resolved
     // synchronously (busy-wait) and hit the immediate path, which already
     // deferred the drain via `schedule_drain`.
+    note_step_settlement(state_id, fulfilled, value);
     settle_out(out, fulfilled, value);
     let has_queue = STATES.with(|states| {
         states
@@ -552,6 +599,7 @@ fn finish_after_immediate_queued_result(
     fulfilled: bool,
     value: f64,
 ) {
+    note_step_settlement(state_id, fulfilled, value);
     let has_queue = STATES.with(|states| {
         states
             .borrow()
@@ -564,6 +612,29 @@ fn finish_after_immediate_queued_result(
         mark_inactive(state_id);
     }
     settle_out(out, fulfilled, value);
+}
+
+fn note_step_settlement(state_id: usize, fulfilled: bool, value: f64) {
+    let done = if fulfilled {
+        let field = js_object_get_own_field_or_undef(value, b"done".as_ptr(), 4);
+        let jv = JSValue::from_bits(field.to_bits());
+        (!jv.is_undefined()).then(|| crate::value::js_is_truthy(field) != 0)
+    } else {
+        None
+    };
+    STATES.with(|states| {
+        let mut states = states.borrow_mut();
+        let Some(state) = states.get_mut(state_id - 1) else {
+            return;
+        };
+        if !fulfilled {
+            state.completed = true;
+        } else if let Some(true) = done {
+            state.completed = true;
+        } else if let Some(false) = done {
+            state.started = true;
+        }
+    });
 }
 
 fn mark_inactive(state_id: usize) {

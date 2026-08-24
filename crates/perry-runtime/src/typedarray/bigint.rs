@@ -11,8 +11,7 @@
 //!     for the construction / `set()` paths.
 
 use super::{
-    jsvalue_to_f64, store_at, throw_type_error, typed_array_alloc, TypedArrayHeader, KIND_BIGINT64,
-    KIND_BIGUINT64,
+    store_at, throw_type_error, typed_array_alloc, TypedArrayHeader, KIND_BIGINT64, KIND_BIGUINT64,
 };
 
 pub(crate) fn is_bigint_kind(kind: u8) -> bool {
@@ -90,7 +89,10 @@ pub(crate) fn coerce_for_kind(dst_kind: u8, raw: f64) -> f64 {
     if dst_kind == KIND_BIGINT64 || dst_kind == KIND_BIGUINT64 {
         to_bigint_for_store(raw)
     } else {
-        jsvalue_to_f64(raw)
+        // Typed-array element conversion is the full observable ToNumber,
+        // not the primitive-only numeric unboxer. In particular an object
+        // source element must run its @@toPrimitive/valueOf hooks.
+        crate::builtins::js_number_coerce(raw)
     }
 }
 

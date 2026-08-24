@@ -227,13 +227,13 @@ unsafe fn typed_array_plain_object_values(val: f64) -> Vec<f64> {
         let iter =
             crate::closure::js_native_call_value(bound_rooted.get_nanbox_f64(), ptr::null(), 0);
         let iter_rooted = scope.root_nanbox_f64(iter);
-        let mut raw: Vec<f64> = Vec::new();
+        let mut raw = Vec::new();
         while let Some(v) =
             crate::collection_iter::iterator_next_value(iter_rooted.get_nanbox_f64())
         {
-            raw.push(v);
+            raw.push(scope.root_nanbox_f64(v));
         }
-        return raw;
+        return crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&raw);
     }
     // Array-like path.
     let len_val = object_like_get(rooted.get_nanbox_f64(), "length");
@@ -250,11 +250,11 @@ unsafe fn typed_array_plain_object_values(val: f64) -> Vec<f64> {
         throw_range_error(format!("Invalid typed array length: {}", len as u64).as_bytes());
     }
     let len = len as u32;
-    let mut raw: Vec<f64> = Vec::with_capacity(len as usize);
+    let mut raw = Vec::with_capacity(len as usize);
     for k in 0..len {
-        raw.push(object_like_get(rooted.get_nanbox_f64(), &k.to_string()));
+        raw.push(scope.root_nanbox_f64(object_like_get(rooted.get_nanbox_f64(), &k.to_string())));
     }
-    raw
+    crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&raw)
 }
 
 /// Collect the raw (uncoerced) source values for `%TypedArray%.from(source)`:
@@ -298,24 +298,40 @@ pub(crate) unsafe fn typed_array_from_source_raw_values(val: f64) -> Vec<f64> {
     // `js_array_from_value` allocated; re-root on the RESULT, which is the
     // value the element reads below must observe.
     let arr_rooted = scope.root_raw_const_ptr(arr);
-    let len = crate::array::js_array_length(arr_rooted.get_raw_const_ptr());
-    (0..len)
-        .map(|i| crate::array::js_array_get_f64(arr_rooted.get_raw_const_ptr(), i))
-        .collect()
+    let len = arr_rooted.with_const_ptr::<ArrayHeader, _>(|arr| crate::array::js_array_length(arr));
+    let raw: Vec<_> = (0..len)
+        .map(|i| {
+            scope.root_nanbox_f64(
+                arr_rooted
+                    .with_const_ptr::<ArrayHeader, _>(|arr| crate::array::js_array_get_f64(arr, i)),
+            )
+        })
+        .collect();
+    crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&raw)
 }
 
 /// Coerce a snapshot of raw element values per `kind` (observable, may throw)
 /// and store them into a freshly allocated typed array.
 unsafe fn typed_array_from_snapshot(kind: u8, raw: Vec<f64>) -> *mut TypedArrayHeader {
-    let vals: Vec<f64> = raw
-        .into_iter()
-        .map(|v| bigint::coerce_for_kind(kind, v))
-        .collect();
-    let ta = typed_array_alloc(kind, vals.len() as u32);
-    for (i, v) in vals.iter().enumerate() {
-        store_at(ta, i, *v);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let rooted = scope.root_nanbox_f64_slice(&raw);
+    typed_array_from_rooted_snapshot(kind, &rooted)
+}
+
+/// Root-preserving sibling used while an iterator is still being driven: every
+/// value yielded so far remains live across later `next()` calls and across
+/// each observable numeric/BigInt coercion.
+unsafe fn typed_array_from_rooted_snapshot(
+    kind: u8,
+    raw: &[crate::gc::RuntimeHandle<'_>],
+) -> *mut TypedArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ta = scope.root_raw_mut_ptr(typed_array_alloc(kind, raw.len() as u32));
+    for (i, value) in raw.iter().enumerate() {
+        let coerced = bigint::coerce_for_kind(kind, value.get_nanbox_f64());
+        ta.with_mut_ptr::<TypedArrayHeader, _>(|ta| store_at(ta, i, coerced));
     }
-    ta
+    ta.across_mut::<TypedArrayHeader, _>(|| ()).1
 }
 
 /// `Get(obj, name)` for a plain-object or function source value.
@@ -407,27 +423,56 @@ pub extern "C" fn js_typed_array_new_from_array(
         return typed_array_alloc(kind, 0);
     }
     rooted.set_raw_const_ptr(arr);
-    unsafe {
-        let len = (*arr).length;
-        // Snapshot the raw source values BEFORE any coercion. Per spec the
-        // source list is fully collected first and only THEN are the elements
-        // converted (`ToNumber`/`ToBigInt`) and stored. A converting element can
-        // run user code (`valueOf`/`Symbol.toPrimitive`) that mutates the source
-        // array — `Int32Array.from([0, { valueOf() { src.length = 0; return 100 }}, 2])`
-        // must still yield `[0, 100, 2]`, not lose the trailing element. Reading
-        // raw values first also keeps the snapshot ahead of the `typed_array_alloc`
-        // GC point (#871).
-        let raw: Vec<f64> = (0..len)
-            .map(|i| crate::array::js_array_get_f64(rooted.get_raw_const_ptr::<ArrayHeader>(), i))
-            .collect();
-        let vals: Vec<f64> = raw
-            .into_iter()
-            .map(|v| bigint::coerce_for_kind(kind, v))
-            .collect();
-        let ta = typed_array_alloc(kind, len);
-        for (i, v) in vals.iter().enumerate() {
-            store_at(ta, i, *v);
+    // GetMethod(source, @@iterator) is observable even for a dense Array. A
+    // callable method drives the real iterator protocol; undefined/null falls
+    // back to InitializeTypedArrayFromArrayLike. In particular, deleting
+    // Array.prototype[Symbol.iterator] must not make `new Uint8Array(array)`
+    // throw. Collect raw values before coercion, retaining the mutation/
+    // snapshot rule described by `typed_array_from_snapshot`.
+    let iterator_symbol = crate::symbol::well_known_symbol("iterator");
+    let method = if iterator_symbol.is_null() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        let symbol =
+            f64::from_bits(crate::value::JSValue::pointer(iterator_symbol as *const u8).bits());
+        unsafe {
+            crate::symbol::js_object_get_symbol_property(
+                rooted.with_const_ptr::<ArrayHeader, _>(|source| {
+                    crate::value::js_nanbox_pointer(source as i64)
+                }),
+                symbol,
+            )
         }
-        ta
+    };
+    let method_bits = method.to_bits();
+    let mut raw = Vec::new();
+    if method_bits == crate::value::TAG_UNDEFINED || method_bits == crate::value::TAG_NULL {
+        let len = rooted.with_const_ptr::<ArrayHeader, _>(|arr| crate::array::js_array_length(arr));
+        for index in 0..len {
+            raw.push(scope.root_nanbox_f64(
+                rooted.with_const_ptr::<ArrayHeader, _>(|arr| {
+                    crate::array::array_spec_get(arr, index)
+                }),
+            ));
+        }
+    } else {
+        let method = scope.root_nanbox_f64(method);
+        let iter = match crate::collection_iter::call_with_this_capturing_throw(
+            method.get_nanbox_f64(),
+            rooted.with_const_ptr::<ArrayHeader, _>(|source| {
+                crate::value::js_nanbox_pointer(source as i64)
+            }),
+            &[],
+        ) {
+            Ok(iter) => iter,
+            Err(error) => crate::exception::js_throw(error),
+        };
+        let iter_rooted = scope.root_nanbox_f64(iter);
+        while let Some(value) =
+            crate::collection_iter::iterator_next_value(iter_rooted.get_nanbox_f64())
+        {
+            raw.push(scope.root_nanbox_f64(value));
+        }
     }
+    unsafe { typed_array_from_rooted_snapshot(kind, &raw) }
 }

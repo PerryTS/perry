@@ -333,12 +333,12 @@ fn a_chain_whose_second_part_is_proven_still_folds() {
 }
 
 #[test]
-fn a_self_append_chain_retains_the_accumulator_and_fuses_only_the_suffix() {
+fn a_self_append_chain_fuses_the_accumulator_and_suffix() {
     // `s = s + "[" + name + "]"` is the #8394 accumulator shape. Folding
     // all four parts into `js_string_concat_chain` copies the growing `s`
-    // prefix on every iteration. The self-append lowering must instead build
-    // the three-part suffix once and hand it to `js_string_append`, whose
-    // unique-owner path grows the accumulator geometrically.
+    // prefix on every iteration. Building a three-part suffix first still
+    // creates short-lived garbage; the append-chain lowering must hand all
+    // four parts to one helper whose unique-owner path grows geometrically.
     let value = add(
         add(
             add(Expr::LocalGet(1), Expr::String("[".to_string())),
@@ -359,13 +359,13 @@ fn a_self_append_chain_retains_the_accumulator_and_fuses_only_the_suffix() {
     let ir = function_ir(module);
 
     assert!(
-        ir.contains("call i64 @js_string_append_known_heap("),
+        ir.contains("call i64 @js_string_append_chain("),
         "the growing prefix must reach the amortized append path:\n{ir}"
     );
     assert_eq!(
         ir.matches("call i64 @js_string_concat_chain(").count(),
-        1,
-        "only the fixed-size suffix should use the n-way concat fold:\n{ir}"
+        0,
+        "the suffix must not be allocated before it is appended:\n{ir}"
     );
 }
 
@@ -423,7 +423,7 @@ fn a_self_append_chain_keeps_an_opaque_numeric_head_pair_intact() {
     let ir = function_ir(module);
 
     assert!(
-        !ir.contains("call i64 @js_string_append_known_heap("),
+        !ir.contains("call i64 @js_string_append_chain("),
         "an opaque numeric-capable head pair must remain in source-tree order:\n{ir}"
     );
 }
@@ -455,8 +455,8 @@ fn a_module_global_self_append_uses_the_amortized_path_and_demotes_extractions()
     let ir = function_ir(module);
 
     assert!(
-        ir.contains("call i64 @js_string_append_known_heap("),
-        "a module root is binding storage and can retain the unique string owner:\n{ir}"
+        ir.contains("call i64 @js_string_append_chain("),
+        "a module root is binding storage and can retain the unique string owner across the fused chain:\n{ir}"
     );
     assert!(
         ir.contains("call void @js_string_addref_if_heap_string("),

@@ -47,6 +47,10 @@ mod console_rooting_tests;
 #[cfg(test)]
 mod ctor_prologue_store_tests;
 mod ctor_prologue_stores;
+/// #8648: what a standalone `<Class>_constructor` symbol RETURNS — see the
+/// module header for why this can only be asserted on IR.
+#[cfg(test)]
+mod ctor_return_publish_tests;
 mod dataview_intrinsic;
 mod early_branches;
 mod event_target;
@@ -153,7 +157,7 @@ pub(crate) use new_ctor_args::{
 // super-must-be-called.
 pub(crate) use new_helpers::{
     ctor_body_calls_super, ctor_body_closure_calls_super, ctor_body_has_value_return,
-    ctor_body_uses_this,
+    ctor_body_uses_this, ctor_chain_can_replace_this,
 };
 // #6325 / #6326: the class-chain walk to a native base whose surface perry
 // stamps onto the instance, plus its init emitter. Shared by the implicit

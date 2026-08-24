@@ -1259,6 +1259,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         method: "iterator".to_string(),
                         args: vec![],
                     }
+                } else if for_of_stmt.is_await && is_generator_call && !callee_is_async_gen {
+                    // Use CreateAsyncFromSyncIterator for a synchronous
+                    // generator in `for await`; the adapter awaits each
+                    // yielded value and performs IteratorClose on rejection.
+                    Expr::GetAsyncIterator(Box::new(iter_expr_raw))
                 } else {
                     iter_expr_raw
                 };
@@ -1353,6 +1358,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                     || is_filehandle_readlines_for_await
                     || is_fs_dir_for_await
                     || is_readline_interface_for_await
+                    || (for_of_stmt.is_await && is_generator_call && !callee_is_async_gen)
                 {
                     insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
                 }

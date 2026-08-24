@@ -47,6 +47,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // second arg is the count. Returns a raw string handle.
     // (`crates/perry-runtime/src/string.rs::js_string_concat_chain`)
     module.declare_function("js_string_concat_chain", I64, &[I64, I32]);
+    // Self-append variant of the N-way chain. The first part is the binding's
+    // current owner value; the runtime may extend it in place when unique and
+    // otherwise writes the complete result in one allocation.
+    module.declare_function("js_string_append_chain", I64, &[I64, I32]);
 
     // In-place append for the `x = x + y` pattern. When `x` has
     // refcount=1 (unique owner), the runtime mutates in-place and
@@ -686,6 +690,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // based on the receiver's NaN-box tag at runtime. Used by IndexGet's
     // fallback path when codegen can't statically prove the receiver type.
     module.declare_function("js_dyn_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
+    // #8655: guarded packed-array / dense Array-subclass read before the
+    // fully generic dynamic dispatcher. Used by unknown-receiver loop reads.
+    module.declare_function(
+        "js_packed_arraylike_index_get",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, PTR],
+    );
     // Issue #957: tag-aware dynamic index write. Used by `Expr::IndexUpdate`
     // codegen to write back the incremented value without rebuilding the
     // IndexSet dispatch tree. Routes to `js_array_set_index_or_string` for
@@ -1303,6 +1314,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_instanceof_noncallable_rhs", DOUBLE, &[]);
     module.declare_function("js_register_class_extends_error", VOID, &[I32]);
     module.declare_function("js_register_class_extends_data_view", VOID, &[I32]);
+    module.declare_function("js_register_class_extends_typed_array", VOID, &[I32]);
     module.declare_function("js_register_class_id", VOID, &[I32]);
     // #1021 NestJS: surface Perry class names to V8 so `metatype.name`
     // is non-empty. Codegen emits one call per registered class id at

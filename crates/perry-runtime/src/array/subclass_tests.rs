@@ -18,7 +18,8 @@
 //! vacuous — which is exactly the failure mode the module is written to avoid.
 
 use super::subclass::{
-    array_object_receiver, is_array_subclass_class_id, raw_receiver_is_heap_object,
+    array_object_receiver, array_subclass_fast_index_get, array_subclass_fast_length,
+    is_array_subclass_class_id, js_packed_arraylike_index_get, raw_receiver_is_heap_object,
 };
 use crate::array::{clean_arr_ptr, js_array_alloc, ArrayHeader};
 use crate::object::{js_object_alloc, ObjectHeader};
@@ -163,4 +164,55 @@ fn array_object_receiver_is_safe_for_non_pointers_and_handle_band_ids() {
         assert!(!raw_receiver_is_heap_object(hdr), "id {id:#x}");
         assert!(array_object_receiver(hdr).is_none(), "id {id:#x}");
     }
+}
+
+/// #8655: the object-backed representation still stores dense Array-subclass
+/// elements in ordinary property slots. Pin the shape proof and, importantly,
+/// its side exit after a structural mutation.
+#[test]
+fn dense_array_subclass_reads_slots_until_its_shape_changes() {
+    let class_id = 0x0074_8655;
+    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
+    let obj = js_object_alloc(class_id, 2);
+    assert!(!obj.is_null());
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    crate::node_stream::js_array_subclass_init(receiver, 0.0);
+
+    for (index, value) in [11.0, 22.0, 33.0].into_iter().enumerate() {
+        crate::object::js_object_set_index_polymorphic(obj as i64, index as f64, value);
+    }
+
+    assert_eq!(array_subclass_fast_length(receiver), Some(3.0));
+    assert_eq!(array_subclass_fast_index_get(receiver, 1), Some(22.0));
+    assert_eq!(
+        js_packed_arraylike_index_get(receiver, 2.0, std::ptr::null_mut()),
+        33.0
+    );
+
+    crate::object::js_object_delete_dynamic(obj, 1.0);
+    assert_eq!(
+        array_subclass_fast_index_get(receiver, 1),
+        None,
+        "deleting an indexed property must mint a shape whose dense proof side-exits"
+    );
+    assert_eq!(
+        js_packed_arraylike_index_get(receiver, 1.0, std::ptr::null_mut()).to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "the wrapper must preserve the generic hole result"
+    );
+}
+
+#[test]
+fn dense_array_subclass_guard_rejects_other_object_brands() {
+    let obj = js_object_alloc(0x0074_8656, 2);
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    let key = crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
+    crate::object::js_object_set_field_by_name(obj, key, 17.0);
+
+    assert_eq!(array_subclass_fast_length(receiver), None);
+    assert_eq!(array_subclass_fast_index_get(receiver, 0), None);
+    assert_eq!(
+        js_packed_arraylike_index_get(receiver, 0.0, std::ptr::null_mut()),
+        17.0
+    );
 }

@@ -474,6 +474,268 @@ pub extern "C" fn js_object_define_property(
         let descriptor_value = desc_handle.get_nanbox_f64();
         let key_value = key_handle.get_nanbox_f64();
 
+        // ArrayBuffer/SharedArrayBuffer/DataView use `BufferHeader` storage,
+        // but are ordinary extensible objects for named properties. Keep their
+        // data descriptors in the existing buffer expando table instead of
+        // falling through and interpreting the header as an `ObjectHeader`.
+        let buffer_addr = crate::value::JSValue::from_bits(obj_value.to_bits())
+            .is_pointer()
+            .then(|| crate::value::js_nanbox_get_pointer(obj_value) as usize)
+            .filter(|addr| crate::buffer::is_registered_buffer(*addr));
+        if buffer_addr.is_some() {
+            let current_obj = || f64::from_bits(obj_value_handle.get_heap_word_u64());
+            let current_addr = || crate::value::js_nanbox_get_pointer(current_obj()) as usize;
+            let current_desc = || desc_handle.get_nanbox_f64();
+            let current_key = || key_handle.get_nanbox_f64();
+
+            // Symbol keys stay Symbols; string coercion would create an
+            // unrelated `"Symbol(...)"` expando that symbol lookup cannot see.
+            if crate::symbol::js_is_symbol(current_key()) != 0 {
+                let current_owner = || crate::symbol::obj_key_from_f64(current_obj());
+                let current_sym = || crate::symbol::sym_key_from_f64(current_key());
+                let existing_accessor_bits =
+                    crate::symbol::symbol_accessor_descriptor_bits(current_owner(), current_sym());
+                let existing_data_bits = existing_accessor_bits
+                    .is_none()
+                    .then(|| {
+                        crate::symbol::symbol_property_root_bits(current_owner(), current_sym())
+                    })
+                    .flatten();
+                let existing_get =
+                    scope.root_nanbox_u64(existing_accessor_bits.map(|(get, _)| get).unwrap_or(0));
+                let existing_set =
+                    scope.root_nanbox_u64(existing_accessor_bits.map(|(_, set)| set).unwrap_or(0));
+                let existing_data = scope
+                    .root_nanbox_u64(existing_data_bits.unwrap_or(crate::value::TAG_UNDEFINED));
+                let existed = existing_accessor_bits.is_some() || existing_data_bits.is_some();
+                // A symbol installed by ordinary assignment has no explicit
+                // attrs side-table entry and therefore has the ordinary
+                // writable/enumerable/configurable defaults.
+                let existing_attrs = existed.then(|| {
+                    crate::symbol::get_symbol_property_attrs(current_owner(), current_sym())
+                        .unwrap_or(PropertyAttrs::new(true, true, true))
+                });
+                if let Some(attrs) = existing_attrs {
+                    if !attrs.configurable() {
+                        validate_nonconfigurable_redefine(
+                            "symbol",
+                            attrs,
+                            existing_accessor_bits.map(|_| super::super::AccessorDescriptor {
+                                get: existing_get.get_nanbox_u64(),
+                                set: existing_set.get_nanbox_u64(),
+                            }),
+                            existing_data.get_nanbox_f64(),
+                            current_desc(),
+                            desc_view.as_ref(),
+                        );
+                    }
+                }
+
+                let has_get = desc_has_field(current_desc(), b"get");
+                let has_set = desc_has_field(current_desc(), b"set");
+                let has_value = desc_has_field(current_desc(), b"value");
+                let has_writable = desc_has_field(current_desc(), b"writable");
+                if has_get || has_set {
+                    let get = scope.root_nanbox_u64(if has_get {
+                        let field = desc_read_field(current_desc(), b"get");
+                        (!field.is_undefined())
+                            .then(|| {
+                                crate::closure::clone_closure_rebind_this(
+                                    field.bits(),
+                                    current_obj(),
+                                )
+                            })
+                            .unwrap_or(0)
+                    } else {
+                        existing_get.get_nanbox_u64()
+                    });
+                    let set = if has_set {
+                        let field = desc_read_field(current_desc(), b"set");
+                        (!field.is_undefined())
+                            .then(|| {
+                                crate::closure::clone_closure_rebind_this(
+                                    field.bits(),
+                                    current_obj(),
+                                )
+                            })
+                            .unwrap_or(0)
+                    } else {
+                        existing_set.get_nanbox_u64()
+                    };
+                    crate::symbol::set_symbol_accessor_property(
+                        current_obj(),
+                        current_key(),
+                        get.get_nanbox_u64(),
+                        set,
+                    );
+                } else if has_value || has_writable || !existed {
+                    let value = if has_value {
+                        f64::from_bits(desc_read_field(current_desc(), b"value").bits())
+                    } else if existing_accessor_bits.is_some() || existing_data_bits.is_none() {
+                        f64::from_bits(crate::value::TAG_UNDEFINED)
+                    } else {
+                        existing_data.get_nanbox_f64()
+                    };
+                    crate::symbol::define_symbol_data_property(current_obj(), current_key(), value);
+                }
+                let read_flag = |name: &[u8]| -> Option<bool> {
+                    desc_has_field(current_desc(), name).then(|| {
+                        crate::value::js_is_truthy(f64::from_bits(
+                            desc_read_field(current_desc(), name).bits(),
+                        )) != 0
+                    })
+                };
+                crate::symbol::set_symbol_property_attrs(
+                    current_owner(),
+                    current_sym(),
+                    PropertyAttrs::new(
+                        if has_get || has_set {
+                            false
+                        } else {
+                            read_flag(b"writable").unwrap_or_else(|| {
+                                existing_attrs
+                                    .map(|attrs| attrs.writable())
+                                    .unwrap_or(false)
+                            })
+                        },
+                        read_flag(b"enumerable").unwrap_or_else(|| {
+                            existing_attrs
+                                .map(|attrs| attrs.enumerable())
+                                .unwrap_or(false)
+                        }),
+                        read_flag(b"configurable").unwrap_or_else(|| {
+                            existing_attrs
+                                .map(|attrs| attrs.configurable())
+                                .unwrap_or(false)
+                        }),
+                    ),
+                );
+                return current_obj();
+            }
+
+            if let Some(name) = super::super::metadata_key_to_string(current_key()) {
+                // Key coercion and descriptor getters may collect. Every side
+                // table access below therefore re-derives the buffer owner from
+                // the rooted receiver instead of retaining `buffer_addr`.
+                let addr = current_addr();
+                let existing_accessor = super::super::get_accessor_descriptor(addr, &name);
+                let existing_data = crate::buffer::buffer_get_own_prop(addr, &name);
+                let existing_get = scope
+                    .root_nanbox_u64(existing_accessor.map(|accessor| accessor.get).unwrap_or(0));
+                let existing_set = scope
+                    .root_nanbox_u64(existing_accessor.map(|accessor| accessor.set).unwrap_or(0));
+                let existing_data_value = scope.root_nanbox_f64(
+                    existing_data.unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
+                );
+                let existing_attrs =
+                    (existing_accessor.is_some() || existing_data.is_some()).then(|| {
+                        super::super::get_property_attrs(addr, &name)
+                            .unwrap_or(PropertyAttrs::new(true, true, true))
+                    });
+                if let Some(attrs) = existing_attrs {
+                    if !attrs.configurable() {
+                        validate_nonconfigurable_redefine(
+                            &name,
+                            attrs,
+                            existing_accessor,
+                            existing_data_value.get_nanbox_f64(),
+                            current_desc(),
+                            desc_view.as_ref(),
+                        );
+                    }
+                }
+
+                let has_get = desc_has_field(current_desc(), b"get");
+                let has_set = desc_has_field(current_desc(), b"set");
+                let has_value = desc_has_field(current_desc(), b"value");
+                let has_writable = desc_has_field(current_desc(), b"writable");
+                if has_get || has_set {
+                    let get_field =
+                        scope.root_nanbox_u64(desc_read_field(current_desc(), b"get").bits());
+                    let set_field =
+                        scope.root_nanbox_u64(desc_read_field(current_desc(), b"set").bits());
+                    let get_bits = scope.root_nanbox_u64(
+                        if has_get && get_field.get_nanbox_u64() != crate::value::TAG_UNDEFINED {
+                            crate::closure::clone_closure_rebind_this(
+                                get_field.get_nanbox_u64(),
+                                current_obj(),
+                            )
+                        } else if !has_get {
+                            existing_get.get_nanbox_u64()
+                        } else {
+                            0
+                        },
+                    );
+                    let set_bits =
+                        if has_set && set_field.get_nanbox_u64() != crate::value::TAG_UNDEFINED {
+                            crate::closure::clone_closure_rebind_this(
+                                set_field.get_nanbox_u64(),
+                                current_obj(),
+                            )
+                        } else if !has_set {
+                            existing_set.get_nanbox_u64()
+                        } else {
+                            0
+                        };
+                    let addr = current_addr();
+                    super::super::set_accessor_descriptor(
+                        addr,
+                        name.clone(),
+                        super::super::AccessorDescriptor {
+                            get: get_bits.get_nanbox_u64(),
+                            set: set_bits,
+                        },
+                    );
+                    // Keep an order/enumeration placeholder; accessor-aware
+                    // reads ignore its undefined payload.
+                    crate::buffer::buffer_define_own_data_prop(
+                        addr,
+                        &name,
+                        f64::from_bits(crate::value::TAG_UNDEFINED),
+                    );
+                } else if has_value || has_writable || existing_attrs.is_none() {
+                    // Data descriptor (or a brand-new generic descriptor).
+                    let addr = current_addr();
+                    super::super::clear_accessor_descriptor(addr, &name);
+                    let value = if has_value {
+                        f64::from_bits(desc_read_field(current_desc(), b"value").bits())
+                    } else if existing_accessor.is_some() || existing_data.is_none() {
+                        f64::from_bits(crate::value::TAG_UNDEFINED)
+                    } else {
+                        existing_data_value.get_nanbox_f64()
+                    };
+                    crate::buffer::buffer_define_own_data_prop(current_addr(), &name, value);
+                }
+
+                let read_flag = |field: &[u8]| -> Option<bool> {
+                    desc_has_field(current_desc(), field).then(|| {
+                        crate::value::js_is_truthy(f64::from_bits(
+                            desc_read_field(current_desc(), field).bits(),
+                        )) != 0
+                    })
+                };
+                let attrs = PropertyAttrs::new(
+                    read_flag(b"writable").unwrap_or_else(|| {
+                        existing_attrs
+                            .map(|attrs| attrs.writable())
+                            .unwrap_or(false)
+                    }),
+                    read_flag(b"enumerable").unwrap_or_else(|| {
+                        existing_attrs
+                            .map(|attrs| attrs.enumerable())
+                            .unwrap_or(false)
+                    }),
+                    read_flag(b"configurable").unwrap_or_else(|| {
+                        existing_attrs
+                            .map(|attrs| attrs.configurable())
+                            .unwrap_or(false)
+                    }),
+                );
+                super::super::set_property_attrs(current_addr(), name, attrs);
+            }
+            return current_obj();
+        }
+
         // Date / RegExp / Error instances are exotic cells, not
         // `ObjectHeader`s — the ordinary define path below would bit-cast
         // them and corrupt memory. Route through the expando-aware

@@ -157,6 +157,16 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     if bits == TAG_UNDEFINED || bits == TAG_NULL {
         crate::object::has_own_helpers::throw_to_object_nullish_type_error();
     }
+    // Property access on a Symbol primitive operates on a temporary boxed
+    // receiver so inherited Symbol.prototype properties/accessors participate
+    // in ordinary Get semantics.
+    if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let symbol = scope.root_nanbox_f64(value);
+        let index = scope.root_nanbox_f64(index);
+        let boxed = crate::builtins::js_boxed_symbol_new(symbol.get_nanbox_f64());
+        return js_dyn_index_get(boxed, index.get_nanbox_f64());
+    }
     let jsval = JSValue::from_bits(bits);
     // #5525: a Symbol *index* (`obj[Symbol.iterator]`) must resolve through the
     // symbol side-table, never the integer-index / stringify paths below (which
@@ -281,7 +291,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         && crate::buffer::is_non_indexed_buffer_view(raw_ptr)
     {
         if let Some(key) = crate::buffer::canonical_index_key(index) {
-            return crate::buffer::buffer_get_own_prop(raw_ptr, &key)
+            return crate::buffer::buffer_read_own_prop(raw_ptr, &key)
                 .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
         }
     }
@@ -409,11 +419,16 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             );
         }
     }
-    let idx_i32 = if index.is_nan() || index.is_infinite() {
-        return f64::from_bits(TAG_UNDEFINED);
-    } else {
-        index as i32
-    };
+    // NaN and +/-Infinity are not array indices, but they are still ordinary
+    // property keys (`"NaN"`, `"Infinity"`, `"-Infinity"`) on Objects and
+    // Arrays. Delegate this cold case to the polymorphic key path, which runs
+    // ToPropertyKey and already distinguishes ordinary from integer-indexed
+    // exotic receivers. The old early return made a computed definition such
+    // as `{ [Infinity]: value }` unreadable through `obj[Infinity]`.
+    if index.is_nan() || index.is_infinite() {
+        return crate::object::js_object_get_index_polymorphic(raw_ptr as i64, index);
+    }
+    let idx_i32 = index as i32;
     if idx_i32 >= 0 {
         if let Some(value) = unsafe {
             crate::object::arguments_object_get_index(
@@ -529,6 +544,16 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
         crate::proxy::js_proxy_set(obj, index, value);
         return value;
     }
+    // Sloppy assignment still targets only the ephemeral ToObject wrapper,
+    // but it must run inherited Symbol.prototype setters before disappearing.
+    if unsafe { crate::symbol::js_is_symbol(obj) } != 0 {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let symbol = scope.root_nanbox_f64(obj);
+        let index = scope.root_nanbox_f64(index);
+        let value = scope.root_nanbox_f64(value);
+        let boxed = crate::builtins::js_boxed_symbol_new(symbol.get_nanbox_f64());
+        return js_dyn_index_set(boxed, index.get_nanbox_f64(), value.get_nanbox_f64());
+    }
     // #5525: a Symbol *index* (`obj[sym] = v`) routes to the symbol side-table,
     // mirroring the get side. Codegen sends all non-string-literal unknown-
     // receiver writes here, so the runtime owns the symbol triage.
@@ -619,6 +644,19 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     if raw_ptr < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return value;
     }
+    // String-named computed writes use ordinary receiver-aware [[Set]]. This
+    // must precede the raw buffer/view branches: DataView and ArrayBuffer carry
+    // ordinary expandos in a side table, and returning from the byte-index
+    // branch would otherwise swallow `view[name] = value`.
+    let idx_top16 = index.to_bits() >> 48;
+    if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
+        let target = if jsval.is_pointer() {
+            obj
+        } else {
+            f64::from_bits(crate::value::js_nanbox_pointer(raw_ptr as i64).to_bits())
+        };
+        return crate::proxy::js_put_value_set(target, index, value, target, 0);
+    }
     if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
         crate::typedarray_props::js_typed_array_index_set_dynamic(
             raw_ptr as *mut crate::typedarray::TypedArrayHeader,
@@ -660,6 +698,30 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     if receiver_tag.is_some_and(|(obj_type, _)| is_registered_collection(raw_ptr, obj_type)) {
         return value;
     }
+    // An ordinary receiver whose explicit [[Prototype]] is a TypedArray must
+    // consult that integer-indexed exotic for canonical but INVALID numeric
+    // keys. Such a write is a successful no-op and must not create an own
+    // property on the receiver. Valid indices, however, continue through the
+    // ordinary receiver path below: they create an own property (and therefore
+    // reject a non-extensible receiver in strict code).
+    if let Some(proto_bits) = crate::object::prototype_chain::object_static_prototype(raw_ptr) {
+        let proto_addr = crate::value::js_nanbox_get_pointer(f64::from_bits(proto_bits)) as usize;
+        if proto_addr != 0 && crate::typedarray::lookup_typed_array_kind(proto_addr).is_some() {
+            let length = unsafe {
+                (*(proto_addr as *const crate::typedarray::TypedArrayHeader)).length as u32
+            };
+            let is_valid_index = finite_nonnegative_u32_index(index)
+                .is_some_and(|numeric_index| numeric_index < length);
+            if !is_valid_index {
+                let target = if jsval.is_pointer() {
+                    obj
+                } else {
+                    f64::from_bits(crate::value::js_nanbox_pointer(raw_ptr as i64).to_bits())
+                };
+                return crate::proxy::js_put_value_set(target, index, value, target, 0);
+            }
+        }
+    }
     // #5579 / Issue #957 (set side): a STRING index (`obj["foo"] = v`) must
     // route through the ordinary receiver-aware `[[Set]]`, NOT the numeric
     // element path below. A NaN-boxed string index otherwise reached the
@@ -678,17 +740,6 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
     // `finite_nonnegative_u32_index`, so NaN/fractional keys fall through to
     // the ToString write instead of aliasing element 0), so the #5544 perf
     // win stands.
-    let idx_top16 = index.to_bits() >> 48;
-    if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
-        // `target`/`receiver` must be a tagged value, not the raw heap address
-        // (`obj` arrives as a module-slot raw I64 when top16 == 0).
-        let target = if jsval.is_pointer() {
-            obj
-        } else {
-            f64::from_bits(crate::value::js_nanbox_pointer(raw_ptr as i64).to_bits())
-        };
-        return crate::proxy::js_put_value_set(target, index, value, target, 0);
-    }
     if let Some(idx_u32) = finite_nonnegative_u32_index(index) {
         if unsafe {
             crate::object::arguments_object_set_index(

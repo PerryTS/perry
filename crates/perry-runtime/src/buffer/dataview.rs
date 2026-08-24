@@ -286,7 +286,8 @@ pub fn js_data_view_set(
     kind: DataViewKind,
     little: bool,
 ) -> f64 {
-    let buf = unbox_buffer_ptr(buf_f64.to_bits()) as *mut BufferHeader;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let buf_handle = scope.root_nanbox_f64(buf_f64);
     let offset = to_byte_offset(offset_value);
     if kind.is_bigint() {
         // SetViewValue for a BigInt accessor: `ToBigInt(value)` (a Number throws
@@ -298,10 +299,12 @@ pub fn js_data_view_set(
         } else {
             raw.to_be_bytes()
         };
+        let buf = unbox_buffer_ptr(buf_handle.get_nanbox_f64().to_bits()) as *mut BufferHeader;
         unsafe { write_bytes(buf, offset, &b) };
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let n = to_number(value);
+    let buf = unbox_buffer_ptr(buf_handle.get_nanbox_f64().to_bits()) as *mut BufferHeader;
     unsafe {
         match kind {
             DataViewKind::BigInt64 | DataViewKind::BigUint64 => unreachable!(),
@@ -486,46 +489,15 @@ fn wrap_to_u64(n: f64, bits: u32) -> u64 {
 /// convertible and throw a `TypeError`; BigInt passes through, Boolean and
 /// String coerce.
 fn to_bigint_raw_or_throw(value: f64) -> u64 {
-    use crate::value::JSValue;
-    let jsval = JSValue::from_bits(value.to_bits());
-    let bi: *const crate::bigint::BigIntHeader = if jsval.is_bigint() {
-        jsval.as_bigint_ptr() as *const crate::bigint::BigIntHeader
-    } else if jsval.is_bool() {
-        crate::bigint::js_bigint_from_i64(if jsval.as_bool() { 1 } else { 0 })
-    } else if jsval.is_any_string() {
-        // StringToBigInt (a malformed numeric string throws SyntaxError).
-        crate::bigint::js_bigint_from_f64(value)
-    } else {
-        throw_bigint_conversion_type_error(value);
-    };
+    // Reuse the typed-array lane's complete ToBigInt implementation. In
+    // particular, object values must run @@toPrimitive/valueOf/toString and
+    // propagate abrupt completion before the DataView bounds check.
+    let coerced = crate::typedarray::bigint::to_bigint_for_store(value);
+    let bi = crate::value::JSValue::from_bits(coerced.to_bits()).as_bigint_ptr()
+        as *const crate::bigint::BigIntHeader;
     let bi = crate::bigint::clean_bigint_ptr(bi);
     if bi.is_null() {
         return 0;
     }
     unsafe { (*bi).limbs[0] }
-}
-
-/// Throw `TypeError: Cannot convert <x> to a BigInt`, matching Node's
-/// `ToBigInt` rejection text for a DataView BigInt setter.
-#[cold]
-fn throw_bigint_conversion_type_error(value: f64) -> ! {
-    use crate::value::JSValue;
-    let jsval = JSValue::from_bits(value.to_bits());
-    let label = if jsval.is_undefined() {
-        "undefined".to_string()
-    } else if jsval.is_null() {
-        "null".to_string()
-    } else if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
-        "a Symbol value".to_string()
-    } else if jsval.is_int32() {
-        jsval.as_int32().to_string()
-    } else {
-        format!("{value}")
-    };
-    let msg = format!("Cannot convert {label} to a BigInt");
-    let err = crate::error::js_typeerror_new(crate::string::js_string_from_bytes(
-        msg.as_ptr(),
-        msg.len() as u32,
-    ));
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }

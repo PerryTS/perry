@@ -7,9 +7,9 @@
 //! reach them via `crate::lower::lower_module*` (or the `lib.rs`
 //! re-exports — `pub use lower::{lower_module, ...}`).
 
-use crate::types::Type;
+use crate::types::{LocalId, Type};
 use anyhow::Result;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use swc_ecma_ast as ast;
 
 use super::*;
@@ -17,6 +17,242 @@ use crate::ir::*;
 use crate::lower_types::hoisted_text_codec::{
     infer_hoisted_text_codec_var_type, require_literal_specifier,
 };
+
+fn reflect_script_var_initializers(
+    stmts: Vec<Stmt>,
+    script_vars: &HashMap<LocalId, String>,
+    next_local_id: &mut LocalId,
+) -> Vec<Stmt> {
+    let mut reflected = Vec::with_capacity(stmts.len());
+    for mut stmt in stmts {
+        match &mut stmt {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                *then_branch = reflect_script_var_initializers(
+                    std::mem::take(then_branch),
+                    script_vars,
+                    next_local_id,
+                );
+                if let Some(branch) = else_branch {
+                    *branch = reflect_script_var_initializers(
+                        std::mem::take(branch),
+                        script_vars,
+                        next_local_id,
+                    );
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                *body = reflect_script_var_initializers(
+                    std::mem::take(body),
+                    script_vars,
+                    next_local_id,
+                );
+            }
+            Stmt::For {
+                init, update, body, ..
+            } => {
+                if let Some(init_stmt) = init.take() {
+                    let mut expanded = reflect_script_var_initializers(
+                        vec![*init_stmt],
+                        script_vars,
+                        next_local_id,
+                    );
+                    if expanded.len() == 1 {
+                        *init = expanded.pop().map(Box::new);
+                    } else {
+                        // A script `var` initializer can be hoisted out of the
+                        // `for` init slot without changing its one-shot order.
+                        // This makes room for the immediately-following global
+                        // mirror, since HIR's init field holds only one Stmt.
+                        reflected.append(&mut expanded);
+                    }
+                }
+                if let Some(update_expr) = update.take() {
+                    let mut update_temps = Vec::new();
+                    *update = Some(reflect_script_var_update_expr(
+                        update_expr,
+                        script_vars,
+                        next_local_id,
+                        &mut update_temps,
+                    ));
+                    reflected.append(&mut update_temps);
+                }
+                *body = reflect_script_var_initializers(
+                    std::mem::take(body),
+                    script_vars,
+                    next_local_id,
+                );
+            }
+            Stmt::Labeled { body, .. } => {
+                let inner = std::mem::replace(body, Box::new(Stmt::Break));
+                let mut expanded =
+                    reflect_script_var_initializers(vec![*inner], script_vars, next_local_id);
+                *body = if expanded.len() > 1 && matches!(expanded.last(), Some(Stmt::For { .. })) {
+                    // A reflected `for (var ...)` init expands to the init,
+                    // its global mirror, and the loop. Keep those one-shot
+                    // statements immediately before the labeled loop: wrapping
+                    // the whole expansion in `do { ... } while (false)` would
+                    // make `continue label` target the wrapper instead of the
+                    // original `for` statement.
+                    let loop_stmt = expanded.pop().expect("reflected labeled for statement");
+                    reflected.append(&mut expanded);
+                    Box::new(loop_stmt)
+                } else if expanded.len() == 1 {
+                    Box::new(expanded.pop().expect("one reflected labeled statement"))
+                } else {
+                    // Non-loop labels are already represented as run-once
+                    // do/while statements. Keep the same representation if a
+                    // direct labeled declaration expands to declaration +
+                    // mirror so `break label` still targets one statement.
+                    Box::new(Stmt::DoWhile {
+                        body: expanded,
+                        condition: Expr::Bool(false),
+                    })
+                };
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                *body = reflect_script_var_initializers(
+                    std::mem::take(body),
+                    script_vars,
+                    next_local_id,
+                );
+                if let Some(catch) = catch {
+                    catch.body = reflect_script_var_initializers(
+                        std::mem::take(&mut catch.body),
+                        script_vars,
+                        next_local_id,
+                    );
+                }
+                if let Some(finally) = finally {
+                    *finally = reflect_script_var_initializers(
+                        std::mem::take(finally),
+                        script_vars,
+                        next_local_id,
+                    );
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    case.body = reflect_script_var_initializers(
+                        std::mem::take(&mut case.body),
+                        script_vars,
+                        next_local_id,
+                    );
+                }
+            }
+            Stmt::Let { .. }
+            | Stmt::Expr(_)
+            | Stmt::Return(_)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::Throw(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
+        }
+
+        let global_var = match &stmt {
+            Stmt::Let { id, name, .. } if script_vars.contains_key(id) => Some((*id, name.clone())),
+            _ => None,
+        };
+        reflected.push(stmt);
+        if let Some((id, name)) = global_var {
+            reflected.push(Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::GlobalThisExpr),
+                property: name,
+                value: Box::new(Expr::LocalGet(id)),
+            }));
+        }
+    }
+    reflected
+}
+
+fn reflect_script_var_update_expr(
+    mut expr: Expr,
+    script_vars: &HashMap<LocalId, String>,
+    next_local_id: &mut LocalId,
+    temp_decls: &mut Vec<Stmt>,
+) -> Expr {
+    // A loop update is an arbitrary expression tree, not necessarily a bare
+    // assignment or a top-level comma sequence. Rewrite children first in
+    // their evaluation order so writes nested in call arguments, computed
+    // keys, conditionals, etc. are mirrored at the instant they execute.
+    crate::walker::walk_expr_children_mut(&mut expr, &mut |child| {
+        let original = std::mem::replace(child, Expr::Undefined);
+        *child = reflect_script_var_update_expr(original, script_vars, next_local_id, temp_decls);
+    });
+
+    match expr {
+        Expr::LocalSet(id, value) if script_vars.contains_key(&id) => Expr::Sequence(vec![
+            Expr::LocalSet(id, value),
+            script_var_mirror_expr(id, script_vars),
+        ]),
+        Expr::Update {
+            id,
+            op,
+            prefix: true,
+        } if script_vars.contains_key(&id) => Expr::Sequence(vec![
+            Expr::Update {
+                id,
+                op,
+                prefix: true,
+            },
+            script_var_mirror_expr(id, script_vars),
+        ]),
+        Expr::Update {
+            id,
+            op,
+            prefix: false,
+        } if script_vars.contains_key(&id) => {
+            // The mirror must run after the update, while postfix `x++` must
+            // still evaluate to the old value for its parent expression. Save
+            // that result in a compiler-only local, publish the new binding,
+            // then restore the expression result.
+            let temp_id = *next_local_id;
+            *next_local_id += 1;
+            temp_decls.push(Stmt::Let {
+                id: temp_id,
+                name: format!("__perry_script_var_postfix_{temp_id}"),
+                ty: Type::Any,
+                mutable: true,
+                init: None,
+            });
+            Expr::Sequence(vec![
+                Expr::LocalSet(
+                    temp_id,
+                    Box::new(Expr::Update {
+                        id,
+                        op,
+                        prefix: false,
+                    }),
+                ),
+                script_var_mirror_expr(id, script_vars),
+                Expr::LocalGet(temp_id),
+            ])
+        }
+        expr => expr,
+    }
+}
+
+fn script_var_mirror_expr(id: LocalId, script_vars: &HashMap<LocalId, String>) -> Expr {
+    Expr::PropertySet {
+        object: Box::new(Expr::GlobalThisExpr),
+        property: script_vars
+            .get(&id)
+            .expect("script var mirror requires a script var")
+            .clone(),
+        value: Box::new(Expr::LocalGet(id)),
+    }
+}
 
 fn should_enable_react_automatic_jsx(name: &str, ast_module: &ast::Module) -> bool {
     let is_jsx_source = name.ends_with(".tsx")
@@ -1225,6 +1461,23 @@ pub fn lower_module_full(
     crate::dynamic_import::detect_top_level_await(&mut module);
     let is_esm_entry =
         !module.imports.is_empty() || !module.exports.is_empty() || module.has_top_level_await;
+    if ctx.is_entry_module && !is_esm_entry && module.references_global_this {
+        let script_vars: HashMap<_, _> = ctx
+            .script_var_decl_names
+            .iter()
+            .filter_map(|name| ctx.lookup_local(name).map(|id| (id, name.clone())))
+            .collect();
+        // Script `var` bindings are properties of the global object. Mirror
+        // every write at its actual execution point, including declarations
+        // nested in blocks, loops, switch arms and try/catch/finally. Matching
+        // by LocalId prevents a same-named lexical shadow from leaking onto
+        // globalThis (ES modules keep their module binding only).
+        module.init = reflect_script_var_initializers(
+            std::mem::take(&mut module.init),
+            &script_vars,
+            &mut ctx.next_local_id,
+        );
+    }
     if ctx.is_entry_module && !is_esm_entry {
         const RESTRICTED_GLOBAL_NAMES: [&str; 3] = ["undefined", "NaN", "Infinity"];
         let restricted_scan_stmts: Vec<ast::Stmt> = ast_module

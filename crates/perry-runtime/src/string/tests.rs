@@ -536,6 +536,68 @@ fn test_string_append_loop() {
     );
 }
 
+#[test]
+fn string_append_chain_owns_one_result_and_reuses_capacity() {
+    fn boxed(s: *mut StringHeader) -> f64 {
+        f64::from_bits(crate::value::STRING_TAG | (s as u64 & crate::value::POINTER_MASK))
+    }
+    fn heap(text: &str) -> *mut StringHeader {
+        js_string_from_bytes(text.as_ptr(), text.len() as u32)
+    }
+
+    let first_parts = [
+        boxed(heap("")),
+        boxed(heap("[")),
+        boxed(heap("n")),
+        boxed(heap("]")),
+    ];
+    let first = js_string_append_chain(first_parts.as_ptr(), first_parts.len() as i32);
+    assert_eq!(string_as_str(first), "[n]");
+    assert_eq!(unsafe { (*first).refcount }, 1);
+    assert_eq!(unsafe { (*first).capacity }, 3);
+
+    let second_parts = [
+        boxed(first),
+        boxed(heap("[")),
+        boxed(heap("fib")),
+        boxed(heap("]")),
+    ];
+    let second = js_string_append_chain(second_parts.as_ptr(), second_parts.len() as i32);
+    assert_ne!(second, first);
+    assert_eq!(string_as_str(second), "[n][fib]");
+    assert_eq!(unsafe { (*second).refcount }, 1);
+    assert!(unsafe { (*second).capacity } >= 32);
+
+    let third_parts = [
+        boxed(second),
+        boxed(heap("[")),
+        boxed(heap("x")),
+        boxed(heap("]")),
+    ];
+    let third = js_string_append_chain(third_parts.as_ptr(), third_parts.len() as i32);
+    assert_eq!(third, second);
+    assert_eq!(string_as_str(third), "[n][fib][x]");
+}
+
+#[test]
+fn string_append_chain_falls_back_for_overlap_and_dynamic_parts() {
+    fn boxed(s: *mut StringHeader) -> f64 {
+        f64::from_bits(crate::value::STRING_TAG | (s as u64 & crate::value::POINTER_MASK))
+    }
+
+    let value = js_string_from_bytes(b"ab".as_ptr(), 2);
+    let overlap = [boxed(value), boxed(value)];
+    let doubled = js_string_append_chain(overlap.as_ptr(), overlap.len() as i32);
+    assert_ne!(doubled, value);
+    assert_eq!(string_as_str(value), "ab");
+    assert_eq!(string_as_str(doubled), "abab");
+
+    let suffix = js_string_from_bytes(b"x".as_ptr(), 1);
+    let dynamic = [42.0, boxed(suffix)];
+    let joined = js_string_append_chain(dynamic.as_ptr(), dynamic.len() as i32);
+    assert_eq!(string_as_str(joined), "42x");
+}
+
 // ── Repsel Phase 3a: js_string_compare_value ───────────────────────────────
 
 #[test]

@@ -1181,6 +1181,7 @@ pub(super) fn init_static_fields_early(
         let mut cur: Option<String> = c.extends_name.clone();
         let mut extends_error = false;
         let mut extends_data_view = false;
+        let mut extends_typed_array = false;
         let mut depth = 0usize;
         while let Some(name) = cur {
             if matches!(
@@ -1199,6 +1200,10 @@ pub(super) fn init_static_fields_early(
             }
             if name == "DataView" {
                 extends_data_view = true;
+                break;
+            }
+            if crate::type_analysis::is_typed_array_class(&name) {
+                extends_typed_array = true;
                 break;
             }
             // Walk user-defined ancestor chain.
@@ -1227,6 +1232,14 @@ pub(super) fn init_static_fields_early(
                 ctx.block().call_void(
                     "js_register_class_extends_data_view",
                     &[(crate::types::I32, &cid_str)],
+                );
+            }
+        }
+        if extends_typed_array {
+            if let Some(&cid) = ctx.class_ids.get(&c.name) {
+                ctx.block().call_void(
+                    "js_register_class_extends_typed_array",
+                    &[(crate::types::I32, &cid.to_string())],
                 );
             }
         }

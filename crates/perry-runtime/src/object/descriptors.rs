@@ -297,6 +297,68 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             );
         }
 
+        if obj_jv.is_pointer() {
+            let addr = crate::value::js_nanbox_get_pointer(obj_value) as usize;
+            if crate::buffer::is_registered_buffer(addr) {
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let receiver = scope.root_nanbox_f64(obj_value);
+                let Some(name) = metadata_key_to_string(key_value) else {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                };
+                let addr = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
+                // Plain node Buffers are byte-indexed exotic objects but are
+                // not always marked as Uint8Array owners, so the typed-array
+                // arm above can legitimately decline them. Their canonical
+                // in-bounds byte keys still have ordinary element descriptors;
+                // an out-of-bounds canonical index cannot fall through to an
+                // expando/accessor of the same spelling.
+                if crate::buffer::is_byte_indexed_buffer(addr) {
+                    if let Some(index) = property_name_array_index(&name) {
+                        let buf = addr as *const crate::buffer::BufferHeader;
+                        let len = crate::buffer::js_buffer_length(buf).max(0) as u32;
+                        if index < len && index <= i32::MAX as u32 {
+                            return build_data_descriptor(
+                                f64::from(crate::buffer::js_buffer_get(buf, index as i32)),
+                                true,
+                                true,
+                                true,
+                            );
+                        }
+                        return f64::from_bits(crate::value::TAG_UNDEFINED);
+                    }
+                }
+                if let Some(accessor) = get_accessor_descriptor(addr, &name) {
+                    let attrs = get_property_attrs(addr, &name)
+                        .unwrap_or_else(|| PropertyAttrs::new(false, false, false));
+                    return build_accessor_descriptor(
+                        f64::from_bits(if accessor.get == 0 {
+                            crate::value::TAG_UNDEFINED
+                        } else {
+                            accessor.get
+                        }),
+                        f64::from_bits(if accessor.set == 0 {
+                            crate::value::TAG_UNDEFINED
+                        } else {
+                            accessor.set
+                        }),
+                        attrs.enumerable(),
+                        attrs.configurable(),
+                    );
+                }
+                let Some(value) = crate::buffer::buffer_get_own_prop(addr, &name) else {
+                    return f64::from_bits(crate::value::TAG_UNDEFINED);
+                };
+                let attrs = get_property_attrs(addr, &name)
+                    .unwrap_or_else(|| PropertyAttrs::new(true, true, true));
+                return build_data_descriptor(
+                    value,
+                    attrs.writable(),
+                    attrs.enumerable(),
+                    attrs.configurable(),
+                );
+            }
+        }
+
         // Date / RegExp / Error exotic instances: own properties live in the
         // expando side tables (plus a few builtin own slots), never in an
         // `ObjectHeader` — the ordinary path below would bit-cast the cell.
@@ -1063,12 +1125,14 @@ pub(crate) unsafe fn build_data_descriptor(
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     let bf = |b: bool| f64::from_bits(if b { TAG_TRUE } else { TAG_FALSE });
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
     let packed = b"value\0writable\0enumerable\0configurable";
     let desc = js_object_alloc_with_shape(0x0D_E5_C0, 4, packed.as_ptr(), packed.len() as u32);
     let header_size = std::mem::size_of::<ObjectHeader>();
     let fields = (desc as *mut u8).add(header_size) as *mut f64;
     // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
-    *fields = value;
+    *fields = value.get_nanbox_f64();
     *fields.add(1) = bf(writable);
     *fields.add(2) = bf(enumerable);
     *fields.add(3) = bf(configurable);
@@ -1085,13 +1149,16 @@ pub(crate) unsafe fn build_accessor_descriptor(
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     let bf = |b: bool| f64::from_bits(if b { TAG_TRUE } else { TAG_FALSE });
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let get = scope.root_nanbox_f64(get);
+    let set = scope.root_nanbox_f64(set);
     let packed = b"get\0set\0enumerable\0configurable";
     let desc = js_object_alloc_with_shape(0x0D_E5_C1, 4, packed.as_ptr(), packed.len() as u32);
     let header_size = std::mem::size_of::<ObjectHeader>();
     let fields = (desc as *mut u8).add(header_size) as *mut f64;
     // GC_STORE_AUDIT(INIT): descriptor object is freshly allocated; layout is rebuilt before publication.
-    *fields = get;
-    *fields.add(1) = set;
+    *fields = get.get_nanbox_f64();
+    *fields.add(1) = set.get_nanbox_f64();
     *fields.add(2) = bf(enumerable);
     *fields.add(3) = bf(configurable);
     super::rebuild_object_field_layout(desc, 4);

@@ -17,3 +17,63 @@ const store = (globalThis as any)[storeId] as Map<string, string>;
 console.log("typeof store:", typeof store);
 store.set("k", "v");
 console.log("store.get('k'):", store.get("k"));
+
+// Script-level `var` remains a global-object binding even when its initializer
+// executes inside a compound statement.
+if (true) {
+  var nestedScriptVar = 42;
+}
+console.log("nested var:", (globalThis as any).nestedScriptVar);
+try {
+  var caughtScriptVar = "try";
+} finally {
+  var finalScriptVar = "finally";
+}
+console.log(
+  "try/finally vars:",
+  (globalThis as any).caughtScriptVar,
+  (globalThis as any).finalScriptVar,
+);
+
+const seen: number[] = [];
+const mirroredUpdates: number[] = [];
+outer: for (
+  var loopScriptVar = 0;
+  loopScriptVar < 3;
+  loopScriptVar++, mirroredUpdates.push((globalThis as any).loopScriptVar)
+) {
+  if (loopScriptVar === 0) continue outer;
+  seen.push(loopScriptVar);
+}
+console.log(
+  "labeled loop:",
+  (globalThis as any).loopScriptVar,
+  seen.join(","),
+  mirroredUpdates.join(","),
+);
+
+// The update may hide the script-var write inside another expression. Mirror
+// it before the next argument reads globalThis, while preserving the old value
+// produced by postfix `++` for the first argument.
+const nestedUpdateSeen: number[] = [];
+for (
+  var nestedUpdateScriptVar = 0;
+  nestedUpdateScriptVar < 1;
+  nestedUpdateSeen.push(
+    nestedUpdateScriptVar++,
+    (globalThis as any).nestedUpdateScriptVar,
+  )
+) {}
+console.log(
+  "nested update:",
+  (globalThis as any).nestedUpdateScriptVar,
+  nestedUpdateSeen.join(","),
+);
+
+switch (1) {
+  case 1: {
+    var switchScriptVar = "case";
+    break;
+  }
+}
+console.log("switch var:", (globalThis as any).switchScriptVar);

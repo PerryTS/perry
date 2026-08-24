@@ -273,6 +273,23 @@ fn builtin_prototype_methods_reject_dynamic_new() {
 }
 
 #[test]
+fn bound_native_constructor_metadata_distinguishes_module_functions() {
+    assert!(super::native_module::is_native_module_constructor_export(
+        "console", "Console"
+    ));
+    assert!(super::native_module::is_native_module_constructor_export(
+        "repl", "start"
+    ));
+    assert!(super::native_module::is_native_module_constructor_export(
+        "events", "init"
+    ));
+    assert!(!super::native_module::is_native_module_constructor_export(
+        "node:path",
+        "toNamespacedPath"
+    ));
+}
+
+#[test]
 fn recorded_prototype_constructor_overrides_plain_object_constructor() {
     unsafe {
         let prototype = js_object_alloc(0, 1);

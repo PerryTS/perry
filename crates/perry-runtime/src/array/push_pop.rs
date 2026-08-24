@@ -1,6 +1,5 @@
 //! push / pop / shift / unshift / set_length / delete + grow primitive.
 use super::*;
-use crate::arena::arena_alloc_gc;
 use std::ptr;
 
 /// `pop`/`shift`/`push`/`unshift` on a frozen array perform a `Set`/`Delete`
@@ -133,8 +132,38 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         let old_size = array_byte_size(old_capacity as usize);
         let new_size = array_byte_size(new_capacity as usize);
 
-        // Allocate new from arena and copy old data.
-        let new_ptr = arena_alloc_gc(new_size, 8, crate::gc::GC_TYPE_ARRAY) as *mut ArrayHeader;
+        // A growth stub outlives the array operation: aliases can keep its
+        // address and `clean_arr_ptr` follows it on a later access. Therefore
+        // a non-moving source must not forward into the copying nursery. A
+        // minor does not trace a retained `GC_FLAG_FORWARDED` stub as a normal
+        // array object, so its payload forwarding word is outside ordinary
+        // layout and remembered-set scanning. It would neither move nor retain
+        // a young target; resetting from-space would leave the permanent old
+        // stub pointing at recycled bytes.
+        //
+        // For a young source, use the nursery only when the already-open block
+        // can satisfy the grow without collecting. If that allocation would
+        // collect, the source may be promoted while its handle is reloaded;
+        // birth the target old instead so the post-collection source cannot
+        // acquire the same old->young forwarding edge.
+        let old_header =
+            (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        let source_requires_old_target = (*old_header).gc_flags & crate::gc::GC_FLAG_TENURED != 0
+            || !matches!(
+                crate::arena::classify_heap_generation(arr as usize),
+                crate::arena::HeapGeneration::Nursery
+            );
+        let new_ptr = if source_requires_old_target {
+            crate::arena::arena_alloc_gc_old_born_tenured(new_size, 8, crate::gc::GC_TYPE_ARRAY)
+        } else {
+            let young =
+                crate::arena::arena_alloc_gc_no_collect(new_size, 8, crate::gc::GC_TYPE_ARRAY);
+            if young.is_null() {
+                crate::arena::arena_alloc_gc_old_born_tenured(new_size, 8, crate::gc::GC_TYPE_ARRAY)
+            } else {
+                young
+            }
+        } as *mut ArrayHeader;
         let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
         // GC_STORE_AUDIT(BARRIERED): array growth copy transfers layout and replays write barriers below.
         ptr::copy_nonoverlapping(arr as *const u8, new_ptr as *mut u8, old_size);

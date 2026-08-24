@@ -275,6 +275,10 @@ pub extern "C" fn js_value_length_property_f64(value: f64) -> f64 {
         return crate::string::js_string_length(string) as f64;
     }
 
+    if let Some(length) = crate::array::array_subclass_fast_length(value) {
+        return length;
+    }
+
     unsafe { js_dynamic_object_get_property(value, b"length".as_ptr() as *const i8, 6) }
 }
 

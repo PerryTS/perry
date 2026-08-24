@@ -14,7 +14,7 @@ fi
 # instead of skipping behind an opt-in flag. The CI job stays advisory
 # (`continue-on-error: true`) per the tier-3 convention. The historical
 # `PERRY_EFFECT_BASIC_ADVISORY=1` gate (added in #4391 when Effect reliably
-# failed) is gone; the env var is now a harmless no-op.
+# failed) was removed in #6572.
 
 fixture_setup "$NAME" || exit 1
 fixture_compile_run_diff "$NAME"

@@ -25,6 +25,7 @@ mod perf_instance_bind;
 pub(crate) use perf_instance_bind::instance_bound_perf_method;
 mod constants;
 mod constants_tables;
+mod constructor_exports;
 mod module_keys;
 mod namespace_builders;
 mod web_locks;
@@ -51,6 +52,9 @@ pub(crate) use callable_exports::{
     zlib_codes_object,
 };
 pub(crate) use constants::get_native_module_constant;
+pub(crate) use constructor_exports::{
+    bound_native_callable_is_constructor_value, is_native_module_constructor_export,
+};
 pub(crate) use module_keys::{native_module_enumerable_keys, native_module_has_enumerable_key};
 #[cfg(test)]
 pub(crate) use namespace_builders::create_fs_constants_object;

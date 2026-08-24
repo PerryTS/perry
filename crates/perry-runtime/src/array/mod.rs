@@ -30,6 +30,8 @@ mod subclass;
 #[cfg(test)]
 mod collection_tag_tests;
 #[cfg(test)]
+mod forwarding_tests;
+#[cfg(test)]
 mod spread_dense_tests;
 #[cfg(test)]
 mod subclass_tests;
@@ -140,9 +142,9 @@ pub use self::iter_methods::{
     js_validate_array_callback, js_validate_array_map_callback,
 };
 pub use self::iter_object::{
-    array_entries_iter, array_keys_iter, array_values_iter, array_values_iter_null_done,
-    dispatch_array_iterator_method, js_array_entries_iter_obj, js_array_keys_iter_obj,
-    js_array_values_iter_obj, ARRAY_ITERATOR_CLASS_ID,
+    arguments_values_iter, array_entries_iter, array_keys_iter, array_values_iter,
+    array_values_iter_null_done, dispatch_array_iterator_method, js_array_entries_iter_obj,
+    js_array_keys_iter_obj, js_array_values_iter_obj, ARRAY_ITERATOR_CLASS_ID,
 };
 pub(crate) use self::iterator::is_builtin_iterator_class_id;
 pub(crate) use self::iterator::iter_bt_dump;
@@ -161,6 +163,7 @@ pub(crate) use self::prototype_addr::{
 };
 pub(crate) use self::sort::object_prototype_has_index_prop;
 pub(crate) use self::sort::object_prototype_index_get as sort_object_prototype_index_get;
+pub(crate) use self::sort::object_prototype_index_get_with_receiver as sort_object_prototype_index_get_with_receiver;
 pub use self::subclass::{
     array_subclass_dense_snapshot, array_subclass_has_iterator_override, is_array_subclass_instance,
 };
@@ -170,8 +173,9 @@ pub(crate) use indexing::test_swap_array_index_fast_path_invalidated;
 // points, plus the Array-exotic `length` maintenance the generic OBJECT index
 // store needs for a `class X extends Array` receiver.
 pub(crate) use self::subclass::{
-    array_object_set_length, is_array_subclass_class_id, is_array_subclass_value,
-    maintain_array_exotic_length, note_array_subclass_index_write,
+    array_object_set_length, array_subclass_fast_index_get, array_subclass_fast_length,
+    is_array_subclass_class_id, is_array_subclass_value, maintain_array_exotic_length,
+    note_array_subclass_index_write,
 };
 // Issue #1572 — flatten helpers reused by `node_stream::ns_iter_flat_map`
 // so an `async function*` mapper return is driven through the iterator

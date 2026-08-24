@@ -56,13 +56,34 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     if obj_key == 0 {
         return crate::array::js_array_alloc(0) as i64;
     }
+    // A declared class prototype is a materialized ObjectHeader, while its
+    // computed Symbol methods/accessors live in the class registry. Seed the
+    // ordinary-object enumeration with those own keys so
+    // `Object.getOwnPropertySymbols(C.prototype)` sees `[sym]() {}` exactly as
+    // direct `C.prototype[sym]` dispatch does. A later assignment to the same
+    // symbol is deduplicated below; class elements precede such assignments in
+    // property-creation order.
+    let mut entries: Vec<(usize, u64)> = crate::object::class_id_for_decl_prototype_object(obj_key)
+        .map(|class_id| {
+            crate::object::class_own_symbol_member_keys(class_id, false)
+                .into_iter()
+                .map(|sym_key| (sym_key, 0))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    let mut entries = guard
+    let stored_entries = guard
         .as_ref()
         .and_then(|m| m.get(&obj_key))
         .cloned()
         .unwrap_or_default();
     drop(guard);
+    for entry in stored_entries {
+        if !entries.iter().any(|(sym_key, _)| *sym_key == entry.0) {
+            entries.push(entry);
+        }
+    }
     // `entries` is the full own-symbol-key list in property-CREATION order:
     // data entries hold their value, accessor properties hold an
     // order-preserving placeholder written by `set_symbol_accessor_property`
@@ -243,11 +264,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
         if jsv.is_pointer() {
             let ptr = jsv.as_pointer::<crate::object::ObjectHeader>();
             if crate::object::is_arguments_object(ptr) {
-                if let Some(arr) = unsafe { crate::object::arguments_object_to_array(ptr) } {
-                    let arr_f64 =
-                        f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits());
-                    return crate::array::array_values_iter(arr_f64);
-                }
+                return crate::array::arguments_values_iter(ptr);
             }
         }
     }

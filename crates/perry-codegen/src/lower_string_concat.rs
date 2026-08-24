@@ -153,6 +153,46 @@ pub(crate) fn lower_string_self_append(
     lower_tag_dispatched_str_self_append(ctx, rhs, &target)
 }
 
+/// Lower `str = str + a + b + ...` without allocating the `a + b + ...`
+/// suffix first. The first array element is an owner read of `str`, so it
+/// retains the unique-string bit; the runtime either grows that value in
+/// place or allocates the complete result once.
+pub(crate) fn lower_string_self_append_chain(
+    ctx: &mut FnCtx<'_>,
+    local_id: u32,
+    suffix_parts: &[&Expr],
+) -> Result<String> {
+    debug_assert!(suffix_parts.len() >= 2);
+    debug_assert!(suffix_parts.len() < CONCAT_CHAIN_MAX_PARTS);
+
+    let target = StringAppendTarget::for_local(ctx, local_id)
+        .ok_or_else(|| anyhow!("string self-append chain: local {} not in scope", local_id))?;
+    let lhs = target.load(ctx)?;
+    let lhs_collects = suffix_parts
+        .iter()
+        .any(|part| operand_may_collect(ctx, part));
+
+    with_rooted_group(ctx, suffix_parts.len() + 1, |ctx, group| {
+        let lhs_root = group.adopt_emitted(ctx, Repr::Boxed, &lhs, lhs_collects);
+        let mut suffix_roots = Vec::with_capacity(suffix_parts.len());
+        for (index, part) in suffix_parts.iter().enumerate() {
+            let later_collects = suffix_parts[index + 1..]
+                .iter()
+                .any(|later| operand_may_collect(ctx, later));
+            suffix_roots.push(group.lower(ctx, part, later_collects)?);
+        }
+
+        let mut values = Vec::with_capacity(suffix_parts.len() + 1);
+        values.push(group.reread_emitted(ctx, lhs_root));
+        for root in suffix_roots {
+            values.push(group.reread(ctx, root)?);
+        }
+        let result = emit_string_append_chain(ctx, &values);
+        target.store(ctx, &result)?;
+        Ok(result)
+    })
+}
+
 /// Repsel Phase 3a: is this expression PROVEN to lower to a heap-tagged
 /// (`STRING_TAG`) NaN-box — never SSO bits, never a non-string? String
 /// literals load the interned pool handle (`@.str.N.handle`, always a heap
@@ -749,6 +789,30 @@ pub(crate) fn emit_string_concat_chain(ctx: &mut FnCtx<'_>, parts: &[String]) ->
         I64,
         "js_string_concat_chain",
         &[(I64, &base_i64), (I32, &format!("{}", n))],
+    );
+    nanbox_string_inline(blk, &result_handle)
+}
+
+/// Emit the shared parts buffer for an accumulator chain. `parts[0]` is the
+/// binding's owner read rather than an ordinary `LocalGet`, which is what lets
+/// the runtime preserve unique ownership across loop iterations.
+fn emit_string_append_chain(ctx: &mut FnCtx<'_>, parts: &[String]) -> String {
+    debug_assert!(parts.len() >= 3);
+    debug_assert!(parts.len() <= CONCAT_CHAIN_MAX_PARTS);
+
+    let n = parts.len();
+    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, CONCAT_CHAIN_MAX_PARTS);
+    let blk = ctx.block();
+    for (i, val) in parts.iter().enumerate() {
+        let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &i.to_string())]);
+        blk.store(DOUBLE, val, &slot);
+    }
+    let base_i64 = blk.next_reg();
+    blk.emit_raw(format!("{} = ptrtoint ptr {} to i64", base_i64, buf_reg));
+    let result_handle = blk.call(
+        I64,
+        "js_string_append_chain",
+        &[(I64, &base_i64), (I32, &n.to_string())],
     );
     nanbox_string_inline(blk, &result_handle)
 }

@@ -1211,6 +1211,15 @@ pub(super) fn compile_method(
         })?;
     }
 
+    // #8648: pre-#8630 this symbol ended in `ret undefined`, and every caller
+    // maps `undefined` onto its own receiver. Returning `this` instead flipped
+    // the callers' `js_ctor_return_override` check from never-taken to
+    // always-taken — a cross-crate call that runs the typed-array, buffer,
+    // callable, Proxy, arguments and array probes before answering "yes, an
+    // object" and handing back the value the caller already held. Publish only
+    // when a replacement `this` can actually exist.
+    let publishes_this = standalone_ctor_return.is_some()
+        && crate::lower_call::ctor_chain_can_replace_this(ctx.classes, &class.name);
     if let Some((target, after_idx)) = standalone_ctor_return.as_ref() {
         let _ = ctx
             .inline_ctor_return
@@ -1224,23 +1233,24 @@ pub(super) fn compile_method(
 
     if !ctx.block().is_terminated() {
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-        let return_value = if let Some((target, _)) = standalone_ctor_return.as_ref() {
-            let raw = ctx.block().load(DOUBLE, &target.result_slot);
-            let this_value = ctx
-                .this_stack
-                .last()
-                .cloned()
-                .map(|slot| ctx.block().load(DOUBLE, &slot))
-                .unwrap_or_else(|| undef.clone());
-            crate::lower_call::emit_ctor_return_override(
-                &mut ctx,
-                &this_value,
-                &raw,
-                target.is_derived,
-            )
-        } else {
-            undef.clone()
-        };
+        let return_value =
+            if let Some((target, _)) = standalone_ctor_return.as_ref().filter(|_| publishes_this) {
+                let raw = ctx.block().load(DOUBLE, &target.result_slot);
+                let this_value = ctx
+                    .this_stack
+                    .last()
+                    .cloned()
+                    .map(|slot| ctx.block().load(DOUBLE, &slot))
+                    .unwrap_or_else(|| undef.clone());
+                crate::lower_call::emit_ctor_return_override(
+                    &mut ctx,
+                    &this_value,
+                    &raw,
+                    target.is_derived,
+                )
+            } else {
+                undef.clone()
+            };
         if ctx.shared_super_scope_active {
             ctx.block().call_void("js_derived_super_scope_pop", &[]);
         }

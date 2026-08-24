@@ -1,5 +1,5 @@
 use super::*;
-use crate::JSValue;
+use crate::{object::object_ops::throw_object_type_error, JSValue};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
@@ -109,7 +109,7 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
         match name {
             "Request" => super::super::register_fetch_parent_kind(class_id, 1),
             "Response" => super::super::register_fetch_parent_kind(class_id, 2),
-            _ => {}
+            _ => super::super::data_view_registry::register_builtin_view_parent(class_id, name),
         }
         return;
     }
@@ -122,6 +122,9 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
     if let Some((module, method)) = unsafe {
         super::super::native_module::bound_native_callable_module_and_method(parent_value)
     } {
+        if !super::super::native_module::is_native_module_constructor_export(&module, &method) {
+            throw_object_type_error(b"Class extends value is not a constructor");
+        }
         if super::super::native_module::normalize_native_module_alias(&module) == "wasi"
             && method == "WASI"
         {
@@ -129,16 +132,11 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
         }
         return;
     }
-    if is_bound_native_method_closure_value(parent_value) {
-        return;
-    }
     // Spec: a non-`null` superclass that is not a constructor throws a TypeError
     // at class-definition time (before any `.prototype` access). (Test262
     // subclass/superclass-* and definition/invalid-extends.)
     if extends_target_must_throw(parent_value) {
-        super::super::object_ops::throw_object_type_error(
-            b"Class extends value is not a constructor",
-        );
+        throw_object_type_error(b"Class extends value is not a constructor");
     }
 
     // #5893 (ClassDefinitionEvaluation): once the superclass is confirmed a
@@ -651,7 +649,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 setters: HashMap::new(),
             });
         vtable.methods.insert(
-            name,
+            name.clone(),
             VTableMethodEntry {
                 func_ptr: func_ptr as usize,
                 param_count: param_count as u32,
@@ -662,6 +660,10 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 has_rest: has_rest != 0,
             },
         );
+        // Backfill when reflection already materialized `C.prototype`.
+        drop(registry);
+        let proto = class_decl_prototype_object(class_id);
+        super::state::install_class_decl_prototype_method_field(proto, class_id, &name);
     }
     VTABLE_GEN.fetch_add(1, Ordering::Release);
 }

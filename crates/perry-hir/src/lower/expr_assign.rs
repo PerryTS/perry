@@ -500,6 +500,12 @@ pub(crate) fn lower_ident_assignment(
         Ok(*value)
     } else {
         if ctx.current_strict {
+            if matches!(name.as_str(), "undefined" | "NaN" | "Infinity") {
+                return Ok(Expr::Sequence(vec![
+                    *value,
+                    throw_type_error_const_assignment(&name),
+                ]));
+            }
             // #5989: strict-mode assignment to an existing global
             // builtin is a property write, not a ReferenceError. See
             // `strict_global_assign_existing_or_throw` for the full
@@ -572,6 +578,25 @@ fn lower_assignment_target(
             // Check if this is a static field assignment (e.g., Counter.count = 5)
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 let obj_name = obj_ident.sym.to_string();
+                // Dynamic GeneratorFunction/AsyncGeneratorFunction results
+                // use a compact non-closure runtime representation, but still
+                // inherit Function.prototype's poisoned caller/arguments
+                // accessors. The local's inferred brand is authoritative here.
+                if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+                    let is_dynamic_generator = matches!(
+                        ctx.lookup_local_type(&obj_name),
+                        Some(Type::Named(name))
+                            if matches!(name.as_str(), "GeneratorFunction" | "AsyncGeneratorFunction")
+                    );
+                    if is_dynamic_generator
+                        && matches!(prop_ident.sym.as_ref(), "caller" | "arguments")
+                    {
+                        return Ok(Expr::Sequence(vec![
+                            *value,
+                            throw_restricted_function_property_assignment(),
+                        ]));
+                    }
+                }
                 // `f.caller = v` / `f.arguments = v` on a declared function —
                 // the poisoned setter-less accessor on Function.prototype
                 // throws (strict semantics; Perry-compiled code is strict).

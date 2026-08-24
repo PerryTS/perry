@@ -1,6 +1,8 @@
 // Console stream-write validation parity (#3080).
 // Node's `new Console(...)` throws ERR_CONSOLE_WRITABLE_STREAM (a TypeError)
 // when a resolved stdout/stderr does not expose a callable `write` method.
+import { toNamespacedPath } from "node:path";
+
 const Console = (console as any).Console;
 
 function check(label: string, fn: () => void): void {
@@ -60,3 +62,20 @@ check("opts-both-ok", () => {
   const c = new Console({ stdout: { write() {} }, stderr: { write() {} } });
   void c;
 });
+
+// Native constructors and ordinary module functions use the same runtime
+// callable trampoline. Constructor metadata must preserve Console while still
+// rejecting a non-constructable export in both `extends` and `new`.
+try {
+  class InvalidNativeBase extends toNamespacedPath {}
+  void InvalidNativeBase;
+  console.log("extends-path-function: accepted");
+} catch (e: any) {
+  console.log("extends-path-function:", e.name);
+}
+try {
+  new toNamespacedPath();
+  console.log("new-path-function: accepted");
+} catch (e: any) {
+  console.log("new-path-function:", e.name);
+}

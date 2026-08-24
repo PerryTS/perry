@@ -10,6 +10,7 @@ use perry_hir::{BinaryOp, Expr, UpdateOp};
 
 use crate::lower_string_concat::{
     can_lower_string_self_append, flatten_string_add_chain, lower_string_self_append,
+    lower_string_self_append_chain,
 };
 use crate::nanbox::double_literal;
 use crate::native_value::MaterializationReason;
@@ -580,15 +581,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         None
                     };
                     if let Some(parts) = accumulator_parts {
-                        let mut suffix = parts[1].clone();
-                        for part in &parts[2..] {
-                            suffix = Expr::Binary {
-                                op: BinaryOp::Add,
-                                left: Box::new(suffix),
-                                right: Box::new((*part).clone()),
-                            };
-                        }
-                        let v = lower_string_self_append(ctx, *id, &suffix)?;
+                        let v = lower_string_self_append_chain(ctx, *id, &parts[1..])?;
                         emit_shadow_slot_update_for_expr(ctx, *id, &v, value);
                         super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
                         return Ok(v);

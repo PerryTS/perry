@@ -21,6 +21,19 @@ crate::perry_thread_local! {
     static BUILTIN_SET_ADD_VALUE_BITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+pub(crate) fn scan_builtin_collection_method_roots_mut(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+) {
+    for slot in [&BUILTIN_MAP_SET_VALUE_BITS, &BUILTIN_SET_ADD_VALUE_BITS] {
+        slot.with(|slot| {
+            let mut bits = slot.get();
+            if visitor.visit_heap_word_u64_slot(&mut bits) {
+                slot.set(bits);
+            }
+        });
+    }
+}
+
 pub(crate) fn is_builtin_map_set_value(value: f64) -> bool {
     is_remembered_builtin_collection_method(value, &BUILTIN_MAP_SET_VALUE_BITS)
 }
@@ -164,6 +177,10 @@ pub(super) fn install_collection_proto_methods(
             ipm(proto_obj, "has", set_proto_has_thunk as *const u8, 1);
             ipm(proto_obj, "keys", set_proto_keys_thunk as *const u8, 0);
             let values_value = ipm(proto_obj, "values", set_proto_values_thunk as *const u8, 0);
+            // ECMA-262 specifies these as the same function object, not merely
+            // two functions with equivalent behavior.
+            let keys_key = crate::string::js_string_from_bytes(b"keys".as_ptr(), 4);
+            super::js_object_set_field_by_name(proto_obj, keys_key, values_value);
             install_collection_iterator_symbol(proto_obj, values_value);
             remember_builtin_collection_method(
                 proto_obj,

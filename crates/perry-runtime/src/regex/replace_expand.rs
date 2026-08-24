@@ -146,7 +146,6 @@ unsafe fn replace_fn_run_matches(
     closure_ptr: *const crate::closure::ClosureHeader,
     has_named_groups: bool,
 ) -> *mut StringHeader {
-    let cur_str = || string_as_str(s_handle.get_raw_const_ptr::<StringHeader>());
     if matches.is_empty() {
         return s_handle.with_const_ptr(|s_now: *const StringHeader| copy_replace_source(s_now));
     }
@@ -159,7 +158,12 @@ unsafe fn replace_fn_run_matches(
     for m in matches {
         // Between-match text is re-sliced from the CURRENT subject address
         // (the previous callback may have moved the string).
-        result.push_str(&cur_str()[last_end..m.start]);
+        // #7341: re-derive the subject from the rooted handle inside a scoped
+        // borrow -- the previous callback may have moved it, and the `&str`
+        // never outlives this statement.
+        s_handle.with_const_ptr(|s_now: *const StringHeader| {
+            result.push_str(&string_as_str(s_now)[last_end..m.start]);
+        });
 
         // Build the full ECMAScript callback argument list:
         //   (match, p1, ..., pN, offset, string, groups?)
@@ -216,7 +220,9 @@ unsafe fn replace_fn_run_matches(
         last_end = m.end;
     }
 
-    result.push_str(&cur_str()[last_end..]);
+    s_handle.with_const_ptr(|s_now: *const StringHeader| {
+        result.push_str(&string_as_str(s_now)[last_end..]);
+    });
     finish_replace_bytes(result.as_bytes())
 }
 
@@ -265,6 +271,47 @@ pub(super) unsafe fn replace_regex_fn_fancy(
     replace_fn_run_matches(s_handle, &matches, closure_ptr, has_named_groups)
 }
 
+pub(super) unsafe fn replace_regex_fn_repeat_matcher(
+    s_handle: &crate::gc::RuntimeHandle<'_>,
+    repeat_matcher: &super::repeat_matcher::RepeatMatcherRegex,
+    global: bool,
+    closure_ptr: *const crate::closure::ClosureHeader,
+) -> *mut StringHeader {
+    let has_named_groups = repeat_matcher.capture_names.iter().any(Option::is_some);
+    let str_data = string_as_str(s_handle.get_raw_const_ptr::<StringHeader>());
+    let mut matches = Vec::new();
+    for matched in repeat_matcher.regex.find_iter(str_data) {
+        matches.push(OwnedMatchData {
+            start: matched.start(),
+            end: matched.end(),
+            char_offset: super::exec_array::byte_index_to_utf16_index(str_data, matched.start()),
+            groups: matched
+                .groups()
+                .map(|group| group.map(|range| str_data[range].to_string()))
+                .collect(),
+            named: repeat_matcher
+                .capture_names
+                .iter()
+                .enumerate()
+                .filter_map(|(index, name)| {
+                    name.as_ref().map(|name| {
+                        (
+                            name.clone(),
+                            matched
+                                .group(index + 1)
+                                .map(|range| str_data[range].to_string()),
+                        )
+                    })
+                })
+                .collect(),
+        });
+        if !global {
+            break;
+        }
+    }
+    replace_fn_run_matches(s_handle, &matches, closure_ptr, has_named_groups)
+}
+
 /// string.replace(regex, replacerFn) — replace with a callback function.
 ///
 /// The callback receives the full ECMAScript argument list (#2867):
@@ -307,6 +354,15 @@ pub extern "C" fn js_string_replace_regex_fn(
         if closure_ptr.is_null() {
             return s_handle
                 .with_const_ptr(|s_now: *const StringHeader| copy_replace_source(s_now));
+        }
+
+        if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+            return replace_regex_fn_repeat_matcher(
+                &s_handle,
+                &repeat_matcher,
+                global,
+                closure_ptr,
+            );
         }
 
         // If the `regex` crate couldn't compile this pattern (lookahead,
@@ -414,6 +470,11 @@ pub extern "C" fn js_string_replace_regex_named(
     }
 
     unsafe {
+        if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+            let result = repeat_matcher.replace(str_data, repl_str, (*re).global);
+            return finish_replace_bytes(result.as_bytes());
+        }
+
         // Fancy-regex fallback (lookbehind/backreferences): expand `$<name>`
         // and friends against the fancy captures instead of the never-match
         // placeholder stored in `regex_ptr`.

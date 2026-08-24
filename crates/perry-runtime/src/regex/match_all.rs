@@ -94,7 +94,33 @@ unsafe fn materialize_match_all_results(
     let search_str = &str_data[search_start..];
 
     let mut owned: Vec<OwnedMatchAllData> = Vec::new();
-    if let Some(fre) = super::lookup_fancy_regex(re) {
+    if let Some(repeat_matcher) = super::lookup_repeat_matcher(re) {
+        for matched in repeat_matcher.regex.find_iter(search_str) {
+            owned.push(OwnedMatchAllData {
+                groups: matched
+                    .groups()
+                    .map(|group| group.map(|range| search_str[range].to_string()))
+                    .collect(),
+                named: repeat_matcher
+                    .capture_names
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, name)| {
+                        name.as_ref().map(|name| {
+                            (
+                                name.clone(),
+                                matched
+                                    .group(index + 1)
+                                    .map(|range| search_str[range].to_string()),
+                            )
+                        })
+                    })
+                    .collect(),
+                match_index: byte_index_to_utf16_index(str_data, search_start + matched.start())
+                    as f64,
+            });
+        }
+    } else if let Some(fre) = super::lookup_fancy_regex(re) {
         let named_names: Vec<(usize, String)> = fre
             .capture_names()
             .enumerate()

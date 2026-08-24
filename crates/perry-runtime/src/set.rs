@@ -1495,17 +1495,26 @@ pub extern "C" fn js_set_from_array(arr: *const crate::array::ArrayHeader) -> *m
 pub extern "C" fn js_set_from_iterable(value: f64) -> *mut SetHeader {
     use crate::collection_iter::{constructor_iter, ConstructorIter};
 
+    if crate::collection_iter::is_null_or_undefined(value) {
+        return js_set_alloc(4);
+    }
+
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_handle = scope.root_nanbox_f64(value);
+    let set = js_set_alloc(4);
+    let set_handle = scope.root_raw_mut_ptr(set);
     let adder = crate::collection_iter::require_callable(
-        crate::collection_iter::builtin_prototype_method("Set", "add"),
+        set_handle.with_mut_ptr::<SetHeader, _>(|set| {
+            crate::collection_iter::builtin_prototype_adder(
+                "Set",
+                "add",
+                crate::value::js_nanbox_pointer(set as i64),
+            )
+        }),
         "Set.prototype.add",
     );
     let adder = crate::collection_iter::normalize_callable_value(adder);
     let adder_handle = scope.root_nanbox_f64(adder);
-
-    let set = js_set_alloc(4);
-    let set_handle = scope.root_raw_mut_ptr(set);
 
     let add_value = |element: f64, iter_to_close: Option<f64>| {
         let args = [element];

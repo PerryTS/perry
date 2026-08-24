@@ -260,6 +260,62 @@ fn fancy_lookbehind_exec_index() {
     }
 }
 
+fn match_capture_text(arr: *const ArrayHeader, index: u32) -> Option<String> {
+    let value = crate::array::js_array_get_f64(arr, index);
+    if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
+        return None;
+    }
+    let string = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    Some(string_as_str(string).to_string())
+}
+
+#[test]
+fn repeat_matcher_resets_nested_captures_each_iteration() {
+    let re = js_regexp_new(make_string(r"(z)((a+)?(b+)?(c))*"), make_string(""));
+    let matched = js_regexp_exec(re, make_string("zaacbbbcac"));
+    assert!(!matched.is_null());
+    assert_eq!(
+        (0..6)
+            .map(|index| match_capture_text(matched, index))
+            .collect::<Vec<_>>(),
+        vec![
+            Some("zaacbbbcac".to_string()),
+            Some("z".to_string()),
+            Some("ac".to_string()),
+            Some("a".to_string()),
+            None,
+            Some("c".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn repeat_matcher_discards_empty_optional_iterations() {
+    let re = js_regexp_new(make_string(r"(a?b??)*"), make_string(""));
+    let matched = js_regexp_exec(re, make_string("ab"));
+    assert!(!matched.is_null());
+    assert_eq!(match_capture_text(matched, 0).as_deref(), Some("ab"));
+    assert_eq!(match_capture_text(matched, 1).as_deref(), Some("b"));
+}
+
+#[test]
+fn repeat_matcher_clears_captures_when_optional_lookahead_is_skipped() {
+    for pattern in [r"(?:(?=(abc)))?a", r"(?:(?=(abc))){0,1}a"] {
+        let re = js_regexp_new(make_string(pattern), make_string(""));
+        let matched = js_string_match(make_string("abc"), re);
+        assert!(!matched.is_null(), "{pattern}");
+        assert_eq!(match_capture_text(matched, 0).as_deref(), Some("a"));
+        assert_eq!(match_capture_text(matched, 1), None, "{pattern}");
+    }
+
+    for pattern in [r"(?:(?=(abc)))a", r"(?:(?=(abc))){1,1}a"] {
+        let re = js_regexp_new(make_string(pattern), make_string(""));
+        let matched = js_string_match(make_string("abc"), re);
+        assert!(!matched.is_null(), "{pattern}");
+        assert_eq!(match_capture_text(matched, 1).as_deref(), Some("abc"));
+    }
+}
+
 #[test]
 fn test_regexp_test_basic() {
     let pattern = make_string("hello");
@@ -617,7 +673,7 @@ fn unicode17_scripts_expand_to_codepoint_ranges() {
     );
 }
 
-/// 2026-07-09 GC audit (wave 2 batch A): `REGEX_CACHE`/`FANCY_CACHE` were
+/// 2026-07-09 GC audit (wave 2 batch A): the compiled-regex caches were
 /// unbounded — one entry per distinct `(pattern, flags)` ever compiled, up to
 /// 64 MiB each — so `new RegExp(userInput)` was an attacker-driven OOM. The
 /// caches are now capped (clear-on-overflow) and every `RegExpHeader` OWNS a
@@ -632,6 +688,11 @@ fn regex_cache_capped_and_prior_headers_survive_eviction() {
     // A fancy-fallback header too (lookbehind forces the fancy engine).
     let fancy = js_regexp_new(make_string(r"(?<=pre)\d+"), make_string(""));
     assert!(js_regexp_test(fancy, make_string("pre77")) != 0);
+
+    // A RepeatMatcher header whose ECMAScript matcher must likewise outlive
+    // its thread-local cache entry.
+    let repeat_matcher = js_regexp_new(make_string(r"(a?b??)*"), make_string(""));
+    assert!(js_regexp_test(repeat_matcher, make_string("ab")) != 0);
 
     // Flood the cache with distinct patterns — far past the cap.
     for i in 0..(REGEX_CACHE_MAX_ENTRIES * 2 + 10) {
@@ -653,6 +714,16 @@ fn regex_cache_capped_and_prior_headers_survive_eviction() {
         "FANCY_CACHE must stay capped at {REGEX_CACHE_MAX_ENTRIES} entries, got {fancy_len}"
     );
 
+    // Quantified captures populate the ECMAScript RepeatMatcher cache.
+    for i in 0..(REGEX_CACHE_MAX_ENTRIES + 10) {
+        let _ = get_or_compile_regex(&format!("(repeat{i})*"), "");
+    }
+    let repeat_len = REPEAT_MATCHER_CACHE.with(|c| c.borrow().len());
+    assert!(
+        repeat_len <= REGEX_CACHE_MAX_ENTRIES,
+        "REPEAT_MATCHER_CACHE must stay capped at {REGEX_CACHE_MAX_ENTRIES} entries, got {repeat_len}"
+    );
+
     // The pre-flood headers still execute correctly: their compiled programs
     // are owned by the headers (leaked Arc refs), not borrowed from the
     // now-cleared caches.
@@ -672,6 +743,10 @@ fn regex_cache_capped_and_prior_headers_survive_eviction() {
     assert!(
         js_regexp_test(fancy, make_string("nope77")) == 0,
         "fancy-fallback header must keep rejecting after cache eviction"
+    );
+    assert!(
+        js_regexp_test(repeat_matcher, make_string("ab")) != 0,
+        "RepeatMatcher header must keep matching after cache eviction"
     );
 }
 

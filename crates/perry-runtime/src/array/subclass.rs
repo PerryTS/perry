@@ -7,11 +7,412 @@
 //! Kept out of `generic.rs` so that module stays under the file-size gate.
 
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::generic::{al_get, al_length, nanbox_arr};
 use crate::array::{js_array_alloc_with_length, note_array_slot, ArrayHeader};
 use crate::object::ObjectHeader;
 use crate::value::JSValue;
+
+// #8655: Array-subclass instances use ordinary ObjectHeader property slots,
+// but their hot numeric reads have a much stronger invariant than a generic
+// object lookup can exploit: `push` appends the own keys `"0"`, `"1"`, ... in
+// order, and every structural/descriptor/prototype mutation publishes a new
+// ShapeId before it becomes observable. Cache that dense prefix per exact
+// (class, shape) pair so a stable `sub[i]` is two field-slot reads (`length`
+// and the element) instead of number -> String allocation + hash lookup.
+//
+// The cache stores no heap pointer, so it is not a GC root. ShapeIds are never
+// reused, and the class id prevents an unrelated class with the same ordered
+// keys from borrowing the Array-subclass proof.
+const DENSE_SUBCLASS_CACHE_SLOTS: usize = 256;
+
+struct DenseSubclassCacheEntry {
+    /// Even while stable, odd while a colliding writer publishes a payload.
+    sequence: AtomicU64,
+    /// `(class_id << 32) | shape_id`.
+    key: AtomicU64,
+    /// `(length_slot << 32) | element_base`.
+    slots: AtomicU64,
+    /// `(live_inline_slots << 32) | dense_prefix_len`.
+    bounds: AtomicU64,
+}
+
+impl DenseSubclassCacheEntry {
+    const fn new() -> Self {
+        Self {
+            sequence: AtomicU64::new(0),
+            key: AtomicU64::new(0),
+            slots: AtomicU64::new(0),
+            bounds: AtomicU64::new(0),
+        }
+    }
+}
+
+static DENSE_SUBCLASS_CACHE: [DenseSubclassCacheEntry; DENSE_SUBCLASS_CACHE_SLOTS] =
+    [const { DenseSubclassCacheEntry::new() }; DENSE_SUBCLASS_CACHE_SLOTS];
+
+#[derive(Clone, Copy)]
+struct DenseSubclassLayout {
+    length_slot: u32,
+    element_base: u32,
+    dense_prefix_len: u32,
+    live_inline_slots: u32,
+}
+
+#[inline(always)]
+fn dense_cache_key(class_id: u32, shape_id: u32) -> u64 {
+    ((class_id as u64) << 32) | shape_id as u64
+}
+
+#[inline(always)]
+fn dense_cache_entry(key: u64) -> &'static DenseSubclassCacheEntry {
+    let mixed = key ^ (key >> 33) ^ (key >> 17);
+    &DENSE_SUBCLASS_CACHE[mixed as usize & (DENSE_SUBCLASS_CACHE_SLOTS - 1)]
+}
+
+#[inline]
+fn cached_dense_layout(key: u64) -> Option<DenseSubclassLayout> {
+    let entry = dense_cache_entry(key);
+    let sequence = entry.sequence.load(Ordering::Acquire);
+    if sequence & 1 != 0 || entry.key.load(Ordering::Relaxed) != key {
+        return None;
+    }
+    let slots = entry.slots.load(Ordering::Relaxed);
+    let bounds = entry.bounds.load(Ordering::Relaxed);
+    // Recheck the seqlock before interpreting either word so readers never
+    // combine payloads from two colliding publishers.
+    if entry.sequence.load(Ordering::Acquire) != sequence {
+        return None;
+    }
+    Some(DenseSubclassLayout {
+        length_slot: (slots >> 32) as u32,
+        element_base: slots as u32,
+        dense_prefix_len: bounds as u32,
+        live_inline_slots: (bounds >> 32) as u32,
+    })
+}
+
+#[inline]
+fn publish_dense_layout(key: u64, layout: DenseSubclassLayout) {
+    let entry = dense_cache_entry(key);
+    let mut sequence = entry.sequence.load(Ordering::Relaxed);
+    loop {
+        if sequence & 1 != 0 {
+            std::hint::spin_loop();
+            sequence = entry.sequence.load(Ordering::Relaxed);
+            continue;
+        }
+        match entry.sequence.compare_exchange_weak(
+            sequence,
+            sequence.wrapping_add(1),
+            Ordering::Acquire,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => sequence = observed,
+        }
+    }
+    entry.slots.store(
+        ((layout.length_slot as u64) << 32) | layout.element_base as u64,
+        Ordering::Relaxed,
+    );
+    entry.bounds.store(
+        ((layout.live_inline_slots as u64) << 32) | layout.dense_prefix_len as u64,
+        Ordering::Relaxed,
+    );
+    entry.key.store(key, Ordering::Relaxed);
+    entry
+        .sequence
+        .store(sequence.wrapping_add(2), Ordering::Release);
+}
+
+fn decimal_u32<'a>(mut value: u32, buf: &'a mut [u8; 10]) -> &'a [u8] {
+    let mut start = buf.len();
+    loop {
+        start -= 1;
+        buf[start] = b'0' + (value % 10) as u8;
+        value /= 10;
+        if value == 0 {
+            return &buf[start..];
+        }
+    }
+}
+
+/// Establish the dense-prefix invariant once for an exact semantic ShapeId.
+/// This path may scan the keys array, but it runs only on a cache miss. It
+/// allocates nothing and keeps no address into the moving heap.
+unsafe fn build_dense_layout(obj: *const ObjectHeader) -> Option<DenseSubclassLayout> {
+    let class_id = (*obj).class_id;
+    if class_id == 0
+        || !is_array_subclass_class_id(class_id)
+        || crate::object::prototype_chain::object_has_prototype_override(obj as usize)
+    {
+        return None;
+    }
+    let shape = crate::object::shapes::object_shape_descriptor(obj)?;
+    if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
+        return None;
+    }
+    let keys = shape.keys as usize as *const crate::array::ArrayHeader;
+    if keys.is_null() {
+        return None;
+    }
+    let (key_slots, physical_len) = crate::object::keys_array_dense_slots(keys);
+    let key_count = (shape.logical_key_count as usize).min(physical_len);
+    if key_slots.is_null() || key_count == 0 {
+        return None;
+    }
+
+    let mut length_slot = None;
+    let mut element_base = None;
+    for slot in 0..key_count {
+        let stored = JSValue::from_bits((*key_slots.add(slot)).to_bits());
+        if length_slot.is_none() && crate::string::js_string_key_matches_bytes(stored, b"length") {
+            length_slot = Some(slot as u32);
+        }
+        if element_base.is_none() && crate::string::js_string_key_matches_bytes(stored, b"0") {
+            element_base = Some(slot as u32);
+        }
+    }
+    let length_slot = length_slot?;
+    // A length-only empty subclass has no `"0"` key yet. Cache its length
+    // read, while leaving the numeric prefix empty so every index side-exits.
+    let has_element_zero = element_base.is_some();
+    let element_base = element_base.unwrap_or(0);
+    let mut dense_prefix_len = 0u32;
+    if has_element_zero {
+        while (element_base as usize + dense_prefix_len as usize) < key_count {
+            let slot = element_base as usize + dense_prefix_len as usize;
+            let stored = JSValue::from_bits((*key_slots.add(slot)).to_bits());
+            let mut decimal = [0u8; 10];
+            if !crate::string::js_string_key_matches_bytes(
+                stored,
+                decimal_u32(dense_prefix_len, &mut decimal),
+            ) {
+                break;
+            }
+            dense_prefix_len += 1;
+        }
+    }
+
+    // Class construction installs descriptors for unrelated methods, so the
+    // object-wide descriptor bit is too coarse for this proof. Data
+    // descriptors do not alter [[Get]]; reject only accessors for the slots the
+    // fast path will read. Descriptor mutations publish a new semantic
+    // ShapeId, which makes this one-time scan part of the exact-shape proof.
+    if crate::object::object_has_descriptors(obj as usize) {
+        if crate::object::get_accessor_descriptor(obj as usize, "length").is_some() {
+            return None;
+        }
+        for index in 0..dense_prefix_len {
+            let mut decimal = [0u8; 10];
+            let bytes = decimal_u32(index, &mut decimal);
+            // `decimal_u32` emits ASCII digits only.
+            let key = unsafe { std::str::from_utf8_unchecked(bytes) };
+            if crate::object::get_accessor_descriptor(obj as usize, key).is_some() {
+                return None;
+            }
+        }
+    }
+
+    Some(DenseSubclassLayout {
+        length_slot,
+        element_base,
+        dense_prefix_len,
+        live_inline_slots: shape.live_inline_slot_count,
+    })
+}
+
+/// Resolve a live Array-subclass object and its cached dense layout. Every
+/// rejected brand, forwarding, descriptor, hole, or prototype case returns
+/// `None`; callers retain their existing fully generic fallback.
+#[inline]
+fn dense_layout_for_value(value: f64) -> Option<(*const ObjectHeader, DenseSubclassLayout)> {
+    let js = JSValue::from_bits(value.to_bits());
+    if !js.is_pointer() {
+        return None;
+    }
+    let obj = js.as_pointer::<ObjectHeader>();
+    if obj.is_null() || !crate::object::is_valid_obj_ptr(obj.cast::<u8>()) {
+        return None;
+    }
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize)? };
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    let (class_id, shape_id) = unsafe { ((*obj).class_id, (*obj).parent_class_id) };
+    let key = dense_cache_key(class_id, shape_id);
+    let layout = cached_dense_layout(key).or_else(|| {
+        let layout = unsafe { build_dense_layout(obj) }?;
+        publish_dense_layout(key, layout);
+        Some(layout)
+    })?;
+    Some((obj, layout))
+}
+
+#[inline]
+fn layout_length_value(obj: *const ObjectHeader, layout: DenseSubclassLayout) -> JSValue {
+    layout_field_value(obj, layout.length_slot, layout.live_inline_slots)
+}
+
+/// Read a slot already proved live by an exact ShapeId. Wide dynamic objects
+/// keep post-inline fields in the object-owned spill Array. Reaching that
+/// buffer directly is the essential #8655 hot path: the general field helper
+/// reclassifies the owner and probes the overflow abstraction for every ECS
+/// element even though the shape proof already established all of it.
+#[inline(always)]
+fn layout_field_value(obj: *const ObjectHeader, slot: u32, live_inline_slots: u32) -> JSValue {
+    unsafe {
+        if slot < live_inline_slots {
+            let fields =
+                (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const JSValue;
+            return *fields.add(slot as usize);
+        }
+
+        if crate::object::object_spill_enabled() {
+            let meta = (*obj).meta;
+            if !meta.is_null() {
+                let spill = (*meta).spill as *const ArrayHeader;
+                if !spill.is_null() && slot < (*spill).length {
+                    let elements =
+                        (spill as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const u64;
+                    return JSValue::from_bits(*elements.add(slot as usize));
+                }
+            }
+            return JSValue::undefined();
+        }
+
+        crate::object::overflow_get(obj as usize, slot as usize)
+            .map(JSValue::from_bits)
+            .unwrap_or_else(JSValue::undefined)
+    }
+}
+
+fn nonnegative_u32_length(value: JSValue) -> Option<u32> {
+    let number = if value.is_int32() {
+        value.as_int32() as f64
+    } else if value.is_number() {
+        value.as_number()
+    } else {
+        return None;
+    };
+    (number.is_finite() && number >= 0.0 && number.fract() == 0.0 && number <= u32::MAX as f64)
+        .then_some(number as u32)
+}
+
+/// Fast own `length` read for an object-backed Array subclass. Returning the
+/// stored JSValue (rather than coercing it) preserves source property-read
+/// semantics; descriptor/prototype-divergent shapes decline above.
+#[inline]
+pub(crate) fn array_subclass_fast_length(value: f64) -> Option<f64> {
+    let (obj, layout) = dense_layout_for_value(value)?;
+    Some(f64::from_bits(layout_length_value(obj, layout).bits()))
+}
+
+/// Guarded dense numeric read for an object-backed Array subclass. The live
+/// `length` value is checked on every hit, while `dense_prefix_len` caps the
+/// proof when a length-only grow created holes without changing the shape.
+#[inline]
+pub(crate) fn array_subclass_fast_index_get(value: f64, index: u32) -> Option<f64> {
+    let (obj, layout) = dense_layout_for_value(value)?;
+    dense_index_get_with_layout(obj, layout, index)
+}
+
+#[inline(always)]
+fn dense_index_get_with_layout(
+    obj: *const ObjectHeader,
+    layout: DenseSubclassLayout,
+    index: u32,
+) -> Option<f64> {
+    let length = nonnegative_u32_length(layout_length_value(obj, layout))?;
+    if index >= length || index >= layout.dense_prefix_len {
+        return None;
+    }
+    let slot = layout.element_base.checked_add(index)?;
+    let value = layout_field_value(obj, slot, layout.live_inline_slots);
+    Some(f64::from_bits(value.bits()))
+}
+
+fn canonical_u32_index(value: f64) -> Option<u32> {
+    let js = JSValue::from_bits(value.to_bits());
+    if js.is_int32() {
+        return (js.as_int32() >= 0).then_some(js.as_int32() as u32);
+    }
+    (js.is_number()
+        && value.is_finite()
+        && value >= 0.0
+        && value.fract() == 0.0
+        && value <= (u32::MAX - 1) as f64)
+        .then_some(value as u32)
+}
+
+/// Unknown-receiver numeric read used by codegen's guarded typed-array miss
+/// block. Stable real arrays and Array subclasses terminate here; every other
+/// receiver/key keeps the established tag-aware dispatcher as a cold side
+/// exit. Keeping that call behind this ABI boundary removes `js_dyn_index_get`
+/// from the emitted hot-loop artifact without weakening its semantics.
+#[no_mangle]
+/// The five optional IC words are
+/// scalar layout facts, never heap pointers:
+/// `(class_id, ShapeId)`, length slot, element base, dense prefix, inline bound.
+/// The emitted hit path reloads the live object/meta/spill pointers, so moving
+/// GC never has to trace or rewrite this cache.
+pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64, cache: *mut u64) -> f64 {
+    if let Some(index_u32) = canonical_u32_index(index) {
+        let js = JSValue::from_bits(receiver.to_bits());
+        if js.is_pointer() {
+            let raw = js.as_pointer::<u8>();
+            if let Some(header) =
+                unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) }
+            {
+                if matches!(
+                    header.obj_type,
+                    crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+                ) {
+                    return crate::array::js_array_get_f64(
+                        raw as *const crate::array::ArrayHeader,
+                        index_u32,
+                    );
+                }
+                if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+                    if let Some((obj, layout)) = dense_layout_for_value(receiver) {
+                        // The codegen hit path reads length inline and wide
+                        // slots through ObjectMeta::spill. Decline to prime in
+                        // the legacy side-table mode or for a pathological
+                        // layout whose length itself spilled.
+                        if !cache.is_null()
+                            && crate::object::object_spill_enabled()
+                            && layout.length_slot < layout.live_inline_slots
+                        {
+                            unsafe {
+                                cache.add(1).write(layout.length_slot as u64);
+                                cache.add(2).write(layout.element_base as u64);
+                                cache.add(3).write(layout.dense_prefix_len as u64);
+                                cache.add(4).write(layout.live_inline_slots as u64);
+                                cache.write(dense_cache_key(
+                                    (*obj).class_id,
+                                    (*obj).parent_class_id,
+                                ));
+                            }
+                        }
+                        if let Some(value) = dense_index_get_with_layout(obj, layout, index_u32) {
+                            return value;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    crate::value::js_dyn_index_get(receiver, index)
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_PACKED_ARRAYLIKE_INDEX_GET: extern "C" fn(f64, f64, *mut u64) -> f64 =
+    js_packed_arraylike_index_get;
 
 /// True when `class_id` is a user class that extends `Array` (the reserved
 /// parent id `0xFFFF0024` appears in its class chain), i.e. `class X extends

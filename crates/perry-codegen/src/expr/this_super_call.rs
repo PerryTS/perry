@@ -1178,6 +1178,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &this_box,
                     &lowered_args,
                 );
+                // The native base initialized the provisional receiver, so a
+                // successful super() must now initialize the derived `this`
+                // binding before field initializers or the remaining
+                // constructor body can observe it. Without this, an indirect
+                // chain such as Counter -> B -> EventEmitter installed the
+                // emitter surface but the next `this.seen = ...` still threw
+                // the pre-super ReferenceError.
                 bind_derived_this_after_super(ctx);
                 // Spec: derived-class field initializers run AFTER `super()`
                 // returns. The native base is the chain root and has no TS

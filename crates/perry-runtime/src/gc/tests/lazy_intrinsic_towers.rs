@@ -253,7 +253,7 @@ fn realm_owned_intrinsic_module_and_storage_roots_are_distinct() {
     let a = a.join().expect("agent A panicked");
     let b = b.join().expect("agent B panicked");
 
-    assert_eq!(a.len(), 23, "the gate must cover every #8002/#8003 root");
+    assert_eq!(a.len(), 25, "the gate must cover every #8002/#8003 root");
     assert_eq!(a.len(), b.len());
     for ((a_name, a_slot, a_root), (b_name, b_slot, b_root)) in a.iter().zip(&b) {
         assert_eq!(a_name, b_name, "snapshot wiring diverged between agents");

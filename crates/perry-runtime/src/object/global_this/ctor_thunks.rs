@@ -24,6 +24,12 @@ pub(crate) extern "C" fn typed_array_constructor_call_thunk(
     super::super::object_ops::throw_object_type_error(b"Constructor %TypedArray% requires 'new'")
 }
 
+pub(crate) extern "C" fn construct_only_builtin_call_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+) -> f64 {
+    super::super::object_ops::throw_object_type_error(b"Constructor requires 'new'")
+}
+
 /// `RegExp(pattern, flags)` called WITHOUT `new` — unlike Map/Set below,
 /// RegExp IS callable: ECMA-262 22.2.4 makes the call form construct exactly
 /// like `new RegExp(pattern, flags)`, with one identity shortcut — `RegExp(re)`

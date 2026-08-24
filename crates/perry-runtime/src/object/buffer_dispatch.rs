@@ -386,17 +386,25 @@ pub unsafe fn dispatch_buffer_method(
     // write methods of a zero-length Buffer with a no-op to MEASURE a packet
     // before allocating it; dispatching the native method regardless would
     // write into the empty buffer and throw RangeError [ERR_OUT_OF_RANGE].
-    if let Some(own) = crate::buffer::buffer_get_own_prop(addr, method_name) {
-        let jv = JSValue::from_bits(own.to_bits());
-        if jv.is_pointer() {
-            let ptr = jv.as_pointer::<u8>() as usize;
-            if crate::closure::is_closure_ptr(ptr) {
-                let prev_this = crate::object::js_implicit_this_set(buf_f64);
-                let r = crate::closure::js_native_call_value(own, args_ptr, args_len);
-                crate::object::js_implicit_this_set(prev_this);
-                return r;
-            }
+    if crate::buffer::buffer_has_own_prop(addr, method_name) {
+        let own_scope = crate::gc::RuntimeHandleScope::new();
+        let own_receiver = own_scope.root_nanbox_f64(buf_f64);
+        let own = crate::buffer::buffer_read_own_prop(addr, method_name)
+            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+        let own = own_scope.root_nanbox_f64(own);
+        let own_value = own.get_nanbox_f64();
+        let own_js = JSValue::from_bits(own_value.to_bits());
+        if own_js.is_undefined() || own_js.is_null() {
+            crate::closure::throw_not_callable();
         }
+        return match crate::collection_iter::call_with_this_capturing_throw(
+            own_value,
+            own_receiver.get_nanbox_f64(),
+            args,
+        ) {
+            Ok(value) => value,
+            Err(error) => crate::exception::js_throw(error),
+        };
     }
     let arg_i32 = |i: usize| -> i32 {
         if i < args.len() {
@@ -516,15 +524,24 @@ pub unsafe fn dispatch_buffer_method(
             crate::buffer::array_buffer_transfer(addr, args)
         }
         "slice" | "subarray" => {
-            let len = (*buf_ptr).length as i32;
-            let (start, end) = if crate::buffer::is_array_buffer(addr)
-                || crate::buffer::is_shared_array_buffer(addr)
-            {
+            let source_is_array_buffer = crate::buffer::is_array_buffer(addr);
+            let source_is_shared_array_buffer = crate::buffer::is_shared_array_buffer(addr);
+            let source_is_any_array_buffer =
+                source_is_array_buffer || source_is_shared_array_buffer;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let buffer = scope.root_raw_mut_ptr(buf_ptr);
+            let len =
+                buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| (*buf).length as i32);
+            let (start, end) = if source_is_any_array_buffer {
+                // Instance-call lowering reaches this fused dispatch directly,
+                // bypassing the prototype thunk. The shared path therefore owns
+                // both index coercion and ArrayBufferSpeciesCreate ordering.
                 // A detached ArrayBuffer refuses slice with a TypeError
                 // (ES2024 DetachArrayBuffer; `transfer` is the only detach
                 // source in Perry).
-                if crate::buffer::is_detached_buffer(addr)
-                    && !crate::buffer::is_shared_array_buffer(addr)
+                if buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
+                    crate::buffer::is_detached_buffer(buf as usize)
+                }) && !source_is_shared_array_buffer
                 {
                     crate::collection_iter::throw_type_error(
                         "Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer",
@@ -542,19 +559,40 @@ pub unsafe fn dispatch_buffer_method(
                 } else {
                     ab_slice_index(args[1])
                 };
+                // SpeciesConstructor is observed only after BOTH index
+                // coercions. It may run getters and collect, so the buffer is
+                // re-read from its handle again by the copy below.
+                if method_name == "slice" {
+                    buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
+                        super::global_this::validate_array_buffer_species_constructor(buf as usize)
+                    });
+                    // ArrayBuffer.prototype.slice checks detachment again
+                    // after the observable species lookup/creation sequence.
+                    if !source_is_shared_array_buffer
+                        && buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
+                            crate::buffer::is_detached_buffer(buf as usize)
+                        })
+                    {
+                        crate::collection_iter::throw_type_error(
+                            "Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer",
+                        );
+                    }
+                }
                 (s, e)
             } else {
                 let s = arg_i32(0);
                 let e = if args.len() >= 2 { arg_i32(1) } else { len };
                 (s, e)
             };
-            let result = crate::buffer::js_buffer_slice(buf_ptr, start, end);
+            let result = buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
+                crate::buffer::js_buffer_slice(buf, start, end)
+            });
             // #2877: `ArrayBuffer.prototype.slice` returns a NEW ArrayBuffer
             // (a copy), so mark the result so `ArrayBuffer.isView(slice)` is
             // false and a subsequent `new Uint8Array(slice)` aliases it.
-            if crate::buffer::is_array_buffer(addr) {
+            if source_is_array_buffer {
                 crate::buffer::mark_as_array_buffer(result as usize);
-            } else if crate::buffer::is_shared_array_buffer(addr) {
+            } else if source_is_shared_array_buffer {
                 crate::buffer::mark_as_shared_array_buffer(result as usize);
             }
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())

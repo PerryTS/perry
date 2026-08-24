@@ -27,6 +27,33 @@ pub(crate) fn lower_member_tail(
         _ => lower_expr(ctx, &member.obj)?,
     };
     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+        // A function produced by the dynamic GeneratorFunction constructors
+        // inherits the caller/arguments poison accessors from
+        // %Function.prototype%. Its compact runtime representation is not a
+        // normal registered closure, so preserve the statically-known brand
+        // here instead of letting generic PropertyGet return undefined.
+        if matches!(prop_ident.sym.as_ref(), "caller" | "arguments") {
+            let is_dynamic_generator = match member.obj.as_ref() {
+                ast::Expr::Ident(obj_ident) => matches!(
+                    ctx.lookup_local_type(obj_ident.sym.as_ref()),
+                    Some(Type::Named(name))
+                        if matches!(name.as_str(), "GeneratorFunction" | "AsyncGeneratorFunction")
+                ),
+                _ => false,
+            };
+            if is_dynamic_generator {
+                return Ok(Expr::Call {
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: "js_throw_restricted_function_property_assignment".to_string(),
+                        param_types: vec![],
+                        return_type: Type::Any,
+                    }),
+                    args: vec![],
+                    type_args: vec![],
+                    byte_offset: member.span.lo.0,
+                });
+            }
+        }
         if let Some(value) = ws_ready_state_value(prop_ident.sym.as_ref()) {
             if is_ws_ready_state_receiver(ctx, member.obj.as_ref(), &object_expr) {
                 return Ok(Expr::Number(value));
@@ -215,6 +242,12 @@ pub(crate) fn lower_member_tail(
                         },
                         ast::MemberProp::PrivateName(_) => None,
                     };
+                    // Every constructor function inherits `.constructor` from
+                    // Function.prototype. Collapsing `Error.constructor` (and
+                    // the equivalent read on another built-in constructor) to
+                    // `globalThis.constructor` loses the receiver and returns
+                    // undefined instead of the Function constructor.
+                    let outer_is_constructor_property = outer_static_member == Some("constructor");
                     // #4596 follow-up: `Array.isArray` / `Array.from` /
                     // `Array.of` read as VALUES need the reified Array
                     // constructor receiver so they resolve to the real native
@@ -377,6 +410,7 @@ pub(crate) fn lower_member_tail(
                     let receiver_is_regexp_ctor = property == "RegExp";
                     let receiver_is_function_ctor = property == "Function";
                     if !outer_is_prototype_or_proto
+                        && !outer_is_constructor_property
                         && !receiver_is_namespace_value
                         && !receiver_is_regexp_ctor
                         && !receiver_is_function_ctor

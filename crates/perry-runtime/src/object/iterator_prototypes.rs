@@ -235,6 +235,11 @@ fn install_symbol_iterator(shared: *mut ObjectHeader) {
             crate::value::js_nanbox_pointer(closure as i64),
         );
     }
+    crate::symbol::set_symbol_property_attrs(
+        shared as usize,
+        sym as usize,
+        PropertyAttrs::new(true, false, true),
+    );
 }
 
 /// Allocate one family prototype with an own `next` method (spec descriptor),
@@ -307,4 +312,63 @@ pub(crate) fn attach_iterator_prototype(obj_ptr: *mut ObjectHeader, class_id: u3
         return;
     }
     chain_to(obj_ptr, proto_ptr as *mut ObjectHeader);
+}
+
+/// Invoke a user replacement of a built-in iterator prototype's `next`
+/// method. Returns `None` while the canonical native thunk is installed.
+pub(crate) unsafe fn call_overridden_iterator_next(
+    iter_obj: *mut ObjectHeader,
+    class_id: u32,
+) -> Option<f64> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(iter_obj as i64));
+    let previous = scope.root_nanbox_f64(super::js_implicit_this_get());
+    ensure_iterator_prototypes();
+    let (slot, canonical): (&crate::object::RealmAtomicI64, *const u8) = match class_id {
+        crate::array::ARRAY_ITERATOR_CLASS_ID => (
+            &ARRAY_ITERATOR_PROTOTYPE_PTR,
+            array_iterator_next_thunk as *const u8,
+        ),
+        crate::collection_iter_object::MAP_ITERATOR_CLASS_ID => (
+            &MAP_ITERATOR_PROTOTYPE_PTR,
+            map_iterator_next_thunk as *const u8,
+        ),
+        crate::collection_iter_object::SET_ITERATOR_CLASS_ID => (
+            &SET_ITERATOR_PROTOTYPE_PTR,
+            set_iterator_next_thunk as *const u8,
+        ),
+        crate::string::STRING_ITERATOR_CLASS_ID => (
+            &STRING_ITERATOR_PROTOTYPE_PTR,
+            string_iterator_next_thunk as *const u8,
+        ),
+        _ => return None,
+    };
+    // Building the tower above may collect. Reload its realm-owned root only
+    // after the build rather than retaining a pre-build raw address.
+    let proto = scope.root_raw_const_ptr(slot.load(Ordering::Acquire) as *const ObjectHeader);
+    if proto.with_const_ptr::<ObjectHeader, _>(|proto| proto.is_null()) {
+        return None;
+    }
+    let key = scope.root_raw_const_ptr(crate::string::js_string_from_bytes(b"next".as_ptr(), 4));
+    let method = proto.with_const_ptr::<ObjectHeader, _>(|proto| {
+        key.with_const_ptr::<crate::string::StringHeader, _>(|key| {
+            f64::from_bits(super::js_object_get_field_by_name(proto, key).bits())
+        })
+    });
+    let method_ptr =
+        crate::value::js_nanbox_get_pointer(method) as *const crate::closure::ClosureHeader;
+    if !method_ptr.is_null() && crate::closure::get_valid_func_ptr(method_ptr) == canonical {
+        return None;
+    }
+
+    let method = scope.root_nanbox_f64(method);
+    super::js_implicit_this_set(iter.get_nanbox_f64());
+    let result = crate::exception::js_call_catching(|| {
+        crate::closure::js_native_call_value(method.get_nanbox_f64(), std::ptr::null(), 0)
+    });
+    super::js_implicit_this_set(previous.get_nanbox_f64());
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => crate::exception::js_throw(error),
+    }
 }

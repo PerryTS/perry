@@ -63,22 +63,69 @@ impl<'s> RootedIterArray<'s> {
     /// observes the original receiver object — at its CURRENT address).
     #[inline(always)]
     fn receiver(&self) -> f64 {
-        self.handle.get_nanbox_f64()
+        array_receiver_value(self.arr())
     }
 
     #[inline(always)]
     fn arr(&self) -> *const ArrayHeader {
-        (self.handle.get_nanbox_u64() & crate::value::POINTER_MASK) as *const ArrayHeader
+        let rooted =
+            (self.handle.get_nanbox_u64() & crate::value::POINTER_MASK) as *const ArrayHeader;
+        let live = clean_arr_ptr(rooted);
+        if live != rooted {
+            // Array growth and moving GC leave forwarding stubs behind. Keep
+            // the root current so subsequent loop iterations do not inspect
+            // the stub's overwritten length/capacity word as an ArrayHeader.
+            self.handle.set_nanbox_f64(array_receiver_value(live));
+        }
+        live
     }
 
     #[inline(always)]
     unsafe fn present(&self, index: usize) -> Option<f64> {
-        present_array_element(array_elements_ptr(self.arr()), index)
+        let arr = self.arr();
+        if index >= (*arr).length as usize {
+            return None;
+        }
+        present_array_element(array_elements_ptr(arr), index)
     }
 
     #[inline(always)]
     unsafe fn get_or_undefined(&self, index: usize) -> f64 {
-        array_element_get_value(array_elements_ptr(self.arr()), index)
+        let arr = self.arr();
+        if index >= (*arr).length as usize {
+            return undefined_value();
+        }
+        array_element_get_value(array_elements_ptr(arr), index)
+    }
+}
+
+#[cfg(test)]
+mod rooted_iter_array_tests {
+    use super::*;
+
+    #[test]
+    fn forwarded_array_observes_shrunk_length_during_callback_iteration() {
+        unsafe {
+            let mut arr = js_array_alloc(3);
+            arr = js_array_push_f64(arr, 1.0);
+            arr = js_array_push_f64(arr, 2.0);
+            arr = js_array_push_f64(arr, 3.0);
+
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let rooted = RootedIterArray::new(&scope, arr);
+            let mut live_arr = js_array_grow(arr, (*arr).capacity + 1);
+            assert_ne!(live_arr, arr);
+            let _removed = js_array_splice(live_arr, 1, 1, ptr::null(), 0, &mut live_arr);
+
+            assert_eq!((*live_arr).length, 2);
+            assert_eq!(rooted.arr(), clean_arr_ptr(live_arr));
+            assert_eq!(rooted.get_or_undefined(1), 3.0);
+            assert_eq!(
+                rooted.get_or_undefined(2).to_bits(),
+                crate::value::TAG_UNDEFINED
+            );
+            assert_eq!(rooted.present(2), None);
+        }
     }
 }
 
