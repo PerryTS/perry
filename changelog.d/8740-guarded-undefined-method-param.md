@@ -6,6 +6,6 @@ async/generator bodies, and oversized methods are conservatively excluded.
 
 This removes the per-entity optional-filter truthiness and callback arm from
 codehz/ecs's 10k-entity accumulation loop. On an Apple M1 Mac mini, 11
-alternating process pairs measured 0.179851 ms versus 0.195838 ms on the exact
-parent, an 8.126% median paired improvement with 11/11 wins and all output
+alternating process pairs measured 0.179437 ms versus 0.195817 ms on the exact
+parent, an 8.376% median paired improvement with 11/11 wins and all output
 oracles passing.
