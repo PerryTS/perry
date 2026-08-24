@@ -24,11 +24,11 @@ pub(crate) fn canonicalize_calendar_id(raw: &str) -> Option<String> {
         }
     }
     let lower = raw.to_ascii_lowercase();
-    // BCP-47 `-u-ca-` type aliases (TR35): a handful of legacy IDs canonicalize
-    // to their preferred form. Everything else passes through lowercased.
+    // BCP-47 `-u-ca-` type aliases (TR35): deprecated IDs canonicalize to
+    // their preferred form. Everything else passes through lowercased.
     let canonical = match lower.as_str() {
         "islamicc" => "islamic-civil",
-        "ethioaa" => "ethiopic-amete-alem",
+        "ethiopic-amete-alem" => "ethioaa",
         other => other,
     };
     Some(canonical.to_string())
