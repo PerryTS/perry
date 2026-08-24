@@ -241,6 +241,10 @@ fn count_stmt_nodes(stmt: &perry_hir::Stmt) -> usize {
     count
 }
 
+pub(super) fn count_body_nodes(body: &[perry_hir::Stmt]) -> usize {
+    body.iter().map(count_stmt_nodes).sum()
+}
+
 pub(crate) fn select_trusted_box_closures(
     closures: &[(perry_hir::types::FuncId, perry_hir::Expr)],
     direct_call_closures: &std::collections::HashSet<u32>,
@@ -298,7 +302,7 @@ pub(crate) fn select_trusted_box_closures(
             if boxed_capture_mask == 0 {
                 return None;
             }
-            let cost = body.iter().map(count_stmt_nodes).sum::<usize>();
+            let cost = count_body_nodes(body);
             (cost <= MAX_TRUSTED_BOX_CLONE_NODES).then_some((
                 cost,
                 *func_id,
