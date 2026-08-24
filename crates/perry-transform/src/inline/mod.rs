@@ -28,8 +28,9 @@ pub use cross_module::{
 // Internal-to-crate re-exports for cross-sibling access via `use super::*;`.
 pub(crate) use analysis::{
     find_max_local_id_in_module, is_inlinable, is_inlinable_method, method_lookup_is_unshadowed,
+    scalar_aggregate_loop_param,
 };
-pub(crate) use call_inliner::inline_calls_in_stmts;
+pub(crate) use call_inliner::{inline_calls_in_stmts, scalar_aggregate_call_len};
 pub(crate) use clamp::{is_clamp3, is_clamp_u8};
 pub(crate) use closure_analysis::{
     body_contains_closure_capturing, body_contains_super_call, body_references_dynamic_this,
@@ -112,6 +113,136 @@ pub fn inline_functions(
         extra_anon_classes,
     );
     span_remaps.finish(&mut module.local_source_spans);
+}
+
+/// Module init caches globals in locals, so an ordinary call between an
+/// inlined impure consumer and its next use could observe stale backing
+/// storage. Admit the #8691 init path only when every executable call is an
+/// eligible call to this one consumer, apart from `console.log` (whose
+/// arguments are evaluated from the cached locals before entering runtime).
+fn impure_scalar_aggregate_init_is_safe(stmts: &[Stmt], target: &Function) -> bool {
+    fn is_console_log(expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::PropertyGet { object, property, .. }
+                if property == "log" && matches!(object.as_ref(), Expr::GlobalGet(_))
+        )
+    }
+
+    fn expr_is_safe(expr: &Expr, target: &Function, saw_target: &mut bool) -> bool {
+        match expr {
+            Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::FuncRef(id) if *id == target.id) =>
+            {
+                *saw_target = true;
+                scalar_aggregate_call_len(target, args).is_some()
+                    && args.iter().all(|arg| expr_is_safe(arg, target, saw_target))
+            }
+            Expr::Call { callee, args, .. } if is_console_log(callee) => {
+                args.iter().all(|arg| expr_is_safe(arg, target, saw_target))
+            }
+            Expr::Call { .. } | Expr::CallSpread { .. } => false,
+            Expr::New {
+                class_name,
+                args,
+                cap_args_appended: 0,
+                ..
+            } if class_name.starts_with("__AnonShape_") => {
+                args.iter().all(|arg| expr_is_safe(arg, target, saw_target))
+            }
+            Expr::New { .. } => false,
+            // Creating a closure does not execute its body. A later call would
+            // itself be rejected above, so its body is irrelevant here.
+            Expr::Closure { .. } => true,
+            _ => {
+                let mut safe = true;
+                perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                    safe &= expr_is_safe(child, target, saw_target);
+                });
+                safe
+            }
+        }
+    }
+
+    fn stmts_are_safe(stmts: &[Stmt], target: &Function, saw_target: &mut bool) -> bool {
+        stmts.iter().all(|stmt| match stmt {
+            Stmt::Let { init, .. } => init
+                .as_ref()
+                .is_none_or(|expr| expr_is_safe(expr, target, saw_target)),
+            Stmt::Expr(expr) | Stmt::Throw(expr) => expr_is_safe(expr, target, saw_target),
+            Stmt::Return(value) => value
+                .as_ref()
+                .is_none_or(|expr| expr_is_safe(expr, target, saw_target)),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                expr_is_safe(condition, target, saw_target)
+                    && stmts_are_safe(then_branch, target, saw_target)
+                    && else_branch
+                        .as_deref()
+                        .is_none_or(|branch| stmts_are_safe(branch, target, saw_target))
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                expr_is_safe(condition, target, saw_target)
+                    && stmts_are_safe(body, target, saw_target)
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.as_deref().is_none_or(|stmt| {
+                    stmts_are_safe(std::slice::from_ref(stmt), target, saw_target)
+                }) && condition
+                    .as_ref()
+                    .is_none_or(|expr| expr_is_safe(expr, target, saw_target))
+                    && update
+                        .as_ref()
+                        .is_none_or(|expr| expr_is_safe(expr, target, saw_target))
+                    && stmts_are_safe(body, target, saw_target)
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                stmts_are_safe(body, target, saw_target)
+                    && catch
+                        .as_ref()
+                        .is_none_or(|catch| stmts_are_safe(&catch.body, target, saw_target))
+                    && finally
+                        .as_deref()
+                        .is_none_or(|body| stmts_are_safe(body, target, saw_target))
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                expr_is_safe(discriminant, target, saw_target)
+                    && cases.iter().all(|case| {
+                        case.test
+                            .as_ref()
+                            .is_none_or(|test| expr_is_safe(test, target, saw_target))
+                            && stmts_are_safe(&case.body, target, saw_target)
+                    })
+            }
+            Stmt::Labeled { body, .. } => {
+                stmts_are_safe(std::slice::from_ref(body.as_ref()), target, saw_target)
+            }
+            Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => true,
+        })
+    }
+
+    let mut saw_target = false;
+    stmts_are_safe(stmts, target, &mut saw_target) && saw_target
 }
 
 fn inline_functions_inner(
@@ -360,7 +491,7 @@ fn inline_functions_inner(
         if is_clamp3(f) || is_clamp_u8(f) {
             continue;
         }
-        if is_inlinable(f) {
+        if is_inlinable(f) || scalar_aggregate_loop_param(f).is_some() {
             func_candidates.insert(f.id, f.clone());
         }
     }
@@ -563,7 +694,11 @@ fn inline_functions_inner(
     {
         let pure_func_candidates: HashMap<FuncId, Function> = func_candidates
             .iter()
-            .filter(|(_, f)| is_pure_function(f))
+            .filter(|(_, f)| {
+                is_pure_function(f)
+                    || (scalar_aggregate_loop_param(f).is_some()
+                        && impure_scalar_aggregate_init_is_safe(&module.init, f))
+            })
             .map(|(id, f)| (*id, f.clone()))
             .collect();
         let mut next_local_id = module_max_id + 1;

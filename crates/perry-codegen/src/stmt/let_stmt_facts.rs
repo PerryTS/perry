@@ -7,6 +7,40 @@ use super::*;
 
 use crate::native_value::BufferAccessMode;
 
+/// #8691: the aggregate scalar-replacement transform erases the carrier array
+/// and object literals before codegen, leaving one synthetic local per field.
+/// Preserve lowering evidence for those eliminated allocations so the result
+/// remains visible to `--explain-lowering`.
+pub(super) fn record_scalar_aggregate_field(ctx: &mut FnCtx<'_>, id: u32, name: &str, value: &str) {
+    if !name.starts_with("__perry_scalar_aggregate_") {
+        return;
+    }
+    let lowered = crate::native_value::LoweredValue {
+        semantic: crate::native_value::SemanticKind::JsValue,
+        rep: crate::native_value::NativeRep::JsValue,
+        llvm_ty: DOUBLE,
+        value: value.to_string(),
+    };
+    ctx.record_lowered_value_with_access_mode(
+        "ScalarAggregateFieldInit",
+        Some(id),
+        "scalar_object_field_store",
+        &lowered,
+        None,
+        None,
+        None,
+        None,
+        false,
+        false,
+        vec![
+            format!("local={name}"),
+            "carrier_array=elided".to_string(),
+            "carrier_object=elided".to_string(),
+            "write_barrier=0".to_string(),
+        ],
+    );
+}
+
 pub(super) fn pod_view_count_source(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> String {
     match expr {
         perry_hir::Expr::Integer(n) => format!("constant:{n}"),
