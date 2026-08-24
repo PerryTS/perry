@@ -175,6 +175,7 @@ impl Drop for CompileProgress {
 }
 
 pub(crate) mod arguments;
+mod artifact_context;
 mod artifacts;
 mod boxed_locals;
 mod closure;
@@ -196,9 +197,12 @@ mod index_method_clone_tests;
 mod clone_suffix_tests;
 #[cfg(test)]
 mod declared_string_add_tests;
+#[cfg(test)]
+mod guarded_undefined_method_tests;
 pub(crate) mod helpers;
 mod method;
 mod method_registry;
+mod method_trampolines;
 mod module_globals_emit;
 mod native_namespace_exports;
 #[cfg(test)]
@@ -248,7 +252,8 @@ pub(crate) use typed_abi::{
     TypedReceiverMethodInfo,
 };
 
-use artifacts::{emit_module_artifacts, ModuleArtifactsCtx};
+use artifact_context::ModuleArtifactsCtx;
+use artifacts::emit_module_artifacts;
 use function::{
     compile_function, compile_typed_f64_function, compile_typed_i1_function,
     compile_typed_i32_function, compile_typed_string_function,
@@ -1759,6 +1764,26 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             })
         })
         .collect();
+    // One bounded full-body version per eligible method. The erased optional
+    // annotation only nominates a candidate; the public wrapper emitted in
+    // `codegen/method.rs` guards the actual argument bits before the clone can
+    // consume a `Type::Void` proof. Keep the module-wide cap explicit so a
+    // source file with many optional loop filters cannot grow without bound.
+    let mut guarded_undefined_method_candidates: Vec<_> = hir
+        .classes
+        .iter()
+        .flat_map(|class| {
+            class.methods.iter().filter_map(move |method| {
+                param_guard::guarded_undefined_method_candidate(method).map(|candidate| {
+                    (
+                        candidate.body_nodes,
+                        (class.name.clone(), method.name.clone()),
+                        candidate.param_index,
+                    )
+                })
+            })
+        })
+        .collect();
     progress.checkpoint("cross-module and typed-ABI analysis");
 
     // Module-wide dispatch/barrier facts. Hoisted above the typed-clone
@@ -1976,6 +2001,24 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
         }
     }
+    // Keep this first implementation non-combinatorial. Existing typed/raw
+    // method clone families have their own public trampolines and calling
+    // conventions; composing those proofs is separate work. The optional
+    // undefined version retains the ordinary boxed ABI throughout.
+    guarded_undefined_method_candidates.retain(|(_, key, _)| {
+        !typed_f64_methods.contains(key)
+            && !typed_i32_methods.contains(key)
+            && !typed_i1_methods.contains(key)
+            && !typed_string_methods.contains(key)
+            && !typed_f64_receiver_methods.contains_key(key)
+            && !nonnegative_index_methods.contains_key(key)
+    });
+    guarded_undefined_method_candidates.sort_unstable_by(|left, right| left.cmp(right));
+    let guarded_undefined_method_params = guarded_undefined_method_candidates
+        .into_iter()
+        .take(16)
+        .map(|(_, key, param_index)| (key, param_index))
+        .collect();
     let mut compiler_private_async_i32_control_locals = std::collections::HashSet::new();
     let mut compiler_private_async_i1_control_locals = std::collections::HashSet::new();
     crate::boxed_vars::collect_compiler_private_async_control_locals_in_stmts(
@@ -2254,6 +2297,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         typed_i1_method_param_reps,
         typed_f64_receiver_methods,
         nonnegative_index_methods,
+        guarded_undefined_method_params,
         pshape_methods,
         pshape_tower_routable,
         typed_f64_closures: std::collections::HashSet::new(),

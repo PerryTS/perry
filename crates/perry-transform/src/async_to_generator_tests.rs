@@ -616,7 +616,10 @@ fn async_generator_linearizes_every_await_position() {
             vec![Stmt::Try {
                 body: vec![y(Expr::Integer(0))],
                 catch: None,
-                finally: Some(vec![y(Expr::Integer(8)), Stmt::Expr(await_(Expr::Integer(9)))]),
+                finally: Some(vec![
+                    y(Expr::Integer(8)),
+                    Stmt::Expr(await_(Expr::Integer(9))),
+                ]),
             }],
         ),
         (

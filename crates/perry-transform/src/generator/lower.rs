@@ -1017,8 +1017,7 @@ pub fn transform_generator_function_with_extra_captures(
                 // mirrors how `.next()`/`.throw()` already drive a yielding
                 // finally. `wrap_generator_resume_body` clears `executing` before
                 // this return, so `__agstep`'s re-entrancy guard passes.
-                let agstep_local_id =
-                    agstep_id.expect("agstep_id is set for async generators");
+                let agstep_local_id = agstep_id.expect("agstep_id is set for async generators");
                 return_resume_body.push(Stmt::Return(Some(Expr::AsyncGenResume {
                     step_closure: Box::new(Expr::LocalGet(agstep_local_id)),
                     value: Box::new(Expr::Undefined),

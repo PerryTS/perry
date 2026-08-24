@@ -920,6 +920,11 @@ pub(crate) struct CrossModuleCtx {
     /// manufacturing calls to clone symbols their defining module never
     /// exported.
     pub nonnegative_index_methods: std::collections::HashMap<(String, String), Vec<u32>>,
+    /// Instance methods with one emitted exact-`undefined` parameter clone,
+    /// mapped to the guarded formal index. The public symbol keeps the stable
+    /// JSValue ABI and performs the bit-exact guard before entering the clone;
+    /// every other runtime value falls through to the ordinary body.
+    pub guarded_undefined_method_params: std::collections::HashMap<(String, String), usize>,
     /// Representation-selection Phase 5a: `(class, method)` pairs that have a
     /// generated proven-`this` clone (`collectors/proven_this.rs`). Local keys
     /// come from body analysis; imported keys come from an explicit capability

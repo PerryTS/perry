@@ -797,6 +797,181 @@ pub(crate) fn inferred_guard(
     })
 }
 
+pub(crate) struct GuardedUndefinedMethodCandidate {
+    pub param_index: usize,
+    pub body_nodes: usize,
+}
+
+const MAX_GUARDED_UNDEFINED_METHOD_NODES: usize = 1_024;
+
+/// Select one optional parameter whose exact-`undefined` value can profitably
+/// specialize an instance method body.
+///
+/// TypeScript's `p?: T` is lowered as `default: Some(Expr::Undefined)` plus a
+/// semantic no-op prologue (`if (p === undefined) p = undefined`).  The
+/// annotation is not a runtime proof, so this function only nominates a clone;
+/// the public method wrapper must still compare the actual NaN-box bits with
+/// `TAG_UNDEFINED` before entering it.
+///
+/// The clone proof remains valid only when the parameter is immutable outside
+/// that synthetic prologue and is not referenced by a nested closure.  The
+/// profitability predicate is deliberately narrow and bounded: the parameter
+/// must guard an `if (p && ...)` inside a loop, which lets the clone erase a
+/// repeated truthiness dispatch and the whole conditional call arm.
+pub(crate) fn guarded_undefined_method_candidate(
+    method: &perry_hir::Function,
+) -> Option<GuardedUndefinedMethodCandidate> {
+    use perry_hir::{CompareOp, Expr, LogicalOp, Stmt};
+
+    let body_nodes = super::closure_collect::count_body_nodes(&method.body);
+    if method.is_async
+        || method.is_generator
+        || method.params.is_empty()
+        || body_nodes > MAX_GUARDED_UNDEFINED_METHOD_NODES
+    {
+        return None;
+    }
+    let closure_refs = crate::expr::collect_closure_referenced_locals(&method.body);
+
+    fn is_synthetic_undefined_default(stmt: &Stmt, id: u32) -> bool {
+        let Stmt::If {
+            condition:
+                Expr::Compare {
+                    op: CompareOp::Eq,
+                    left,
+                    right,
+                },
+            then_branch,
+            else_branch: None,
+        } = stmt
+        else {
+            return false;
+        };
+        let compares_undefined = matches!(
+            (left.as_ref(), right.as_ref()),
+            (Expr::LocalGet(local), Expr::Undefined)
+                | (Expr::Undefined, Expr::LocalGet(local)) if *local == id
+        );
+        compares_undefined
+            && matches!(
+                then_branch.as_slice(),
+                [Stmt::Expr(Expr::LocalSet(local, value))]
+                    if *local == id && matches!(value.as_ref(), Expr::Undefined)
+            )
+    }
+
+    fn expr_has_guard(expr: &Expr, id: u32) -> bool {
+        if matches!(
+            expr,
+            Expr::Logical {
+                op: LogicalOp::And,
+                left,
+                ..
+            } if matches!(left.as_ref(), Expr::LocalGet(local) if *local == id)
+        ) {
+            return true;
+        }
+        let mut found = false;
+        perry_hir::walker::walk_expr_children(expr, &mut |child| {
+            found |= expr_has_guard(child, id);
+        });
+        found
+    }
+
+    fn body_has_loop_guard(stmts: &[Stmt], id: u32, in_loop: bool) -> bool {
+        stmts.iter().any(|stmt| match stmt {
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                (in_loop && expr_has_guard(condition, id))
+                    || body_has_loop_guard(then_branch, id, in_loop)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|body| body_has_loop_guard(body, id, in_loop))
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                expr_has_guard(condition, id) || body_has_loop_guard(body, id, true)
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.as_deref().is_some_and(|stmt| {
+                    body_has_loop_guard(std::slice::from_ref(stmt), id, in_loop)
+                }) || condition
+                    .as_ref()
+                    .is_some_and(|expr| expr_has_guard(expr, id))
+                    || update.as_ref().is_some_and(|expr| expr_has_guard(expr, id))
+                    || body_has_loop_guard(body, id, true)
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                body_has_loop_guard(body, id, in_loop)
+                    || catch
+                        .as_ref()
+                        .is_some_and(|catch| body_has_loop_guard(&catch.body, id, in_loop))
+                    || finally
+                        .as_deref()
+                        .is_some_and(|body| body_has_loop_guard(body, id, in_loop))
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                (in_loop && expr_has_guard(discriminant, id))
+                    || cases
+                        .iter()
+                        .any(|case| body_has_loop_guard(&case.body, id, in_loop))
+            }
+            Stmt::Labeled { body, .. } => {
+                body_has_loop_guard(std::slice::from_ref(body.as_ref()), id, in_loop)
+            }
+            Stmt::Expr(expr) | Stmt::Throw(expr) => in_loop && expr_has_guard(expr, id),
+            Stmt::Return(Some(expr)) => in_loop && expr_has_guard(expr, id),
+            Stmt::Let {
+                init: Some(expr), ..
+            } => in_loop && expr_has_guard(expr, id),
+            Stmt::Return(None)
+            | Stmt::Let { init: None, .. }
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => false,
+        })
+    }
+
+    method.params.iter().enumerate().find_map(|(index, param)| {
+        if param.is_rest
+            || param.arguments_object.is_some()
+            || !matches!(param.default, Some(Expr::Undefined))
+            || closure_refs.contains(&param.id)
+        {
+            return None;
+        }
+        let has_real_reassignment = method.body.iter().any(|stmt| {
+            !is_synthetic_undefined_default(stmt, param.id)
+                && crate::collectors::reassigned_locals(std::slice::from_ref(stmt))
+                    .contains(&param.id)
+        });
+        (!has_real_reassignment && body_has_loop_guard(&method.body, param.id, false)).then_some(
+            GuardedUndefinedMethodCandidate {
+                param_index: index,
+                body_nodes,
+            },
+        )
+    })
+}
+
 /// Whether the current function body can suspend after its entry guard.
 /// `walk_expr_children` intentionally does not enter nested closure bodies;
 /// those execute under their own entry contracts and must not disqualify the
