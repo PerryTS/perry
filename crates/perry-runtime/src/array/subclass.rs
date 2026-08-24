@@ -81,7 +81,11 @@ fn cached_dense_layout(key: u64) -> Option<DenseSubclassLayout> {
     let slots = entry.slots.load(Ordering::Relaxed);
     let bounds = entry.bounds.load(Ordering::Relaxed);
     // Recheck the seqlock before interpreting either word so readers never
-    // combine payloads from two colliding publishers.
+    // combine payloads from two colliding publishers. The fence stops the
+    // relaxed payload loads above from being reordered past this recheck on
+    // weakly ordered targets - an Acquire load alone only orders what comes
+    // after it, not what precedes it in program order.
+    std::sync::atomic::fence(Ordering::Acquire);
     if entry.sequence.load(Ordering::Acquire) != sequence {
         return None;
     }
