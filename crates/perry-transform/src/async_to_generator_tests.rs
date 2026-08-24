@@ -6,8 +6,6 @@
 
 use super::*;
 
-use super::*;
-
 // The minimal shape the collect scan matches: `async () => { await 1 }`
 // — `Expr::Closure { is_async, !is_generator }` whose body has an Await.
 fn async_closure_with_await(func_id: perry_hir::types::FuncId) -> Expr {
