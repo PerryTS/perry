@@ -87,6 +87,19 @@ thread_local! {
     static PUMP_LAST_TICK_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+pub(crate) fn scan_windows_media_playback_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    PLAYERS.with(|players| {
+        for player in players.borrow_mut().iter_mut().flatten() {
+            if let Some(callback) = player.on_state_change.as_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+            if let Some(callback) = player.on_time_update.as_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------
 // String helpers
 // ---------------------------------------------------------------------------

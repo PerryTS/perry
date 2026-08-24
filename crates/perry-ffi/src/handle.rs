@@ -438,6 +438,22 @@ impl<'a> GcRootVisitor<'a> {
         )
     }
 
+    /// Visit a raw const heap pointer slot.
+    ///
+    /// Native UI backends commonly unbox a closure once and retain its code
+    /// pointer as `*const u8`. The collector treats const and mutable pointee
+    /// types identically; it only needs the address of the mutable pointer
+    /// *slot* so an evacuating collection can rewrite it.
+    ///
+    /// Returns `true` when the runtime rewrote the slot to a forwarded address.
+    pub fn visit_raw_const_ptr_slot<T>(&mut self, slot: &mut *const T) -> bool {
+        (self.visit)(
+            FFI_ROOT_SLOT_RAW_MUT_PTR,
+            slot as *mut *const T as *mut c_void,
+            self.ctx,
+        )
+    }
+
     /// Visit a NaN-boxed JS value stored as an `f64`.
     ///
     /// Returns `true` when the runtime rewrote the slot to a forwarded address.
@@ -907,6 +923,32 @@ extern "C" fn scan_registered_mutable_root_by_id(
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    extern "C" fn rewrite_const_pointer_slot(
+        kind: u32,
+        slot: *mut c_void,
+        ctx: *mut c_void,
+    ) -> bool {
+        assert_eq!(kind, FFI_ROOT_SLOT_RAW_MUT_PTR);
+        unsafe {
+            *(slot as *mut *const u8) = ctx as *const u8;
+        }
+        true
+    }
+
+    #[test]
+    fn const_pointer_root_slot_is_rewritten() {
+        let original = 1_u8;
+        let replacement = 2_u8;
+        let mut slot = &original as *const u8;
+        let mut visitor = GcRootVisitor::new(
+            rewrite_const_pointer_slot,
+            &replacement as *const u8 as *mut c_void,
+        );
+
+        assert!(visitor.visit_raw_const_ptr_slot(&mut slot));
+        assert_eq!(slot, &replacement as *const u8);
+    }
 
     #[test]
     fn round_trip_simple_value() {

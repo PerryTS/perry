@@ -43,6 +43,14 @@ thread_local! {
     static DELEGATE_TO_HANDLE: RefCell<HashMap<usize, i64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_ios_image_gallery_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    STATES.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.on_index_change);
+        }
+    });
+}
+
 pub struct PerryGalleryDelegateIvars {
     key: std::cell::Cell<usize>,
 }

@@ -529,6 +529,14 @@ thread_local! {
     static DOUBLE_CLICK_CALLBACKS: RefCell<HashMap<i64, f64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_tvos_widgets_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    DOUBLE_CLICK_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 /// Set the enabled state of any UIControl-based widget.
 pub fn set_enabled(handle: i64, enabled: bool) {
     if let Some(view) = get_widget(handle) {

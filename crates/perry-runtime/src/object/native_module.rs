@@ -628,6 +628,7 @@ pub(crate) fn cjs_default_base_module(module_name: &str) -> Option<&'static str>
         "constants.default" => Some("constants"),
         "dns.default" => Some("dns"),
         "dns/promises.default" => Some("dns/promises"),
+        "ffi.default" => Some("ffi"),
         "inspector.default" => Some("inspector"),
         "inspector/promises.default" => Some("inspector/promises"),
         "module.default" => Some("module"),
@@ -656,6 +657,7 @@ fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
         "constants" => Some("constants.default"),
         "dns" => Some("dns.default"),
         "dns/promises" => Some("dns/promises.default"),
+        "ffi" => Some("ffi.default"),
         "inspector" => Some("inspector.default"),
         "inspector/promises" => Some("inspector/promises.default"),
         "module" => Some("module.default"),
@@ -712,9 +714,9 @@ pub(crate) fn cjs_default_export_value(module_name: &str) -> Option<f64> {
             b"wasi.default".as_ptr(),
             "wasi.default".len(),
         )),
-        "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "node-pty"
-        | "os" | "path" | "path.posix" | "path.win32" | "punycode" | "querystring" | "repl"
-        | "sea" | "url" | "util" | "inspector" | "inspector/promises" => {
+        "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "ffi"
+        | "node-pty" | "os" | "path" | "path.posix" | "path.win32" | "punycode" | "querystring"
+        | "repl" | "sea" | "url" | "util" | "inspector" | "inspector/promises" => {
             create_cjs_default_namespace(module_name)
         }
         _ => None,

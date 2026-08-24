@@ -12,6 +12,7 @@ pub mod deeplinks;
 pub mod drag_drop;
 pub mod file_dialog;
 pub mod foundation_models;
+mod gc;
 pub mod geolocation;
 pub mod image_picker;
 pub mod keyboard;

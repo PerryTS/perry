@@ -40,6 +40,14 @@ thread_local! {
     static COMBOBOX_DELEGATES: RefCell<HashMap<i64, Retained<PerryComboboxDelegate>>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_ios_combobox_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    COMBOBOX_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn fire_callback(handle: i64, value: &str) {

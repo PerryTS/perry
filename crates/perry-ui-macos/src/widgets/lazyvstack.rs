@@ -236,6 +236,19 @@ thread_local! {
     static SCROLL_END_OBSERVER_TO_HANDLE: RefCell<HashMap<usize, i64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_macos_lazyvstack_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    LAZY_VSTACKS.with(|stacks| {
+        for stack in stacks.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut stack.render_closure);
+        }
+    });
+    SCROLL_END_STATES.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.closure);
+        }
+    });
+}
+
 pub struct PerryLazyVStackScrollObserverIvars {
     key: std::cell::Cell<usize>,
 }

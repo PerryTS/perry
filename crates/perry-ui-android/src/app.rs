@@ -25,6 +25,7 @@ pub(crate) use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an app. Stores config for deferred creation. Returns app handle (i64).
 pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
+    crate::gc::ensure_registered();
     let title = if title_ptr.is_null() {
         "Perry App".to_string()
     } else {
@@ -390,6 +391,19 @@ pub fn on_activate(callback: f64) {
 pub fn on_terminate(callback: f64) {
     ON_TERMINATE_CALLBACK.with(|c| {
         *c.borrow_mut() = Some(callback);
+    });
+}
+
+pub(crate) fn scan_android_app_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    ON_ACTIVATE_CALLBACK.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().as_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+    ON_TERMINATE_CALLBACK.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().as_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
     });
 }
 

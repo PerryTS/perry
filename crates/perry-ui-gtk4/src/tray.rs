@@ -333,6 +333,16 @@ fn trays() -> &'static Mutex<Vec<Option<TrayHandle>>> {
     TRAYS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+pub(crate) fn scan_gtk4_tray_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    if let Ok(mut trays) = trays().lock() {
+        for tray in trays.iter_mut().flatten() {
+            if let Ok(mut state) = tray.state.lock() {
+                visitor.visit_nanbox_f64_slot(&mut state.on_click);
+            }
+        }
+    }
+}
+
 /// Dedicated tokio runtime for the tray's KSNI service — re-used
 /// across all tray icons (KSNI services share a single DBus connection
 /// via zbus's shared session bus, so one runtime is sufficient).

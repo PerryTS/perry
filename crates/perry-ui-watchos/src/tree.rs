@@ -176,6 +176,19 @@ thread_local! {
     static TREE_VERSION: Cell<u64> = Cell::new(0);
 }
 
+pub(crate) fn scan_watchos_tree_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    NODES.with(|nodes| {
+        for node in nodes.borrow_mut().iter_mut() {
+            if let Some(callback) = node.action_closure.as_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+            if let Some(callback) = node.on_change_closure.as_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        }
+    });
+}
+
 fn bump_version() {
     TREE_VERSION.with(|v| v.set(v.get().wrapping_add(1)));
 }

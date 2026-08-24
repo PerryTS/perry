@@ -80,6 +80,10 @@ windows = { version = "0.62", features = [
     # SystemMediaTransportControls / DisplayUpdater / MusicDisplayProperties
     # (#367 — volume HUD media tile, headphone media keys, Edge Now Playing).
     "Media",
+    # PdfView (#6613) — decode native PDF pages to an in-memory PNG via
+    # Windows.Data.Pdf, then paint them in the Win32 widget with GDI+.
+    "Data_Pdf",
+    "Storage",
     "Storage_Streams",
     # WinHTTP — URL-fetched images on Windows (Image(url, alt) +
     # ImageGallery URLs). Mirrors the macOS NSURL/NSData path: native

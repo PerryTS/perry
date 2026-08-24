@@ -11,6 +11,14 @@ thread_local! {
     static REGISTERED_ENTRIES: RefCell<Vec<i64>> = const { RefCell::new(Vec::new()) };
 }
 
+pub(crate) fn scan_gtk4_textfield_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TEXTFIELD_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;

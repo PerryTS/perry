@@ -96,6 +96,16 @@ thread_local! {
         RefCell::new(std::collections::HashSet::new());
 }
 
+pub(crate) fn scan_macos_pointer_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    for callbacks in [&MOUSE_DOWN_CB, &MOUSE_UP_CB, &MOUSE_MOVE_CB, &HOVER_CB] {
+        callbacks.with(|callbacks| {
+            for callback in callbacks.borrow_mut().values_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        });
+    }
+}
+
 /// Install the single global NSEvent local monitor on first use. The
 /// monitor block is leaked intentionally (lives for the app's lifetime)
 /// — `addLocalMonitorForEventsMatchingMask:handler:` retains the block

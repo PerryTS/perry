@@ -44,6 +44,14 @@ thread_local! {
     static CALLBACKS: RefCell<HashMap<i64, f64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_windows_combobox_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
     let initial = unsafe { str_from_header(initial_ptr) };
     let control_id = alloc_control_id();

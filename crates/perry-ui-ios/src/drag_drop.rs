@@ -53,6 +53,16 @@ thread_local! {
     static DRAG_URL: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_ios_drag_drop_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    for callbacks in [&DROP_CB, &DRAG_TEXT, &DRAG_FILE, &DRAG_URL] {
+        callbacks.with(|callbacks| {
+            for callback in callbacks.borrow_mut().values_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        });
+    }
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 unsafe fn nanbox_str(s: &str) -> f64 {

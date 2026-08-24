@@ -457,6 +457,9 @@ pub extern "C" fn perry_has_work() -> i32 {
     if unsafe { js_stdlib_has_active_handles() } != 0 {
         return 1;
     }
+    if crate::bun_ffi::callback::js_bun_ffi_has_active_threadsafe_callbacks() != 0 {
+        return 1;
+    }
     0
 }
 

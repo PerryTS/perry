@@ -6462,6 +6462,7 @@ dependencies = [
 name = "perry-ui"
 version = "0.5.1519"
 dependencies = [
+ "perry-ffi",
  "perry-ui-model",
 ]
 

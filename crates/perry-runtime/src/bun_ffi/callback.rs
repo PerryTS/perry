@@ -1,4 +1,4 @@
-//! Same-thread native-to-JS callback trampolines for `bun:ffi`.
+//! Native-to-JS callback trampolines for `bun:ffi` and `node:ffi`.
 //!
 //! A callback pointer must carry both an arbitrary C scalar signature and a
 //! Perry callback identity. The hosted ABIs already split scalar arguments
@@ -15,7 +15,8 @@ use super::call::{self, MAX_ARGS, MAX_FLOAT_ARGS};
 use super::types::*;
 use crate::closure::ClosureHeader;
 use crate::value::JSValue;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::ThreadId;
 
 const MAX_CALLBACKS: usize = 128;
@@ -33,10 +34,22 @@ struct CallbackRecord {
     ret: u8,
     argc: u8,
     args: [u8; MAX_ARGS],
+    threadsafe: bool,
+    owner_lib: Option<usize>,
     open: bool,
 }
 
 static CALLBACKS: Mutex<Vec<CallbackRecord>> = Mutex::new(Vec::new());
+static ACTIVE_THREADSAFE_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+
+struct PendingCallback {
+    index: usize,
+    integer_registers: [usize; 8],
+    float_registers: [u64; 8],
+    completion: Arc<(Mutex<Option<u64>>, Condvar)>,
+}
+
+static PENDING_CALLBACKS: Mutex<Vec<PendingCallback>> = Mutex::new(Vec::new());
 
 #[cfg(target_vendor = "apple")]
 macro_rules! callback_symbol {
@@ -172,49 +185,76 @@ unsafe fn object_ptr(value: f64) -> Option<*mut crate::object::ObjectHeader> {
 }
 
 unsafe fn get_field(object: *mut crate::object::ObjectHeader, name: &str) -> f64 {
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    f64::from_bits(crate::object::js_object_get_field_by_name(object, key).bits())
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(object);
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        name.as_ptr(),
+        name.len() as u32,
+    ));
+    f64::from_bits(
+        object
+            .with_mut_ptr(|object| {
+                key.with_const_ptr(|key| crate::object::js_object_get_field_by_name(object, key))
+            })
+            .bits(),
+    )
 }
 
 fn set_field(object: *mut crate::object::ObjectHeader, name: &str, value: f64) {
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_set_field_by_name(object, key, value);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(object);
+    let value = scope.root_nanbox_f64(value);
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        name.as_ptr(),
+        name.len() as u32,
+    ));
+    object.with_mut_ptr(|object| {
+        key.with_const_ptr(|key| {
+            crate::object::js_object_set_field_by_name(object, key, value.get_nanbox_f64())
+        })
+    });
 }
 
 fn throw_type(message: &str) -> ! {
     crate::fs::validate::throw_type_error_with_code(message, "ERR_INVALID_ARG_TYPE")
 }
 
-fn parse_signature(definition: f64) -> (u8, u8, [u8; MAX_ARGS]) {
+fn parse_signature(definition: f64) -> (u8, u8, [u8; MAX_ARGS], bool) {
     let Some(object) = (unsafe { object_ptr(definition) }) else {
         throw_type("JSCallback callback definition must be an object");
     };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(object);
 
-    let threadsafe = unsafe { get_field(object, "threadsafe") };
-    if !JSValue::from_bits(threadsafe.to_bits()).is_undefined()
-        && crate::value::js_is_truthy(threadsafe) != 0
-    {
-        crate::fs::validate::throw_error_with_code(
-            "bun:ffi: threadsafe JSCallback is not supported; callbacks must be invoked on their creating thread",
-            "ERR_NOT_IMPLEMENTED",
-        );
-    }
+    let threadsafe = object.with_mut_ptr(|object: *mut crate::object::ObjectHeader| unsafe {
+        get_field(object, "threadsafe")
+    });
+    let threadsafe = !JSValue::from_bits(threadsafe.to_bits()).is_undefined()
+        && crate::value::js_is_truthy(threadsafe) != 0;
 
     let mut args = [T_VOID; MAX_ARGS];
-    let args_value = unsafe { get_field(object, "args") };
-    let args_jv = JSValue::from_bits(args_value.to_bits());
+    let args_value = scope.root_nanbox_f64(object.with_mut_ptr(
+        |object: *mut crate::object::ObjectHeader| unsafe { get_field(object, "args") },
+    ));
+    let args_jv = JSValue::from_bits(args_value.get_nanbox_f64().to_bits());
     let mut argc = 0usize;
     if !args_jv.is_undefined() && !args_jv.is_null() {
-        if !JSValue::from_bits(crate::array::js_array_is_array(args_value).to_bits()).as_bool() {
+        if !JSValue::from_bits(
+            crate::array::js_array_is_array(args_value.get_nanbox_f64()).to_bits(),
+        )
+        .as_bool()
+        {
             throw_type("JSCallback definition.args must be an array");
         }
-        let array = crate::value::js_nanbox_get_pointer(args_value) as usize
+        let array = crate::value::js_nanbox_get_pointer(args_value.get_nanbox_f64()) as usize
             as *const crate::array::ArrayHeader;
         let len = crate::array::js_array_length(array) as usize;
         if len > MAX_ARGS {
             throw_type(&format!("JSCallback supports at most {MAX_ARGS} arguments"));
         }
         for (index, slot) in args.iter_mut().take(len).enumerate() {
+            let array = crate::value::js_nanbox_get_pointer(args_value.get_nanbox_f64()) as usize
+                as *const crate::array::ArrayHeader;
             let value = crate::array::js_array_get(array, index as u32);
             *slot = unsafe { super::types::parse_ffi_type_checked(f64::from_bits(value.bits())) }
                 .unwrap_or_else(|message| throw_type(&format!("JSCallback: {message}")));
@@ -222,7 +262,9 @@ fn parse_signature(definition: f64) -> (u8, u8, [u8; MAX_ARGS]) {
         argc = len;
     }
 
-    let returns = unsafe { get_field(object, "returns") };
+    let returns = object.with_mut_ptr(|object: *mut crate::object::ObjectHeader| unsafe {
+        get_field(object, "returns")
+    });
     let returns_jv = JSValue::from_bits(returns.to_bits());
     let ret = if returns_jv.is_undefined() || returns_jv.is_null() {
         T_VOID
@@ -231,9 +273,14 @@ fn parse_signature(definition: f64) -> (u8, u8, [u8; MAX_ARGS]) {
             .unwrap_or_else(|message| throw_type(&format!("JSCallback: {message}")))
     };
 
+    validate_callback_types(ret, &args[..argc]);
+    (ret, argc as u8, args, threadsafe)
+}
+
+fn validate_callback_types(ret: u8, args: &[u8]) {
     let mut ints = 0usize;
     let mut floats = 0usize;
-    for &ty in &args[..argc] {
+    for &ty in args {
         match ty {
             T_VOID => throw_type("JSCallback: void is not a valid argument type"),
             T_NAPI_ENV | T_NAPI_VALUE | T_BUFFER => {
@@ -262,15 +309,12 @@ fn parse_signature(definition: f64) -> (u8, u8, [u8; MAX_ARGS]) {
         }
         _ => {}
     }
-
-    (ret, argc as u8, args)
 }
 
 extern "C" fn callback_close_thunk(closure: *const ClosureHeader) -> f64 {
     let index = crate::closure::js_closure_get_capture_bits(closure, 0) as usize;
     if let Some(record) = CALLBACKS.lock().unwrap().get_mut(index) {
-        record.open = false;
-        record.callback_bits = crate::value::TAG_UNDEFINED;
+        close_record(record);
     }
     super::undefined()
 }
@@ -294,11 +338,51 @@ pub(crate) fn js_callback_value(callback: f64, definition: f64) -> f64 {
             "ERR_NOT_IMPLEMENTED",
         );
     }
-    if !crate::object::value_is_callable(callback) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(callback);
+    let definition = scope.root_nanbox_f64(definition);
+    if !crate::object::value_is_callable(callback.get_nanbox_f64()) {
         throw_type("JSCallback expects a function as its first argument");
     }
-    let (ret, argc, args) = parse_signature(definition);
+    let (ret, argc, args, threadsafe) = parse_signature(definition.get_nanbox_f64());
 
+    let (index, pointer) =
+        register_callback(callback.get_nanbox_f64(), ret, argc, args, threadsafe, None);
+
+    // The registry roots callback before any of the following JS allocations.
+    let object = crate::object::js_object_alloc(0, 3);
+    let object = scope.root_raw_mut_ptr(object);
+    let ptr_value = super::number_value(pointer as f64);
+    object.with_mut_ptr(|o: *mut crate::object::ObjectHeader| set_field(o, "ptr", ptr_value));
+    object.with_mut_ptr(|o: *mut crate::object::ObjectHeader| {
+        set_field(
+            o,
+            "threadsafe",
+            f64::from_bits(if threadsafe {
+                crate::value::TAG_TRUE
+            } else {
+                crate::value::TAG_FALSE
+            }),
+        )
+    });
+    let close = scope.root_nanbox_f64(close_closure(index));
+    let close_value = close.get_nanbox_f64();
+    object.with_mut_ptr(|o: *mut crate::object::ObjectHeader| set_field(o, "close", close_value));
+    f64::from_bits(
+        object
+            .with_mut_ptr(|o: *mut crate::object::ObjectHeader| JSValue::object_ptr(o as *mut u8))
+            .bits(),
+    )
+}
+
+pub(crate) fn register_callback(
+    callback: f64,
+    ret: u8,
+    argc: u8,
+    args: [u8; MAX_ARGS],
+    threadsafe: bool,
+    owner_lib: Option<usize>,
+) -> (usize, usize) {
     let index = {
         let mut callbacks = CALLBACKS.lock().unwrap();
         if callbacks.len() >= MAX_CALLBACKS {
@@ -314,29 +398,126 @@ pub(crate) fn js_callback_value(callback: f64, definition: f64) -> f64 {
             ret,
             argc,
             args,
+            threadsafe,
+            owner_lib,
             open: true,
         });
+        if threadsafe {
+            ACTIVE_THREADSAFE_CALLBACKS.fetch_add(1, Ordering::Release);
+        }
         index
     };
     let pointer = trampoline_ptr(index).expect("supported callback target has trampoline table");
+    (index, pointer)
+}
 
-    // The registry roots callback before any of the following JS allocations.
+pub(crate) unsafe fn node_register_callback_value(
+    lib: usize,
+    signature: f64,
+    callback: f64,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let object = crate::object::js_object_alloc(0, 3);
-    let object = scope.root_raw_mut_ptr(object);
-    let ptr_value = super::number_value(pointer as f64);
-    object.with_mut_ptr(|o: *mut crate::object::ObjectHeader| set_field(o, "ptr", ptr_value));
-    object.with_mut_ptr(|o: *mut crate::object::ObjectHeader| {
-        set_field(o, "threadsafe", f64::from_bits(crate::value::TAG_FALSE))
-    });
-    let close = scope.root_nanbox_f64(close_closure(index));
-    let close_value = close.get_nanbox_f64();
-    object.with_mut_ptr(|o: *mut crate::object::ObjectHeader| set_field(o, "close", close_value));
-    f64::from_bits(
+    let signature = scope.root_nanbox_f64(signature);
+    let callback = scope.root_nanbox_f64(callback);
+    let (has_signature, callback_value) =
+        if crate::object::value_is_callable(callback.get_nanbox_f64()) {
+            (true, callback.get_nanbox_f64())
+        } else if crate::object::value_is_callable(signature.get_nanbox_f64()) {
+            (false, signature.get_nanbox_f64())
+        } else {
+            throw_type("ffi.registerCallback expects a function argument");
+        };
+    let callback = scope.root_nanbox_f64(callback_value);
+    let object = if has_signature {
+        object_ptr(signature.get_nanbox_f64()).map(|object| scope.root_raw_mut_ptr(object))
+    } else {
+        None
+    };
+    if has_signature && object.is_none() {
+        throw_type("ffi.registerCallback expects a signature object");
+    }
+    let arguments = scope.root_nanbox_f64(object.as_ref().map_or(super::undefined(), |object| {
         object
-            .with_mut_ptr(|o: *mut crate::object::ObjectHeader| JSValue::object_ptr(o as *mut u8))
-            .bits(),
+            .with_mut_ptr(|object: *mut crate::object::ObjectHeader| get_field(object, "arguments"))
+    }));
+    let arguments_jv = JSValue::from_bits(arguments.get_nanbox_f64().to_bits());
+    let len = if arguments_jv.is_undefined() || arguments_jv.is_null() {
+        0
+    } else if JSValue::from_bits(
+        crate::array::js_array_is_array(arguments.get_nanbox_f64()).to_bits(),
     )
+    .as_bool()
+    {
+        let array = crate::value::js_nanbox_get_pointer(arguments.get_nanbox_f64()) as usize
+            as *const crate::array::ArrayHeader;
+        crate::array::js_array_length(array) as usize
+    } else {
+        throw_type("ffi callback signature.arguments must be an array");
+    };
+    if len > MAX_ARGS {
+        throw_type(&format!(
+            "ffi callbacks support at most {MAX_ARGS} arguments"
+        ));
+    }
+    let mut args = [T_VOID; MAX_ARGS];
+    for (index, slot) in args.iter_mut().take(len).enumerate() {
+        let array = crate::value::js_nanbox_get_pointer(arguments.get_nanbox_f64()) as usize
+            as *const crate::array::ArrayHeader;
+        let value = crate::array::js_array_get(array, index as u32);
+        *slot = super::dlopen::parse_node_ffi_type(f64::from_bits(value.bits()), false)
+            .unwrap_or_else(|message| throw_type(&message));
+    }
+    let return_value = object.as_ref().map_or(super::undefined(), |object| {
+        object.with_mut_ptr(|object: *mut crate::object::ObjectHeader| get_field(object, "return"))
+    });
+    let return_jv = JSValue::from_bits(return_value.to_bits());
+    let ret = if return_jv.is_undefined() || return_jv.is_null() {
+        T_VOID
+    } else {
+        super::dlopen::parse_node_ffi_type(return_value, true)
+            .unwrap_or_else(|message| throw_type(&message))
+    };
+    validate_callback_types(ret, &args[..len]);
+    let (_index, pointer) = register_callback(
+        callback.get_nanbox_f64(),
+        ret,
+        len as u8,
+        args,
+        false,
+        Some(lib),
+    );
+    call::bigint_value_u64(pointer as u64)
+}
+
+pub(crate) unsafe fn node_unregister_callback_value(pointer: f64) -> f64 {
+    let pointer = call::value_to_pointer_arg(pointer);
+    let mut callbacks = CALLBACKS.lock().unwrap();
+    for (index, record) in callbacks.iter_mut().enumerate() {
+        if trampoline_ptr(index) == Some(pointer) {
+            close_record(record);
+            break;
+        }
+    }
+    super::undefined()
+}
+
+pub(crate) fn close_callbacks_for_library(lib: usize) {
+    for record in CALLBACKS.lock().unwrap().iter_mut() {
+        if record.owner_lib == Some(lib) {
+            close_record(record);
+        }
+    }
+}
+
+fn close_record(record: &mut CallbackRecord) {
+    if !record.open {
+        return;
+    }
+    record.open = false;
+    record.callback_bits = crate::value::TAG_UNDEFINED;
+    if record.threadsafe {
+        ACTIVE_THREADSAFE_CALLBACKS.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 unsafe fn native_arg_value(ty: u8, bits: u64) -> f64 {
@@ -358,27 +539,11 @@ unsafe fn native_return_bits(ty: u8, value: f64) -> u64 {
     }
 }
 
-/// Assembly callback target. Never unwinds across native code: an uncaught JS
-/// exception is trapped and converted to the declared ABI's zero value. This
-/// matches the module's fail-closed same-thread contract and, critically,
-/// never sends a Perry unwind through an arbitrary third-party C frame.
-#[no_mangle]
-pub unsafe extern "C" fn perry_ffi_callback_dispatch(
-    index: usize,
+unsafe fn invoke_record(
+    record: &CallbackRecord,
     integer_registers: *const usize,
     float_registers: *const u64,
 ) -> u64 {
-    let record = {
-        let callbacks = CALLBACKS.lock().unwrap();
-        let Some(record) = callbacks.get(index) else {
-            return 0;
-        };
-        if !record.open || record.owner != std::thread::current().id() {
-            return 0;
-        }
-        record.clone()
-    };
-
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback = scope.root_nanbox_f64(f64::from_bits(record.callback_bits));
     let mut argument_roots = Vec::with_capacity(record.argc as usize);
@@ -411,6 +576,113 @@ pub unsafe extern "C" fn perry_ffi_callback_dispatch(
         Ok(value) => native_return_bits(record.ret, value),
         Err(_error) => 0,
     }
+}
+
+/// Assembly callback target. Never unwinds across native code: an uncaught JS
+/// exception is trapped and converted to the declared ABI's zero value. This
+/// matches the module's fail-closed same-thread contract and, critically,
+/// never sends a Perry unwind through an arbitrary third-party C frame.
+#[no_mangle]
+pub unsafe extern "C" fn perry_ffi_callback_dispatch(
+    index: usize,
+    integer_registers: *const usize,
+    float_registers: *const u64,
+) -> u64 {
+    let record = {
+        let callbacks = CALLBACKS.lock().unwrap();
+        let Some(record) = callbacks.get(index) else {
+            return 0;
+        };
+        if !record.open {
+            return 0;
+        }
+        record.clone()
+    };
+
+    if record.owner == std::thread::current().id() {
+        return invoke_record(&record, integer_registers, float_registers);
+    }
+    if !record.threadsafe {
+        return 0;
+    }
+
+    // A native worker may release or reuse pointer arguments as soon as the
+    // callback returns, so copy the ABI register images and synchronously wait
+    // for the owning JS thread to execute the callback. No JS/GC state is
+    // touched on this foreign thread.
+    let mut integers = [0usize; 8];
+    let mut floats = [0u64; 8];
+    std::ptr::copy_nonoverlapping(
+        integer_registers,
+        integers.as_mut_ptr(),
+        MAX_CALLBACK_INT_ARGS,
+    );
+    std::ptr::copy_nonoverlapping(float_registers, floats.as_mut_ptr(), MAX_FLOAT_ARGS);
+    let completion = Arc::new((Mutex::new(None), Condvar::new()));
+    PENDING_CALLBACKS.lock().unwrap().push(PendingCallback {
+        index,
+        integer_registers: integers,
+        float_registers: floats,
+        completion: Arc::clone(&completion),
+    });
+    crate::event_pump::js_notify_main_thread();
+    let (lock, ready) = &*completion;
+    let mut result = lock.lock().unwrap_or_else(|poison| poison.into_inner());
+    while result.is_none() {
+        result = ready
+            .wait(result)
+            .unwrap_or_else(|poison| poison.into_inner());
+    }
+    result.unwrap_or(0)
+}
+
+/// Execute foreign-thread callbacks on their owning JS thread. Called at the
+/// beginning of every microtask/event-loop pump.
+pub(crate) fn drain_threadsafe_callbacks() -> i32 {
+    let owner = std::thread::current().id();
+    let pending = {
+        let mut queue = PENDING_CALLBACKS.lock().unwrap();
+        let mut mine = Vec::new();
+        let mut index = 0;
+        while index < queue.len() {
+            let belongs_here = CALLBACKS
+                .lock()
+                .unwrap()
+                .get(queue[index].index)
+                .is_some_and(|record| record.owner == owner);
+            if belongs_here {
+                mine.push(queue.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        mine
+    };
+    let count = pending.len() as i32;
+    for pending in pending {
+        let record = CALLBACKS
+            .lock()
+            .unwrap()
+            .get(pending.index)
+            .filter(|record| record.open)
+            .cloned();
+        let result = record.map_or(0, |record| unsafe {
+            invoke_record(
+                &record,
+                pending.integer_registers.as_ptr(),
+                pending.float_registers.as_ptr(),
+            )
+        });
+        let (lock, ready) = &*pending.completion;
+        *lock.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(result);
+        ready.notify_one();
+    }
+    count
+}
+
+#[no_mangle]
+pub extern "C" fn js_bun_ffi_has_active_threadsafe_callbacks() -> i32 {
+    (ACTIVE_THREADSAFE_CALLBACKS.load(Ordering::Acquire) != 0) as i32
 }
 
 pub(crate) fn scan_callback_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {

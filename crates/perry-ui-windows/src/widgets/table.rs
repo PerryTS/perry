@@ -83,6 +83,16 @@ thread_local! {
     static TABLE_LAYOUT_IN_PROGRESS: Cell<bool> = const { Cell::new(false) };
 }
 
+pub(crate) fn scan_windows_table_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TABLES.with(|tables| {
+        for table in tables.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut table.render_closure);
+            visitor.visit_nanbox_f64_slot(&mut table.select_closure);
+            visitor.visit_nanbox_f64_slot(&mut table.sort_closure);
+        }
+    });
+}
+
 #[cfg(target_os = "windows")]
 const TABLE_SUBCLASS_ID: usize = 0x6616;
 

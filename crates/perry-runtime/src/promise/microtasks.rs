@@ -215,6 +215,8 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     });
     let mut ran = 0;
 
+    ran += crate::bun_ffi::callback::drain_threadsafe_callbacks();
+
     ran += crate::async_hooks::drain_gc_destroy_queue();
 
     // FinalizationRegistry cleanup jobs recorded by AUTOMATIC collection

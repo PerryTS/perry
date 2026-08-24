@@ -81,6 +81,14 @@ thread_local! {
     static TAP_TARGET: RefCell<Option<Retained<AnyObject>>> = RefCell::new(None);
 }
 
+pub(crate) fn scan_ios_camera_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TAP_CALLBACK.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().as_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 // =============================================================================
 // Camera delegate — receives frames from AVCaptureVideoDataOutput
 // =============================================================================

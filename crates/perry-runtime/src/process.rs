@@ -122,7 +122,7 @@ pub(crate) fn is_function_value(value: f64) -> bool {
 /// - `_`-prefixed legacy internals (`_http_agent`, …): Node still serves
 ///   them, Perry has no implementation — they must keep failing with an
 ///   error that names the module, not resolve to a method-dead namespace.
-/// - Scheme-only builtins (`node:sea`, `node:sqlite`, `node:test`,
+/// - Scheme-only builtins (`node:ffi`, `node:sea`, `node:sqlite`, `node:test`,
 ///   `node:test/reporters` — stored WITH the prefix, exactly as Node spells
 ///   them in `module.builtinModules`): resolve only when the caller wrote
 ///   the `node:` prefix. The bare spelling is an ordinary npm package name
@@ -251,6 +251,7 @@ pub(crate) const MODULE_BUILTIN_MODULES: &[&str] = &[
     "wasi",
     "worker_threads",
     "zlib",
+    "node:ffi",
     "node:sea",
     "node:sqlite",
     "node:test",
@@ -814,8 +815,8 @@ mod builtin_module_list_tests {
                 let prefixed = format!("node:{entry}");
                 assert_eq!(supported_builtin_module_name(&prefixed), None, "{prefixed}");
             } else if let Some(bare) = entry.strip_prefix("node:") {
-                // Scheme-only builtins (node:sea, node:sqlite, node:test,
-                // node:test/reporters): the prefixed spelling resolves, the
+                // Scheme-only builtins (node:ffi, node:sea, node:sqlite,
+                // node:test, node:test/reporters): the prefixed spelling resolves, the
                 // bare spelling is an ordinary npm name (Node parity).
                 assert_eq!(supported_builtin_module_name(entry), Some(bare), "{entry}");
                 assert_eq!(supported_builtin_module_name(bare), None, "{bare}");

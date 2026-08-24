@@ -34,6 +34,14 @@ thread_local! {
     static SLIDER_INFO: RefCell<HashMap<i64, SliderInfo>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_windows_slider_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    SLIDER_INFO.with(|sliders| {
+        for slider in sliders.borrow_mut().values_mut() {
+            visitor.visit_raw_const_ptr_slot(&mut slider.callback_ptr);
+        }
+    });
+}
+
 /// TBM_GETPOS is not exported by the windows crate 0.58 — define it manually.
 /// WM_USER (0x0400) + 0 = 1024
 #[cfg(target_os = "windows")]

@@ -10,6 +10,7 @@ pub mod crash_log;
 pub mod deeplinks_stub;
 pub mod drag_drop;
 pub mod file_dialog;
+mod gc;
 #[cfg(feature = "geisterhand")]
 pub mod geisterhand_style;
 pub mod issue_552_stub;

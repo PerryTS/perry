@@ -11,4 +11,5 @@ workspace = true
 crate-type = ["rlib"]
 
 [dependencies]
+perry-ffi.workspace = true
 perry-ui-model.workspace = true

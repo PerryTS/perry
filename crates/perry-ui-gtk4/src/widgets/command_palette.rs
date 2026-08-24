@@ -44,6 +44,14 @@ thread_local! {
     });
 }
 
+pub(crate) fn scan_gtk4_command_palette_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    STATE.with(|state| {
+        for command in &mut state.borrow_mut().commands {
+            visitor.visit_nanbox_f64_slot(&mut command.on_run);
+        }
+    });
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn refresh_filter() {

@@ -27,6 +27,14 @@ thread_local! {
     static CALENDAR_CALLBACKS: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_ios_calendar_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    CALENDAR_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 pub struct PerryCalendarTargetIvars {
     pub handle: Cell<i64>,
 }

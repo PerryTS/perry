@@ -166,6 +166,16 @@ thread_local! {
         RefCell::new(std::collections::HashSet::new());
 }
 
+pub(crate) fn scan_windows_webview_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    WEBVIEW_STATES.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.on_should_navigate);
+            visitor.visit_nanbox_f64_slot(&mut state.on_loaded);
+            visitor.visit_nanbox_f64_slot(&mut state.on_error);
+        }
+    });
+}
+
 #[cfg(target_os = "windows")]
 const WEBVIEW_SUBCLASS_ID: usize = 0x77_76_69_77; // 'w','v','i','w'
 

@@ -54,12 +54,6 @@
       "why": "Vec<PendingTlsKeylog>: an i64 server HANDLE plus Vec<Vec<u8>> of owned keylog bytes. Both are Rust-allocated; no JS heap pointer is stored, so no root scanner is required."
     },
     {
-      "file": "crates/perry-ext-net/src/tls.rs",
-      "name": "ABORTS",
-      "verdict": "not_a_gc_pointer",
-      "why": "HashSet<i64> of pending TLS abort handles. Each i64 is a socket HANDLE -- the key used to look the socket up in crate::statics::sockets() and the payload of PendingNetEvent::AbortError/Close -- i.e. an index into the handle side table, stable across collection, not a heap address. The set holds no other field, so there is nothing for a scanner to visit."
-    },
-    {
       "file": "crates/perry-ext-http/src/server/server.rs",
       "name": "CONNECTIONS",
       "verdict": "not_a_gc_pointer",
@@ -94,6 +88,12 @@
       "name": "STATE",
       "verdict": "not_a_gc_pointer",
       "why": "ConnectionOrderState = socket-id VecDeques, per-server usize credits, and buffered Bytes chunks keyed by socket id. Pure ids and bytes; no NaN-boxed values."
+    },
+    {
+      "file": "crates/perry-ext-net/src/tls.rs",
+      "name": "ABORTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashSet<i64> of pending TLS abort handles. Each i64 is a socket HANDLE -- the key used to look the socket up in crate::statics::sockets() and the payload of PendingNetEvent::AbortError/Close -- i.e. an index into the handle side table, stable across collection, not a heap address. The set holds no other field, so there is nothing for a scanner to visit."
     },
     {
       "file": "crates/perry-ext-parcel-watcher/src/lib.rs",
@@ -142,12 +142,6 @@
       "name": "CAPTURED_MISS_STREAK",
       "verdict": "not_a_gc_pointer",
       "why": "Keyed by the closure's func_ptr \u2014 a CODE address, which the collector neither moves nor traces; the value is a miss-streak count."
-    },
-    {
-      "file": "crates/perry-runtime/src/closure/alloc.rs",
-      "name": "CLOSURE_ALLOC_COUNT",
-      "verdict": "not_a_gc_pointer",
-      "why": "Monotonic allocation counter (telemetry). Holds no address."
     },
     {
       "file": "crates/perry-runtime/src/closure/alloc.rs",
@@ -465,9 +459,1269 @@
       "name": "WS_CONNECTIONS",
       "verdict": "not_a_gc_pointer",
       "why": "Keyed by ws id; WsConnection is Rust-owned (command sender, buffered message Strings, state flags). Listener closures live in WS_CLIENT_LISTENERS, which scan_ws_roots_mut visits."
+    },
+    {
+      "file": "crates/perry-ui-android/src/app.rs",
+      "name": "PENDING_CONFIG",
+      "verdict": "not_a_gc_pointer",
+      "why": "AppConfig is pre-launch native UI configuration: Rust strings, dimensions, flags, and widget handles; it retains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/callback.rs",
+      "name": "NEXT_KEY",
+      "verdict": "not_a_gc_pointer",
+      "why": "NEXT_KEY is a monotonic numeric id/counter used to address native or callback-registry state; it is never a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/drag_drop.rs",
+      "name": "DRAG_KEYS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/menu.rs",
+      "name": "CONTEXT_MENUS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Context-menu bindings map native widget handles to numeric menu handles only; callbacks are rooted separately."
+    },
+    {
+      "file": "crates/perry-ui-android/src/menu.rs",
+      "name": "MENUS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Android menu entries retain Rust titles and numeric keys into the scanned global CALLBACKS registry; they do not retain callback bits."
+    },
+    {
+      "file": "crates/perry-ui-android/src/pointer.rs",
+      "name": "KEYS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/sheet.rs",
+      "name": "SHEETS",
+      "verdict": "not_a_gc_pointer",
+      "why": "A field-by-field audit of sheet.rs:SHEETS (RefCell<HashMap<i64, SheetState>>) found only Rust-owned strings/collections, native objects or widget handles, and numeric UI state; no field accepts or preserves a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "MultiTextBinding contains a widget handle and TextPart values made only of Rust strings or numeric state ids."
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "SLIDER_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "SliderBinding stores only the native slider widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextFieldBinding stores a native text-field handle and a Rust reentrancy flag; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextBinding stores widget handles plus Rust prefix/suffix strings; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "TOGGLE_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "ToggleBinding stores only the native toggle widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-android/src/state.rs",
+      "name": "VISIBILITY_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "VisibilityBinding contains only numeric widget handles to show or hide."
+    },
+    {
+      "file": "crates/perry-ui-android/src/system.rs",
+      "name": "NOTIFICATION_REMOTE_TOKEN_KEY",
+      "verdict": "not_a_gc_pointer",
+      "why": "NOTIFICATION_REMOTE_TOKEN_KEY is a monotonic numeric id/counter used to address native or callback-registry state; it is never a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/system.rs",
+      "name": "NOTIFICATION_TAP_KEY",
+      "verdict": "not_a_gc_pointer",
+      "why": "NOTIFICATION_TAP_KEY is a monotonic numeric id/counter used to address native or callback-registry state; it is never a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/toolbar.rs",
+      "name": "TOOLBARS",
+      "verdict": "not_a_gc_pointer",
+      "why": "A field-by-field audit of toolbar.rs:TOOLBARS (RefCell<HashMap<i64, ToolbarState>>) found only Rust-owned strings/collections, native objects or widget handles, and numeric UI state; no field accepts or preserves a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/bloomview.rs",
+      "name": "BLOOM_WINDOWS",
+      "verdict": "not_a_gc_pointer",
+      "why": "A field-by-field audit of widgets/bloomview.rs:BLOOM_WINDOWS (Mutex<Vec<(i64, i64)>>) found only Rust-owned strings/collections, native objects or widget handles, and numeric UI state; no field accepts or preserves a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/bottom_nav.rs",
+      "name": "STATES",
+      "verdict": "not_a_gc_pointer",
+      "why": "A field-by-field audit of widgets/bottom_nav.rs:STATES (RefCell<HashMap<i64, BottomNavState>>) found only Rust-owned strings/collections, native objects or widget handles, and numeric UI state; no field accepts or preserves a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGE_SIZES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Canvas size cache stores width/height drawing scalars keyed by numeric handles, not NaN-boxed JavaScript data."
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/canvas.rs",
+      "name": "CANVAS_STATES",
+      "verdict": "not_a_gc_pointer",
+      "why": "A field-by-field audit of widgets/canvas.rs:CANVAS_STATES (LazyLock<Mutex<HashMap<i64, CanvasState>>>) found only Rust-owned strings/collections, native objects or widget handles, and numeric UI state; no field accepts or preserves a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/canvas.rs",
+      "name": "IMAGE_CACHE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Image cache maps Rust source strings to numeric native image handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/image_gallery.rs",
+      "name": "STATES",
+      "verdict": "not_a_gc_pointer",
+      "why": "A field-by-field audit of widgets/image_gallery.rs:STATES (RefCell<HashMap<i64, GalleryState>>) found only Rust-owned strings/collections, native objects or widget handles, and numeric UI state; no field accepts or preserves a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/navstack.rs",
+      "name": "NAV_STATES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Navigation state contains Rust page titles and numeric widget handles/indices only; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/scrollview.rs",
+      "name": "REFRESH_LAYOUTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/tabbar.rs",
+      "name": "TABBAR_STATE",
+      "verdict": "not_a_gc_pointer",
+      "why": "A field-by-field audit of widgets/tabbar.rs:TABBAR_STATE (RefCell<HashMap<i64, TabBarState>>) found only Rust-owned strings/collections, native objects or widget handles, and numeric UI state; no field accepts or preserves a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Text registry maps Rust string ids to numeric native widget handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/tree_view.rs",
+      "name": "TREE_NODES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Tree node storage contains Rust ids/labels and numeric child-node handles only; selection callbacks live in separately scanned storage."
+    },
+    {
+      "file": "crates/perry-ui-android/src/widgets/tree_view.rs",
+      "name": "TREE_VIEWS",
+      "verdict": "not_a_gc_pointer",
+      "why": "A field-by-field audit of widgets/tree_view.rs:TREE_VIEWS (RefCell<HashMap<i64, TreeViewState>>) found only Rust-owned strings/collections, native objects or widget handles, and numeric UI state; no field accepts or preserves a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-android/src/window.rs",
+      "name": "WINDOWS",
+      "verdict": "not_a_gc_pointer",
+      "why": "A field-by-field audit of window.rs:WINDOWS (RefCell<HashMap<i64, WindowState>>) found only Rust-owned strings/collections, native objects or widget handles, and numeric UI state; no field accepts or preserves a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-geisterhand/src/chaos.rs",
+      "name": "EVENTS_FIRED",
+      "verdict": "not_a_gc_pointer",
+      "why": "EVENTS_FIRED is a monotonic numeric id/counter used to address native or callback-registry state; it is never a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/app.rs",
+      "name": "APPS",
+      "verdict": "not_a_gc_pointer",
+      "why": "App entries retain native window/application objects and scalar window configuration. Callback roots are kept in dedicated scanned tables."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/media_playback.rs",
+      "name": "CMD_RX",
+      "verdict": "not_a_gc_pointer",
+      "why": "MPRIS channel endpoint transports the private native Command enum (playback operations and scalar handles); no JavaScript value crosses it."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/media_playback.rs",
+      "name": "CMD_TX",
+      "verdict": "not_a_gc_pointer",
+      "why": "MPRIS channel endpoint transports the private native Command enum (playback operations and scalar handles); no JavaScript value crosses it."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/menu.rs",
+      "name": "MENUBARS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Menu-bar entries contain native menu objects, Rust titles, and numeric menu handles. Item callbacks live in separately scanned storage."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "MultiTextBinding contains a widget handle and TextPart values made only of Rust strings or numeric state ids."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "SLIDER_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "SliderBinding stores only the native slider widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextFieldBinding stores a native text-field handle and a Rust reentrancy flag; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextBinding stores widget handles plus Rust prefix/suffix strings; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "TOGGLE_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "ToggleBinding stores only the native toggle widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/state.rs",
+      "name": "VISIBILITY_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "VisibilityBinding contains only numeric widget handles to show or hide."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
+      "name": "CANVAS_COMMANDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Draw-command buffers contain Rust strings/native image handles and numeric geometry, color, and stroke scalars, not JavaScript values."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
+      "name": "CANVAS_LAST_FRAME",
+      "verdict": "not_a_gc_pointer",
+      "why": "Draw-command buffers contain Rust strings/native image handles and numeric geometry, color, and stroke scalars, not JavaScript values."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
+      "name": "CANVAS_SIZES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Canvas size cache stores width/height drawing scalars keyed by numeric handles, not NaN-boxed JavaScript data."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
+      "name": "IMAGE_CACHE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Image cache maps Rust source strings to numeric native image handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/chart.rs",
+      "name": "CHARTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Chart entries contain a chart kind, Rust labels/title, native handles, and numeric data points. The f64 values are plotted numbers, not JavaScript roots."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/mod.rs",
+      "name": "BORDER_STATE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native styling cache contains widget handles and geometry, opacity, shadow, border, or RGBA f64 scalars only; it accepts no arbitrary JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/rich_tooltip.rs",
+      "name": "BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Rich-tooltip binding retains native UI objects, widget handles, and a numeric delay/token; it contains no JavaScript callback or heap value."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/text_registry.rs",
+      "name": "TEXT_REGISTRY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Text registry maps Rust string ids to numeric native widget handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/textfield.rs",
+      "name": "REGISTERED_ENTRIES",
+      "verdict": "not_a_gc_pointer",
+      "why": "List of numeric native text-field widget handles used by blur_all; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/tree_view.rs",
+      "name": "NODES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Tree node storage contains Rust ids/labels and numeric child-node handles only; selection callbacks live in separately scanned storage."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/adaptive_layout.rs",
+      "name": "LAST_SNAPSHOT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Adaptive-layout snapshot copies native viewport dimensions, size class, orientation, and platform flags; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/app.rs",
+      "name": "PENDING_CONFIG",
+      "verdict": "not_a_gc_pointer",
+      "why": "AppConfig is pre-launch native UI configuration: Rust strings, dimensions, flags, and widget handles; it retains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/audio_playback.rs",
+      "name": "BUSES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Audio BusEntry values contain native mixer nodes and scalar volume/mute/solo state. JavaScript callbacks live only in scanned sound and voice entries."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/audio_playback.rs",
+      "name": "FADES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Fade entries contain playback/bus handles and numeric envelope progress; they never store JavaScript values or GC heap pointers."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/background.rs",
+      "name": "REGISTERED_BLOCKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Retained Objective-C blocks capture stable Rust/native identifiers for OS delivery. JavaScript callbacks remain in the separately scanned HANDLERS table."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/menu.rs",
+      "name": "MENUBARS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Menu-bar entries contain native menu objects, Rust titles, and numeric menu handles. Item callbacks live in separately scanned storage."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/network.rs",
+      "name": "MONITOR_BLOCK",
+      "verdict": "not_a_gc_pointer",
+      "why": "Retained Network.framework monitor block captures only native monitor state; JavaScript listeners are held in and rewritten through LISTENERS."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/notifications.rs",
+      "name": "NEXT_COMPLETION_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "NEXT_COMPLETION_HANDLE is a monotonic numeric id/counter used to address native or callback-registry state; it is never a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/notifications.rs",
+      "name": "PENDING_COMPLETIONS",
+      "verdict": "not_a_gc_pointer",
+      "why": "The table owns OS-provided notification completion blocks with integer arguments, not JavaScript closures."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/pointer.rs",
+      "name": "INSTALLED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Set of numeric widget handles whose native hook or behavior is installed; no JavaScript value is stored."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/pointer.rs",
+      "name": "RECOG_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "MultiTextBinding contains a widget handle and TextPart values made only of Rust strings or numeric state ids."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "SLIDER_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "SliderBinding stores only the native slider widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextFieldBinding stores a native text-field handle and a Rust reentrancy flag; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextBinding stores widget handles plus Rust prefix/suffix strings; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "TOGGLE_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "ToggleBinding stores only the native toggle widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/state.rs",
+      "name": "VISIBILITY_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "VisibilityBinding contains only numeric widget handles to show or hide."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/bottom_nav.rs",
+      "name": "DELEGATE_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
+      "name": "CANVAS_COMMANDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Draw-command buffers contain Rust strings/native image handles and numeric geometry, color, and stroke scalars, not JavaScript values."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGES",
+      "verdict": "not_a_gc_pointer",
+      "why": "CanvasImage owns native image objects and decoded raster dimensions only; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
+      "name": "CANVAS_LAST_FRAME",
+      "verdict": "not_a_gc_pointer",
+      "why": "Draw-command buffers contain Rust strings/native image handles and numeric geometry, color, and stroke scalars, not JavaScript values."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
+      "name": "CANVAS_SIZES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Canvas size cache stores width/height drawing scalars keyed by numeric handles, not NaN-boxed JavaScript data."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
+      "name": "IMAGE_CACHE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Image cache maps Rust source strings to numeric native image handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/chart.rs",
+      "name": "CHARTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Chart entries contain a chart kind, Rust labels/title, native handles, and numeric data points. The f64 values are plotted numbers, not JavaScript roots."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/image_gallery.rs",
+      "name": "DELEGATE_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/navstack.rs",
+      "name": "NAV_STACKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Navigation state contains Rust page titles and numeric widget handles/indices only; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/picker.rs",
+      "name": "PICKER_SELECTED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Picker selection cache stores only numeric widget handles and selected row indices."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/rich_tooltip.rs",
+      "name": "BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Rich-tooltip binding retains native UI objects, widget handles, and a numeric delay/token; it contains no JavaScript callback or heap value."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
+      "name": "SCROLL_MUTATION_GATE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Scroll mutation gate is native reentrancy/bookkeeping state made of widget handles and boolean/counter fields."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/tabbar.rs",
+      "name": "DELEGATE_MAP",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Text registry maps Rust string ids to numeric native widget handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/tree_view.rs",
+      "name": "NODES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Tree node storage contains Rust ids/labels and numeric child-node handles only; selection callbacks live in separately scanned storage."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/wheel_picker.rs",
+      "name": "SELECTED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Picker selection cache stores only numeric widget handles and selected row indices."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/app.rs",
+      "name": "APPS",
+      "verdict": "not_a_gc_pointer",
+      "why": "App entries retain native window/application objects and scalar window configuration. Callback roots are kept in dedicated scanned tables."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/audio_playback.rs",
+      "name": "BUSES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Audio BusEntry values contain native mixer nodes and scalar volume/mute/solo state. JavaScript callbacks live only in scanned sound and voice entries."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/audio_playback.rs",
+      "name": "FADES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Fade entries contain playback/bus handles and numeric envelope progress; they never store JavaScript values or GC heap pointers."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/background.rs",
+      "name": "REGISTERED_BLOCKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Retained Objective-C blocks capture stable Rust/native identifiers for OS delivery. JavaScript callbacks remain in the separately scanned HANDLERS table."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/network.rs",
+      "name": "MONITOR_BLOCK",
+      "verdict": "not_a_gc_pointer",
+      "why": "Retained Network.framework monitor block captures only native monitor state; JavaScript listeners are held in and rewritten through LISTENERS."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/pointer.rs",
+      "name": "MOVE_DEDUP",
+      "verdict": "not_a_gc_pointer",
+      "why": "Pointer-motion deduplication cache stores native x/y coordinates; its f64 values are geometry scalars."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "MultiTextBinding contains a widget handle and TextPart values made only of Rust strings or numeric state ids."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "SLIDER_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "SliderBinding stores only the native slider widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextFieldBinding stores a native text-field handle and a Rust reentrancy flag; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "TEXTFIELD_TO_BINDING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Reverse index of native text-field handles to Rust TextFieldBinding records; neither side contains a JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextBinding stores widget handles plus Rust prefix/suffix strings; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "TOGGLE_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "ToggleBinding stores only the native toggle widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/state.rs",
+      "name": "VISIBILITY_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "VisibilityBinding contains only numeric widget handles to show or hide."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/bottom_nav.rs",
+      "name": "TARGET_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
+      "name": "CANVAS_COMMANDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Draw-command buffers contain Rust strings/native image handles and numeric geometry, color, and stroke scalars, not JavaScript values."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGES",
+      "verdict": "not_a_gc_pointer",
+      "why": "CanvasImage owns native image objects and decoded raster dimensions only; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
+      "name": "CANVAS_LAST_FRAME",
+      "verdict": "not_a_gc_pointer",
+      "why": "Draw-command buffers contain Rust strings/native image handles and numeric geometry, color, and stroke scalars, not JavaScript values."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
+      "name": "CANVAS_SIZES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Canvas size cache stores width/height drawing scalars keyed by numeric handles, not NaN-boxed JavaScript data."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
+      "name": "IMAGE_CACHE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Image cache maps Rust source strings to numeric native image handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/chart.rs",
+      "name": "CHARTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Chart entries contain a chart kind, Rust labels/title, native handles, and numeric data points. The f64 values are plotted numbers, not JavaScript roots."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/image_gallery.rs",
+      "name": "OBSERVER_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/lazyvstack.rs",
+      "name": "SCROLL_END_OBSERVER_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/mod.rs",
+      "name": "BG_COLOR_MAP",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native styling cache contains widget handles and geometry, opacity, shadow, border, or RGBA f64 scalars only; it accepts no arbitrary JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/mod.rs",
+      "name": "PARENT_MAP",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/navstack.rs",
+      "name": "NAV_STACKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Navigation state contains Rust page titles and numeric widget handles/indices only; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/rich_tooltip.rs",
+      "name": "BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Rich-tooltip binding retains native UI objects, widget handles, and a numeric delay/token; it contains no JavaScript callback or heap value."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/scrollview.rs",
+      "name": "SCROLL_END_OBSERVER_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Text registry maps Rust string ids to numeric native widget handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/tree_view.rs",
+      "name": "NODES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Tree node storage contains Rust ids/labels and numeric child-node handles only; selection callbacks live in separately scanned storage."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/zstack.rs",
+      "name": "ZSTACK_HANDLES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Set of numeric widget handles whose native hook or behavior is installed; no JavaScript value is stored."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/app.rs",
+      "name": "PENDING_CONFIG",
+      "verdict": "not_a_gc_pointer",
+      "why": "AppConfig is pre-launch native UI configuration: Rust strings, dimensions, flags, and widget handles; it retains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/audio_playback.rs",
+      "name": "BUSES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Audio BusEntry values contain native mixer nodes and scalar volume/mute/solo state. JavaScript callbacks live only in scanned sound and voice entries."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/audio_playback.rs",
+      "name": "FADES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Fade entries contain playback/bus handles and numeric envelope progress; they never store JavaScript values or GC heap pointers."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/background.rs",
+      "name": "REGISTERED_BLOCKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Retained Objective-C blocks capture stable Rust/native identifiers for OS delivery. JavaScript callbacks remain in the separately scanned HANDLERS table."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/menu.rs",
+      "name": "MENUBARS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Menu-bar entries contain native menu objects, Rust titles, and numeric menu handles. Item callbacks live in separately scanned storage."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/pointer.rs",
+      "name": "INSTALLED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Set of numeric widget handles whose native hook or behavior is installed; no JavaScript value is stored."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/pointer.rs",
+      "name": "RECOG_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "MultiTextBinding contains a widget handle and TextPart values made only of Rust strings or numeric state ids."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "SLIDER_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "SliderBinding stores only the native slider widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextFieldBinding stores a native text-field handle and a Rust reentrancy flag; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextBinding stores widget handles plus Rust prefix/suffix strings; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "TOGGLE_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "ToggleBinding stores only the native toggle widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/state.rs",
+      "name": "VISIBILITY_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "VisibilityBinding contains only numeric widget handles to show or hide."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/bottom_nav.rs",
+      "name": "DELEGATE_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
+      "name": "CANVAS_COMMANDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Draw-command buffers contain Rust strings/native image handles and numeric geometry, color, and stroke scalars, not JavaScript values."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGES",
+      "verdict": "not_a_gc_pointer",
+      "why": "CanvasImage owns native image objects and decoded raster dimensions only; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
+      "name": "CANVAS_LAST_FRAME",
+      "verdict": "not_a_gc_pointer",
+      "why": "Draw-command buffers contain Rust strings/native image handles and numeric geometry, color, and stroke scalars, not JavaScript values."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
+      "name": "CANVAS_SIZES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Canvas size cache stores width/height drawing scalars keyed by numeric handles, not NaN-boxed JavaScript data."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
+      "name": "IMAGE_CACHE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Image cache maps Rust source strings to numeric native image handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/navstack.rs",
+      "name": "NAV_STACKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Navigation state contains Rust page titles and numeric widget handles/indices only; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/picker.rs",
+      "name": "PICKER_SELECTED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Picker selection cache stores only numeric widget handles and selected row indices."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/tabbar.rs",
+      "name": "DELEGATE_MAP",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Text registry maps Rust string ids to numeric native widget handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/app.rs",
+      "name": "PENDING_CONFIG",
+      "verdict": "not_a_gc_pointer",
+      "why": "AppConfig is pre-launch native UI configuration: Rust strings, dimensions, flags, and widget handles; it retains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/audio_playback.rs",
+      "name": "BUSES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Audio BusEntry values contain native mixer nodes and scalar volume/mute/solo state. JavaScript callbacks live only in scanned sound and voice entries."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/audio_playback.rs",
+      "name": "FADES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Fade entries contain playback/bus handles and numeric envelope progress; they never store JavaScript values or GC heap pointers."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/background.rs",
+      "name": "REGISTERED_BLOCKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Retained Objective-C blocks capture stable Rust/native identifiers for OS delivery. JavaScript callbacks remain in the separately scanned HANDLERS table."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/menu.rs",
+      "name": "MENUBARS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Menu-bar entries contain native menu objects, Rust titles, and numeric menu handles. Item callbacks live in separately scanned storage."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/pointer.rs",
+      "name": "INSTALLED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Set of numeric widget handles whose native hook or behavior is installed; no JavaScript value is stored."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/pointer.rs",
+      "name": "RECOG_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "MultiTextBinding contains a widget handle and TextPart values made only of Rust strings or numeric state ids."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "SLIDER_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "SliderBinding stores only the native slider widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextFieldBinding stores a native text-field handle and a Rust reentrancy flag; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextBinding stores widget handles plus Rust prefix/suffix strings; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "TOGGLE_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "ToggleBinding stores only the native toggle widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/state.rs",
+      "name": "VISIBILITY_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "VisibilityBinding contains only numeric widget handles to show or hide."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/bottom_nav.rs",
+      "name": "DELEGATE_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
+      "name": "CANVAS_COMMANDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Draw-command buffers contain Rust strings/native image handles and numeric geometry, color, and stroke scalars, not JavaScript values."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGES",
+      "verdict": "not_a_gc_pointer",
+      "why": "CanvasImage owns native image objects and decoded raster dimensions only; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
+      "name": "CANVAS_LAST_FRAME",
+      "verdict": "not_a_gc_pointer",
+      "why": "Draw-command buffers contain Rust strings/native image handles and numeric geometry, color, and stroke scalars, not JavaScript values."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
+      "name": "CANVAS_SIZES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Canvas size cache stores width/height drawing scalars keyed by numeric handles, not NaN-boxed JavaScript data."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
+      "name": "IMAGE_CACHE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Image cache maps Rust source strings to numeric native image handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/chart.rs",
+      "name": "CHARTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Chart entries contain a chart kind, Rust labels/title, native handles, and numeric data points. The f64 values are plotted numbers, not JavaScript roots."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/navstack.rs",
+      "name": "NAV_STACKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Navigation state contains Rust page titles and numeric widget handles/indices only; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/picker.rs",
+      "name": "PICKER_SELECTED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Picker selection cache stores only numeric widget handles and selected row indices."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/rich_tooltip.rs",
+      "name": "BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Rich-tooltip binding retains native UI objects, widget handles, and a numeric delay/token; it contains no JavaScript callback or heap value."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/tabbar.rs",
+      "name": "DELEGATE_MAP",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Text registry maps Rust string ids to numeric native widget handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/tree_view.rs",
+      "name": "NODES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Tree node storage contains Rust ids/labels and numeric child-node handles only; selection callbacks live in separately scanned storage."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/wheel_picker.rs",
+      "name": "SELECTED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Picker selection cache stores only numeric widget handles and selected row indices."
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/audio_playback.rs",
+      "name": "BUSES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Audio BusEntry values contain native mixer nodes and scalar volume/mute/solo state. JavaScript callbacks live only in scanned sound and voice entries."
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/audio_playback.rs",
+      "name": "FADES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Fade entries contain playback/bus handles and numeric envelope progress; they never store JavaScript values or GC heap pointers."
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "MultiTextBinding contains a widget handle and TextPart values made only of Rust strings or numeric state ids."
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/state.rs",
+      "name": "SLIDER_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "SliderBinding stores only the native slider widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/state.rs",
+      "name": "TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextBinding stores widget handles plus Rust prefix/suffix strings; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/state.rs",
+      "name": "TOGGLE_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "ToggleBinding stores only the native toggle widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/state.rs",
+      "name": "VISIBILITY_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "VisibilityBinding contains only numeric widget handles to show or hide."
+    },
+    {
+      "file": "crates/perry-ui-watchos/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Text registry maps Rust string ids to numeric native widget handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/app.rs",
+      "name": "APPS",
+      "verdict": "not_a_gc_pointer",
+      "why": "App entries retain native window/application objects and scalar window configuration. Callback roots are kept in dedicated scanned tables."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/media_playback.rs",
+      "name": "Q",
+      "verdict": "not_a_gc_pointer",
+      "why": "The queued f64 is a numeric media-player handle paired with a WinRT transport-button enum, not a NaN-boxed JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/menu.rs",
+      "name": "CONTEXT_MENU_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Context-menu bindings map native widget handles to numeric menu handles only; callbacks are rooted separately."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "MULTI_TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "MultiTextBinding contains a widget handle and TextPart values made only of Rust strings or numeric state ids."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "SLIDER_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "SliderBinding stores only the native slider widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "TEXTFIELD_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextFieldBinding stores a native text-field handle and a Rust reentrancy flag; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "TEXT_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "TextBinding stores widget handles plus Rust prefix/suffix strings; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "TOGGLE_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "ToggleBinding stores only the native toggle widget handle used for two-way updates."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/state.rs",
+      "name": "VISIBILITY_BINDINGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "VisibilityBinding contains only numeric widget handles to show or hide."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/bottom_nav.rs",
+      "name": "ITEM_LOOKUP",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/button.rs",
+      "name": "BTN_HWND_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/button.rs",
+      "name": "BUTTON_CONTENT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Button presentation cache stores Rust text/icon paths and a numeric position enum; callbacks live in separately scanned storage."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
+      "name": "CANVAS_CMDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Draw-command buffers contain Rust strings/native image handles and numeric geometry, color, and stroke scalars, not JavaScript values."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGE_CACHE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Image cache maps Rust source strings to numeric native image handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
+      "name": "CANVAS_IMAGE_SIZES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Canvas size cache stores width/height drawing scalars keyed by numeric handles, not NaN-boxed JavaScript data."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
+      "name": "CANVAS_LAST_FRAME",
+      "verdict": "not_a_gc_pointer",
+      "why": "Draw-command buffers contain Rust strings/native image handles and numeric geometry, color, and stroke scalars, not JavaScript values."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/chart.rs",
+      "name": "CHARTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Chart entries contain a chart kind, Rust labels/title, native handles, and numeric data points. The f64 values are plotted numbers, not JavaScript roots."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/map_view.rs",
+      "name": "HWND_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/map_view.rs",
+      "name": "MAPS",
+      "verdict": "not_a_gc_pointer",
+      "why": "MapState contains latitude/longitude/span scalars, native WinRT map objects, Rust error text, and counters; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "BORDER_STATE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native styling cache contains widget handles and geometry, opacity, shadow, border, or RGBA f64 scalars only; it accepts no arbitrary JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "BORDER_SUBCLASSED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Set of numeric widget handles whose native hook or behavior is installed; no JavaScript value is stored."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "CORNER_RADII",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native styling cache contains widget handles and geometry, opacity, shadow, border, or RGBA f64 scalars only; it accepts no arbitrary JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "HWND_MAP",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "OPACITY_VALUES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native styling cache contains widget handles and geometry, opacity, shadow, border, or RGBA f64 scalars only; it accepts no arbitrary JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "PARENT_SHADOW_REGISTRY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native shadow routing registry maps parent HWND identities to numeric Perry widget handles only."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "SHADOW_PARAMS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native styling cache contains widget handles and geometry, opacity, shadow, border, or RGBA f64 scalars only; it accepts no arbitrary JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
+      "name": "WIDGETS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Widget registry contains native HWND objects, layout/style scalars, and numeric child handles. JavaScript callbacks are kept in scanned tables."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/navstack.rs",
+      "name": "NAV_STACKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Navigation state contains Rust page titles and numeric widget handles/indices only; no JavaScript value is retained."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/pdf_view.rs",
+      "name": "COMPLETED",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashMap<usize, RenderCompletion> of finished PDF page renders. The key is a monotonic request id from an AtomicUsize counter, not a heap address, and RenderCompletion holds only owned Rust data (the encoded PNG bytes as Vec<u8>, or an error String). No field can hold a pointer into the GC heap, so there is nothing for a scanner to visit."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/pdf_view.rs",
+      "name": "PDFS",
+      "verdict": "not_a_gc_pointer",
+      "why": "PDF state contains a Rust path, numeric page indices/counts, and a zoom scalar; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/rich_tooltip.rs",
+      "name": "TOOLTIPS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Rich-tooltip binding retains native UI objects, widget handles, and a numeric delay/token; it contains no JavaScript callback or heap value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/scrollview.rs",
+      "name": "SCROLL_STATES",
+      "verdict": "not_a_gc_pointer",
+      "why": "ScrollState contains native pixel offsets, viewport/content sizes, and an optional numeric child widget handle only."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/text.rs",
+      "name": "DECORATION_VALUES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Text-decoration cache pairs numeric widget handles with an integer decoration enum; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/text.rs",
+      "name": "HWND_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/text_registry.rs",
+      "name": "TEXT_IDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Text registry maps Rust string ids to numeric native widget handles; it contains no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/tree_view.rs",
+      "name": "NODES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Tree node storage contains Rust ids/labels and numeric child-node handles only; selection callbacks live in separately scanned storage."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/webview.rs",
+      "name": "HWND_TO_HANDLE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/window.rs",
+      "name": "HWND_TO_WINDOW",
+      "verdict": "not_a_gc_pointer",
+      "why": "Native event-routing index made only of observer/control identities, callback-registry keys, and numeric Perry widget handles; it stores no JavaScript value."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/window.rs",
+      "name": "WINDOW_ROOTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Window-root registry maps numeric window handles to numeric root-widget handles; neither value is a JavaScript heap pointer."
     }
   ],
-  "_FRONTIER_README": "Identity-pinned ratchet over the perry-ui* crates and otherwise-unclassified core perry_thread_local! declarations (see the census docstring, 'The identity-pinned frontier'). Entries are debt baselines, not verdicts. A new uncovered holder fails until deliberately pinned, and a fixed holder fails until its stale entry is deleted. An optional scanner names cross-file coverage and must remain registered; deleting that registration invalidates the pin and fails the gate. Covered same-file holders must NOT be pinned.",
+  "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core perry_thread_local! declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
   "frontier": [
     {
       "file": "crates/perry-runtime/src/array/element_shape.rs",
@@ -575,10 +1829,6 @@
     },
     {
       "file": "crates/perry-runtime/src/closure/registry.rs",
-      "name": "CLOSURE_ARITY_REGISTRY"
-    },
-    {
-      "file": "crates/perry-runtime/src/closure/registry.rs",
       "name": "CLOSURE_ARROW_FUNCTION_REGISTRY"
     },
     {
@@ -592,10 +1842,6 @@
     {
       "file": "crates/perry-runtime/src/closure/registry.rs",
       "name": "CLOSURE_GENERATOR_FUNCTION_REGISTRY"
-    },
-    {
-      "file": "crates/perry-runtime/src/closure/registry.rs",
-      "name": "CLOSURE_LENGTH_REGISTRY"
     },
     {
       "file": "crates/perry-runtime/src/closure/registry.rs",
@@ -1113,1878 +2359,6 @@
     {
       "file": "crates/perry-runtime/src/yoga.rs",
       "name": "GC_SCANNER_REGISTERED"
-    },
-    {
-      "file": "crates/perry-ui-android/src/app.rs",
-      "name": "ON_ACTIVATE_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-android/src/app.rs",
-      "name": "ON_TERMINATE_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-android/src/app.rs",
-      "name": "PENDING_CONFIG"
-    },
-    {
-      "file": "crates/perry-ui-android/src/callback.rs",
-      "name": "CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/callback.rs",
-      "name": "NEXT_KEY"
-    },
-    {
-      "file": "crates/perry-ui-android/src/drag_drop.rs",
-      "name": "DRAG_KEYS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/media_playback.rs",
-      "name": "PLAYERS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/menu.rs",
-      "name": "CONTEXT_MENUS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/menu.rs",
-      "name": "MENUS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/pointer.rs",
-      "name": "KEYS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/sheet.rs",
-      "name": "SHEETS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/state.rs",
-      "name": "FOR_EACH_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/state.rs",
-      "name": "MULTI_TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/state.rs",
-      "name": "ON_CHANGE_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/state.rs",
-      "name": "SLIDER_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/state.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-android/src/state.rs",
-      "name": "TEXTFIELD_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/state.rs",
-      "name": "TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/state.rs",
-      "name": "TOGGLE_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/state.rs",
-      "name": "VISIBILITY_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/system.rs",
-      "name": "NOTIFICATION_REMOTE_TOKEN_KEY"
-    },
-    {
-      "file": "crates/perry-ui-android/src/system.rs",
-      "name": "NOTIFICATION_TAP_KEY"
-    },
-    {
-      "file": "crates/perry-ui-android/src/toolbar.rs",
-      "name": "TOOLBARS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/bloomview.rs",
-      "name": "BLOOM_WINDOWS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/bottom_nav.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/canvas.rs",
-      "name": "CANVAS_IMAGE_SIZES"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/canvas.rs",
-      "name": "CANVAS_STATES"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/canvas.rs",
-      "name": "IMAGE_CACHE"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/image_gallery.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/lazyvstack.rs",
-      "name": "LAZY_STATES"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/navstack.rs",
-      "name": "NAV_STATES"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/picker.rs",
-      "name": "PICKER_STATES"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/scrollview.rs",
-      "name": "REFRESH_LAYOUTS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/tabbar.rs",
-      "name": "TABBAR_STATE"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/text_registry.rs",
-      "name": "TEXT_IDS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/tree_view.rs",
-      "name": "TREE_NODES"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/tree_view.rs",
-      "name": "TREE_VIEWS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/webview.rs",
-      "name": "EVAL_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/widgets/webview.rs",
-      "name": "WEBVIEW_STATES"
-    },
-    {
-      "file": "crates/perry-ui-android/src/window.rs",
-      "name": "WINDOWS"
-    },
-    {
-      "file": "crates/perry-ui-android/src/ws.rs",
-      "name": "PENDING_RESOLVES"
-    },
-    {
-      "file": "crates/perry-ui-geisterhand/src/chaos.rs",
-      "name": "EVENTS_FIRED"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/app.rs",
-      "name": "APPS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/app.rs",
-      "name": "ON_ACTIVATE_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/app.rs",
-      "name": "ON_TERMINATE_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/app.rs",
-      "name": "PENDING_SHORTCUTS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/app.rs",
-      "name": "SHORTCUT_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/app.rs",
-      "name": "TIMER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/audio.rs",
-      "name": "AUDIO_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/camera.rs",
-      "name": "CAMERA_VIEWS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/drag_drop.rs",
-      "name": "DRAG_FILE"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/drag_drop.rs",
-      "name": "DRAG_TEXT"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/drag_drop.rs",
-      "name": "DRAG_URL"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/drag_drop.rs",
-      "name": "DROP_CB"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/ffi/platform_audio_camera_toast.rs",
-      "name": "RESIZE_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/media_playback.rs",
-      "name": "CMD_RX"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/media_playback.rs",
-      "name": "CMD_TX"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/media_playback.rs",
-      "name": "PLAYERS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/menu.rs",
-      "name": "MENUBARS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/menu.rs",
-      "name": "MENUS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/menu.rs",
-      "name": "MENU_ITEM_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/state.rs",
-      "name": "FOR_EACH_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/state.rs",
-      "name": "MULTI_TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/state.rs",
-      "name": "ON_CHANGE_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/state.rs",
-      "name": "SLIDER_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/state.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/state.rs",
-      "name": "TEXTFIELD_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/state.rs",
-      "name": "TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/state.rs",
-      "name": "TOGGLE_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/state.rs",
-      "name": "VISIBILITY_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/toolbar.rs",
-      "name": "TOOLBAR_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/tray.rs",
-      "name": "TRAYS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/bottom_nav.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/button.rs",
-      "name": "BUTTON_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
-      "name": "CANVAS_COMMANDS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
-      "name": "CANVAS_LAST_FRAME"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
-      "name": "CANVAS_SIZES"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
-      "name": "IMAGE_CACHE"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/chart.rs",
-      "name": "CHARTS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/command_palette.rs",
-      "name": "STATE"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/image_gallery.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/lazyvstack.rs",
-      "name": "LAZY_VSTACKS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/mod.rs",
-      "name": "BORDER_STATE"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/picker.rs",
-      "name": "PICKER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/rich_tooltip.rs",
-      "name": "BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/scrollview.rs",
-      "name": "SCROLL_END_STATES"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/securefield.rs",
-      "name": "SECUREFIELD_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/slider.rs",
-      "name": "SLIDER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/text_registry.rs",
-      "name": "TEXT_REGISTRY"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/textarea.rs",
-      "name": "TEXTAREA_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/textfield.rs",
-      "name": "REGISTERED_ENTRIES"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/textfield.rs",
-      "name": "TEXTFIELD_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/toggle.rs",
-      "name": "TOGGLE_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/tree_view.rs",
-      "name": "NODES"
-    },
-    {
-      "file": "crates/perry-ui-gtk4/src/widgets/webview.rs",
-      "name": "WEBVIEW_STATES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/adaptive_layout.rs",
-      "name": "LAST_SNAPSHOT"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/adaptive_layout.rs",
-      "name": "LISTENERS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/app.rs",
-      "name": "PENDING_CONFIG"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/app.rs",
-      "name": "TIMER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/audio_playback.rs",
-      "name": "BUSES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/audio_playback.rs",
-      "name": "FADES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/audio_playback.rs",
-      "name": "SOUNDS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/audio_playback.rs",
-      "name": "VOICES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/background.rs",
-      "name": "HANDLERS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/background.rs",
-      "name": "REGISTERED_BLOCKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/camera.rs",
-      "name": "TAP_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/deeplinks.rs",
-      "name": "HANDLER"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/drag_drop.rs",
-      "name": "DRAG_FILE"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/drag_drop.rs",
-      "name": "DRAG_TEXT"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/drag_drop.rs",
-      "name": "DRAG_URL"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/drag_drop.rs",
-      "name": "DROP_CB"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/geolocation.rs",
-      "name": "PENDING_ONE_SHOTS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/geolocation.rs",
-      "name": "PERMISSION_REQUESTS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/geolocation.rs",
-      "name": "WATCHES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/location.rs",
-      "name": "LOCATION_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/media_playback.rs",
-      "name": "PLAYERS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/menu.rs",
-      "name": "ACTION_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/menu.rs",
-      "name": "MENUBARS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/menu.rs",
-      "name": "MENUS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/network.rs",
-      "name": "LISTENERS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/network.rs",
-      "name": "MONITOR_BLOCK"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/notifications.rs",
-      "name": "NEXT_COMPLETION_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/notifications.rs",
-      "name": "ON_BACKGROUND_RECEIVE_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/notifications.rs",
-      "name": "ON_REMOTE_RECEIVE_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/notifications.rs",
-      "name": "ON_REMOTE_TOKEN_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/notifications.rs",
-      "name": "ON_TAP_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/notifications.rs",
-      "name": "PENDING_COMPLETIONS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/pointer.rs",
-      "name": "INSTALLED"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/pointer.rs",
-      "name": "MOUSE_DOWN_CB"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/pointer.rs",
-      "name": "MOUSE_MOVE_CB"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/pointer.rs",
-      "name": "MOUSE_UP_CB"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/pointer.rs",
-      "name": "RECOG_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/state.rs",
-      "name": "DEFERRED_REBUILDS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/state.rs",
-      "name": "FOR_EACH_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/state.rs",
-      "name": "MULTI_TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/state.rs",
-      "name": "ON_CHANGE_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/state.rs",
-      "name": "SLIDER_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/state.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/state.rs",
-      "name": "TEXTFIELD_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/state.rs",
-      "name": "TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/state.rs",
-      "name": "TOGGLE_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/state.rs",
-      "name": "VISIBILITY_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/bottom_nav.rs",
-      "name": "DELEGATE_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/bottom_nav.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/button.rs",
-      "name": "BUTTON_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/button.rs",
-      "name": "TAP_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/calendar.rs",
-      "name": "CALENDAR_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
-      "name": "CANVAS_COMMANDS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
-      "name": "CANVAS_IMAGES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
-      "name": "CANVAS_LAST_FRAME"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
-      "name": "CANVAS_SIZES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
-      "name": "IMAGE_CACHE"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/chart.rs",
-      "name": "CHARTS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/combobox.rs",
-      "name": "COMBOBOX_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/date_picker.rs",
-      "name": "DATEPICKER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/image_gallery.rs",
-      "name": "DELEGATE_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/image_gallery.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/mod.rs",
-      "name": "DOUBLE_CLICK_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/navstack.rs",
-      "name": "NAV_STACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/picker.rs",
-      "name": "PICKER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/picker.rs",
-      "name": "PICKER_SELECTED"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/rich_text.rs",
-      "name": "CHANGE_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/rich_tooltip.rs",
-      "name": "BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
-      "name": "REFRESH_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
-      "name": "SCROLL_END_STATES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
-      "name": "SCROLL_MUTATION_GATE"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/securefield.rs",
-      "name": "SECUREFIELD_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/slider.rs",
-      "name": "SLIDER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/tabbar.rs",
-      "name": "DELEGATE_MAP"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/tabbar.rs",
-      "name": "TABBAR_STATE"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/text_registry.rs",
-      "name": "TEXT_IDS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/textarea.rs",
-      "name": "TEXTAREA_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/textfield.rs",
-      "name": "SUBMIT_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/textfield.rs",
-      "name": "TEXTFIELD_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/toggle.rs",
-      "name": "TOGGLE_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/tree_view.rs",
-      "name": "NODES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/tree_view.rs",
-      "name": "TREES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/webview.rs",
-      "name": "WEBVIEW_STATES"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/wheel_picker.rs",
-      "name": "CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-ios/src/widgets/wheel_picker.rs",
-      "name": "SELECTED"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/app.rs",
-      "name": "APPS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/app.rs",
-      "name": "ON_ACTIVATE_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/app.rs",
-      "name": "ON_TERMINATE_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/app.rs",
-      "name": "PENDING_SHORTCUTS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/app.rs",
-      "name": "SHORTCUT_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/app.rs",
-      "name": "TIMER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/app.rs",
-      "name": "WINDOW_FOCUS_LOST_CBS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/audio_playback.rs",
-      "name": "BUSES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/audio_playback.rs",
-      "name": "FADES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/audio_playback.rs",
-      "name": "SOUNDS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/audio_playback.rs",
-      "name": "VOICES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/background.rs",
-      "name": "HANDLERS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/background.rs",
-      "name": "REGISTERED_BLOCKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/deeplinks.rs",
-      "name": "HANDLER"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/drag_drop.rs",
-      "name": "DRAG_FILE"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/drag_drop.rs",
-      "name": "DRAG_TEXT"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/drag_drop.rs",
-      "name": "DRAG_URL"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/drag_drop.rs",
-      "name": "DROP_CB"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/geolocation.rs",
-      "name": "PENDING_ONE_SHOTS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/geolocation.rs",
-      "name": "PERMISSION_REQUESTS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/geolocation.rs",
-      "name": "WATCHES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/location.rs",
-      "name": "LOCATION_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/media_playback.rs",
-      "name": "PLAYERS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/menu.rs",
-      "name": "MENU_ITEM_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/network.rs",
-      "name": "LISTENERS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/network.rs",
-      "name": "MONITOR_BLOCK"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/notifications.rs",
-      "name": "ON_REMOTE_RECEIVE_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/notifications.rs",
-      "name": "ON_REMOTE_TOKEN_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/notifications.rs",
-      "name": "ON_TAP_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/pointer.rs",
-      "name": "HOVER_CB"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/pointer.rs",
-      "name": "MOUSE_DOWN_CB"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/pointer.rs",
-      "name": "MOUSE_MOVE_CB"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/pointer.rs",
-      "name": "MOUSE_UP_CB"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/pointer.rs",
-      "name": "MOVE_DEDUP"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/state.rs",
-      "name": "FOR_EACH_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/state.rs",
-      "name": "MULTI_TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/state.rs",
-      "name": "ON_CHANGE_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/state.rs",
-      "name": "SLIDER_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/state.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/state.rs",
-      "name": "TEXTFIELD_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/state.rs",
-      "name": "TEXTFIELD_TO_BINDING"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/state.rs",
-      "name": "TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/state.rs",
-      "name": "TOGGLE_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/state.rs",
-      "name": "VISIBILITY_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/tray.rs",
-      "name": "TRAY_CLICK_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/bottom_nav.rs",
-      "name": "BOTTOM_NAVS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/bottom_nav.rs",
-      "name": "TARGET_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/button.rs",
-      "name": "BUTTON_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/calendar.rs",
-      "name": "CALENDAR_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
-      "name": "CANVAS_COMMANDS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
-      "name": "CANVAS_IMAGES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
-      "name": "CANVAS_LAST_FRAME"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
-      "name": "CANVAS_SIZES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
-      "name": "IMAGE_CACHE"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/chart.rs",
-      "name": "CHARTS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/combobox.rs",
-      "name": "COMBOBOX_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/command_palette.rs",
-      "name": "COMMANDS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/date_picker.rs",
-      "name": "DATEPICKER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/image_gallery.rs",
-      "name": "GALLERIES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/image_gallery.rs",
-      "name": "OBSERVER_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/lazyvstack.rs",
-      "name": "LAZY_VSTACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/lazyvstack.rs",
-      "name": "SCROLL_END_OBSERVER_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/lazyvstack.rs",
-      "name": "SCROLL_END_STATES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/mod.rs",
-      "name": "BG_COLOR_MAP"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/mod.rs",
-      "name": "CLICK_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/mod.rs",
-      "name": "DOUBLE_CLICK_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/mod.rs",
-      "name": "HOVER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/mod.rs",
-      "name": "PARENT_MAP"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/navstack.rs",
-      "name": "NAV_STACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/picker.rs",
-      "name": "PICKER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/rich_text.rs",
-      "name": "CHANGE_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/rich_tooltip.rs",
-      "name": "BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/scrollview.rs",
-      "name": "SCROLL_END_OBSERVER_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/scrollview.rs",
-      "name": "SCROLL_END_STATES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/securefield.rs",
-      "name": "SECUREFIELD_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/slider.rs",
-      "name": "SLIDER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/table.rs",
-      "name": "TABLES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/text_registry.rs",
-      "name": "TEXT_IDS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/textarea.rs",
-      "name": "TEXTAREA_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/textfield.rs",
-      "name": "TEXTFIELD_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/textfield.rs",
-      "name": "TEXTFIELD_FOCUS_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/textfield.rs",
-      "name": "TEXTFIELD_SUBMIT_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/toggle.rs",
-      "name": "TOGGLE_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/toolbar.rs",
-      "name": "TOOLBARS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/toolbar.rs",
-      "name": "TOOLBAR_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/tree_view.rs",
-      "name": "NODES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/tree_view.rs",
-      "name": "TREES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/webview.rs",
-      "name": "WEBVIEW_STATES"
-    },
-    {
-      "file": "crates/perry-ui-macos/src/widgets/zstack.rs",
-      "name": "ZSTACK_HANDLES"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/app.rs",
-      "name": "PENDING_CONFIG"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/app.rs",
-      "name": "TIMER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/audio_playback.rs",
-      "name": "BUSES"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/audio_playback.rs",
-      "name": "FADES"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/audio_playback.rs",
-      "name": "SOUNDS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/audio_playback.rs",
-      "name": "VOICES"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/background.rs",
-      "name": "HANDLERS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/background.rs",
-      "name": "REGISTERED_BLOCKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/location.rs",
-      "name": "LOCATION_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/media_playback.rs",
-      "name": "PLAYERS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/menu.rs",
-      "name": "ACTION_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/menu.rs",
-      "name": "MENUBARS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/menu.rs",
-      "name": "MENUS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/pointer.rs",
-      "name": "INSTALLED"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/pointer.rs",
-      "name": "MOUSE_DOWN_CB"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/pointer.rs",
-      "name": "MOUSE_MOVE_CB"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/pointer.rs",
-      "name": "MOUSE_UP_CB"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/pointer.rs",
-      "name": "RECOG_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/state.rs",
-      "name": "FOR_EACH_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/state.rs",
-      "name": "MULTI_TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/state.rs",
-      "name": "ON_CHANGE_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/state.rs",
-      "name": "SLIDER_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/state.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/state.rs",
-      "name": "TEXTFIELD_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/state.rs",
-      "name": "TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/state.rs",
-      "name": "TOGGLE_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/state.rs",
-      "name": "VISIBILITY_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/bottom_nav.rs",
-      "name": "DELEGATE_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/bottom_nav.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/button.rs",
-      "name": "BUTTON_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/button.rs",
-      "name": "TAP_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
-      "name": "CANVAS_COMMANDS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
-      "name": "CANVAS_IMAGES"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
-      "name": "CANVAS_LAST_FRAME"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
-      "name": "CANVAS_SIZES"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
-      "name": "IMAGE_CACHE"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/mod.rs",
-      "name": "DOUBLE_CLICK_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/navstack.rs",
-      "name": "NAV_STACKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/picker.rs",
-      "name": "PICKER_SELECTED"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/scrollview.rs",
-      "name": "REFRESH_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/securefield.rs",
-      "name": "SECUREFIELD_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/slider.rs",
-      "name": "SLIDER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/tabbar.rs",
-      "name": "DELEGATE_MAP"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/tabbar.rs",
-      "name": "TABBAR_STATE"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/text_registry.rs",
-      "name": "TEXT_IDS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/textarea.rs",
-      "name": "TEXTAREA_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/textfield.rs",
-      "name": "SUBMIT_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/textfield.rs",
-      "name": "TEXTFIELD_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-tvos/src/widgets/toggle.rs",
-      "name": "TOGGLE_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/app.rs",
-      "name": "PENDING_CONFIG"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/app.rs",
-      "name": "TIMER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/audio_playback.rs",
-      "name": "BUSES"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/audio_playback.rs",
-      "name": "FADES"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/audio_playback.rs",
-      "name": "SOUNDS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/audio_playback.rs",
-      "name": "VOICES"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/background.rs",
-      "name": "HANDLERS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/background.rs",
-      "name": "REGISTERED_BLOCKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/camera.rs",
-      "name": "TAP_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/drag_drop.rs",
-      "name": "DRAG_FILE"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/drag_drop.rs",
-      "name": "DRAG_TEXT"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/drag_drop.rs",
-      "name": "DRAG_URL"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/drag_drop.rs",
-      "name": "DROP_CB"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/location.rs",
-      "name": "LOCATION_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/media_playback.rs",
-      "name": "PLAYERS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/menu.rs",
-      "name": "ACTION_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/menu.rs",
-      "name": "MENUBARS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/menu.rs",
-      "name": "MENUS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/pointer.rs",
-      "name": "INSTALLED"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/pointer.rs",
-      "name": "MOUSE_DOWN_CB"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/pointer.rs",
-      "name": "MOUSE_MOVE_CB"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/pointer.rs",
-      "name": "MOUSE_UP_CB"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/pointer.rs",
-      "name": "RECOG_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/state.rs",
-      "name": "FOR_EACH_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/state.rs",
-      "name": "MULTI_TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/state.rs",
-      "name": "ON_CHANGE_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/state.rs",
-      "name": "SLIDER_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/state.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/state.rs",
-      "name": "TEXTFIELD_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/state.rs",
-      "name": "TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/state.rs",
-      "name": "TOGGLE_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/state.rs",
-      "name": "VISIBILITY_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/bottom_nav.rs",
-      "name": "DELEGATE_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/bottom_nav.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/button.rs",
-      "name": "BUTTON_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/button.rs",
-      "name": "TAP_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/calendar.rs",
-      "name": "CALENDAR_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
-      "name": "CANVAS_COMMANDS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
-      "name": "CANVAS_IMAGES"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
-      "name": "CANVAS_LAST_FRAME"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
-      "name": "CANVAS_SIZES"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
-      "name": "IMAGE_CACHE"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/chart.rs",
-      "name": "CHARTS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/combobox.rs",
-      "name": "COMBOBOX_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/date_picker.rs",
-      "name": "DATEPICKER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/mod.rs",
-      "name": "DOUBLE_CLICK_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/navstack.rs",
-      "name": "NAV_STACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/picker.rs",
-      "name": "PICKER_SELECTED"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/rich_text.rs",
-      "name": "CHANGE_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/rich_tooltip.rs",
-      "name": "BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/scrollview.rs",
-      "name": "REFRESH_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/securefield.rs",
-      "name": "SECUREFIELD_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/slider.rs",
-      "name": "SLIDER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/tabbar.rs",
-      "name": "DELEGATE_MAP"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/tabbar.rs",
-      "name": "TABBAR_STATE"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/text_registry.rs",
-      "name": "TEXT_IDS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/textarea.rs",
-      "name": "TEXTAREA_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/textfield.rs",
-      "name": "SUBMIT_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/textfield.rs",
-      "name": "TEXTFIELD_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/tree_view.rs",
-      "name": "NODES"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/tree_view.rs",
-      "name": "TREES"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/webview.rs",
-      "name": "WEBVIEW_STATES"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/wheel_picker.rs",
-      "name": "CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-visionos/src/widgets/wheel_picker.rs",
-      "name": "SELECTED"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/audio_playback.rs",
-      "name": "BUSES"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/audio_playback.rs",
-      "name": "FADES"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/audio_playback.rs",
-      "name": "SOUNDS"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/audio_playback.rs",
-      "name": "VOICES"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/background.rs",
-      "name": "HANDLERS"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/media_playback.rs",
-      "name": "PLAYERS"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/notifications.rs",
-      "name": "ON_TAP_CALLBACK"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/state.rs",
-      "name": "FOR_EACH_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/state.rs",
-      "name": "MULTI_TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/state.rs",
-      "name": "ON_CHANGE_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/state.rs",
-      "name": "SLIDER_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/state.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/state.rs",
-      "name": "TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/state.rs",
-      "name": "TOGGLE_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/state.rs",
-      "name": "VISIBILITY_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/tree.rs",
-      "name": "NODES"
-    },
-    {
-      "file": "crates/perry-ui-watchos/src/widgets/text_registry.rs",
-      "name": "TEXT_IDS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/app.rs",
-      "name": "APPS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/app.rs",
-      "name": "PENDING_SHORTCUTS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/drag_drop.rs",
-      "name": "DRAG_FILE"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/drag_drop.rs",
-      "name": "DRAG_TEXT"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/drag_drop.rs",
-      "name": "DRAG_URL"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/drag_drop.rs",
-      "name": "DROP_CB"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/media_playback.rs",
-      "name": "PLAYERS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/media_playback.rs",
-      "name": "Q"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/menu.rs",
-      "name": "CONTEXT_MENU_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/pointer.rs",
-      "name": "CLICK_CB"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/pointer.rs",
-      "name": "HOVER_CB"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/pointer.rs",
-      "name": "MOUSE_DOWN_CB"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/pointer.rs",
-      "name": "MOUSE_MOVE_CB"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/pointer.rs",
-      "name": "MOUSE_UP_CB"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/state.rs",
-      "name": "FOR_EACH_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/state.rs",
-      "name": "MULTI_TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/state.rs",
-      "name": "SLIDER_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/state.rs",
-      "name": "STATES"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/state.rs",
-      "name": "TEXTFIELD_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/state.rs",
-      "name": "TEXT_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/state.rs",
-      "name": "TOGGLE_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/state.rs",
-      "name": "VISIBILITY_BINDINGS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/toolbar.rs",
-      "name": "TOOLBARS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/tray.rs",
-      "name": "TRAYS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/bottom_nav.rs",
-      "name": "ITEM_LOOKUP"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/bottom_nav.rs",
-      "name": "NAVS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/button.rs",
-      "name": "BTN_HWND_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/button.rs",
-      "name": "BUTTON_CONTENT"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/calendar.rs",
-      "name": "CALENDAR_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
-      "name": "CANVAS_CMDS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
-      "name": "CANVAS_IMAGE_CACHE"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
-      "name": "CANVAS_IMAGE_SIZES"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
-      "name": "CANVAS_LAST_FRAME"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/chart.rs",
-      "name": "CHARTS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/combobox.rs",
-      "name": "CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/command_palette.rs",
-      "name": "COMMANDS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/date_picker.rs",
-      "name": "DATEPICKER_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/image_gallery.rs",
-      "name": "GALLERIES"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/lazyvstack.rs",
-      "name": "LAZYVSTACK_STATES"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/map_view.rs",
-      "name": "HWND_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/map_view.rs",
-      "name": "MAPS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-      "name": "BORDER_STATE"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-      "name": "BORDER_SUBCLASSED"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-      "name": "CORNER_RADII"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-      "name": "HWND_MAP"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-      "name": "OPACITY_VALUES"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-      "name": "PARENT_SHADOW_REGISTRY"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-      "name": "SHADOW_PARAMS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/mod.rs",
-      "name": "WIDGETS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/navstack.rs",
-      "name": "NAV_STACKS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/pdf_view.rs",
-      "name": "PDFS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/rich_text.rs",
-      "name": "CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/rich_tooltip.rs",
-      "name": "TOOLTIPS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/scrollview.rs",
-      "name": "SCROLL_END_STATES"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/scrollview.rs",
-      "name": "SCROLL_STATES"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/slider.rs",
-      "name": "SLIDER_INFO"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/table.rs",
-      "name": "TABLES"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/text.rs",
-      "name": "DECORATION_VALUES"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/text.rs",
-      "name": "HWND_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/text_registry.rs",
-      "name": "TEXT_IDS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/tree_view.rs",
-      "name": "CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/tree_view.rs",
-      "name": "NODES"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/webview.rs",
-      "name": "HWND_TO_HANDLE"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/widgets/webview.rs",
-      "name": "WEBVIEW_STATES"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/window.rs",
-      "name": "FOCUS_LOST_CALLBACKS"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/window.rs",
-      "name": "HWND_TO_WINDOW"
-    },
-    {
-      "file": "crates/perry-ui-windows/src/window.rs",
-      "name": "WINDOW_ROOTS"
-    },
-    {
-      "file": "crates/perry-ui/src/key_dispatch.rs",
-      "name": "KEY_DOWN_CB"
-    },
-    {
-      "file": "crates/perry-ui/src/key_dispatch.rs",
-      "name": "KEY_UP_CB"
     }
   ]
 }

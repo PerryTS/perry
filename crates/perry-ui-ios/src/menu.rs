@@ -45,6 +45,21 @@ thread_local! {
     static ACTION_CALLBACKS: RefCell<Vec<(usize, f64)>> = RefCell::new(Vec::new());
 }
 
+pub(crate) fn scan_ios_menu_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    MENUS.with(|menus| {
+        for item in menus.borrow_mut().iter_mut().flatten() {
+            if let MenuItemEntry::Item { callback, .. } = item {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        }
+    });
+    ACTION_CALLBACKS.with(|callbacks| {
+        for (_, callback) in callbacks.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 /// Extract a &str from a *const StringHeader pointer.
 use perry_ffi::copy_string_from_raw as str_from_header;
 

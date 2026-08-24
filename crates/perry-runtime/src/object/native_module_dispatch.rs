@@ -270,6 +270,9 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // #3687: cluster default-import method calls (`cluster.fork()`,
         // `cluster.emit(...)`) dispatch against the base `cluster` arms.
         "cluster.default" => ("cluster", false),
+        // `createRequire(...)("node:ffi")` exposes the CJS default namespace.
+        // Keep method calls on that namespace on node:ffi's compatibility path.
+        "ffi.default" => ("ffi", false),
         // #6563: `(await import("node-pty")).default.spawn(...)` — the CJS
         // interop shape esbuild-bundled consumers produce.
         "node-pty.default" => ("node-pty", false),

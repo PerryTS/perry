@@ -76,6 +76,14 @@ thread_local! {
     static NEXT_TRAY_UID: std::cell::Cell<u32> = std::cell::Cell::new(1);
 }
 
+pub(crate) fn scan_windows_tray_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TRAYS.with(|trays| {
+        for tray in trays.borrow_mut().iter_mut() {
+            visitor.visit_raw_const_ptr_slot(&mut tray.callback_ptr);
+        }
+    });
+}
+
 #[cfg(target_os = "windows")]
 fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()

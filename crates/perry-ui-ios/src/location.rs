@@ -36,6 +36,14 @@ thread_local! {
     static DELEGATE_REGISTERED: RefCell<bool> = RefCell::new(false);
 }
 
+pub(crate) fn scan_ios_location_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    LOCATION_CALLBACK.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().as_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 /// Invoke the stored JS callback with (lat, lon), draining promises first.
 unsafe fn invoke_callback(lat: f64, lon: f64) {
     let cb = LOCATION_CALLBACK.with(|c| c.borrow_mut().take());

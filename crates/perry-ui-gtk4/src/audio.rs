@@ -23,6 +23,14 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 
 static AUDIO_CALLBACK: Mutex<Option<f64>> = Mutex::new(None);
 
+pub(crate) fn scan_gtk4_audio_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    if let Ok(mut callback) = AUDIO_CALLBACK.lock() {
+        if let Some(callback) = callback.as_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    }
+}
+
 // Recording state
 static RECORDING: AtomicBool = AtomicBool::new(false);
 static RECORDED_SAMPLES: Mutex<Vec<f32>> = Mutex::new(Vec::new());

@@ -11,6 +11,14 @@ thread_local! {
     static NEXT_TOGGLE_ID: RefCell<usize> = RefCell::new(1);
 }
 
+pub(crate) fn scan_gtk4_toggle_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TOGGLE_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 // TAG_TRUE and TAG_FALSE from perry-runtime NaN-boxing
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;

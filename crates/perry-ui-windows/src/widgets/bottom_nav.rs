@@ -65,6 +65,14 @@ thread_local! {
     static ITEM_LOOKUP: RefCell<HashMap<u16, (i64, i64)>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_windows_bottom_nav_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    NAVS.with(|navs| {
+        for nav in navs.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut nav.on_select);
+        }
+    });
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]

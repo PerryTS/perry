@@ -211,6 +211,14 @@ thread_local! {
     static SCROLL_END_OBSERVER_TO_HANDLE: RefCell<HashMap<usize, i64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_macos_scrollview_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    SCROLL_END_STATES.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.closure);
+        }
+    });
+}
+
 pub struct PerryScrollEndObserverIvars {
     key: std::cell::Cell<usize>,
 }

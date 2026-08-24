@@ -50,7 +50,14 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
                 | "CFunction"
                 | "linkSymbols"
                 | "viewSource"
-                | "read"
+        )
+    {
+        return true;
+    }
+    if module == "ffi"
+        && matches!(
+            prop,
+            "dlopen" | "getRawPointer" | "toArrayBuffer" | "toBuffer" | "toString"
         )
     {
         return true;

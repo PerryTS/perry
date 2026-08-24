@@ -21,6 +21,20 @@ thread_local! {
     static TAP_DELEGATE: RefCell<Option<Retained<PerryNotificationDelegate>>> = const { RefCell::new(None) };
 }
 
+pub(crate) fn scan_macos_notifications_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    for slot in [
+        &ON_REMOTE_TOKEN_CALLBACK,
+        &ON_REMOTE_RECEIVE_CALLBACK,
+        &ON_TAP_CALLBACK,
+    ] {
+        slot.with(|slot| {
+            if let Some(callback) = slot.borrow_mut().as_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        });
+    }
+}
+
 extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
     fn js_nanbox_string(ptr: i64) -> f64;

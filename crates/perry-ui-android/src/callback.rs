@@ -51,6 +51,16 @@ fn pump_microtasks() {
 static CALLBACKS: Mutex<Option<HashMap<i64, f64>>> = Mutex::new(None);
 static NEXT_KEY: AtomicI64 = AtomicI64::new(1);
 
+pub(crate) fn scan_android_callback_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    if let Ok(mut callbacks) = CALLBACKS.lock() {
+        if let Some(callbacks) = callbacks.as_mut() {
+            for callback in callbacks.values_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        }
+    }
+}
+
 /// Read the closure currently stored under `key`, or `None` if it's
 /// been removed. Used by the pointer dispatcher to fetch the current
 /// callback without going through `invoke*`.

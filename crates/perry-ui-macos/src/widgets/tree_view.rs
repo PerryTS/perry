@@ -50,6 +50,14 @@ thread_local! {
     static ITEMS: RefCell<HashMap<i64, Retained<PerryTreeItem>>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_macos_tree_view_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TREES.with(|trees| {
+        for tree in trees.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut tree.on_select);
+        }
+    });
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 // ===========================================================================

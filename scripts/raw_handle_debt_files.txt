@@ -56,7 +56,6 @@
 5 crates/perry-runtime/src/atomics.rs
 7 crates/perry-runtime/src/builtins/console.rs
 12 crates/perry-runtime/src/builtins/globals.rs
-5 crates/perry-runtime/src/bun_ffi/dlopen.rs
 3 crates/perry-runtime/src/child_process/v8_serde.rs
 5 crates/perry-runtime/src/dns.rs
 6 crates/perry-runtime/src/embedded.rs

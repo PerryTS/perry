@@ -59,6 +59,14 @@ thread_local! {
     static BTN_HWND_TO_HANDLE: RefCell<HashMap<isize, i64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_windows_button_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    BUTTON_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_raw_const_ptr_slot(callback);
+        }
+    });
+}
+
 /// Create a Button. Returns widget handle.
 pub fn create(label_ptr: *const u8, on_press: f64) -> i64 {
     let label = unsafe { str_from_header(label_ptr) };

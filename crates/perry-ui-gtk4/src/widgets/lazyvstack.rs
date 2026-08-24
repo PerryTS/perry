@@ -17,6 +17,14 @@ struct LazyVStackState {
     render_closure: f64,
 }
 
+pub(crate) fn scan_gtk4_lazyvstack_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    LAZY_VSTACKS.with(|stacks| {
+        for stack in stacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut stack.render_closure);
+        }
+    });
+}
+
 /// Create a lazy vertical stack that renders items from a closure.
 /// count = number of items, render_closure = NaN-boxed closure(index) -> widget_handle
 pub fn create(count: f64, render_closure: f64) -> i64 {

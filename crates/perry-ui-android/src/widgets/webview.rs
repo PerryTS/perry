@@ -38,6 +38,21 @@ thread_local! {
     static WEBVIEW_STATES: RefCell<HashMap<i64, WebViewState>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_android_webview_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    WEBVIEW_STATES.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.on_should_navigate);
+            visitor.visit_nanbox_f64_slot(&mut state.on_loaded);
+            visitor.visit_nanbox_f64_slot(&mut state.on_error);
+        }
+    });
+    EVAL_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn nanbox_str(s: &str) -> f64 {

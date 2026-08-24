@@ -30,6 +30,21 @@ thread_local! {
     static TAP_DELEGATE: RefCell<Option<Retained<PerryNotificationDelegate>>> = const { RefCell::new(None) };
 }
 
+pub(crate) fn scan_ios_notifications_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    for slot in [
+        &ON_REMOTE_TOKEN_CALLBACK,
+        &ON_REMOTE_RECEIVE_CALLBACK,
+        &ON_BACKGROUND_RECEIVE_CALLBACK,
+        &ON_TAP_CALLBACK,
+    ] {
+        slot.with(|slot| {
+            if let Some(callback) = slot.borrow_mut().as_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        });
+    }
+}
+
 /// Monotonic id used to look up a stored completion block from a Promise
 /// callback's capture. Starts at 1 so 0 can stay an unambiguous "missing".
 static NEXT_COMPLETION_HANDLE: AtomicI64 = AtomicI64::new(1);

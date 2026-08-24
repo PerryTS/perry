@@ -49,6 +49,20 @@ struct FrameData {
     stride: i32,
 }
 
+pub(crate) fn scan_gtk4_camera_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    CAMERA_VIEWS.with(|views| {
+        if let Ok(mut views) = views.lock() {
+            for view in views.values_mut() {
+                if let Ok(mut callback) = view.frame_callback.lock() {
+                    if let Some(callback) = callback.as_mut() {
+                        visitor.visit_nanbox_f64_slot(callback);
+                    }
+                }
+            }
+        }
+    });
+}
+
 pub fn create() -> i64 {
     crate::app::ensure_gtk_init();
 

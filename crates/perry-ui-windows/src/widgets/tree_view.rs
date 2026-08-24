@@ -36,6 +36,14 @@ thread_local! {
     static CALLBACKS: RefCell<HashMap<i64, f64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_windows_tree_view_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]

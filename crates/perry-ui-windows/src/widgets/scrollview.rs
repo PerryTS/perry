@@ -43,6 +43,14 @@ struct ScrollEndEntry {
     armed: bool,
 }
 
+pub(crate) fn scan_windows_scrollview_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    SCROLL_END_STATES.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.closure);
+        }
+    });
+}
+
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;

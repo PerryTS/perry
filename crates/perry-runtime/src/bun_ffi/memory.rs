@@ -115,6 +115,56 @@ pub(crate) unsafe fn view_value(
     f64::from_bits(JSValue::pointer(buffer as *mut u8).bits())
 }
 
+/// Node's raw-pointer helper. Unlike Bun's `ptr`, Node always returns a
+/// BigInt so addresses remain lossless on every 64-bit host.
+pub(crate) unsafe fn node_get_raw_pointer_value(buffer: f64) -> f64 {
+    let Some((data, _length)) = super::call::value_buffer_span(buffer) else {
+        throw_type("ffi.getRawPointer expects an ArrayBuffer or ArrayBufferView");
+    };
+    super::call::bigint_value_u64(data as usize as u64)
+}
+
+/// Node's `(pointer, length, copy = true)` memory-view shape. Passing false
+/// produces the zero-copy external backing required by OpenTUI/Yoga.
+pub(crate) unsafe fn node_view_value(
+    pointer_arg: f64,
+    length_arg: f64,
+    copy_arg: f64,
+    array_buffer: bool,
+) -> f64 {
+    let address = pointer_address(pointer_arg);
+    let length = match optional_integer(length_arg, "length") {
+        Some(n) if n >= 0 && n <= u32::MAX as i64 => n as u32,
+        _ => throw_range("length is outside Perry's ArrayBuffer range"),
+    };
+    let copy_jv = JSValue::from_bits(copy_arg.to_bits());
+    let copy = copy_jv.is_undefined() || crate::value::js_is_truthy(copy_arg) != 0;
+    let buffer = if copy {
+        let buffer = crate::buffer::buffer_alloc(length);
+        std::ptr::copy_nonoverlapping(
+            address as *const u8,
+            crate::buffer::buffer_data_mut(buffer),
+            length as usize,
+        );
+        (*buffer).length = length;
+        buffer
+    } else {
+        crate::buffer::buffer_alloc_foreign(address as *mut u8, length)
+    };
+    if array_buffer {
+        crate::buffer::mark_as_array_buffer(buffer as usize);
+    }
+    f64::from_bits(JSValue::pointer(buffer as *mut u8).bits())
+}
+
+pub(crate) unsafe fn node_to_string_value(pointer: f64) -> f64 {
+    let address = super::call::value_to_pointer_arg(pointer);
+    if address == 0 {
+        return super::null();
+    }
+    super::call::read_cstring_value(address)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

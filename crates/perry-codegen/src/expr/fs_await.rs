@@ -222,9 +222,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let has_callbacks = ctx.block().call(I32, "js_callback_timer_has_pending", &[]);
                     let has_intervals = ctx.block().call(I32, "js_interval_timer_has_pending", &[]);
                     let has_stdlib = ctx.block().call(I32, "js_stdlib_has_active_handles", &[]);
+                    let has_ffi_callbacks =
+                        ctx.block()
+                            .call(I32, "js_bun_ffi_has_active_threadsafe_callbacks", &[]);
                     let has_microtasks = ctx.block().call(I32, "js_microtasks_pending", &[]);
                     let any1 = ctx.block().or(I32, &has_timers, &has_callbacks);
                     let any2 = ctx.block().or(I32, &has_intervals, &has_stdlib);
+                    let any2 = ctx.block().or(I32, &any2, &has_ffi_callbacks);
                     let any3 = ctx.block().or(I32, &any1, &any2);
                     let any = ctx.block().or(I32, &any3, &has_microtasks);
                     let no_refed_work = ctx.block().icmp_eq(I32, &any, "0");

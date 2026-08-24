@@ -11,6 +11,7 @@ pub mod audio;
 pub mod audio_playback;
 pub mod background;
 pub mod drag_drop;
+mod gc;
 pub mod haptics;
 pub mod media_playback;
 pub mod notifications;
@@ -36,6 +37,7 @@ pub fn cstring_from_header(ptr: *const u8) -> Option<CString> {
 
 #[no_mangle]
 pub extern "C" fn perry_ui_app_create(title_ptr: i64, width: f64, height: f64) -> i64 {
+    gc::ensure_registered();
     app::app_create(title_ptr as *const u8, width, height)
 }
 

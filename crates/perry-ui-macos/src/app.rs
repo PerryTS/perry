@@ -12,6 +12,8 @@ use objc2_foundation::{MainThreadMarker, NSObject, NSString};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 use crate::widgets;
 
@@ -64,6 +66,7 @@ use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an app with title, width, height.
 pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
+    crate::gc::ensure_registered();
     let title = if title_ptr.is_null() {
         "Perry App".to_owned()
     } else {
@@ -740,6 +743,25 @@ thread_local! {
     static SHORTCUT_CALLBACKS: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
 }
 
+static GLOBAL_HOTKEY_CALLBACKS: LazyLock<Mutex<HashMap<usize, f64>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static NEXT_GLOBAL_HOTKEY_CALLBACK: AtomicUsize = AtomicUsize::new(1);
+
+fn invoke_global_hotkey_callback(key: usize) {
+    let callback = GLOBAL_HOTKEY_CALLBACKS
+        .lock()
+        .ok()
+        .and_then(|callbacks| callbacks.get(&key).copied());
+    if let Some(callback) = callback {
+        let callback_ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
+        if !callback_ptr.is_null() {
+            unsafe {
+                js_closure_call0(callback_ptr);
+            }
+        }
+    }
+}
+
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;
@@ -1011,7 +1033,12 @@ pub fn register_global_hotkey(key_ptr: *const u8, modifiers: f64, callback: f64)
         return;
     }
 
-    let callback_ptr = unsafe { js_nanbox_get_pointer(callback) } as usize;
+    let callback_key = NEXT_GLOBAL_HOTKEY_CALLBACK.fetch_add(1, Ordering::Relaxed);
+    if let Ok(mut callbacks) = GLOBAL_HOTKEY_CALLBACKS.lock() {
+        callbacks.insert(callback_key, callback);
+    } else {
+        return;
+    }
     let mod_bits = modifiers as u64;
     let target_key = key_str.to_lowercase();
 
@@ -1053,7 +1080,7 @@ pub fn register_global_hotkey(key_ptr: *const u8, modifiers: f64, callback: f64)
                     // Mask to device-independent modifier flags only
                     let relevant_mods = event_mods & 0xFFFF0000;
                     if event_key == target_key_global && relevant_mods == ns_mods {
-                        js_closure_call0(callback_ptr as *const u8);
+                        invoke_global_hotkey_callback(callback_key);
                     }
                 }
             }
@@ -1085,7 +1112,7 @@ pub fn register_global_hotkey(key_ptr: *const u8, modifiers: f64, callback: f64)
                         let event_mods: u64 = msg_send![event, modifierFlags];
                         let relevant_mods = event_mods & 0xFFFF0000;
                         if event_key == target_key_local && relevant_mods == ns_mods {
-                            js_closure_call0(callback_ptr as *const u8);
+                            invoke_global_hotkey_callback(callback_key);
                         }
                     }
                 }
@@ -1721,10 +1748,13 @@ pub fn window_on_focus_lost(window_handle: i64, callback: f64) {
                 let center: Retained<AnyObject> =
                     objc2::msg_send![objc2::class!(NSNotificationCenter), defaultCenter];
                 let name = NSString::from_str("NSWindowDidResignKeyNotification");
-                let callback_copy = callback;
                 let block = block2::RcBlock::new(move |_notif: *const AnyObject| {
-                    let ptr = js_nanbox_get_pointer(callback_copy) as *const u8;
-                    js_closure_call0(ptr);
+                    let callback = WINDOW_FOCUS_LOST_CBS
+                        .with(|callbacks| callbacks.borrow().get(&window_handle).copied());
+                    if let Some(callback) = callback {
+                        let ptr = js_nanbox_get_pointer(callback) as *const u8;
+                        js_closure_call0(ptr);
+                    }
                 });
                 let _: Retained<AnyObject> = objc2::msg_send![
                     &*center,
@@ -1737,6 +1767,41 @@ pub fn window_on_focus_lost(window_handle: i64, callback: f64) {
             }
         }
     });
+}
+
+pub(crate) fn scan_macos_app_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    PENDING_SHORTCUTS.with(|shortcuts| {
+        for shortcut in shortcuts.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut shortcut.callback);
+        }
+    });
+    for slot in [&ON_TERMINATE_CALLBACK, &ON_ACTIVATE_CALLBACK] {
+        slot.with(|slot| {
+            if let Some(callback) = slot.borrow_mut().as_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        });
+    }
+    SHORTCUT_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+    TIMER_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+    WINDOW_FOCUS_LOST_CBS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+    if let Ok(mut callbacks) = GLOBAL_HOTKEY_CALLBACKS.lock() {
+        for callback in callbacks.values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    }
 }
 
 // ============================================

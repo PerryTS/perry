@@ -10,6 +10,14 @@ thread_local! {
     static TEXTAREA_CALLBACKS: RefCell<HashMap<usize, (f64, *const AnyObject)>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_visionos_textarea_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TEXTAREA_CALLBACKS.with(|callbacks| {
+        for (callback, _) in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;

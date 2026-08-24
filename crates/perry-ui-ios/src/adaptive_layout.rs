@@ -68,6 +68,14 @@ thread_local! {
     static LAST_SNAPSHOT: RefCell<Option<LayoutSnapshot>> = const { RefCell::new(None) };
 }
 
+pub(crate) fn scan_ios_adaptive_layout_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    LISTENERS.with(|listeners| {
+        for listener in listeners.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(listener);
+        }
+    });
+}
+
 static NEXT_LISTENER_ID: AtomicI64 = AtomicI64::new(1);
 
 fn size_class_name(value: isize) -> &'static str {
