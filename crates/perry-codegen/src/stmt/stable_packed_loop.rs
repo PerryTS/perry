@@ -215,10 +215,19 @@ fn match_candidate(
         },
         _ => return None,
     };
+    let receiver = Expr::LocalGet(array_id);
     if ctx.reassigned_locals.contains(&array_id)
         || ctx.closure_captures.contains_key(&array_id)
         || (ctx.locals.contains_key(&array_id) && ctx.boxed_vars.contains(&array_id))
         || (!ctx.locals.contains_key(&array_id) && !ctx.module_globals.contains_key(&array_id))
+        // TypedArrays have their own element-width-aware indexed lowering.
+        // Even though the runtime guard would decline their non-Array header,
+        // emitting the speculative clone can feed its numeric facts into
+        // function-wide native-representation selection. In particular a
+        // Uint32Array XOR then lost the required signed i32 canonicalization
+        // in the generic copy. Known TypedArrays are never valid candidates,
+        // so reject them before cloning rather than relying on the guard.
+        || crate::type_analysis::is_typed_array_expr(ctx, &receiver)
         || super::loops::stmts_mutate_local(body, counter_id)
         // A fast-loop `break` reaches that clone's exit block. Live-length
         // versions use the same block to enter the generic continuation, so

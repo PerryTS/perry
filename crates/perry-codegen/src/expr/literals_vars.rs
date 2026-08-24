@@ -636,25 +636,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // still see the current value.
             if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
                 let structurally_i32 = can_lower_expr_as_i32_in_current_region(ctx, value);
-                // When `x` is a canonical raw Number, `x | 0` may feed the canonical
-                // i32 slot directly: materializing a double here only to
-                // convert it back would duplicate the spec ToInt32. Keep the
-                // canonical gate explicit — declared Number types are erased,
-                // so a local can still hold a String or BigInt at runtime.
+                // Within a stable-packed numeric clone, when `x` is a
+                // canonical raw Number, `x | 0` may feed the canonical i32
+                // slot directly: materializing a double here only to convert
+                // it back would duplicate the spec ToInt32. Keep BOTH gates
+                // explicit. Declared Number types are erased, so a local can
+                // still hold a String or BigInt at runtime; and other loop
+                // clones own narrower indexed-load contracts that their
+                // existing assignment lowering must continue to see.
                 //
-                // This is a claim about the VALUE the ordinary lowering of `x`
-                // produces, NOT a licence to re-evaluate `x`'s operands
-                // natively — see the lowering below.
+                // The canonical gate is a claim about the VALUE the ordinary
+                // lowering of `x` produces, NOT a licence to re-evaluate `x`'s
+                // operands natively — see the lowering below.
                 let explicit_numeric_toint32 = matches!(
-                value.as_ref(),
-                Expr::Binary {
-                    op: BinaryOp::BitOr,
-                    left,
-                    right,
-                    ..
-                } if matches!(right.as_ref(), Expr::Integer(0))
-                    && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left)
-                );
+                    value.as_ref(),
+                    Expr::Binary {
+                        op: BinaryOp::BitOr,
+                        left,
+                        right,
+                        ..
+                    } if matches!(right.as_ref(), Expr::Integer(0))
+                        && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left)
+                ) && !ctx.stable_packed_loop_facts.is_empty();
                 if !ctx.closure_captures.contains_key(id)
                     && !(ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id))
                     && (structurally_i32 || explicit_numeric_toint32)
