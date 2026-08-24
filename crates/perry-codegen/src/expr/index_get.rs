@@ -859,6 +859,43 @@ fn lower_legacy_array_index_get(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::IndexGet { object, index } => {
+            if let Some(value) =
+                crate::stmt::stable_packed_loop::try_lower_index_get(ctx, object, index)
+            {
+                return Ok(value);
+            }
+            if let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) =
+                (object.as_ref(), index.as_ref())
+            {
+                let versioned_handle = ctx
+                    .versioned_indexed_loop_facts
+                    .last()
+                    .filter(|fact| fact.counter_local_id == *index_id)
+                    .and_then(|fact| fact.live_array_handles.get(array_id))
+                    .cloned();
+                if let (Some(array_handle), Some(index_slot)) = (
+                    versioned_handle,
+                    ctx.i32_counter_slots.get(index_id).cloned(),
+                ) {
+                    let idx_i32 = ctx.block().load(I32, &index_slot);
+                    return Ok(guarded_array::lower_trusted_plain_array_index_get(
+                        ctx,
+                        &array_handle,
+                        &idx_i32,
+                    ));
+                }
+                if let (Some(array_handle), Some(index_slot)) = (
+                    ctx.trusted_array_param_handles.get(array_id).cloned(),
+                    ctx.i32_counter_slots.get(index_id).cloned(),
+                ) {
+                    let idx_i32 = ctx.block().load(I32, &index_slot);
+                    return Ok(guarded_array::lower_trusted_plain_array_index_get(
+                        ctx,
+                        &array_handle,
+                        &idx_i32,
+                    ));
+                }
+            }
             if receiver_class_name(ctx, object).as_deref() == Some("Server")
                 && is_async_dispose_symbol_index(index)
             {

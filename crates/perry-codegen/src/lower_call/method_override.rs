@@ -42,7 +42,7 @@ const SHAPE_ID_RANGE_LEN: &str = "1073741824"; // 0x4000_0000
 /// and its exact `(class_id, ShapeId)` pair still matches the
 /// compiler-published pair. Any failed proof takes the unchanged dynamic
 /// method fallback.
-fn emit_inline_direct_method_shape_guard(
+pub(crate) fn emit_inline_direct_method_shape_guard(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
     expected_class_id: &str,

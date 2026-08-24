@@ -122,6 +122,18 @@ pub(crate) fn lower_let(
     }
     if let Some(init_expr) = init {
         crate::expr::record_local_value_alias_for_write(ctx, id, init_expr);
+        if !ctx.reassigned_locals.contains(&id) {
+            if let perry_hir::Expr::PropertyGet {
+                object, property, ..
+            } = init_expr
+            {
+                if property == "length" {
+                    if let perry_hir::Expr::LocalGet(array_id) = object.as_ref() {
+                        ctx.array_length_snapshots.insert(id, *array_id);
+                    }
+                }
+            }
+        }
         ctx.guarded_discriminant_aliases.remove(&id);
         if !mutable && !ctx.reassigned_locals.contains(&id) {
             if let perry_hir::Expr::PropertyGet {
@@ -142,6 +154,7 @@ pub(crate) fn lower_let(
         }
     } else {
         ctx.local_value_aliases.remove(&id);
+        ctx.array_length_snapshots.remove(&id);
         ctx.guarded_discriminant_aliases.remove(&id);
     }
     crate::expr::record_int_facts_for_let(ctx, id, init, mutable);

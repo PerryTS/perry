@@ -393,6 +393,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     None,
                     Some(nonnegative_index_params),
                     false,
+                    false,
                 )
                 .with_context(|| {
                     format!(
@@ -400,6 +401,45 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                         class.name, method.name
                     )
                 })?;
+                if !crate::codegen::typed_abi::nonnegative_index_fast_array_params(
+                    method,
+                    nonnegative_index_params,
+                )
+                .is_empty()
+                {
+                    compile_method(
+                        llmod,
+                        class,
+                        method,
+                        func_names,
+                        strings,
+                        class_table,
+                        method_names,
+                        module_globals,
+                        module_global_types,
+                        opts.import_function_prefixes,
+                        enum_table,
+                        static_field_globals,
+                        class_ids,
+                        func_signatures,
+                        func_synthetic_arguments,
+                        module_boxed_vars,
+                        closure_rest_params,
+                        cross_module,
+                        None,
+                        false,
+                        None,
+                        Some(nonnegative_index_params),
+                        true,
+                        false,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "lowering fallback-free indexed-array method clone '{}::{}'",
+                            class.name, method.name
+                        )
+                    })?;
+                }
             }
             compile_method(
                 llmod,
@@ -426,6 +466,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     .contains_key(&(class.name.clone(), method.name.clone())),
                 None,
                 None,
+                false,
                 false,
             )
             .with_context(|| format!("lowering method '{}::{}'", class.name, method.name))?;
@@ -463,6 +504,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     false,
                     Some(fact.clone()),
                     None,
+                    false,
                     false,
                 )
                 .with_context(|| {
@@ -504,6 +546,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                         false,
                         Some(fact.clone()),
                         None,
+                        false,
                         true,
                     )
                     .with_context(|| {
@@ -543,6 +586,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 false,
                 None,
                 None,
+                false,
                 false,
             )
             .with_context(|| {
@@ -611,6 +655,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 None,
                 None,
                 false,
+                false,
             )
             .with_context(|| format!("lowering getter '{}::{}'", class.name, prop))?;
         }
@@ -665,6 +710,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 false,
                 None,
                 None,
+                false,
                 false,
             )
             .with_context(|| format!("lowering setter '{}::{}'", class.name, prop))?;
@@ -762,6 +808,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 false,
                 None,
                 None,
+                false,
                 false,
             )
             .with_context(|| format!("lowering constructor for '{}'", class.name))?;

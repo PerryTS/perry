@@ -443,6 +443,22 @@ pub(crate) fn nonnegative_index_method_name(generic_name: &str, params: &[u32]) 
     format!("{generic_name}$idx_u31_{suffix}")
 }
 
+/// Private indexed-method body reached only from a versioned loop that has
+/// already admitted the receiver, the complete index range, and every array
+/// argument. The extra arguments are live array handles; the body contains no
+/// ordinary array guard or semantic fallback.
+pub(crate) fn nonnegative_index_fast_array_method_name(
+    generic_name: &str,
+    params: &[u32],
+) -> String {
+    let suffix = params
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join("_");
+    format!("{generic_name}$idx_fast_array_u31_{suffix}")
+}
+
 /// Select a deliberately small method family for call-site-proven index
 /// specialization. Source `number` annotations nominate candidates but never
 /// license the clone: routing requires a separate nonnegative-i32 proof at the
@@ -469,6 +485,102 @@ pub(crate) fn nonnegative_index_method_params(method: &Function) -> Vec<u32> {
         .filter(|param| {
             matches!(param.ty, Type::Number | Type::Int32)
                 && index_used.contains(&param.id)
+                && !reassigned.contains(&param.id)
+                && !closure_referenced.contains(&param.id)
+        })
+        .map(|param| param.id)
+        .collect()
+}
+
+/// Array parameters eligible for the fallback-free indexed-method clone.
+///
+/// The deliberately small body contract is a common checked-reader shape:
+/// reject an absent array, load `array[index]`, optionally reject one sentinel,
+/// and return the loaded value. No user code can run on the continuing path
+/// before or after the indexed read. Throw expressions remain unrestricted
+/// because they terminate the invocation; their allocation/evaluation cannot
+/// invalidate a later fast read in this clone.
+pub(crate) fn nonnegative_index_fast_array_params(
+    method: &Function,
+    index_params: &[u32],
+) -> Vec<u32> {
+    use perry_hir::Expr;
+
+    if index_params.is_empty() || method.body.len() != 4 {
+        return Vec::new();
+    }
+    let (
+        Stmt::If {
+            condition: absent_condition,
+            then_branch: absent_branch,
+            else_branch: None,
+        },
+        Stmt::Let {
+            id: value_id,
+            init: Some(Expr::IndexGet { object, index }),
+            ..
+        },
+        Stmt::If {
+            condition: sentinel_condition,
+            then_branch: sentinel_branch,
+            else_branch: None,
+        },
+        Stmt::Return(Some(Expr::LocalGet(return_id))),
+    ) = (
+        &method.body[0],
+        &method.body[1],
+        &method.body[2],
+        &method.body[3],
+    )
+    else {
+        return Vec::new();
+    };
+    if *return_id != *value_id
+        || !matches!(absent_branch.as_slice(), [Stmt::Throw(_)])
+        || !matches!(sentinel_branch.as_slice(), [Stmt::Throw(_)])
+    {
+        return Vec::new();
+    }
+
+    let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) = (object.as_ref(), index.as_ref())
+    else {
+        return Vec::new();
+    };
+    if !index_params.contains(index_id) {
+        return Vec::new();
+    }
+    let absent_checks_array = matches!(
+        absent_condition,
+        Expr::Compare {
+            op: CompareOp::Eq | CompareOp::LooseEq,
+            left,
+            right,
+        } if matches!(
+            (left.as_ref(), right.as_ref()),
+            (Expr::LocalGet(id), Expr::Undefined) | (Expr::Undefined, Expr::LocalGet(id))
+                if *id == *array_id
+        )
+    );
+    let sentinel_checks_value = matches!(
+        sentinel_condition,
+        Expr::Compare {
+            op: CompareOp::Eq | CompareOp::LooseEq,
+            left,
+            right,
+        } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == *value_id)
+            || matches!(right.as_ref(), Expr::LocalGet(id) if *id == *value_id)
+    );
+    if !absent_checks_array || !sentinel_checks_value {
+        return Vec::new();
+    }
+
+    let reassigned = crate::collectors::reassigned_locals(&method.body);
+    let closure_referenced = crate::expr::collect_closure_referenced_locals(&method.body);
+    method
+        .params
+        .iter()
+        .filter(|param| {
+            param.id == *array_id
                 && !reassigned.contains(&param.id)
                 && !closure_referenced.contains(&param.id)
         })

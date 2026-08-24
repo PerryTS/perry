@@ -93,6 +93,14 @@ fn merge_native_arena_owner_aliases(ctx: &mut FnCtx<'_>, exits: &[NativeArenaOwn
 fn try_const_fold_condition(ctx: &FnCtx<'_>, condition: &perry_hir::Expr) -> Option<bool> {
     use perry_hir::{CompareOp, Expr, LogicalOp};
     match condition {
+        Expr::LocalGet(id)
+            if ctx
+                .versioned_indexed_loop_facts
+                .last()
+                .is_some_and(|fact| fact.falsy_local_id == Some(*id)) =>
+        {
+            Some(false)
+        }
         Expr::Compare { op, left, right } => {
             // Try to extract a known constant from one side and a literal
             // from the other.

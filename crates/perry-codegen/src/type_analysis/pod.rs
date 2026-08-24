@@ -552,6 +552,9 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
             !ptr_shape_numeric
         }
         Expr::IndexGet { object, index } => {
+            if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, expr) {
+                return false;
+            }
             if !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
                 return false;
             }

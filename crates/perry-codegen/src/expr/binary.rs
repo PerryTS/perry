@@ -376,6 +376,14 @@ fn chain_fold_is_sound(ctx: &FnCtx<'_>, parts: &[&Expr]) -> bool {
 }
 
 fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
+    // A stable-packed numeric clone has a stronger fact than the generic
+    // untyped-local typed-array probe below: its preheader scanned the exact
+    // range, and its emitted-IR gate proved that no call can invalidate that
+    // proof. Preserve the clone's private direct load and report that no
+    // residual ToNumber coercion is needed.
+    if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, expr) {
+        return Ok((lower_expr(ctx, expr)?, true));
+    }
     // #5497 Lever E: a representation-first Boolean local/literal is already
     // an i1. JavaScript arithmetic applies ToNumber, which is exactly an
     // unsigned i1 -> f64 conversion; boxing and calling js_number_coerce only

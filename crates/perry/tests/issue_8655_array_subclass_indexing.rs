@@ -81,8 +81,23 @@ fn function_ir<'a>(ir: &'a str, function_fragment: &str) -> &'a str {
     &tail[..end + 2]
 }
 
+fn named_blocks(function: &str, prefixes: &[&str]) -> String {
+    let mut selected = false;
+    let mut result = String::new();
+    for line in function.lines() {
+        if !line.starts_with([' ', '\t']) && line.contains(':') {
+            selected = prefixes.iter().any(|prefix| line.contains(prefix));
+        }
+        if selected {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+    result
+}
+
 #[test]
-fn wolf_ecs_loop_has_no_generic_dynamic_index_get() {
+fn wolf_ecs_loop_has_a_fallback_free_versioned_fast_copy() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (_bin, stderr) = compile(dir.path(), issue_repro_source(), true);
     let ll_path = stderr
@@ -96,8 +111,24 @@ fn wolf_ecs_loop_has_no_generic_dynamic_index_get() {
     let system = function_ir(&ir, "__system(double");
 
     assert!(
+        system.contains("call i32 @js_packed_arraylike_loop_guard("),
+        "the original #8655 fixture must enter through the loop preheader proof"
+    );
+    assert!(system.contains("stable_packed.loop.fast.preheader"));
+    assert!(
+        !system.contains("stable_packed.iteration.fast"),
+        "the call-free clone must not repeat its complete preheader proof per iteration"
+    );
+    assert!(system.contains("stable_packed.loop.slow.preheader"));
+    let fast_blocks = named_blocks(system, &["stable_packed", "for.stable_packed_fast"]);
+    assert!(
+        !fast_blocks.contains("js_object_get_index_polymorphic")
+            && !fast_blocks.contains("js_packed_arraylike_index_get"),
+        "the original Wolf ECS fast copy must use private direct loads\n{fast_blocks}"
+    );
+    assert!(
         system.contains("call double @js_packed_arraylike_index_get("),
-        "the unknown Array-subclass receiver must use the guarded packed-arraylike read"
+        "the explicit generic loop copy must retain the guarded semantic fallback"
     );
     assert!(
         !system.contains("call double @js_dyn_index_get("),

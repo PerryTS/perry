@@ -68,6 +68,50 @@ fn read_method() -> Function {
     )
 }
 
+fn checked_read_method() -> Function {
+    const VALUE_ID: u32 = 13;
+    function(
+        91,
+        "checkedRead",
+        vec![
+            param(COLUMN_ID, "column", Type::Array(Box::new(Type::Any))),
+            param(INDEX_ID, "index", Type::Number),
+        ],
+        Type::Any,
+        vec![
+            Stmt::If {
+                condition: Expr::Compare {
+                    op: perry_hir::CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(COLUMN_ID)),
+                    right: Box::new(Expr::Undefined),
+                },
+                then_branch: vec![Stmt::Throw(Expr::String("absent".to_string()))],
+                else_branch: None,
+            },
+            Stmt::Let {
+                id: VALUE_ID,
+                name: "value".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(COLUMN_ID)),
+                    index: Box::new(Expr::LocalGet(INDEX_ID)),
+                }),
+            },
+            Stmt::If {
+                condition: Expr::Compare {
+                    op: perry_hir::CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(VALUE_ID)),
+                    right: Box::new(Expr::Integer(99)),
+                },
+                then_branch: vec![Stmt::Throw(Expr::String("sentinel".to_string()))],
+                else_branch: None,
+            },
+            Stmt::Return(Some(Expr::LocalGet(VALUE_ID))),
+        ],
+    )
+}
+
 fn reader_class() -> Class {
     Class {
         id: 100,
@@ -186,6 +230,120 @@ fn emit() -> String {
         .expect("LLVM IR is UTF-8")
 }
 
+fn emit_checked_reader() -> String {
+    let mut class = reader_class();
+    class.methods = vec![checked_read_method()];
+    let mut module = Module::new("checked_index_method_clone.ts");
+    module.classes = vec![class];
+    module.init_kind = ModuleInitKind::Eager;
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".to_string(),
+        ..Default::default()
+    };
+    String::from_utf8(compile_module(&module, opts).expect("checked reader compiles"))
+        .expect("LLVM IR is UTF-8")
+}
+
+fn emit_versioned_checked_reader_loop() -> String {
+    const ENTITIES: u32 = 20;
+    const COLUMN: u32 = 21;
+    const BOUND: u32 = 22;
+    const CALLBACK: u32 = 23;
+    const FILTER: u32 = 24;
+    const COUNTER: u32 = 25;
+    const ENTITY: u32 = 26;
+
+    let checked_call = Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::This),
+            property: "checkedRead".to_string(),
+            byte_offset: 0,
+        }),
+        args: vec![Expr::LocalGet(COLUMN), Expr::LocalGet(COUNTER)],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    };
+    let iterate = function(
+        92,
+        "iterate",
+        vec![
+            param(ENTITIES, "entities", Type::Array(Box::new(Type::Any))),
+            param(COLUMN, "column", Type::Array(Box::new(Type::Any))),
+            param(BOUND, "bound", Type::Number),
+            param(CALLBACK, "callback", Type::Any),
+            param(FILTER, "filter", Type::Any),
+        ],
+        Type::Void,
+        vec![Stmt::For {
+            init: Some(Box::new(Stmt::Let {
+                id: COUNTER,
+                name: "i".to_string(),
+                ty: Type::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            })),
+            condition: Some(Expr::Compare {
+                op: perry_hir::CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(COUNTER)),
+                right: Box::new(Expr::LocalGet(BOUND)),
+            }),
+            update: Some(Expr::Update {
+                id: COUNTER,
+                op: perry_hir::UpdateOp::Increment,
+                prefix: false,
+            }),
+            body: vec![
+                Stmt::Let {
+                    id: ENTITY,
+                    name: "entity".to_string(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(ENTITIES)),
+                        index: Box::new(Expr::LocalGet(COUNTER)),
+                    }),
+                },
+                Stmt::If {
+                    condition: Expr::Logical {
+                        op: perry_hir::LogicalOp::And,
+                        left: Box::new(Expr::LocalGet(FILTER)),
+                        right: Box::new(Expr::Unary {
+                            op: perry_hir::UnaryOp::Not,
+                            operand: Box::new(Expr::Call {
+                                callee: Box::new(Expr::LocalGet(FILTER)),
+                                args: vec![Expr::LocalGet(ENTITY)],
+                                type_args: Vec::new(),
+                                byte_offset: 0,
+                            }),
+                        }),
+                    },
+                    then_branch: vec![Stmt::Continue],
+                    else_branch: None,
+                },
+                Stmt::Expr(Expr::Call {
+                    callee: Box::new(Expr::LocalGet(CALLBACK)),
+                    args: vec![Expr::LocalGet(ENTITY), checked_call],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+            ],
+        }],
+    );
+    let mut class = reader_class();
+    class.methods = vec![checked_read_method(), iterate];
+    let mut module = Module::new("versioned_checked_reader_loop.ts");
+    module.classes = vec![class];
+    module.init_kind = ModuleInitKind::Eager;
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".to_string(),
+        ..Default::default()
+    };
+    String::from_utf8(compile_module(&module, opts).expect("versioned loop compiles"))
+        .expect("LLVM IR is UTF-8")
+}
+
 fn function_body(ir: &str, definition_contains: &str) -> String {
     let start = ir
         .lines()
@@ -294,6 +452,67 @@ fn selector_rejects_mutated_defaulted_and_closure_captured_indices() {
         }),
     );
     assert!(super::typed_abi::nonnegative_index_method_params(&captured).is_empty());
+}
+
+#[test]
+fn checked_reader_gets_a_handle_abi_clone_with_no_array_fallback() {
+    let method = checked_read_method();
+    let index_params = super::typed_abi::nonnegative_index_method_params(&method);
+    assert_eq!(index_params, vec![INDEX_ID]);
+    assert_eq!(
+        super::typed_abi::nonnegative_index_fast_array_params(&method, &index_params),
+        vec![COLUMN_ID]
+    );
+
+    let ir = emit_checked_reader();
+    let clone = function_body(
+        &ir,
+        "@perry_method_checked_index_method_clone_ts__Reader__checkedRead$idx_fast_array_u31_12(",
+    );
+    assert!(
+        clone.lines().next().is_some_and(|line| {
+            line.contains("i64 %fast_array_handle11") && line.contains(" alwaysinline ")
+        }),
+        "the fallback-free clone must expose the private live-handle ABI:\n{clone}"
+    );
+    assert!(
+        clone.contains("load double")
+            && clone.contains("select i1")
+            && !clone.contains("js_typed_feedback_array_index_get_fallback_boxed")
+            && !clone.contains("js_array_get_index_or_string")
+            && !clone.contains("arr.guard"),
+        "the private clone must contain a hole-aware direct load and no ordinary fallback:\n{clone}"
+    );
+}
+
+#[test]
+fn checked_reader_callback_loop_versions_to_fast_and_resumable_slow_bodies() {
+    let ir = emit_versioned_checked_reader_loop();
+    let iterate = function_body(
+        &ir,
+        "@perry_method_versioned_checked_reader_loop_ts__Reader__iterate(",
+    );
+    assert!(
+        iterate.contains("versioned_index.loop.fast.preheader")
+            && iterate.contains("versioned_index.loop.slow.preheader")
+            && iterate.contains("versioned_index.iteration.fast")
+            && iterate.contains("label %versioned_index.loop.slow.preheader"),
+        "the loop must have an iteration-entry guard and a current-index slow side exit:\n{iterate}"
+    );
+    assert!(
+        iterate.contains(
+            "@perry_method_versioned_checked_reader_loop_ts__Reader__checkedRead$idx_fast_array_u31_12("
+        ),
+        "the fast body must route the checked reader through its live-handle ABI:\n{iterate}"
+    );
+    let fast_call = iterate
+        .lines()
+        .find(|line| line.contains("$idx_fast_array_u31_12("))
+        .expect("fast clone call exists");
+    assert!(
+        fast_call.contains("i64 %"),
+        "the versioned call must pass a live array handle:\n{fast_call}"
+    );
 }
 
 #[test]

@@ -48,7 +48,12 @@ use super::{
 
 /// Runtime write-PIC flags that force the miss path. Class-vs-instance kind is
 /// encoded by the authoritative ShapeId and therefore owns no header flag.
-const WRITE_PIC_BLOCKING_FLAGS: u16 = 0x1907;
+// Includes the packed Array-subclass numeric-proof authority bit (0x80).
+// A proof-active receiver takes one ordinary miss so the runtime store's
+// unconditional layout note retires the proof even for pointer-free tagged
+// values such as SSO strings and booleans. After that miss, the PIC is eligible
+// again. This keeps proof retirement out of every ordinary-object hit.
+const WRITE_PIC_BLOCKING_FLAGS: u16 = 0x1987;
 
 /// #8098: `GcHeader::_reserved` bit 9 — the runtime birth-marked this
 /// class-less receiver an ORDINARY plain object (`JSON.parse` output), so it is
@@ -730,7 +735,7 @@ fn lower_put_value_static_write_ic(
         //   Downgrade`, where a pointer lands in a slot a typed descriptor
         //   declared raw-f64 — is unreachable from a PIC hit twice over. It
         //   is guarded by `claimed_intact`, and `GC_OBJ_TYPED_LAYOUT_INTACT`
-        //   (0x1000) is a member of `WRITE_PIC_BLOCKING_FLAGS` (0x1907),
+        //   (0x1000) is a member of `WRITE_PIC_BLOCKING_FLAGS` (0x1987),
         //   which every one of the four `hit` conjunctions requires CLEAR; and
         //   it needs a pointer value, which is the case `pointer_tested` does
         //   NOT skip.
@@ -869,7 +874,8 @@ fn lower_put_value_static_write_ic(
 /// Registers arrive in k → v → t evaluation order (see the call site); from
 /// the target register onward the path is call-free until the store or the
 /// outlined slow call. Guards are byte-for-byte the static write PIC's
-/// (GcHeader -8/-7/-6 with BLOCKING 0x1907 incl. typed-intact, ObjectHeader
+/// (GcHeader -8/-7/-6 with BLOCKING 0x1987 incl. typed-intact and the packed
+/// numeric-proof authority, ObjectHeader
 /// regular/class/token via the #6804 discriminated shape-token select).
 /// The raw store fires only for non-reference VALUE tags (not pointer/
 /// string/bigint), so it needs no barrier and no layout note; every other

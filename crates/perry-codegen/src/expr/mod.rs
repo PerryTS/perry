@@ -904,6 +904,12 @@ pub(crate) struct FnCtx<'a> {
     /// call that LLVM can't prove won't modify the length).
     pub cached_lengths: std::collections::HashMap<u32, String>,
 
+    /// Immutable locals initialized from an exact `receiver.length` read,
+    /// keyed by the snapshot local. The read itself retains ordinary property
+    /// semantics; a later counted-loop guard may use the association only
+    /// after proving the receiver is a packed Array/Array-subclass.
+    pub array_length_snapshots: std::collections::HashMap<u32, u32>,
+
     /// `(counter_local_id, array_local_id)` pairs that are guaranteed
     /// inbounds inside the current loop nest — populated by
     /// `lower_for` when it detects the same `for (...; i < arr.length;
@@ -1067,6 +1073,22 @@ pub(crate) struct FnCtx<'a> {
     /// eligibility over `classes`, which also contains imported structural
     /// stubs.
     pub nonnegative_index_methods: &'a std::collections::HashMap<(String, String), Vec<u32>>,
+
+    /// Raw live array handles supplied only to a fallback-free indexed-method
+    /// clone. The caller's versioned-loop admission proves the complete index
+    /// range and revalidates every handle before entering each fast iteration.
+    /// Public and ordinary `$idx_u31` bodies always leave this map empty.
+    pub trusted_array_param_handles: std::collections::HashMap<u32, String>,
+
+    /// Active fallback-free loop versions. The newest fact belongs to the
+    /// innermost fast loop. Its scalar fingerprints are revalidated at each
+    /// iteration entry before these live array handles may be consumed.
+    pub versioned_indexed_loop_facts: Vec<VersionedIndexedLoopFact>,
+
+    /// Scoped direct Array/Array-subclass iteration facts. The preheader
+    /// descriptor contains scalar layout data only; `live_receiver_handle`
+    /// is refreshed by the iteration-entry check before direct loads.
+    pub stable_packed_loop_facts: Vec<StablePackedLoopFact>,
 
     /// #7142: the subset of [`Self::pshape_methods`] the class-id dispatch
     /// tower may route to. A profitability filter only — see
@@ -1536,6 +1558,71 @@ pub(crate) struct BoundedIndexPair {
     pub index_local_id: u32,
     pub array_local_id: u32,
     pub scope_id: u32,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct VersionedIndexedArrayFact {
+    pub local_id: u32,
+    pub local_slot: String,
+    pub expected_fingerprint: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct VersionedIndexedMethodFact {
+    pub class_name: String,
+    pub method_name: String,
+    pub this_slot: String,
+    pub expected_class_id: String,
+    pub expected_shape_id: String,
+    pub method_guard_slot: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct VersionedIndexedLoopFact {
+    pub counter_local_id: u32,
+    pub falsy_local_id: Option<u32>,
+    pub side_exit_label: String,
+    pub arrays: Vec<VersionedIndexedArrayFact>,
+    pub method: VersionedIndexedMethodFact,
+    /// Populated by the iteration-entry revalidation block. These SSA handles
+    /// dominate the complete fast body and are never retained across the loop
+    /// callback/back edge.
+    pub live_array_handles: std::collections::HashMap<u32, String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct StablePackedNumericAccess {
+    /// Whether the admitted receiver is a plain Array rather than an
+    /// Array-subclass object.
+    pub is_plain: String,
+    /// Address immediately before element zero for a plain Array.
+    pub plain_base: String,
+    /// Number of admitted Array-subclass elements stored inline.
+    pub object_inline_count: String,
+    /// Address immediately before element zero in inline object storage.
+    pub object_inline_base: String,
+    /// Address immediately before element zero in spill object storage.
+    pub object_spill_base: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct StablePackedLoopFact {
+    pub counter_local_id: u32,
+    pub array_local_id: u32,
+    pub side_exit_label: String,
+    pub descriptor: String,
+    pub live_receiver_handle: Option<String>,
+    /// Admission scanned the complete indexed range and proved every value is
+    /// an untagged IEEE Number. This is requested only when the indexed value
+    /// appears below a numeric operator in the cloned body.
+    pub numeric_elements: bool,
+    /// The clone was emitted against a preheader-cached receiver. Its entry is
+    /// enabled only after an emitted-IR scan proves the whole clone call-free,
+    /// so no allocation, collection, or proof-revoking runtime funnel can run.
+    pub preheader_stable: bool,
+    /// Preheader-derived numeric storage bases. Admission proved the complete
+    /// range is raw f64 and the call-free clone keeps these addresses stable.
+    pub numeric_access: Option<StablePackedNumericAccess>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

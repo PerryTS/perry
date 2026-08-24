@@ -1072,6 +1072,18 @@ pub const OBJ_FLAG_NO_EXTEND: u16 = 0x04;
 // (`GC_COPY_SURVIVAL_AGE_MASK = 0x0038`) and bits 14..15 the layout state,
 // so 0x08 would be clobbered on every minor GC. Bits 6..13 are free.
 pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
+/// #8690: this `GC_TYPE_OBJECT` carries a cached proof that the packed
+/// Array-subclass element prefix recorded in `ObjectMeta::flags` is numeric.
+/// The bit is the address-reuse-safe authority: fresh allocations start with
+/// it clear, and the whole `_reserved` word rides copying/compacting GC moves.
+/// Every ordinary object-slot store clears it through `layout_note_slot`; the
+/// object-owned spill store has the matching owner-side hook.
+///
+/// Bit 7 is shared with `GC_ARRAY_RAW_F64_LAYOUT`, which is only meaningful
+/// for `GC_TYPE_ARRAY`. The two facts deliberately mean the same thing to the
+/// loop guard — direct loads over the admitted prefix are raw numeric f64s —
+/// but their payload layouts and invalidation funnels remain type-specific.
+pub(crate) const OBJ_FLAG_PACKED_NUMERIC_PROOF: u16 = 0x80;
 // Array carries per-index property descriptors (accessors or custom attrs
 // installed via `Object.defineProperty`, or a non-writable `length`). The
 // raw-f64 numeric fast paths must decline and route through the

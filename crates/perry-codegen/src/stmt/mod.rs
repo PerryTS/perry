@@ -27,9 +27,11 @@ mod loops;
 mod masked_window_region;
 #[cfg(test)]
 mod prealloc_module_global_tests;
+pub(crate) mod stable_packed_loop;
 mod switch_stmt;
 mod try_stmt;
 mod unused_expr;
+mod versioned_indexed_loop;
 
 pub(crate) use if_stmt::lower_if;
 pub(crate) use let_stmt::lower_let;

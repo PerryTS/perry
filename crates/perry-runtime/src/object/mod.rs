@@ -1747,11 +1747,13 @@ pub struct ObjectMeta {
     /// Same summary for accessor descriptors (`get`/`set` installs) — the
     /// `accessor_descriptors` table twin of `attr_key_bits`.
     pub accessor_key_bits: u64,
-    /// Object-only state that cannot share `GcHeader._reserved`: every bit in
-    /// that 16-bit word is already owned by GC layout/age or another object
-    /// flag. In particular, bit 12 is `GC_OBJ_TYPED_LAYOUT_INTACT`, so using
-    /// it for prototype divergence made every typed-layout object appear to
-    /// have a custom prototype.
+    /// Object-only state and compact scalar proof payloads. Bit 0 is the
+    /// custom-prototype flag. #8690 reserves bit 1 plus bits 8..63 for the
+    /// packed Array-subclass numeric-prefix proof (verified bound + ShapeId);
+    /// its address-reuse-safe authority is a type-specific GcHeader bit.
+    /// In particular, GcHeader bit 12 is `GC_OBJ_TYPED_LAYOUT_INTACT`, so
+    /// using that word for prototype divergence made every typed-layout
+    /// object appear to have a custom prototype.
     pub flags: u64,
     /// #6812: object-owned overflow storage — a `GC_TYPE_ARRAY` buffer
     /// (`*mut ArrayHeader` bits, 0 = none) holding the NaN-boxed values of

@@ -121,6 +121,10 @@ pub(crate) fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
         // handle scope is needed. This is every write after the first to a
         // given width (e.g. round-robin updates across an object array).
         let meta = (*obj).meta;
+        // The physical write below belongs to the spill Array, so its layout
+        // note cannot identify the owning Array-subclass object. Retire that
+        // owner's cached numeric-prefix proof before changing any spill slot.
+        crate::array::note_packed_subclass_spill_store(obj, meta);
         if !meta.is_null() {
             let spill = (*meta).spill as *mut crate::array::ArrayHeader;
             if !spill.is_null() && ((*spill).capacity as usize) > field_index {

@@ -484,6 +484,11 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         // Stringify the index and route through the object field setter,
         // which handles shape transitions, frozen/sealed/extensible checks,
         // overflow into out-of-line storage, and accessor descriptors.
+        // Keep the receiver/key alive because the setter can allocate and the
+        // Array-subclass post-step below must observe their evacuated values.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let recv_h = scope.root_nanbox_f64(boxed);
+        let key_h = scope.root_nanbox_f64(idx);
         unsafe { rooted_property_key_set(raw, idx, value) };
         // #7574: a `class X extends Array` instance IS an Array in JavaScript,
         // so `sub[3] = v` runs the Array-exotic `[[DefineOwnProperty]]` and
@@ -493,13 +498,10 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         // then made the next `sub.push(v)` append at index 0 and overwrite it.
         // Ordinary objects and object literals never reach the chain walk: the
         // `class_id == 0` test short-circuits first.
-        let class_id = crate::object::js_object_get_class_id(raw as *const ObjectHeader);
-        if class_id != 0 && crate::array::is_array_subclass_class_id(class_id) {
-            if let Some(index) = numeric_key_u32_index(idx) {
-                let recv = f64::from_bits(crate::value::POINTER_TAG | raw);
-                crate::array::maintain_array_exotic_length(recv, index);
-            }
-        }
+        crate::array::note_array_subclass_index_write(
+            recv_h.get_nanbox_f64(),
+            key_h.get_nanbox_f64(),
+        );
         return;
     }
     // Buffer / typed-array were handled above. Map / Set are collection

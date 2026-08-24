@@ -13,13 +13,14 @@ use crate::lower_string_concat::{
     lower_string_self_append_chain,
 };
 use crate::nanbox::double_literal;
-use crate::type_analysis::{is_map_expr, is_set_expr, receiver_class_name};
+use crate::native_value::ExpectedNativeRep;
+use crate::type_analysis::{is_map_expr, is_numeric_expr, is_set_expr, receiver_class_name};
 use crate::types::{DOUBLE, I32, I64};
 
 use super::{
     can_lower_expr_as_i32_in_current_region, emit_root_nanbox_store_on_block,
     emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_write_barrier,
-    is_global_this_builtin_function_name, lower_expr, lower_expr_as_i32,
+    is_global_this_builtin_function_name, lower_expr, lower_expr_as_i32, lower_expr_native,
     lower_pod_local_reassignment, materialize_pod_value_copy, nanbox_string_inline, FnCtx,
     TrustedBoxCapturePtr,
 };
@@ -635,11 +636,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // via one sitofp per write so non-int readers (e.g. `acc / K`)
             // still see the current value.
             if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
+                let structurally_i32 = can_lower_expr_as_i32_in_current_region(ctx, value);
+                // When `x` is proven numeric, `x | 0` may feed the canonical
+                // i32 slot directly: materializing a double here only to
+                // convert it back would duplicate the spec ToInt32. Keep the
+                // numeric gate explicit — an untyped `x` can be a String, and
+                // its `+` expression must preserve concatenation before `|0`.
+                let explicit_numeric_toint32 = matches!(
+                    value.as_ref(),
+                    Expr::Binary {
+                        op: BinaryOp::BitOr,
+                        left,
+                        right,
+                        ..
+                    } if matches!(right.as_ref(), Expr::Integer(0))
+                        && is_numeric_expr(ctx, left)
+                );
                 if !ctx.closure_captures.contains_key(id)
                     && !(ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id))
-                    && can_lower_expr_as_i32_in_current_region(ctx, value)
+                    && (structurally_i32 || explicit_numeric_toint32)
                 {
-                    let v_i32 = lower_expr_as_i32(ctx, value)?;
+                    let v_i32 = if structurally_i32 {
+                        lower_expr_as_i32(ctx, value)?
+                    } else {
+                        lower_expr_native(ctx, value, ExpectedNativeRep::I32)?.value
+                    };
                     let unsigned_i32 = ctx.unsigned_i32_locals.contains(id);
                     let blk = ctx.block();
                     blk.store(I32, &v_i32, &i32_slot);

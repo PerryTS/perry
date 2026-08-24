@@ -14,6 +14,22 @@ use crate::array::{js_array_alloc_with_length, note_array_slot, ArrayHeader};
 use crate::object::ObjectHeader;
 use crate::value::JSValue;
 
+// #8690: `ObjectMeta::flags` carries the move-stable scalar payload for a
+// numeric packed-prefix proof. The GcHeader authority bit prevents a record
+// surviving address reuse: fresh allocations have it clear, and both words
+// ride an evacuation without a side-table re-key walk.
+//
+//     bit 0       existing custom-[[Prototype]] flag
+//     bit 1       payload valid
+//     bits 8..31  verified numeric prefix bound (24 bits, max 16,000,000)
+//     bits 32..63 exact semantic ShapeId
+const PACKED_NUMERIC_META_VALID: u64 = 1 << 1;
+const PACKED_NUMERIC_META_BOUND_SHIFT: u32 = 8;
+const PACKED_NUMERIC_META_BOUND_MASK: u64 = 0x00FF_FFFF << PACKED_NUMERIC_META_BOUND_SHIFT;
+const PACKED_NUMERIC_META_SHAPE_MASK: u64 = 0xFFFF_FFFF_0000_0000;
+const PACKED_NUMERIC_META_MASK: u64 =
+    PACKED_NUMERIC_META_VALID | PACKED_NUMERIC_META_BOUND_MASK | PACKED_NUMERIC_META_SHAPE_MASK;
+
 // #8655: Array-subclass instances use ordinary ObjectHeader property slots,
 // but their hot numeric reads have a much stronger invariant than a generic
 // object lookup can exploit: `push` appends the own keys `"0"`, `"1"`, ... in
@@ -247,6 +263,11 @@ fn dense_layout_for_value(value: f64) -> Option<(*const ObjectHeader, DenseSubcl
     {
         return None;
     }
+    // This is per receiver, not per ShapeId. A cached layout built before
+    // Object.setPrototypeOf must not let this object borrow the old proof.
+    if crate::object::prototype_chain::object_has_prototype_override(obj as usize) {
+        return None;
+    }
     let (class_id, shape_id) = unsafe { ((*obj).class_id, (*obj).parent_class_id) };
     let key = dense_cache_key(class_id, shape_id);
     let layout = cached_dense_layout(key).or_else(|| {
@@ -255,6 +276,146 @@ fn dense_layout_for_value(value: f64) -> Option<(*const ObjectHeader, DenseSubcl
         Some(layout)
     })?;
     Some((obj, layout))
+}
+
+/// Clear an established Array-subclass numeric-prefix proof before an owner
+/// field store. `layout_note_slot` calls this for inline slots; the object-owned
+/// spill path calls it against the owner because its physical store is noted
+/// on the child Array buffer instead.
+#[inline]
+pub(crate) unsafe fn clear_packed_subclass_numeric_proof(obj: *mut ObjectHeader) {
+    if obj.is_null() || (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return;
+    }
+    let header = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    if (*header).obj_type != crate::gc::GC_TYPE_OBJECT
+        || (*header)._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF == 0
+    {
+        return;
+    }
+    // Retire the authority first. A missing/moving meta then merely leaves an
+    // unreachable payload, never a proof a future query can consume.
+    (*header)._reserved &= !crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
+    let meta = (*obj).meta;
+    if !meta.is_null() {
+        (*meta).flags &= !PACKED_NUMERIC_META_MASK;
+    }
+}
+
+/// Owner-side invalidation for an object-owned spill write. The common
+/// no-proof case uses the meta pointer the spill path already loaded and pays
+/// only one predictable bit test; it does not re-read the owner's GC header.
+#[inline]
+pub(crate) unsafe fn note_packed_subclass_spill_store(
+    obj: *mut ObjectHeader,
+    meta: *mut crate::object::ObjectMeta,
+) {
+    if !meta.is_null() && (*meta).flags & PACKED_NUMERIC_META_VALID != 0 {
+        clear_packed_subclass_numeric_proof(obj);
+    }
+}
+
+#[inline]
+unsafe fn subclass_numeric_prefix_is_proven(
+    obj: *const ObjectHeader,
+    shape_id: u32,
+    bound: u32,
+) -> bool {
+    let header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    if (*header)._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF == 0 {
+        return false;
+    }
+    let meta = (*obj).meta;
+    if meta.is_null() {
+        (*header)._reserved &= !crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
+        return false;
+    }
+    let flags = (*meta).flags;
+    let payload_valid = flags & PACKED_NUMERIC_META_VALID != 0;
+    let proven_bound =
+        ((flags & PACKED_NUMERIC_META_BOUND_MASK) >> PACKED_NUMERIC_META_BOUND_SHIFT) as u32;
+    let proven_shape = (flags >> 32) as u32;
+    if payload_valid && proven_shape == shape_id && proven_bound >= bound {
+        return true;
+    }
+    clear_packed_subclass_numeric_proof(obj as *mut ObjectHeader);
+    false
+}
+
+#[inline]
+unsafe fn publish_subclass_numeric_prefix(
+    obj: *const ObjectHeader,
+    shape_id: u32,
+    bound: u32,
+) -> bool {
+    let meta = (*obj).meta;
+    if meta.is_null() || bound > 16_000_000 {
+        return false;
+    }
+    let flags = (*meta).flags;
+    (*meta).flags = (flags & !PACKED_NUMERIC_META_MASK)
+        | PACKED_NUMERIC_META_VALID
+        | (u64::from(bound) << PACKED_NUMERIC_META_BOUND_SHIFT)
+        | (u64::from(shape_id) << 32);
+    let header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    (*header)._reserved |= crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
+    true
+}
+
+/// Establish-or-confirm the numeric prefix used by the call-free loop clone.
+/// The first visit scans; later visits are two scalar-word checks. Any owner
+/// store retires the record before writing, and semantic shape changes fail
+/// the exact ShapeId comparison even if they do not touch a value slot.
+#[inline]
+unsafe fn ensure_subclass_numeric_prefix(
+    obj: *const ObjectHeader,
+    layout: DenseSubclassLayout,
+    bound: u32,
+) -> bool {
+    if bound == 0 {
+        return true;
+    }
+    let shape_id = (*obj).parent_class_id;
+    if subclass_numeric_prefix_is_proven(obj, shape_id, bound) {
+        return true;
+    }
+    for index in 0..bound {
+        let Some(slot) = layout.element_base.checked_add(index) else {
+            return false;
+        };
+        let value_ptr = if slot < layout.live_inline_slots {
+            (obj as *mut u8)
+                .add(std::mem::size_of::<ObjectHeader>())
+                .cast::<u64>()
+                .add(slot as usize)
+        } else {
+            let meta = (*obj).meta;
+            if meta.is_null() {
+                return false;
+            }
+            let spill = (*meta).spill as *mut ArrayHeader;
+            if spill.is_null() || slot >= (*spill).length {
+                return false;
+            }
+            (spill as *mut u8)
+                .add(std::mem::size_of::<ArrayHeader>())
+                .cast::<u64>()
+                .add(slot as usize)
+        };
+        let value = JSValue::from_bits(ptr::read(value_ptr));
+        if value.is_int32() {
+            // `push(i)` commonly stores Perry's compact INT32 Number tag. The
+            // direct clone consumes raw doubles, so normalize that Number to
+            // its representation-equivalent f64 bits during the one-time
+            // verification walk. This is pointer-free -> pointer-free and
+            // changes no JS-observable type/value, hence needs neither a GC
+            // barrier nor a layout downgrade.
+            ptr::write(value_ptr, (value.as_int32() as f64).to_bits());
+        } else if !value.is_number() {
+            return false;
+        }
+    }
+    publish_subclass_numeric_prefix(obj, shape_id, bound)
 }
 
 #[inline]
@@ -412,6 +573,122 @@ pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64, cache
     }
     crate::value::js_dyn_index_get(receiver, index)
 }
+
+/// Admit a complete counted-loop range over either an ordinary Array or an
+/// object-backed Array subclass. The seven output words are scalar facts, not
+/// managed pointers, so the generated loop can reload a relocated receiver
+/// from its root before each residual check.
+///
+/// Layout: `(kind, gc_header, receiver_header, length_slot, element_base,
+/// dense_prefix|inline_bound<<32, bound)`. Kind 1 is an ArrayHeader and kind 2
+/// is an ObjectHeader Array subclass. A zero return leaves every semantic case
+/// to the unchanged generic loop.
+#[no_mangle]
+pub extern "C" fn js_packed_arraylike_loop_guard(
+    receiver: f64,
+    bound: f64,
+    require_numeric: i32,
+    out: *mut u64,
+) -> i32 {
+    let live_length_bound = bound == -1.0;
+    if out.is_null()
+        || !bound.is_finite()
+        || (!live_length_bound && bound < 0.0)
+        || (!live_length_bound && bound.fract() != 0.0)
+        || bound > 16_000_000.0
+    {
+        return 0;
+    }
+    let requested_bound = (!live_length_bound).then_some(bound as u32);
+    let js = JSValue::from_bits(receiver.to_bits());
+    if !js.is_pointer() {
+        return 0;
+    }
+    let raw = js.as_pointer::<u8>();
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) })
+    else {
+        return 0;
+    };
+    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        return 0;
+    }
+
+    if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+        if header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+            || super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0
+        {
+            return 0;
+        }
+        let array = raw.cast::<ArrayHeader>();
+        let (length, capacity) = unsafe { ((*array).length, (*array).capacity) };
+        let bound = requested_bound.unwrap_or(length);
+        if bound > length || length > capacity || capacity > 16_000_000 {
+            return 0;
+        }
+        if require_numeric != 0 {
+            // The raw-f64 invariant is an O(1) GcHeader bit after its first
+            // self-healing scan, and every nonnumeric Array write already
+            // clears it. Reuse that representation proof instead of walking
+            // the full range on every invocation of the surrounding scan().
+            if !unsafe { super::header::ensure_array_numeric_raw_f64(array as *mut ArrayHeader) } {
+                return 0;
+            }
+        }
+        let gc_word = unsafe { ptr::read_unaligned((raw as *const u8).sub(8).cast::<u64>()) };
+        let array_word = (u64::from(capacity) << 32) | u64::from(length);
+        unsafe {
+            out.add(0).write(1);
+            out.add(1).write(gc_word);
+            out.add(2).write(array_word);
+            out.add(3).write(0);
+            out.add(4).write(0);
+            out.add(5).write(0);
+            out.add(6).write(u64::from(bound));
+        }
+        return 1;
+    }
+
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        return 0;
+    }
+    let Some((object, layout)) = dense_layout_for_value(receiver) else {
+        return 0;
+    };
+    if !crate::object::object_spill_enabled() || layout.length_slot >= layout.live_inline_slots {
+        return 0;
+    }
+    let Some(length) = nonnegative_u32_length(layout_length_value(object, layout)) else {
+        return 0;
+    };
+    let bound = requested_bound.unwrap_or(length);
+    if bound > length || bound > layout.dense_prefix_len || length > 16_000_000 {
+        return 0;
+    }
+    if require_numeric != 0 {
+        if !unsafe { ensure_subclass_numeric_prefix(object, layout, bound) } {
+            return 0;
+        }
+    }
+    let gc_word = unsafe { ptr::read_unaligned((raw as *const u8).sub(8).cast::<u64>()) };
+    let receiver_word = unsafe { ptr::read_unaligned(raw.cast::<u64>()) };
+    unsafe {
+        out.add(0).write(2);
+        out.add(1).write(gc_word);
+        out.add(2).write(receiver_word);
+        out.add(3).write(u64::from(layout.length_slot));
+        out.add(4).write(u64::from(layout.element_base));
+        out.add(5).write(
+            (u64::from(layout.live_inline_slots) << 32) | u64::from(layout.dense_prefix_len),
+        );
+        out.add(6).write(u64::from(bound));
+    }
+    2
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_PACKED_ARRAYLIKE_LOOP_GUARD: extern "C" fn(f64, f64, i32, *mut u64) -> i32 =
+    js_packed_arraylike_loop_guard;
 
 #[cfg(feature = "keepalive-anchors")]
 #[used]
@@ -669,7 +946,7 @@ pub(crate) fn array_object_index_set(recv: f64, index: u32, value: f64) {
     maintain_array_exotic_length(handle.get_nanbox_f64(), index);
 }
 
-/// The Array-exotic `length` step for an indexed own-property write, applied by
+/// The Array-exotic post-step for an indexed own-property write, applied by
 /// the two generic OBJECT store funnels (`js_put_value_set` and
 /// `js_object_set_index_polymorphic`) AFTER the store has landed.
 ///
@@ -684,10 +961,16 @@ pub(crate) fn array_object_index_set(recv: f64, index: u32, value: f64) {
 /// on a bounded parent walk. `key` is a property-key VALUE; a non-canonical
 /// array index (`"length"`, `"foo"`, `"01"`, a symbol) is a no-op.
 pub(crate) fn note_array_subclass_index_write(recv: f64, key: f64) {
-    if !is_array_subclass_value(recv) {
+    // Stringifying a numeric key can allocate and evacuate the object. Keep
+    // both inputs live, then re-read the receiver before retiring its proof.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_h = scope.root_nanbox_f64(recv);
+    let key_h = scope.root_nanbox_f64(key);
+    if !is_array_subclass_value(recv_h.get_nanbox_f64()) {
         return;
     }
-    let key_ptr = crate::value::js_jsvalue_to_string(key) as *const crate::string::StringHeader;
+    let key_ptr = crate::value::js_jsvalue_to_string(key_h.get_nanbox_f64())
+        as *const crate::string::StringHeader;
     // The `&str` borrows the heap `StringHeader`'s bytes. `canonical_array_index`
     // only parses digits — it allocates nothing, so the borrow cannot straddle a
     // collection point (the `&[u8]`-into-a-StringHeader hazard in CLAUDE.md).
@@ -699,7 +982,13 @@ pub(crate) fn note_array_subclass_index_write(recv: f64, key: f64) {
             None => return,
         }
     };
-    maintain_array_exotic_length(recv, index);
+    let live_recv = recv_h.get_nanbox_f64();
+    let raw = (live_recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
+    // A successful value overwrite does not necessarily change shape and a
+    // pointer-free tag (notably an SSO string) needs no GC layout note. Retire
+    // the numeric authority explicitly so neither case can reuse stale proof.
+    unsafe { clear_packed_subclass_numeric_proof(raw) };
+    maintain_array_exotic_length(live_recv, index);
 }
 
 /// The `length`-bumping half of `array_object_index_set`, split out so the
