@@ -152,27 +152,6 @@ pub(crate) unsafe fn intl_subclass_super(
     let instance = crate::closure::js_native_call_value(parent_val, args_ptr, args_len);
     crate::object::js_new_target_set(prev_nt);
     crate::object::js_implicit_this_set(prev_this);
-    // Perry allocates the derived `this` before dispatching native `super()`.
-    // Complete OrdinaryCreateFromConstructor's prototype relationship here:
-    // `CustomIntl.prototype.[[Prototype]]` is the intrinsic Intl prototype.
-    if let Some(this_obj) = object_ptr_from_value(this_box) {
-        let class_id = crate::object::js_object_get_class_id(this_obj);
-        if let Some(derived_proto_value) =
-            crate::object::class_decl_prototype_value_for_instance_class(class_id)
-        {
-            let parent_closure =
-                JSValue::from_bits(parent_val.to_bits()).as_pointer::<u8>() as usize;
-            let parent_proto =
-                crate::closure::closure_get_dynamic_prop(parent_closure, "prototype");
-            let derived_proto = proto_identity_addr(derived_proto_value);
-            if derived_proto != 0 && proto_identity_addr(parent_proto) != 0 {
-                crate::object::prototype_chain::object_set_static_prototype(
-                    derived_proto,
-                    parent_proto.to_bits(),
-                );
-            }
-        }
-    }
     // Re-home the freshly-built instance's brand + bound methods onto `this`.
     let this_bits = this_box.to_bits();
     if (this_bits >> 48) == 0x7FFD {

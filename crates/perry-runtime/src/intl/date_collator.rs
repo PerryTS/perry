@@ -5,6 +5,9 @@ use crate::closure::ClosureHeader;
 use crate::object::{js_object_alloc, ObjectHeader};
 use crate::value::{js_nanbox_pointer, JSValue};
 
+mod compare;
+use compare::{collator_compare_order, CollatorCompareOptions};
+
 /// ECMA-402 FormatDateTime / HandleDateTimeValue step 1: coerce the
 /// `format`/`formatToParts` argument to a TimeClip'd integer-millisecond value.
 /// `undefined` means "now". Every other value goes through ToNumber — a Date
@@ -1720,46 +1723,6 @@ fn german_phonebook_key(s: &str) -> String {
     out
 }
 
-fn collator_compare_order(obj: *const ObjectHeader, left: &str, right: &str) -> std::cmp::Ordering {
-    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
-    let usage = get_string_field(obj, KEY_COL_USAGE).unwrap_or_else(|| "sort".to_string());
-    let collation =
-        get_string_field(obj, KEY_COL_COLLATION).unwrap_or_else(|| "default".to_string());
-    let sensitivity =
-        get_string_field(obj, KEY_COL_SENSITIVITY).unwrap_or_else(|| "variant".to_string());
-    if locale == "sv" || locale.starts_with("sv-") {
-        return swedish_collation_key(left).cmp(&swedish_collation_key(right));
-    }
-    let phonebook = collation == "phonebk"
-        || (usage == "search" && (locale == "de" || locale.starts_with("de-")));
-    let primary_left = if phonebook {
-        german_phonebook_key(left)
-    } else {
-        base_collation_key(left, false)
-    };
-    let primary_right = if phonebook {
-        german_phonebook_key(right)
-    } else {
-        base_collation_key(right, false)
-    };
-    let primary = primary_left.cmp(&primary_right);
-    if primary != std::cmp::Ordering::Equal || sensitivity == "base" {
-        return primary;
-    }
-    let normalized_left = collation_normalize(left);
-    let normalized_right = collation_normalize(right);
-    if sensitivity == "accent" {
-        return normalized_left
-            .to_lowercase()
-            .cmp(&normalized_right.to_lowercase());
-    }
-    if sensitivity == "case" {
-        return base_collation_key(&normalized_left, true)
-            .cmp(&base_collation_key(&normalized_right, true));
-    }
-    normalized_left.cmp(&normalized_right)
-}
-
 /// `GetOption(options, key, "string", allowed, undefined)` for a Collator string
 /// option: only `undefined` selects the default (absent); every other value —
 /// `null` included — is coerced via `ToString` and rejected with a RangeError
@@ -1851,15 +1814,38 @@ fn is_punctuation(c: char) -> bool {
 }
 
 pub(crate) fn collator_compare_object(obj: *const ObjectHeader, left: f64, right: f64) -> f64 {
-    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
-    let ignore_punct = get_field(obj, KEY_COL_IGNORE_PUNCT).to_bits() == crate::value::TAG_TRUE;
-    let (mut l, mut r) = (value_to_string(left), value_to_string(right));
-    if ignore_punct {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_const_ptr(obj);
+    let left = scope.root_nanbox_f64(left);
+    let right = scope.root_nanbox_f64(right);
+
+    // Snapshot every immutable collator slot before ToString can invoke user
+    // code and move the instance. Re-read the rooted object for every access.
+    let options = CollatorCompareOptions {
+        locale: get_string_field_from_raw_handle(&obj, KEY_LOCALE)
+            .unwrap_or_else(|| "en-US".to_string()),
+        usage: get_string_field_from_raw_handle(&obj, KEY_COL_USAGE)
+            .unwrap_or_else(|| "sort".to_string()),
+        collation: get_string_field_from_raw_handle(&obj, KEY_COL_COLLATION)
+            .unwrap_or_else(|| "default".to_string()),
+        sensitivity: get_string_field_from_raw_handle(&obj, KEY_COL_SENSITIVITY)
+            .unwrap_or_else(|| "variant".to_string()),
+        numeric: get_field_from_raw_handle(&obj, KEY_COL_NUMERIC).to_bits()
+            == crate::value::TAG_TRUE,
+        case_first: get_string_field_from_raw_handle(&obj, KEY_COL_CASE_FIRST)
+            .unwrap_or_else(|| "false".to_string()),
+        ignore_punctuation: get_field_from_raw_handle(&obj, KEY_COL_IGNORE_PUNCT).to_bits()
+            == crate::value::TAG_TRUE,
+    };
+    let (mut l, mut r) = (
+        value_to_string(left.get_nanbox_f64()),
+        value_to_string(right.get_nanbox_f64()),
+    );
+    if options.ignore_punctuation {
         l = strip_ignorable_punctuation(&l);
         r = strip_ignorable_punctuation(&r);
     }
-    let _ = locale;
-    match collator_compare_order(obj, &l, &r) {
+    match collator_compare_order(&options, &l, &r) {
         std::cmp::Ordering::Less => -1.0,
         std::cmp::Ordering::Equal => 0.0,
         std::cmp::Ordering::Greater => 1.0,
@@ -1924,4 +1910,49 @@ pub(crate) fn collator_resolved_options_object(obj: *const ObjectHeader) -> f64 
         ),
     );
     js_nanbox_pointer(out as i64)
+}
+
+#[cfg(test)]
+mod collator_compare_tests {
+    use super::*;
+
+    fn options(numeric: bool, case_first: &str) -> CollatorCompareOptions {
+        CollatorCompareOptions {
+            locale: "en".to_string(),
+            usage: "sort".to_string(),
+            collation: "default".to_string(),
+            sensitivity: "variant".to_string(),
+            numeric,
+            case_first: case_first.to_string(),
+            ignore_punctuation: false,
+        }
+    }
+
+    #[test]
+    fn numeric_option_compares_digit_runs_by_value() {
+        assert_eq!(
+            collator_compare_order(&options(false, "false"), "10", "9"),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            collator_compare_order(&options(true, "false"), "10", "9"),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            collator_compare_order(&options(true, "false"), "2", "02"),
+            std::cmp::Ordering::Equal
+        );
+    }
+
+    #[test]
+    fn case_first_option_changes_case_tie_breaking() {
+        assert_eq!(
+            collator_compare_order(&options(false, "upper"), "A", "a"),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            collator_compare_order(&options(false, "lower"), "A", "a"),
+            std::cmp::Ordering::Greater
+        );
+    }
 }

@@ -670,6 +670,21 @@ pub(crate) extern "C" fn rtf_bound_resolved_options_thunk(closure: *const Closur
 
 // ---- Intl.PluralRules ------------------------------------------------------
 
+fn plural_digit_option(options: f64, key: &str, min: f64, max: f64) -> Option<f64> {
+    let value = get_option_value(options, key);
+    if JSValue::from_bits(value.to_bits()).is_undefined() {
+        return None;
+    }
+    let number = to_number_reject_bigint(value);
+    let integer = number.trunc();
+    if integer.is_nan() || integer < min || integer > max {
+        throw_range_error(&format!(
+            "Value {number} out of range for Intl.PluralRules options property {key}"
+        ));
+    }
+    Some(integer)
+}
+
 pub(super) fn configure_plural_rules(
     obj: *mut ObjectHeader,
     options_handle: &crate::gc::RuntimeHandle<'_>,
@@ -693,7 +708,7 @@ pub(super) fn configure_plural_rules(
         &["cardinal", "ordinal"],
         "cardinal",
     );
-    obj_handle.with_mut_ptr(|obj| set_internal_field(obj, KEY_TYPE, string_value(&pr_type)));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_TYPE, string_value(&pr_type));
     let notation = enum_option_strict(
         options_handle.get_nanbox_f64(),
         "notation",
@@ -706,36 +721,72 @@ pub(super) fn configure_plural_rules(
         &["short", "long"],
         "short",
     );
-    obj_handle
-        .with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_NOTATION, string_value(&notation)));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_PR_NOTATION, string_value(&notation));
     if notation == "compact" {
-        obj_handle.with_mut_ptr(|obj| {
-            set_internal_field(obj, KEY_PR_COMPACT_DISPLAY, string_value(&compact_display))
-        });
+        set_internal_field_from_raw_handle(
+            &obj_handle,
+            KEY_PR_COMPACT_DISPLAY,
+            string_value(&compact_display),
+        );
     }
-    let min_int =
-        get_option_number(options_handle.get_nanbox_f64(), "minimumIntegerDigits").unwrap_or(1.0);
-    obj_handle.with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_MIN_INT, min_int));
-    let min_frac_read = get_option_number(options_handle.get_nanbox_f64(), "minimumFractionDigits");
-    let max_frac_read = get_option_number(options_handle.get_nanbox_f64(), "maximumFractionDigits");
-    let min_sig = get_option_number(options_handle.get_nanbox_f64(), "minimumSignificantDigits");
-    let max_sig = get_option_number(options_handle.get_nanbox_f64(), "maximumSignificantDigits");
+    let min_int = plural_digit_option(
+        options_handle.get_nanbox_f64(),
+        "minimumIntegerDigits",
+        1.0,
+        21.0,
+    )
+    .unwrap_or(1.0);
+    let min_frac_read = plural_digit_option(
+        options_handle.get_nanbox_f64(),
+        "minimumFractionDigits",
+        0.0,
+        100.0,
+    );
+    let max_frac_read = plural_digit_option(
+        options_handle.get_nanbox_f64(),
+        "maximumFractionDigits",
+        0.0,
+        100.0,
+    );
+    let min_sig = plural_digit_option(
+        options_handle.get_nanbox_f64(),
+        "minimumSignificantDigits",
+        1.0,
+        21.0,
+    );
+    let max_sig = plural_digit_option(
+        options_handle.get_nanbox_f64(),
+        "maximumSignificantDigits",
+        1.0,
+        21.0,
+    );
     let _ = get_option_value(options_handle.get_nanbox_f64(), "roundingIncrement");
     let _ = get_option_value(options_handle.get_nanbox_f64(), "roundingMode");
     let _ = get_option_value(options_handle.get_nanbox_f64(), "roundingPriority");
     let _ = get_option_value(options_handle.get_nanbox_f64(), "trailingZeroDisplay");
+    set_internal_field_from_raw_handle(&obj_handle, KEY_PR_MIN_INT, min_int);
     if min_sig.is_some() || max_sig.is_some() {
-        obj_handle.with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_USE_SIG, bool_value(true)));
-        obj_handle
-            .with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_MIN_SIG, min_sig.unwrap_or(1.0)));
-        obj_handle
-            .with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_MAX_SIG, max_sig.unwrap_or(21.0)));
+        let min_sig = min_sig.unwrap_or(1.0);
+        let max_sig = max_sig.unwrap_or(21.0);
+        if max_sig < min_sig {
+            throw_range_error(
+                "maximumSignificantDigits is below minimumSignificantDigits for Intl.PluralRules",
+            );
+        }
+        set_internal_field_from_raw_handle(&obj_handle, KEY_PR_USE_SIG, bool_value(true));
+        set_internal_field_from_raw_handle(&obj_handle, KEY_PR_MIN_SIG, min_sig);
+        set_internal_field_from_raw_handle(&obj_handle, KEY_PR_MAX_SIG, max_sig);
     } else {
-        obj_handle.with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_USE_SIG, bool_value(false)));
+        set_internal_field_from_raw_handle(&obj_handle, KEY_PR_USE_SIG, bool_value(false));
         let min_frac = min_frac_read.unwrap_or(0.0);
         let max_frac = max_frac_read.unwrap_or_else(|| min_frac.max(3.0));
-        obj_handle.with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_MIN_FRAC, min_frac));
-        obj_handle.with_mut_ptr(|obj| set_internal_field(obj, KEY_PR_MAX_FRAC, max_frac));
+        if max_frac < min_frac {
+            throw_range_error(
+                "maximumFractionDigits is below minimumFractionDigits for Intl.PluralRules",
+            );
+        }
+        set_internal_field_from_raw_handle(&obj_handle, KEY_PR_MIN_FRAC, min_frac);
+        set_internal_field_from_raw_handle(&obj_handle, KEY_PR_MAX_FRAC, max_frac);
     }
     obj_handle.with_mut_ptr(|obj| {
         install_bound_instance_function(
@@ -812,15 +863,20 @@ pub(crate) fn plural_categories(locale: &str, is_ordinal: bool) -> &'static [&'s
     }
 }
 
-pub(crate) fn plural_rules_select(obj: *const ObjectHeader, value: f64) -> f64 {
-    let n = JSValue::from_bits(value.to_bits()).to_number();
-    let is_ordinal = get_string_field(obj, KEY_TYPE).as_deref() == Some("ordinal");
-    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
-    if intl_language(&locale) == "fr" && !is_ordinal && n.is_finite() {
-        let abs = n.abs();
-        let notation =
-            get_string_field(obj, KEY_PR_NOTATION).unwrap_or_else(|| "standard".to_string());
-        let category = if abs < 2.0 {
+fn plural_category(language: &str, is_ordinal: bool, notation: &str, n: f64) -> &'static str {
+    if is_ordinal {
+        return if language == "en" {
+            plural_select_en(n, true)
+        } else {
+            "other"
+        };
+    }
+    if !n.is_finite() {
+        return "other";
+    }
+    let abs = n.abs();
+    if language == "fr" {
+        return if abs < 2.0 {
             "one"
         } else if (notation == "compact" && abs >= 1_000_000.0)
             || (abs.fract() == 0.0 && abs != 0.0 && abs % 1_000_000.0 == 0.0)
@@ -829,9 +885,90 @@ pub(crate) fn plural_rules_select(obj: *const ObjectHeader, value: f64) -> f64 {
         } else {
             "other"
         };
-        return string_value(category);
     }
-    string_value(plural_select_en(n, is_ordinal))
+    let integer = abs.fract() == 0.0;
+    let i = abs as u64;
+    match language {
+        "ar" if abs == 0.0 => "zero",
+        "ar" if abs == 1.0 => "one",
+        "ar" if abs == 2.0 => "two",
+        "ar" if integer && matches!(i % 100, 3..=10) => "few",
+        "ar" if integer && matches!(i % 100, 11..=99) => "many",
+        "ar" => "other",
+        "fa" if i == 0 || abs == 1.0 => "one",
+        "fa" => "other",
+        "gv" if !integer => "many",
+        "gv" if i % 10 == 1 => "one",
+        "gv" if i % 10 == 2 => "two",
+        "gv" if matches!(i % 100, 0 | 20 | 40 | 60 | 80) => "few",
+        "gv" => "other",
+        "ko" => "other",
+        "sl" if integer && i % 100 == 1 => "one",
+        "sl" if integer && i % 100 == 2 => "two",
+        "sl" if !integer || matches!(i % 100, 3..=4) => "few",
+        "sl" => "other",
+        _ => plural_select_en(n, false),
+    }
+}
+
+pub(crate) fn plural_rules_select(obj: *const ObjectHeader, value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_const_ptr(obj);
+    let value = scope.root_nanbox_f64(value);
+    let is_ordinal = get_string_field_from_raw_handle(&obj, KEY_TYPE).as_deref() == Some("ordinal");
+    let locale =
+        get_string_field_from_raw_handle(&obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
+    let notation = get_string_field_from_raw_handle(&obj, KEY_PR_NOTATION)
+        .unwrap_or_else(|| "standard".to_string());
+    let n = to_number_reject_bigint(value.get_nanbox_f64());
+    let language = intl_language(&locale);
+    string_value(plural_category(&language, is_ordinal, &notation, n))
+}
+
+#[cfg(test)]
+mod plural_category_tests {
+    use super::*;
+
+    #[test]
+    fn locale_selectors_only_return_advertised_categories() {
+        let samples = [
+            0.0,
+            0.5,
+            1.0,
+            2.0,
+            3.0,
+            4.0,
+            5.0,
+            10.0,
+            11.0,
+            20.0,
+            21.0,
+            100.0,
+            1_000_000.0,
+        ];
+        for locale in ["ar", "en", "fa", "fr", "gv", "ko", "sl"] {
+            for is_ordinal in [false, true] {
+                for value in samples {
+                    let category = plural_category(locale, is_ordinal, "standard", value);
+                    assert!(
+                        plural_categories(locale, is_ordinal).contains(&category),
+                        "{locale} ordinal={is_ordinal} value={value} returned {category}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn locale_specific_cardinal_rules_cover_their_extra_categories() {
+        assert_eq!(plural_category("ar", false, "standard", 0.0), "zero");
+        assert_eq!(plural_category("ar", false, "standard", 2.0), "two");
+        assert_eq!(plural_category("ar", false, "standard", 7.0), "few");
+        assert_eq!(plural_category("ar", false, "standard", 15.0), "many");
+        assert_eq!(plural_category("gv", false, "standard", 1.5), "many");
+        assert_eq!(plural_category("sl", false, "standard", 3.0), "few");
+        assert_eq!(plural_category("ko", true, "standard", 1.0), "other");
+    }
 }
 
 pub(crate) extern "C" fn plural_rules_select_thunk(

@@ -16,9 +16,9 @@ fn transform_with_icu(p: &mut ParsedLocale, maximize: bool) {
     };
     let expander = icu_locale::LocaleExpander::new_extended();
     if maximize {
-        expander.maximize(&mut locale.id);
+        let _ = expander.maximize(&mut locale.id);
     } else {
-        expander.minimize(&mut locale.id);
+        let _ = expander.minimize(&mut locale.id);
     }
     if let Some(parsed) = super::parse_language_tag(&locale.to_string()) {
         *p = parsed;

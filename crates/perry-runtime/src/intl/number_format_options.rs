@@ -6,9 +6,13 @@ use crate::value::JSValue;
 /// Read, validate, and store the NumberFormat option slots (ECMA-402
 /// CreateNumberFormat / SetNumberFormatUnitOptions / SetNumberFormatDigitOptions).
 pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, options: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let options_handle = scope.root_nanbox_f64(options);
+    let current_options = || options_handle.get_nanbox_f64();
     // CoerceOptionsToObject: `null` throws; `undefined` behaves as an empty
     // null-prototype object (our readers already treat non-objects as empty).
-    if JSValue::from_bits(options.to_bits()).is_null() {
+    if JSValue::from_bits(current_options().to_bits()).is_null() {
         throw_type_error("Cannot convert undefined or null to object");
     }
 
@@ -18,7 +22,7 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     // constructor-option-read-order.js asserts (localeMatcher before
     // numberingSystem) and propagates a throwing localeMatcher getter.
     let _ = get_string_option_enum(
-        options,
+        current_options(),
         "localeMatcher",
         &["lookup", "best fit"],
         "best fit",
@@ -28,7 +32,7 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     // then run ResolveLocale for the `nu` key — reconciling the option with the
     // requested locale's `-u-nu-` keyword and updating the resolved locale so
     // `resolvedOptions().locale` reflects only the supported value actually used.
-    let opt_ns = match get_option_string(options, "numberingSystem") {
+    let opt_ns = match get_option_string(current_options(), "numberingSystem") {
         Some(value) => {
             let lower = value.to_ascii_lowercase();
             if !is_well_formed_numbering_system(&lower) {
@@ -41,24 +45,28 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         None => None,
     };
     let (resolved_locale, numbering) = resolve_numbering_system(locale, opt_ns.as_deref());
-    set_internal_field(obj, KEY_LOCALE, string_value(&resolved_locale));
-    set_internal_field(obj, KEY_NF_NUMBERING, string_value(&numbering));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_LOCALE, string_value(&resolved_locale));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_NF_NUMBERING, string_value(&numbering));
 
     // SetNumberFormatUnitOptions.
     let style = get_string_option_enum(
-        options,
+        current_options(),
         "style",
         &["decimal", "percent", "currency", "unit"],
         "decimal",
     );
-    set_internal_field(obj, KEY_STYLE, string_value(&style));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_STYLE, string_value(&style));
 
-    let currency = get_option_string(options, "currency");
+    let currency = get_option_string(current_options(), "currency");
     if let Some(code) = &currency {
         if !is_well_formed_currency_code(code) {
             throw_range_error(&format!("Invalid currency code : {code}"));
         }
-        set_internal_field(obj, KEY_CURRENCY, string_value(&code.to_ascii_uppercase()));
+        set_internal_field_from_raw_handle(
+            &obj_handle,
+            KEY_CURRENCY,
+            string_value(&code.to_ascii_uppercase()),
+        );
     }
     // Throw TypeError for missing currency BEFORE reading currencyDisplay /
     // currencySign — so proxy-get traps on those keys are never triggered when
@@ -67,40 +75,48 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         throw_type_error("Currency code is required with currency style.");
     }
     let currency_display = get_string_option_enum(
-        options,
+        current_options(),
         "currencyDisplay",
         &["code", "symbol", "narrowSymbol", "name"],
         "symbol",
     );
     let currency_sign = get_string_option_enum(
-        options,
+        current_options(),
         "currencySign",
         &["standard", "accounting"],
         "standard",
     );
-    set_internal_field(
-        obj,
+    set_internal_field_from_raw_handle(
+        &obj_handle,
         KEY_NF_CURRENCY_DISPLAY,
         string_value(&currency_display),
     );
-    set_internal_field(obj, KEY_NF_CURRENCY_SIGN, string_value(&currency_sign));
+    set_internal_field_from_raw_handle(
+        &obj_handle,
+        KEY_NF_CURRENCY_SIGN,
+        string_value(&currency_sign),
+    );
 
-    let unit = get_option_string(options, "unit");
+    let unit = get_option_string(current_options(), "unit");
     if let Some(u) = &unit {
         if !is_well_formed_unit_identifier(u) {
             throw_range_error(&format!(
                 "Value {u} out of range for Intl.NumberFormat options property unit"
             ));
         }
-        set_internal_field(obj, KEY_NF_UNIT, string_value(u));
+        set_internal_field_from_raw_handle(&obj_handle, KEY_NF_UNIT, string_value(u));
     }
     let unit_display = get_string_option_enum(
-        options,
+        current_options(),
         "unitDisplay",
         &["short", "narrow", "long"],
         "short",
     );
-    set_internal_field(obj, KEY_NF_UNIT_DISPLAY, string_value(&unit_display));
+    set_internal_field_from_raw_handle(
+        &obj_handle,
+        KEY_NF_UNIT_DISPLAY,
+        string_value(&unit_display),
+    );
 
     if style == "unit" && unit.is_none() {
         throw_type_error("unit is required with unit style.");
@@ -108,33 +124,37 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
 
     // notation (read before the digit options per the spec order).
     let notation = get_string_option_enum(
-        options,
+        current_options(),
         "notation",
         &["standard", "scientific", "engineering", "compact"],
         "standard",
     );
-    set_internal_field(obj, KEY_NF_NOTATION, string_value(&notation));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_NF_NOTATION, string_value(&notation));
 
     // SetNumberFormatDigitOptions — the GetOption reads run in the exact
     // ECMA-402 order asserted by constructor-option-read-order.js:
     // minimumIntegerDigits, minimumFractionDigits, maximumFractionDigits,
     // minimumSignificantDigits, maximumSignificantDigits, roundingIncrement,
     // roundingMode, roundingPriority, trailingZeroDisplay.
-    let min_int =
-        get_int_option_in_range(options, "minimumIntegerDigits", 1.0, 21.0).unwrap_or(1.0);
-    let min_frac_opt = get_int_option_in_range(options, "minimumFractionDigits", 0.0, 100.0);
-    let max_frac_opt = get_int_option_in_range(options, "maximumFractionDigits", 0.0, 100.0);
-    let min_sig_opt = get_int_option_in_range(options, "minimumSignificantDigits", 1.0, 21.0);
-    let max_sig_opt = get_int_option_in_range(options, "maximumSignificantDigits", 1.0, 21.0);
+    let min_int = get_int_option_in_range(current_options(), "minimumIntegerDigits", 1.0, 21.0)
+        .unwrap_or(1.0);
+    let min_frac_opt =
+        get_int_option_in_range(current_options(), "minimumFractionDigits", 0.0, 100.0);
+    let max_frac_opt =
+        get_int_option_in_range(current_options(), "maximumFractionDigits", 0.0, 100.0);
+    let min_sig_opt =
+        get_int_option_in_range(current_options(), "minimumSignificantDigits", 1.0, 21.0);
+    let max_sig_opt =
+        get_int_option_in_range(current_options(), "maximumSignificantDigits", 1.0, 21.0);
 
     // roundingIncrement is read before roundingMode/roundingPriority and is
     // ToNumber-coerced (so `{ valueOf }` objects work) then checked against the
     // sanctioned increment set — a [1, 5000] range alone would wrongly admit
     // values like 3 or 5000.1.
-    let rounding_increment = read_rounding_increment(options);
+    let rounding_increment = read_rounding_increment(current_options());
 
     let rounding_mode = enum_option_strict(
-        options,
+        current_options(),
         "roundingMode",
         &[
             "ceil",
@@ -150,19 +170,19 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         "halfExpand",
     );
     let mut rounding_priority = get_string_option_enum(
-        options,
+        current_options(),
         "roundingPriority",
         &["auto", "morePrecision", "lessPrecision"],
         "auto",
     );
     let trailing_zero = get_string_option_enum(
-        options,
+        current_options(),
         "trailingZeroDisplay",
         &["auto", "stripIfInteger"],
         "auto",
     );
 
-    set_internal_field(obj, KEY_NF_MIN_INT, min_int);
+    set_internal_field_from_raw_handle(&obj_handle, KEY_NF_MIN_INT, min_int);
 
     // The currency-specific digit defaults only apply to "standard" notation
     // (ECMA-402 SetNumberFormatDigitOptions step 19-20) — compact/engineering/
@@ -256,10 +276,10 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
         }
     }
 
-    set_internal_field(obj, KEY_NF_MIN_SIG, min_sig as f64);
-    set_internal_field(obj, KEY_NF_MAX_SIG, max_sig as f64);
-    set_internal_field(obj, KEY_NF_MIN_FRAC, min_frac as f64);
-    set_internal_field(obj, KEY_MAX_FRACTION_DIGITS, max_frac as f64);
+    set_internal_field_from_raw_handle(&obj_handle, KEY_NF_MIN_SIG, min_sig as f64);
+    set_internal_field_from_raw_handle(&obj_handle, KEY_NF_MAX_SIG, max_sig as f64);
+    set_internal_field_from_raw_handle(&obj_handle, KEY_NF_MIN_FRAC, min_frac as f64);
+    set_internal_field_from_raw_handle(&obj_handle, KEY_MAX_FRACTION_DIGITS, max_frac as f64);
 
     // Digit display mode: "fraction" | "significant" | "both" (compact default).
     let digit_mode = if has_sd && !has_fd {
@@ -280,42 +300,66 @@ pub(crate) fn configure_number_format(obj: *mut ObjectHeader, locale: &str, opti
     };
     // Compact's significant defaults are 1–2 when not explicitly given.
     if digit_mode == "both" {
-        set_internal_field(obj, KEY_NF_MIN_SIG, 1.0);
-        set_internal_field(obj, KEY_NF_MAX_SIG, 2.0);
-        set_internal_field(obj, KEY_NF_MIN_FRAC, 0.0);
-        set_internal_field(obj, KEY_MAX_FRACTION_DIGITS, 0.0);
+        set_internal_field_from_raw_handle(&obj_handle, KEY_NF_MIN_SIG, 1.0);
+        set_internal_field_from_raw_handle(&obj_handle, KEY_NF_MAX_SIG, 2.0);
+        set_internal_field_from_raw_handle(&obj_handle, KEY_NF_MIN_FRAC, 0.0);
+        set_internal_field_from_raw_handle(&obj_handle, KEY_MAX_FRACTION_DIGITS, 0.0);
     }
-    set_internal_field(obj, KEY_NF_USE_SIG, string_value(digit_mode));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_NF_USE_SIG, string_value(digit_mode));
 
-    set_internal_field(obj, KEY_NF_ROUNDING_INCREMENT, rounding_increment);
-    set_internal_field(obj, KEY_NF_ROUNDING_MODE, string_value(&rounding_mode));
-    set_internal_field(
-        obj,
+    set_internal_field_from_raw_handle(&obj_handle, KEY_NF_ROUNDING_INCREMENT, rounding_increment);
+    set_internal_field_from_raw_handle(
+        &obj_handle,
+        KEY_NF_ROUNDING_MODE,
+        string_value(&rounding_mode),
+    );
+    set_internal_field_from_raw_handle(
+        &obj_handle,
         KEY_NF_ROUNDING_PRIORITY,
         string_value(&rounding_priority),
     );
-    set_internal_field(obj, KEY_NF_TRAILING_ZERO, string_value(&trailing_zero));
+    set_internal_field_from_raw_handle(
+        &obj_handle,
+        KEY_NF_TRAILING_ZERO,
+        string_value(&trailing_zero),
+    );
 
     // compactDisplay, useGrouping, signDisplay.
-    let compact_display =
-        get_string_option_enum(options, "compactDisplay", &["short", "long"], "short");
-    set_internal_field(obj, KEY_NF_COMPACT_DISPLAY, string_value(&compact_display));
+    let compact_display = get_string_option_enum(
+        current_options(),
+        "compactDisplay",
+        &["short", "long"],
+        "short",
+    );
+    set_internal_field_from_raw_handle(
+        &obj_handle,
+        KEY_NF_COMPACT_DISPLAY,
+        string_value(&compact_display),
+    );
 
     let default_grouping = if notation == "compact" {
         "min2"
     } else {
         "auto"
     };
-    let use_grouping = get_use_grouping_option(options, default_grouping);
-    set_internal_field(obj, KEY_NF_USE_GROUPING, string_value(&use_grouping));
+    let use_grouping = get_use_grouping_option(current_options(), default_grouping);
+    set_internal_field_from_raw_handle(
+        &obj_handle,
+        KEY_NF_USE_GROUPING,
+        string_value(&use_grouping),
+    );
 
     let sign_display = get_string_option_enum(
-        options,
+        current_options(),
         "signDisplay",
         &["auto", "never", "always", "exceptZero", "negative"],
         "auto",
     );
-    set_internal_field(obj, KEY_NF_SIGN_DISPLAY, string_value(&sign_display));
+    set_internal_field_from_raw_handle(
+        &obj_handle,
+        KEY_NF_SIGN_DISPLAY,
+        string_value(&sign_display),
+    );
 }
 
 /// GetNumberOption(options, "roundingIncrement", 1, 5000, 1) followed by the

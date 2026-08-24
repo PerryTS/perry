@@ -727,12 +727,35 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
                 let parent_bits = parent_proto.to_bits();
                 ((parent_bits >> 48) == 0x7FFD).then_some(parent_bits)
             })
+            // A runtime function-valued superclass (including Intl service
+            // constructors) has no class-id edge. Link the declared prototype
+            // to the parent's own `.prototype` exactly once, while this fresh
+            // class prototype is initialized. Construction must never rewrite
+            // this edge after user code mutates it.
+            .or_else(|| {
+                let parent = JSValue::from_bits(dynamic_parent.to_bits());
+                if !parent.is_pointer() {
+                    return None;
+                }
+                let parent_addr = parent.as_pointer::<u8>() as usize;
+                if !crate::closure::is_closure_ptr(parent_addr) {
+                    return None;
+                }
+                let parent_proto =
+                    crate::closure::closure_get_dynamic_prop(parent_addr, "prototype");
+                let bits = parent_proto.to_bits();
+                ((bits >> 48) == 0x7FFD).then_some(bits)
+            })
             .or_else(global_object_prototype_bits)
     };
     if let Some(bits) = parent_proto_bits {
-        super::super::prototype_chain::object_set_static_prototype(proto as usize, bits);
+        let proto = class_decl_prototype_object(class_id);
+        if !proto.is_null() {
+            super::super::prototype_chain::object_set_static_prototype(proto as usize, bits);
+        }
     }
 
+    let proto = class_decl_prototype_object(class_id);
     crate::value::js_nanbox_pointer(proto as i64)
 }
 

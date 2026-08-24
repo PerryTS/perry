@@ -67,10 +67,13 @@ fn u_ext_type_alias(key: &str, value: &str) -> Option<&'static str> {
 /// region in the optional `tlang` prefix from being mistaken for a field key.
 fn canonicalize_transformed_extension_types(tag: &str) -> String {
     let subtags: Vec<&str> = tag.split('-').collect();
-    let Some(t_start) = subtags.iter().position(|s| *s == "t") else {
+    let Some(t_start) = subtags.iter().position(|s| s.eq_ignore_ascii_case("t")) else {
         return tag.to_string();
     };
-    if subtags[..t_start].contains(&"x") {
+    if subtags[..t_start]
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case("x"))
+    {
         return tag.to_string();
     }
     let t_end = subtags
@@ -99,7 +102,10 @@ fn canonicalize_transformed_extension_types(tag: &str) -> String {
         let value_end = (value_start..t_end)
             .find(|&j| is_tkey(subtags[j]))
             .unwrap_or(t_end);
-        if key == "m0" && subtags[value_start..value_end] == ["names"] {
+        if key.eq_ignore_ascii_case("m0")
+            && value_end == value_start + 1
+            && subtags[value_start].eq_ignore_ascii_case("names")
+        {
             out.push("prprname".to_string());
             changed = true;
         } else {
@@ -208,5 +214,16 @@ mod tests {
             canonicalize_unicode_extension_types("en-t-en-US-m0-names"),
             "en-t-en-US-m0-prprname"
         );
+        assert_eq!(
+            canonicalize_unicode_extension_types("en-T-en-US-M0-NAMES"),
+            "en-T-en-US-M0-prprname"
+        );
+        assert_eq!(
+            canonicalize_unicode_extension_types("en-t-en-m0-names-u-ca-gregory"),
+            "en-t-en-m0-prprname-u-ca-gregory"
+        );
+        for unchanged in ["en-x-t-m0-names", "en-t-en-h0-hybrid"] {
+            assert_eq!(canonicalize_unicode_extension_types(unchanged), unchanged);
+        }
     }
 }
