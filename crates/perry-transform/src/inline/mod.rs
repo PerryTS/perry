@@ -890,6 +890,39 @@ mod tests {
     }
 
     #[test]
+    fn nonprimitive_local_inline_argument_keeps_a_parameter_binding() {
+        let params = vec![Param {
+            id: 1,
+            name: "value".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }];
+        let mut next_local_id = 100;
+        let (setup, param_map) = call_inliner::build_inline_arg_bindings(
+            &params,
+            &[Expr::LocalGet(42)],
+            &HashSet::new(),
+            &HashSet::new(),
+            &mut next_local_id,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            setup.as_slice(),
+            [Stmt::Let {
+                id: 100,
+                ty: Type::Any,
+                init: Some(Expr::LocalGet(42)),
+                ..
+            }]
+        ));
+        assert!(matches!(param_map.get(&1), Some(Expr::LocalGet(100))));
+    }
+
+    #[test]
     fn cross_module_synthetic_imports_are_sorted() {
         let mut module = Module::new("dest");
         let mut extra_methods = HashMap::new();

@@ -105,6 +105,45 @@ fn nested_pod_initializers_and_local_assignments_preserve_value_semantics() {
 }
 
 #[test]
+fn pod_local_assigned_to_any_stays_at_the_managed_boundary() {
+    let packet_ty = pod_type(&[("tag", Type::Named("PerryU8".to_string()))]);
+    let module = module(
+        "pod_to_any.ts",
+        vec![
+            pod_let(1, "packet", packet_ty, vec![("tag", int(7))]),
+            Stmt::Let {
+                id: 2,
+                name: "managed".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(local(1)),
+            },
+            Stmt::Return(Some(local(2))),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        !records.iter().any(|record| {
+            record["local_id"] == 2 && record["consumer"] == "pod_record_value_copy"
+        }),
+        "an `any` destination must not be pulled back into native POD storage:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "pod_record_materialized_value_copy"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note == "value_semantics=copy_at_managed_boundary")
+                })
+        }),
+        "a POD-to-any assignment must cross the managed value-copy boundary:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn checked_native_scalar_conversions_keep_dynamic_pod_initializers_native() {
     let packet_ty = pod_type(&[
         ("signed8", Type::Named("PerryI8".to_string())),

@@ -439,7 +439,7 @@ pub(crate) fn lower_let(
     if let Some(init_expr) = init {
         let copied = match init_expr {
             perry_hir::Expr::LocalGet(source_id) if !ctx.boxed_vars.contains(&id) => {
-                crate::expr::copy_pod_local(ctx, id, *source_id)?
+                crate::expr::copy_pod_local(ctx, id, *source_id, &refined_ty)?
             }
             _ => None,
         };

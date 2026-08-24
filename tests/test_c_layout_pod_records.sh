@@ -1,7 +1,7 @@
 #!/bin/bash
-# Focused runtime regression for C-layout POD records. The marker types are
-# erased at the TypeScript surface; JS-visible reads, writes, returns, and
-# dynamic escapes must behave like an ordinary object.
+# Focused runtime regression for C-layout POD records. POD assignment and call
+# boundaries have value semantics; once materialized, each independent copy's
+# reads, writes, returns, and dynamic properties behave like an ordinary object.
 
 set -euo pipefail
 
@@ -114,7 +114,7 @@ COMPILE_OUTPUT=$(PERRY_NATIVE_REPS=1 \
 }
 write_evidence "compile.log" "$COMPILE_OUTPUT"
 
-EXPECTED=$'read=7,1.5,2.25,4\ninit=-1,x,1.1\nlie=x\nafter=9,2.5,11\nreturn=4\ncapture=8'
+EXPECTED=$'read=7,1.5,2.25,4\ninit=-1,x,1.1\nlie=x\nafter=9,1.5,11\nreturn=4\ncapture=8'
 RUN_OUTPUT=$(./test_bin 2>&1)
 write_evidence "runtime.stdout" "$RUN_OUTPUT"
 if [ "$RUN_OUTPUT" != "$EXPECTED" ]; then

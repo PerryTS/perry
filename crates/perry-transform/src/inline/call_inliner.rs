@@ -1376,7 +1376,9 @@ pub fn build_inline_arg_bindings(
             // local (`function f(a){a++}; f(x)` mutated x — S13.2.1_A6),
             // and substituting a literal would produce `5++`.
             let force_let = mutated_params.contains(&param.id);
-            if is_trivial_expr(arg) && !trivial_in_closure && !force_let {
+            let preserve_value_boundary = inline_arg_needs_value_boundary(param, arg);
+            if is_trivial_expr(arg) && !trivial_in_closure && !force_let && !preserve_value_boundary
+            {
                 param_map.insert(param.id, arg.clone());
             } else {
                 let fresh = *next_local_id;
@@ -1409,6 +1411,15 @@ pub fn build_inline_arg_bindings(
     }
 
     Some((setup, param_map))
+}
+
+fn inline_arg_needs_value_boundary(param: &Param, arg: &Expr) -> bool {
+    // A source local passed to a non-primitive parameter must retain the
+    // parameter-binding boundary. In particular, standalone POD records have
+    // value semantics there: codegen materializes a managed copy for `any`
+    // and copies exact POD layouts. Direct substitution would let later POD
+    // recognition target the caller's native local from inside the callee.
+    matches!(arg, Expr::LocalGet(_)) && !param.ty.is_primitive()
 }
 
 /// Try to inline a simple function or method call.
@@ -1911,7 +1922,12 @@ pub fn try_inline_call(
                     // Body-written params get a copy — see
                     // build_inline_arg_bindings (S13.2.1_A6).
                     let force_let = mutated.contains(&param.id);
-                    if is_trivial_expr(arg) && !trivial_in_closure && !force_let {
+                    let preserve_value_boundary = inline_arg_needs_value_boundary(param, arg);
+                    if is_trivial_expr(arg)
+                        && !trivial_in_closure
+                        && !force_let
+                        && !preserve_value_boundary
+                    {
                         param_map.insert(param.id, arg.clone());
                     } else {
                         let local_id = *next_local_id;
@@ -2047,7 +2063,8 @@ pub fn try_inline_call(
                         let trivial_in_closure = is_trivial_expr(arg)
                             && !matches!(arg, Expr::LocalGet(_))
                             && closure_capt.contains(&param.id);
-                        if is_trivial_expr(arg) && !trivial_in_closure {
+                        let preserve_value_boundary = inline_arg_needs_value_boundary(param, arg);
+                        if is_trivial_expr(arg) && !trivial_in_closure && !preserve_value_boundary {
                             param_map.insert(param.id, arg.clone());
                         } else {
                             let local_id = *next_local_id;

@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use perry_hir::Expr;
+use perry_hir::{types::Type, Expr};
 
 use crate::nanbox::{double_literal, POINTER_MASK_I64, TAG_UNDEFINED_I64};
 use crate::native_value::{
@@ -19,10 +19,19 @@ pub(crate) fn copy_pod_local(
     ctx: &mut FnCtx<'_>,
     destination_id: u32,
     source_id: u32,
+    destination_type: &Type,
 ) -> Result<Option<PodLocal>> {
+    let crate::native_value::PodLayoutDecision::Layout(destination_layout) =
+        crate::native_value::layout_decision_for_type(ctx, destination_type)
+    else {
+        return Ok(None);
+    };
     let Some(source) = ctx.pod_records.get(&source_id).cloned() else {
         return Ok(None);
     };
+    if source.layout != destination_layout {
+        return Ok(None);
+    }
     let data_slot = ctx
         .func
         .alloca_entry_bytes_aligned(source.layout.size, source.layout.alignment);
@@ -88,7 +97,7 @@ pub(crate) fn copy_pod_local(
         &lowered,
         None,
         None,
-        Some(MaterializationReason::PodMaterialization),
+        None,
         false,
         false,
         vec![
