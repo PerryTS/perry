@@ -289,6 +289,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (DOUBLE, &first),
                     ],
                 );
+                bind_derived_this_after_super(ctx);
                 crate::lower_call::apply_field_initializers_recursive(
                     ctx,
                     &current_class_name,
@@ -317,6 +318,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_url_search_params_subclass_init",
                     &[(DOUBLE, &this_box), (DOUBLE, &first)],
                 );
+                bind_derived_this_after_super(ctx);
                 crate::lower_call::apply_field_initializers_recursive(
                     ctx,
                     &current_class_name,
@@ -349,6 +351,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     "js_dom_exception_subclass_init",
                     &[(DOUBLE, &this_box), (DOUBLE, &message), (DOUBLE, &name)],
                 );
+                bind_derived_this_after_super(ctx);
                 crate::lower_call::apply_field_initializers_recursive(
                     ctx,
                     &current_class_name,
@@ -365,6 +368,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(I32, &cid_str), (DOUBLE, &this_box), (DOUBLE, &arr_box)],
                 );
             }
+            bind_derived_this_after_super(ctx);
             // Spec: subclass field initializers run AFTER super() returns
             // (mirrors every other super arm).
             crate::lower_call::apply_field_initializers_recursive(
@@ -459,6 +463,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "js_url_search_params_subclass_init",
                             &[(DOUBLE, &this_box), (DOUBLE, &init)],
                         );
+                        bind_derived_this_after_super(ctx);
                         crate::lower_call::apply_field_initializers_recursive(
                             ctx,
                             &current_class_name,
@@ -674,6 +679,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     };
                     if let Some(kind) = node_stream_kind {
                         let result = lower_node_stream_super_init(ctx, kind, super_args)?;
+                        bind_derived_this_after_super(ctx);
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
                         crate::lower_call::apply_field_initializers_recursive(
@@ -690,6 +696,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // would otherwise leave it length-less with no Array methods.
                     if parent_name == "Array" {
                         let result = lower_array_super_init(ctx, super_args)?;
+                        bind_derived_this_after_super(ctx);
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
                         crate::lower_call::apply_field_initializers_recursive(
@@ -713,6 +720,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     };
                     if let Some(kind) = stream_kind {
                         let result = lower_stream_super_init(ctx, kind, super_args)?;
+                        bind_derived_this_after_super(ctx);
                         // Per JS spec field initializers run AFTER super()
                         // returns. Without this, `this.foo = []` declared
                         // on the subclass never executes — instance reads
@@ -737,6 +745,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     };
                     if let Some(kind) = node_stream_kind {
                         let result = lower_node_stream_super_init(ctx, kind, super_args)?;
+                        bind_derived_this_after_super(ctx);
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
                         crate::lower_call::apply_field_initializers_recursive(
@@ -783,6 +792,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (DOUBLE, &iterable),
                             ],
                         );
+                        bind_derived_this_after_super(ctx);
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
                         crate::lower_call::apply_field_initializers_recursive(
@@ -862,6 +872,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (I32, &is_custom),
                             ],
                         );
+                        bind_derived_this_after_super(ctx);
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
                         crate::lower_call::apply_field_initializers_recursive(
@@ -893,6 +904,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "js_dom_exception_subclass_init",
                             &[(DOUBLE, &this_box), (DOUBLE, &arg0), (DOUBLE, &arg1)],
                         );
+                        bind_derived_this_after_super(ctx);
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
                         crate::lower_call::apply_field_initializers_recursive(
@@ -925,6 +937,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "js_promise_subclass_init",
                             &[(DOUBLE, &this_box), (DOUBLE, &executor)],
                         );
+                        bind_derived_this_after_super(ctx);
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
                         crate::lower_call::apply_field_initializers_recursive(
@@ -956,6 +969,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             runtime_fn,
                             &[(DOUBLE, &this_box), (DOUBLE, &arg0), (DOUBLE, &arg1)],
                         );
+                        bind_derived_this_after_super(ctx);
                         // Per JS spec, subclass field initializers run after
                         // super() returns (mirrors the stream/error arms above).
                         let current_class_name =
@@ -1129,6 +1143,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             }
                         }
                     }
+                    bind_derived_this_after_super(ctx);
                     return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                 }
             };
@@ -1334,9 +1349,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let lower_result = crate::stmt::lower_stmts(ctx, &parent_ctor.body);
                 ctx.try_depth = caller_try_depth;
                 lower_result?;
-                if parent_is_derived {
-                    pop_shared_super_called_slot(ctx);
-                }
                 ctx.class_stack.pop();
                 let parent_return = ctx
                     .inline_ctor_return
@@ -1346,6 +1358,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx.block().br(&parent_after_label);
                 }
                 ctx.current_block = parent_after_idx;
+                if parent_is_derived {
+                    pop_shared_super_called_slot(ctx);
+                }
                 let parent_raw = ctx.block().load(DOUBLE, &parent_return.result_slot);
                 if let Some(this_slot) = ctx.this_stack.last().cloned() {
                     let inherited_this = ctx.block().load(DOUBLE, &this_slot);

@@ -361,6 +361,19 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
+        if module == "tls" && matches!(method.as_str(), "Server" | "TLSSocket") {
+            let want = if method == "Server" { 1 } else { 2 };
+            if let (Some(handle), Some(probe)) = (
+                small_native_handle_id(value),
+                crate::object::tls_handle_kind_probe(),
+            ) {
+                return f64::from_bits(if unsafe { probe(handle) } == want {
+                    crate::value::TAG_TRUE
+                } else {
+                    TAG_FALSE
+                });
+            }
+        }
         if module == "wasi" && method == "WASI" && crate::wasi::is_wasi_instance(value) {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
@@ -377,11 +390,14 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         // #2689: `net.Stream` is an alias for `net.Socket`; both should match
         // a live socket handle via the runtime probe.
         if module == "net" && matches!(method.as_str(), "Socket" | "Stream") {
-            if let (Some(handle), Some(probe)) = (
-                small_native_handle_id(value),
-                crate::object::net_socket_handle_probe(),
-            ) {
-                if unsafe { probe(handle) } {
+            if let Some(handle) = small_native_handle_id(value) {
+                let net_socket = crate::object::net_socket_handle_probe()
+                    .map(|probe| unsafe { probe(handle) })
+                    .unwrap_or(false);
+                let tls_socket = crate::object::tls_handle_kind_probe()
+                    .map(|probe| unsafe { probe(handle) == 2 })
+                    .unwrap_or(false);
+                if net_socket || tls_socket {
                     return f64::from_bits(crate::value::TAG_TRUE);
                 }
             }
@@ -1125,11 +1141,14 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         };
     }
     if class_id == CLASS_ID_NET_SOCKET {
-        return if let (Some(handle), Some(probe)) = (
-            small_native_handle_id(value),
-            crate::object::net_socket_handle_probe(),
-        ) {
-            if unsafe { probe(handle) } {
+        return if let Some(handle) = small_native_handle_id(value) {
+            let net_socket = crate::object::net_socket_handle_probe()
+                .map(|probe| unsafe { probe(handle) })
+                .unwrap_or(false);
+            let tls_socket = crate::object::tls_handle_kind_probe()
+                .map(|probe| unsafe { probe(handle) == 2 })
+                .unwrap_or(false);
+            if net_socket || tls_socket {
                 true_val
             } else {
                 false_val

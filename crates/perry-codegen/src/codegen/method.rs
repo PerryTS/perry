@@ -1048,7 +1048,16 @@ pub(super) fn compile_method(
             // .pathname` threw. Forward this synthesized ctor's params to the
             // runtime dynamic-parent super dispatcher, mirroring the explicit
             // `Expr::SuperCall` dynamic-parent path in `expr/this_super_call.rs`.
-            if builtin_parent_runtime.is_none() && class.extends_expr.is_some() {
+            let parent_is_uncallable_builtin = class
+                .extends_name
+                .as_deref()
+                .map(crate::expr::is_other_builtin_constructor_name)
+                .unwrap_or(false)
+                && class.extends_name.as_deref() != Some("SharedArrayBuffer");
+            if builtin_parent_runtime.is_none()
+                && class.extends_expr.is_some()
+                && !parent_is_uncallable_builtin
+            {
                 if let Some(cid) = ctx.class_ids.get(&class.name).copied().filter(|c| *c != 0) {
                     let undef_lit =
                         crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));

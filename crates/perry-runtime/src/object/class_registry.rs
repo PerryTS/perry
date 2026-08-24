@@ -29,12 +29,13 @@ pub use super::class_handles::{
     js_register_handle_property_set_dispatch, js_register_handle_prototype_dispatch,
     js_register_http_agent_handle_probe, js_register_net_socket_handle_probe,
     js_register_stream_expando_set, js_register_stream_handle_kind_probe,
-    js_register_stream_handle_probe, net_socket_handle_probe, stream_expando_set,
-    stream_handle_kind_probe, stream_handle_probe, EventEmitterAsyncResourceHandleProbeFn,
-    EventEmitterGetDomainFn, EventEmitterHandleProbeFn, EventEmitterOnFn, EventEmitterSetDomainFn,
-    FetchHandleKindProbeFn, HandleMethodDispatchFn, HandleOwnPropertyNamesDispatchFn,
-    HandlePropertyDispatchFn, HandlePropertySetDispatchFn, HandlePrototypeDispatchFn,
-    HttpAgentHandleProbeFn, NetSocketHandleProbeFn, StreamHandleKindProbeFn, StreamHandleProbeFn,
+    js_register_stream_handle_probe, js_register_tls_handle_kind_probe, net_socket_handle_probe,
+    stream_expando_set, stream_handle_kind_probe, stream_handle_probe, tls_handle_kind_probe,
+    EventEmitterAsyncResourceHandleProbeFn, EventEmitterGetDomainFn, EventEmitterHandleProbeFn,
+    EventEmitterOnFn, EventEmitterSetDomainFn, FetchHandleKindProbeFn, HandleMethodDispatchFn,
+    HandleOwnPropertyNamesDispatchFn, HandlePropertyDispatchFn, HandlePropertySetDispatchFn,
+    HandlePrototypeDispatchFn, HttpAgentHandleProbeFn, NetSocketHandleProbeFn,
+    StreamHandleKindProbeFn, StreamHandleProbeFn, TlsHandleKindProbeFn,
 };
 use super::*;
 
@@ -141,10 +142,11 @@ pub(crate) use gc_roots::{
 pub use gc_roots::{scan_class_side_table_roots, scan_class_side_table_roots_mut};
 #[cfg(test)]
 pub(crate) use gc_roots::{
-    test_class_dynamic_prop_root_bits, test_class_parent_closure_root_addr,
-    test_class_prototype_method_root_bits, test_class_prototype_method_value_root_bits,
-    test_class_prototype_object_root_addr, test_clear_class_side_table_roots,
-    test_function_class_id_key_count, test_function_class_id_key_for_class,
+    test_class_decl_prototype_object_root_addr, test_class_dynamic_prop_root_bits,
+    test_class_parent_closure_root_addr, test_class_prototype_method_root_bits,
+    test_class_prototype_method_value_root_bits, test_class_prototype_object_root_addr,
+    test_clear_class_side_table_roots, test_function_class_id_key_count,
+    test_function_class_id_key_for_class, test_seed_class_decl_prototype_object_root,
     test_seed_class_dynamic_prop_root, test_seed_class_prototype_method_root,
     test_seed_class_prototype_method_value_root, test_seed_class_prototype_object_root,
     test_seed_function_class_id_key,
@@ -173,15 +175,16 @@ pub(crate) use dispatch::{
 // ── parent_static.rs ────────────────────────────────────────────────────────
 pub(crate) use parent_static::{
     call_private_static_method_for_owner, call_registered_static_method, call_static_method,
-    class_chain_has_instance_accessor, class_dynamic_static_accessor_getter_value,
-    class_has_instance_getter, class_has_own_static_method, class_has_symbol_member_in_chain,
-    class_instance_setter_apply, class_method_bind_length, class_object_own_field_bytes,
-    class_object_pinned_parent, class_own_symbol_accessor_ptrs, class_own_symbol_member_keys,
-    class_own_symbol_method, class_private_instance_getter_value,
-    class_private_instance_setter_apply, class_static_accessor_getter_value,
-    class_static_accessor_setter_apply, class_symbol_getter_value, class_symbol_setter_apply,
-    get_parent_class_id, lookup_class_symbol_method_in_chain, lookup_static_method_in_chain,
-    register_class, register_class_dynamic_static_accessor,
+    class_chain_has_instance_accessor, class_dynamic_static_accessor_descriptor,
+    class_dynamic_static_accessor_getter_value, class_has_instance_getter,
+    class_has_own_static_method, class_has_symbol_member_in_chain, class_instance_setter_apply,
+    class_method_bind_length, class_object_own_field_bytes, class_object_pinned_parent,
+    class_own_symbol_accessor_ptrs, class_own_symbol_member_keys, class_own_symbol_method,
+    class_private_instance_getter_value, class_private_instance_setter_apply,
+    class_static_accessor_getter_value, class_static_accessor_setter_apply,
+    class_symbol_getter_value, class_symbol_setter_apply, get_parent_class_id,
+    lookup_class_symbol_method_in_chain, lookup_static_method_in_chain, register_class,
+    register_class_dynamic_static_accessor,
 };
 pub use parent_static::{
     is_class_object_ptr, is_class_object_value, is_registered_class_prototype_object,

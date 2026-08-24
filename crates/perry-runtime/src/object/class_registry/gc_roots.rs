@@ -17,6 +17,9 @@ enum ClassSideTableRootSlot {
     PrototypeObject {
         class_id: u32,
     },
+    DeclPrototypeObject {
+        class_id: u32,
+    },
     ParentClosure {
         class_id: u32,
     },
@@ -104,6 +107,16 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     });
 
     CLASS_PROTOTYPE_OBJECTS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                for proto_addr in map.values_mut() {
+                    visitor.visit_usize_slot(proto_addr);
+                }
+            }
+        }
+    });
+
+    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
         if let Ok(mut guard) = table.write() {
             if let Some(map) = guard.as_mut() {
                 for proto_addr in map.values_mut() {
@@ -248,6 +261,16 @@ fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
         }
     });
 
+    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
+        if let Ok(guard) = table.read() {
+            if let Some(map) = guard.as_ref() {
+                for &class_id in map.keys() {
+                    slots.push(ClassSideTableRootSlot::DeclPrototypeObject { class_id });
+                }
+            }
+        }
+    });
+
     CLASS_PARENT_CLOSURES.with(|table| {
         if let Ok(guard) = table.read() {
             if let Some(map) = guard.as_ref() {
@@ -364,6 +387,15 @@ fn scan_class_side_table_root_slot(
         }
         ClassSideTableRootSlot::PrototypeObject { class_id } => {
             CLASS_PROTOTYPE_OBJECTS.with(|table| {
+                if let Ok(mut guard) = table.write() {
+                    if let Some(proto_addr) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
+                        visitor.visit_usize_slot(proto_addr);
+                    }
+                }
+            });
+        }
+        ClassSideTableRootSlot::DeclPrototypeObject { class_id } => {
+            CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
                 if let Ok(mut guard) = table.write() {
                     if let Some(proto_addr) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
                         visitor.visit_usize_slot(proto_addr);
@@ -600,6 +632,11 @@ pub(crate) fn test_clear_class_side_table_roots() {
             *guard = None;
         }
     });
+    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            *guard = None;
+        }
+    });
     CLASS_PARENT_CLOSURES.with(|table| {
         if let Ok(mut guard) = table.write() {
             *guard = None;
@@ -687,6 +724,22 @@ pub(crate) fn test_seed_class_prototype_object_root(class_id: u32, addr: usize) 
 #[cfg(test)]
 pub(crate) fn test_class_prototype_object_root_addr(class_id: u32) -> usize {
     CLASS_PROTOTYPE_OBJECTS.with(|table| {
+        table
+            .read()
+            .ok()
+            .and_then(|guard| guard.as_ref().and_then(|map| map.get(&class_id).copied()))
+            .unwrap_or(0)
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn test_seed_class_decl_prototype_object_root(class_id: u32, addr: usize) {
+    class_decl_prototype_object_root_store(class_id, addr as *mut ObjectHeader);
+}
+
+#[cfg(test)]
+pub(crate) fn test_class_decl_prototype_object_root_addr(class_id: u32) -> usize {
+    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
         table
             .read()
             .ok()

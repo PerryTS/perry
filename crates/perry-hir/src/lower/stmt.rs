@@ -1232,14 +1232,15 @@ pub(crate) fn lower_stmt(
                                 parent_expr: extends_expr.clone(),
                             }));
                     }
-                    for member in &class.computed_members {
-                        module
-                            .init
-                            .push(Stmt::Expr(class_computed_member_registration_expr(
-                                &class.name,
-                                member,
-                            )));
-                    }
+                    let (computed_name_evaluations, _) =
+                        crate::lower_decl::prepare_ordered_class_computed_names(
+                            &class_decl.class.body,
+                            &class,
+                            &class.name,
+                        );
+                    module
+                        .init
+                        .extend(computed_name_evaluations.into_iter().map(Stmt::Expr));
                     // Inject static-field-init and static-block-call
                     // statements at the source position of the class
                     // declaration, INTERLEAVED in source order (see
@@ -1259,7 +1260,7 @@ pub(crate) fn lower_stmt(
                     // declaration path; it skips blocks already invoked via
                     // this inline call.
                     module.init.extend(
-                        crate::lower_decl::build_interleaved_static_init_stmts(
+                        crate::lower_decl::build_interleaved_static_init_stmts_after_computed_names(
                             &class_decl.class.body,
                             &class.name,
                             &class.fields,

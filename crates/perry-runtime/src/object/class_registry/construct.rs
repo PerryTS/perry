@@ -158,7 +158,7 @@ pub(crate) unsafe fn nm_ctor_tls(
             args_ptr, args_len, 0,
         )));
     }
-    None
+    crate::tls::construct_registered_tls_class(method, args_ptr, args_len)
 }
 
 pub(crate) unsafe fn nm_ctor_wasi(
@@ -944,6 +944,9 @@ pub unsafe extern "C" fn js_new_function_construct(
             // address. Reproduced by `new C()` where `C = mk()` is a class
             // EXPRESSION value.
             let inst_handle = scope.root_raw_mut_ptr(inst);
+            inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+                link_class_object_instance_prototype(class_handle.get_nanbox_f64(), inst)
+            });
             // Every evaluation gets a distinct brand despite sharing its
             // class id. Stamp it before replay, where private access may occur.
             inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
@@ -966,20 +969,31 @@ pub unsafe extern "C" fn js_new_function_construct(
                     args_len,
                 );
             });
-            let inst: *mut ObjectHeader = inst_handle.get_raw_mut_ptr();
             // `class X extends Request/Response {}` constructed via the dynamic
             // (class-expression value) path: the replayed ctor's `super()`
             // can't statically route an aliased parent, so attach the native
             // fetch handle here when the registered parent is a fetch builtin
             // and the instance didn't already get one. Refs `@hono/node-server`.
             if let Some(kind) = fetch_parent_kind_in_chain(class_cid) {
-                if super::super::field_get_set::fetch_subclass_handle_id(inst as usize).is_none() {
-                    super::super::attach_fetch_handle_for_construction(
-                        inst, kind, args_ptr, args_len,
-                    );
+                let has_handle = inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+                    super::super::field_get_set::fetch_subclass_handle_id(inst as usize).is_some()
+                });
+                if !has_handle {
+                    inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+                        super::super::attach_fetch_handle_for_construction(
+                            inst, kind, args_ptr, args_len,
+                        )
+                    });
                 }
             }
-            // Re-read: `attach_fetch_handle_for_construction` allocates.
+            // Class-expression values can also extend Promise and reach this
+            // dynamic construct path. The synthesized default constructor does
+            // not call construct-only builtins as plain functions; attach the
+            // Promise backing here, matching the ClassRef path below. An
+            // explicit `super(executor)` has already installed it, so avoid
+            // invoking the executor twice.
+            ensure_promise_subclass_backing(&inst_handle, class_cid, args_ptr, args_len);
+            // Re-read: the fetch attachment and Promise executor both allocate.
             return crate::value::js_nanbox_pointer(
                 inst_handle.get_raw_mut_ptr::<ObjectHeader>() as i64
             );
@@ -1415,34 +1429,8 @@ fn new_target_class_id(new_target: f64) -> Option<u32> {
 }
 
 include!("construct/class_return.rs");
-
-/// True when class `cid` (or an ancestor) `extends Promise` — its registered
-/// dynamic-parent value resolves to the intrinsic `Promise` constructor. Used to
-/// run `js_promise_subclass_init` on the dynamic (runtime) `new Subclass(exec)`
-/// path, where codegen's `super()` Promise branch never emitted the init (e.g.
-/// `NewPromiseCapability(Subclass)` inside a combinator, which calls the runtime
-/// `js_new_function_construct` directly rather than a compiled `new`).
-pub(crate) fn promise_parent_in_chain(class_id: u32) -> bool {
-    let mut cid = class_id;
-    let mut depth = 0u32;
-    while depth < 32 && cid != 0 {
-        let parent_val = js_get_dynamic_parent_value(cid);
-        if matches!(
-            identify_global_builtin_constructor(parent_val),
-            Some("Promise")
-        ) {
-            return true;
-        }
-        match get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    false
-}
+include!("construct/class_object.rs");
+include!("construct/promise_subclass.rs");
 
 unsafe fn construct_registered_class_ref(
     target_cid: u32,
@@ -1518,22 +1506,8 @@ unsafe fn construct_registered_class_ref(
             super::super::attach_fetch_handle_for_construction(inst, kind, args_ptr, args_len);
         }
     }
-    // ClassRef `new` of a Promise subclass — run the Promise constructor against
-    // a hidden backing cell (only when the compiled ctor's `super()` didn't
-    // already attach one). `NewPromiseCapability(Subclass)` reaches here.
-    if promise_parent_in_chain(target_cid) {
-        // Re-read: `attach_fetch_handle_for_construction` above allocates.
-        let inst_val =
-            crate::value::js_nanbox_pointer(inst_handle.get_raw_mut_ptr::<ObjectHeader>() as i64);
-        if crate::promise::subclass_backing_promise(inst_val).is_none() {
-            let executor = if args_len >= 1 && !args_ptr.is_null() {
-                *args_ptr
-            } else {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
-            };
-            crate::promise::js_promise_subclass_init(inst_val, executor);
-        }
-    }
+    // `NewPromiseCapability(Subclass)` reaches this dynamic ClassRef path.
+    ensure_promise_subclass_backing(&inst_handle, target_cid, args_ptr, args_len);
     // Re-read once more: the executor `js_promise_subclass_init` runs is user
     // code, so the last two blocks are both collection points.
     crate::value::js_nanbox_pointer(inst_handle.get_raw_mut_ptr::<ObjectHeader>() as i64)
@@ -1666,13 +1640,20 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
         // `GetPrototypeFromConstructor(newTarget)` like the typed-array arm
         // below so `instanceof newTarget` and subclass prototypes hold.
         if ta_name == "Date" {
-            let proto_bits = new_target_custom_object_prototype(nt);
-            let result = js_new_function_construct(func_value, args_ptr, args_len);
-            if let Some(proto_bits) = proto_bits {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let nt = scope.root_nanbox_f64(nt);
+            let func = scope.root_nanbox_f64(func_value);
+            let proto = new_target_custom_object_prototype(nt.get_nanbox_f64())
+                .map(|bits| scope.root_heap_word_u64(bits));
+            let result = js_new_function_construct(func.get_nanbox_f64(), args_ptr, args_len);
+            if let Some(proto) = proto {
                 let jv = crate::value::JSValue::from_bits(result.to_bits());
                 if jv.is_pointer() {
                     let addr = (jv.bits() & crate::value::POINTER_MASK) as usize;
-                    super::super::prototype_chain::object_set_static_prototype(addr, proto_bits);
+                    super::super::prototype_chain::object_set_static_prototype(
+                        addr,
+                        proto.get_heap_word_u64(),
+                    );
                 }
             }
             return result;
@@ -1720,9 +1701,13 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                 | "RegExp"
                 | "Function"
         ) {
-            let proto_bits = new_target_custom_object_prototype(nt);
-            let result = js_new_function_construct(func_value, args_ptr, args_len);
-            if let Some(proto_bits) = proto_bits {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let nt = scope.root_nanbox_f64(nt);
+            let func = scope.root_nanbox_f64(func_value);
+            let proto = new_target_custom_object_prototype(nt.get_nanbox_f64())
+                .map(|bits| scope.root_heap_word_u64(bits));
+            let result = js_new_function_construct(func.get_nanbox_f64(), args_ptr, args_len);
+            if let Some(proto) = proto {
                 let bits = result.to_bits();
                 let addr = if (bits >> 48) == 0x7FFD {
                     (bits & crate::value::POINTER_MASK) as usize
@@ -1734,7 +1719,10 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                     0
                 };
                 if addr != 0 {
-                    super::super::prototype_chain::object_set_static_prototype(addr, proto_bits);
+                    super::super::prototype_chain::object_set_static_prototype(
+                        addr,
+                        proto.get_heap_word_u64(),
+                    );
                 }
             }
             return result;

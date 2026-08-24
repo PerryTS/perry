@@ -216,3 +216,14 @@ fn test_jsvalue_equals_numbers() {
     assert_eq!(js_jsvalue_equals(null, undef), 0); // strict: null !== undefined
     assert_eq!(js_jsvalue_equals(null, 0.0), 0);
 }
+
+#[test]
+fn test_jsvalue_equals_distinct_box_allocated_registered_symbols() {
+    let left_key = f64::from_bits(JSValue::try_short_string(b"eq_l").unwrap().bits());
+    let right_key = f64::from_bits(JSValue::try_short_string(b"eq_r").unwrap().bits());
+    let left = unsafe { crate::symbol::js_symbol_for(left_key) };
+    let right = unsafe { crate::symbol::js_symbol_for(right_key) };
+    assert_ne!(left.to_bits(), right.to_bits());
+
+    assert_eq!(js_jsvalue_equals(left, right), 0);
+}

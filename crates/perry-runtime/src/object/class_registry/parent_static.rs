@@ -1005,6 +1005,11 @@ pub(crate) unsafe fn class_static_accessor_getter_value(
     let mut cid = class_id;
     let mut depth = 0usize;
     while cid != 0 && depth < 32 {
+        // A descriptor installed by `defineProperty` replaces an existing
+        // class-body accessor at the same inheritance level.
+        if let Some(result) = class_dynamic_static_accessor_getter_value(cid, name, receiver) {
+            return Some(result);
+        }
         if let Some(accessors) = map.and_then(|map| map.get(&cid)) {
             if let Some(&(getter, _)) = accessors.get(name) {
                 if getter == 0 {
@@ -1022,9 +1027,6 @@ pub(crate) unsafe fn class_static_accessor_getter_value(
                 crate::object::static_this_disarm();
                 return Some(result);
             }
-        }
-        if let Some(result) = class_dynamic_static_accessor_getter_value(cid, name, receiver) {
-            return Some(result);
         }
         match get_parent_class_id(cid) {
             Some(p) if p != 0 && p != cid => {
@@ -1048,6 +1050,11 @@ pub(crate) unsafe fn class_static_accessor_setter_apply(
     let mut cid = class_id;
     let mut depth = 0usize;
     while cid != 0 && depth < 32 {
+        if let Some(applied) =
+            class_dynamic_static_accessor_setter_apply(cid, name, receiver, value)
+        {
+            return applied;
+        }
         if let Some(accessors) = map.and_then(|map| map.get(&cid)) {
             if let Some(&(_, setter)) = accessors.get(name) {
                 if setter != 0 {
@@ -1063,11 +1070,6 @@ pub(crate) unsafe fn class_static_accessor_setter_apply(
                 }
                 return true;
             }
-        }
-        if let Some(applied) =
-            class_dynamic_static_accessor_setter_apply(cid, name, receiver, value)
-        {
-            return applied;
         }
         match get_parent_class_id(cid) {
             Some(p) if p != 0 && p != cid => {

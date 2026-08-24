@@ -818,12 +818,10 @@ fn typed_feedback_guards_direct_class_method_specialization() {
     assert!(ir.contains("js_typed_feedback_method_direct_call_guard"));
     assert!(ir.contains("method_direct.fast"));
     assert!(ir.contains("method_direct.fallback"));
-    // #5334 lever A: this class has a field `x` whose synthesized field-set
-    // routes its guard-miss arm through the outlined fallback. (The
-    // method-direct fallback only records when its site_id is Some, which it
-    // isn't here — the old `record_fallback_call` assertion was incidentally
-    // satisfied by the field-set fallback that is now folded into this call.)
-    assert!(ir.contains("call void @js_class_field_set_fallback"));
+    // Class field initialization follows DefineField semantics, so the
+    // synthesized initializer uses the class-field add helper rather than the
+    // ordinary property-set fallback.
+    assert!(ir.contains("call double @js_class_field_add"));
     assert!(ir.contains("call double @js_native_call_method"));
 }
 

@@ -804,30 +804,41 @@ pub extern "C" fn js_object_define_property(
                 let has_set = desc_has_field(descriptor_value, b"set");
                 if super::super::class_prototype_ref_id(obj_value).is_none() && (has_get || has_set)
                 {
+                    let descriptor_value = desc_handle.get_nanbox_f64();
                     let get_field = desc_read_field(descriptor_value, b"get");
-                    let set_field = desc_read_field(descriptor_value, b"set");
-                    let get_bits = if has_get && !get_field.is_undefined() {
-                        get_field.bits()
-                    } else {
-                        0
-                    };
-                    let set_bits = if has_set && !set_field.is_undefined() {
-                        set_field.bits()
-                    } else {
-                        0
-                    };
+                    let get_field = scope.root_nanbox_u64(get_field.bits());
+                    let set_field = desc_read_field(desc_handle.get_nanbox_f64(), b"set");
+                    let set_field = scope.root_nanbox_u64(set_field.bits());
+                    let get_bits = has_get.then(|| {
+                        (get_field.get_nanbox_u64() != crate::value::TAG_UNDEFINED)
+                            .then(|| get_field.get_nanbox_u64())
+                            .unwrap_or(0)
+                    });
+                    let set_bits = has_set.then(|| {
+                        (set_field.get_nanbox_u64() != crate::value::TAG_UNDEFINED)
+                            .then(|| set_field.get_nanbox_u64())
+                            .unwrap_or(0)
+                    });
+                    let class_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
+                    let descriptor_value = desc_handle.get_nanbox_f64();
+                    let enumerable = desc_has_field(descriptor_value, b"enumerable")
+                        .then(|| descriptor_enumerable(desc_handle.get_nanbox_f64()));
+                    let descriptor_value = desc_handle.get_nanbox_f64();
+                    let configurable =
+                        desc_has_field(descriptor_value, b"configurable").then(|| {
+                            crate::value::js_is_truthy(f64::from_bits(
+                                desc_read_field(desc_handle.get_nanbox_f64(), b"configurable")
+                                    .bits(),
+                            )) != 0
+                        });
                     super::super::class_registry::register_class_dynamic_static_accessor(
-                        target_cid, &name, get_bits, set_bits,
-                    );
-                    super::super::class_registry::class_static_set_defined_attrs(
                         target_cid,
+                        class_value,
                         &name,
-                        false,
-                        descriptor_enumerable(descriptor_value),
-                        desc_has_field(descriptor_value, b"configurable")
-                            && crate::value::js_is_truthy(f64::from_bits(
-                                desc_read_field(descriptor_value, b"configurable").bits(),
-                            )) != 0,
+                        get_bits,
+                        set_bits,
+                        enumerable,
+                        configurable,
                     );
                     return obj_value;
                 }

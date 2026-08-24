@@ -114,17 +114,22 @@ pub(crate) fn subclass_backing_promise(value: f64) -> Option<*mut Promise> {
 /// synchronously per step 2.
 #[no_mangle]
 pub extern "C" fn js_promise_subclass_init(this: f64, executor: f64) -> f64 {
-    let obj = match unsafe { instance_object_ptr(this) } {
-        Some(o) => o,
-        None => return this,
-    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let executor = scope.root_nanbox_f64(executor);
+    if unsafe { instance_object_ptr(this.get_nanbox_f64()) }.is_none() {
+        return this.get_nanbox_f64();
+    }
 
     // 27.2.3.1 step 2: a non-callable executor throws a TypeError, before any
     // promise is created.
-    if !super::spec_combinators::is_callable_value(executor) {
+    if !super::spec_combinators::is_callable_value(executor.get_nanbox_f64()) {
         let msg = b"Promise resolver is not a function";
-        let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(s);
+        let s = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            msg.as_ptr(),
+            msg.len() as u32,
+        ));
+        let err = s.with_mut_ptr::<crate::StringHeader, _>(|s| crate::error::js_typeerror_new(s));
         let v = f64::from_bits(JSValue::pointer(err as *const u8).bits());
         crate::exception::js_throw(v);
     }
@@ -132,27 +137,35 @@ pub extern "C" fn js_promise_subclass_init(this: f64, executor: f64) -> f64 {
     // Build the backing promise + resolving functions, run the executor. Keep a
     // raw root on the backing cell across the string-key allocation below (which
     // can GC) by stashing it immediately after the executor runs.
-    let promise = super::js_promise_new();
-    let (resolve_closure, reject_closure) = super::combinators::make_resolving_functions(promise);
-    let resolve_f64 = crate::value::js_nanbox_pointer(resolve_closure as i64);
-    let reject_f64 = crate::value::js_nanbox_pointer(reject_closure as i64);
+    let promise = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        super::js_promise_new() as i64
+    ));
+    let promise_ptr = crate::value::js_nanbox_get_pointer(promise.get_nanbox_f64()) as *mut Promise;
+    let (resolve_closure, reject_closure) =
+        super::combinators::make_resolving_functions(promise_ptr);
+    let resolve = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(resolve_closure as i64));
+    let reject = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(reject_closure as i64));
 
     // 27.2.3.1 step 10: run the executor; a throw rejects the promise via the
     // shared resolving `reject` (so the [[AlreadyResolved]] guard makes a later
     // resolve/reject a no-op). `js_native_call_value` accepts both POINTER_TAG
     // closures and raw-pointer-bits closures, so `executor` is passed as-is.
-    let args = [resolve_f64, reject_f64];
+    let args = [resolve.get_nanbox_f64(), reject.get_nanbox_f64()];
     if let Err(reason) = super::combinators::combinator_catch_js(|| unsafe {
-        crate::closure::js_native_call_value(executor, args.as_ptr(), args.len())
+        crate::closure::js_native_call_value(executor.get_nanbox_f64(), args.as_ptr(), args.len())
     }) {
-        crate::closure::js_closure_call1(reject_closure, reason);
+        let reject = crate::value::js_nanbox_get_pointer(reject.get_nanbox_f64())
+            as *const crate::closure::ClosureHeader;
+        crate::closure::js_closure_call1(reject, reason);
     }
 
     // #7795: arm the probe gate before the field exists, so no reader can
     // observe a stashed backing cell while the flag still says "never".
     PROMISE_SUBCLASS_EVER.store(true, std::sync::atomic::Ordering::Relaxed);
     let key = crate::string::js_string_from_bytes(BACKING_KEY.as_ptr(), BACKING_KEY.len() as u32);
-    let backing_bits = JSValue::pointer(promise as *const u8).bits();
+    let obj = unsafe { instance_object_ptr(this.get_nanbox_f64()) }
+        .expect("rooted Promise subclass receiver must remain an object");
+    let backing_bits = promise.get_nanbox_f64().to_bits();
     js_object_set_field_by_name(obj, key, f64::from_bits(backing_bits));
-    this
+    this.get_nanbox_f64()
 }

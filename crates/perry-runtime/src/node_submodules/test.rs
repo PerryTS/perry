@@ -24,7 +24,7 @@ mod property_mock;
 #[path = "test_reporters.rs"]
 mod reporters;
 #[path = "test_runner.rs"]
-mod runner;
+pub(crate) mod runner;
 #[path = "test_snapshot.rs"]
 mod snapshot;
 
@@ -1707,7 +1707,6 @@ pub(crate) fn scan_test_module_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
         }
     });
     property_mock::scan_roots_mut(visitor);
-    runner::scan_roots_mut(visitor);
 }
 
 #[cfg(test)]

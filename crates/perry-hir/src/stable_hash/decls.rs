@@ -81,6 +81,7 @@ impl SH for ClassComputedMember {
         self.function.hash(h);
         self.is_static.hash(h);
         self.kind.hash(h);
+        self.source_order.hash(h);
     }
 }
 

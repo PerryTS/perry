@@ -537,6 +537,9 @@ pub(crate) unsafe fn nm_dispatch_tls(ctx: &NmCtx, module_name: &str, method_name
     );
     match (module_name, method_name) {
         ("tls", "getCiphers") => crate::tls::js_tls_get_ciphers(),
+        ("tls", "getCertificateCompressionAlgorithms") => {
+            crate::tls::js_tls_get_certificate_compression_algorithms()
+        }
         ("tls", "getCACertificates") => crate::tls::js_tls_get_ca_certificates(arg(0)),
         ("tls", "setDefaultCACertificates") => {
             crate::tls::js_tls_set_default_ca_certificates(arg(0))

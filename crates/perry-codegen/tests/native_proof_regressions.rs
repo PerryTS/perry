@@ -151,6 +151,31 @@ fn compile_ir_for_module_with_opts(module: Module, opts: CompileOptions) -> anyh
     Ok(String::from_utf8(compile_module(&module, opts)?)?)
 }
 
+#[test]
+fn generic_strict_equality_does_not_read_unverified_pointer_headers() {
+    let module = module_with_classes_and_params(
+        "generic_strict_equality_pointer_safety.ts",
+        Vec::new(),
+        vec![param(1, "left", Type::Any), param(2, "right", Type::Any)],
+        Type::Boolean,
+        vec![Stmt::Return(Some(Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(local(1)),
+            right: Box::new(local(2)),
+        }))],
+    );
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+
+    assert!(
+        ir.contains("anyeq.slow") && ir.contains("call i64 @js_eq"),
+        "distinct generic pointer values need the registry-aware runtime fallback:\n{ir}"
+    );
+    assert!(
+        !ir.contains("anyeq.fwd"),
+        "generic equality must not read a GC header after only a pointer-tag/magnitude check:\n{ir}"
+    );
+}
+
 fn contains_inline_direct_method_shape_guard(ir: &str) -> bool {
     ir.contains("method_direct.inline_deref")
         && ir.contains("load atomic i8, ptr @PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED acquire")
@@ -272,6 +297,7 @@ fn class_with_computed_member(id: u32, name: &str, fields: Vec<ClassField>) -> C
         },
         is_static: false,
         kind: ClassComputedMemberKind::Method,
+        source_order: 0,
     });
     class
 }
@@ -9781,6 +9807,39 @@ fn scalar_method_summary_module() -> Module {
     )
 }
 
+fn scalar_field_initializer_module() -> Module {
+    let mut value_field = class_field("value", Type::Number);
+    value_field.init = Some(number(42.0));
+    let holder = class(109, "Holder", vec![value_field]);
+
+    module_with_classes_and_params(
+        "scalar_field_initializer.ts",
+        vec![holder],
+        Vec::new(),
+        Type::Number,
+        vec![
+            Stmt::Let {
+                id: 20,
+                name: "holder".to_string(),
+                ty: Type::Named("Holder".to_string()),
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: "Holder".to_string(),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+            },
+            Stmt::Return(Some(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(local(20)),
+                property: "value".to_string(),
+            })),
+        ],
+    )
+}
+
 fn scalar_method_field_write_module() -> Module {
     let mut counter = class(111, "Counter", vec![class_field("value", Type::Number)]);
     counter.constructor = Some(Function {
@@ -10421,6 +10480,7 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                     },
                     is_static: false,
                     kind: ClassComputedMemberKind::Method,
+                    source_order: 0,
                 });
         }
         "inherited_field_shadow" => {
@@ -13276,6 +13336,23 @@ fn scalar_replaced_simple_method_call_inlines_summary_without_dispatch() {
     assert!(
         !ir.contains("call double @perry_method_scalar_method_summary_ts__Point_sum"),
         "scalar-replaced summarized method call should inline the method body:\n{ir}"
+    );
+}
+
+#[test]
+fn scalar_replaced_class_field_initializer_uses_its_field_slot() {
+    let ir = String::from_utf8(
+        compile_module(&scalar_field_initializer_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let probe_ir = function_ir_section(&ir, "perry_fn_scalar_field_initializer_ts__probe");
+    assert!(
+        !probe_ir.contains("call double @js_class_field_add"),
+        "a scalar-replaced construction has no receiver for DefineField:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("store double 42.0"),
+        "the initializer must populate the scalar field slot:\n{probe_ir}"
     );
 }
 

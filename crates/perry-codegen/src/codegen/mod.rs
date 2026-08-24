@@ -213,6 +213,7 @@ mod spec_preserve_none_tests;
 mod spec_return_proof;
 #[cfg(test)]
 mod spec_self_recursion_tests;
+pub(crate) mod static_fields;
 mod string_pool;
 #[cfg(test)]
 mod testing_feature_gate_tests;

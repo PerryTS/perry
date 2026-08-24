@@ -25,7 +25,7 @@ use crate::types::{DOUBLE, I1, I128, I32, I64};
 
 use crate::rooting::with_operands_rooted;
 
-use super::{is_known_finite, lower_expr, FnCtx};
+use super::{is_known_i32_range, lower_expr, FnCtx};
 
 /// `helper(left, right)` with each operand rooted across the other's lowering
 /// and the group released on every path out (#6951).
@@ -1101,7 +1101,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // entirely — just fptosi + sitofp (identity for in-range
                 // values, LLVM eliminates via instcombine).
                 BinaryOp::BitOr
-                    if matches!(right.as_ref(), Expr::Integer(0)) && is_known_finite(ctx, left) =>
+                    if matches!(right.as_ref(), Expr::Integer(0))
+                        && is_known_i32_range(ctx, left) =>
                 {
                     let blk = ctx.block();
                     let li = blk.toint32_fast(&l);
@@ -1112,8 +1113,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 | BinaryOp::BitXor
                 | BinaryOp::Shl
                 | BinaryOp::Shr => {
-                    let l_safe = is_known_finite(ctx, left);
-                    let r_safe = is_known_finite(ctx, right);
+                    let l_safe = is_known_i32_range(ctx, left);
+                    let r_safe = is_known_i32_range(ctx, right);
                     let blk = ctx.block();
                     let li = if l_safe {
                         blk.toint32_fast(&l)
@@ -1136,15 +1137,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.sitofp(I32, &v, DOUBLE)
                 }
                 BinaryOp::UShr
-                    if matches!(right.as_ref(), Expr::Integer(0)) && is_known_finite(ctx, left) =>
+                    if matches!(right.as_ref(), Expr::Integer(0))
+                        && is_known_i32_range(ctx, left) =>
                 {
                     let blk = ctx.block();
                     let li = blk.toint32_fast(&l);
                     blk.uitofp(I32, &li, DOUBLE)
                 }
                 BinaryOp::UShr => {
-                    let l_safe = is_known_finite(ctx, left);
-                    let r_safe = is_known_finite(ctx, right);
+                    let l_safe = is_known_i32_range(ctx, left);
+                    let r_safe = is_known_i32_range(ctx, right);
                     let blk = ctx.block();
                     let li = if l_safe {
                         blk.toint32_fast(&l)

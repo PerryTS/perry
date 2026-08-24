@@ -490,14 +490,30 @@ pub(super) unsafe fn jwk_uint_field(obj_bits: u64, name: &[u8]) -> Option<RsaBig
 }
 
 pub(super) unsafe fn set_object_string_field(obj: *mut ObjectHeader, name: &[u8], value: &str) {
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let val = js_string_from_bytes(value.as_ptr(), value.len() as u32);
-    js_object_set_field_by_name(obj, key, nanbox_str(val));
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    let key = scope.root_raw_mut_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32));
+    let val = scope.root_nanbox_f64(nanbox_str(js_string_from_bytes(
+        value.as_ptr(),
+        value.len() as u32,
+    )));
+    js_object_set_field_by_name(
+        obj.get_raw_mut_ptr::<ObjectHeader>(),
+        key.get_raw_mut_ptr(),
+        val.get_nanbox_f64(),
+    );
 }
 
 pub(super) unsafe fn set_object_value_field(obj: *mut ObjectHeader, name: &[u8], value: f64) {
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(obj, key, value);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    let value = scope.root_nanbox_f64(value);
+    let key = scope.root_raw_mut_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32));
+    js_object_set_field_by_name(
+        obj.get_raw_mut_ptr::<ObjectHeader>(),
+        key.get_raw_mut_ptr(),
+        value.get_nanbox_f64(),
+    );
 }
 
 pub(super) fn nanbox_pointer(ptr: *mut ObjectHeader) -> f64 {

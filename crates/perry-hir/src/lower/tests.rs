@@ -909,6 +909,141 @@ fn nested_class_shadowing_outer_var_constructs_the_class_not_the_local() {
     );
 }
 
+/// A sibling class declaration is already a known lexical binding while an
+/// earlier class method is lowered, even though its registry entry is emitted
+/// later. The unresolved-constructor guard must preserve that forward binding.
+#[test]
+fn nested_method_constructs_forward_declared_sibling_class() {
+    let source = r#"
+        function make() {
+            class Base {
+                makeChild(): any {
+                    return new Child();
+                }
+            }
+            class Child extends Base {}
+            return Base;
+        }
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let make_child = hir
+        .classes
+        .iter()
+        .find(|class| class.name == "Base")
+        .expect("Base class is lowered")
+        .methods
+        .iter()
+        .find(|method| method.name == "makeChild")
+        .expect("makeChild method is lowered");
+
+    assert!(
+        matches!(
+            make_child.body.as_slice(),
+            [crate::Stmt::Return(Some(crate::Expr::New { class_name, .. }))]
+                if class_name == "Child"
+        ),
+        "forward sibling construction must remain a static class construct: {:#?}",
+        make_child.body
+    );
+}
+
+/// Forward-declaration bookkeeping uses source identifiers, while a sibling
+/// class may use a collision-safe registration name. Constructor resolution
+/// must compare the source identifier before rejecting the forward binding.
+#[test]
+fn nested_method_constructs_collision_renamed_forward_sibling_class() {
+    let source = r#"
+        function first() {
+            class Child {}
+            return Child;
+        }
+        function make() {
+            class Base {
+                makeChild(): any {
+                    return new Child();
+                }
+            }
+            class Child extends Base {}
+            return Base;
+        }
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let make_child = hir
+        .classes
+        .iter()
+        .find(|class| class.name == "Base")
+        .expect("Base class is lowered")
+        .methods
+        .iter()
+        .find(|method| method.name == "makeChild")
+        .expect("makeChild method is lowered");
+
+    assert!(
+        matches!(
+            make_child.body.as_slice(),
+            [crate::Stmt::Return(Some(crate::Expr::New { class_name, .. }))]
+                if class_name.starts_with("Child$")
+        ),
+        "collision-renamed forward sibling construction must remain a static class construct: {:#?}",
+        make_child.body
+    );
+}
+
+/// A collision-safe registration key is compiler-internal; the evaluated
+/// class declaration must still bind and read through its source-level name.
+#[test]
+fn fresh_class_declaration_collision_keeps_lexical_binding() {
+    let source = r#"
+        function first() {
+            class C { #x = 1; }
+            return C;
+        }
+        function second() {
+            class C { #x = 2; static missing; }
+            const value = C.missing;
+            return C;
+        }
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let second = hir
+        .functions
+        .iter()
+        .find(|function| function.name == "second")
+        .expect("second function lowers");
+    let (binding_id, template) = second
+        .body
+        .iter()
+        .find_map(|stmt| match stmt {
+            crate::Stmt::Let {
+                id,
+                name,
+                init: Some(crate::Expr::ClassExprFresh { template, .. }),
+                ..
+            } if name == "C" => Some((*id, template.as_str())),
+            _ => None,
+        })
+        .expect("fresh class is bound under source name");
+    assert_ne!(template, "C", "second template should be collision-renamed");
+    assert!(second.body.iter().any(|stmt| {
+        matches!(stmt, crate::Stmt::Return(Some(crate::Expr::LocalGet(id))) if *id == binding_id)
+    }));
+    assert!(second.body.iter().any(|stmt| {
+        matches!(
+            stmt,
+            crate::Stmt::Let {
+                name,
+                init: Some(crate::Expr::PropertyGet { object, property, .. }),
+                ..
+            } if name == "value"
+                && property == "missing"
+                && matches!(object.as_ref(), crate::Expr::LocalGet(id) if *id == binding_id)
+        )
+    }));
+}
+
 /// Companion (the case the depth rule must NOT break): a module-scope `class e`
 /// and a factory-local `let e` holding a different constructor. JS says the
 /// nearer local wins, so `new e()` inside the factory must still construct the

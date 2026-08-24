@@ -248,6 +248,7 @@ pub(crate) use accessors::{
     ordinary_object_prototype_property_value, own_data_field_by_name,
     primitive_builtin_prototype_property, primitive_object_prototype_accessor, string_index_value,
 };
+pub(crate) use class_object_props::class_object_prototype_value;
 pub(crate) use crypto_key::{
     crypto_key_property_value, CLASS_ID_BOXED_BIGINT, CLASS_ID_BOXED_BOOLEAN,
     CLASS_ID_BOXED_NUMBER, CLASS_ID_BOXED_STRING, CLASS_ID_BOXED_SYMBOL,
@@ -278,7 +279,8 @@ pub(crate) use ic_miss::primitive_proto_method_name_static;
 pub(crate) use ic_miss::{
     bind_primitive_proto_method_static, is_array_method_value_name, private_evaluation_brand_value,
     private_lexical_brand_pop, private_lexical_brand_push, private_lexical_brand_stack_restore,
-    private_lexical_brand_stack_savepoint, private_member_call_by_name, private_member_get_by_name,
+    private_lexical_brand_stack_savepoint, private_member_access_hints_restore,
+    private_member_access_hints_savepoint, private_member_call_by_name, private_member_get_by_name,
     private_member_set_by_name, scan_private_lexical_brand_roots_mut, set_method_value_name,
     stamp_private_evaluation_brand, take_private_method_call_hint, take_private_method_owner_hint,
     timer_handle_method_name_static,

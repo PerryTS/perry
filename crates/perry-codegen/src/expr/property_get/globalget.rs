@@ -174,6 +174,14 @@ pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> R
             &[(I64, &ctor_handle), (I64, &key_raw)],
         ));
     }
+    // `Buffer.isBuffer` used as a callback (for example
+    // `values.every(Buffer.isBuffer)`) needs the callable value, not only the
+    // direct-call intrinsic. Bare builtin receivers are represented by the
+    // shared `GlobalGet(0)` sentinel, and `isBuffer` is distinctive among the
+    // builtin statics, so recover it from the populated Buffer constructor.
+    if property == "isBuffer" {
+        return Ok(lower_global_builtin_static_value(ctx, "Buffer", property));
+    }
     // #6674: `Uint8Array.fromBase64` / `fromHex` read as a VALUE (not a direct
     // call) — jose/Auth.js feature-detect with `Uint8Array.fromBase64 ? native
     // : fallback`. The bare `Uint8Array` receiver collapses to `GlobalGet(0)`

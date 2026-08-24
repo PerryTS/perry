@@ -32,6 +32,9 @@ unsafe fn write_fast_path_receiver_kind_ok(
     if class_id == crate::object::NATIVE_MODULE_CLASS_ID {
         return false;
     }
+    if crate::object::is_class_object_ptr(obj.cast()) {
+        return false;
+    }
     class_id != 0 || obj_flags & crate::gc::OBJ_FLAG_PLAIN_ORDINARY != 0
 }
 

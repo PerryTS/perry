@@ -1898,6 +1898,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"createServer",
             b"createSecureContext",
             b"getCACertificates",
+            b"getCertificateCompressionAlgorithms",
             b"getCiphers",
             b"setDefaultCACertificates",
             b"Server",

@@ -13,6 +13,7 @@ fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
 
     let value = young_leaf();
     let prototype_object = crate::object::js_object_alloc(0, 0) as usize;
+    let decl_prototype_object = crate::object::js_object_alloc(0, 0) as usize;
     let parent_closure = crate::arena::arena_alloc_gc(
         std::mem::size_of::<crate::closure::ClosureHeader>(),
         std::mem::align_of::<crate::closure::ClosureHeader>(),
@@ -33,6 +34,7 @@ fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
     crate::object::test_seed_class_prototype_method_root(0x5401, "proto", string_bits(value));
     crate::object::test_seed_class_prototype_method_value_root(0x5401, "bound", string_bits(value));
     crate::object::test_seed_class_prototype_object_root(0x5401, prototype_object);
+    crate::object::test_seed_class_decl_prototype_object_root(0x5401, decl_prototype_object);
     crate::object::test_seed_class_parent_closure_root(0x5401, parent_closure);
     crate::object::test_seed_function_class_id_key(ptr_bits(key), 0x8200_5401);
 
@@ -42,6 +44,8 @@ fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
     let prototype_bits = crate::object::test_class_prototype_method_root_bits(0x5401, "proto");
     let cached_bits = crate::object::test_class_prototype_method_value_root_bits(0x5401, "bound");
     let prototype_object_after = crate::object::test_class_prototype_object_root_addr(0x5401);
+    let decl_prototype_object_after =
+        crate::object::test_class_decl_prototype_object_root_addr(0x5401);
     let parent_closure_after = crate::object::test_class_parent_closure_root_addr(0x5401);
     let value_after = (dynamic_bits & POINTER_MASK) as usize;
     let key_after_bits = js_shadow_slot_get(0);
@@ -53,6 +57,10 @@ fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
     assert!(crate::arena::pointer_in_nursery(value_after));
     assert_ne!(prototype_object_after, prototype_object);
     assert!(crate::arena::pointer_in_nursery(prototype_object_after));
+    assert_ne!(decl_prototype_object_after, decl_prototype_object);
+    assert!(crate::arena::pointer_in_nursery(
+        decl_prototype_object_after
+    ));
     assert_ne!(parent_closure_after, parent_closure);
     assert!(crate::arena::pointer_in_nursery(parent_closure_after));
     assert_ne!(key_after_bits, ptr_bits(key));

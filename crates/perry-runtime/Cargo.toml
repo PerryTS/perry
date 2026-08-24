@@ -292,6 +292,11 @@ temporal_rs = { version = "0.2.3", default-features = false, features = ["std", 
 
 serde.workspace = true
 serde_json.workspace = true
+# TLS client identity callbacks run from the external net archive, before the
+# stdlib TLS module is necessarily linked. Keep the legacy peer-certificate
+# object builder in the runtime so that callback path has no stdlib symbol
+# dependency (the DER parser is dead-stripped from programs that never use it).
+x509-cert = { version = "0.3", default-features = false }
 unicode-normalization = { version = "0.1", optional = true }
 # #4877: extended grapheme-cluster / word / sentence segmentation backing
 # Intl.Segmenter (the grapheme path is what string-width@7+/wrap-ansi@9+ use,

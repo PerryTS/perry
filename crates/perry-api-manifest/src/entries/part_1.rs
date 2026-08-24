@@ -778,6 +778,13 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("net", "isSessionReused", true, Some("Socket")),
     method("net", "exportKeyingMaterial", true, Some("Socket")),
     method("net", "setMaxSendFragment", true, Some("Socket")),
+    method("net", "getEphemeralKeyInfo", true, Some("Socket")),
+    method("net", "getFinished", true, Some("Socket")),
+    method("net", "getPeerFinished", true, Some("Socket")),
+    method("net", "getSharedSigalgs", true, Some("Socket")),
+    method("net", "getX509Certificate", true, Some("Socket")),
+    method("net", "getPeerX509Certificate", true, Some("Socket")),
+    method("net", "setKeyCert", true, Some("Socket")),
     // Issue #1123 followup — `net.Server` instance methods backing
     // `createServer(...).listen/.close/.address/.on`. Mirrors the
     // shape of the http-server rows at entries.rs:2298. The
@@ -861,6 +868,7 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
         TypeSpec::Any,
     ),
     method("tls", "getCiphers", false, None),
+    method("tls", "getCertificateCompressionAlgorithms", false, None),
     method_sig(
         "tls",
         "setDefaultCACertificates",

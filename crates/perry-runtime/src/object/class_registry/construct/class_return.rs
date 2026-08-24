@@ -91,6 +91,11 @@ fn constructor_return_overrides_this(value: f64) -> bool {
                 | crate::gc::GC_TYPE_ERROR
                 | crate::gc::GC_TYPE_PROMISE
                 | crate::gc::GC_TYPE_TEMPORAL
+                | crate::gc::GC_TYPE_MAP
+                | crate::gc::GC_TYPE_SET
+                | crate::gc::GC_TYPE_DATE_CELL
+                | crate::gc::GC_TYPE_REGEXP
+                | crate::gc::GC_TYPE_LAZY_ARRAY
         )
     }
 }

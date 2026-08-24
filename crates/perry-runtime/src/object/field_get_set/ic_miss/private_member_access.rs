@@ -18,6 +18,14 @@ struct PrivateMemberAccessHint {
     is_write: bool,
 }
 
+pub(crate) fn private_member_access_hints_savepoint() -> usize {
+    PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| hints.borrow().len())
+}
+
+pub(crate) fn private_member_access_hints_restore(depth: usize) {
+    PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| hints.borrow_mut().truncate(depth));
+}
+
 pub(crate) fn take_private_method_owner_hint(method_name: &str) -> Option<u32> {
     PRIVATE_METHOD_OWNER_HINT.with(|hint| {
         let mut hint = hint.borrow_mut();
@@ -88,10 +96,14 @@ pub(crate) fn private_member_get_by_name(
                         ),
                     );
                 }
+                let stable_name = super::super::native_module::intern_class_method_name(
+                    hint.class_id,
+                    &name,
+                );
                 Some(super::super::js_class_method_bind(
                     receiver,
-                    name.as_ptr(),
-                    name.len(),
+                    stable_name.as_ptr(),
+                    stable_name.len(),
                 ))
             }
             2 | 4 if hint.is_static => {
@@ -293,8 +305,12 @@ pub extern "C" fn js_private_brand_check(
 /// Throw a `TypeError` with `msg` through Perry's exception machinery so a
 /// surrounding `try { ... } catch (e) { ... }` catches it. Diverges.
 fn throw_private_type_error(msg: &str) -> ! {
-    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        msg.as_ptr(),
+        msg.len() as u32,
+    ));
+    let err = s.with_mut_ptr::<crate::StringHeader, _>(|s| crate::error::js_typeerror_new(s));
     let v = crate::value::JSValue::pointer(err as *const u8).bits();
     crate::exception::js_throw(f64::from_bits(v))
 }

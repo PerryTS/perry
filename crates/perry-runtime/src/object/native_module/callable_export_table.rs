@@ -835,6 +835,7 @@ pub(super) static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
             "createSecureContext",
             "createServer",
             "getCACertificates",
+            "getCertificateCompressionAlgorithms",
             "getCiphers",
             "setDefaultCACertificates",
         ],

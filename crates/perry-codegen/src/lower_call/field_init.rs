@@ -718,6 +718,28 @@ pub(crate) fn apply_field_initializers_recursive(
             );
         }
         for (prop, init_expr, is_private) in init_pairs {
+            // A scalar-replaced `new C()` has no heap receiver. Its fields are
+            // represented by the allocas in `ctx.scalar_replaced`, and the
+            // dummy `this_stack` slot exists only so ordinary constructor
+            // assignments can reach the scalar PropertySet fast path. DefineField
+            // lowering bypasses PropertySet, so route public named initializers
+            // to those allocas directly as well. Otherwise `js_class_field_add`
+            // receives the uninitialized dummy `this` value.
+            if !is_private {
+                if let Some(target_id) = ctx.scalar_ctor_target.last().copied() {
+                    let slot = ctx
+                        .scalar_replaced
+                        .get(&target_id)
+                        .and_then(|fields| fields.get(&prop))
+                        .cloned();
+                    let value = lower_expr(ctx, &init_expr)?;
+                    if let Some(slot) = slot {
+                        ctx.block().store(DOUBLE, &value, &slot);
+                        crate::expr::root_scalar_replaced_slot(ctx, &slot, &init_expr);
+                    }
+                    continue;
+                }
+            }
             if is_private {
                 let value = lower_expr(ctx, &init_expr)?;
                 let this_val = ctx

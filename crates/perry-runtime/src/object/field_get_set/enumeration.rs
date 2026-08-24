@@ -1365,9 +1365,18 @@ pub(crate) unsafe fn instance_private_key_hidden(
 pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
     b == crate::object::map_set_subclass::BACKING_KEY
         || b == crate::weakref::WEAK_ENTRIES_KEY
+        || b == crate::object::parent_static::CLASS_OBJECT_PARENT_KEY.as_bytes()
+        || b == b"__perry_ctor_caps"
         || b.starts_with(crate::node_stream::NATIVE_BASE_SUPER_PREFIX)
         || b.starts_with(b"__perry_computed_field_key_")
-        || b.starts_with(b"#<perry:private-")
+        || b == b"#<perry:class-evaluation-prototype>"
+        || b == b"#<perry:private-class-lexical-binding>"
+        || b.starts_with(b"#<perry:private-brand:")
+        || b.starts_with(b"#<perry:private-member:")
+        || b.starts_with(b"#<perry:private-field:")
+        || b.starts_with(b"#<perry:private-value:")
+        || b.starts_with(b"#<perry:class-evaluation-method:")
+        || b.starts_with(b"#<perry:static-private-method:")
 }
 
 /// `&str` form of [`is_internal_runtime_key_bytes`].

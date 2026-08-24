@@ -1113,6 +1113,28 @@ static KEEP_JS_ERROR_SUBCLASS_DEFAULT_INIT: unsafe extern "C" fn(
     *const crate::StringHeader,
 ) = js_error_subclass_default_init;
 
+/// Find the per-evaluation class object that owns `target_cid` while walking a
+/// fresh derived class's pinned parent chain. The template class-id registry
+/// identifies which constructor to replay, but it cannot identify which
+/// evaluation's captured environment belongs to that constructor.
+fn pinned_class_object_for_ancestor(start: f64, target_cid: u32) -> Option<f64> {
+    let mut current = start;
+    let mut depth = 0usize;
+    while depth < 32 && super::class_registry::is_class_object_value(current) {
+        let object =
+            crate::value::JSValue::from_bits(current.to_bits()).as_pointer::<ObjectHeader>();
+        if object.is_null() {
+            return None;
+        }
+        if super::js_object_get_class_id(object) == target_cid {
+            return Some(current);
+        }
+        current = super::class_registry::class_object_pinned_parent(object)?;
+        depth += 1;
+    }
+    None
+}
+
 pub(crate) unsafe fn replay_class_object_constructor(
     classobj_value: f64,
     class_cid: u32,
@@ -1159,30 +1181,45 @@ pub(crate) unsafe fn replay_class_object_constructor(
     };
 
     // Read the snapshotted captures (an own array, in capture-param order).
-    // Absent → no captures. The `__perry_ctor_caps` snapshot on this class
-    // object belongs to ITS OWN ctor — when the walk above resolved an
-    // ANCESTOR's ctor, that snapshot doesn't apply; use the ancestor's
-    // decl-site snapshot (CLASS_CAPTURE_VALUES) via the fallback below.
-    let caps_val = if ctor_cid == class_cid {
-        crate::object::js_object_get_own_field_or_undef(
-            classobj_handle.get_nanbox_f64(),
-            b"__perry_ctor_caps".as_ptr(),
-            17,
-        )
+    // When the implicit derived constructor walk resolves an ancestor, follow
+    // THIS class object's pinned per-evaluation parent chain and take the
+    // capture array from the matching ancestor object. Falling straight back
+    // to the template-wide declaration snapshot loses a fresh parent's
+    // environment (`class extends makeParent(tag) {}`), so inherited methods
+    // read `undefined` even though the instance's prototype chain is correct.
+    let capture_owner = if ctor_cid == class_cid {
+        classobj_handle.get_nanbox_f64()
     } else {
-        f64::from_bits(crate::value::TAG_UNDEFINED)
+        pinned_class_object_for_ancestor(classobj_handle.get_nanbox_f64(), ctor_cid)
+            .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
     };
+    let capture_owner_handle = scope.root_nanbox_f64(capture_owner);
+    let caps_val =
+        if super::class_registry::is_class_object_value(capture_owner_handle.get_nanbox_f64()) {
+            crate::object::js_object_get_own_field_or_undef(
+                capture_owner_handle.get_nanbox_f64(),
+                b"__perry_ctor_caps".as_ptr(),
+                17,
+            )
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        };
     let caps_jv = crate::value::JSValue::from_bits(caps_val.to_bits());
-    let (caps_arr, n_caps): (*const crate::array::ArrayHeader, u32) = if caps_jv.is_pointer() {
+    let caps_arr_handle = if caps_jv.is_pointer() {
         let arr = caps_jv.as_pointer::<crate::array::ArrayHeader>();
         if arr.is_null() {
-            (std::ptr::null(), 0)
+            None
         } else {
-            (arr, crate::array::js_array_length(arr))
+            Some(scope.root_raw_const_ptr(arr))
         }
     } else {
-        (std::ptr::null(), 0)
+        None
     };
+    let n_caps = caps_arr_handle.as_ref().map_or(0, |handle| {
+        handle.with_const_ptr::<crate::array::ArrayHeader, _>(|arr| {
+            crate::array::js_array_length(arr)
+        })
+    });
 
     // A class DECLARATION reached as a heap class object (webpack interop:
     // `t["default"] = PQueue` read back cross-module) has no per-evaluation
@@ -1247,7 +1284,12 @@ pub(crate) unsafe fn replay_class_object_constructor(
     // (class DECLARATIONS reached as heap values), undefined last.
     for slot in 0..sig_caps as usize {
         let v = if (slot as u32) < n_caps {
-            crate::array::js_array_get_f64(caps_arr, slot as u32)
+            caps_arr_handle
+                .as_ref()
+                .expect("non-empty capture array should have a runtime handle")
+                .with_const_ptr::<crate::array::ArrayHeader, _>(|caps_arr| {
+                    crate::array::js_array_get_f64(caps_arr, slot as u32)
+                })
         } else if let Some(bits) = snapshot_caps.get(slot) {
             f64::from_bits(*bits)
         } else {

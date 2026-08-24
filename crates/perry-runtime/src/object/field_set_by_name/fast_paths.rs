@@ -38,6 +38,12 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     if obj_gc.obj_type != crate::gc::GC_TYPE_OBJECT
         || obj_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || obj_gc._reserved & BLOCKING_FLAGS != 0
+        // A per-evaluation class object can carry dynamic static accessors in
+        // the class registry while retaining an ordinary backing slot with the
+        // same key. Overwriting that slot directly bypasses the accessor
+        // setter, so class constructors must always take the full exotic
+        // `[[Set]]` path.
+        || crate::object::class_registry::is_class_object_ptr(obj.cast())
         || (*obj).class_id == NATIVE_MODULE_CLASS_ID
         || crate::array::object_prototype_addr_matches(obj_addr)
         // URL's visible fields are live views over one backing URL. An own

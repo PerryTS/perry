@@ -154,6 +154,10 @@ pub(crate) unsafe fn nm_field_set_override(
         super::set_buffer_pool_size(value);
         return true;
     }
+    if matches!(module_name.as_str(), "tls" | "tls.default") && property_name == "rootCertificates"
+    {
+        crate::error::throw_immutable_write(0, "rootCertificates");
+    }
     // CommonJS module exports are MUTABLE in Node: monkey-patching
     // like Next.js's `require('node:timers').setImmediate = patched`
     // must store the override (read back via `vt_get_own_field`)

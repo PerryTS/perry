@@ -103,6 +103,27 @@ fn indirect_eval_completion_value_global_script() {
     );
 }
 
+/// A script-level `var` binding and its `globalThis` property are the same
+/// binding.  Assignments lowered after the declaration must therefore remain
+/// visible to indirect eval, which resolves through the global environment.
+const VAR_ASSIGNMENT_MIRRORS_GLOBAL: &str = r#"
+var x = 1;
+x = 7;
+console.log("eval.x:", (0, eval)("x"));
+console.log("DONE");
+"#;
+
+#[test]
+fn script_var_assignment_remains_visible_to_indirect_eval() {
+    let (ok, out) = compile_and_run(VAR_ASSIGNMENT_MIRRORS_GLOBAL, /* global_script */ true);
+    assert!(ok, "binary did not exit cleanly\n{out}");
+    assert!(
+        out.contains("eval.x: 7"),
+        "assignment to a script `var` must update its global property\n{out}"
+    );
+    assert!(out.contains("DONE"), "program must complete\n{out}");
+}
+
 /// `cptn-nrml-expr-obj.js` shape: the eval body reads a global object and the
 /// completion is that very object (identity preserved).
 const CPTN_OBJ: &str = r#"

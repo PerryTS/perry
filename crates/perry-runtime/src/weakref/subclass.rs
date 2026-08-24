@@ -5,6 +5,7 @@
 pub extern "C" fn js_weak_collection_subclass_init(this: f64, kind: i32, iterable: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(this);
+    let iterable = scope.root_nanbox_f64(iterable);
     let raw = crate::value::js_nanbox_get_pointer(this.get_nanbox_f64()) as usize;
     let is_object = unsafe {
         crate::value::addr_class::try_read_gc_header(raw)
@@ -31,8 +32,8 @@ pub extern "C" fn js_weak_collection_subclass_init(this: f64, kind: i32, iterabl
         )
     });
     if kind == 0 {
-        js_weakmap_init_iterable(this.get_nanbox_f64(), iterable)
+        js_weakmap_init_iterable(this.get_nanbox_f64(), iterable.get_nanbox_f64())
     } else {
-        js_weakset_init_iterable(this.get_nanbox_f64(), iterable)
+        js_weakset_init_iterable(this.get_nanbox_f64(), iterable.get_nanbox_f64())
     }
 }

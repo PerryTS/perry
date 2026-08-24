@@ -26,10 +26,23 @@ pub(crate) fn computed_field_key_initializers(
     fields: &[ClassField],
     static_fields: &[ClassField],
 ) -> Vec<(String, Expr)> {
+    computed_field_key_initializers_with_order(class_body, fields, static_fields)
+        .into_iter()
+        .map(|(_, name, value)| (name, value))
+        .collect()
+}
+
+/// [`computed_field_key_initializers`] plus each element's absolute ClassBody
+/// position, used to merge field names with computed methods/accessors.
+pub(crate) fn computed_field_key_initializers_with_order(
+    class_body: &[ast::ClassMember],
+    fields: &[ClassField],
+    static_fields: &[ClassField],
+) -> Vec<(usize, String, Expr)> {
     let mut result = Vec::new();
     let mut field_idx = 0usize;
     let mut static_field_idx = 0usize;
-    for member in class_body {
+    for (source_order, member) in class_body.iter().enumerate() {
         match member {
             ast::ClassMember::ClassProp(prop) if !prop.declare && !prop.is_abstract => {
                 let field = if prop.is_static {
@@ -43,7 +56,11 @@ pub(crate) fn computed_field_key_initializers(
                 };
                 if let Some(field) = field {
                     if let Some(key) = field.key_expr.as_ref() {
-                        result.push((field.name.clone(), to_property_key(key.clone())));
+                        result.push((
+                            source_order,
+                            field.name.clone(),
+                            to_property_key(key.clone()),
+                        ));
                     }
                 }
             }
@@ -88,6 +105,43 @@ pub(crate) fn build_interleaved_static_init_stmts(
     static_fields: &[ClassField],
     static_methods: &[Function],
 ) -> Vec<Stmt> {
+    build_interleaved_static_init_stmts_impl(
+        class_body,
+        class_name,
+        fields,
+        static_fields,
+        static_methods,
+        true,
+    )
+}
+
+/// Static initialization after a caller has already evaluated and stored all
+/// computed names in source order.
+pub(crate) fn build_interleaved_static_init_stmts_after_computed_names(
+    class_body: &[ast::ClassMember],
+    class_name: &str,
+    fields: &[ClassField],
+    static_fields: &[ClassField],
+    static_methods: &[Function],
+) -> Vec<Stmt> {
+    build_interleaved_static_init_stmts_impl(
+        class_body,
+        class_name,
+        fields,
+        static_fields,
+        static_methods,
+        false,
+    )
+}
+
+fn build_interleaved_static_init_stmts_impl(
+    class_body: &[ast::ClassMember],
+    class_name: &str,
+    fields: &[ClassField],
+    static_fields: &[ClassField],
+    static_methods: &[Function],
+    emit_computed_names: bool,
+) -> Vec<Stmt> {
     let emit_field = |out: &mut Vec<Stmt>, sf: &ClassField| {
         // A COMPUTED-key static field with no initializer still performs
         // CreateDataProperty(F, key, undefined) at class-eval time, so it must
@@ -128,12 +182,16 @@ pub(crate) fn build_interleaved_static_init_stmts(
     // source order. Keep the resolved keys on hidden static slots so static
     // initialization and each later instance construction reuse the same key.
     let mut out = Vec::new();
-    for (field_name, value) in computed_field_key_initializers(class_body, fields, static_fields) {
-        out.push(Stmt::Expr(Expr::StaticFieldSet {
-            class_name: class_name.to_string(),
-            field_name,
-            value: Box::new(value),
-        }));
+    if emit_computed_names {
+        for (field_name, value) in
+            computed_field_key_initializers(class_body, fields, static_fields)
+        {
+            out.push(Stmt::Expr(Expr::StaticFieldSet {
+                class_name: class_name.to_string(),
+                field_name,
+                value: Box::new(value),
+            }));
+        }
     }
 
     // Static fields and blocks initialize only after all computed keys above
@@ -142,7 +200,9 @@ pub(crate) fn build_interleaved_static_init_stmts(
     let mut block_idx = 0usize;
     for member in class_body {
         match member {
-            ast::ClassMember::ClassProp(prop) if !prop.declare && prop.is_static => {
+            ast::ClassMember::ClassProp(prop)
+                if !prop.declare && !prop.is_abstract && prop.is_static =>
+            {
                 if let Some(sf) = static_fields.get(field_idx) {
                     emit_field(&mut out, sf);
                 }

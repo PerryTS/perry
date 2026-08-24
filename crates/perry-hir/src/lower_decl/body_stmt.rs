@@ -13,9 +13,7 @@ use crate::lower::{
 };
 use crate::lower_patterns::*;
 
-use super::class_computed::{
-    class_computed_member_registration_expr, push_deduped_class_computed_keys,
-};
+use super::class_computed::push_deduped_class_computed_keys;
 use super::helpers::{async_iterator_method_call, is_filehandle_readlines_for_await_target};
 use super::*;
 
@@ -285,12 +283,13 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         parent_expr: extends_expr.clone(),
                     }));
                 }
-                for member in &class.computed_members {
-                    result.push(Stmt::Expr(class_computed_member_registration_expr(
+                let (computed_name_evaluations, computed_keys) =
+                    crate::lower_decl::prepare_ordered_class_computed_names(
+                        &class_decl.class.body,
+                        &class,
                         &class.name,
-                        member,
-                    )));
-                }
+                    );
+                result.extend(computed_name_evaluations.into_iter().map(Stmt::Expr));
                 // A function-nested class that captures enclosing locals
                 // (`const n = require('x'); class C { m() { n.f() } }` — the
                 // webpack/zod bundle pattern) snapshots the CURRENT capture
@@ -332,11 +331,6 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         .iter()
                         .any(|m| m.name.starts_with("__perry_static_init_"));
                 let has_private_elements = class.has_private_elements();
-                let computed_keys = crate::lower_decl::computed_field_key_initializers(
-                    &class_decl.class.body,
-                    &class.fields,
-                    &class.static_fields,
-                );
                 let fresh_binding = has_private_elements
                     || !computed_keys.is_empty()
                     || (!captured_exprs.is_empty() && !has_static_state);
@@ -346,8 +340,11 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         .iter()
                         .filter_map(
                             |field| match (field.key_expr.as_ref(), field.init.as_ref()) {
-                                (None, Some(value)) => Some((field.name.clone(), value.clone())),
-                                _ => None,
+                                (None, init) => Some((
+                                    field.name.clone(),
+                                    init.cloned().unwrap_or(Expr::Undefined),
+                                )),
+                                (Some(_), _) => None,
                             },
                         )
                         .collect()
@@ -370,6 +367,10 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 } else {
                     Vec::new()
                 };
+                let static_init_order = crate::lower_decl::fresh_class_static_init_order(
+                    &class_decl.class.body,
+                    &class.static_fields,
+                );
                 // Static field initializers + static blocks for a
                 // function-nested class. The module-level path
                 // (`lower/stmt.rs`) emits these into `module.init`; here they
@@ -381,13 +382,15 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // `build_interleaved_static_init_stmts`), with lexical `this`
                 // in field initializers bound to the class ref.
                 if !fresh_binding {
-                    result.extend(crate::lower_decl::build_interleaved_static_init_stmts(
-                        &class_decl.class.body,
-                        &class.name,
-                        &class.fields,
-                        &class.static_fields,
-                        &class.static_methods,
-                    ));
+                    result.extend(
+                        crate::lower_decl::build_interleaved_static_init_stmts_after_computed_names(
+                            &class_decl.class.body,
+                            &class.name,
+                            &class.fields,
+                            &class.static_fields,
+                            &class.static_methods,
+                        ),
+                    );
                 }
                 let template_name = class.name.clone();
                 ctx.pending_classes.push(class);
@@ -398,17 +401,25 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 // real local (not an inferred static class alias), `new C()`
                 // constructs through the evaluated class VALUE.
                 if fresh_binding {
-                    let class_local = ctx.define_local(class_name.clone(), Type::Any);
+                    // `class_name` is the collision-safe template key (`C$0`),
+                    // but the lexical binding remains the source identifier
+                    // (`C`). Binding the local under the template key makes
+                    // later `C` reads miss it and fall back to `ClassRef(C$0)`,
+                    // bypassing this evaluation's private brand and own static
+                    // fields whenever another nested class already claimed C.
+                    let binding_name = class_decl.ident.sym.to_string();
+                    let class_local = ctx.define_local(binding_name.clone(), Type::Any);
                     ctx.record_local_source_span(class_local, class_decl.ident.span);
                     result.push(Stmt::Let {
                         id: class_local,
-                        name: class_name.clone(),
+                        name: binding_name,
                         ty: Type::Any,
                         init: Some(Expr::ClassExprFresh {
                             template: template_name,
                             named_statics,
                             computed_keys,
                             computed_statics,
+                            static_init_order,
                             captured_args: captured_exprs,
                         }),
                         mutable: false,

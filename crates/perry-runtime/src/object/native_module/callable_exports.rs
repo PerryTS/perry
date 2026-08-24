@@ -18,7 +18,7 @@ pub(crate) fn test_collect_native_export_after_alloc() {
     TEST_COLLECT_NATIVE_EXPORT_AFTER_ALLOC.with(|armed| armed.set(true));
 }
 
-pub(crate) fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
+pub fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
     // Bound-native closures carry (module, method) metadata that the
     // generic property/call paths resolve through the vtable — and they
     // can be minted via the codegen NativeModuleRef fast path without any
@@ -862,29 +862,59 @@ pub(crate) fn buffer_constructor_value() -> f64 {
         if closure.is_null() {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let closure = scope.root_raw_mut_ptr(closure);
         crate::closure::js_register_closure_arity(func_ptr, 3);
-        set_bound_native_closure_name(closure, "Buffer");
-        let closure_addr = closure as usize;
-        let value = crate::value::js_nanbox_pointer(closure as i64);
+        closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
+            set_bound_native_closure_name(ptr, "Buffer")
+        });
 
         for method in BUFFER_STATIC_METHODS {
-            let method_value = bound_native_callable_export_value("buffer.Buffer", method);
-            crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
+            let method_value =
+                scope.root_nanbox_f64(bound_native_callable_export_value("buffer.Buffer", method));
+            closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+                crate::closure::closure_set_dynamic_prop(
+                    closure as usize,
+                    method,
+                    method_value.get_nanbox_f64(),
+                )
+            });
         }
 
-        crate::closure::closure_set_dynamic_prop(closure_addr, "poolSize", buffer_pool_size());
+        closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+            crate::closure::closure_set_dynamic_prop(
+                closure as usize,
+                "poolSize",
+                buffer_pool_size(),
+            )
+        });
 
         let proto = js_object_alloc(0, 0);
         if !proto.is_null() {
+            let proto = scope.root_raw_mut_ptr(proto);
             let constructor = "constructor";
-            let constructor_key =
-                crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
-            js_object_set_field_by_name(proto, constructor_key, value);
-            super::set_builtin_property_attrs(
-                proto as usize,
-                constructor.to_string(),
-                super::PropertyAttrs::new(true, false, true),
-            );
+            let constructor_key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+                constructor.as_ptr(),
+                constructor.len() as u32,
+            ));
+            proto.with_mut_ptr(|proto: *mut ObjectHeader| {
+                constructor_key.with_mut_ptr(|constructor_key| {
+                    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+                        js_object_set_field_by_name(
+                            proto,
+                            constructor_key,
+                            crate::value::js_nanbox_pointer(closure as i64),
+                        )
+                    })
+                })
+            });
+            proto.with_mut_ptr(|proto: *mut ObjectHeader| {
+                super::set_builtin_property_attrs(
+                    proto as usize,
+                    constructor.to_string(),
+                    super::PropertyAttrs::new(true, false, true),
+                )
+            });
 
             for method in BUFFER_PROTOTYPE_METHODS {
                 let method_ptr = buffer_prototype_method_thunk as *const u8;
@@ -892,20 +922,46 @@ pub(crate) fn buffer_constructor_value() -> f64 {
                 if method_closure.is_null() {
                     continue;
                 }
-                set_bound_native_closure_name(method_closure, method);
-                let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
-                let method_value = crate::value::js_nanbox_pointer(method_closure as i64);
-                js_object_set_field_by_name(proto, key, method_value);
+                let method_closure = scope.root_raw_mut_ptr(method_closure);
+                method_closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ptr| {
+                    set_bound_native_closure_name(ptr, method)
+                });
+                let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+                    method.as_ptr(),
+                    method.len() as u32,
+                ));
+                proto.with_mut_ptr(|proto: *mut ObjectHeader| {
+                    key.with_mut_ptr(|key| {
+                        method_closure.with_mut_ptr(
+                            |method_closure: *mut crate::closure::ClosureHeader| {
+                                js_object_set_field_by_name(
+                                    proto,
+                                    key,
+                                    crate::value::js_nanbox_pointer(method_closure as i64),
+                                )
+                            },
+                        )
+                    })
+                });
             }
-            let proto_value = crate::value::js_nanbox_pointer(proto as i64);
-            crate::closure::closure_set_dynamic_prop(closure_addr, "prototype", proto_value);
-            super::set_builtin_property_attrs(
-                closure_addr,
-                "prototype".to_string(),
-                super::PropertyAttrs::new(true, false, false),
-            );
+            let proto_value = proto.with_mut_ptr(|proto: *mut ObjectHeader| {
+                crate::value::js_nanbox_pointer(proto as i64)
+            });
+            closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+                crate::closure::closure_set_dynamic_prop(closure as usize, "prototype", proto_value)
+            });
+            closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+                super::set_builtin_property_attrs(
+                    closure as usize,
+                    "prototype".to_string(),
+                    super::PropertyAttrs::new(true, false, false),
+                )
+            });
         }
 
+        let value = closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
+            crate::value::js_nanbox_pointer(closure as i64)
+        });
         slot.set(value.to_bits());
         value
     })

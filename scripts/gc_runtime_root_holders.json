@@ -54,6 +54,12 @@
       "why": "Vec<PendingTlsKeylog>: an i64 server HANDLE plus Vec<Vec<u8>> of owned keylog bytes. Both are Rust-allocated; no JS heap pointer is stored, so no root scanner is required."
     },
     {
+      "file": "crates/perry-ext-net/src/tls.rs",
+      "name": "ABORTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "HashSet<i64> of pending TLS abort handles. Each i64 is a socket HANDLE -- the key used to look the socket up in crate::statics::sockets() and the payload of PendingNetEvent::AbortError/Close -- i.e. an index into the handle side table, stable across collection, not a heap address. The set holds no other field, so there is nothing for a scanner to visit."
+    },
+    {
       "file": "crates/perry-ext-http/src/server/server.rs",
       "name": "CONNECTIONS",
       "verdict": "not_a_gc_pointer",
