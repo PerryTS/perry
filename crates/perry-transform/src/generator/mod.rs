@@ -164,6 +164,13 @@ pub fn transform_generators(module: &mut Module) {
         }
         for m in &mut class.methods {
             if m.is_generator {
+                // #8681: an `async *m(){}` method is an async generator — record
+                // it (before the transform clears `is_async`) exactly like the
+                // top-level `async function*` loop above, so codegen has the same
+                // ground truth for methods as for functions/closures.
+                if m.is_async {
+                    record_async_generator_func(m.id);
+                }
                 transform_generator_function_with_extra_captures(
                     m,
                     &mut next_local_id,
@@ -181,6 +188,10 @@ pub fn transform_generators(module: &mut Module) {
         }
         for m in &mut class.static_methods {
             if m.is_generator {
+                // #8681: `static async *m(){}` — see the instance-method note.
+                if m.is_async {
+                    record_async_generator_func(m.id);
+                }
                 transform_generator_function(m, &mut next_local_id, &mut next_func_id);
             }
             let mut b = std::mem::take(&mut m.body);
@@ -193,6 +204,11 @@ pub fn transform_generators(module: &mut Module) {
         for member in &mut class.computed_members {
             let m = &mut member.function;
             if m.is_generator {
+                // #8681: `async *[Symbol.asyncIterator](){}` — the Anthropic SDK
+                // `Stream` shape; record it as an async generator like the rest.
+                if m.is_async {
+                    record_async_generator_func(m.id);
+                }
                 transform_generator_function_with_extra_captures(
                     m,
                     &mut next_local_id,

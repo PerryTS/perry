@@ -16,7 +16,15 @@ pub(crate) fn build_async_throw_body_direct(
     let mut fallback = vec![Stmt::Throw(Expr::LocalGet(throw_param_id))];
 
     for route in catches.into_iter().rev() {
-        let condition = catch_route_condition(&route, state_id, false, false);
+        // #8681: a LINEARIZED catch (its body became real dispatch states) must
+        // use the state-based upper bound (`protected_end_state`, which EXCLUDES
+        // the catch's own states) so an error raised *inside* the catch — e.g.
+        // `catch (e) { await x; throw wrap(e); }` — ESCAPES to an enclosing
+        // handler instead of re-matching this same route and re-entering the
+        // catch. The legacy inline path (catch_entry_state == None) keeps the
+        // async `post_catch_state` upper bound it always used.
+        let state_based = route.catch_entry_state.is_some();
+        let condition = catch_route_condition(&route, state_id, state_based, false);
         let then_branch = build_async_catch_route_body_direct(
             route,
             state_id,
@@ -49,6 +57,32 @@ pub(crate) fn build_async_catch_route_body_direct(
         )));
     }
 
+    // #8681: when the catch body was linearized into its own dispatch states
+    // (`catch_entry_state`), route the delivered error INTO those states —
+    // bind the catch param (above), set `state = catch_entry_state`, and fall
+    // through to the step's `while (true)` dispatch loop — exactly as the sync
+    // path does in `build_abrupt_routing`. The old behavior inlined a raw copy
+    // of the catch body here and ran `rewrite_yield_to_await_in_stmts` over it,
+    // turning every `await` inside the catch into a BLOCKING busy-wait
+    // (`fs_await.rs`: `js_wait_for_event` + `js_unsettled_top_level_await_exit`).
+    // Reached re-entrantly from inside the async-step / async-generator pull
+    // cascade (a rejected awaited promise in a `try` routing to a `catch` that
+    // itself awaits — the Anthropic SDK stream error path), that blocking wait
+    // monopolises the single runtime thread and self-deadlocks: the
+    // `perry_closure __85891` `-p` hang. The linearized catch states suspend via
+    // the async-step driver (`AsyncStepChain`) like any other await, so the
+    // driver keeps making progress.
+    if let Some(catch_entry_state) = route.catch_entry_state {
+        body.push(Stmt::Expr(Expr::LocalSet(
+            state_id,
+            Box::new(Expr::Number(catch_entry_state as f64)),
+        )));
+        return body;
+    }
+
+    // Legacy fallback: the catch body was NOT linearized (no await/yield inside
+    // it, so there is nothing to suspend on) — inline it directly. A yield-free
+    // catch has no `await` to turn into a block-wait, so this stays correct.
     let mut rewritten = route.body;
     rewrite_hoisted_lets_in_stmts(&mut rewritten, hoisted_ids);
     rewrite_yield_to_await_in_stmts(&mut rewritten);
