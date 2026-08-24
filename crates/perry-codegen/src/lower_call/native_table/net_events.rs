@@ -299,7 +299,9 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "connect",
         class_filter: Some("Socket"),
         runtime: "js_net_socket_method_connect",
-        args: &[NA_F64, NA_STR],
+        // Keep every slot raw so port/host, options, and path overloads reach
+        // the runtime without callback-to-string coercion.
+        args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_VOID,
     },
     NativeModSig {
