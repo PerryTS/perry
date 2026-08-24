@@ -933,6 +933,12 @@ pub(crate) struct CrossModuleCtx {
     /// compiled for and `this` cannot have a different subclass chain.
     pub pshape_methods:
         std::collections::HashMap<(String, String), crate::collectors::PtrShapeLocal>,
+    /// Module-local method bodies with a guarded exact-shape parameter clone.
+    /// The plan names every formal that must pass its class+shape guard before
+    /// the tagged-ABI `$pshape_args` body may be entered.  These capabilities
+    /// are intentionally not exported in the first increment.
+    pub pshape_arg_methods:
+        std::collections::HashMap<(String, String), crate::collectors::ProvenShapeArgPlan>,
     /// #7142: the subset of [`Self::pshape_methods`] whose clone the class-id
     /// dispatch tower may route to. The other two routing sites are dominated by
     /// a shape guard they pay regardless, so the clone is free for them; the

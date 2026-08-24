@@ -445,6 +445,7 @@ pub(crate) fn collect_shape_proven_ptr_locals_and_element_fields(
         candidates: &candidates,
         roots: &roots,
         classes,
+        module_dispatch,
         disqualified: HashSet::new(),
         let_counts: HashMap::new(),
         field_stores: HashMap::new(),
@@ -841,6 +842,7 @@ struct UseWalk<'a> {
     /// Tracked member id (candidate or const alias) -> root candidate id.
     roots: &'a HashMap<u32, u32>,
     classes: &'a HashMap<String, &'a Class>,
+    module_dispatch: &'a ModuleDispatchFacts,
     disqualified: HashSet<u32>,
     let_counts: HashMap<u32, u32>,
     /// root candidate -> (field name, store value) for in-function stores.
@@ -1214,9 +1216,22 @@ impl<'a> UseWalk<'a> {
                                     .or_default()
                                     .push(args.as_slice());
                             }
-                            for a in args {
-                                // Position-aware: `o.m(o.field)` is safe,
-                                // `o.m(o)` escapes via the LocalGet arm.
+                            for (param_index, a) in args.iter().enumerate() {
+                                // `o.m(o)` escapes unless the audited exact-class
+                                // argument clone makes this position contained.
+                                if resolvable
+                                    && super::proven_args::route_preserves_argument_containment(
+                                        self.module_dispatch,
+                                        self.candidates,
+                                        self.roots,
+                                        class_name,
+                                        property,
+                                        param_index,
+                                        a,
+                                    )
+                                {
+                                    continue;
+                                }
                                 self.with_ctx(report::ESC_CALL_ARGUMENT, |w| w.walk_expr(a));
                             }
                             return;

@@ -1061,12 +1061,21 @@ pub(crate) struct FnCtx<'a> {
     /// keeps today's guarded lowering because its receiver is unproven.
     pub proven_this: Option<crate::collectors::PtrShapeLocal>,
 
+    /// #8774: parameter-local exact-shape proofs installed only in a guarded
+    /// `$pshape_args` method clone.  Like `proven_this`, each value remains a
+    /// tagged JSValue in its ordinary shadow-bound slot; field lowering reloads
+    /// that slot before deriving a raw pointer.
+    pub proven_shape_params: std::collections::HashMap<u32, crate::collectors::PtrShapeLocal>,
+
     /// Phase 5a: `(class, method)` pairs with an emitted proven-`this` clone.
     /// The two proven call sites consult this before routing; a hit also
     /// proves the receiver's exact class DECLARES the method (own
     /// declarations only), which is what rules out a subclass `this`.
     pub pshape_methods:
         &'a std::collections::HashMap<(String, String), crate::collectors::PtrShapeLocal>,
+    /// #8774: module-local guarded exact-shape parameter clone plans.
+    pub pshape_arg_methods:
+        &'a std::collections::HashMap<(String, String), crate::collectors::ProvenShapeArgPlan>,
 
     /// Module-local methods whose nonnegative-index clone was actually
     /// emitted. Call lowering gates on this registry rather than re-running
@@ -2089,7 +2098,10 @@ impl<'a> FnCtx<'a> {
             return None;
         }
         match e {
-            perry_hir::Expr::LocalGet(id) => self.native_facts.shape_proven_ptr_local(*id),
+            perry_hir::Expr::LocalGet(id) => self
+                .proven_shape_params
+                .get(id)
+                .or_else(|| self.native_facts.shape_proven_ptr_local(*id)),
             perry_hir::Expr::This => self.proven_this.as_ref(),
             _ => None,
         }
@@ -2103,7 +2115,10 @@ impl<'a> FnCtx<'a> {
         e: &perry_hir::Expr,
     ) -> Option<&crate::collectors::PtrShapeLocal> {
         match e {
-            perry_hir::Expr::LocalGet(id) => self.native_facts.shape_proven_ptr_local(*id),
+            perry_hir::Expr::LocalGet(id) => self
+                .proven_shape_params
+                .get(id)
+                .or_else(|| self.native_facts.shape_proven_ptr_local(*id)),
             perry_hir::Expr::This => self.proven_this.as_ref(),
             _ => None,
         }

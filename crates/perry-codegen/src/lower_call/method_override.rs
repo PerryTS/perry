@@ -124,6 +124,166 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
     }
 }
 
+/// Emit the exact ordinary-object `(class_id, ShapeId)` guard used by a
+/// `$pshape_args` route.  Unlike the method-receiver guard above this does not
+/// consult prototype-method invalidation state: it proves field offsets only.
+/// Descriptor-bearing, forwarded, proxy, subclass, wrong-class, and mutated-
+/// shape values all take `fallback_label` before any clone field access.
+fn emit_inline_exact_argument_shape_guard(
+    ctx: &mut FnCtx<'_>,
+    value: &str,
+    expected_class_id: u32,
+    expected_shape_id: &str,
+    fast_label: &str,
+    fallback_label: &str,
+) {
+    let deref_idx = ctx.new_block("pshape_arg.guard_deref");
+    let deref_label = ctx.block_label(deref_idx);
+    let heap_floor =
+        crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
+    let heap_ceiling =
+        crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
+
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(value);
+        let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+        let tag = blk.lshr(I64, &bits, "48");
+        let tagged = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
+        let above_floor = blk.icmp_uge(I64, &handle, &heap_floor);
+        let below_ceiling = blk.icmp_ult(I64, &handle, &heap_ceiling);
+        let in_heap = blk.and(I1, &above_floor, &below_ceiling);
+        let safe_to_deref = blk.and(I1, &tagged, &in_heap);
+        blk.cond_br(&safe_to_deref, &deref_label, fallback_label);
+    }
+
+    ctx.current_block = deref_idx;
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(value);
+        let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+        let obj_ptr = blk.inttoptr(I64, &handle);
+        let gc_header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
+        let gc_header = blk.load(I32, &gc_header_ptr);
+        let guarded_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_METHOD_GUARD_MASK_I32);
+        let gc_header_ok = blk.icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
+
+        let class_shape = blk.load(I64, &obj_ptr);
+        let expected_shape_i64 = blk.zext(I32, expected_shape_id, I64);
+        let expected_shape_high = blk.shl(I64, &expected_shape_i64, "32");
+        let expected_class_shape =
+            blk.or(I64, &expected_shape_high, &expected_class_id.to_string());
+        let class_shape_ok = blk.icmp_eq(I64, &class_shape, &expected_class_shape);
+        let shape_id_rel = blk.add(I32, expected_shape_id, SHAPE_ID_BASE_NEG_I32);
+        let shape_valid = blk.icmp_ult(I32, &shape_id_rel, SHAPE_ID_RANGE_LEN);
+        let pass = blk.and(I1, &gc_header_ok, &class_shape_ok);
+        let pass = blk.and(I1, &pass, &shape_valid);
+        blk.cond_br(&pass, fast_label, fallback_label);
+    }
+}
+
+/// Route a receiver-proven method call through its exact-shape argument clone.
+/// `generic_fn` is the already-selected receiver-safe body for guard failure.
+pub(super) fn emit_pshape_argument_dispatch(
+    ctx: &mut FnCtx<'_>,
+    receiver_class_name: &str,
+    property: &str,
+    direct_fn: &str,
+    generic_fn: &str,
+    direct_arg_slices: &[(crate::types::LlvmType, &str)],
+) -> Option<String> {
+    let key = (receiver_class_name.to_string(), property.to_string());
+    let plan = ctx.pshape_arg_methods.get(&key)?.clone();
+    let clone_fn = crate::collectors::pshape_args_method_name(direct_fn);
+
+    let mut guarded = Vec::with_capacity(plan.args.len());
+    for arg in &plan.args {
+        let value = direct_arg_slices.get(arg.param_index + 1)?.1.to_string();
+        let class_id = *ctx.class_ids.get(&arg.fact.class_name)?;
+        let keys_global = ctx.class_keys_globals.get(&arg.fact.class_name)?.clone();
+        let shape_id =
+            crate::typed_shape::load_class_shape_id(ctx, &arg.fact.class_name, &keys_global);
+        guarded.push((arg.clone(), value, class_id, shape_id));
+    }
+    if guarded.is_empty() {
+        return None;
+    }
+
+    let fast_idx = ctx.new_block("pshape_arg.fast");
+    let fallback_idx = ctx.new_block("pshape_arg.fallback");
+    let merge_idx = ctx.new_block("pshape_arg.merge");
+    let intermediate_idxs: Vec<usize> = (1..guarded.len())
+        .map(|_| ctx.new_block("pshape_arg.guard_next"))
+        .collect();
+    let fast_label = ctx.block_label(fast_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    for (index, (_, value, class_id, shape_id)) in guarded.iter().enumerate() {
+        let pass_label = intermediate_idxs
+            .get(index)
+            .map(|block| ctx.block_label(*block))
+            .unwrap_or_else(|| fast_label.clone());
+        emit_inline_exact_argument_shape_guard(
+            ctx,
+            value,
+            *class_id,
+            shape_id,
+            &pass_label,
+            &fallback_label,
+        );
+        if let Some(next) = intermediate_idxs.get(index) {
+            ctx.current_block = *next;
+        }
+    }
+
+    ctx.current_block = fast_idx;
+    let fast_value = ctx.block().call(DOUBLE, &clone_fn, direct_arg_slices);
+    let fast_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = fallback_idx;
+    let fallback_value = ctx.block().call(DOUBLE, generic_fn, direct_arg_slices);
+    let fallback_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    let merged = ctx.block().phi(
+        DOUBLE,
+        &[
+            (fast_value.as_str(), fast_end.as_str()),
+            (fallback_value.as_str(), fallback_end.as_str()),
+        ],
+    );
+    let mut notes = vec![
+        format!("argument_clone={clone_fn}"),
+        format!("generic_method={generic_fn}"),
+        format!("receiver_class={receiver_class_name}"),
+        format!("method={property}"),
+        "argument_abi=tagged_js_value_shadow_rooted".to_string(),
+        "guard_failure_fallback=generic_method".to_string(),
+    ];
+    for (arg, _, _, _) in &guarded {
+        notes.push(format!("argument_index={}", arg.param_index));
+        notes.push(format!("argument_class={}", arg.fact.class_name));
+        notes.push("argument_guard=exact_class_and_shape".to_string());
+        notes.push("argument_provenance=runtime_guarded_declared_candidate".to_string());
+    }
+    ctx.record_lowered_value(
+        "MethodCall",
+        None,
+        "proven_shape_argument_method_call",
+        &LoweredValue::js_value(merged.clone()),
+        None,
+        None,
+        None,
+        false,
+        false,
+        notes,
+    );
+    Some(merged)
+}
+
 #[cfg(test)]
 mod packed_guard_tests {
     use super::*;
@@ -1036,70 +1196,88 @@ pub(super) fn emit_guarded_direct_method_call(
             );
             result
         } else {
-            // Representation-selection Phase 5a: this arm is reached ONLY
-            // after `js_method_direct_shape_guard` /
-            // `js_typed_feedback_method_direct_call_guard` matched the exact
-            // class id AND the keys token — i.e. the receiver's shape is
-            // already proven, and the proof is then thrown away by calling the
-            // guard-ridden public body. Route to the proven-`this` clone
-            // instead; identical ABI, so only the callee name changes.
-            //
-            // A `pshape_methods` hit additionally proves `receiver_class_name`
-            // DECLARES `property` (locally by analysis or across modules by a
-            // producer-authored capability), so the clone's `this` is exactly
-            // the class it was compiled for — an inherited `Base::m` reached
-            // through a subclass receiver never routes here.
-            //
-            // NOTE: the per-field `js_typed_feedback_class_field_get_guard`
-            // loop above is deliberately LEFT IN PLACE. It guards the
-            // `$typed_f64_recv` clone's bare `load double` field access, and
-            // the whole-object shape guard does NOT subsume it: an external
-            // `obj.f = "s"` preserves both the class id and the key set while
-            // downgrading the slot's raw-f64 layout. The `$pshape` clone
-            // needs no such guard because it never claims `JsNumber` — its
-            // bare loads carry generic `JsValue` semantics (see
-            // `collectors/proven_this.rs`).
-            //
-            // `pshape_fn` (computed once at the top of this function, where the
-            // `perry_static_` exclusion and the declaring-class argument are
-            // written out) is the same clone the typed arms above now route
-            // their generic fallbacks to.
-            let target = nonnegative_index_direct_fn
-                .or(pshape_fn.as_deref())
-                .unwrap_or(direct_fn);
-            let result = ctx.block().call(DOUBLE, target, direct_arg_slices);
-            if nonnegative_index_direct_fn.is_none() {
-                if let Some(pshape) = pshape_fn.as_deref() {
-                    let receiver_provenance =
-                        if ctx.imported_class_sources.contains_key(receiver_class_name) {
-                            "imported_class_metadata"
-                        } else {
-                            "module_local_analysis"
-                        };
-                    ctx.record_lowered_value(
-                        "MethodCall",
-                        None,
-                        "proven_this_method_direct_call",
-                        &LoweredValue::js_value(result.clone()),
-                        None,
-                        None,
-                        None,
-                        false,
-                        false,
-                        vec![
-                            format!("typed_clone={pshape}"),
-                            format!("generic_method={direct_fn}"),
-                            format!("receiver_class={receiver_class_name}"),
-                            format!("method={property}"),
-                            format!("receiver_provenance={receiver_provenance}"),
-                            "this_representation=tagged_js_value_exact_shape".to_string(),
-                            "method_identity_guard=required".to_string(),
-                            "generic_dispatch_fallback=js_native_call_method_by_id".to_string(),
-                        ],
-                    );
+            // #8774: the receiver guard dominating this block already proves
+            // method identity.  Guard the selected object arguments here and
+            // enter the tagged `$pshape_args` body only when every exact shape
+            // matches.  An argument miss stays on the receiver-safe ordinary
+            // body; a receiver miss is still handled by the outer dynamic
+            // fallback.
+            let pshape_arg_fallback = pshape_fn.as_deref().unwrap_or(direct_fn);
+            if let Some(argument_specialized) = emit_pshape_argument_dispatch(
+                ctx,
+                receiver_class_name,
+                property,
+                direct_fn,
+                pshape_arg_fallback,
+                direct_arg_slices,
+            ) {
+                argument_specialized
+            } else {
+                // Representation-selection Phase 5a: this arm is reached ONLY
+                // after `js_method_direct_shape_guard` /
+                // `js_typed_feedback_method_direct_call_guard` matched the exact
+                // class id AND the keys token — i.e. the receiver's shape is
+                // already proven, and the proof is then thrown away by calling the
+                // guard-ridden public body. Route to the proven-`this` clone
+                // instead; identical ABI, so only the callee name changes.
+                //
+                // A `pshape_methods` hit additionally proves `receiver_class_name`
+                // DECLARES `property` (locally by analysis or across modules by a
+                // producer-authored capability), so the clone's `this` is exactly
+                // the class it was compiled for — an inherited `Base::m` reached
+                // through a subclass receiver never routes here.
+                //
+                // NOTE: the per-field `js_typed_feedback_class_field_get_guard`
+                // loop above is deliberately LEFT IN PLACE. It guards the
+                // `$typed_f64_recv` clone's bare `load double` field access, and
+                // the whole-object shape guard does NOT subsume it: an external
+                // `obj.f = "s"` preserves both the class id and the key set while
+                // downgrading the slot's raw-f64 layout. The `$pshape` clone
+                // needs no such guard because it never claims `JsNumber` — its
+                // bare loads carry generic `JsValue` semantics (see
+                // `collectors/proven_this.rs`).
+                //
+                // `pshape_fn` (computed once at the top of this function, where the
+                // `perry_static_` exclusion and the declaring-class argument are
+                // written out) is the same clone the typed arms above now route
+                // their generic fallbacks to.
+                let target = nonnegative_index_direct_fn
+                    .or(pshape_fn.as_deref())
+                    .unwrap_or(direct_fn);
+                let result = ctx.block().call(DOUBLE, target, direct_arg_slices);
+                if nonnegative_index_direct_fn.is_none() {
+                    if let Some(pshape) = pshape_fn.as_deref() {
+                        let receiver_provenance =
+                            if ctx.imported_class_sources.contains_key(receiver_class_name) {
+                                "imported_class_metadata"
+                            } else {
+                                "module_local_analysis"
+                            };
+                        ctx.record_lowered_value(
+                            "MethodCall",
+                            None,
+                            "proven_this_method_direct_call",
+                            &LoweredValue::js_value(result.clone()),
+                            None,
+                            None,
+                            None,
+                            false,
+                            false,
+                            vec![
+                                format!("typed_clone={pshape}"),
+                                format!("generic_method={direct_fn}"),
+                                format!("receiver_class={receiver_class_name}"),
+                                format!("method={property}"),
+                                format!("receiver_provenance={receiver_provenance}"),
+                                "this_representation=tagged_js_value_exact_shape".to_string(),
+                                "method_identity_guard=required".to_string(),
+                                "generic_dispatch_fallback=js_native_call_method_by_id".to_string(),
+                            ],
+                        );
+                    }
                 }
+                result
             }
-            result
         }
     };
     let after_fast = ctx.block().label.clone();

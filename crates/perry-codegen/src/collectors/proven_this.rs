@@ -829,7 +829,10 @@ mod tests {
                     continue;
                 }
                 let text = std::fs::read_to_string(&path).expect("read source file");
-                if text.contains("$pshape") {
+                if text
+                    .match_indices("$pshape")
+                    .any(|(offset, _)| !text[offset..].starts_with("$pshape_args"))
+                {
                     out.push(rel);
                 }
             }
