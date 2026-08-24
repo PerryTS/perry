@@ -794,9 +794,10 @@ mod tests {
         // Naming + emission + the two proven call sites. `string_pool.rs`
         // (which emits `js_register_class_method`) is deliberately ABSENT:
         // the vtable must only ever hold the public symbol.
-        let allowed: [&str; 7] = [
+        let allowed: [&str; 8] = [
             "collectors/proven_this.rs",                   // this test
             "collectors/proven_this_routing_tests.rs",     // routing IR ratchet
+            "codegen/guarded_undefined_method_tests.rs",   // test-only wrapper linkage ratchet
             "codegen/typed_abi.rs",                        // name helper
             "codegen/method.rs",                           // clone emission
             "codegen/artifacts.rs",                        // emission driver
