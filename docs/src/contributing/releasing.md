@@ -72,17 +72,42 @@ npm --version                 # must be >= 11.17.0
 # If needed: npm install -g npm@latest
 ```
 
+One-time GitHub setup: create the environment named in the OIDC identity and
+store the Socket credential at environment scope (the secret value is entered
+interactively and must never be committed):
+
+```bash
+gh api --method PUT repos/PerryTS/perry/environments/npm-publish
+gh secret set SOCKET_API_TOKEN --repo PerryTS/perry --env npm-publish
+```
+
 Before the first nine-package release, an npm organization owner must confirm
-that every name in `scripts/publish/constants.mts` exists and has
-`npm-stage-publish.yml` with environment `npm-publish` configured as a Trusted
-Publisher. In particular, verify the ARM64 Windows package:
+that every name in `scripts/publish/constants.mts` exists and has this single
+Trusted Publisher configuration:
+
+- provider: GitHub Actions
+- organization/repository: `PerryTS/perry`
+- workflow filename: `npm-stage-publish.yml`
+- environment: `npm-publish`
+- allowed action: **`npm stage publish`**
+
+npm permits only one trusted publisher per package. Configurations created
+before May 20, 2026 were carried forward with only direct **`npm publish`**
+allowed, so edit every existing package and explicitly enable
+**`npm stage publish`**; merely seeing a trusted publisher entry is not enough.
+The old `release-packages.yml` direct-publish path cannot occupy a second
+trusted-publisher slot and is not part of the canonical release.
+
+In particular, verify the ARM64 Windows package:
 
 ```bash
 npm view @perryts/perry-win32-arm64 name
 ```
 
-If that returns `E404`, reserve/provision the package and configure its Trusted
-Publisher before continuing. The pipeline intentionally refuses a partial set.
+If that returns `E404`, an `@perryts` npm owner must make the initial public
+name-reservation publish (the repository permits version `0.0.0` only for this
+bootstrap), then configure the same Trusted Publisher fields above. The
+pipeline intentionally refuses a partial set.
 
 ```bash
 npm run publish:stage       # CI builds all platforms, stages 9 npm packages,

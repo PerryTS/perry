@@ -368,6 +368,17 @@ test('pipeline.mts: stage dispatch and release receipt are pinned to one commit'
   assert.match(src, /ensureTagAndRelease\(gate\.version, candidate\.sha\)/)
 })
 
+test('release runbook pins the staged-publish OIDC identity and action', () => {
+  const runbook = readFileSync(
+    path.join(PUBLISH_DIR, '../../docs/src/contributing/releasing.md'),
+    'utf8',
+  )
+  assert.match(runbook, /workflow filename: `npm-stage-publish\.yml`/)
+  assert.match(runbook, /environment: `npm-publish`/)
+  assert.match(runbook, /allowed action: \*\*`npm stage publish`\*\*/)
+  assert.match(runbook, /npm permits only one trusted publisher per package/)
+})
+
 test('pipeline.mts: two conflicting mode flags fail closed instead of picking one by argument order', () => {
   // Mode resolution used to be `flags.find(...)`, which silently picked
   // whichever mode flag argv happened to list first — so `--stage-only

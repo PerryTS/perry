@@ -1971,10 +1971,12 @@ jobs:
   # ---------------------------------------------------------------------------
   # Publish npm packages (@perryts/perry + 8 per-platform packages)
   #
-  # Uses OIDC / Trusted Publishers (no long-lived NPM_TOKEN). Each of the 9
-  # package names must be registered on npmjs.com with this repo + workflow
-  # as a Trusted Publisher. See docs/src/contributing/releasing.md for the
-  # one-time setup.
+  # Uses OIDC / Trusted Publishers (no long-lived NPM_TOKEN). This direct npm
+  # leg is legacy: npm permits only one trusted publisher per package, while
+  # Perry's canonical posture assigns that slot to npm-stage-publish.yml with
+  # the `npm stage publish` action. A normal registry-first release reaches
+  # this release-event job only after all versions are live, so its idempotency
+  # checks skip every direct publish. See the release runbook.
   # ---------------------------------------------------------------------------
   npm-publish:
     # The irreversible leg. build-cross is in `needs` (completed, not

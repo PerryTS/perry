@@ -19,7 +19,8 @@ name: npm stage publish
 #
 # Auth: OIDC trusted publishing only — id-token: write, NO long-lived NPM_TOKEN.
 # Each @perryts/* package must list this workflow + the `npm-publish` environment
-# as a trusted publisher on npmjs.com (see docs/src/contributing/releasing.md).
+# as its one trusted publisher on npmjs.com, with the `npm stage publish`
+# action explicitly allowed (see docs/src/contributing/releasing.md).
 # The auth-posture gate in
 # scripts/publish/auth-posture.mts refuses any long-lived token present here.
 #
