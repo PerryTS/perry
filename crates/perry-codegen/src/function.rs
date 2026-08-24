@@ -895,6 +895,14 @@ impl LlFunction {
     }
 
     pub fn to_ir(&self) -> String {
+        self.to_ir_with_gc_leaf_callees(&HashSet::new())
+    }
+
+    /// Render with the module's transitive Perry-GC leaf closure available at
+    /// direct call sites. Standalone function tests use [`Self::to_ir`] and an
+    /// empty set; module and codegen-unit renderers compute the whole-module
+    /// fixed point before serializing any function.
+    pub(crate) fn to_ir_with_gc_leaf_callees(&self, gc_leaf_callees: &HashSet<String>) -> String {
         let mut ir = self.define_header(false);
         ir.push('\n');
         self.for_each_final_line::<std::convert::Infallible>(&mut |line| {
@@ -917,6 +925,18 @@ impl LlFunction {
         //
         let ir = if self.stack_map_requested {
             lower_precise_roots_to_native_stack(&ir, &self.name, self.stack_map_slot_count)
+        } else {
+            ir
+        };
+
+        // #8596: LLVM needs a statepoint at a caller edge exactly when the
+        // transitive callee can reach collection. The whole-module analysis
+        // proves direct generated callees that cannot; stamp those edges after
+        // root lowering (which separately handles audited runtime helpers).
+        // Unknown, indirect, cross-module and collecting callees remain
+        // unmarked and therefore remain statepoints.
+        let ir = if self.stack_map_requested && !gc_leaf_callees.is_empty() {
+            crate::gc_call_effects::annotate_transitive_leaf_calls(&ir, gc_leaf_callees)
         } else {
             ir
         };

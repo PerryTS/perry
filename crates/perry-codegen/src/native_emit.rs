@@ -89,7 +89,9 @@ fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result
         skeleton.push_str(&format!("declare {} @{}({})\n", f.return_type, f.name, tys));
     }
     let module = crate::inprocess::parse_ir_text(context, &skeleton, "perry_native_module")?;
-    let (typed_insts, raw_insts) = stream_functions(context, &module, &funcs, false)?;
+    let gc_leaf_callees = crate::gc_call_effects::transitive_leaf_functions(&funcs);
+    let (typed_insts, raw_insts) =
+        stream_functions(context, &module, &funcs, false, &gc_leaf_callees)?;
     log::debug!(
         "perry-codegen: native construction built {} functions, {} typed + {} raw instructions \
          (ratchet: raw -> 0), skeleton {} bytes",
@@ -108,6 +110,7 @@ fn stream_functions<'ctx>(
     module: &Module<'ctx>,
     funcs: &[&crate::function::LlFunction],
     force_external: bool,
+    gc_leaf_callees: &std::collections::HashSet<String>,
 ) -> Result<(usize, usize)> {
     let mut typed_insts = 0usize;
     let mut raw_insts = 0usize;
@@ -123,7 +126,7 @@ fn stream_functions<'ctx>(
             // This remains native construction: only one finalized function
             // is materialized and fed through the closed dialect line reader,
             // never parsed as module-scale IR.
-            let fn_text = f.to_ir();
+            let fn_text = f.to_ir_with_gc_leaf_callees(gc_leaf_callees);
             for line in fn_text.lines().skip(1) {
                 stream.line(line).map_err(|e| {
                     anyhow!(
@@ -170,7 +173,12 @@ fn freeze_unit(
     part: crate::module::OwnedCodegenUnitPart,
     external_declarations: &[(String, String)],
 ) -> Result<FrozenUnit> {
-    let crate::module::OwnedCodegenUnitPart { pre, post, funcs } = part;
+    let crate::module::OwnedCodegenUnitPart {
+        pre,
+        post,
+        funcs,
+        gc_leaf_callees,
+    } = part;
     let mut skeleton = format!("{pre}{post}");
     // Text units minimize declarations with a rendered-reference scan. Typed
     // instructions can name helpers without passing through that textual scan
@@ -201,7 +209,10 @@ fn freeze_unit(
             // no inkwell builders. Let LLVM's in-process assembly parser build
             // only these exceptional functions; all ordinary bodies remain on
             // the typed C-API path and never become text.
-            skeleton.push_str(&crate::module::render_fn_external(&f));
+            skeleton.push_str(&crate::module::render_fn_external_with_gc_leaf_callees(
+                &f,
+                &gc_leaf_callees,
+            ));
             skeleton.push('\n');
             continue;
         }
@@ -213,7 +224,7 @@ fn freeze_unit(
             // owned lines so worker threads still receive an immutable payload
             // and the module-scale text graph is never retained.
             items.extend(
-                f.to_ir()
+                f.to_ir_with_gc_leaf_callees(&gc_leaf_callees)
                     .lines()
                     .skip(1)
                     .filter(|line| *line != "}")
@@ -880,6 +891,80 @@ mod tests {
             native_ir.contains("gc-leaf-function"),
             "native path lost the gc-leaf attribute on the barrier (#8121):\n{native_ir}"
         );
+    }
+
+    /// #8596: whole-module generated-callee effects must reach both emission
+    /// transports. The text path spells the string attribute inline; LLVM's
+    /// C API prints it through an attribute group. RS4GC is the final arbiter:
+    /// both forms must leave `pure_generated` direct and wrap `may_collect`.
+    #[test]
+    fn transitive_generated_leaf_calls_match_text_and_native_construction() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let mut module = LlModule::new(crate::codegen::default_target_triple());
+        module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
+        module.declare_function("may_collect", VOID, &[]);
+
+        let pure = module.define_function("pure_generated", VOID, vec![]);
+        pure.create_block("entry").ret_void();
+
+        let caller = module.define_function("rooted_leaf_caller", VOID, vec![]);
+        caller.enable_shadow_frame(0);
+        let slot = caller.reserve_shadow_slot().expect("reserve native root");
+        let root = caller.alloca_entry(I64);
+        caller.entry_allocas_push_store(I64, "0", &root);
+        caller.entry_setup_call_void(
+            "js_shadow_slot_bind",
+            &[(I32, &slot.to_string()), (PTR, &root)],
+        );
+        let entry = caller.create_block("entry");
+        entry.call_void("pure_generated", &[]);
+        entry.call_void("may_collect", &[]);
+        entry.ret_void();
+
+        let text_ir = module.to_ir();
+        let context = Context::create();
+        let native_ir = build_native_module(&context, &module)
+            .expect("native transitive-leaf witness constructs")
+            .print_to_string()
+            .to_string();
+        assert!(
+            text_ir.contains("call void @pure_generated() \"gc-leaf-function\""),
+            "text path lost transitive leaf marker:\n{text_ir}"
+        );
+        assert!(
+            native_ir.contains("\"gc-leaf-function\""),
+            "native path lost transitive leaf marker:\n{native_ir}"
+        );
+        let units = module.render_codegen_units(2);
+        assert_eq!(units.len(), 2, "fixture must split into two real units");
+        assert!(
+            units
+                .iter()
+                .any(|unit| unit.contains("call void @pure_generated() \"gc-leaf-function\"")),
+            "split text units lost the whole-module leaf closure:\n{}",
+            units.join("\n--- unit ---\n")
+        );
+
+        let target = crate::codegen::default_target_triple();
+        for (arm, ir) in [("text", text_ir), ("native", native_ir)] {
+            let rewritten = crate::inprocess::statepoint_rewritten_ir(
+                &ir,
+                &target,
+                &format!("transitive_leaf_{arm}"),
+            )
+            .unwrap_or_else(|e| panic!("{arm} transitive-leaf witness failed RS4GC: {e:#}"));
+            assert!(
+                rewritten.contains("call void @pure_generated()"),
+                "{arm} path statepointed a proven leaf call:\n{rewritten}"
+            );
+            assert!(
+                rewritten.lines().any(|line| {
+                    line.contains("@llvm.experimental.gc.statepoint")
+                        && line.contains("@may_collect")
+                }),
+                "{arm} path failed to statepoint the collecting control:\n{rewritten}"
+            );
+        }
     }
 
     fn compact_gc_map_section_name() -> &'static [u8] {

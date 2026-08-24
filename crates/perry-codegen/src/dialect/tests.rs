@@ -381,3 +381,39 @@ fn preserve_none_constructs_on_define_call_and_invoke() {
         "invoke site lost its calling convention:\n{printed}"
     );
 }
+
+/// #8596: a transitive-leaf direct call inside `try` is an invoke, and LLVM's
+/// call-site attribute sits between the argument list and `to label`. The
+/// split-module native reader must carry it onto the CallBase or RS4GC silently
+/// restores a statepoint that the text path removed.
+#[test]
+fn gc_leaf_attribute_constructs_on_invoke() {
+    let ctx = Context::create();
+    let skeleton = "declare void @pure()\n\
+                    declare i32 @perry_eh_personality(i32, i32, i64, ptr, ptr)\n";
+    let module = crate::inprocess::parse_ir_text(&ctx, skeleton, "leaf_invoke_skel")
+        .expect("skeleton parses");
+    let function = "define void @trycaller() personality ptr @perry_eh_personality {\n\
+                    entry:\n\
+                    \x20 invoke void @pure() \"gc-leaf-function\" to label %ok unwind label %pad\n\
+                    ok:\n\
+                    \x20 ret void\n\
+                    pad:\n\
+                    \x20 %lp = landingpad { ptr, i32 } catch ptr null\n\
+                    \x20 ret void\n\
+                    }\n";
+    predeclare_function_from_text(&ctx, &module, function).expect("predeclare");
+    add_function_from_text(&ctx, &module, function).unwrap_or_else(|e| panic!("{e:#}"));
+    module
+        .verify()
+        .unwrap_or_else(|e| panic!("verifier rejected native module:\n{}", e.to_string()));
+    let printed = module.print_to_string().to_string();
+    let invoke = printed
+        .lines()
+        .find(|line| line.contains("invoke void @pure"))
+        .unwrap_or_else(|| panic!("no invoke in constructed module:\n{printed}"));
+    assert!(
+        invoke.contains("#0") && printed.contains("attributes #0 = { \"gc-leaf-function\" }"),
+        "invoke lost its gc-leaf-function call-site attribute:\n{printed}"
+    );
+}
