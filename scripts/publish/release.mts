@@ -89,8 +89,27 @@ export function writeChecksums(files: readonly string[], cwd: string = rootPath)
  * uploaded by a follow-up CI leg. Returns true only when the tag is on origin
  * AND the release is published (or already existed).
  */
-export async function ensureTagAndRelease(version: string): Promise<boolean> {
+export async function ensureTagAndRelease(
+  version: string,
+  expectedCommit: string,
+): Promise<boolean> {
   const tagName = `v${version}`
+
+  // The staged artifacts and approval receipt are tied to one commit. Refuse
+  // to let a later checkout (or an old local tag) turn that receipt into a tag
+  // for different source bytes.
+  const head = await runCapture('git', ['rev-parse', 'HEAD'], rootPath)
+  const headCommit = head.stdout.trim()
+  if (head.code !== 0 || !headCommit) {
+    logger.fail('could not resolve HEAD — refusing to create a release tag.')
+    return false
+  }
+  if (headCommit !== expectedCommit) {
+    logger.fail(
+      `release receipt is for ${expectedCommit}, but HEAD is ${headCommit} — refusing to tag different source bytes.`,
+    )
+    return false
+  }
 
   // 1. Assets FIRST. install.sh is a REQUIRED release asset (the release
   //    advertises `curl ... install.sh | sh`), and the tag is immutable once
@@ -117,7 +136,19 @@ export async function ensureTagAndRelease(version: string): Promise<boolean> {
       ['rev-parse', '-q', '--verify', `refs/tags/${tagName}`],
       rootPath,
     )
-    if (tagCheck.code !== 0) {
+    if (tagCheck.code === 0) {
+      const localTag = await runCapture(
+        'git',
+        ['rev-parse', `refs/tags/${tagName}^{commit}`],
+        rootPath,
+      )
+      if (localTag.code !== 0 || localTag.stdout.trim() !== headCommit) {
+        logger.fail(
+          `local tag ${tagName} does not point to release-candidate commit ${headCommit} — refusing to push it.`,
+        )
+        return false
+      }
+    } else {
       const created = await runCapture('git', ['tag', tagName], rootPath)
       if (created.code !== 0) {
         logger.fail(`could not create tag ${tagName}`)

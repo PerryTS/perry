@@ -42,6 +42,10 @@ const STAGE_WORKFLOW = 'npm-stage-publish.yml'
 
 export interface PipelineState {
   version: string
+  /** Exact pushed commit and branch used by the staging workflow. */
+  candidateSha?: string
+  candidateRef?: string
+  stageRunId?: string
   staged: string[]
   verified: string[]
   scanResults: ScanResult[]
@@ -51,6 +55,15 @@ export interface PipelineState {
   registryLive?: boolean
   released?: boolean
   updatedAt: string
+}
+
+interface Candidate {
+  sha: string
+  ref: string
+}
+
+interface StageWorkflowReceipt extends Candidate {
+  runId: string
 }
 
 function statePath(version: string): string {
@@ -73,62 +86,187 @@ function writeState(state: PipelineState): void {
   writeFileSync(statePath(state.version), JSON.stringify(state, null, 2) + '\n')
 }
 
+/** Resolve a clean, pushed branch tip. workflow_dispatch accepts a branch/tag, not a raw SHA. */
+async function resolveReleaseCandidate(
+  config: { requireCurrentMain?: boolean } = {},
+): Promise<Candidate | undefined> {
+  const { requireCurrentMain = true } = config
+  const status = await runCapture(
+    'git',
+    ['status', '--porcelain', '--untracked-files=all'],
+    rootPath,
+  )
+  if (status.code !== 0 || status.stdout.trim()) {
+    logger.fail(
+      'Release candidate is not clean — commit or remove every tracked/untracked change before staging.',
+    )
+    return undefined
+  }
+  const branch = await runCapture(
+    'git',
+    ['symbolic-ref', '--quiet', '--short', 'HEAD'],
+    rootPath,
+  )
+  const head = await runCapture('git', ['rev-parse', 'HEAD'], rootPath)
+  const ref = branch.stdout.trim()
+  const sha = head.stdout.trim()
+  if (branch.code !== 0 || !ref || head.code !== 0 || !sha) {
+    logger.fail('Release staging requires a named branch, not a detached HEAD.')
+    return undefined
+  }
+  if (ref === 'main') {
+    logger.fail(
+      'Release staging refuses the moving main branch — create and push a release/vX.Y.Z candidate branch.',
+    )
+    return undefined
+  }
+  const remote = await runCapture(
+    'git',
+    ['ls-remote', '--heads', 'origin', `refs/heads/${ref}`],
+    rootPath,
+  )
+  const remoteSha = remote.stdout.trim().split(/\s+/)[0] ?? ''
+  if (remote.code !== 0 || remoteSha !== sha) {
+    logger.fail(
+      `origin/${ref} is ${remoteSha || '<missing>'}, but local HEAD is ${sha}. ` +
+        'Push a release-candidate branch pinned to this commit before staging.',
+    )
+    return undefined
+  }
+  if (requireCurrentMain) {
+    const remoteMain = await runCapture(
+      'git',
+      ['ls-remote', '--heads', 'origin', 'refs/heads/main'],
+      rootPath,
+    )
+    const mainSha = remoteMain.stdout.trim().split(/\s+/)[0] ?? ''
+    if (remoteMain.code !== 0 || !mainSha) {
+      logger.fail('Could not resolve origin/main — refusing to stage an unverifiable candidate.')
+      return undefined
+    }
+    const containsMain = await runCapture(
+      'git',
+      ['merge-base', '--is-ancestor', mainSha, sha],
+      rootPath,
+    )
+    if (containsMain.code !== 0) {
+      logger.fail(
+        `Candidate ${sha} does not contain current origin/main ${mainSha}. ` +
+          'Fetch/rebase the release branch before staging.',
+      )
+      return undefined
+    }
+  }
+  return { ref, sha }
+}
+
+/** Revalidate the staging receipt before approval or tag creation. */
+async function requirePinnedCandidate(
+  state: PipelineState,
+): Promise<Candidate | undefined> {
+  if (!state.candidateSha || !state.candidateRef || !state.stageRunId) {
+    logger.fail(
+      'The local receipt is not commit-pinned — re-run `npm run publish:stage` with the hardened pipeline.',
+    )
+    return undefined
+  }
+  // Main may advance while a staged candidate is being reviewed. Approval is
+  // tied to the already-tested receipt and must not chase that moving target.
+  const candidate = await resolveReleaseCandidate({ requireCurrentMain: false })
+  if (!candidate) return undefined
+  if (
+    candidate.sha !== state.candidateSha ||
+    candidate.ref !== state.candidateRef
+  ) {
+    logger.fail(
+      `Staging run ${state.stageRunId} used ${state.candidateRef}@${state.candidateSha}, ` +
+        `but this checkout is ${candidate.ref}@${candidate.sha}. Re-stage this exact candidate.`,
+    )
+    return undefined
+  }
+  return candidate
+}
+
+function isCompleteVersionSet(items: readonly string[], version: string): boolean {
+  return (
+    items.length === ALL_PACKAGES.length &&
+    ALL_PACKAGES.every(name => items.includes(`${name}@${version}`))
+  )
+}
+
 /** Dispatch the CI stage workflow and watch it to completion. */
 async function dispatchStageWorkflow(
   version: string,
+  candidate: Candidate,
   config: { dryRun?: boolean; tag?: string },
-): Promise<boolean> {
+): Promise<StageWorkflowReceipt | undefined> {
   const { dryRun = false, tag = 'latest' } = config
+  const dispatchedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
   const args = [
     'workflow',
     'run',
     STAGE_WORKFLOW,
     '-R',
     'PerryTS/perry',
+    '--ref',
+    candidate.ref,
     '-f',
     `publish=${dryRun ? 'false' : 'true'}`,
     '-f',
     `dist-tag=${tag}`,
+    '-f',
+    `candidate-sha=${candidate.sha}`,
   ]
   const run = await runCapture('gh', args, rootPath)
   if (run.code !== 0) {
     logger.fail(`gh workflow run ${STAGE_WORKFLOW} failed (${run.code}).`)
-    return false
+    return undefined
   }
   logger.log(`Dispatched ${STAGE_WORKFLOW} (publish=${!dryRun}, tag=${tag}). Waiting for the run to start…`)
-  // Match the workflow_dispatch run we just created by event + createdAt,
-  // not just the newest run — a concurrent dispatch could otherwise be watched.
-  const dispatchedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
-  await new Promise(r => setTimeout(r, 4000))
-  const list = await runCapture(
-    'gh',
-    ['run', 'list', '--workflow', STAGE_WORKFLOW, '-R', 'PerryTS/perry', '--event', 'workflow_dispatch', '--limit', '5', '--json', 'databaseId,createdAt,status'],
-    rootPath,
-  )
   let runId = ''
-  try {
-    const arr = JSON.parse(list.stdout) as Array<{ databaseId: number; createdAt: string; status: string }>
-    const match = arr.find(r => r.createdAt >= dispatchedAt)
-    if (match) runId = String(match.databaseId)
-    else if (arr.length > 0) runId = String(arr[0]!.databaseId)
-  } catch {
-    /* fall through */
+  for (let attempt = 1; attempt <= 20 && !runId; attempt += 1) {
+    await new Promise(r => setTimeout(r, 3000))
+    const list = await runCapture(
+      'gh',
+      [
+        'run', 'list', '--workflow', STAGE_WORKFLOW, '-R', 'PerryTS/perry',
+        '--event', 'workflow_dispatch', '--limit', '20', '--json',
+        'databaseId,createdAt,headBranch,headSha,status',
+      ],
+      rootPath,
+    )
+    try {
+      const arr = JSON.parse(list.stdout) as Array<{
+        databaseId: number
+        createdAt: string
+        headBranch: string
+        headSha: string
+      }>
+      const match = arr.find(r =>
+        r.createdAt >= dispatchedAt &&
+        r.headSha === candidate.sha &&
+        r.headBranch === candidate.ref,
+      )
+      if (match) runId = String(match.databaseId)
+    } catch {
+      /* poll again */
+    }
   }
   if (!runId) {
     logger.fail(
       `Could not resolve the ${STAGE_WORKFLOW} run id to watch it. Check ` +
         `https://github.com/PerryTS/perry/actions/workflows/${STAGE_WORKFLOW} manually.`,
     )
-    return false
+    return undefined
   }
   logger.log(`Watching run ${runId}…`)
   const watch = await runCapture('gh', ['run', 'watch', runId, '-R', 'PerryTS/perry', '--exit-status'], rootPath)
   if (watch.code !== 0) {
     logger.fail(`CI stage workflow run ${runId} did not succeed (${watch.code}).`)
-    return false
+    return undefined
   }
   logger.log(`CI stage workflow run ${runId} succeeded — staged @perryts/* v${version}.`)
-  return true
+  return { ...candidate, runId }
 }
 
 /** Verify + scan the currently-staged @perryts/* entries; update state. */
@@ -136,8 +274,10 @@ async function verifyAndScan(
   version: string,
   state: PipelineState,
 ): Promise<PipelineState> {
-  const staged = (await listStagedEntries(rootPath)).filter(e =>
-    ALL_PACKAGES.includes(e.name as (typeof ALL_PACKAGES)[number]),
+  const staged = (await listStagedEntries(rootPath)).filter(
+    e =>
+      e.version === version &&
+      ALL_PACKAGES.includes(e.name as (typeof ALL_PACKAGES)[number]),
   )
   state.staged = staged.map(e => `${e.name}@${e.version}`)
   // Surface a partial staged set immediately, not only when publish:approve
@@ -182,6 +322,10 @@ async function verifyAndScan(
 
 function printStatus(state: PipelineState): void {
   logger.log(`=== publish pipeline: v${state.version} ===`)
+  logger.log(
+    `  candidate: ${state.candidateSha ? `${state.candidateRef}@${state.candidateSha}` : '(not pinned)'}`,
+  )
+  logger.log(`  stage run: ${state.stageRunId ?? '(none)'}`)
   logger.log(`  staged:    ${state.staged.length ? state.staged.join(', ') : '(none)'}`)
   logger.log(`  verified:  ${state.verified.length ? state.verified.join(', ') : '(none)'}`)
   logger.log(
@@ -269,8 +413,28 @@ async function main(): Promise<void> {
   }
 
   if (mode === '--stage-only') {
-    if (!(await dispatchStageWorkflow(gate.version, { dryRun, tag }))) {
+    const candidate = await resolveReleaseCandidate()
+    if (!candidate) {
       process.exitCode = 1
+      return
+    }
+    const receipt = await dispatchStageWorkflow(
+      gate.version,
+      candidate,
+      { dryRun, tag },
+    )
+    if (!receipt) {
+      process.exitCode = 1
+      return
+    }
+    state.candidateSha = receipt.sha
+    state.candidateRef = receipt.ref
+    state.stageRunId = receipt.runId
+    state.updatedAt = new Date().toISOString()
+    writeState(state)
+    if (dryRun) {
+      logger.log('Dry-run build succeeded; no registry stage was created or scanned.')
+      printStatus(state)
       return
     }
     state = await verifyAndScan(gate.version, state)
@@ -299,7 +463,13 @@ async function main(): Promise<void> {
   }
 
   if (mode === '--approve') {
+    const candidate = await requirePinnedCandidate(state)
+    if (!candidate) {
+      process.exitCode = 1
+      return
+    }
     const receipt = await runApprove({
+      version: gate.version,
       yes: flags.has('--yes'),
       otp,
     })
@@ -308,7 +478,10 @@ async function main(): Promise<void> {
     state.scanResults = receipt.scanResults
     state.updatedAt = new Date().toISOString()
     writeState(state)
-    if (!receipt.registryLive || receipt.approved.length === 0) {
+    if (
+      !receipt.registryLive ||
+      !isCompleteVersionSet(receipt.approved, gate.version)
+    ) {
       process.exitCode = 1
       return
     }
@@ -324,7 +497,7 @@ async function main(): Promise<void> {
       process.exitCode = 1
       return
     }
-    const released = await ensureTagAndRelease(gate.version)
+    const released = await ensureTagAndRelease(gate.version, candidate.sha)
     state.released = released
     state.updatedAt = new Date().toISOString()
     writeState(state)
@@ -333,12 +506,25 @@ async function main(): Promise<void> {
   }
 
   if (mode === '--release-only') {
-    if (!state.registryLive) {
-      logger.fail(`No approved+live receipt for v${gate.version} — run publish:approve first.`)
+    const candidate = await requirePinnedCandidate(state)
+    if (!candidate) {
       process.exitCode = 1
       return
     }
-    const released = await ensureTagAndRelease(gate.version)
+    if (
+      !state.registryLive ||
+      !isCompleteVersionSet(state.approved ?? [], gate.version)
+    ) {
+      logger.fail(`No complete approved+live receipt for v${gate.version} — run publish:approve first.`)
+      process.exitCode = 1
+      return
+    }
+    const packages = ALL_PACKAGES.map(name => ({ name, version: gate.version }))
+    if (!(await requireRegistryLive(packages))) {
+      process.exitCode = 1
+      return
+    }
+    const released = await ensureTagAndRelease(gate.version, candidate.sha)
     state.released = released
     state.updatedAt = new Date().toISOString()
     writeState(state)

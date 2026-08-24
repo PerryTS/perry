@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Run the same fast lint gates that the Tests workflow's `lint` and
-# `api-docs-drift` jobs run. Designed to be invoked manually before
+# Legacy convenience subset. The authoritative local mirror is
+# `BASE_SHA=origin/main scripts/run_lint_gates.sh`; release candidates must also
+# run the commands in docs/src/contributing/releasing.md and the exact-SHA full
+# CI + simulator workflows. Designed to be invoked manually before
 # `git tag vX.Y.Z` or wired into a `pre-push` git hook for branches
 # that push to main / tags.
 #

@@ -9,7 +9,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { spawnSync } from 'node:child_process'
@@ -21,6 +22,8 @@ import { formatHumanGate } from './human-gate.mts'
 import { publishAuthPreflight } from './auth-posture.mts'
 import { compareSemver, extractFirstJson } from './shared.mts'
 import { parseStageListJson } from './npm/shared.mts'
+import { perryStagedEntries } from './npm/approve.mts'
+import { tagExists } from './npm/bump.mts'
 import { NPM_MIN_VERSION } from './constants.mts'
 
 const PUBLISH_DIR = path.dirname(fileURLToPath(import.meta.url))
@@ -109,6 +112,44 @@ test('parseStageListJson: array of entries parses to staged entries', () => {
   const entries2 = parseStageListJson(noisy)
   assert.equal(entries2.length, 1)
   assert.equal(entries2[0]!.name, '@perryts/perry-darwin-arm64')
+})
+
+test('perryStagedEntries: approval is restricted to the candidate version', () => {
+  const entries = [
+    {
+      name: '@perryts/perry-darwin-arm64',
+      version: '0.5.1519',
+      stageId: 'candidate',
+    },
+    {
+      name: '@perryts/perry-darwin-arm64',
+      version: '0.5.1518',
+      stageId: 'stale',
+    },
+    {
+      name: '@somewhere/else',
+      version: '0.5.1519',
+      stageId: 'foreign',
+    },
+  ]
+  assert.deepEqual(
+    perryStagedEntries(entries, '0.5.1519').map(e => e.stageId),
+    ['candidate'],
+  )
+})
+
+test('tagExists: inability to query origin fails closed', async () => {
+  const cwd = mkdtempSync(path.join(os.tmpdir(), 'perry-tag-gate-'))
+  try {
+    const init = spawnSync('git', ['init', '--quiet'], { cwd, encoding: 'utf8' })
+    assert.equal(init.status, 0)
+    await assert.rejects(
+      tagExists('0.5.1519', cwd),
+      /could not query origin for refs\/tags\/v0\.5\.1519/,
+    )
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
 })
 
 test('formatHumanGate: the 🖐 block shape with both lanes', () => {
@@ -298,6 +339,15 @@ test('pipeline.mts: --scan-only sets a failing exit code on an incomplete/blocke
     /process\.exitCode = 1/,
     '--scan-only must set a non-zero exit code when the scan did not fully pass',
   )
+})
+
+test('pipeline.mts: stage dispatch and release receipt are pinned to one commit', () => {
+  const src = readFileSync(path.join(PUBLISH_DIR, 'pipeline.mts'), 'utf8')
+  assert.match(src, /'--ref',\s*candidate\.ref/)
+  assert.match(src, /`candidate-sha=\$\{candidate\.sha\}`/)
+  assert.match(src, /r\.headSha === candidate\.sha/)
+  assert.match(src, /requirePinnedCandidate\(state\)/)
+  assert.match(src, /ensureTagAndRelease\(gate\.version, candidate\.sha\)/)
 })
 
 test('pipeline.mts: two conflicting mode flags fail closed instead of picking one by argument order', () => {

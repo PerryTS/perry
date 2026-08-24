@@ -27,6 +27,8 @@ import { fetchPublishedVersion, listStagedEntries, type StagedEntry } from './sh
 import { verifyStagedEntry } from './staged.mts'
 
 export interface ApproveOptions {
+  /** The one release version this approval is allowed to promote. */
+  version: string
   /** TOTP code (CI / scripted). */
   otp?: string
   /** Approve without prompting; browser web-OTP drives 2FA. */
@@ -44,10 +46,11 @@ export interface ApproveReceipt {
 /** Filter staged entries to Perry's 9 packages, in publish order. */
 export function perryStagedEntries(
   entries: readonly StagedEntry[],
+  version?: string,
 ): StagedEntry[] {
   const order = new Map(ALL_PACKAGES.map((n, i) => [n, i]))
   return entries
-    .filter(e => order.has(e.name))
+    .filter(e => order.has(e.name) && (version === undefined || e.version === version))
     .sort((a, b) => (order.get(a.name)! - order.get(b.name)!))
 }
 
@@ -79,10 +82,13 @@ export async function approveEntry(
  * release stage on `registryLive && approved.length > 0`.
  */
 export async function runApprove(opts: ApproveOptions): Promise<ApproveReceipt> {
-  const staged = perryStagedEntries(await listStagedEntries(process.cwd()))
+  const staged = perryStagedEntries(
+    await listStagedEntries(process.cwd()),
+    opts.version,
+  )
   if (staged.length === 0) {
     logger.fail(
-      'No staged @perryts/* entries to approve. Run `npm run publish:stage` first.',
+      `No staged @perryts/* entries for v${opts.version} to approve. Run \`npm run publish:stage\` first.`,
     )
     return { approved: [], failed: [], registryLive: false, scanResults: [] }
   }
