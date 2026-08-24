@@ -381,8 +381,10 @@ mapViewSetMapType(map, 1); // 0=standard, 1=satellite, 2=hybrid
 
 ### PdfView (issue #516)
 
-`PDFView` from PDFKit on macOS / iOS / visionOS. `pdfViewLoadFile`
-returns 1 on success, 0 on failure.
+Native PDF rendering uses PDFKit on macOS / iOS / visionOS and
+`Windows.Data.Pdf` with a GDI+ page surface on Windows. `pdfViewLoadFile`
+returns 1 on success, 0 on failure. Page navigation and zoom redraw real
+document pixels on both backends.
 
 ```typescript,no-test
 import {

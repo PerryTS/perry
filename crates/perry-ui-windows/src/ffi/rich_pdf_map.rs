@@ -35,9 +35,8 @@ pub extern "C" fn perry_ui_rich_text_toggle_underline(h: i64) {
     widgets::rich_text::toggle_underline(h)
 }
 
-// PdfView (#516) — Win32 stub-with-state. STATIC label shows
-// "[PDF: name — page X/Y @ Z%]" on load + nav. Real page-bitmap
-// rendering via `Windows.Data.Pdf` WinRT or PDFium is a follow-up.
+// PdfView (#516 / #6613) — native page decoding via Windows.Data.Pdf,
+// painted into a subclassed Win32 control with GDI+.
 #[no_mangle]
 pub extern "C" fn perry_ui_pdf_view_create(w: f64, h: f64) -> i64 {
     widgets::pdf_view::create(w, h)
