@@ -1086,6 +1086,33 @@ pub(crate) fn build_and_run_link(
                 cmd.arg(format!("/WHOLEARCHIVE:{}", ui_lib.display()));
             } else {
                 cmd.arg(&ui_lib);
+                // ld64 scans archives left-to-right once, and the UI lib is
+                // added *after* the runtime and stdlib. A symbol the UI lib
+                // references but does not define — `std` internals it shares
+                // with the stdlib — becomes undefined for the first time only
+                // here, by which point those archives have been scanned and
+                // will not be revisited.
+                //
+                // This made `--target ios` unlinkable outright:
+                // `PerryTestExitTarget::test_exit` calls `Stdout::flush`, whose
+                // only definition surviving strip-dedup lives in
+                // libperry_stdlib.a. Reproduced with the untouched
+                // docs/examples/platforms/ui/ios_app.ts, so it is not specific
+                // to one app, and it is not specific to that one symbol either:
+                // any std item referenced solely by the UI lib lands the same
+                // way, which is why this is an ordering fix rather than a
+                // targeted `-u`.
+                //
+                // Repeating the archives is the standard remedy and is cheap —
+                // the linker extracts only members resolving a still-pending
+                // undefined. The Windows branch above solves the same problem
+                // with /WHOLEARCHIVE. The duplicate-symbol warnings this
+                // surfaces are pre-existing runtime/stdlib overlap (both rlibs
+                // bundle their own std), not new conflicts.
+                cmd.arg(runtime_lib);
+                if let Some(ref stdlib) = stdlib_lib {
+                    cmd.arg(stdlib);
+                }
             }
 
             if is_watchos {

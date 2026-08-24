@@ -1,0 +1,10 @@
+[project]
+name = "perry-ui-bench"
+version = "1.0.0"
+display_name = "Perry UI Bench"
+
+[ios]
+# Emits CADisableMinimumFrameDurationOnPhone. Without it iOS caps an iPhone at
+# 60 Hz no matter what the display link asks for, so a ProMotion device would
+# report a hard 60 and read as "the framework cannot sustain 120".
+high_refresh_rate = true

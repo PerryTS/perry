@@ -84,6 +84,7 @@ pub mod exception;
 pub mod fast_hash;
 pub mod ffi;
 pub mod frame;
+pub mod frame_metrics;
 pub mod fs;
 pub mod gc;
 pub mod intl;
