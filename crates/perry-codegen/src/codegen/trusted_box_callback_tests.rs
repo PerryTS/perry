@@ -187,8 +187,26 @@ fn direct_arrow_gets_a_private_body_but_keeps_the_public_validation_path() {
         "{public}"
     );
 
-    assert!(trusted.contains("@js_box_get_bits_trusted("));
-    assert!(trusted.contains("@js_box_set_bits_trusted_no_barrier("));
+    // The exact clone reads its immutable raw-box capture pointer once from
+    // the closure entry layout, then directly accesses the non-moving cell.
+    // The trusted getter remains only as the cold TDZ/suppression fallback;
+    // normal writes need no helper at all.
+    assert!(trusted.contains("getelementptr i8, ptr"), "{trusted}");
+    assert!(trusted.contains(", i64 16"), "{trusted}");
+    assert!(trusted.contains("inttoptr i64"), "{trusted}");
+    assert!(trusted.contains("load i64, ptr"), "{trusted}");
+    assert!(trusted.contains("store i64"), "{trusted}");
+    assert!(trusted.contains(crate::nanbox::TAG_TDZ_I64), "{trusted}");
+    assert!(trusted.contains("trusted_box.tdz"), "{trusted}");
+    assert!(trusted.contains("@js_box_get_bits_trusted("), "{trusted}");
+    assert!(
+        !trusted.contains("@js_box_set_bits_trusted_no_barrier("),
+        "{trusted}"
+    );
+    assert!(
+        !trusted.contains("@js_closure_get_capture_bits("),
+        "{trusted}"
+    );
     assert!(!trusted.contains("@js_box_get_bits("));
     assert!(!trusted.contains("@js_box_set_bits("));
     assert!(trusted.contains("@js_write_barrier("));

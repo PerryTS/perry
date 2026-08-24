@@ -88,6 +88,23 @@ pub fn object_header_size_bytes(_target_triple: &str) -> u64 {
     16
 }
 
+/// `std::mem::size_of::<perry_runtime::closure::ClosureHeader>()` for the
+/// target.
+///
+/// `ClosureHeader` is `repr(C)` and contains a pointer followed by two `u32`
+/// fields. It is therefore 16 bytes on LP64 and 12 bytes on ILP32. Trusted
+/// exact-arrow bodies use this offset to read compiler-installed raw box
+/// capture pointers directly from their immutable capture slots. Keep the
+/// target derivation here: using the compiler host's pointer width would make
+/// cross-compiled arm64_32 watchOS closures read four bytes past the slot.
+pub fn closure_header_size_bytes(target_triple: &str) -> u64 {
+    if target_is_ilp32(target_triple) {
+        12
+    } else {
+        16
+    }
+}
+
 /// Minimum number of inline field slots `perry-runtime` allocates for EVERY
 /// object, mirroring `perry_runtime::object::INLINE_SLOT_FLOOR`.
 ///
@@ -228,6 +245,14 @@ mod tests {
                 "{triple}: floor-sized allocation must be 8-aligned"
             );
         }
+    }
+
+    #[test]
+    fn closure_header_size_tracks_target_pointer_width() {
+        assert_eq!(closure_header_size_bytes("aarch64-apple-darwin"), 16);
+        assert_eq!(closure_header_size_bytes("x86_64-unknown-linux-gnu"), 16);
+        assert_eq!(closure_header_size_bytes("arm64_32-apple-watchos"), 12);
+        assert_eq!(closure_header_size_bytes("wasm32-unknown-unknown"), 12);
     }
 
     #[test]

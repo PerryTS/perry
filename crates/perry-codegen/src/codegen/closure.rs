@@ -10,7 +10,7 @@ use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I1, I32, I64, PTR};
+use crate::types::{LlvmType, DOUBLE, I1, I32, I64, I8, PTR};
 
 use super::opts::CrossModuleCtx;
 use super::typed_abi::{
@@ -916,6 +916,41 @@ pub(super) fn compile_closure(
         })
     };
 
+    // The private exact-arrow clone is entered only after the runtime has
+    // verified the public closure identity and its compiler-installed raw-box
+    // capture mask. Capture slots never change. Load each box pointer once,
+    // before user code or a safepoint can relocate the closure, and retain the
+    // non-moving box pointer for the invocation. This removes the repeated
+    // checked closure-capture helper from hot callback bodies without caching
+    // the mutable VALUE stored inside the box.
+    let trusted_box_capture_ptrs = if trusted_box_captures {
+        let mut trusted = HashMap::new();
+        let mut boxed_captures: Vec<_> = closure_captures
+            .iter()
+            .filter(|(id, _)| closure_boxed_vars.contains(id))
+            .map(|(id, index)| (*id, *index))
+            .collect();
+        boxed_captures.sort_unstable_by_key(|(_, index)| *index);
+        if !boxed_captures.is_empty() {
+            let header_size =
+                crate::target_layout::closure_header_size_bytes(&cross_module.target_triple)
+                    .to_string();
+            let blk = lf.block_mut(0).expect("closure body has an entry block");
+            let closure_ptr = blk.inttoptr(I64, "%this_closure");
+            let captures_base = blk.gep(I8, &closure_ptr, &[(I64, &header_size)]);
+            for (id, index) in boxed_captures {
+                let index = index.to_string();
+                let capture_slot = blk.gep(I64, &captures_base, &[(I64, &index)]);
+                let bits = blk.load(I64, &capture_slot);
+                let ptr = blk.inttoptr(I64, &bits);
+                trusted.insert(id, crate::expr::TrustedBoxCapturePtr { bits, ptr });
+            }
+        }
+        trusted
+    } else {
+        HashMap::new()
+    };
+
     let mut ctx = FnCtx {
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -1000,6 +1035,7 @@ pub(super) fn compile_closure(
         local_closure_param_counts: HashMap::new(),
         resolved_arrow_callback_targets: HashMap::new(),
         trusted_box_captures,
+        trusted_box_capture_ptrs,
         local_func_ref_ids: HashMap::new(),
         option_object_locals: HashMap::new(),
         object_literal_locals: HashSet::new(),

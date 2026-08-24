@@ -1082,6 +1082,7 @@ pub(super) fn compile_function(
         local_closure_param_counts: HashMap::new(),
         resolved_arrow_callback_targets: HashMap::new(),
         trusted_box_captures: false,
+        trusted_box_capture_ptrs: HashMap::new(),
         local_func_ref_ids: HashMap::new(),
         option_object_locals: HashMap::new(),
         object_literal_locals: HashSet::new(),
