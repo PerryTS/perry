@@ -1730,6 +1730,16 @@ fn try_const_fold_eval(
     // plain assignment. (test262 language/eval-code/direct/strictness-override)
     let eval_strict = ctx.current_strict || crate::lower_decl::body_has_use_strict(&body_stmts);
 
+    // SWC initially lexes the standalone eval body as a sloppy Script. That is
+    // necessary for legal sloppy-only syntax, but it means the lexer defers the
+    // strict-mode errors for legacy numeric literals (`01`, `08`, ...). Re-lex
+    // strict eval source with an explicit directive and surface those deferred
+    // diagnostics at the eval call. Modern `0o` literals remain valid, and the
+    // parser keeps comment/string contents out of the diagnostic stream.
+    if eval_strict && strict_eval_has_legacy_numeric_literal(&body_src) {
+        return synth_function_syntax_error(ctx, EvalSurface::Eval, span).map(Some);
+    }
+
     // Annex B.3.3.3: a *sloppy global* direct eval routes the `var`/`function`
     // declarations of its body into the global variable environment, so they
     // survive after the eval returns. Rewrite them to global assignments before
@@ -1765,6 +1775,32 @@ fn try_const_fold_eval(
     }
 
     build_eval_completion_iife(ctx, body_stmts, eval_strict, span)
+}
+
+fn strict_eval_has_legacy_numeric_literal(source: &str) -> bool {
+    const LEGACY_NUMERIC_DIAGNOSTICS: [&str; 2] = [
+        "Legacy decimal escape is not permitted in strict mode",
+        "Legacy octal escape is not permitted in strict mode",
+    ];
+
+    let strict_source = format!("\"use strict\";\n{source}");
+    let mut cache = perry_diagnostics::SourceCache::new();
+    match perry_parser::parse_typescript_with_cache(
+        &strict_source,
+        "<strict eval numeric probe>.cjs",
+        &mut cache,
+    ) {
+        Ok(parsed) => parsed
+            .diagnostics
+            .iter()
+            .any(|diagnostic| LEGACY_NUMERIC_DIAGNOSTICS.contains(&diagnostic.message.as_str())),
+        Err(error) => {
+            let message = format!("{error:#}");
+            LEGACY_NUMERIC_DIAGNOSTICS
+                .iter()
+                .any(|diagnostic| message.contains(diagnostic))
+        }
+    }
 }
 
 /// Is the current eval call site at module top level in global-script mode,
@@ -1853,7 +1889,7 @@ fn build_eval_completion_iife(
 
 #[cfg(test)]
 mod foldable_tests {
-    use super::eval_body_iife_foldable;
+    use super::{eval_body_iife_foldable, strict_eval_has_legacy_numeric_literal};
     use swc_ecma_ast as ast;
 
     fn parse(src: &str) -> Vec<ast::Stmt> {
@@ -1866,6 +1902,28 @@ mod foldable_tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn strict_eval_rejects_legacy_numeric_literals_only_in_code() {
+        for source in ["value = 01;", "value = 08;", "value = 000;"] {
+            assert!(
+                strict_eval_has_legacy_numeric_literal(source),
+                "expected strict early error for {source:?}"
+            );
+        }
+
+        for source in [
+            "value = 0o1; value = 0x1; value = 1;",
+            "value = '01';",
+            "// 01\nvalue = 1;",
+            "/* 08 */ value = 1;",
+        ] {
+            assert!(
+                !strict_eval_has_legacy_numeric_literal(source),
+                "unexpected strict early error for {source:?}"
+            );
+        }
     }
 
     #[test]
