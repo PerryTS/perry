@@ -194,7 +194,7 @@ def band_predicate_near(lines: list[str], idx: int) -> bool:
     return bool(BAND_PREDICATE_RE.search("\n".join(context)))
 
 
-# A new sibling conditional at the top of a code line — the boundary
+# A new SIBLING conditional at the top of a code line — the boundary
 # `lone_band_predicate_near` refuses to cross. `handle-floor`'s own #6321 fix
 # shape deliberately spans two separate `if` statements (a coarse range
 # pre-filter, then the real band-predicate gate a few lines below), so
@@ -206,6 +206,12 @@ def band_predicate_near(lines: list[str], idx: int) -> bool:
 # caught: an `is_valid_obj_ptr`-only guard that already dereferences inside
 # its own block must not be cleared by some other, disconnected `if
 # is_handle_band(...)` a few statements later.
+#
+# A conditional NESTED inside the guard's own block (brace depth still > 0
+# relative to the guard) is not that boundary — a second CodeRabbit pass
+# caught this rule stopping on `if is_valid_obj_ptr(ptr) { if
+# is_above_handle_band(...) { deref } }`, where the inner `if` is exactly the
+# band predicate protecting the dereference, not a disconnected sibling.
 SIBLING_CONDITIONAL_RE = re.compile(r"^\s*(?:\}\s*)?(?:else\s+)?(?:if|while|for|match)\b")
 
 
@@ -213,21 +219,27 @@ def lone_band_predicate_near(lines: list[str], idx: int) -> bool:
     """`band_predicate_near`, scoped to the current guard's own statement.
 
     Same backward window; the forward scan stops (without including) at the
-    first later line that opens a new sibling conditional, since the real
-    fix shape never needs to reach past that boundary.
+    first later line that opens a new SIBLING conditional — one reached only
+    after the brace depth relative to `lines[idx]` has returned to zero or
+    below, i.e. the guard's own block (and any block nested inside it) has
+    already closed. A conditional still nested inside that block never
+    triggers the boundary, since it may be the very predicate guarding the
+    dereference.
     """
 
     start = max(0, idx - BAND_PREDICATE_LOOKBACK)
     context = [strip_comment(line) for line in lines[start : idx + 1]]
+    depth = context[-1].count("{") - context[-1].count("}")
     taken = 0
     cursor = idx + 1
     while cursor < len(lines) and taken < BAND_PREDICATE_LOOKAHEAD_CODE:
         code = strip_comment(lines[cursor])
         if code.strip():
-            if SIBLING_CONDITIONAL_RE.search(code):
+            if depth <= 0 and SIBLING_CONDITIONAL_RE.search(code):
                 break
             context.append(code)
             taken += 1
+            depth += code.count("{") - code.count("}")
         cursor += 1
     return bool(BAND_PREDICATE_RE.search("\n".join(context)))
 
@@ -481,6 +493,23 @@ def run_self_tests() -> int:
         ),
         "lone-valid-obj-ptr must still flag a dereference cleared only by "
         "a disconnected LATER sibling conditional's band predicate",
+    )
+    # CodeRabbit (PR #8685, second pass): a band predicate NESTED inside the
+    # guard's own block — not a disconnected sibling — must still clear the
+    # finding, since it is exactly what protects the dereference below it.
+    nested_guard = (
+        "    if is_valid_obj_ptr(ptr) {\n"
+        "        if is_above_handle_band(ptr as usize) {\n"
+        "            (*ptr).class_id\n"
+        "        }\n"
+        "    }\n"
+    )
+    expect(
+        not any(
+            f.rule == "lone-valid-obj-ptr" for f in scan_text(runtime, nested_guard)
+        ),
+        "lone-valid-obj-ptr must accept a band predicate NESTED inside the "
+        "guard's own block",
     )
 
     # Band literals in code are caught; comment-only mentions are not.
