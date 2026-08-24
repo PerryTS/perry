@@ -146,7 +146,6 @@ unsafe fn replace_fn_run_matches(
     closure_ptr: *const crate::closure::ClosureHeader,
     has_named_groups: bool,
 ) -> *mut StringHeader {
-    let cur_str = || string_as_str(s_handle.get_raw_const_ptr::<StringHeader>());
     if matches.is_empty() {
         return s_handle.with_const_ptr(|s_now: *const StringHeader| copy_replace_source(s_now));
     }
@@ -159,7 +158,12 @@ unsafe fn replace_fn_run_matches(
     for m in matches {
         // Between-match text is re-sliced from the CURRENT subject address
         // (the previous callback may have moved the string).
-        result.push_str(&cur_str()[last_end..m.start]);
+        // #7341: re-derive the subject from the rooted handle inside a scoped
+        // borrow -- the previous callback may have moved it, and the `&str`
+        // never outlives this statement.
+        s_handle.with_const_ptr(|s_now: *const StringHeader| {
+            result.push_str(&string_as_str(s_now)[last_end..m.start]);
+        });
 
         // Build the full ECMAScript callback argument list:
         //   (match, p1, ..., pN, offset, string, groups?)
@@ -216,7 +220,9 @@ unsafe fn replace_fn_run_matches(
         last_end = m.end;
     }
 
-    result.push_str(&cur_str()[last_end..]);
+    s_handle.with_const_ptr(|s_now: *const StringHeader| {
+        result.push_str(&string_as_str(s_now)[last_end..]);
+    });
     finish_replace_bytes(result.as_bytes())
 }
 

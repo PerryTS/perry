@@ -786,13 +786,13 @@
     },
     {
       "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_member_access.rs",
-      "name": "PRIVATE_METHOD_OWNER_HINT",
-      "why": "RefCell<Option<(u32, String)>>: a declaring class_id plus an OWNED Rust String naming the private method. Neither field is, or is derived from, a heap address, so a copying collection cannot invalidate it and there is nothing for a scanner to visit."
+      "name": "PRIVATE_MEMBER_ACCESS_HINTS",
+      "why": "RefCell<Vec<PrivateMemberAccessHint>>; the struct is class_id: u32, name: String, kind: u32, is_static: bool, is_write: bool -- all owned Rust data. No JSValue, NaN-box word or raw heap pointer is stored."
     },
     {
       "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_member_access.rs",
-      "name": "PRIVATE_MEMBER_ACCESS_HINTS",
-      "why": "RefCell<Vec<PrivateMemberAccessHint>>; the struct is class_id: u32, name: String, kind: u32, is_static: bool, is_write: bool -- all owned Rust data. No JSValue, NaN-box word or raw heap pointer is stored."
+      "name": "PRIVATE_METHOD_OWNER_HINT",
+      "why": "RefCell<Option<(u32, String)>>: a declaring class_id plus an OWNED Rust String naming the private method. Neither field is, or is derived from, a heap address, so a copying collection cannot invalidate it and there is nothing for a scanner to visit."
     },
     {
       "file": "crates/perry-runtime/src/object/instanceof.rs",
@@ -1050,6 +1050,11 @@
     {
       "file": "crates/perry-runtime/src/regex.rs",
       "name": "REGEX_CACHE"
+    },
+    {
+      "file": "crates/perry-runtime/src/regex.rs",
+      "name": "REPEAT_MATCHER_CACHE",
+      "why": "HashMap<(String,String), Arc<RepeatMatcherRegex>> -- owned Rust strings keying an Arc to a compiled matcher. No JS heap pointer, so nothing asks a scanner to visit it."
     },
     {
       "file": "crates/perry-runtime/src/set.rs",
@@ -1749,11 +1754,11 @@
     },
     {
       "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
-      "name": "SCROLL_MUTATION_GATE"
+      "name": "SCROLL_END_STATES"
     },
     {
       "file": "crates/perry-ui-ios/src/widgets/scrollview.rs",
-      "name": "SCROLL_END_STATES"
+      "name": "SCROLL_MUTATION_GATE"
     },
     {
       "file": "crates/perry-ui-ios/src/widgets/securefield.rs",
