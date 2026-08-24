@@ -161,6 +161,9 @@ mod write_pic_barrier_tests;
 // and it now lives outside `crate::expr`.
 #[cfg(test)]
 mod call_spread_rooting_tests;
+mod call_spread_short;
+#[cfg(test)]
+mod call_spread_short_tests;
 #[cfg(test)]
 mod issue7628_rooting_tests;
 pub(crate) mod shadow_slot;

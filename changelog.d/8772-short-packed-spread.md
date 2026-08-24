@@ -1,0 +1,3 @@
+## perf(codegen): direct-call stable methods with short packed spread tails
+
+`receiver.method(fixed, ...args)` now emits guarded direct-call arms when the final spread is an exact ordinary packed Array with zero through four present elements. The guard rejects holes, iterator/prototype overrides, proxies, Array subclasses, descriptors, and oversized tails; method class/shape/invalidation guards select the concrete body, and every miss retains the full iterator-aware apply dispatcher. This removes argument-array materialization and dynamic method lookup from the common empty/one-element ECS dispatch path while preserving source-order evaluation and moving-GC roots.

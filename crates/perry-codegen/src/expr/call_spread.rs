@@ -330,6 +330,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                 }
                 if !skip {
+                    if let Some(result) =
+                        super::call_spread_short::try_lower(ctx, object, property, args)?
+                    {
+                        return Ok(result);
+                    }
                     let recv_box = lower_expr(ctx, object)?;
                     // Build a single JS array containing every arg in order.
                     //

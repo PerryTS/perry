@@ -69,7 +69,7 @@ pub use self::element_shape::{
 pub(crate) use self::element_shape::{test_element_shape_record_exists, test_serialize};
 pub use self::flat_clone::{
     js_array_clone, js_array_clone_for_spread, js_array_entries, js_array_flat,
-    js_array_flat_depth, js_array_keys, js_array_values,
+    js_array_flat_depth, js_array_keys, js_array_values, js_short_packed_spread_values,
 };
 pub use self::from_concat::{
     array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,

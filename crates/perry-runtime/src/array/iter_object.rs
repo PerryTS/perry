@@ -25,8 +25,8 @@
 //! Buffer iterator one.
 
 use super::*;
-use crate::object::{js_object_alloc, js_object_get_field, js_object_set_field, ObjectHeader};
-use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_UNDEFINED};
+use crate::object::{ObjectHeader, js_object_alloc, js_object_get_field, js_object_set_field};
+use crate::value::{JSValue, TAG_UNDEFINED, js_nanbox_get_pointer, js_nanbox_pointer};
 
 /// Class id reserved for array iterators. Sits adjacent to the Buffer
 /// iterator id (0xFFFF0005) in the 0xFFFF prefix reserved for
@@ -46,6 +46,11 @@ const KIND_VALUES_NULL_DONE: i32 = 3;
 /// iterator this reads `length` and each indexed property from the Arguments
 /// object on every step, so mutations made before exhaustion are observable.
 const KIND_ARGUMENTS_VALUES: i32 = 4;
+/// Values iterator over an Array Proxy. The backing field stores the proxy's
+/// NaN-boxed registry id rather than an `ArrayHeader` pointer; `.next()` uses
+/// live `LengthOfArrayLike` / `Get` operations so proxy traps and mutations are
+/// observed with the same timing as `%ArrayIteratorPrototype%.next`.
+const KIND_PROXY_VALUES: i32 = 5;
 
 /// Clean a NaN-boxed array pointer to a raw `*mut ArrayHeader`, or null.
 fn unbox_array_ptr(value: f64) -> *mut ArrayHeader {
@@ -88,6 +93,9 @@ unsafe fn alloc_iterator(arr_ptr: *mut ArrayHeader, kind: i32) -> f64 {
 
 /// `arr.values()` iterator — yields each element value.
 pub fn array_values_iter(arr_f64: f64) -> f64 {
+    if crate::proxy::js_proxy_is_proxy(arr_f64) != 0 {
+        return unsafe { alloc_iterator_backing(arr_f64, KIND_PROXY_VALUES) };
+    }
     let arr_ptr = unbox_array_ptr(arr_f64);
     if arr_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
@@ -673,6 +681,8 @@ pub unsafe fn dispatch_array_iterator_method(
 
             let len = if kind == KIND_ARGUMENTS_VALUES {
                 crate::object::arguments_object_length(backing_ptr as *const ObjectHeader)
+            } else if kind == KIND_PROXY_VALUES {
+                super::generic::al_length(backing_f64).clamp(0, u32::MAX as i64) as u32
             } else if backing_ptr == 0 {
                 0
             } else {
@@ -698,11 +708,12 @@ pub unsafe fn dispatch_array_iterator_method(
             // field 0, which the collector DOES rewrite, instead of reusing
             // the pre-store copy. `iter_obj()` re-reads the iterator's own
             // address from its root for the same reason.
-            let backing_ptr =
-                js_nanbox_get_pointer(f64::from_bits(js_object_get_field(iter_obj(), 0).bits()))
-                    as usize;
+            let backing_f64 = f64::from_bits(js_object_get_field(iter_obj(), 0).bits());
+            let backing_ptr = js_nanbox_get_pointer(backing_f64) as usize;
             let elem = if kind == KIND_ARGUMENTS_VALUES {
                 crate::object::arguments_object_index_value(backing_ptr as *const ObjectHeader, idx)
+            } else if kind == KIND_PROXY_VALUES {
+                super::generic::al_get(backing_f64, idx as i64)
             } else if backing_ptr == 0 {
                 f64::from_bits(TAG_UNDEFINED)
             } else {
@@ -710,7 +721,7 @@ pub unsafe fn dispatch_array_iterator_method(
             };
 
             let value = match kind {
-                KIND_VALUES | KIND_VALUES_NULL_DONE | KIND_ARGUMENTS_VALUES => {
+                KIND_VALUES | KIND_VALUES_NULL_DONE | KIND_ARGUMENTS_VALUES | KIND_PROXY_VALUES => {
                     JSValue::from_bits(elem.to_bits())
                 }
                 KIND_KEYS => JSValue::number(idx as f64),

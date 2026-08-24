@@ -536,6 +536,65 @@ pub unsafe extern "C-unwind" fn js_native_call_method_apply_by_id(
     )
 }
 
+/// Materialize `fixed..., ...spread` for the generic branch of a short packed
+/// spread callsite. The fast branch has already evaluated all operands; doing
+/// the fallback assembly here preserves that source order without re-running
+/// an expression, and [`js_array_clone_for_spread`] preserves every observable
+/// iterator case (own/prototype overrides, proxies, accessors, and throws).
+///
+/// The returned array is consumed immediately by
+/// [`js_native_call_method_apply_by_id`]. Every input and both arrays are held
+/// in mutable runtime handles because iterator materialization and array pushes
+/// can evacuate the nursery.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_spread_tail_fallback_args(
+    fixed_ptr: *const f64,
+    fixed_len: usize,
+    spread: f64,
+) -> i64 {
+    let fixed = if fixed_ptr.is_null() || fixed_len == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(fixed_ptr, fixed_len)
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let fixed_handles = scope.root_nanbox_f64_slice(fixed);
+    let spread_handle = scope.root_nanbox_f64(spread);
+
+    let spread_array = crate::array::js_array_clone_for_spread(spread_handle.get_nanbox_f64());
+    let spread_array_handle = scope.root_raw_mut_ptr(spread_array);
+    let spread_len = spread_array_handle.with_const_ptr(|arr: *const crate::array::ArrayHeader| {
+        if arr.is_null() {
+            0
+        } else {
+            crate::array::js_array_length(arr) as usize
+        }
+    });
+    let capacity = fixed_len.saturating_add(spread_len).min(u32::MAX as usize) as u32;
+    let result_handle = scope.root_raw_mut_ptr(crate::array::js_array_alloc(capacity));
+
+    for value in &fixed_handles {
+        let next = crate::array::js_array_push_f64(
+            result_handle.get_raw_mut_ptr(),
+            value.get_nanbox_f64(),
+        );
+        result_handle.set_raw_mut_ptr(next);
+    }
+    for index in 0..spread_len {
+        let value = spread_array_handle
+            .with_const_ptr(|arr| crate::array::js_array_get_f64(arr, index as u32));
+        // The push can collect while `value` is otherwise only a Rust local.
+        let value_scope = crate::gc::RuntimeHandleScope::new();
+        let value_handle = value_scope.root_nanbox_f64(value);
+        let next = crate::array::js_array_push_f64(
+            result_handle.get_raw_mut_ptr(),
+            value_handle.get_nanbox_f64(),
+        );
+        result_handle.set_raw_mut_ptr(next);
+    }
+    result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
+}
+
 /// The numeric property key of an `obj[key](...)` call, as the raw `f64` index
 /// `js_object_get_index_polymorphic` consumes, or `None` when `key` is not a
 /// number. Both representations a numeric key can arrive in are accepted: a

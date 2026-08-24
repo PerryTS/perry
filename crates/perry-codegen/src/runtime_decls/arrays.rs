@@ -213,6 +213,13 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_set_length_strict", VOID, &[I64, DOUBLE]);
     // Array.from() — js_array_clone handles arrays, Sets, and Maps.
     module.declare_function("js_array_clone", I64, &[I64]);
+    // #8772: non-allocating exact packed-array guard for a final spread tail.
+    // Writes at most four values to caller-owned stack storage and returns
+    // arity 0..4, or -1 for the generic iterator path.
+    module.declare_function("js_short_packed_spread_values", I32, &[DOUBLE, PTR]);
+    // Generic `fixed..., ...spread` materializer used after the short-array or
+    // guarded-method proof fails. It drives the complete iterator protocol.
+    module.declare_function("js_spread_tail_fallback_args", I64, &[PTR, I64, DOUBLE]);
     // #2773: Array.from(source) — throws TypeError for nullish sources, keeps
     // number/boolean/symbol -> [], otherwise materializes via js_array_clone.
     // Takes the raw NaN-boxed value so the tag bits survive.
