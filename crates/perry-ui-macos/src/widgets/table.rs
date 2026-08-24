@@ -36,6 +36,16 @@ thread_local! {
     static TABLES: RefCell<Vec<TableEntry>> = const { RefCell::new(Vec::new()) };
 }
 
+pub(crate) fn scan_macos_table_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TABLES.with(|tables| {
+        for table in tables.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut table.render_closure);
+            visitor.visit_nanbox_f64_slot(&mut table.select_closure);
+            visitor.visit_nanbox_f64_slot(&mut table.sort_closure);
+        }
+    });
+}
+
 fn find_entry_idx(handle: i64) -> Option<usize> {
     TABLES.with(|t| t.borrow().iter().position(|e| e.handle == handle))
 }

@@ -10,6 +10,7 @@ pub mod deeplinks;
 pub mod drag_drop;
 pub mod ffi;
 pub mod file_dialog;
+mod gc;
 pub mod geolocation;
 pub mod image_picker;
 pub mod keychain;

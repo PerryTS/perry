@@ -39,6 +39,14 @@ thread_local! {
     static HANDLERS: RefCell<HashMap<String, f64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_watchos_background_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    HANDLERS.with(|handlers| {
+        for handler in handlers.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(handler);
+        }
+    });
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 unsafe fn invoke_handler(handler: f64) {

@@ -442,6 +442,7 @@ fn to_wide(s: &str) -> Vec<u16> {
 
 /// Create an app window. Returns app handle (1-based).
 pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
+    crate::gc::ensure_gc_scanner_registered();
     let title = unsafe { str_from_header(title_ptr) };
     let w = if width > 0.0 { width } else { 800.0 };
     let h = if height > 0.0 { height } else { 600.0 };
@@ -538,6 +539,36 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             apps.len() as i64
         })
     }
+}
+
+pub(crate) fn scan_windows_app_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    PENDING_SHORTCUTS.with(|shortcuts| {
+        for shortcut in shortcuts.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut shortcut.callback);
+        }
+    });
+    SHORTCUTS.with(|shortcuts| {
+        for shortcut in shortcuts.borrow_mut().iter_mut() {
+            visitor.visit_raw_const_ptr_slot(&mut shortcut.callback_ptr);
+        }
+    });
+    TIMERS.with(|timers| {
+        for timer in timers.borrow_mut().iter_mut() {
+            visitor.visit_raw_const_ptr_slot(&mut timer.callback_ptr);
+        }
+    });
+    for slot in [&ON_ACTIVATE_CALLBACK, &ON_TERMINATE_CALLBACK] {
+        slot.with(|slot| {
+            if let Some(callback) = slot.borrow_mut().as_mut() {
+                visitor.visit_raw_const_ptr_slot(callback);
+            }
+        });
+    }
+    GLOBAL_HOTKEY_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_raw_const_ptr_slot(callback);
+        }
+    });
 }
 
 /// Set the root widget of an app.

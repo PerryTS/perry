@@ -30,6 +30,14 @@ thread_local! {
     static CHANGE_CALLBACKS: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_visionos_rich_text_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    CHANGE_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn ns_string_to_rust(ns: *mut AnyObject) -> String {

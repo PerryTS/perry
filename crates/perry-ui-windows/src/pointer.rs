@@ -62,6 +62,22 @@ thread_local! {
     static HOVER_STATE: RefCell<HashMap<i64, bool>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_windows_pointer_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    for callbacks in [
+        &MOUSE_DOWN_CB,
+        &MOUSE_UP_CB,
+        &MOUSE_MOVE_CB,
+        &HOVER_CB,
+        &CLICK_CB,
+    ] {
+        callbacks.with(|callbacks| {
+            for callback in callbacks.borrow_mut().values_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        });
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn install_subclass(handle: i64) {
     let Some(hwnd) = crate::widgets::get_hwnd(handle) else {

@@ -52,6 +52,14 @@ thread_local! {
     static TARGET_TO_HANDLE: RefCell<HashMap<usize, (i64, i64)>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_macos_bottom_nav_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    BOTTOM_NAVS.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.on_select);
+        }
+    });
+}
+
 pub struct PerryBottomNavTargetIvars {
     key: std::cell::Cell<usize>,
 }

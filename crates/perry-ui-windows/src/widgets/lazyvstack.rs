@@ -19,6 +19,14 @@ thread_local! {
     static LAZYVSTACK_STATES: RefCell<HashMap<i64, LazyVStackState>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_windows_lazyvstack_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    LAZYVSTACK_STATES.with(|stacks| {
+        for stack in stacks.borrow_mut().values_mut() {
+            visitor.visit_raw_const_ptr_slot(&mut stack.render_closure);
+        }
+    });
+}
+
 /// Create a LazyVStack that renders `count` items using a closure.
 /// Returns the outer scrollview handle (which is the LazyVStack handle).
 /// count = number of items, render_closure = NaN-boxed closure(index) -> widget handle.

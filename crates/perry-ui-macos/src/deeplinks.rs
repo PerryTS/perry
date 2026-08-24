@@ -49,6 +49,14 @@ thread_local! {
     static APP_LAUNCHED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+pub(crate) fn scan_macos_deeplinks_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    HANDLER.with(|slot| {
+        if let Some(handler) = slot.borrow_mut().as_mut() {
+            visitor.visit_nanbox_f64_slot(handler);
+        }
+    });
+}
+
 unsafe fn nanbox_str(s: &str) -> f64 {
     let bytes = s.as_bytes();
     let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);

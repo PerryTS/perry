@@ -222,3 +222,30 @@ fn dispatch(callback: f64, code: KeyCode, mods: u32, is_down: bool, is_repeat: b
         }
     }
 }
+
+pub(crate) fn scan_key_dispatch_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    KEY_DOWN_CB.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+    KEY_UP_CB.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+
+    for slot in [
+        &APP_KEY_DOWN_CB,
+        &APP_KEY_UP_CB,
+        &ACTIVE_DOWN_CB,
+        &ACTIVE_UP_CB,
+    ] {
+        slot.with(|callback| {
+            let mut value = callback.get();
+            if visitor.visit_nanbox_f64_slot(&mut value) {
+                callback.set(value);
+            }
+        });
+    }
+}

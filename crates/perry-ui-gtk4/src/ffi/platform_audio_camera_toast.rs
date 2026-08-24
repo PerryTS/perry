@@ -65,6 +65,14 @@ thread_local! {
     static RESIZE_CALLBACK: std::cell::RefCell<Option<f64>> = std::cell::RefCell::new(None);
 }
 
+pub(crate) fn scan_gtk4_platform_ffi_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    RESIZE_CALLBACK.with(|callback| {
+        if let Some(callback) = callback.borrow_mut().as_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 /// perry_on_resize(callback) — store callback; called with (width, height) on resize.
 #[no_mangle]
 pub extern "C" fn __wrapper_perry_on_resize(_closure_ptr: i64, callback: f64) -> f64 {

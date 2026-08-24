@@ -152,6 +152,23 @@ thread_local! {
     static WARNED_VARISPEED_FALLBACK: RefCell<bool> = RefCell::new(false);
 }
 
+pub(crate) fn scan_visionos_audio_playback_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    SOUNDS.with(|sounds| {
+        for sound in sounds.borrow_mut().iter_mut().flatten() {
+            if let Some(callback) = sound.on_loaded.as_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        }
+    });
+    VOICES.with(|voices| {
+        for voice in voices.borrow_mut().iter_mut().flatten() {
+            if let Some(callback) = voice.on_ended.as_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        }
+    });
+}
+
 // =============================================================================
 // Helpers
 // =============================================================================

@@ -69,6 +69,14 @@ thread_local! {
     static CACHED: RefCell<Status> = const { RefCell::new(Status::unknown()) };
     static LISTENERS: RefCell<HashMap<i64, f64>> = RefCell::new(HashMap::new());
 }
+
+pub(crate) fn scan_macos_network_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    LISTENERS.with(|listeners| {
+        for listener in listeners.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(listener);
+        }
+    });
+}
 static NEXT_LISTENER_ID: AtomicI64 = AtomicI64::new(1);
 
 unsafe fn nanbox_str(s: &str) -> f64 {

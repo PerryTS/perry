@@ -30,6 +30,23 @@ thread_local! {
     pub(crate) static PENDING_MENUBAR: RefCell<Option<i64>> = RefCell::new(None);
 }
 
+pub(crate) fn scan_gtk4_menu_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    MENUS.with(|menus| {
+        for menu in menus.borrow_mut().iter_mut() {
+            for item in menu {
+                if let MenuItemEntry::Item { callback, .. } = item {
+                    visitor.visit_nanbox_f64_slot(callback);
+                }
+            }
+        }
+    });
+    MENU_ITEM_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;

@@ -52,6 +52,14 @@ thread_local! {
     static DELEGATE_MAP: RefCell<HashMap<usize, i64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_tvos_tabbar_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TABBAR_STATE.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.on_change);
+        }
+    });
+}
+
 // ── UITabBarDelegate ─────────────────────────────────────────
 
 pub struct PerryTabBarDelegateIvars {

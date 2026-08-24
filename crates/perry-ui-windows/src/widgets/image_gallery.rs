@@ -38,6 +38,14 @@ thread_local! {
     static GALLERIES: RefCell<HashMap<i64, GalleryEntry>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_windows_image_gallery_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    GALLERIES.with(|galleries| {
+        for gallery in galleries.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut gallery.on_index_change);
+        }
+    });
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]

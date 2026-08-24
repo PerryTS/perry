@@ -337,6 +337,15 @@ FN_DEF = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+|extern\s+\"[^\"]*\"\s+)*fn\s+(\w+)"
 )
 IDENT = re.compile(r"\b[A-Za-z_]\w*\b")
+# Free/qualified function calls only. Method names must not enter the scanner
+# call graph: walking `.values_mut()`/`.iter_mut()` as though they were free
+# functions can reach unrelated same-named helpers and falsely certify a
+# holder that the scanner never mentions. The body of the scanner still
+# contains closure bodies, so direct holder visits such as
+# `TABLE.with(|table| ...)` remain visible to the per-file coverage check.
+CALLED_FUNCTION = re.compile(
+    r"(?<![.])\b([A-Za-z_]\w*)\s*(?:<[^(){};]*>)?\s*\("
+)
 
 # A declaration: `static NAME: TYPE =` — covers `pub(crate) static`, the bodies
 # of `thread_local!` blocks (which use the same syntax), `lazy_static!`'s
@@ -927,39 +936,48 @@ def scan(root: Path) -> tuple[list[dict], int, set[str]]:
         seeds.add(name)
         seed_files.setdefault(name, set()).update(p for p, _ in matched)
 
-    reachable: set[str] = set()
-    frontier = set(seeds)
-    # Files whose functions may be walked for a given reachable name. Root-level
-    # names are pinned to the registration's file(s); deeper hops are not
-    # (nothing in the text says which module a call resolved to), and the
-    # docstring says so.
-    for depth in range(MAX_SCANNER_DEPTH):
-        nxt: set[str] = set()
-        for name in frontier:
-            if name in reachable:
-                continue
-            reachable.add(name)
-            allowed = seed_files.get(name) if depth == 0 else None
+    def reachable_text(call_pattern: re.Pattern) -> dict[Path, str]:
+        reachable: set[str] = set()
+        frontier = set(seeds)
+        # Files whose functions may be walked for a given reachable name.
+        # Root-level names are pinned to the registration's file(s); deeper
+        # hops are not (nothing in the text says which module a call resolved
+        # to), and the docstring says so.
+        for depth in range(MAX_SCANNER_DEPTH):
+            nxt: set[str] = set()
+            for name in frontier:
+                if name in reachable:
+                    continue
+                reachable.add(name)
+                allowed = seed_files.get(name) if depth == 0 else None
+                for path, body in bodies.get(name, []):
+                    if allowed is not None and path not in allowed:
+                        continue
+                    if allowed is None and not crate_hosts_reachable_code(path):
+                        continue
+                    nxt.update(call_pattern.findall(body))
+            frontier = {n for n in nxt if n in bodies and n not in reachable}
+            if not frontier:
+                break
+
+        by_file: dict[Path, str] = {}
+        for name in reachable:
+            allowed = seed_files.get(name)
             for path, body in bodies.get(name, []):
                 if allowed is not None and path not in allowed:
                     continue
                 if allowed is None and not crate_hosts_reachable_code(path):
                     continue
-                nxt.update(IDENT.findall(body))
-        frontier = {n for n in nxt if n in bodies and n not in reachable}
-        if not frontier:
-            break
+                by_file[path] = by_file.get(path, "") + "\n" + body
+        return by_file
 
-    # per-file text of every reachable function defined in that file
-    reachable_text_by_file: dict[Path, str] = {}
-    for name in reachable:
-        allowed = seed_files.get(name)
-        for path, body in bodies.get(name, []):
-            if allowed is not None and path not in allowed:
-                continue
-            if allowed is None and not crate_hosts_reachable_code(path):
-                continue
-            reachable_text_by_file[path] = reachable_text_by_file.get(path, "") + "\n" + body
+    # The #8701 UI campaign needs the strict free-function graph: method
+    # names such as `.values_mut()` otherwise collide with unrelated helpers
+    # across the many ported backend crates and falsely certify UI tables. Keep
+    # the pre-existing conservative graph for older tiers so this focused
+    # campaign does not silently reclassify unrelated historical inventory.
+    reachable_text_by_file = reachable_text(CALLED_FUNCTION)
+    legacy_reachable_text_by_file = reachable_text(IDENT)
 
     # 3. classify declarations
     holders: list[dict] = []
@@ -970,7 +988,9 @@ def scan(root: Path) -> tuple[list[dict], int, set[str]]:
             declarations_in_perry_tls(text) if tier == "core" else set()
         )
         bodies_here = function_bodies(text)
-        covered_text = reachable_text_by_file.get(path, "")
+        covered_text = (
+            reachable_text_by_file if tier == "frontier" else legacy_reachable_text_by_file
+        ).get(path, "")
         if tier == "core":
             allocating_context = "\n".join(
                 body
@@ -1044,6 +1064,7 @@ def apply_frontier(
     holders: list[dict],
     frontier: list[dict],
     registered_scanners: set[str] | None = None,
+    classified_inventory: list[dict] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """(new_unpinned, stale_entries) for the frontier ratchet.
 
@@ -1054,6 +1075,9 @@ def apply_frontier(
     then invalidates the pin instead of silently leaving it matched.
     """
     pinned = {(entry["file"], entry["name"]): entry for entry in frontier}
+    classified = {
+        (entry["file"], entry["name"]) for entry in (classified_inventory or [])
+    }
     used: set[tuple[str, str]] = set()
     unpinned: list[dict] = []
     for holder in holders:
@@ -1061,6 +1085,11 @@ def apply_frontier(
             continue
         key = (holder["file"], holder["name"])
         if holder["covered"]:
+            continue
+        if key in classified:
+            # A researched verdict graduates an identity-ratcheted candidate
+            # out of the debt-only frontier. apply_inventory validates and
+            # consumes the verdict; any old frontier pin becomes stale below.
             continue
         entry = pinned.get(key)
         required_scanner = (entry or {}).get("scanner")
@@ -1134,11 +1163,11 @@ def apply_inventory(
     used: set[tuple[str, str]] = set()
     unclassified: list[dict] = []
     for holder in holders:
-        if holder.get("ratchet", holder.get("tier", "core") == "frontier"):
-            continue  # ratcheted by apply_frontier, not verdict-gated
         if holder["covered"]:
             continue
         key = (holder["file"], holder["name"])
+        if holder.get("ratchet", holder.get("tier", "core") == "frontier") and key not in index:
+            continue  # unresolved frontier debt remains apply_frontier's responsibility
         if key in index:
             used.add(key)
         else:
@@ -1195,7 +1224,7 @@ def report(root: Path, quiet: bool = False) -> int:
     malformed = inventory_problems(inventory)
     frontier = load_frontier(INVENTORY_PATH)
     frontier_new, frontier_stale = apply_frontier(
-        holders, frontier, registered_scanners
+        holders, frontier, registered_scanners, inventory
     )
 
     status = 0
@@ -1364,6 +1393,22 @@ pub fn scan_dup_roots_mut(v: &mut V) { for p in DUP_A_TABLE.borrow_mut().iter_mu
     "crates/perry-runtime/src/dup_b.rs": """
 static DUP_B_TABLE: RefCell<Vec<*mut ObjectHeader>> = RefCell::new(Vec::new());
 pub fn scan_dup_roots_mut(v: &mut V) { for p in DUP_B_TABLE.borrow_mut().iter_mut() { v.visit(p); } }
+""",
+    # A method call must not be treated as a free helper call. Before #8701,
+    # `.values_mut()` reached this unrelated `fn values_mut` and falsely
+    # certified METHOD_COLLISION_TABLE even though the scanner never names it.
+    "crates/perry-ui-method/src/method_collision.rs": """
+static METHOD_COLLISION_TABLE: RefCell<Vec<*mut ObjectHeader>> = RefCell::new(Vec::new());
+fn values_mut(v: &mut V) {
+    for p in METHOD_COLLISION_TABLE.borrow_mut().iter_mut() { v.visit(p); }
+}
+fn ensure_registered() {
+    gc_register_mutable_root_scanner(scan_method_collision_roots_mut);
+}
+pub fn scan_method_collision_roots_mut(v: &mut V) {
+    let mut numeric = HashMap::<usize, usize>::new();
+    for value in numeric.values_mut() { *value += 1; }
+}
 """,
     # An ffi-side crate registering through the C-ABI trampoline. Exercises:
     # nested parens in the registration args (`SOURCE.as_ptr()`), an
@@ -1582,6 +1627,13 @@ def self_test() -> int:
         "function in a different module; registering dup_a's must not certify "
         "dup_b's holder",
     )
+    expect(
+        "crates/perry-ui-method/src/method_collision.rs",
+        "METHOD_COLLISION_TABLE",
+        False,
+        "a scanner method call named values_mut must not reach an unrelated free helper",
+        tier="frontier",
+    )
 
     # --- ffi-side shapes: the 2026-08 blind spot, planted -------------------
     expect(
@@ -1683,6 +1735,36 @@ def self_test() -> int:
         failures.append(
             "an exact frontier baseline still reported "
             f"{len(unpinned)} unpinned / {len(stale)} stale"
+        )
+    promoted = planted_frontier[0]
+    promoted_inventory = [
+        {
+            "file": promoted["file"],
+            "name": promoted["name"],
+            "verdict": "not_a_gc_pointer",
+            "why": "planted researched verdict for a frontier candidate",
+        }
+    ]
+    unclassified_promoted, stale_promoted = apply_inventory(
+        holders, promoted_inventory
+    )
+    if stale_promoted or any(
+        h["file"] == promoted["file"] and h["name"] == promoted["name"]
+        for h in unclassified_promoted
+    ):
+        failures.append("a researched frontier verdict was not consumed by the inventory")
+    promoted_new, promoted_frontier_stale = apply_frontier(
+        holders, exact_baseline, classified_inventory=promoted_inventory
+    )
+    if any(
+        h["file"] == promoted["file"] and h["name"] == promoted["name"]
+        for h in promoted_new
+    ) or not any(
+        e["file"] == promoted["file"] and e["name"] == promoted["name"]
+        for e in promoted_frontier_stale
+    ):
+        failures.append(
+            "graduating a frontier candidate to a verdict did not stale its debt pin"
         )
     _unpinned, stale = apply_frontier(
         holders,
@@ -1801,6 +1883,7 @@ def self_test() -> int:
         real_holders,
         load_frontier(INVENTORY_PATH),
         real_registered_scanners,
+        inventory,
     )
     if frontier_stale:
         failures.append(

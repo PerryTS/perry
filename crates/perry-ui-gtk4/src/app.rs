@@ -38,6 +38,9 @@ thread_local! {
     /// Timer callbacks queued before the app activates (interval_ms, callback f64).
     /// After activation, set_timer schedules directly via install_timer().
     static TIMER_CALLBACKS: RefCell<Vec<(f64, f64)>> = RefCell::new(Vec::new());
+    /// Callbacks owned by installed GLib timers, keyed so the GC can rewrite them.
+    static ACTIVE_TIMER_CALLBACKS: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
+    static NEXT_TIMER_CALLBACK_KEY: RefCell<usize> = const { RefCell::new(1) };
     /// True once connect_activate has fired — set_timer can then call glib::timeout_add_local
     /// directly instead of buffering.
     static APP_ACTIVATED: RefCell<bool> = RefCell::new(false);
@@ -92,6 +95,7 @@ pub(crate) use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an app with title, width, height.
 pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
+    crate::gc::ensure_gc_scanner_registered();
     ensure_gtk_init();
 
     let title = if title_ptr.is_null() {
@@ -676,14 +680,27 @@ pub fn add_keyboard_shortcut(key_ptr: *const u8, modifiers: f64, callback: f64) 
 /// the GTK main thread after the GLib MainContext is active.
 fn install_timer(interval_ms: f64, callback: f64) {
     let ms = interval_ms as u64;
+    let callback_key = NEXT_TIMER_CALLBACK_KEY.with(|next| {
+        let mut next = next.borrow_mut();
+        let key = *next;
+        *next = next.wrapping_add(1).max(1);
+        key
+    });
+    ACTIVE_TIMER_CALLBACKS.with(|callbacks| {
+        callbacks.borrow_mut().insert(callback_key, callback);
+    });
     glib::timeout_add_local(std::time::Duration::from_millis(ms), move || {
         unsafe {
             js_run_stdlib_pump();
             js_promise_run_microtasks();
         }
-        let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
-        unsafe {
-            js_closure_call0(ptr);
+        let callback =
+            ACTIVE_TIMER_CALLBACKS.with(|callbacks| callbacks.borrow().get(&callback_key).copied());
+        if let Some(callback) = callback {
+            let ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
+            unsafe {
+                js_closure_call0(ptr);
+            }
         }
         #[cfg(feature = "geisterhand")]
         {
@@ -696,6 +713,36 @@ fn install_timer(interval_ms: f64, callback: f64) {
         }
         glib::ControlFlow::Continue
     });
+}
+
+pub(crate) fn scan_gtk4_app_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    PENDING_SHORTCUTS.with(|shortcuts| {
+        for shortcut in shortcuts.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut shortcut.callback);
+        }
+    });
+    SHORTCUT_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+    TIMER_CALLBACKS.with(|timers| {
+        for (_, callback) in timers.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+    ACTIVE_TIMER_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+    for slot in [&ON_ACTIVATE_CALLBACK, &ON_TERMINATE_CALLBACK] {
+        slot.with(|slot| {
+            if let Some(callback) = slot.borrow_mut().as_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        });
+    }
 }
 
 /// Set a repeating timer. interval_ms = milliseconds between ticks.

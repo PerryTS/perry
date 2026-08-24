@@ -129,6 +129,16 @@ thread_local! {
     static DRAG_SUBCLASSED: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
 }
 
+pub(crate) fn scan_windows_drag_drop_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    for callbacks in [&DROP_CB, &DRAG_TEXT, &DRAG_FILE, &DRAG_URL] {
+        callbacks.with(|callbacks| {
+            for callback in callbacks.borrow_mut().values_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        });
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn has_any_drag_source(key: usize) -> bool {
     DRAG_TEXT.with(|m| m.borrow().contains_key(&key))

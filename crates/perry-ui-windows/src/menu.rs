@@ -51,6 +51,21 @@ thread_local! {
     static PENDING_MENUBAR: RefCell<Option<i64>> = RefCell::new(None);
 }
 
+pub(crate) fn scan_windows_menu_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    MENUS.with(|menus| {
+        for menu in menus.borrow_mut().iter_mut() {
+            for item in &mut menu.items {
+                visitor.visit_raw_const_ptr_slot(&mut item.callback_ptr);
+            }
+        }
+    });
+    MENU_CALLBACKS.with(|callbacks| {
+        for (_, callback) in callbacks.borrow_mut().iter_mut() {
+            visitor.visit_raw_const_ptr_slot(callback);
+        }
+    });
+}
+
 /// Create a context menu. Returns menu handle (1-based).
 pub fn create() -> i64 {
     #[cfg(target_os = "windows")]

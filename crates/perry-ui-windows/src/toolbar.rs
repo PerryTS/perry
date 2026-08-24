@@ -18,6 +18,16 @@ struct ToolbarItem {
     callback: f64,
 }
 
+pub(crate) fn scan_windows_toolbar_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TOOLBARS.with(|toolbars| {
+        for items in toolbars.borrow_mut().values_mut() {
+            for item in items {
+                visitor.visit_nanbox_f64_slot(&mut item.callback);
+            }
+        }
+    });
+}
+
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;

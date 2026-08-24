@@ -48,6 +48,14 @@ thread_local! {
     static TAP_DELEGATE: RefCell<Option<Retained<PerryNotificationDelegate>>> = const { RefCell::new(None) };
 }
 
+pub(crate) fn scan_watchos_notifications_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    ON_TAP_CALLBACK.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().as_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 pub struct PerryNotificationDelegateIvars;
 
 define_class!(

@@ -76,6 +76,25 @@ thread_local! {
     static PERMISSION_REQUESTS: RefCell<HashMap<usize, PermissionRequest>> = RefCell::new(HashMap::new());
     static DELEGATE_REGISTERED: RefCell<bool> = const { RefCell::new(false) };
 }
+
+pub(crate) fn scan_ios_geolocation_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    PENDING_ONE_SHOTS.with(|requests| {
+        for request in requests.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut request.on_success);
+            visitor.visit_nanbox_f64_slot(&mut request.on_error);
+        }
+    });
+    WATCHES.with(|watches| {
+        for watch in watches.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut watch.callback);
+        }
+    });
+    PERMISSION_REQUESTS.with(|requests| {
+        for request in requests.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut request.callback);
+        }
+    });
+}
 static NEXT_WATCH_ID: AtomicI64 = AtomicI64::new(1);
 
 unsafe fn nanbox_str(s: &str) -> f64 {

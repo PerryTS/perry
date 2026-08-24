@@ -51,6 +51,14 @@ thread_local! {
     static POPUP: RefCell<Option<(HWND, HWND, HWND)>> = const { RefCell::new(None) };
 }
 
+pub(crate) fn scan_windows_command_palette_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    COMMANDS.with(|commands| {
+        for command in commands.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut command.on_run);
+        }
+    });
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 #[cfg(target_os = "windows")]

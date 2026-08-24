@@ -63,6 +63,24 @@ thread_local! {
     static ON_CHANGE_CALLBACKS: RefCell<HashMap<i64, Vec<f64>>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_visionos_state_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    STATES.with(|states| {
+        for state in states.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.value);
+        }
+    });
+    FOR_EACH_BINDINGS.with(|bindings| {
+        for binding in bindings.borrow_mut().values_mut().flatten() {
+            visitor.visit_nanbox_f64_slot(&mut binding.render_closure);
+        }
+    });
+    ON_CHANGE_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut().flatten() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Check if a f64 value is a NaN-boxed string (STRING_TAG = 0x7FFF).

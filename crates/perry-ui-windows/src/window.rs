@@ -341,6 +341,14 @@ thread_local! {
     pub(crate) static FOCUS_LOST_CALLBACKS: RefCell<HashMap<i64, f64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_windows_window_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    FOCUS_LOST_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 /// Hide a window without destroying it.
 pub fn hide(window_handle: i64) {
     #[cfg(target_os = "windows")]

@@ -20,7 +20,7 @@
 use libc::{c_char, c_float, c_int, c_uint, c_void};
 use std::cell::RefCell;
 use std::ffi::CString;
-use std::sync::Mutex;
+use std::sync::{Mutex, Once};
 
 use perry_ffi::copy_string_from_raw as str_from_header;
 
@@ -227,6 +227,8 @@ struct Fade {
     then_stop: bool,
 }
 
+static GC_SCANNER_REGISTERED: Once = Once::new();
+
 thread_local! {
     static ENGINE: RefCell<Option<MaBox<MA_ENGINE_SIZE>>> = RefCell::new(None);
     static SOUNDS: RefCell<Vec<Option<SoundEntry>>> = RefCell::new(Vec::new());
@@ -236,6 +238,32 @@ thread_local! {
     static MASTER_VOLUME: RefCell<f32> = RefCell::new(1.0);
     static PENDING_ENDED: RefCell<Vec<usize>> = RefCell::new(Vec::new());
     static PENDING_LOADED: RefCell<Vec<usize>> = RefCell::new(Vec::new());
+}
+
+fn ensure_gc_scanner_registered() {
+    GC_SCANNER_REGISTERED.call_once(|| {
+        perry_ffi::gc_register_mutable_root_scanner_named(
+            "perry-audio-miniaudio",
+            scan_miniaudio_gc_roots,
+        );
+    });
+}
+
+fn scan_miniaudio_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    SOUNDS.with(|sounds| {
+        for sound in sounds.borrow_mut().iter_mut().flatten() {
+            if let Some(callback) = sound.on_loaded.as_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        }
+    });
+    VOICES.with(|voices| {
+        for voice in voices.borrow_mut().iter_mut().flatten() {
+            if let Some(callback) = voice.on_ended.as_mut() {
+                visitor.visit_nanbox_f64_slot(callback);
+            }
+        }
+    });
 }
 
 /// Voice indices whose miniaudio end_callback fired on the audio thread.
@@ -460,6 +488,7 @@ pub extern "C" fn perry_audio_unload(sound: f64) {
 
 #[no_mangle]
 pub extern "C" fn perry_audio_on_loaded(sound: f64, callback: f64) {
+    ensure_gc_scanner_registered();
     let idx = match classify(sound) {
         HandleKind::Sound(i) => i,
         _ => return,
@@ -1174,6 +1203,7 @@ pub extern "C" fn perry_audio_get_position(playback: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn perry_audio_on_ended(playback: f64, callback: f64) {
+    ensure_gc_scanner_registered();
     let idx = match classify(playback) {
         HandleKind::Playback(i) => i,
         _ => return,

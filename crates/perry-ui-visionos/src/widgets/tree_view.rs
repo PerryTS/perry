@@ -69,6 +69,14 @@ thread_local! {
     static TREES: RefCell<Vec<TreeEntry>> = const { RefCell::new(Vec::new()) };
 }
 
+pub(crate) fn scan_visionos_tree_view_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TREES.with(|trees| {
+        for tree in trees.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut tree.on_select);
+        }
+    });
+}
+
 fn rebuild_flat(entry_idx: usize) {
     let (root, expanded_snapshot) = TREES.with(|t| {
         let trees = t.borrow();

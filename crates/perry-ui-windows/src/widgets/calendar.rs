@@ -41,6 +41,14 @@ thread_local! {
     static CALENDAR_CALLBACKS: RefCell<HashMap<i64, f64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_windows_calendar_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    CALENDAR_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 #[cfg(target_os = "windows")]
 #[repr(C)]
 #[derive(Default, Copy, Clone)]

@@ -32,6 +32,19 @@ thread_local! {
     static REFRESH_CALLBACKS: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_ios_scrollview_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    REFRESH_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+    SCROLL_END_STATES.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.closure);
+        }
+    });
+}
+
 pub struct PerryRefreshTargetIvars {
     callback_key: std::cell::Cell<usize>,
 }

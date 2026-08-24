@@ -14,6 +14,14 @@ thread_local! {
     pub(crate) static PENDING_USER_MENUBAR: RefCell<Option<Retained<NSMenu>>> = const { RefCell::new(None) };
 }
 
+pub(crate) fn scan_macos_menu_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    MENU_ITEM_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;

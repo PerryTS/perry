@@ -19,6 +19,7 @@ pub mod drag_drop;
 pub mod fetch;
 pub mod ffi;
 pub mod file_dialog;
+mod gc;
 #[cfg(feature = "geisterhand")]
 pub mod geisterhand_style;
 pub mod geolocation;
@@ -132,6 +133,7 @@ pub(crate) fn catch_panic_void(name: &str, f: impl FnOnce() + std::panic::Unwind
 /// Called by the JVM when the native library is loaded via System.loadLibrary().
 #[no_mangle]
 pub extern "C" fn JNI_OnLoad(vm: jni::JavaVM, _reserved: *mut std::ffi::c_void) -> jni::sys::jint {
+    gc::ensure_registered();
     unsafe {
         __android_log_print(
             3,
@@ -177,6 +179,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInit(
     mut env: jni::JNIEnv,
     _class: jni::objects::JClass,
 ) {
+    gc::ensure_registered();
     // Recover state that `JNI_OnLoad` would normally set up, in case a linked
     // native library's own `JNI_OnLoad` shadowed Perry's (see
     // `jni_bridge::ensure_vm` and `PERRY_DISABLE_MTE_CTOR`). The constructor

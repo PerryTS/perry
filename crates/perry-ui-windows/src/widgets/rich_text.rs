@@ -100,6 +100,14 @@ thread_local! {
     static CALLBACKS: RefCell<HashMap<i64, f64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_windows_rich_text_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 pub fn create(width: f64, height: f64, on_change: f64) -> i64 {
     let control_id = alloc_control_id();
 

@@ -59,6 +59,14 @@ thread_local! {
         const { RefCell::new(Vec::new()) };
 }
 
+pub(crate) fn scan_macos_background_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    HANDLERS.with(|handlers| {
+        for handler in handlers.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(handler);
+        }
+    });
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn boolean_truthy(v: f64) -> bool {

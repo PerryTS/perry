@@ -9,6 +9,7 @@ pub mod deeplinks_stub;
 pub mod dialog;
 pub mod drag_drop;
 pub mod file_dialog;
+mod gc;
 pub mod issue_552_stub;
 pub mod keyboard;
 pub mod keychain;

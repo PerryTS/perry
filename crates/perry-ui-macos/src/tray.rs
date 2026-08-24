@@ -21,6 +21,14 @@ thread_local! {
     static TRAY_CLICK_CALLBACKS: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_macos_tray_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TRAY_CLICK_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 extern "C" {
     fn js_closure_call0(closure: *const u8) -> f64;
     fn js_nanbox_get_pointer(value: f64) -> i64;

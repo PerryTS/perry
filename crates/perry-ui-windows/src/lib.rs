@@ -9,6 +9,7 @@ pub mod dpi_compat;
 pub mod drag_drop;
 #[cfg(target_os = "windows")]
 pub mod dwm;
+mod gc;
 pub mod issue_552_stub;
 #[cfg(target_os = "windows")]
 pub mod keyboard;

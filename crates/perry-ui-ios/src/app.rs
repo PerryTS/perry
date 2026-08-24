@@ -34,6 +34,7 @@ use perry_ffi::copy_string_from_raw as str_from_header;
 /// Create an app. Stores config in thread-local for deferred creation.
 /// Returns app handle (i64).
 pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
+    crate::gc::ensure_registered();
     let title = if title_ptr.is_null() {
         "Perry App".to_string()
     } else {
@@ -52,6 +53,14 @@ pub fn app_create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
     });
 
     1 // Single app handle
+}
+
+pub(crate) fn scan_ios_app_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TIMER_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
 }
 
 /// Set the root widget (body) of the app.

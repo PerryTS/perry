@@ -31,6 +31,21 @@ thread_local! {
     static TOOLBAR_CALLBACKS: RefCell<HashMap<usize, f64>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_macos_toolbar_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    TOOLBARS.with(|toolbars| {
+        for toolbar in toolbars.borrow_mut().iter_mut() {
+            for item in &mut toolbar.items {
+                visitor.visit_nanbox_f64_slot(&mut item.callback);
+            }
+        }
+    });
+    TOOLBAR_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+}
+
 pub struct PerryToolbarTargetIvars {
     callback_key: std::cell::Cell<usize>,
 }

@@ -53,6 +53,15 @@ unsafe impl Send for SendPromise {}
 /// The pump tick drains this and calls js_promise_resolve on the main thread.
 static PENDING_RESOLVES: Mutex<Vec<(SendPromise, f64)>> = Mutex::new(Vec::new());
 
+pub(crate) fn scan_android_ws_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    if let Ok(mut pending) = PENDING_RESOLVES.lock() {
+        for (promise, value) in pending.iter_mut() {
+            visitor.visit_raw_mut_ptr_slot(&mut promise.0);
+            visitor.visit_nanbox_f64_slot(value);
+        }
+    }
+}
+
 /// Extract a Rust &str from a Perry StringHeader pointer.
 use perry_ffi::copy_string_from_raw as str_from_header;
 

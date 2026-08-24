@@ -17,6 +17,14 @@ thread_local! {
     static PICKER_STATES: RefCell<HashMap<i64, PickerState>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_android_picker_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    PICKER_STATES.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.on_change);
+        }
+    });
+}
+
 pub fn create(label_ptr: *const u8, on_change: f64, _style: i64) -> i64 {
     let _label = unsafe { str_from_header(label_ptr) };
     let mut env = jni_bridge::get_env();

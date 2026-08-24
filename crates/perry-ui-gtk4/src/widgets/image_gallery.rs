@@ -28,6 +28,14 @@ thread_local! {
     static STATES: RefCell<HashMap<i64, GalleryState>> = RefCell::new(HashMap::new());
 }
 
+pub(crate) fn scan_gtk4_image_gallery_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    STATES.with(|states| {
+        for state in states.borrow_mut().values_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.on_index_change);
+        }
+    });
+}
+
 pub fn create(on_index_change: f64) -> i64 {
     crate::app::ensure_gtk_init();
     let scrolled = gtk4::ScrolledWindow::new();

@@ -77,6 +77,29 @@ thread_local! {
     static DEFERRED_REBUILDS: RefCell<Vec<DeferredRebuild>> = RefCell::new(Vec::new());
 }
 
+pub(crate) fn scan_ios_state_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
+    STATES.with(|states| {
+        for state in states.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut state.value);
+        }
+    });
+    FOR_EACH_BINDINGS.with(|bindings| {
+        for binding in bindings.borrow_mut().values_mut().flatten() {
+            visitor.visit_nanbox_f64_slot(&mut binding.render_closure);
+        }
+    });
+    ON_CHANGE_CALLBACKS.with(|callbacks| {
+        for callback in callbacks.borrow_mut().values_mut().flatten() {
+            visitor.visit_nanbox_f64_slot(callback);
+        }
+    });
+    DEFERRED_REBUILDS.with(|rebuilds| {
+        for rebuild in rebuilds.borrow_mut().iter_mut() {
+            visitor.visit_nanbox_f64_slot(&mut rebuild.render_closure);
+        }
+    });
+}
+
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Check if a f64 value is a NaN-boxed string (STRING_TAG = 0x7FFF).
