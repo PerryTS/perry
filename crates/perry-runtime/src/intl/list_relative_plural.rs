@@ -670,18 +670,21 @@ pub(crate) extern "C" fn rtf_bound_resolved_options_thunk(closure: *const Closur
 
 // ---- Intl.PluralRules ------------------------------------------------------
 
+fn plural_digit_integer(number: f64, min: f64, max: f64) -> Option<f64> {
+    (number.is_finite() && number >= min && number <= max).then(|| number.floor())
+}
+
 fn plural_digit_option(options: f64, key: &str, min: f64, max: f64) -> Option<f64> {
     let value = get_option_value(options, key);
     if JSValue::from_bits(value.to_bits()).is_undefined() {
         return None;
     }
     let number = to_number_reject_bigint(value);
-    let integer = number.trunc();
-    if integer.is_nan() || integer < min || integer > max {
+    let Some(integer) = plural_digit_integer(number, min, max) else {
         throw_range_error(&format!(
             "Value {number} out of range for Intl.PluralRules options property {key}"
         ));
-    }
+    };
     Some(integer)
 }
 
@@ -928,6 +931,15 @@ pub(crate) fn plural_rules_select(obj: *const ObjectHeader, value: f64) -> f64 {
 #[cfg(test)]
 mod plural_category_tests {
     use super::*;
+
+    #[test]
+    fn digit_options_validate_before_flooring() {
+        assert_eq!(plural_digit_integer(20.9, 1.0, 21.0), Some(20.0));
+        assert_eq!(plural_digit_integer(21.9, 1.0, 21.0), None);
+        assert_eq!(plural_digit_integer(100.5, 0.0, 100.0), None);
+        assert_eq!(plural_digit_integer(-0.5, 0.0, 100.0), None);
+        assert_eq!(plural_digit_integer(f64::INFINITY, 0.0, 100.0), None);
+    }
 
     #[test]
     fn locale_selectors_only_return_advertised_categories() {
