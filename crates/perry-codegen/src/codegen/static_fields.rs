@@ -306,16 +306,18 @@ pub(super) fn init_static_fields_late(
                 // reassignment made between the class decl and end of module
                 // init. Mirrors the static-block dedup below. The inline
                 // lowering also registers the field in CLASS_DYNAMIC_PROPS.
-                let inline_initialized = hir.init.iter().any(|s| {
-                    matches!(
-                        s,
-                        perry_hir::Stmt::Expr(perry_hir::Expr::StaticFieldSet {
-                            class_name,
-                            field_name,
-                            ..
-                        }) if *class_name == c.name && *field_name == sf.name
-                    )
-                });
+                let inline_initialized = super::entry_outline::logical_entry_stmts(hir)
+                    .into_iter()
+                    .any(|s| {
+                        matches!(
+                            s,
+                            perry_hir::Stmt::Expr(perry_hir::Expr::StaticFieldSet {
+                                class_name,
+                                field_name,
+                                ..
+                            }) if *class_name == c.name && *field_name == sf.name
+                        )
+                    });
                 if inline_initialized {
                     continue;
                 }

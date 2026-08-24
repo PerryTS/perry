@@ -1409,6 +1409,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         } // macOS / darwin default
     };
     progress.checkpoint("symbol tables and initial declarations");
+    // #8595: after entry outlining, declaration-bearing statements live in
+    // compiler-owned chunk functions. Analyses that model the module's source
+    // environment use the reconstructed stream, not the compact call-only
+    // `hir.init`, so immutable initializer facts and TDZ/prealloc metadata are
+    // unchanged by the structural transform.
+    let logical_entry_stmts = entry_outline::logical_entry_stmts(hir);
 
     // Pre-scan hir.init for compile-time constant variables. These are
     // `declare const __platform__: number` / `declare const __plugins__: number`
@@ -1416,7 +1422,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // uses these to constant-fold platform checks in `lower_if`, eliminating
     // dead branches that reference extern FFI functions absent on the target.
     let mut compile_time_constants: HashMap<u32, f64> = HashMap::new();
-    for s in &hir.init {
+    for s in logical_entry_stmts.iter().copied() {
         if let perry_hir::Stmt::Let {
             id,
             name,
@@ -1445,14 +1451,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // ReferenceError on pre-declaration reads instead of folding to a value.
     {
         let mut prealloc_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
-        for s in &hir.init {
+        for s in logical_entry_stmts.iter().copied() {
             if let perry_hir::Stmt::PreallocateBoxes(ids)
             | perry_hir::Stmt::PreallocateTdzBoxes(ids) = s
             {
                 prealloc_ids.extend(ids.iter().copied());
             }
         }
-        for s in &hir.init {
+        for s in logical_entry_stmts.iter().copied() {
             if let perry_hir::Stmt::Let {
                 id,
                 mutable: false,
@@ -2227,7 +2233,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // in the module (LocalSet/Update/IndexSet/mutating methods).
             let mut map: std::collections::HashMap<u32, crate::expr::FlatConstInfo> =
                 std::collections::HashMap::new();
-            for s in &hir.init {
+            for s in logical_entry_stmts.iter().copied() {
                 if let perry_hir::Stmt::Let {
                     id,
                     init: Some(init),

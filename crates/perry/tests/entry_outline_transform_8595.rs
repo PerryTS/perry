@@ -1,14 +1,13 @@
 //! #8595 entry-outlining transform — end-to-end differential.
 //!
-//! `PERRY_OUTLINE_ENTRY` rewrites an eligible module-entry body into per-chunk
-//! functions, hoisting top-level `let` declarations so cross-chunk state is
-//! globalized (via the existing `emit_module_globals` escape rule) and shared
-//! across the chunks. This must not change observable behavior — including
-//! under a relocating minor, since the cross-chunk objects now live in module
-//! globals that a moving collection has to find and rewrite.
+//! Oversized entries are outlined automatically; `PERRY_OUTLINE_ENTRY=1`
+//! forces the transform on small differential fixtures. Original declarations
+//! move unchanged into chunk functions, while module-global discovery gives
+//! them shared rooted storage. This must not change observable behavior —
+//! including under a relocating minor.
 //!
 //! The same program is compiled twice from identical source:
-//!   * `PERRY_OUTLINE_ENTRY` unset — the ordinary single-function entry;
+//!   * `PERRY_OUTLINE_ENTRY=0` — the ordinary single-function entry;
 //!   * `PERRY_OUTLINE_ENTRY=1 PERRY_OUTLINE_ENTRY_CHUNK_STMTS=1` — maximum
 //!     chunking, so every top-level statement is its own chunk function and the
 //!     object lets `a`/`b`/`c` are genuinely defined in one chunk and read in
@@ -24,14 +23,14 @@ fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-/// Straight-line, no exports / no control flow / no top-level await, so it is
-/// an eligible outlining candidate. `a`/`b`/`c` are heap objects defined in
-/// separate chunks and read together in a later chunk.
+/// Exported immutable bindings exercise the module-global/export scans that
+/// used to gate outlining out entirely. `a`/`b`/`c` are heap objects defined
+/// in separate chunks and read together in a later chunk.
 const SOURCE: &str = r#"
 let a = { v: 3 };
 let b = { v: 4 };
 let c = { v: 5 };
-let sum = a.v + b.v + c.v;
+export const sum = a.v + b.v + c.v;
 console.log("sum:" + sum);
 "#;
 
@@ -52,6 +51,7 @@ const GC_ENV_OVERRIDES: &[&str] = &[
     "PERRY_OUTLINE_ENTRY",
     "PERRY_OUTLINE_ENTRY_CHUNK_STMTS",
     "PERRY_OUTLINE_ENTRY_REPORT",
+    "PERRY_OUTLINE_SCAN_8595",
 ];
 
 fn compile(dir: &std::path::Path, name: &str, source: &str, outline: bool) -> (PathBuf, String) {
@@ -72,6 +72,8 @@ fn compile(dir: &std::path::Path, name: &str, source: &str, outline: bool) -> (P
         cmd.env("PERRY_OUTLINE_ENTRY", "1")
             .env("PERRY_OUTLINE_ENTRY_CHUNK_STMTS", "1")
             .env("RUST_LOG", "debug");
+    } else {
+        cmd.env("PERRY_OUTLINE_ENTRY", "0");
     }
     let out = cmd.output().expect("run perry compile");
     assert!(
@@ -115,6 +117,11 @@ fn run_arms(binary: &std::path::Path, dir: &std::path::Path, label: &str, expect
             expected,
             "[{arm_label}] wrong output"
         );
+        assert!(
+            run.stderr.is_empty(),
+            "[{arm_label}] unexpected stderr:\n{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
     }
 }
 
@@ -139,29 +146,101 @@ fn outlined_entry_matches_the_single_function_entry_under_a_relocating_minor() {
     run_arms(&on_bin, dir.path(), "outlined", EXPECTED);
 }
 
-/// A body with a top-level `if` between relocatable runs: the transform must
-/// outline the runs and keep the `if` inline, in order — and the result must
-/// still match the single-function build under a relocating minor.
+/// Script-global function reflection and a `globalThis` read used to be a
+/// conservative coupling bail. Structured control flow now moves as one chunk
+/// statement, while the reflection still happens before user code.
 const INTERLEAVE_SOURCE: &str = r#"
+function reflected() { return 7; }
 let a = { v: 10 };
 let b = { v: 20 };
 if (a.v < b.v) { console.log("less"); }
 let c = { v: 30 };
-console.log("total:" + (a.v + b.v + c.v));
+console.log("total:" + (a.v + b.v + c.v + globalThis.reflected()));
 "#;
 
-const INTERLEAVE_EXPECTED: &str = "less\ntotal:60\n";
+const INTERLEAVE_EXPECTED: &str = "less\ntotal:67\n";
 
 #[test]
-fn outlining_interleaves_chunks_around_inline_control_flow() {
+fn outlining_preserves_structured_control_flow_and_script_global_reflection() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (off_bin, _) = compile(dir.path(), "int_off", INTERLEAVE_SOURCE, false);
     let (on_bin, on_stderr) = compile(dir.path(), "int_on", INTERLEAVE_SOURCE, true);
     assert!(
         on_stderr.contains("outlined entry body of 'int_on.ts' into")
             && on_stderr.contains("chunk functions"),
-        "the interleaved body must still outline:\nstderr:\n{on_stderr}"
+        "the structured body must still outline:\nstderr:\n{on_stderr}"
     );
     run_arms(&off_bin, dir.path(), "single-function", INTERLEAVE_EXPECTED);
     run_arms(&on_bin, dir.path(), "outlined", INTERLEAVE_EXPECTED);
+}
+
+/// `process.env` literals in the entry are applied before static dependencies
+/// initialize. The early scan must follow chunk calls after outlining.
+#[test]
+fn outlining_keeps_early_process_env_assignment_visible_to_dependencies() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("dep.ts"),
+        r#"export const observed = process.env.PERRY_OUTLINE_SCAN_8595 || "missing";"#,
+    )
+    .expect("write dependency");
+    let source = r#"
+process.env.PERRY_OUTLINE_SCAN_8595 = "visible";
+import { observed } from "./dep";
+console.log(observed);
+"#;
+    let (off_bin, _) = compile(dir.path(), "env_off", source, false);
+    let (on_bin, on_stderr) = compile(dir.path(), "env_on", source, true);
+    assert!(
+        on_stderr.contains("outlined entry body of 'env_on.ts' into"),
+        "the env fixture must outline:\nstderr:\n{on_stderr}"
+    );
+    run_arms(&off_bin, dir.path(), "single-function", "visible\n");
+    run_arms(&on_bin, dir.path(), "outlined", "visible\n");
+}
+
+#[test]
+fn oversized_entry_outlines_automatically_without_an_environment_opt_in() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut source = String::new();
+    for id in 0..1_001 {
+        source.push_str(&format!("const v{id} = {id};\n"));
+    }
+    source.push_str("console.log(v0 + v1000);\n");
+
+    let entry = dir.path().join("auto.ts");
+    let output = dir.path().join("auto");
+    std::fs::write(&entry, source).expect("write automatic outlining fixture");
+    let mut cmd = Command::new(perry_bin());
+    cmd.current_dir(dir.path())
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .arg("--no-cache")
+        .env("RUST_LOG", "debug");
+    for key in GC_ENV_OVERRIDES {
+        cmd.env_remove(key);
+    }
+    let compiled = cmd.output().expect("compile automatic outlining fixture");
+    assert!(
+        compiled.status.success(),
+        "automatic outlining compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compiled.stdout),
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&compiled.stderr);
+    assert!(
+        stderr.contains("outlined entry body of 'auto.ts' into 6 chunk functions"),
+        "the default 1,000-statement gate should emit six bounded chunks:\n{stderr}"
+    );
+
+    let run = Command::new(&output)
+        .current_dir(dir.path())
+        .env_remove("PERRY_OUTLINE_SCAN_8595")
+        .output()
+        .expect("run automatic outlining fixture");
+    assert!(run.status.success(), "automatic outlined binary failed");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "1000\n");
+    assert!(run.stderr.is_empty());
 }

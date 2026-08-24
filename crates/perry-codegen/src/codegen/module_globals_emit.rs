@@ -341,8 +341,12 @@ pub(crate) fn emit_module_globals(
             }
         }
     }
+    let logical_entry = super::entry_outline::logical_entry_stmts(hir);
+    let outlined_entry_globals = super::entry_outline::outlined_entry_global_let_ids(hir);
     let mut init_lets: Vec<&perry_hir::Stmt> = Vec::new();
-    collect_init_lets(&hir.init, &mut init_lets);
+    for stmt in logical_entry {
+        collect_init_lets(std::slice::from_ref(stmt), &mut init_lets);
+    }
     // `Expr::New { class_name }` does not retain whether an unqualified name
     // came from the intrinsic or a same-named runtime binding. Mirror HIR's
     // `shadows_unqualified_global` categories here, plus the module-level HIR
@@ -374,7 +378,10 @@ pub(crate) fn emit_module_globals(
             {
                 module_global_proven_types.insert(*id, proven);
             }
-            if referenced_from_fn.contains(id) || exported_var_names.contains(name) {
+            if outlined_entry_globals.contains(id)
+                || referenced_from_fn.contains(id)
+                || exported_var_names.contains(name)
+            {
                 // A `var` redeclared at module scope (`var x = …; … var x = …;`)
                 // lowers to multiple `Stmt::Let` sharing the SAME id. The backing
                 // global (and any exported getter) is keyed by that id, so emit it

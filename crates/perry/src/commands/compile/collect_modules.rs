@@ -1942,9 +1942,17 @@ fn collect_module_finish(
         // #8595: outline an oversized module-entry body into per-chunk
         // functions so no single function carries the whole init (which is
         // pathological for RS4GC relocation fan-out, ISel, and regalloc alike).
-        // Self-gating and fail-safe: a no-op unless PERRY_OUTLINE_ENTRY is set,
-        // and it declines (leaving the body unchanged) unless the whole body is
-        // provably safe to relocate. See perry-codegen `codegen::entry_outline`.
+        // Automatic only for very large entries; PERRY_OUTLINE_ENTRY=1 forces
+        // the transform and =0 disables it. Fail-safe exclusions leave the
+        // original body untouched. See perry-codegen `codegen::entry_outline`.
+        progress.record(ProgressSnapshot {
+            stage: "transform-outline-entry",
+            module_path: Some(&canonical),
+            module_name: Some(&module_name),
+            visited: Some(visited.len()),
+            collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
+            ..Default::default()
+        });
         match perry_codegen::codegen::entry_outline::outline_entry_module(&mut hir_module) {
             perry_codegen::codegen::entry_outline::OutlineOutcome::Outlined { chunks } => {
                 log::debug!(
@@ -1953,7 +1961,13 @@ fn collect_module_finish(
                     chunks
                 );
             }
-            perry_codegen::codegen::entry_outline::OutlineOutcome::Skipped(_) => {}
+            perry_codegen::codegen::entry_outline::OutlineOutcome::Skipped(reason) => {
+                log::debug!(
+                    "perry: entry body of '{}' not outlined: {}",
+                    hir_module.name,
+                    reason
+                );
+            }
         }
         progress.record(ProgressSnapshot {
             stage: "transform-generators",
