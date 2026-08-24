@@ -68,7 +68,77 @@ iOS apps use `UIApplicationMain` with a deferred creation pattern:
 {{#include ../../examples/platforms/ui/ios_app.ts:ios-app}}
 ```
 
-The `App()` call triggers `UIApplicationMain`, and your render function is called via `PerryAppDelegate` once the app is ready.
+The `App()` call triggers `UIApplicationMain`, and your render function is called via `PerryAppDelegate` once the app is ready. Perry-generated apps use `UIWindowScene`, `PerrySceneDelegate`, and an `UIApplicationSceneManifest`, which also satisfies the scene-based lifecycle required for apps built with the iOS 27 SDK.
+
+## Adaptive layouts
+
+Use `perry/ios` to inspect the active scene rather than branching on a device model or physical screen size:
+
+```typescript,no-test
+import {
+  getLayoutEnvironment,
+  onLayoutChange,
+  offLayoutChange,
+} from "perry/ios";
+
+const initial = getLayoutEnvironment();
+console.log(initial.width, initial.horizontalSizeClass, initial.windowMode);
+
+const subscription = onLayoutChange((layout) => {
+  if (layout.horizontalSizeClass === "compact") {
+    // Present a compact navigation treatment.
+  }
+  if (layout.isFourByThree || layout.windowMode === "sideBySide") {
+    // Reflow content for 4:3 or iPad side-by-side multitasking.
+  }
+
+  // These insets describe display cutouts, rounded corners, and any future
+  // interrupted-display geometry exposed to the scene by UIKit.
+  console.log(layout.safeAreaTop, layout.safeAreaRight);
+});
+
+// When the observer is no longer needed:
+offLayoutChange(subscription);
+```
+
+Snapshots contain the window dimensions and aspect ratio, display scale, horizontal and vertical size classes, orientation, window mode, multitasking and 4:3 flags, and all four safe-area insets. On iOS 27 they also contain the effective scene's system-space frame, interactive-resize state, and orientation-lock state. The callback fires once when a scene is available and then after meaningful bounds, trait, safe-area, or effective-geometry changes.
+
+UIKit does not expose a separate public hardware-model or hinge-state property. Safe areas, effective scene geometry, and trait collections are the supported adaptive signals, and they continue to work when one device moves among full-screen, side-by-side, and freeform window modes. Perry's `SplitView` and `FrameSplit` also cap their preferred sidebar at 45% of the current scene width so the detail pane remains usable in narrow layouts.
+
+## Foundation Models
+
+The simple, unstructured Foundation Models flow is available through `perry/ios`:
+
+```typescript,no-test
+import {
+  foundationModelAvailability,
+  createLanguageModelSession,
+  respond,
+  destroyLanguageModelSession,
+} from "perry/ios";
+
+if (foundationModelAvailability() === "available") {
+  const session = createLanguageModelSession(
+    "Answer in one short, factual sentence.",
+  );
+  try {
+    const answer = await respond(session, "Why is the sky blue?");
+    console.log(answer);
+  } finally {
+    destroyLanguageModelSession(session);
+  }
+}
+```
+
+The bridge uses Apple's default `LanguageModelSession`, preserves conversational context while a session handle is reused, and rejects the returned promise when generation fails. Check availability first: unsupported OS versions and unavailable Apple Intelligence configurations are reported without loading the framework. This surface intentionally returns plain strings; structured `@Generable` responses are outside the current API.
+
+Building a source file that imports `perry/ios` requires an Xcode SDK containing `FoundationModels.framework` (Xcode 26 or later). The framework is weak-linked, so the normal iOS 17 deployment target remains valid.
+
+## Now Playing on iOS 27
+
+`perry/media.setNowPlaying(...)` is the public Perry API for Lock Screen, Control Center, Dynamic Island, CarPlay, artwork, playback progress, and play/pause/stop/seek commands. When an Xcode 27 SDK containing `NowPlaying.framework` is installed, Perry automatically compiles an observable `MediaSession` bridge and publishes each player through the new framework. Builds made with older SDKs, and devices before iOS 27, retain the existing `MPNowPlayingInfoCenter` / `MPRemoteCommandCenter` compatibility path. Perry never activates both paths for one local session.
+
+The iOS 27 SDK is beta software until Apple's GM release. This support does not change Perry's SDK build markers or version; distribution metadata should only be updated once the GM toolchain can submit to App Store Connect.
 
 ## iOS Widgets (WidgetKit)
 

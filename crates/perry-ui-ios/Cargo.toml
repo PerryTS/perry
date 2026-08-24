@@ -55,6 +55,7 @@ objc2-ui-kit = { version = "0.3", features = [
     "UIColor",
     "UIFont",
     "UIControl",
+    "UIGeometry",
     "UIPasteboard",
     "UIResponder",
     "UIScreen",

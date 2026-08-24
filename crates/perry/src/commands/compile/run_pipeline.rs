@@ -1196,7 +1196,7 @@ pub fn run_with_parse_cache(
         // These are in exported_objects but not in functions, so they need param counts too
         let exported_set: std::collections::HashSet<&String> =
             hir_module.exported_objects.iter().collect();
-        for stmt in &hir_module.init {
+        for stmt in perry_codegen::codegen::entry_outline::logical_entry_stmts(hir_module) {
             if let perry_hir::ir::Stmt::Let {
                 name,
                 init: Some(expr),

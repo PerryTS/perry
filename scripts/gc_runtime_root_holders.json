@@ -1491,6 +1491,14 @@
       "name": "WEBVIEW_STATES"
     },
     {
+      "file": "crates/perry-ui-ios/src/adaptive_layout.rs",
+      "name": "LAST_SNAPSHOT"
+    },
+    {
+      "file": "crates/perry-ui-ios/src/adaptive_layout.rs",
+      "name": "LISTENERS"
+    },
+    {
       "file": "crates/perry-ui-ios/src/app.rs",
       "name": "PENDING_CONFIG"
     },

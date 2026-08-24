@@ -336,7 +336,15 @@ fn no_entry_module_root_is_live_before_the_gc_is_initialized() {
             vec![
                 let_stmt(1, "a", Expr::MapNew),
                 let_stmt(2, "b", Expr::MapNew),
-                console_log(vec![Expr::LocalGet(1), Expr::LocalGet(2)]),
+                // Keep the string initializer non-empty: #8596 can prove an
+                // empty initializer transitively leaf, in which case it is an
+                // ordinary call rather than a statepoint and this test would
+                // stop observing the boundary whose ordering it verifies.
+                console_log(vec![
+                    Expr::LocalGet(1),
+                    Expr::LocalGet(2),
+                    Expr::String("root-order-control".to_string()),
+                ]),
             ],
         );
         let ir = native_ir(&module, target, true);

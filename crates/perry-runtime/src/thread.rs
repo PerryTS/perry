@@ -1600,6 +1600,15 @@ fn queue_thread_result(
     promise_usize: usize,
     result: SerializedValue,
 ) {
+    queue_thread_result_with_mode(owner, promise_usize, result, false);
+}
+
+fn queue_thread_result_with_mode(
+    owner: crate::agent::AgentId,
+    promise_usize: usize,
+    result: SerializedValue,
+    is_rejection: bool,
+) {
     // We need to interact with perry-stdlib's deferred resolution queue.
     // Since perry-runtime cannot depend on perry-stdlib, we use the same
     // pattern as timer resolution: store the result and let the pump pick it up.
@@ -1616,6 +1625,7 @@ fn queue_thread_result(
             owner,
             promise_ptr: promise_usize,
             result,
+            is_rejection,
         });
     }
     ACTIVE_THREAD_JOBS.fetch_sub(1, Ordering::SeqCst);
@@ -1664,6 +1674,23 @@ pub fn queue_promise_string_result(
     );
 }
 
+/// Reject a pinned cross-thread promise with a UTF-8 message on its owning
+/// agent. This is the error-side companion to
+/// [`queue_promise_string_result`], used by native async framework bridges
+/// whose completion may arrive on an arbitrary OS thread (#5536).
+pub fn queue_promise_string_rejection(
+    owner: crate::agent::AgentId,
+    promise_usize: usize,
+    message: &str,
+) {
+    queue_thread_result_with_mode(
+        owner,
+        promise_usize,
+        SerializedValue::String(message.as_bytes().to_vec()),
+        true,
+    );
+}
+
 /// A pending thread result waiting to be resolved on the agent that spawned it.
 struct PendingThreadResult {
     /// #6185: the agent whose heap `promise_ptr` lives in — captured at spawn
@@ -1674,6 +1701,8 @@ struct PendingThreadResult {
     owner: crate::agent::AgentId,
     promise_ptr: usize,
     result: SerializedValue,
+    /// Settle through `reject` rather than `resolve` after deserialization.
+    is_rejection: bool,
 }
 
 // Safety: SerializedValue is Send, usize is Send. `promise_ptr` is a raw
@@ -1689,7 +1718,7 @@ static PENDING_THREAD_RESULTS: std::sync::Mutex<Vec<PendingThreadResult>> =
 /// (registered as a pump function, similar to js_stdlib_process_pending).
 ///
 /// Drains the queue, deserializes each result into the main thread's arena,
-/// and resolves the corresponding Promise.
+/// and resolves or rejects the corresponding Promise.
 ///
 /// # Returns
 /// Number of results processed.
@@ -1737,9 +1766,13 @@ pub extern "C" fn js_thread_process_pending() -> i32 {
                 continue;
             }
 
-            // Deserialize the result into the main thread's arena and resolve.
+            // Deserialize the result into the owning agent's arena and settle.
             let result_bits = deserialize_nanbox_on_current_thread(&item.result);
-            crate::promise::js_promise_resolve(promise, f64::from_bits(result_bits));
+            if item.is_rejection {
+                crate::promise::js_promise_reject(promise, f64::from_bits(result_bits));
+            } else {
+                crate::promise::js_promise_resolve(promise, f64::from_bits(result_bits));
+            }
         }
     }
 

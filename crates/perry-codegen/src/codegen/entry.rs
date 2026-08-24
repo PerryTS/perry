@@ -122,7 +122,7 @@ fn emit_plugin_abi_shim(llmod: &mut LlModule, hir: &HirModule, module_prefix: &s
 /// (function(){ ... })()`), which is where the wrapped entry's top-level
 /// statements live. Assignments nested in conditionals or inner functions are
 /// deliberately skipped — those run conditionally/lazily, exactly as in Node.
-fn collect_entry_env_literals(init: &[perry_hir::Stmt]) -> Vec<(String, String)> {
+fn collect_entry_env_literals(hir: &HirModule) -> Vec<(String, String)> {
     use perry_hir::{Expr, Stmt};
 
     fn record(expr: &Expr, out: &mut Vec<(String, String)>) {
@@ -176,7 +176,9 @@ fn collect_entry_env_literals(init: &[perry_hir::Stmt]) -> Vec<(String, String)>
     }
 
     let mut out = Vec::new();
-    scan(init, &mut out, 0);
+    for stmt in super::entry_outline::logical_entry_stmts(hir) {
+        scan(std::slice::from_ref(stmt), &mut out, 0);
+    }
     out
 }
 
@@ -620,7 +622,7 @@ pub(super) fn compile_module_entry(
             // `collect_entry_env_literals`. The "NODE_ENV"/"production" string
             // handles are interned here and populated by the strings-init call
             // above (the entry body also references them, so they share slots).
-            for (name, value) in collect_entry_env_literals(&hir.init) {
+            for (name, value) in collect_entry_env_literals(hir) {
                 let name_idx = strings.intern(&name);
                 let value_idx = strings.intern(&value);
                 let name_global = format!("@{}", strings.entry(name_idx).handle_global);

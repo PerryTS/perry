@@ -580,6 +580,11 @@ pub(super) fn compile_function(
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
+    let entry_outline_chunk = super::entry_outline::is_entry_chunk(f);
+    // #8595: these functions exist specifically to bound backend work. Letting
+    // the ordinary or pre-statepoint inliner fold them back into module init
+    // would recreate the single giant function before RS4GC/ISel/regalloc.
+    lf.no_inline = entry_outline_chunk;
     if typed_public_trampoline.is_some()
         || guarded_public_plan.is_some()
         || spec_entry.is_some()
@@ -620,7 +625,8 @@ pub(super) fn compile_function(
     // rewritten wrapper into its caller breaks GC-root coverage of the
     // step closure's iter capture, hanging async chains (issue #447).
     let specialized_entry = spec_entry.is_some();
-    if !specialized_entry
+    if !entry_outline_chunk
+        && !specialized_entry
         && f.body.len() <= 8
         && !f.is_async
         && !f.is_generator
@@ -647,7 +653,8 @@ pub(super) fn compile_function(
     // as `hot_loop_callee` (before the entry block exists and before any
     // expression is lowered), for the same reason.
     lf.alloc_hot = cross_module.alloc_hot_functions.contains(&f.id);
-    if !specialized_entry
+    if !entry_outline_chunk
+        && !specialized_entry
         && !lf.force_inline
         && inline_hot_small_enabled()
         && (INLINE_HOT_SMALL_MIN..=inline_hot_small_size_cap()).contains(&f.body.len())

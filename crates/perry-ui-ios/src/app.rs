@@ -287,6 +287,10 @@ unsafe extern "C" fn scene_will_connect(
         a.borrow_mut().push(AppEntry { window });
     });
 
+    // Publish the initial scene-relative geometry after the UIWindow has a
+    // root controller and is visible (#5536).
+    crate::adaptive_layout::notify_if_changed();
+
     // Register for keyboard notifications
     register_keyboard_observers();
 
@@ -371,6 +375,17 @@ unsafe extern "C" fn scene_continue_user_activity(
     crate::deeplinks::dispatch_continue_user_activity(activity as *const AnyObject);
 }
 
+/// iOS 27 scene-geometry callback. UIKit passes the previous geometry; the
+/// public Perry snapshot always reads the scene's current effective geometry.
+unsafe extern "C" fn scene_did_update_effective_geometry(
+    _this: *mut AnyObject,
+    _sel: *const std::ffi::c_void,
+    _scene: *mut AnyObject,
+    _previous_geometry: *mut AnyObject,
+) {
+    crate::adaptive_layout::notify_if_changed();
+}
+
 /// Register the PerrySceneDelegate class dynamically at runtime.
 fn register_scene_delegate() {
     unsafe {
@@ -422,6 +437,17 @@ fn register_scene_delegate() {
             c"v@:@@".as_ptr(),
         );
 
+        // iOS 27: receive every effective UIWindowScene geometry update,
+        // including continuous interactive resizing and screen moves. Older
+        // UIKit releases simply never invoke this optional delegate method.
+        let sel_geometry = sel_registerName(c"windowScene:didUpdateEffectiveGeometry:".as_ptr());
+        class_addMethod(
+            cls,
+            sel_geometry,
+            scene_did_update_effective_geometry as *const std::ffi::c_void,
+            c"v@:@@".as_ptr(),
+        );
+
         objc_registerClassPair(cls);
     }
 }
@@ -463,6 +489,19 @@ unsafe extern "C" fn vc_can_perform_action(
     action == perry_sel
 }
 
+/// UIViewController layout hook used by `perry/ios.onLayoutChange`. Calling
+/// super preserves UIKit's own controller layout before we snapshot bounds,
+/// traits, and safe-area insets.
+unsafe extern "C" fn vc_view_did_layout_subviews(
+    this: *mut AnyObject,
+    _sel: *const std::ffi::c_void,
+) {
+    if let Some(superclass) = AnyClass::get(c"UIViewController") {
+        let _: () = msg_send![super(this, superclass), viewDidLayoutSubviews];
+    }
+    crate::adaptive_layout::notify_if_changed();
+}
+
 /// Register the PerryViewController class dynamically at runtime.
 fn register_view_controller() {
     unsafe {
@@ -498,6 +537,14 @@ fn register_view_controller() {
             sel_can,
             vc_can_perform_action as *const std::ffi::c_void,
             c"B@::@".as_ptr(),
+        );
+
+        let sel_layout = sel_registerName(c"viewDidLayoutSubviews".as_ptr());
+        class_addMethod(
+            cls,
+            sel_layout,
+            vc_view_did_layout_subviews as *const std::ffi::c_void,
+            c"v@:".as_ptr(),
         );
 
         objc_registerClassPair(cls);

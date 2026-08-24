@@ -1053,3 +1053,30 @@ Closing the last axis therefore needs the root set to shrink, not the encoding:
 221 KB of map for 154k roots is already near this format's floor. That is the
 repsel-promotion lever the earlier projection named, and it is still the
 outstanding work.
+
+## Safepoint density and the caller-frame constraint (2026-08-24)
+
+A polling design cannot soundly mark every ordinary call as
+`gc-leaf-function` under LLVM statepoints. If `A` calls `B`, and `B` reaches an
+allocation or loop poll that starts moving collection, `A` is suspended at its
+call to `B`. The collector must find and rewrite `A`'s live managed values at
+that return PC. Omitting the statepoint on `A -> B` would remove exactly that
+caller-frame relocation map; putting a poll only inside `B` does not recreate
+it. VM poll points reduce where collection may begin, but every active caller
+edge beneath such a poll still needs an oop/relocation map.
+
+Perry therefore applies the maximal local reduction that preserves this
+constraint: compute a whole-module, greatest-fixed-point GC-effect closure and
+mark a direct generated call leaf only when its callee cannot transitively
+reach collection. The proof admits mutually recursive pure components. It
+fails closed on any allocation or poll helper, indirect call, unknown external,
+or cross-module call, and propagates that result back through callers. Runtime
+helpers remain governed by the audited `GcCallEffect` table.
+
+The closure is computed before codegen-unit partitioning and carried into every
+unit, so a safe direct edge remains leaf even when caller and callee are emitted
+into different objects. Textual and native LLVM construction consume the same
+set; the native dialect also preserves the marker on `invoke` edges inside
+`try`. Calls outside the proven set remain ordinary RS4GC safepoints. Reducing
+those further requires a different frame representation (for example, spilling
+caller roots to a shadow frame), not merely moving the collection trigger.

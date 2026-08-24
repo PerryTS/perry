@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2051 entries across 133 modules
+// Coverage: 2059 entries across 134 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -2711,6 +2711,23 @@ declare module "perry/i18n" {
   export function t(...args: any[]): any;
 }
 
+declare module "perry/ios" {
+  /** stdlib */
+  export function createLanguageModelSession(...args: any[]): any;
+  /** stdlib */
+  export function destroyLanguageModelSession(...args: any[]): any;
+  /** stdlib */
+  export function foundationModelAvailability(...args: any[]): any;
+  /** stdlib */
+  export function getLayoutEnvironment(...args: any[]): any;
+  /** stdlib */
+  export function offLayoutChange(...args: any[]): any;
+  /** stdlib */
+  export function onLayoutChange(...args: any[]): any;
+  /** stdlib */
+  export function respond(...args: any[]): any;
+}
+
 declare module "perry/media" {
   /** stdlib */
   export function createPlayer(...args: any[]): any;
@@ -4018,6 +4035,8 @@ declare module "tls" {
   export function createServer(options: any, secureConnectionListener: any): any;
   /** stdlib */
   export function getCACertificates(type: any): any;
+  /** stdlib */
+  export function getCertificateCompressionAlgorithms(...args: any[]): any;
   /** stdlib */
   export function getCiphers(...args: any[]): any;
   /** stdlib */

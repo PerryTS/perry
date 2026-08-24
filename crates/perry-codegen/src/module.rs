@@ -13,6 +13,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::block::FpFlags;
 use crate::function::LlFunction;
@@ -299,7 +300,14 @@ pub(crate) fn declare_line_for(f: &LlFunction) -> String {
 /// `private` definition so cross-unit calls can bind to it. Names are
 /// module-prefixed and unique, so promotion never collides.
 pub(crate) fn render_fn_external(f: &LlFunction) -> String {
-    let ir = f.to_ir();
+    render_fn_external_with_gc_leaf_callees(f, &HashSet::new())
+}
+
+pub(crate) fn render_fn_external_with_gc_leaf_callees(
+    f: &LlFunction,
+    gc_leaf_callees: &HashSet<String>,
+) -> String {
+    let ir = f.to_ir_with_gc_leaf_callees(gc_leaf_callees);
     if f.linkage == "internal" || f.linkage == "private" {
         return ir.replacen(&format!("define {} ", f.linkage), "define ", 1);
     }
@@ -789,6 +797,11 @@ impl LlModule {
         ir.push('\n');
 
         let funcs = self.deduped_function_refs();
+        let gc_leaf_callees = if crate::codegen::helpers::native_stack_roots_enabled() {
+            crate::gc_call_effects::transitive_leaf_functions(&funcs)
+        } else {
+            HashSet::new()
+        };
 
         // Skip any `declare` whose name is also `define`d in this module —
         // LLVM rejects declare+define for the same symbol.
@@ -806,7 +819,7 @@ impl LlModule {
         ir.push('\n');
 
         for func in &funcs {
-            ir.push_str(&func.to_ir());
+            ir.push_str(&func.to_ir_with_gc_leaf_callees(&gc_leaf_callees));
             ir.push('\n');
         }
 
@@ -917,11 +930,17 @@ impl LlModule {
     /// into one object, keeping `compile_module`'s single-object API.
     pub(crate) fn codegen_unit_parts(&self, n: usize) -> Vec<CodegenUnitPart<'_>> {
         let funcs = self.deduped_function_refs();
+        let gc_leaf_callees = Arc::new(if crate::codegen::helpers::native_stack_roots_enabled() {
+            crate::gc_call_effects::transitive_leaf_functions(&funcs)
+        } else {
+            HashSet::new()
+        });
         if n <= 1 || funcs.len() <= 1 {
             return vec![CodegenUnitPart {
                 pre: String::new(),
                 post: String::new(),
                 funcs,
+                gc_leaf_callees,
             }];
         }
         let n = n.min(funcs.len());
@@ -1155,6 +1174,7 @@ impl LlModule {
                 pre,
                 post: unit_posts[bi].clone(),
                 funcs: bucket,
+                gc_leaf_callees: Arc::clone(&gc_leaf_callees),
             });
         }
         parts
@@ -1167,7 +1187,7 @@ impl LlModule {
     /// function graph as soon as its immutable worker payload exists instead
     /// of retaining the whole `LlModule` until every LLVM unit has finished.
     pub(crate) fn into_codegen_unit_parts(mut self, n: usize) -> Vec<OwnedCodegenUnitPart> {
-        let layouts: Vec<(String, String, Vec<String>)> = self
+        let layouts: Vec<(String, String, Vec<String>, Arc<HashSet<String>>)> = self
             .codegen_unit_parts(n)
             .into_iter()
             .map(|part| {
@@ -1175,6 +1195,7 @@ impl LlModule {
                     part.pre,
                     part.post,
                     part.funcs.iter().map(|func| func.name.clone()).collect(),
+                    part.gc_leaf_callees,
                 )
             })
             .collect();
@@ -1187,7 +1208,7 @@ impl LlModule {
 
         layouts
             .into_iter()
-            .map(|(pre, post, names)| OwnedCodegenUnitPart {
+            .map(|(pre, post, names, gc_leaf_callees)| OwnedCodegenUnitPart {
                 pre,
                 post,
                 funcs: names
@@ -1198,6 +1219,7 @@ impl LlModule {
                             .expect("borrowed codegen partition named an owned function")
                     })
                     .collect(),
+                gc_leaf_callees,
             })
             .collect()
     }
@@ -1215,7 +1237,10 @@ impl LlModule {
             .map(|part| {
                 let mut ir = part.pre;
                 for func in &part.funcs {
-                    ir.push_str(&render_fn_external(func));
+                    ir.push_str(&render_fn_external_with_gc_leaf_callees(
+                        func,
+                        &part.gc_leaf_callees,
+                    ));
                     ir.push('\n');
                 }
                 ir.push_str(&part.post);
@@ -1233,12 +1258,14 @@ pub(crate) struct CodegenUnitPart<'m> {
     pub pre: String,
     pub post: String,
     pub funcs: Vec<&'m LlFunction>,
+    pub gc_leaf_callees: Arc<HashSet<String>>,
 }
 
 pub(crate) struct OwnedCodegenUnitPart {
     pub pre: String,
     pub post: String,
     pub funcs: Vec<LlFunction>,
+    pub gc_leaf_callees: Arc<HashSet<String>>,
 }
 
 #[cfg(test)]

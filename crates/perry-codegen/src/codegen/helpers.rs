@@ -7,9 +7,6 @@
 
 use std::collections::HashMap;
 
-use anyhow::Result;
-use perry_hir::Module as HirModule;
-
 use crate::module::LlModule;
 use crate::types::{DOUBLE, I32, I64, PTR};
 

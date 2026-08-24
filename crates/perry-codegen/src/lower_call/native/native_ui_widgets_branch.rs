@@ -346,6 +346,26 @@
         );
     }
 
+    // iOS-only adaptive scene geometry + Foundation Models (#5536). The
+    // module is deliberately platform-specific so other UI backends never
+    // receive unresolved UIKit/Swift symbols.
+    if module == "perry/ios" && object.is_none() {
+        if !ctx.target_triple.contains("apple-ios") {
+            bail!(
+                "perry/ios is only available for --target ios or ios-simulator (current target: {})",
+                ctx.target_triple
+            );
+        }
+        if let Some(sig) = perry_ios_table_lookup(method) {
+            return lower_perry_ui_table_call(ctx, sig, args);
+        }
+        bail!(
+            "perry/ios: '{}' is not a known function (args: {}). Check types/perry/ios/index.d.ts for the supported API surface.",
+            method,
+            args.len()
+        );
+    }
+
     // perry/i18n format wrappers: Currency, Percent, FormatNumber, ShortDate,
     // LongDate, FormatTime, Raw. Without this, the call falls through to the
     // receiver-less early-out and returns NaN-boxed `undefined` (issue #188).

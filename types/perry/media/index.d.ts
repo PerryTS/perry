@@ -96,7 +96,8 @@ export function onTimeUpdate(
  * path to a local image or an `https://` URL — the platform backend caches
  * remote artwork before display.
  *
- * Apple: backed by `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter`.
+ * Apple: backed by an observable NowPlaying `MediaSession` on iOS 27,
+ * with `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter` as the fallback.
  * Android: backed by `MediaSessionCompat`.
  * Linux/GTK4: backed by MPRIS D-Bus.
  * Windows: backed by `SystemMediaTransportControls`.

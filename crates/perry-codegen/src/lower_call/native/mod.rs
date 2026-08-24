@@ -41,10 +41,10 @@ pub(super) use super::{
     find_outer_writes_stmt, find_thread_hazard_in_body, get_raw_string_ptr,
     hazardous_module_global_ids, lower_fetch_native_method, lower_native_module_dispatch,
     lower_notification_schedule, lower_perry_ui_table_call, native_module_lookup,
-    perry_audio_table_lookup, perry_i18n_table_lookup, perry_media_table_lookup,
-    perry_plugin_instance_method_lookup, perry_plugin_table_lookup, perry_system_table_lookup,
-    perry_ui_instance_method_lookup, perry_ui_table_lookup, perry_updater_table_lookup,
-    ThreadClosureHazard,
+    perry_audio_table_lookup, perry_i18n_table_lookup, perry_ios_table_lookup,
+    perry_media_table_lookup, perry_plugin_instance_method_lookup, perry_plugin_table_lookup,
+    perry_system_table_lookup, perry_ui_instance_method_lookup, perry_ui_table_lookup,
+    perry_updater_table_lookup, ThreadClosureHazard,
 };
 
 mod box_style;

@@ -9,6 +9,11 @@
 //! auditing the complete runtime call graph for `gc_check_trigger`,
 //! `js_gc_collect`, `js_gc_loop_safepoint`, or another route into collection.
 
+use std::collections::{HashMap, HashSet};
+
+use crate::function::{FinalItem, LlFunction};
+use crate::inst::LlInst;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GcCallEffect {
     CannotCollect,
@@ -55,6 +60,21 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_gc_temp_root_get"
         | "js_gc_temp_root_set"
         | "js_gc_temp_root_truncate"
+        // Heap-shadow-frame bookkeeping. These helpers touch only the
+        // thread-local shadow buffer; growth is a raw Rust Vec allocation,
+        // and slot writes may run the incremental-mark root barrier, neither
+        // of which can enter Perry's collector. Native-root functions consume
+        // bind/set calls before RS4GC, while #8583-spilled functions retain
+        // them. Classifying both forms lets the module call-graph closure prove
+        // an otherwise-leaf spilled callee without pretending its frame
+        // maintenance is a safepoint. All six are in the root-dominance
+        // checker's NONCOLLECTING authority.
+        | "js_shadow_frame_enter"
+        | "js_shadow_frame_push"
+        | "js_shadow_frame_pop"
+        | "js_shadow_state_addr"
+        | "js_shadow_slot_bind"
+        | "js_shadow_slot_set"
         // `gc/barrier.rs`: remembered-set / incremental-marking maintenance.
         | "js_write_barrier"
         | "js_write_barrier_slot"
@@ -234,6 +254,250 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // conservative in the only direction that is safe.
         _ => GcCallEffect::Unknown,
     }
+}
+
+/// Whether a direct external call is a Perry-GC leaf in this compile.
+///
+/// `AllocNoReentry` is deliberately conditional: without the strict
+/// safepoint-only contract those helpers may collect synchronously at their
+/// allocation site, so every caller frame on the stack still needs a
+/// statepoint at the edge that reached them.
+fn external_callee_cannot_collect(name: &str) -> bool {
+    name.starts_with("llvm.")
+        || match classify_direct_callee(name) {
+            GcCallEffect::CannotCollect => true,
+            GcCallEffect::AllocNoReentry => {
+                crate::codegen::helpers::gc_safepoint_only_contract_enabled()
+            }
+            GcCallEffect::Unknown => false,
+        }
+}
+
+/// The direct callee token and its argument-list opening parenthesis.
+///
+/// Perry's closed IR dialect emits unquoted `[-A-Za-z0-9_.$]` symbols. Search
+/// for the first `%name(`/`@name(` token after the call opcode rather than the
+/// first `(`: return types such as `ptr addrspace(1)` contain parentheses too.
+/// Choosing the first sigil also fails closed for an indirect call whose
+/// arguments later contain a direct-function constant.
+fn direct_callee_span(line: &str) -> Option<(&str, usize)> {
+    let trimmed = line.trim_start();
+    let leading = line.len() - trimmed.len();
+    // Prefer invoke before searching for `call`: a later argument or inline
+    // constant may contain those bytes, but it is never the opcode of an
+    // invoke line.
+    let opcode = if let Some(rest) = trimmed.strip_prefix("invoke ") {
+        trimmed.len() - rest.len()
+    } else if let Some(pos) = trimmed.find(" = invoke ") {
+        pos + " = invoke ".len()
+    } else if let Some(pos) = trimmed.find("call ") {
+        pos + "call ".len()
+    } else {
+        return None;
+    };
+    let tail = &trimmed[opcode..];
+    let bytes = tail.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if matches!(bytes[i], b'@' | b'%') {
+            let sigil = bytes[i];
+            let start = i + 1;
+            let mut end = start;
+            while end < bytes.len()
+                && (bytes[end].is_ascii_alphanumeric()
+                    || matches!(bytes[end], b'_' | b'.' | b'$' | b'-'))
+            {
+                end += 1;
+            }
+            if end > start && bytes.get(end) == Some(&b'(') {
+                if sigil == b'%' {
+                    return None;
+                }
+                return Some((&tail[start..end], leading + opcode + end));
+            }
+            i = end.max(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+fn line_is_call_like(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("call ")
+        || t.starts_with("tail call ")
+        || t.starts_with("musttail call ")
+        || t.starts_with("notail call ")
+        || t.contains(" = call ")
+        || t.contains(" = tail call ")
+        || t.contains(" = musttail call ")
+        || t.contains(" = notail call ")
+        || t.starts_with("invoke ")
+        || t.contains(" = invoke ")
+}
+
+fn matching_call_paren(line: &str, open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut escaped = false;
+    for (offset, ch) in line[open..].char_indices() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                quoted = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => quoted = true,
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(open + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Add LLVM's call-site leaf marker to direct calls of `known_leaf_callees`.
+///
+/// This runs after Perry's native-root lowering, which already annotates the
+/// audited runtime-helper table. It handles both `call` and `invoke`; for an
+/// invoke the attribute belongs between `@callee(args)` and `to label`.
+pub(crate) fn annotate_transitive_leaf_calls(
+    ir: &str,
+    known_leaf_callees: &HashSet<String>,
+) -> String {
+    if known_leaf_callees.is_empty() {
+        return ir.to_string();
+    }
+    let mut out = String::with_capacity(ir.len());
+    for line in ir.lines() {
+        let rewritten = (line_is_call_like(line) && !line.contains(" asm "))
+            .then(|| direct_callee_span(line))
+            .flatten()
+            .and_then(|(callee, open)| {
+                if !known_leaf_callees.contains(callee) || line.contains("\"gc-leaf-function\"") {
+                    return None;
+                }
+                let close = matching_call_paren(line, open)?;
+                let mut marked = String::with_capacity(line.len() + 19);
+                marked.push_str(&line[..=close]);
+                marked.push_str(" \"gc-leaf-function\"");
+                marked.push_str(&line[close + 1..]);
+                Some(marked)
+            });
+        out.push_str(rewritten.as_deref().unwrap_or(line));
+        out.push('\n');
+    }
+    out
+}
+
+#[derive(Default)]
+struct FunctionEffects {
+    internal_callees: HashSet<String>,
+    has_collecting_edge: bool,
+}
+
+fn note_direct_callee(effects: &mut FunctionEffects, callee: &str, defined: &HashSet<&str>) {
+    if defined.contains(callee) {
+        effects.internal_callees.insert(callee.to_string());
+    } else if !external_callee_cannot_collect(callee) {
+        effects.has_collecting_edge = true;
+    }
+}
+
+fn note_text_effects(line: &str, effects: &mut FunctionEffects, defined: &HashSet<&str>) {
+    if !line_is_call_like(line) || line.contains("\"gc-leaf-function\"") || line.contains(" asm ") {
+        return;
+    }
+    match direct_callee_span(line) {
+        Some((callee, _)) => note_direct_callee(effects, callee, defined),
+        None => effects.has_collecting_edge = true,
+    }
+}
+
+fn effects_of(function: &LlFunction, defined: &HashSet<&str>) -> FunctionEffects {
+    let mut effects = FunctionEffects::default();
+    function
+        .for_each_final_item::<std::convert::Infallible>(&mut |item| {
+            match item {
+                FinalItem::Inst(LlInst::Call { callee, .. }) => {
+                    note_direct_callee(&mut effects, callee, defined)
+                }
+                FinalItem::Inst(LlInst::CallIndirect { .. }) => effects.has_collecting_edge = true,
+                FinalItem::Inst(LlInst::AsmBarrier) => {}
+                FinalItem::Inst(LlInst::Raw(line)) => {
+                    note_text_effects(line, &mut effects, defined)
+                }
+                FinalItem::Text(line) => note_text_effects(line, &mut effects, defined),
+                FinalItem::Label(_) | FinalItem::Blank | FinalItem::Inst(_) => {}
+            }
+            Ok(())
+        })
+        .unwrap_or_else(|e| match e {});
+    effects
+}
+
+/// Compute the largest sound set of module-defined functions that cannot
+/// reach Perry's collector.
+///
+/// Start with every definition as a candidate and remove functions with an
+/// unknown/indirect/collecting external edge, then propagate removal backwards
+/// through direct calls. This greatest-fixed-point formulation admits pure
+/// recursive SCCs while rejecting an SCC as soon as any member can allocate,
+/// poll, throw through an allocating helper, call indirectly, or leave the
+/// module through an unaudited symbol.
+///
+/// A caller suspended below a collecting callee still needs a statepoint even
+/// when collection begins only at an allocation or loop poll: the moving
+/// collector must find and rewrite that caller's frame. Consequently this set
+/// is the safe part of polling-style density reduction; calls outside it must
+/// remain statepoints.
+pub(crate) fn transitive_leaf_functions(functions: &[&LlFunction]) -> HashSet<String> {
+    let defined: HashSet<&str> = functions.iter().map(|f| f.name.as_str()).collect();
+    let effects: HashMap<&str, FunctionEffects> = functions
+        .iter()
+        .map(|f| (f.name.as_str(), effects_of(f, &defined)))
+        .collect();
+
+    let mut collecting: HashSet<&str> = effects
+        .iter()
+        .filter_map(|(&name, effect)| effect.has_collecting_edge.then_some(name))
+        .collect();
+    // Reverse edges make propagation O(functions + calls). Re-scanning every
+    // function once per newly-unsafe layer is quadratic on a long generated
+    // call chain -- exactly the scale this optimization is meant to help.
+    let mut callers: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (&caller, effect) in &effects {
+        for callee in &effect.internal_callees {
+            callers.entry(callee.as_str()).or_default().push(caller);
+        }
+    }
+    let mut work: Vec<&str> = collecting.iter().copied().collect();
+    while let Some(callee) = work.pop() {
+        if let Some(direct_callers) = callers.get(callee) {
+            for &caller in direct_callers {
+                if collecting.insert(caller) {
+                    work.push(caller);
+                }
+            }
+        }
+    }
+
+    defined
+        .into_iter()
+        .filter(|name| !collecting.contains(name))
+        .map(str::to_string)
+        .collect()
 }
 
 #[cfg(test)]
@@ -436,6 +700,12 @@ mod tests {
     fn audited_runtime_bookkeeping_cannot_collect() {
         for name in [
             "js_gc_temp_root_push",
+            "js_shadow_frame_enter",
+            "js_shadow_frame_push",
+            "js_shadow_frame_pop",
+            "js_shadow_state_addr",
+            "js_shadow_slot_bind",
+            "js_shadow_slot_set",
             "js_write_barrier_root_nanbox",
             "js_gc_note_slot_layout",
             "js_typed_feedback_record_guard_pass",
@@ -597,6 +867,161 @@ mod tests {
                 classify_direct_callee(name),
                 GcCallEffect::Unknown,
                 "{name}"
+            );
+        }
+    }
+
+    fn void_function(name: &str, calls: &[&str]) -> LlFunction {
+        let mut f = LlFunction::new(name, crate::types::VOID, vec![]);
+        let entry = f.create_block("entry");
+        for callee in calls {
+            entry.call_void(callee, &[]);
+        }
+        entry.ret_void();
+        f
+    }
+
+    /// #8596: the greatest fixed point admits a pure recursive component, but
+    /// one collecting exit poisons every direct caller that can reach it.
+    #[test]
+    fn transitive_leaf_closure_handles_recursion_and_collecting_exits() {
+        let leaf = void_function("leaf", &["js_nanbox_pointer"]);
+        let wrapper = void_function("wrapper", &["leaf"]);
+        let recursive_a = void_function("recursive_a", &["recursive_b"]);
+        let recursive_b = void_function("recursive_b", &["recursive_a"]);
+        let allocating = void_function("allocating", &["js_array_alloc"]);
+        let reaches_allocating = void_function("reaches_allocating", &["allocating"]);
+        let functions = [
+            &leaf,
+            &wrapper,
+            &recursive_a,
+            &recursive_b,
+            &allocating,
+            &reaches_allocating,
+        ];
+
+        let safe = transitive_leaf_functions(&functions);
+        for name in ["leaf", "wrapper", "recursive_a", "recursive_b"] {
+            assert!(safe.contains(name), "{name} should be transitively leaf");
+        }
+        for name in ["allocating", "reaches_allocating"] {
+            assert!(
+                !safe.contains(name),
+                "{name} reaches Perry allocation and must remain a safepoint callee"
+            );
+        }
+    }
+
+    #[test]
+    fn indirect_and_unknown_external_edges_fail_closed() {
+        let unknown = void_function("unknown", &["cross_module_function"]);
+        let mut indirect = LlFunction::new("indirect", crate::types::VOID, vec![]);
+        let entry = indirect.create_block("entry");
+        entry.call_indirect(crate::types::I64, "%callback", &[]);
+        entry.ret_void();
+        let functions = [&unknown, &indirect];
+
+        let safe = transitive_leaf_functions(&functions);
+        assert!(
+            safe.is_empty(),
+            "unknown and indirect calls must fail closed"
+        );
+    }
+
+    #[test]
+    fn annotates_call_and_invoke_at_the_llvm_attribute_position() {
+        let known = HashSet::from(["pure".to_string()]);
+        let ir = "  %a = call ptr addrspace(1) @pure(ptr addrspace(1) %p)\n\
+                  %b = invoke preserve_nonecc double @pure(double %x) to label %ok unwind label %pad\n\
+                  %c = call double @collecting()\n\
+                  %d = call double %callback(ptr @pure)\n\
+                  ; call void @pure() is documentation, not an instruction\n";
+        let marked = annotate_transitive_leaf_calls(ir, &known);
+        assert!(marked.contains(
+            "%a = call ptr addrspace(1) @pure(ptr addrspace(1) %p) \"gc-leaf-function\""
+        ));
+        assert!(marked.contains(
+            "%b = invoke preserve_nonecc double @pure(double %x) \"gc-leaf-function\" to label %ok unwind label %pad"
+        ));
+        assert!(marked.contains("%c = call double @collecting()\n"));
+        assert!(marked.contains("%d = call double %callback(ptr @pure)\n"));
+        assert_eq!(
+            marked.matches("\"gc-leaf-function\"").count(),
+            2,
+            "only the two proven direct calls may be annotated:\n{marked}"
+        );
+    }
+
+    /// End-to-end emission witness: the analysis is module-wide and the leaf
+    /// set reaches a rooted caller's final IR. The allocating sibling is the
+    /// discriminating control and must remain unmarked for RS4GC to rewrite.
+    #[test]
+    fn module_marks_only_transitively_noncollecting_generated_calls() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let mut module = crate::module::LlModule::new(crate::codegen::default_target_triple());
+        module.declare_function("js_array_alloc", crate::types::I64, &[crate::types::I32]);
+        module.declare_function(
+            "js_shadow_slot_bind",
+            crate::types::VOID,
+            &[crate::types::I32, crate::types::PTR],
+        );
+
+        let pure = module.define_function("pure_generated", crate::types::VOID, vec![]);
+        pure.create_block("entry").ret_void();
+
+        let allocating = module.define_function("allocating_generated", crate::types::VOID, vec![]);
+        let entry = allocating.create_block("entry");
+        entry.call(
+            crate::types::I64,
+            "js_array_alloc",
+            &[(crate::types::I32, "0")],
+        );
+        entry.ret_void();
+
+        let caller = module.define_function("rooted_caller", crate::types::VOID, vec![]);
+        caller.enable_shadow_frame(0);
+        let slot = caller.reserve_shadow_slot().expect("reserve native root");
+        let root = caller.alloca_entry(crate::types::I64);
+        caller.entry_allocas_push_store(crate::types::I64, "0", &root);
+        caller.entry_setup_call_void(
+            "js_shadow_slot_bind",
+            &[
+                (crate::types::I32, &slot.to_string()),
+                (crate::types::PTR, &root),
+            ],
+        );
+        let entry = caller.create_block("entry");
+        entry.call_void("pure_generated", &[]);
+        entry.call_void("allocating_generated", &[]);
+        entry.ret_void();
+
+        let ir = module.to_ir();
+        assert!(ir.contains("call void @pure_generated() \"gc-leaf-function\""));
+        assert!(
+            ir.contains("call void @allocating_generated()")
+                && !ir.contains("call void @allocating_generated() \"gc-leaf-function\""),
+            "allocating generated callee must remain a statepoint edge:\n{ir}"
+        );
+
+        #[cfg(feature = "llvm-inprocess")]
+        {
+            let target = crate::codegen::default_target_triple();
+            let rewritten = crate::inprocess::statepoint_rewritten_ir(
+                &ir,
+                &target,
+                "transitive_leaf_generated_calls",
+            )
+            .expect("module-wide leaf witness must survive RS4GC");
+            assert!(
+                rewritten.contains("call void @pure_generated()"),
+                "proven leaf call was unexpectedly rewritten:\n{rewritten}"
+            );
+            assert!(
+                rewritten.lines().any(|line| {
+                    line.contains("@llvm.experimental.gc.statepoint")
+                        && line.contains("@allocating_generated")
+                }),
+                "collecting generated call did not become a statepoint:\n{rewritten}"
             );
         }
     }

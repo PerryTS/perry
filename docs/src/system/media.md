@@ -84,7 +84,7 @@ tick if the signal hasn't arrived.
 | Platform | Backend | Status |
 | --- | --- | --- |
 | macOS | AVPlayer + MPNowPlayingInfoCenter + MPRemoteCommandCenter | **Implemented** + lock-screen |
-| iOS | AVPlayer + AVAudioSession Playback + UIImage artwork | **Implemented** + lock-screen |
+| iOS | AVPlayer + NowPlaying MediaSession (iOS 27) or MediaPlayer fallback | **Implemented** + lock-screen |
 | tvOS | AVPlayer + Siri Remote play/pause/skip | **Implemented** + remote |
 | visionOS | AVPlayer + UIImage artwork | **Implemented** + lock-screen |
 | Android | `android.media.MediaPlayer` + `MediaSessionCompat` via JNI | **Implemented** + lock-screen |
@@ -176,20 +176,28 @@ calling code. Implementation detail varies:
 
 ## Now Playing on Apple platforms
 
-Apple's MPNowPlayingInfoCenter is a process-wide singleton — the most
-recent `setNowPlaying` call wins. For a single-player app (Subsonic
-client, podcast player) this matches user expectation. The
-MPRemoteCommandCenter handlers route `play` / `pause` / `togglePlayPause`
-events to the **first live player handle** — multi-player apps that
-need an explicit "active player" should manage that themselves.
+On iOS 27, an app built with an Xcode 27 SDK uses Apple's new NowPlaying
+framework. Perry creates an observable `MediaSession` per player, keeps its
+metadata, playback snapshot, elapsed time, and duration synchronized, and
+routes play, pause, stop, and seek commands to the matching `AVPlayer` handle.
+The bridge requests system-primary status so the session appears on the Lock
+Screen, in Control Center and Dynamic Island, and on connected surfaces such
+as CarPlay.
+
+On devices before iOS 27, builds made without the new framework, and other
+Apple platforms, Perry uses `MPNowPlayingInfoCenter` and
+`MPRemoteCommandCenter`. `MPNowPlayingInfoCenter` is process-wide, so the most
+recent `setNowPlaying` call wins on that compatibility path. The remote command
+handlers route events to the first live player handle. Perry selects exactly
+one implementation for a local iOS session; Apple warns that mixing the new
+NowPlaying and legacy MediaPlayer APIs has undefined behavior.
 
 `artworkUrl` accepts:
 
-- `file://` paths — loaded synchronously via NSImage / UIImage
-- `https://` URLs — fetched synchronously via NSData(contentsOf:) and
-  wrapped in UIImage. The synchronous fetch is acceptable for a one-off
-  artwork load (the MPNowPlayingInfoCenter dict is consumed
-  synchronously when set).
+- `file://` paths — loaded via the platform image/artwork loader
+- `https://` URLs — requested when the system needs artwork. The legacy
+  MediaPlayer path fetches once via `NSData(contentsOf:)`; iOS 27's
+  NowPlaying `Artwork` provider loads it asynchronously on demand.
 
 ### watchOS Info.plist requirements
 

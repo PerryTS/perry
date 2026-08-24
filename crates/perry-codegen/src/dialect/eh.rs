@@ -52,6 +52,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         let callee = &after[..paren];
         let close = rmatch_paren(after, paren)?;
         let args_str = &after[paren + 1..close];
+        let trailing_attr = after[close + 1..].trim();
 
         // `build_indirect_invoke` takes basic values (not metadata enums
         // like the call path), so collect both shapes once.
@@ -84,6 +85,19 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             .map_err(be)?;
         if preserve_none {
             site.set_call_convention(super::LLVM_CC_PRESERVE_NONE);
+        }
+        match trailing_attr {
+            "" => {}
+            // #8596: whole-module GC-effect closure can prove a direct
+            // generated callee transitively non-collecting even inside a try.
+            // The textual path places the call-site attribute before
+            // `to label`; reproduce it in the C-API path or native units gain
+            // statepoints the text units do not have.
+            "\"gc-leaf-function\"" => site.add_attribute(
+                inkwell::attributes::AttributeLoc::Function,
+                self.ctx.create_string_attribute("gc-leaf-function", ""),
+            ),
+            other => bail!("unknown invoke callsite attribute `{other}`"),
         }
         // An invoke terminates its block; the emitted text continues in
         // the inline continuation label, which arrives as the next line.

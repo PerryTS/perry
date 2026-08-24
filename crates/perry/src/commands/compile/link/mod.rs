@@ -51,6 +51,7 @@ mod linux_ui_libs;
 mod native_features;
 mod pkg_config;
 mod platform_cmd;
+mod watchos_frameworks;
 mod windows_link;
 
 use archive_cache::{prepare_well_known_archives, PreparedArchiveInputs};

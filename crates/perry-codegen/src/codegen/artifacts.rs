@@ -1831,7 +1831,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // name (`const bar = function namedBar(){}` ⇒ `"namedBar"`).
     let mut named_inline_closure_ids: std::collections::HashSet<perry_hir::types::FuncId> =
         std::collections::HashSet::new();
-    for stmt in &hir.init {
+    for stmt in super::entry_outline::logical_entry_stmts(hir) {
         if let perry_hir::Stmt::Let { name, init, .. } = stmt {
             if name.is_empty() || name.starts_with('_') {
                 continue;
