@@ -791,6 +791,10 @@
       "name": "WARN_NULL_PTR_STATE"
     },
     {
+      "file": "crates/perry-runtime/src/object/field_get_set/for_in_stable.rs",
+      "name": "PROTOTYPE_VERDICT"
+    },
+    {
       "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_member_access.rs",
       "name": "PRIVATE_MEMBER_ACCESS_HINTS",
       "why": "RefCell<Vec<PrivateMemberAccessHint>>; the struct is class_id: u32, name: String, kind: u32, is_static: bool, is_write: bool -- all owned Rust data. No JSValue, NaN-box word or raw heap pointer is stored."

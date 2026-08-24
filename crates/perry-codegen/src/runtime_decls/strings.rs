@@ -401,6 +401,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_object_keys", I64, &[I64]);
     module.declare_function("js_object_keys_value", I64, &[DOUBLE]);
     module.declare_function("js_for_in_keys_value", I64, &[DOUBLE]);
+    module.declare_function("js_for_in_keys_stable_value", I64, &[DOUBLE]);
     module.declare_function("js_is_finite", DOUBLE, &[DOUBLE]);
     module.declare_function("js_is_undefined_or_bare_nan", I32, &[DOUBLE]);
     module.declare_function("js_math_min_array", DOUBLE, &[I64]);

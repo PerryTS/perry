@@ -2062,3 +2062,55 @@ allow_materialization_reasons = [
   "unknown_bounds",
   "dynamic_escape",
 ]
+
+[workloads.for_in_stable_keys]
+source = "benchmarks/compiler_output/fixtures/for_in_stable_keys.ts"
+kind = "for_in_stable_keys"
+allow_dynamic_property_runtime = true
+allow_hot_loop_conversions = true
+allowed_hot_loop_runtime_calls = [
+  "js_array_get",
+  "js_array_length",
+  "js_dyn_index_get",
+  "js_dynamic_string_or_number_add",
+  "js_for_in_keys_stable_value",
+  "js_gc_loop_safepoint",
+  "js_in_operator",
+]
+
+[workloads.for_in_stable_keys.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: dynamic for-in semantics require guarded runtime enumeration"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[[workloads.for_in_stable_keys.stdout_checks]]
+name = "for_in_stable_keys_checksum"
+equals = "for_in_stable_keys:200000\n"
+detail = "the stable registry fixture retains exact for-in semantics"
+
+[[workloads.for_in_stable_keys.ir_checks]]
+name = "stable_registry_uses_guarded_for_in_helper"
+section = "llvm_before"
+function_contains = "sumRegistry"
+contains = "call i64 @js_for_in_keys_stable_value"
+detail = "the registry loop enters the guarded stable-key helper"
+
+[[workloads.for_in_stable_keys.ir_checks]]
+name = "stable_registry_avoids_generic_enumeration_helpers"
+section = "llvm_before"
+function_contains = "sumRegistry"
+regex_none = [
+  "call i64 @js_for_in_keys_value",
+  "call i64 @js_object_keys",
+  "call i64 @js_object_get_own_property_names",
+]
+detail = "the stable arm does not directly allocate or rebuild generic key lists"
