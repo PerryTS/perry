@@ -549,7 +549,8 @@ fn stale_array_reference_survives_three_growths_and_forced_minor_gc() {
     let mut head = initial;
 
     // Capacity progresses 16 -> 32 -> 64 -> 128. Keeping `initial` unchanged
-    // makes every assertion exercise the complete three-stub chain.
+    // makes the first resolution exercise the complete three-stub chain; that
+    // resolution then compresses `initial` directly to the current head.
     for i in 0..65u32 {
         head = js_array_push_f64(head, i as f64);
     }
@@ -561,8 +562,9 @@ fn stale_array_reference_survives_three_growths_and_forced_minor_gc() {
     }
 
     // Root the current head, not the deliberately stale first allocation: the
-    // handle must prove that evacuation moved the live array itself, while
-    // `initial` independently exercises the three growth stubs afterward.
+    // handle must prove that evacuation moved the live array itself. The
+    // compressed `initial` stub then follows the evacuation edge to that new
+    // head and remains usable.
     let scope = crate::gc::RuntimeHandleScope::new();
     let root = scope.root_raw_mut_ptr(head);
     let pre_gc_head = head;
@@ -582,7 +584,7 @@ fn stale_array_reference_survives_three_growths_and_forced_minor_gc() {
     assert_eq!(
         clean_arr_ptr_mut(initial),
         rooted_head,
-        "the stale three-stub chain must resolve to the relocated rooted head"
+        "the compressed growth stub must resolve to the relocated rooted head"
     );
     assert_eq!(js_array_length(initial), 65);
     for i in 0..65u32 {
@@ -685,6 +687,40 @@ fn clean_arr_ptr_rejects_forwarding_cycle() {
         (*first_header).gc_flags = first_flags;
         (*second_header).gc_flags = second_flags;
         assert!(resolved.is_null());
+    }
+}
+
+#[test]
+fn clean_arr_ptr_compresses_multi_hop_forwarding_chain() {
+    let first = js_array_alloc(0);
+    let second = js_array_alloc(0);
+    let live = js_array_alloc(0);
+    unsafe {
+        let first_header = crate::value::addr_class::try_read_tracked_gc_header(first as usize)
+            .unwrap()
+            .as_ptr();
+        let second_header = crate::value::addr_class::try_read_tracked_gc_header(second as usize)
+            .unwrap()
+            .as_ptr();
+        let first_flags = (*first_header).gc_flags;
+        let second_flags = (*second_header).gc_flags;
+        let first_payload = *(first as *const u64);
+        let second_payload = *(second as *const u64);
+        crate::gc::set_forwarding_address(first_header, second as *mut u8);
+        crate::gc::set_forwarding_address(second_header, live as *mut u8);
+
+        let resolved = clean_arr_ptr(first);
+        let compressed_target = crate::gc::forwarding_address(first_header);
+
+        *(first as *mut u64) = first_payload;
+        *(second as *mut u64) = second_payload;
+        (*first_header).gc_flags = first_flags;
+        (*second_header).gc_flags = second_flags;
+        assert_eq!(resolved, live);
+        assert_eq!(
+            compressed_target, live as *mut u8,
+            "the original stub must point directly at the validated live head"
+        );
     }
 }
 
