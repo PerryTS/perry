@@ -1,0 +1,1 @@
+Regenerated the checked-in API reference and TypeScript declarations from the compile-time manifest, picking up the `ffi` module that #8704 added and dropping the `@perryStub … (#6562)` markers from the entries it implemented. Coverage moves from 2,059 entries across 134 modules to 2,065 across 135. This clears the release-blocking api-docs-drift check.

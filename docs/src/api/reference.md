@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 3009 entries across 136 modules.
+Total: 3015 entries across 137 modules.
 
 ## Modules
 
@@ -52,6 +52,7 @@ Total: 3009 entries across 136 modules.
 - [`exponential-backoff`](#exponential-backoff)
 - [`fastify`](#fastify)
 - [`fetch`](#fetch)
+- [`ffi`](#ffi)
 - [`fs`](#fs)
 - [`fs/promises`](#fspromises)
 - [`http`](#http)
@@ -437,20 +438,20 @@ Total: 3009 entries across 136 modules.
 
 ### Methods
 
-- `CFunction` — module ⚠ **stub** — stage 3 — not yet implemented, throws at runtime (#6562)
+- `CFunction` — module
 - `CString` — module
 - `JSCallback` — module
 - `dlopen` — module
-- `linkSymbols` — module ⚠ **stub** — stage ≥2 — not yet implemented, throws at runtime (#6562)
+- `linkSymbols` — module
 - `ptr` — module
-- `read` — module ⚠ **stub** — stage ≥2 — not yet implemented, throws at runtime (#6562)
 - `toArrayBuffer` — module
 - `toBuffer` — module
-- `viewSource` — module ⚠ **stub** — stage ≥2 — not yet implemented, throws at runtime (#6562)
+- `viewSource` — module
 
 ### Properties
 
 - `FFIType`
+- `read`
 - `suffix`
 
 ## `bun:sqlite`
@@ -1425,6 +1426,20 @@ Total: 3009 entries across 136 modules.
 ### Methods
 
 - `default` — module
+
+## `ffi`
+
+### Methods
+
+- `dlopen` — module
+- `getRawPointer` — module
+- `toArrayBuffer` — module
+- `toBuffer` — module
+- `toString` — module
+
+### Properties
+
+- `suffix`
 
 ## `fs`
 
