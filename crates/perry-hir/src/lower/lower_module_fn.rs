@@ -539,6 +539,37 @@ fn collect_assigned_function_binding_candidates(ast_module: &ast::Module) -> Has
     out
 }
 
+/// Names introduced by `var` declarations in the module's var scope.
+///
+/// A same-named top-level FunctionDeclaration and `var` declaration share one
+/// binding. Collect these before function lowering so the function's hoisted
+/// value can seed that binding instead of a later var pre-scan creating a
+/// separate, undefined local that shadows it. The statement walker deliberately
+/// descends through blocks/loops/try/switch but not nested functions or classes.
+fn collect_module_var_binding_names(ast_module: &ast::Module) -> HashSet<String> {
+    let mut names = Vec::new();
+    for item in &ast_module.body {
+        match item {
+            ast::ModuleItem::Stmt(stmt) => {
+                crate::lower_decl::collect_var_binding_names_from_stmt(stmt, &mut names);
+            }
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export_decl)) => {
+                if let ast::Decl::Var(var_decl) = &export_decl.decl {
+                    if var_decl.kind == ast::VarDeclKind::Var {
+                        for decl in &var_decl.decls {
+                            crate::lower_decl::collect_var_binding_names_from_pat(
+                                &decl.name, &mut names,
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    names.into_iter().collect()
+}
+
 /// #5833: names assigned by a **direct top-level** `name = ...`/`name++`
 /// expression statement (module scope, not nested in any block/if/loop/
 /// function). Deliberately narrower than
@@ -932,6 +963,7 @@ pub fn lower_module_full(
     // Skip 'declare function' statements (functions with no body) - they are external FFI
     // BUT: also skip overload signatures if an implementation exists
     let reassigned_function_candidates = collect_assigned_function_binding_candidates(ast_module);
+    let module_var_binding_names = collect_module_var_binding_names(ast_module);
     // #5833: a narrower, binding-aware-enough scan stashed on `ctx` so
     // `stmt.rs`'s top-level `Decl::Class` arm can gate its opt-in local-slot
     // seeding (see both `reassigned_top_level_identifiers`'s doc comment and
@@ -1008,11 +1040,21 @@ pub fn lower_module_full(
             let func_id = ctx.fresh_func();
             ctx.register_func(func_name.clone(), func_id);
             if reassigned_function_candidates.contains(&func_name)
-                && ctx.lookup_local(&func_name).is_none()
+                || module_var_binding_names.contains(&func_name)
             {
-                let local_id = ctx.define_local(func_name.clone(), Type::Any);
+                // FunctionDeclaration and `var` of the same name share one
+                // mutable binding. Seed it with every declaration in source
+                // order so duplicate function declarations leave the last
+                // function installed at entry, then let any source-position
+                // `var f = value` overwrite that same slot when it executes.
+                let local_id = ctx
+                    .lookup_local(&func_name)
+                    .unwrap_or_else(|| ctx.define_local(func_name.clone(), Type::Any));
                 ctx.record_local_source_span(local_id, fn_decl.ident.span);
                 ctx.function_valued_locals.insert(local_id);
+                if module_var_binding_names.contains(&func_name) {
+                    ctx.var_hoisted_ids.insert(local_id);
+                }
                 module.init.push(Stmt::Let {
                     id: local_id,
                     name: func_name.clone(),
