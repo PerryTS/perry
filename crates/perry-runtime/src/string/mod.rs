@@ -155,8 +155,8 @@ pub(crate) use compare::{
     js_string_key_bytes, js_string_key_matches, js_string_key_matches_bytes, utf16_cmp_bytes,
 };
 pub use concat::{
-    js_string_add_value, js_string_concat, js_string_concat_box, js_string_concat_chain,
-    js_string_concat_value, js_value_add_string, js_value_concat_string,
+    js_string_add_value, js_string_append_chain, js_string_concat, js_string_concat_box,
+    js_string_concat_chain, js_string_concat_value, js_value_add_string, js_value_concat_string,
 };
 pub(crate) use format::fix_exponent_format;
 pub(crate) use format::js_format_f64;
