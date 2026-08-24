@@ -30,6 +30,8 @@ mod subclass;
 #[cfg(test)]
 mod collection_tag_tests;
 #[cfg(test)]
+mod forwarding_tests;
+#[cfg(test)]
 mod spread_dense_tests;
 #[cfg(test)]
 mod subclass_tests;

@@ -634,12 +634,16 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
         unsafe { crate::value::addr_class::try_read_tracked_gc_header(cleaned as usize) };
     unsafe {
         let mut steps = 0u32;
+        let mut first_forwarded_header: *mut crate::gc::GcHeader = std::ptr::null_mut();
         while let Some(gc_header) = tracked_header {
             let gc_header = gc_header.as_ptr();
             if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY
                 || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             {
                 break;
+            }
+            if steps == 0 {
+                first_forwarded_header = gc_header;
             }
             let new_user = crate::gc::forwarding_address(gc_header) as usize;
             let Some(target_header) =
@@ -656,6 +660,23 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             if steps > 64 {
                 return std::ptr::null();
             }
+        }
+        // A receiver stored through an alias can keep its original array head
+        // across several capacity-crossing grows. Generated array guards heal
+        // one forwarding edge inline; without compression, a two-or-more-edge
+        // chain therefore rejects the guard on every element access and pays
+        // this entire resolver repeatedly. Once the validated walk reaches the
+        // live array, point the original retained stub straight at that head.
+        // The next generated access can then heal its single edge inline.
+        //
+        // Do this only after walking and validating the complete chain. A
+        // corrupt target/cycle returns above and must not rewrite a stub with
+        // an address that has not been proved to be a tracked array.
+        if steps > 1 && !first_forwarded_header.is_null() {
+            crate::gc::set_forwarding_address(
+                first_forwarded_header,
+                cleaned as *mut ArrayHeader as *mut u8,
+            );
         }
     }
     // Issue #179 Phase 2: lazy arrays have a GcHeader with
