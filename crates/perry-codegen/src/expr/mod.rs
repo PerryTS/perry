@@ -582,12 +582,19 @@ pub(crate) struct FnCtx<'a> {
     /// parameters, indexed by callback local (including exact const aliases)
     /// and call arity.
     pub resolved_arrow_callback_targets: std::collections::HashMap<(u32, usize), String>,
+    /// Nullable compiler-private callback targets whose guarded cold arms
+    /// poison a versioned loop before they can run user code.
+    pub resolved_versioned_loop_callback_targets: std::collections::HashMap<(u32, usize), String>,
     /// This is an internal clone of a compiler-proven direct arrow body. Its
     /// boxed capture slots were installed through
     /// `js_closure_set_box_capture_ptr`, so captured-box accesses may use the
     /// raw helpers. Public and dynamically dispatched closure bodies keep the
     /// defensive runtime registry validation.
     pub trusted_box_captures: bool,
+    /// Stack context supplied only to a compiler-private versioned-loop
+    /// callback clone. Its cold arms record the exact resume index and poison
+    /// the caller's private counter before executing observable fallback code.
+    pub versioned_loop_deopt_context: Option<String>,
     /// Raw box capture pointers loaded once in the entry block of a
     /// compiler-private exact-arrow clone. The capture slots are immutable,
     /// and a live exact capture edge keeps each box cell alive and non-moving
@@ -1578,12 +1585,24 @@ pub(crate) struct VersionedIndexedMethodFact {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) enum VersionedIndexedGuardMode {
+    Fingerprints,
+    CallbackDeopt {
+        callback_local_id: u32,
+        callback_arity: usize,
+        target: String,
+        context: String,
+    },
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct VersionedIndexedLoopFact {
     pub counter_local_id: u32,
     pub falsy_local_id: Option<u32>,
     pub side_exit_label: String,
     pub arrays: Vec<VersionedIndexedArrayFact>,
     pub method: VersionedIndexedMethodFact,
+    pub guard_mode: VersionedIndexedGuardMode,
     /// Populated by the iteration-entry revalidation block. These SSA handles
     /// dominate the complete fast body and are never retained across the loop
     /// callback/back edge.
@@ -1964,6 +1983,42 @@ pub(crate) fn class_field_loop_fact_lookup<'f>(
 /// `perry_ic_N` symbol at the final application link.
 pub(crate) fn inline_cache_global_name(ctx: &FnCtx<'_>, site_id: u32) -> String {
     inline_cache_global_name_for_prefix(ctx.strings.module_prefix(), site_id)
+}
+
+/// Record a cold-arm bailout for a compiler-private versioned-loop callback.
+/// The stack context is `[counter_slot_ptr, original_bound, resume_index]` as
+/// three i64 words. The first cold arm stores `counter + 1` and poisons the
+/// private i32 counter to `bound - 1`; the caller's ordinary update advances
+/// it to `bound`, so the existing loop condition exits without a hot-path
+/// check. Later cold arms in the same callback are idempotent.
+pub(crate) fn emit_versioned_loop_callback_deopt(ctx: &mut FnCtx<'_>) {
+    let Some(context) = ctx.versioned_loop_deopt_context.clone() else {
+        return;
+    };
+    let resume_ptr = ctx.block().gep(I64, &context, &[(I64, "2")]);
+    let resume = ctx.block().load(I64, &resume_ptr);
+    let unmarked = ctx.block().icmp_eq(I64, &resume, "-1");
+    let mark_idx = ctx.new_block("versioned_callback.deopt.mark");
+    let continue_idx = ctx.new_block("versioned_callback.deopt.continue");
+    let mark_label = ctx.block_label(mark_idx);
+    let continue_label = ctx.block_label(continue_idx);
+    ctx.block().cond_br(&unmarked, &mark_label, &continue_label);
+
+    ctx.current_block = mark_idx;
+    let counter_slot_ptr = ctx.block().gep(I64, &context, &[(I64, "0")]);
+    let counter_slot_bits = ctx.block().load(I64, &counter_slot_ptr);
+    let counter_slot = ctx.block().inttoptr(I64, &counter_slot_bits);
+    let counter = ctx.block().load(I32, &counter_slot);
+    let next = ctx.block().add(I32, &counter, "1");
+    let next_i64 = ctx.block().zext(I32, &next, I64);
+    ctx.block().store(I64, &next_i64, &resume_ptr);
+    let bound_ptr = ctx.block().gep(I64, &context, &[(I64, "1")]);
+    let bound_i64 = ctx.block().load(I64, &bound_ptr);
+    let bound = ctx.block().trunc(I64, &bound_i64, I32);
+    let poison = ctx.block().sub(I32, &bound, "1");
+    ctx.block().store(I32, &poison, &counter_slot);
+    ctx.block().br(&continue_label);
+    ctx.current_block = continue_idx;
 }
 
 fn inline_cache_global_name_for_prefix(module_prefix: &str, site_id: u32) -> String {

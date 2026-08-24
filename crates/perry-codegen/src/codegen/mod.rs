@@ -2780,6 +2780,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         &module_globals,
         &trusted_box_exclusions,
     );
+    let versioned_loop_callbacks = closure_collect::select_versioned_loop_callbacks(
+        &closures,
+        &trusted_box_closures,
+        &module_boxed_vars,
+        &module_globals,
+    );
 
     // ---- Representation-selection Phase 2: specialized-ABI plan selection.
     // Runs AFTER the typed_abi clone sets so mutual exclusion is decidable;
@@ -3378,6 +3384,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         closure_lengths: &closure_lengths,
         closure_arrow_functions: &closure_arrow_functions,
         trusted_box_closures: &trusted_box_closures,
+        versioned_loop_callbacks: &versioned_loop_callbacks,
         closures: &closures,
         class_keys_init_data: &class_keys_init_data,
         class_header_image_inits: &class_header_image_inits,

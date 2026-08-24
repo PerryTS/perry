@@ -84,6 +84,56 @@ fn a_non_collecting_window_is_left_byte_for_byte_alone() {
 }
 
 #[test]
+fn guarded_indirect_leaf_call_does_not_reload_a_dead_on_collecting_return_handle() {
+    let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
+    let b = f.create_block("entry");
+    let slot = b.alloca(DOUBLE);
+    b.store(DOUBLE, "%arg", &slot);
+    b.call_void(
+        "js_shadow_slot_bind",
+        &[(crate::types::I32, "0"), (PTR, &slot)],
+    );
+    let value = b.load(DOUBLE, &slot);
+    b.call_indirect_gc_leaf(DOUBLE, "%callback", &[]);
+    let result = b.call(
+        DOUBLE,
+        "js_object_assign_one",
+        &[(DOUBLE, &value), (DOUBLE, "0.0")],
+    );
+    b.ret(DOUBLE, &result);
+
+    let before = body(&f);
+    assert_eq!(apply_to_function(&mut f), 0);
+    assert_eq!(body(&f), before);
+    assert!(before.contains("\"gc-leaf-function\""));
+}
+
+#[test]
+fn guarded_direct_leaf_call_does_not_reload_a_proven_live_handle() {
+    let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);
+    let b = f.create_block("entry");
+    let slot = b.alloca(DOUBLE);
+    b.store(DOUBLE, "%arg", &slot);
+    b.call_void(
+        "js_shadow_slot_bind",
+        &[(crate::types::I32, "0"), (PTR, &slot)],
+    );
+    let value = b.load(DOUBLE, &slot);
+    b.call_gc_leaf(DOUBLE, "guarded_reader", &[]);
+    let result = b.call(
+        DOUBLE,
+        "js_object_assign_one",
+        &[(DOUBLE, &value), (DOUBLE, "0.0")],
+    );
+    b.ret(DOUBLE, &result);
+
+    let before = body(&f);
+    assert_eq!(apply_to_function(&mut f), 0);
+    assert_eq!(body(&f), before);
+    assert!(before.contains("call double @guarded_reader() \"gc-leaf-function\""));
+}
+
+#[test]
 fn a_slot_the_program_reassigns_in_the_window_is_not_reloaded() {
     // ★ The soundness half. `f(x, (x = other, 1))` must pass the ORIGINAL
     // `x`; re-reading the slot below the assignment would hand the consumer

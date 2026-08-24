@@ -1376,7 +1376,20 @@ pub(crate) fn try_lower_instance_method_call(
                             &fallback_fn,
                             params,
                         );
-                        return Ok(Some(ctx.block().call(DOUBLE, &target, &fast_args)));
+                        let value = if matches!(
+                            fact.guard_mode,
+                            crate::expr::VersionedIndexedGuardMode::CallbackDeopt { .. }
+                        ) {
+                            // Admission proved every private handle argument
+                            // is a live in-bounds array. The checked-reader
+                            // clone's only collecting arms are therefore
+                            // unreachable in this loop version; a callback
+                            // cold arm side-exits before the next use.
+                            ctx.block().call_gc_leaf(DOUBLE, &target, &fast_args)
+                        } else {
+                            ctx.block().call(DOUBLE, &target, &fast_args)
+                        };
+                        return Ok(Some(value));
                     }
                 }
                 let typed_receiver_direct = match (

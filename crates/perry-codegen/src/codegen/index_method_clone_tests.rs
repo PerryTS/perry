@@ -271,7 +271,19 @@ fn emit_versioned_checked_reader_loop() -> String {
             param(ENTITIES, "entities", Type::Array(Box::new(Type::Any))),
             param(COLUMN, "column", Type::Array(Box::new(Type::Any))),
             param(BOUND, "bound", Type::Number),
-            param(CALLBACK, "callback", Type::Any),
+            param(
+                CALLBACK,
+                "callback",
+                Type::Function(perry_hir::types::FunctionType {
+                    params: vec![
+                        ("entity".to_string(), Type::Any, false),
+                        ("value".to_string(), Type::Any, false),
+                    ],
+                    return_type: Box::new(Type::Void),
+                    is_async: false,
+                    is_generator: false,
+                }),
+            ),
             param(FILTER, "filter", Type::Any),
         ],
         Type::Void,

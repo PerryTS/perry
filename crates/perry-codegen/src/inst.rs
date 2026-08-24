@@ -123,6 +123,10 @@ pub enum LlInst {
         /// for the default C convention. Must match the callee's define
         /// header — a mismatch is UB, not a verifier error (#8175).
         cconv: Option<&'static str>,
+        /// Call-site relocation exemption. The callee still participates in
+        /// transitive effect analysis; this flag only controls caller-side
+        /// root relocation and the emitted RS4GC attribute.
+        gc_leaf: bool,
     },
     /// Opaque-pointer indirect call. The callee operand itself is a `ptr`;
     /// argument types remain explicit at the call site.
@@ -131,6 +135,11 @@ pub enum LlInst {
         ret: LlvmType,
         fptr: String,
         args: Vec<(LlvmType, String)>,
+        /// Call-site promise to RS4GC that no relocated value is observed
+        /// after a collecting arm returns. This is narrower than a function
+        /// effect: transitive leaf analysis must still treat the opaque target
+        /// as collecting.
+        gc_leaf: bool,
     },
     /// `call void asm sideeffect "", ""()` — the loop-preservation barrier.
     AsmBarrier,
@@ -277,6 +286,7 @@ impl LlInst {
                 callee,
                 args,
                 cconv,
+                gc_leaf,
             } => {
                 out.push_str("  ");
                 if let Some(d) = dst {
@@ -292,16 +302,23 @@ impl LlInst {
                 }
                 push_args(out, args);
                 out.push(')');
+                if *gc_leaf {
+                    out.push_str(" \"gc-leaf-function\"");
+                }
             }
             LlInst::CallIndirect {
                 dst,
                 ret,
                 fptr,
                 args,
+                gc_leaf,
             } => {
                 let _ = write!(out, "  {dst} = call {ret} {fptr}(");
                 push_args(out, args);
                 out.push(')');
+                if *gc_leaf {
+                    out.push_str(" \"gc-leaf-function\"");
+                }
             }
             LlInst::AsmBarrier => {
                 // `"gc-leaf-function"` exempts the barrier from

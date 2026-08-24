@@ -500,6 +500,7 @@ pub(super) fn compile_closure(
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
     trusted_box_captures: bool,
+    versioned_loop_callback: bool,
 ) -> Result<()> {
     // Destructure the closure expression. We trust that the caller
     // passes only `Expr::Closure` here (from `collect_closures_*`).
@@ -568,13 +569,18 @@ pub(super) fn compile_closure(
     } else {
         public_llvm_name.clone()
     };
-    let llvm_name = if trusted_box_captures {
+    let llvm_name = if versioned_loop_callback {
+        format!("{ordinary_body_name}$trusted_boxes$versioned_loop")
+    } else if trusted_box_captures {
         format!("{ordinary_body_name}$trusted_boxes")
     } else {
         ordinary_body_name
     };
 
-    // Param list: i64 this_closure, then each param as double.
+    // Param list: i64 this_closure, then each param as double. The private
+    // versioned-loop clone reuses its proven-unused first callback parameter
+    // for the caller's stack context, so its ABI and register footprint stay
+    // identical to the ordinary trusted clone.
     let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
     llvm_params.push((I64, "%this_closure".to_string()));
     for p in params {
@@ -634,6 +640,16 @@ pub(super) fn compile_closure(
 
     let _ = lf.create_block("entry");
 
+    let versioned_loop_deopt_context = versioned_loop_callback.then(|| {
+        let scratch_param = params
+            .first()
+            .expect("versioned-loop callback selection requires a scratch parameter");
+        let scratch_arg = format!("%arg{}", scratch_param.id);
+        let blk = lf.block_mut(0).expect("closure body has an entry block");
+        let context_bits = blk.bitcast_double_to_i64(&scratch_arg);
+        blk.inttoptr(I64, &context_bits)
+    });
+
     let mut closure_boxed_vars: HashSet<u32> = closure_relevant_ids
         .iter()
         .filter(|id| module_boxed_vars.contains(id))
@@ -665,8 +681,19 @@ pub(super) fn compile_closure(
     // their types available inside the body. Without this, closures
     // that capture an array `items` and do `items.length` miss the
     // typed fast path and return undefined.
-    let mut local_types: HashMap<u32, perry_hir::types::Type> =
-        params.iter().map(|p| (p.id, p.ty.clone())).collect();
+    let mut local_types: HashMap<u32, perry_hir::types::Type> = params
+        .iter()
+        .map(|p| {
+            (
+                p.id,
+                if versioned_loop_callback {
+                    perry_hir::types::Type::Any
+                } else {
+                    p.ty.clone()
+                },
+            )
+        })
+        .collect();
     for id in &closure_relevant_ids {
         if let Some(ty) = module_receiver_types.get(id) {
             local_types.entry(*id).or_insert_with(|| ty.clone());
@@ -832,11 +859,13 @@ pub(super) fn compile_closure(
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
     );
-    if let Some(callback_shapes) = cross_module.array_callback_shapes.get(&func_id) {
-        native_facts
-            .shape_stability
-            .shape_proven_ptr_locals
-            .extend(callback_shapes.clone());
+    if !versioned_loop_callback {
+        if let Some(callback_shapes) = cross_module.array_callback_shapes.get(&func_id) {
+            native_facts
+                .shape_stability
+                .shape_proven_ptr_locals
+                .extend(callback_shapes.clone());
+        }
     }
 
     // Representation-selection context gates (see codegen/function.rs).
@@ -1034,7 +1063,9 @@ pub(super) fn compile_closure(
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
         resolved_arrow_callback_targets: HashMap::new(),
+        resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures,
+        versioned_loop_deopt_context,
         trusted_box_capture_ptrs,
         local_func_ref_ids: HashMap::new(),
         option_object_locals: HashMap::new(),
