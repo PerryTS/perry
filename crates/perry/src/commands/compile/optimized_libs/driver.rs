@@ -1,5 +1,6 @@
 use super::*;
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -11,6 +12,25 @@ use super::super::{
     find_perry_workspace_root, is_android_target, is_windows_target, rust_target_triple,
     CompilationContext,
 };
+
+/// Select the provider for TLS module/server state after well-known routing.
+///
+/// perry-ext-net (directly or through perry-ext-http) owns the socket/connect
+/// symbols, but calls back into perry-stdlib for TLS SNI/ALPN preflight. Keep
+/// that provider without compiling bundled net beside the external wrapper.
+pub(super) fn finalize_tls_transport_features(
+    features: &mut BTreeSet<&'static str>,
+    imports_tls: bool,
+    external_net_transport: bool,
+) {
+    if external_net_transport {
+        features.remove("tls");
+        features.remove("bundled-net");
+        features.insert("external-net-tls");
+    } else if imports_tls {
+        features.insert("tls");
+    }
+}
 
 /// Rebuild perry-runtime + perry-stdlib in a single cargo invocation with
 /// the chosen Cargo features and panic mode, and return paths to the
@@ -158,6 +178,7 @@ pub(crate) fn build_optimized_libs(
     // through perry-stdlib's tokio. Their workspace-built .a stays
     // fine.
     let mut tokio_using_bindings: Vec<(String, String, Option<String>)> = Vec::new();
+    let mut external_net_transport = false;
     // Web Fetch is selected independently from the external node:http
     // binding. `uses_fetch` adds `web-fetch` in compute_required_features.
     if use_well_known {
@@ -278,6 +299,9 @@ pub(crate) fn build_optimized_libs(
                     binding.lib.clone(),
                     binding.tracking.clone(),
                 ));
+            }
+            if matches!(module_normalized, "net" | "http" | "https" | "http2") {
+                external_net_transport = true;
             }
             // Strip the perry-stdlib feature(s) this binding was
             // covering. `module_to_features` is the same table
@@ -454,14 +478,11 @@ pub(crate) fn build_optimized_libs(
     }
 
     // `net` maps to `[bundled-net, tls]` because its bundled implementation
-    // owns upgradeToTLS. Routing net to perry-ext-net strips both features,
-    // but an independent `node:tls` import still needs the stdlib TLS module
-    // for Server/TLSSocket constructors and their dynamic method dispatcher.
-    // Reassert that shared feature after all well-known removals so iteration
-    // order cannot make a direct `new tls.TLSSocket(...)` lose its provider.
-    if imports_tls {
-        features.insert("tls");
-    }
+    // owns upgradeToTLS. External net/http owns connect/socket symbols but
+    // still calls perry-stdlib's SNI/ALPN preflight provider. Select the split
+    // `external-net-tls` adapter in that case; a direct TLS-only program keeps
+    // the historical `tls` umbrella (and therefore bundled net).
+    finalize_tls_transport_features(&mut features, imports_tls, external_net_transport);
 
     // The UI backends (perry-ui-gtk4 on Linux, perry-ui-macos, perry-ui-windows)
     // reach into perry-stdlib's async bridge from GLib/NSTimer/WM_TIMER

@@ -164,7 +164,8 @@ fn mixed_statepoint_and_shadow_frames_survive_a_relocating_minor() {
     // proves nothing. The report names each shadow-framed function at default
     // verbosity (#8421: the change is never silent).
     assert!(
-        spilled_err.contains("keeps its") && spilled_err.contains("GC roots in a shadow frame"),
+        spilled_err.contains("keeps its")
+            && spilled_err.contains("in a shadow frame instead of statepoints"),
         "PERRY_ROOT_SPILL_RELOCATIONS=1 was expected to spill at least one \
          function, but the compile reported none:\nstderr:\n{spilled_err}"
     );

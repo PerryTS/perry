@@ -625,7 +625,11 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         count += net_count;
     }
 
-    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    #[cfg(all(
+        feature = "tls-runtime",
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
     {
         count += unsafe { crate::tls::js_tls_process_pending() };
     }
@@ -794,7 +798,11 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
             return 1;
         }
     }
-    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    #[cfg(all(
+        feature = "tls-runtime",
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
     {
         if crate::tls::js_tls_has_active_handles() != 0 {
             return 1;

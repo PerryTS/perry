@@ -473,6 +473,24 @@ fn ext_binding_build_routing_split() {
 }
 
 #[test]
+fn external_net_transport_keeps_tls_provider_without_bundled_net() {
+    let mut features = std::collections::BTreeSet::from(["bundled-net", "tls"]);
+    super::driver::finalize_tls_transport_features(&mut features, true, true);
+    assert_eq!(
+        features,
+        std::collections::BTreeSet::from(["external-net-tls"]),
+        "external net/http must keep TLS preflight without duplicate bundled-net symbols"
+    );
+}
+
+#[test]
+fn direct_tls_without_external_transport_keeps_legacy_umbrella() {
+    let mut features = std::collections::BTreeSet::new();
+    super::driver::finalize_tls_transport_features(&mut features, true, false);
+    assert_eq!(features, std::collections::BTreeSet::from(["tls"]));
+}
+
+#[test]
 fn unknown_modules_default_to_workspace_path() {
     // Defensive default: if a module isn't in the allowlist,
     // treat it as CPU-only (existing v0.5.586 behavior).

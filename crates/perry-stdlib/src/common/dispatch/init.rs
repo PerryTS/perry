@@ -667,7 +667,11 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         }
         js_register_http_agent_handle_probe(http_agent_probe);
     }
-    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    #[cfg(all(
+        feature = "tls-runtime",
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
     {
         unsafe extern "C" fn tls_handle_kind_probe(handle: i64) -> u8 {
             if crate::tls::is_tls_server_handle(handle) {
@@ -750,7 +754,11 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     #[cfg(feature = "database-sqlite")]
     perry_runtime::js_set_native_sqlite_dispatch(crate::sqlite::js_node_sqlite_native_dispatch);
     perry_runtime::js_set_native_domain_dispatch(crate::domain::js_domain_native_dispatch);
-    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    #[cfg(all(
+        feature = "tls-runtime",
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
     perry_runtime::js_set_native_tls_dispatch(crate::tls::js_tls_native_dispatch);
 
     // #2533: route captured / aliased http/https/http2 `createServer` back to

@@ -33,6 +33,8 @@ mod locale;
 mod locales;
 use locales::{get_canonical_locales_thunk, supported_values_of_thunk};
 mod date_collator;
+mod date_time_locale;
+use date_time_locale::resolve_date_time_locale;
 mod date_names;
 #[cfg(feature = "intl-datetime")]
 pub(crate) mod icu_dtf;
@@ -1089,20 +1091,16 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 &["lookup", "best fit"],
                 "best fit",
             );
-            // `calendar` must match the Unicode locale `type` nonterminal; store
-            // the canonicalized ID so `resolvedOptions().calendar` reflects it.
-            if let Some(calendar) = get_locale_extension_option(current_options(), "calendar") {
-                match canonicalize_calendar_id(&calendar) {
-                    Some(canonical) => set_internal_field_from_raw_handle(
-                        &obj_handle,
-                        KEY_CALENDAR,
-                        string_value(&canonical),
-                    ),
-                    None => throw_range_error(&format!(
-                        "Value {calendar} out of range for Intl options property calendar"
-                    )),
-                }
-            }
+            // `calendar` must match the Unicode locale `type` nonterminal.
+            // Unsupported well-formed values fall through ResolveLocale.
+            let calendar_option =
+                get_locale_extension_option(current_options(), "calendar").map(|calendar| {
+                    canonicalize_calendar_id(&calendar).unwrap_or_else(|| {
+                        throw_range_error(&format!(
+                            "Value {calendar} out of range for Intl options property calendar"
+                        ))
+                    })
+                });
             // `numberingSystem` must be a well-formed `type` nonterminal. Read
             // it here (preserving the GetOption order options-order.js asserts),
             // then run ResolveLocale for `nu` — reconciling the option with the
@@ -1117,25 +1115,43 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                     }
                     ns.to_ascii_lowercase()
                 });
-            let (dtf_locale, dtf_numbering) =
-                resolve_numbering_system(&locale, dtf_opt_ns.as_deref());
-            set_internal_field_from_raw_handle(&obj_handle, KEY_LOCALE, string_value(&dtf_locale));
-            set_internal_field_from_raw_handle(
-                &obj_handle,
-                KEY_NUMBERING_SYSTEM,
-                string_value(&dtf_numbering),
-            );
             // hour12 (boolean) then hourCycle (enum) — both only surface in
             // `resolvedOptions` when the resolved pattern has an hour field.
-            if let Some(h12) = get_bool_option(current_options(), "hour12") {
-                set_internal_field_from_raw_handle(&obj_handle, KEY_HOUR12, bool_value(h12));
-            }
-            if let Some(hc) = get_option_string(current_options(), "hourCycle") {
+            let hour12 = get_bool_option(current_options(), "hour12");
+            let hour_cycle_option = get_option_string(current_options(), "hourCycle");
+            if let Some(ref hc) = hour_cycle_option {
                 if !["h11", "h12", "h23", "h24"].contains(&hc.as_str()) {
                     throw_range_error(&format!(
                         "Value {hc} out of range for Intl options property hourCycle"
                     ));
                 }
+            }
+            let resolved = resolve_date_time_locale(
+                &locale,
+                calendar_option.as_deref(),
+                dtf_opt_ns.as_deref(),
+                hour12,
+                hour_cycle_option.as_deref(),
+            );
+            set_internal_field_from_raw_handle(
+                &obj_handle,
+                KEY_LOCALE,
+                string_value(&resolved.locale),
+            );
+            set_internal_field_from_raw_handle(
+                &obj_handle,
+                KEY_CALENDAR,
+                string_value(&resolved.calendar),
+            );
+            set_internal_field_from_raw_handle(
+                &obj_handle,
+                KEY_NUMBERING_SYSTEM,
+                string_value(&resolved.numbering_system),
+            );
+            if let Some(h12) = hour12 {
+                set_internal_field_from_raw_handle(&obj_handle, KEY_HOUR12, bool_value(h12));
+            }
+            if let Some(hc) = resolved.hour_cycle {
                 set_internal_field_from_raw_handle(&obj_handle, KEY_HOUR_CYCLE, string_value(&hc));
             }
             // ECMA-402 DefaultTimeZone(): when no `timeZone` option is given, use

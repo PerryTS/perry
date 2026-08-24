@@ -467,7 +467,11 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
         return crate::crypto::dispatch_sign(handle, method_name, &args);
     }
 
-    #[cfg(all(feature = "tls", not(target_os = "ios"), not(target_os = "android")))]
+    #[cfg(all(
+        feature = "tls-runtime",
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
     if crate::tls::should_dispatch_tls_handle(handle, method_name) {
         return crate::tls::dispatch_tls_handle(handle, method_name, &args);
     }
