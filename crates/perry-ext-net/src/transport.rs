@@ -11,9 +11,14 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::client::TlsStream;
 
+pub(crate) trait IpcStream: AsyncRead + AsyncWrite + Send + Unpin {}
+
+impl<T> IpcStream for T where T: AsyncRead + AsyncWrite + Send + Unpin {}
+
 pub(crate) enum Transport {
     Plain(TcpStream),
     Tls(Box<TlsStream<TcpStream>>),
+    Ipc(Box<dyn IpcStream>),
 }
 
 impl Transport {
@@ -25,6 +30,9 @@ impl Transport {
         match self {
             Transport::Plain(s) => s.set_nodelay(nodelay),
             Transport::Tls(s) => s.get_ref().0.set_nodelay(nodelay),
+            // Pipes do not use Nagle's algorithm. Node accepts setNoDelay on
+            // every net.Socket, including pipe-backed sockets, as a no-op.
+            Transport::Ipc(_) => Ok(()),
         }
     }
 
@@ -35,6 +43,7 @@ impl Transport {
         match self {
             Transport::Plain(s) => s.nodelay(),
             Transport::Tls(s) => s.get_ref().0.nodelay(),
+            Transport::Ipc(_) => Ok(false),
         }
     }
 }
@@ -48,6 +57,7 @@ impl AsyncRead for Transport {
         match self.get_mut() {
             Transport::Plain(s) => Pin::new(s).poll_read(cx, buf),
             Transport::Tls(s) => Pin::new(&mut **s).poll_read(cx, buf),
+            Transport::Ipc(s) => Pin::new(&mut **s).poll_read(cx, buf),
         }
     }
 }
@@ -61,18 +71,21 @@ impl AsyncWrite for Transport {
         match self.get_mut() {
             Transport::Plain(s) => Pin::new(s).poll_write(cx, buf),
             Transport::Tls(s) => Pin::new(&mut **s).poll_write(cx, buf),
+            Transport::Ipc(s) => Pin::new(&mut **s).poll_write(cx, buf),
         }
     }
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             Transport::Plain(s) => Pin::new(s).poll_flush(cx),
             Transport::Tls(s) => Pin::new(&mut **s).poll_flush(cx),
+            Transport::Ipc(s) => Pin::new(&mut **s).poll_flush(cx),
         }
     }
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         match self.get_mut() {
             Transport::Plain(s) => Pin::new(s).poll_shutdown(cx),
             Transport::Tls(s) => Pin::new(&mut **s).poll_shutdown(cx),
+            Transport::Ipc(s) => Pin::new(&mut **s).poll_shutdown(cx),
         }
     }
 }

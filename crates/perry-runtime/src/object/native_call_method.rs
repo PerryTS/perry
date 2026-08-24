@@ -2059,7 +2059,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
 
         // Vtable lookup: check if this class has a registered method in the vtable
         let class_id = (*obj).class_id;
-        if class_id != 0 {
+        if class_id != 0 && !class_is_key_deleted(class_id, method_name) {
             if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
                 if let Some(ref reg) = *registry {
                     if let Some(vtable) = reg.get(&class_id) {

@@ -3,45 +3,10 @@
 //! under the per-file LOC ceiling. Canonicalization itself lives in
 //! [`super::canonicalize_language_tag`].
 
-use super::{
-    array_ptr_from_value, canonicalize_language_tag, get_field, get_number_field,
-    locale_instance_tag, object_ptr_from_value, string_from_string_value, string_value,
-    throw_invalid_language_tag, throw_range_error, throw_type_error, value_to_string,
-};
-use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
+use super::{locales_from_value, string_value, throw_range_error, value_to_string};
+use crate::array::{js_array_alloc, js_array_push_f64};
 use crate::closure::ClosureHeader;
-use crate::value::{js_nanbox_pointer, JSValue};
-
-/// The ECMA-402 element-type guard inside CanonicalizeLocaleList: each element
-/// must be a String or an Object, else `TypeError`. A Locale/other object is
-/// coerced via `ToString` (an `Intl.Locale` stringifies to its canonical id).
-fn locale_list_element_tag(value: f64) -> String {
-    let js = JSValue::from_bits(value.to_bits());
-    if js.is_any_string() {
-        return string_from_string_value(value).unwrap_or_default();
-    }
-    // An `Intl.Locale` (or `class X extends Intl.Locale` subclass) element:
-    // CanonicalizeLocaleList reads its `[[Locale]]` slot directly, WITHOUT
-    // calling the (user-overridable) `toString` — checked before the generic
-    // ToString path below (test262 canonicalize-locale-list-take-locale.js).
-    if let Some(tag) = locale_instance_tag(value) {
-        return tag;
-    }
-    // Object (but not a Symbol, which is pointer-shaped yet a primitive).
-    if js.is_pointer() && unsafe { crate::symbol::js_is_symbol(value) } == 0 {
-        return value_to_string(value);
-    }
-    throw_type_error("locale must be a String or Object");
-}
-
-fn push_canonical_locale(seen: &mut Vec<String>, tag: &str) {
-    let Some(canonical) = canonicalize_language_tag(tag) else {
-        throw_invalid_language_tag(tag);
-    };
-    if !seen.iter().any(|existing| existing == &canonical) {
-        seen.push(canonical);
-    }
-}
+use crate::value::js_nanbox_pointer;
 
 pub(super) fn canonical_locales_array(list: &[String]) -> f64 {
     let mut arr = js_array_alloc(list.len() as u32);
@@ -54,54 +19,10 @@ pub(super) fn canonical_locales_array(list: &[String]) -> f64 {
 /// `Intl.getCanonicalLocales(locales)` — CanonicalizeLocaleList then
 /// CreateArrayFromList. `undefined` → `[]`; a String → a single-element list;
 /// `null` → `TypeError`; an Array (or array-like Object) → its elements
-/// canonicalized and de-duplicated, in order; any other primitive → `[]`
-/// (`ToObject` yields a wrapper with no integer-indexed entries).
+/// canonicalized and de-duplicated, in order. Other primitives are ToObject-
+/// wrapped, so inherited array-like properties remain observable.
 pub(super) fn get_canonical_locales(locales: f64) -> f64 {
-    let js = JSValue::from_bits(locales.to_bits());
-    let mut seen: Vec<String> = Vec::new();
-
-    if js.is_undefined() {
-        return canonical_locales_array(&seen);
-    }
-    if js.is_null() {
-        throw_type_error("Cannot convert undefined or null to object");
-    }
-    if js.is_any_string() {
-        let tag = string_from_string_value(locales).unwrap_or_default();
-        push_canonical_locale(&mut seen, &tag);
-        return canonical_locales_array(&seen);
-    }
-    // CanonicalizeLocaleList step 2: a value with an `[[InitializedLocale]]`
-    // slot (an `Intl.Locale` or a subclass instance) is the single-element list
-    // « locale », read from its `[[Locale]]` slot — never iterated as an
-    // array-like nor stringified via `toString`.
-    if let Some(tag) = locale_instance_tag(locales) {
-        push_canonical_locale(&mut seen, &tag);
-        return canonical_locales_array(&seen);
-    }
-    if let Some(arr) = array_ptr_from_value(locales) {
-        let len = js_array_length(arr);
-        for i in 0..len {
-            let tag = locale_list_element_tag(js_array_get_f64(arr, i));
-            push_canonical_locale(&mut seen, &tag);
-        }
-        return canonical_locales_array(&seen);
-    }
-    if let Some(obj) = object_ptr_from_value(locales) {
-        // Generic array-like: iterate `O[0..length]`.
-        let len = get_number_field(obj, "length")
-            .filter(|n| n.is_finite() && *n > 0.0)
-            .map(|n| n as u32)
-            .unwrap_or(0);
-        for i in 0..len {
-            let tag = locale_list_element_tag(get_field(obj, &i.to_string()));
-            push_canonical_locale(&mut seen, &tag);
-        }
-        return canonical_locales_array(&seen);
-    }
-    // Other primitives (number/boolean/symbol/bigint): ToObject succeeds but the
-    // wrapper has length 0 — an empty list, no throw.
-    canonical_locales_array(&seen)
+    canonical_locales_array(&locales_from_value(locales))
 }
 
 pub(super) extern "C" fn get_canonical_locales_thunk(

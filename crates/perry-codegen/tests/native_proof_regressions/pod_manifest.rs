@@ -1,6 +1,110 @@
 use super::*;
 
 #[test]
+fn pod_i64_and_u64_materialization_uses_safe_integer_guards() {
+    let packet_ty = pod_type(&[
+        ("signed", Type::Named("PerryI64".to_string())),
+        ("unsigned", Type::Named("PerryU64".to_string())),
+    ]);
+    let module = module(
+        "pod_safe_integer_materialization.ts",
+        vec![
+            pod_let(
+                1,
+                "packet",
+                packet_ty,
+                vec![("signed", int(-7)), ("unsigned", int(9))],
+            ),
+            Stmt::Return(Some(local(1))),
+        ],
+    );
+
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    assert!(
+        ir.contains("call double @js_native_abi_materialize_i64"),
+        "signed POD fields must reject imprecise managed materialization:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_native_abi_materialize_u64"),
+        "unsigned POD fields must reject imprecise managed materialization:\n{ir}"
+    );
+}
+
+#[test]
+fn nested_pod_initializers_and_local_assignments_preserve_value_semantics() {
+    let nested_ty = pod_type(&[
+        ("code", Type::Named("PerryU16".to_string())),
+        ("delta", Type::Named("PerryI8".to_string())),
+    ]);
+    let packet_ty = pod_type(&[
+        ("tag", Type::Named("PerryU8".to_string())),
+        ("nested", nested_ty),
+    ]);
+    let module = module(
+        "nested_pod_copy.ts",
+        vec![
+            pod_let(
+                1,
+                "original",
+                packet_ty.clone(),
+                vec![
+                    ("tag", int(7)),
+                    (
+                        "nested",
+                        Expr::Object(vec![
+                            ("code".to_string(), int(513)),
+                            ("delta".to_string(), int(-8)),
+                        ]),
+                    ),
+                ],
+            ),
+            Stmt::Let {
+                id: 2,
+                name: "copy".to_string(),
+                ty: packet_ty,
+                mutable: true,
+                init: Some(local(1)),
+            },
+            Stmt::Return(Some(local(1))),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PodRecordLiteralInit"
+                && record["consumer"] == "pod_record_stack_alloc"
+                && record["pod_layout"]["fields"]
+                    .as_array()
+                    .is_some_and(|fields| fields.len() == 3)
+        }),
+        "nested POD literal should flatten into one C layout:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PodRecordCopyInit"
+                && record["consumer"] == "pod_record_value_copy"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes.iter().any(|note| note == "assignment_semantics=copy")
+                })
+        }),
+        "POD local assignment must snapshot into independent storage:\n{artifact:#}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["consumer"] == "pod_record_materialized_value_copy"
+                && record["notes"].as_array().is_some_and(|notes| {
+                    notes
+                        .iter()
+                        .any(|note| note == "value_semantics=copy_at_managed_boundary")
+                })
+        }),
+        "a managed POD boundary must receive a copied object:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn checked_native_scalar_conversions_keep_dynamic_pod_initializers_native() {
     let packet_ty = pod_type(&[
         ("signed8", Type::Named("PerryI8".to_string())),

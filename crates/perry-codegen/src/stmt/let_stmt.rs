@@ -1,5 +1,3 @@
-//! `Stmt::Let` lowering — large arm extracted from the dispatcher.
-
 use super::*;
 
 use super::let_buffer_views::{math_min_length_buffer_ids, register_noalias_buffer_view};
@@ -20,13 +18,8 @@ use crate::native_value::{
 use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
-/// #5271: does `init` provably evaluate to a plain object literal? Two
-/// shapes reach codegen: a data-only literal stays `Expr::Object`, while a
-/// literal carrying methods/getters lowers to an immediately-invoked
-/// object-building closure whose sole param is named `__perry_obj_iife`
-/// and whose single argument is the seed `Object(..)`. Recognizing both
-/// lets `o.trim()` / `internals.trim(v, s)` resolve to the receiver's own
-/// member rather than `String.prototype.trim`.
+/// #5271: recognize both data-only object literals and method/getter IIFEs so
+/// own members win over built-in prototype methods during lowering.
 fn is_object_literal_init(init: &perry_hir::Expr) -> bool {
     use perry_hir::Expr;
     match init {
@@ -443,6 +436,25 @@ pub(crate) fn lower_let(
     }
 
     if let Some(init_expr) = init {
+        let copied = match init_expr {
+            perry_hir::Expr::LocalGet(source_id) if !ctx.boxed_vars.contains(&id) => {
+                crate::expr::copy_pod_local(ctx, id, *source_id)?
+            }
+            _ => None,
+        };
+        if let Some(copied) = copied {
+            ctx.local_types.insert(id, refined_ty.clone());
+            ctx.locals.insert(id, copied.materialized_slot.clone());
+            ctx.pod_records.insert(id, copied);
+            if ctx.module_globals.contains_key(&id) {
+                let _ = crate::expr::materialize_pod_local(
+                    ctx,
+                    id,
+                    MaterializationReason::PodMaterialization,
+                )?;
+            }
+            return Ok(());
+        }
         match crate::native_value::layout_decision_for_type(ctx, &refined_ty) {
             PodLayoutDecision::Layout(_)
                 if ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id) =>
@@ -454,12 +466,11 @@ pub(crate) fn lower_let(
                 );
             }
             PodLayoutDecision::Layout(layout) => {
-                match crate::native_value::collect_pod_init_fields(ctx, init_expr).and_then(
-                    |fields| {
+                match crate::native_value::collect_pod_init_fields(ctx, init_expr, &layout)
+                    .and_then(|fields| {
                         crate::native_value::validate_exact_init(&layout, &fields)?;
                         Ok(fields)
-                    },
-                ) {
+                    }) {
                     Ok(init_fields) => {
                         let data_slot = ctx
                             .func
@@ -535,9 +546,8 @@ pub(crate) fn lower_let(
         }
     }
 
-    // Keep a non-escaping uppercase result virtual when every consumer is a
-    // fused string operation. Store the original boxed receiver now so later
-    // writes to its source local cannot change the captured value.
+    // Keep non-escaping uppercase results virtual for fused consumers while
+    // snapshotting the receiver against later source-local writes.
     if let Some(perry_hir::Expr::Call { callee, args, .. }) = init {
         if ctx.fusible_uppercase_locals.contains(&id)
             && args.is_empty()

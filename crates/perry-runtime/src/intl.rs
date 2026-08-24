@@ -40,6 +40,17 @@ mod time_zone;
 pub(crate) use time_zone::resolved_date_time_zone;
 mod install;
 use install::install_constructor;
+mod method_install;
+use method_install::{
+    install_bound_instance_function, install_bound_instance_function_from_handle, install_function,
+    install_function_from_handle,
+};
+mod rooted_fields;
+use rooted_fields::{
+    get_field, get_field_from_raw_handle, get_field_from_value_handle, get_number_field,
+    get_option_value, get_string_field, get_string_field_from_raw_handle, set_builtin_attrs,
+    set_field, set_internal_field, set_internal_field_from_raw_handle,
+};
 mod subclass;
 pub(crate) use subclass::{intl_instanceof, intl_subclass_super, is_intl_constructor_value};
 use subclass::{locale_instance_tag, push_locale_element};
@@ -61,18 +72,16 @@ pub(crate) use date_collator::{
     date_time_format_bound_to_parts_thunk, date_time_format_format_getter_thunk,
     date_time_format_range_thunk, date_time_format_range_to_parts_thunk,
     date_time_format_resolved_options_thunk, date_time_format_to_parts_thunk,
-    temporal_locale_string, TemporalLocaleCtx,
+    resolve_collator_locale, temporal_locale_string, TemporalLocaleCtx,
 };
 pub(crate) use list_relative_plural::{
     canonicalize_calendar_id, canonicalize_offset_time_zone, is_valid_offset_time_zone,
     list_format_bound_format_thunk, list_format_bound_resolved_options_thunk,
     list_format_bound_to_parts_thunk, list_format_format_thunk, list_format_parts,
     list_format_resolved_options_thunk, list_format_to_parts_thunk,
-    plural_rules_bound_resolved_options_thunk, plural_rules_bound_select_range_thunk,
-    plural_rules_bound_select_thunk, plural_rules_resolved_options_thunk,
-    plural_rules_select_range_thunk, plural_rules_select_thunk, rtf_bound_format_thunk,
-    rtf_bound_resolved_options_thunk, rtf_bound_to_parts_thunk, rtf_format_thunk,
-    rtf_resolved_options_thunk, rtf_to_parts_thunk,
+    plural_rules_resolved_options_thunk, plural_rules_select_range_thunk,
+    plural_rules_select_thunk, rtf_bound_format_thunk, rtf_bound_resolved_options_thunk,
+    rtf_bound_to_parts_thunk, rtf_format_thunk, rtf_resolved_options_thunk, rtf_to_parts_thunk,
 };
 pub(crate) use number_format::{
     bigint_to_locale_string, captured_intl_object, nf_resolved_default,
@@ -137,6 +146,7 @@ const KEY_TYPE: &str = "__intlType";
 const KEY_LF_STYLE: &str = "__intlListStyle";
 const KEY_NUMERIC: &str = "__intlNumeric";
 const KEY_RTF_STYLE: &str = "__intlRtfStyle";
+const KEY_RTF_NUMBERING: &str = "__intlRtfNumbering";
 const KEY_PR_MIN_INT: &str = "__intlMinInt";
 const KEY_PR_MIN_FRAC: &str = "__intlMinFrac";
 const KEY_PR_MAX_FRAC: &str = "__intlMaxFrac";
@@ -249,46 +259,6 @@ fn array_ptr_from_value(value: f64) -> Option<*const crate::ArrayHeader> {
     }
     let ptr = js.as_pointer::<crate::ArrayHeader>();
     (!ptr.is_null()).then_some(ptr)
-}
-
-fn get_field(value: *const ObjectHeader, key: &str) -> f64 {
-    let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    js_object_get_field_by_name_f64(value, key_ptr)
-}
-
-fn set_field(obj: *mut ObjectHeader, key: &str, value: f64) {
-    let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    js_object_set_field_by_name(obj, key_ptr, value);
-}
-
-fn set_builtin_attrs(obj: *mut ObjectHeader, key: &str, attrs: PropertyAttrs) {
-    set_builtin_property_attrs(obj as usize, key.to_string(), attrs);
-}
-
-fn set_internal_field(obj: *mut ObjectHeader, key: &str, value: f64) {
-    set_field(obj, key, value);
-    set_builtin_attrs(obj, key, PropertyAttrs::new(true, false, true));
-}
-
-fn get_string_field(obj: *const ObjectHeader, key: &str) -> Option<String> {
-    string_from_string_value(get_field(obj, key))
-}
-
-fn get_number_field(obj: *const ObjectHeader, key: &str) -> Option<f64> {
-    let value = get_field(obj, key);
-    let js = JSValue::from_bits(value.to_bits());
-    if js.is_undefined() || js.is_null() {
-        None
-    } else {
-        Some(js.to_number())
-    }
-}
-
-fn get_option_value(options: f64, key: &str) -> f64 {
-    let Some(obj) = object_ptr_from_value(options) else {
-        return undefined();
-    };
-    get_field(obj, key)
 }
 
 /// Coerce an already-fetched option value to its GetOption string form. ECMA-402
@@ -519,22 +489,26 @@ pub(crate) fn canonical_locale(tag: &str) -> Option<String> {
 /// canonicalization. Returns `None` when the tag is not a structurally valid
 /// `unicode_locale_id` (the caller raises `RangeError`).
 ///
-/// With the `intl-locale` feature this delegates to `icu_locale_core`'s data-free
-/// structural parser, which gives correct case normalization, variant ordering,
-/// extension well-formedness, and UTS #35 rejection of extlang / grandfathered /
-/// duplicate-singleton tags. (Deep CLDR alias replacement —
-/// grandfathered→preferred, complex subtag replacement, unicode-extension value
-/// aliases — needs `icu_locale` + its CLDR data and is out of scope.) The
-/// fallback path uses the lighter hand-rolled `canonical_locale`.
+/// With the `intl-locale` feature this delegates to ICU4X's structural parser
+/// and compiled CLDR canonicalizer, which cover case/variant/extension
+/// normalization as well as language, script, region, variant, and transformed
+/// extension aliases. Perry's small post-pass supplies the handful of Unicode
+/// extension type aliases that ICU4X does not currently include. The fallback
+/// path uses the lighter hand-rolled `canonical_locale`.
 fn canonicalize_language_tag(tag: &str) -> Option<String> {
     #[cfg(feature = "intl-locale")]
     {
-        match icu_locale_core::Locale::normalize(tag) {
-            Ok(canonical) => Some(canonicalize_unicode_extension_types(
-                &canonical.into_owned(),
-            )),
-            Err(_) => None,
-        }
+        let mut locale = match tag.parse::<icu_locale::Locale>() {
+            Ok(locale) => locale,
+            Err(_)
+                if (5..=8).contains(&tag.len()) && tag.bytes().all(|b| b.is_ascii_alphabetic()) =>
+            {
+                return Some(tag.to_ascii_lowercase());
+            }
+            Err(_) => return None,
+        };
+        icu_locale::LocaleCanonicalizer::new_extended().canonicalize(&mut locale);
+        Some(canonicalize_unicode_extension_types(&locale.to_string()))
     }
     #[cfg(not(feature = "intl-locale"))]
     {
@@ -542,15 +516,27 @@ fn canonicalize_language_tag(tag: &str) -> Option<String> {
     }
 }
 
-/// `HasProperty(O, ToString(index))` — true when the integer-indexed property is
-/// present (own or inherited). Used to skip holes/absent indices in
-/// CanonicalizeLocaleList's array/array-like walk.
-fn js_has_index(obj: f64, index: u32) -> bool {
-    let key = string_value(&index.to_string());
-    crate::object::js_object_has_property(obj, key).to_bits() == crate::value::TAG_TRUE
+/// CanonicalizeLocaleList's `HasProperty(O, ToString(index))`.
+fn js_has_index(obj: &crate::gc::RuntimeHandle<'_>, index: u32) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key = scope.root_nanbox_f64(string_value(&index.to_string()));
+    if crate::proxy::js_proxy_is_proxy(obj.get_nanbox_f64()) != 0 {
+        return crate::proxy::js_proxy_has(obj.get_nanbox_f64(), key.get_nanbox_f64()).to_bits()
+            == crate::value::TAG_TRUE;
+    }
+    crate::object::js_object_has_property(obj.get_nanbox_f64(), key.get_nanbox_f64()).to_bits()
+        == crate::value::TAG_TRUE
+}
+
+fn proxy_get_from_value_handle(value: &crate::gc::RuntimeHandle<'_>, key: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key = scope.root_nanbox_f64(string_value(key));
+    crate::proxy::js_proxy_get(value.get_nanbox_f64(), key.get_nanbox_f64())
 }
 
 fn locales_from_value(locales: f64) -> Vec<String> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let locales_handle = scope.root_nanbox_f64(locales);
     let js = JSValue::from_bits(locales.to_bits());
     // CanonicalizeLocaleList(undefined) is the empty list; `null` fails ToObject
     // with a TypeError (everything else is a String or coerces via ToObject).
@@ -568,29 +554,57 @@ fn locales_from_value(locales: f64) -> Vec<String> {
         };
         return vec![canonical];
     }
-    // CanonicalizeLocaleList step 2: a value with an `[[InitializedLocale]]`
-    // slot (an `Intl.Locale` / subclass instance) is the single-element list
-    // « locale », read from its slot — not iterated nor `toString`-ed.
+    // A Proxy must be classified before probing Locale/Array/Object headers:
+    // those probes reinterpret pointer payloads and a Proxy has a distinct GC
+    // layout. CanonicalizeLocaleList observes it through [[Get]]/[[HasProperty]]
+    // regardless of the target's underlying kind.
+    if crate::proxy::js_proxy_is_proxy(locales_handle.get_nanbox_f64()) != 0 {
+        let len = crate::builtins::js_number_coerce(proxy_get_from_value_handle(
+            &locales_handle,
+            "length",
+        ));
+        let mut out = Vec::new();
+        for i in 0..if len.is_finite() && len > 0.0 {
+            len as u32
+        } else {
+            0
+        } {
+            if js_has_index(&locales_handle, i) {
+                push_locale_element(
+                    &mut out,
+                    proxy_get_from_value_handle(&locales_handle, &i.to_string()),
+                );
+            }
+        }
+        return out;
+    }
+    // An Intl.Locale contributes its internal locale instead of being iterated.
     if let Some(tag) = locale_instance_tag(locales) {
         let Some(canonical) = canonicalize_language_tag(&tag) else {
             throw_invalid_language_tag(&tag);
         };
         return vec![canonical];
     }
-    if let Some(arr) = array_ptr_from_value(locales) {
+    if let Some(arr) = array_ptr_from_value(locales_handle.get_nanbox_f64()) {
         let len = js_array_length(arr);
         let mut out = Vec::with_capacity(len as usize);
         for i in 0..len {
+            if !js_has_index(&locales_handle, i) {
+                continue;
+            }
+            let Some(arr) = array_ptr_from_value(locales_handle.get_nanbox_f64()) else {
+                break;
+            };
             push_locale_element(&mut out, js_array_get_f64(arr, i));
         }
         return out;
     }
     // CanonicalizeLocaleList on a generic array-like Object: iterate `O[0..length]`
     // (e.g. `{ 0: "DE", length: 1 }` → `["de"]`).
-    if let Some(obj) = object_ptr_from_value(locales) {
+    if object_ptr_from_value(locales_handle.get_nanbox_f64()).is_some() {
         // `length = ? ToLength(? Get(O, "length"))`: a throwing `length` getter or
         // ToNumber step (Symbol / abrupt valueOf/toString) propagates here.
-        let len_raw = get_field(obj, "length");
+        let len_raw = get_field_from_value_handle(&locales_handle, "length");
         let len_num = crate::builtins::js_number_coerce(len_raw);
         let len = if len_num.is_finite() && len_num > 0.0 {
             len_num as u32
@@ -601,16 +615,42 @@ fn locales_from_value(locales: f64) -> Vec<String> {
         for i in 0..len {
             // Skip absent indices (`HasProperty` is false) — e.g.
             // `{ length: 3, 0: "en" }` yields just `["en"]`, never `undefined`.
-            if !js_has_index(locales, i) {
+            if !js_has_index(&locales_handle, i) {
                 continue;
             }
-            push_locale_element(&mut out, get_field(obj, &i.to_string()));
+            push_locale_element(
+                &mut out,
+                get_field_from_value_handle(&locales_handle, &i.to_string()),
+            );
         }
         return out;
     }
-    // Other primitives (number/boolean/Symbol/BigInt): ToObject yields a wrapper
-    // with length 0 — an empty list, no throw.
-    Vec::new()
+    // Other primitives (number/boolean/Symbol/BigInt): CanonicalizeLocaleList
+    // applies ToObject, so inherited `length` / indexed getters on the wrapper
+    // prototype remain observable (DisplayNames/locales-symbol-length.js).
+    let boxed = scope.root_nanbox_f64(crate::object::js_object_coerce(
+        locales_handle.get_nanbox_f64(),
+    ));
+    if object_ptr_from_value(boxed.get_nanbox_f64()).is_none() {
+        return Vec::new();
+    }
+    let len_raw = get_field_from_value_handle(&boxed, "length");
+    let len_num = crate::builtins::js_number_coerce(len_raw);
+    let len = if len_num.is_finite() && len_num > 0.0 {
+        len_num as u32
+    } else {
+        0
+    };
+    let mut out = Vec::with_capacity(len as usize);
+    for i in 0..len {
+        if js_has_index(&boxed, i) {
+            push_locale_element(
+                &mut out,
+                get_field_from_value_handle(&boxed, &i.to_string()),
+            );
+        }
+    }
+    out
 }
 
 /// BestAvailableLocale (lookup) — a requested canonical locale is "supported"
@@ -872,27 +912,19 @@ fn enum_option_strict(options: f64, key: &str, allowed: &[&str], default: &str) 
     }
 }
 
-/// `GetOptionsObject(options)`: `undefined` yields an empty bag (reported as
-/// `undefined`, which the option readers treat as "every key absent"); an Object
-/// passes through unchanged; any other value (including `null`, primitives, and
-/// BigInt) throws `TypeError`. Used by the constructors whose spec step is
-/// `GetOptionsObject` (ListFormat, Segmenter, PluralRules, …).
+/// ECMA-402 GetOptionsObject.
 fn get_options_object(options: f64) -> f64 {
     let jv = JSValue::from_bits(options.to_bits());
     if jv.is_undefined() {
         return options;
     }
-    if object_ptr_from_value(options).is_some() {
+    if crate::proxy::js_proxy_is_proxy(options) != 0 || object_ptr_from_value(options).is_some() {
         return options;
     }
     throw_type_error("Cannot convert undefined or null to object");
 }
 
-/// `CoerceOptionsToObject(options)` partial: `undefined` stays an empty bag and
-/// `null` throws `TypeError` (`ToObject(null)`). Primitives are *not* boxed here
-/// — Perry reads option keys directly off Objects, so a primitive simply yields
-/// every-key-absent — but `null` must still reject. Used by the constructors
-/// whose spec step is `ToObject` (RelativeTimeFormat, Collator, …).
+/// CoerceOptionsToObject's null rejection; callers box primitives when needed.
 fn coerce_options_reject_null(options: f64) -> f64 {
     if JSValue::from_bits(options.to_bits()).is_null() {
         throw_type_error("Cannot convert undefined or null to object");
@@ -900,19 +932,11 @@ fn coerce_options_reject_null(options: f64) -> f64 {
     options
 }
 
-/// `ToObject(options)` for the SupportedLocales option read: `null` / `undefined`
-/// are handled by the caller; a non-object primitive (Boolean, Number, String,
-/// Symbol, BigInt) is boxed into a fresh empty object so that reading an option
-/// key walks the standard prototype chain and fires any `Object.prototype`
-/// getter for that key exactly once (SupportedLocales step 1.a, test262
-/// `supportedLocalesOf/options-toobject.js`). A real object passes through.
+/// Box a primitive so inherited Object.prototype option getters stay observable.
 fn to_object_for_options(options: f64) -> f64 {
-    if object_ptr_from_value(options).is_some() {
+    if crate::proxy::js_proxy_is_proxy(options) != 0 || object_ptr_from_value(options).is_some() {
         return options;
     }
-    // Box the primitive: an empty object has no own option keys, so every read
-    // resolves through the prototype chain — matching the boxed-wrapper behaviour
-    // the spec observes (the wrapper carries no `localeMatcher` of its own).
     js_nanbox_pointer(js_object_alloc(0, 0) as i64)
 }
 
@@ -936,6 +960,8 @@ fn dt_component_option(
     allowed: &[&str],
     store_key: &str,
 ) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
     match get_option_string(options, key) {
         None => false,
         Some(value) => {
@@ -944,10 +970,20 @@ fn dt_component_option(
                     "Value {value} out of range for Intl options property {key}"
                 ));
             }
-            set_internal_field(obj, store_key, string_value(&value));
+            set_internal_field_from_raw_handle(&obj, store_key, string_value(&value));
             true
         }
     }
+}
+
+fn dt_component_option_from_handle(
+    obj: &crate::gc::RuntimeHandle<'_>,
+    options: f64,
+    key: &str,
+    allowed: &[&str],
+    store_key: &str,
+) -> bool {
+    obj.with_mut_ptr(|obj| dt_component_option(obj, options, key, allowed, store_key))
 }
 
 /// Validate a *named* (non-offset) `timeZone` identifier. Perry ships no tz
@@ -959,14 +995,23 @@ fn dt_component_option(
 /// (`"MEZ"`, `"invalid"`, `"Europe/İstanbul"`, …) do not. Returns the (best
 /// effort, un-recased) canonical identifier, or `None` to signal `RangeError`.
 fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, options: f64) -> f64 {
-    let locale = locale_or_default(locales);
+    // Locale/option access can invoke user Proxy traps. Keep both arguments and
+    // the partially initialized result live across those calls; the handles are
+    // refreshed explicitly in the long PluralRules read-order sequence below.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure_handle = scope.root_raw_const_ptr(closure);
+    let locales_handle = scope.root_nanbox_f64(locales);
+    let options_handle = scope.root_nanbox_f64(options);
+    let locale = locale_or_default(locales_handle.get_nanbox_f64());
     let obj = js_object_alloc(0, 8);
-    set_internal_field(obj, KEY_KIND, string_value(kind));
-    set_internal_field(obj, KEY_LOCALE, string_value(&locale));
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    set_internal_field_from_raw_handle(&obj_handle, KEY_KIND, string_value(kind));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_LOCALE, string_value(&locale));
+    let current_options = || options_handle.get_nanbox_f64();
 
     match kind {
         KIND_NUMBER => {
-            configure_number_format(obj, &locale, options);
+            obj_handle.with_mut_ptr(|obj| configure_number_format(obj, &locale, current_options()));
             // The bound format function is the [[BoundFormat]] slot: ECMA-402
             // gives it an empty `name` ("") and length 1. It is installed as an
             // own `format` property so `nf.format(x)` dispatches without the
@@ -974,22 +1019,22 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // props), and is also stashed in the hidden KEY_NF_BOUND_FORMAT slot
             // that the prototype `format` getter reads — so mutating or deleting
             // the public property can't corrupt what the accessor returns.
-            let format_fn = install_bound_instance_function(
-                obj,
+            let format_fn = install_bound_instance_function_from_handle(
+                &obj_handle,
                 "format",
                 number_format_bound_format_thunk as *const u8,
                 1,
             );
             if !format_fn.is_null() {
                 crate::object::set_bound_native_closure_name(format_fn, "");
-                set_internal_field(
-                    obj,
+                set_internal_field_from_raw_handle(
+                    &obj_handle,
                     KEY_NF_BOUND_FORMAT,
                     js_nanbox_pointer(format_fn as i64),
                 );
             }
-            install_bound_instance_function(
-                obj,
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "formatToParts",
                 number_format_bound_to_parts_thunk as *const u8,
                 1,
@@ -1001,24 +1046,24 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // loses `this` and the `this_intl_object` guard throws a TypeError
             // (formatRange/invoked-as-func.js), matching the non-bound prototype
             // method these shadow.
-            install_function(
-                obj,
+            install_function_from_handle(
+                &obj_handle,
                 "formatRange",
                 number_format_range_thunk as *const u8,
                 2,
                 2,
                 false,
             );
-            install_function(
-                obj,
+            install_function_from_handle(
+                &obj_handle,
                 "formatRangeToParts",
                 number_format_range_to_parts_thunk as *const u8,
                 2,
                 2,
                 false,
             );
-            install_bound_instance_function(
-                obj,
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "resolvedOptions",
                 number_format_bound_resolved_options_thunk as *const u8,
                 0,
@@ -1031,7 +1076,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // with no DateTimeFormat-relevant properties, i.e. behave as empty —
             // `object_ptr_from_value` already returns `None` for them, so option
             // reads simply see `undefined`.
-            if JSValue::from_bits(options.to_bits()).is_null() {
+            if JSValue::from_bits(current_options().to_bits()).is_null() {
                 throw_type_error("Cannot convert undefined or null to object");
             }
             // GetOption reads run in the exact ECMA-402 CreateDateTimeFormat
@@ -1039,18 +1084,20 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // localeMatcher / formatMatcher are validated but don't affect the
             // deterministic formatter, so their resolved value is discarded.
             let _ = enum_option(
-                options,
+                current_options(),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
             );
             // `calendar` must match the Unicode locale `type` nonterminal; store
             // the canonicalized ID so `resolvedOptions().calendar` reflects it.
-            if let Some(calendar) = get_locale_extension_option(options, "calendar") {
+            if let Some(calendar) = get_locale_extension_option(current_options(), "calendar") {
                 match canonicalize_calendar_id(&calendar) {
-                    Some(canonical) => {
-                        set_internal_field(obj, KEY_CALENDAR, string_value(&canonical))
-                    }
+                    Some(canonical) => set_internal_field_from_raw_handle(
+                        &obj_handle,
+                        KEY_CALENDAR,
+                        string_value(&canonical),
+                    ),
                     None => throw_range_error(&format!(
                         "Value {calendar} out of range for Intl options property calendar"
                     )),
@@ -1061,30 +1108,35 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // then run ResolveLocale for `nu` — reconciling the option with the
             // locale's `-u-nu-` keyword so `resolvedOptions().locale` /
             // `.numberingSystem` reflect only the supported value actually used.
-            let dtf_opt_ns = get_locale_extension_option(options, "numberingSystem").map(|ns| {
-                if !is_well_formed_numbering_system(&ns) {
-                    throw_range_error(&format!(
-                        "Value {ns} out of range for Intl options property numberingSystem"
-                    ));
-                }
-                ns.to_ascii_lowercase()
-            });
+            let dtf_opt_ns =
+                get_locale_extension_option(current_options(), "numberingSystem").map(|ns| {
+                    if !is_well_formed_numbering_system(&ns) {
+                        throw_range_error(&format!(
+                            "Value {ns} out of range for Intl options property numberingSystem"
+                        ));
+                    }
+                    ns.to_ascii_lowercase()
+                });
             let (dtf_locale, dtf_numbering) =
                 resolve_numbering_system(&locale, dtf_opt_ns.as_deref());
-            set_internal_field(obj, KEY_LOCALE, string_value(&dtf_locale));
-            set_internal_field(obj, KEY_NUMBERING_SYSTEM, string_value(&dtf_numbering));
+            set_internal_field_from_raw_handle(&obj_handle, KEY_LOCALE, string_value(&dtf_locale));
+            set_internal_field_from_raw_handle(
+                &obj_handle,
+                KEY_NUMBERING_SYSTEM,
+                string_value(&dtf_numbering),
+            );
             // hour12 (boolean) then hourCycle (enum) — both only surface in
             // `resolvedOptions` when the resolved pattern has an hour field.
-            if let Some(h12) = get_bool_option(options, "hour12") {
-                set_internal_field(obj, KEY_HOUR12, bool_value(h12));
+            if let Some(h12) = get_bool_option(current_options(), "hour12") {
+                set_internal_field_from_raw_handle(&obj_handle, KEY_HOUR12, bool_value(h12));
             }
-            if let Some(hc) = get_option_string(options, "hourCycle") {
+            if let Some(hc) = get_option_string(current_options(), "hourCycle") {
                 if !["h11", "h12", "h23", "h24"].contains(&hc.as_str()) {
                     throw_range_error(&format!(
                         "Value {hc} out of range for Intl options property hourCycle"
                     ));
                 }
-                set_internal_field(obj, KEY_HOUR_CYCLE, string_value(&hc));
+                set_internal_field_from_raw_handle(&obj_handle, KEY_HOUR_CYCLE, string_value(&hc));
             }
             // ECMA-402 DefaultTimeZone(): when no `timeZone` option is given, use
             // the HOST time zone (Node returns e.g. "Europe/Berlin"), not UTC —
@@ -1093,8 +1145,12 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // single source of that logic (it canonicalizes offsets to `±HH:mm`
             // for FormatOffsetTimeZoneIdentifier and validates named zones
             // structurally, Perry having no tz database).
-            let time_zone = resolved_date_time_zone(options);
-            set_internal_field(obj, KEY_TIME_ZONE, string_value(&time_zone));
+            let time_zone = resolved_date_time_zone(current_options());
+            set_internal_field_from_raw_handle(
+                &obj_handle,
+                KEY_TIME_ZONE,
+                string_value(&time_zone),
+            );
             // Date/time component options (ECMA-402 Table 7), read in order. Each
             // out-of-range value is a RangeError.
             //
@@ -1113,9 +1169,9 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             //   conflict check (step 35.b: throw if style + any component option).
             let mut any_component = false;
             let mut has_explicit_component = false;
-            let has_weekday = dt_component_option(
-                obj,
-                options,
+            let has_weekday = dt_component_option_from_handle(
+                &obj_handle,
+                current_options(),
                 "weekday",
                 &["narrow", "short", "long"],
                 KEY_WEEKDAY,
@@ -1123,58 +1179,89 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             any_component |= has_weekday;
             has_explicit_component |= has_weekday;
             // era counts toward the style-conflict check but NOT toward needDefaults.
-            has_explicit_component |=
-                dt_component_option(obj, options, "era", &["narrow", "short", "long"], KEY_ERA);
-            let has_year =
-                dt_component_option(obj, options, "year", &["2-digit", "numeric"], KEY_YEAR);
+            has_explicit_component |= dt_component_option_from_handle(
+                &obj_handle,
+                current_options(),
+                "era",
+                &["narrow", "short", "long"],
+                KEY_ERA,
+            );
+            let has_year = dt_component_option_from_handle(
+                &obj_handle,
+                current_options(),
+                "year",
+                &["2-digit", "numeric"],
+                KEY_YEAR,
+            );
             any_component |= has_year;
             has_explicit_component |= has_year;
-            let has_month = dt_component_option(
-                obj,
-                options,
+            let has_month = dt_component_option_from_handle(
+                &obj_handle,
+                current_options(),
                 "month",
                 &["2-digit", "numeric", "narrow", "short", "long"],
                 KEY_MONTH,
             );
             any_component |= has_month;
             has_explicit_component |= has_month;
-            let has_day =
-                dt_component_option(obj, options, "day", &["2-digit", "numeric"], KEY_DAY);
+            let has_day = dt_component_option_from_handle(
+                &obj_handle,
+                current_options(),
+                "day",
+                &["2-digit", "numeric"],
+                KEY_DAY,
+            );
             any_component |= has_day;
             has_explicit_component |= has_day;
-            let has_day_period = dt_component_option(
-                obj,
-                options,
+            let has_day_period = dt_component_option_from_handle(
+                &obj_handle,
+                current_options(),
                 "dayPeriod",
                 &["narrow", "short", "long"],
                 KEY_DAY_PERIOD,
             );
             any_component |= has_day_period;
             has_explicit_component |= has_day_period;
-            let has_hour =
-                dt_component_option(obj, options, "hour", &["2-digit", "numeric"], KEY_HOUR);
+            let has_hour = dt_component_option_from_handle(
+                &obj_handle,
+                current_options(),
+                "hour",
+                &["2-digit", "numeric"],
+                KEY_HOUR,
+            );
             any_component |= has_hour;
             has_explicit_component |= has_hour;
-            let has_minute =
-                dt_component_option(obj, options, "minute", &["2-digit", "numeric"], KEY_MINUTE);
+            let has_minute = dt_component_option_from_handle(
+                &obj_handle,
+                current_options(),
+                "minute",
+                &["2-digit", "numeric"],
+                KEY_MINUTE,
+            );
             any_component |= has_minute;
             has_explicit_component |= has_minute;
-            let has_second =
-                dt_component_option(obj, options, "second", &["2-digit", "numeric"], KEY_SECOND);
+            let has_second = dt_component_option_from_handle(
+                &obj_handle,
+                current_options(),
+                "second",
+                &["2-digit", "numeric"],
+                KEY_SECOND,
+            );
             any_component |= has_second;
             has_explicit_component |= has_second;
             // fractionalSecondDigits is GetNumberOption(1, 3) — out of range or
             // non-numeric is a RangeError.
-            if let Some(n) = get_number_option_coerced(options, "fractionalSecondDigits", 1.0, 3.0)
+            if let Some(n) =
+                get_number_option_coerced(current_options(), "fractionalSecondDigits", 1.0, 3.0)
             {
-                set_internal_field(obj, KEY_FRACTIONAL, n);
+                set_internal_field_from_raw_handle(&obj_handle, KEY_FRACTIONAL, n);
                 any_component = true;
                 has_explicit_component = true;
             }
             // timeZoneName counts toward the style-conflict check but NOT toward needDefaults.
-            has_explicit_component |= dt_component_option(
-                obj,
-                options,
+            has_explicit_component |= dt_component_option_from_handle(
+                &obj_handle,
+                current_options(),
                 "timeZoneName",
                 &[
                     "short",
@@ -1186,10 +1273,15 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 ],
                 KEY_TIME_ZONE_NAME,
             );
-            let _ = enum_option(options, "formatMatcher", &["basic", "best fit"], "best fit");
+            let _ = enum_option(
+                current_options(),
+                "formatMatcher",
+                &["basic", "best fit"],
+                "best fit",
+            );
             // dateStyle / timeStyle have no default (an absent style stays absent
             // in `resolvedOptions`); an out-of-range value is a RangeError.
-            let date_style = get_option_string(options, "dateStyle");
+            let date_style = get_option_string(current_options(), "dateStyle");
             if let Some(ref ds) = date_style {
                 if !["full", "long", "medium", "short"].contains(&ds.as_str()) {
                     throw_range_error(&format!(
@@ -1197,7 +1289,7 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                     ));
                 }
             }
-            let time_style = get_option_string(options, "timeStyle");
+            let time_style = get_option_string(current_options(), "timeStyle");
             if let Some(ref ts) = time_style {
                 if !["full", "long", "medium", "short"].contains(&ts.as_str()) {
                     throw_range_error(&format!(
@@ -1214,54 +1306,58 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
                 );
             }
             if let Some(ds) = date_style {
-                set_internal_field(obj, KEY_DATE_STYLE, string_value(&ds));
+                set_internal_field_from_raw_handle(&obj_handle, KEY_DATE_STYLE, string_value(&ds));
             }
             if let Some(ts) = time_style {
-                set_internal_field(obj, KEY_TIME_STYLE, string_value(&ts));
+                set_internal_field_from_raw_handle(&obj_handle, KEY_TIME_STYLE, string_value(&ts));
             }
             // ToDateTimeOptions(required="any", defaults="date"): when neither a
             // style nor any component was requested, fall back to numeric
             // year/month/day so `resolvedOptions` reports the default date shape.
             if !has_style && !any_component {
-                set_internal_field(obj, KEY_YEAR, string_value("numeric"));
-                set_internal_field(obj, KEY_MONTH, string_value("numeric"));
-                set_internal_field(obj, KEY_DAY, string_value("numeric"));
-                set_internal_field(obj, KEY_DT_IS_DEFAULT, bool_value(true));
+                set_internal_field_from_raw_handle(&obj_handle, KEY_YEAR, string_value("numeric"));
+                set_internal_field_from_raw_handle(&obj_handle, KEY_MONTH, string_value("numeric"));
+                set_internal_field_from_raw_handle(&obj_handle, KEY_DAY, string_value("numeric"));
+                set_internal_field_from_raw_handle(
+                    &obj_handle,
+                    KEY_DT_IS_DEFAULT,
+                    bool_value(true),
+                );
             }
-            let format_fn = install_bound_instance_function(
-                obj,
+            let format_fn = install_bound_instance_function_from_handle(
+                &obj_handle,
                 "format",
                 date_time_format_bound_format_thunk as *const u8,
                 1,
             );
             if !format_fn.is_null() {
                 crate::object::set_bound_native_closure_name(format_fn, "");
-                set_internal_field(
-                    obj,
+                set_internal_field_from_raw_handle(
+                    &obj_handle,
                     KEY_DTF_BOUND_FORMAT,
                     js_nanbox_pointer(format_fn as i64),
                 );
             }
-            install_bound_instance_function(
-                obj,
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "formatToParts",
                 date_time_format_bound_to_parts_thunk as *const u8,
                 1,
             );
-            install_bound_instance_function(
-                obj,
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "formatRange",
                 date_time_format_bound_range_thunk as *const u8,
                 2,
             );
-            install_bound_instance_function(
-                obj,
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "formatRangeToParts",
                 date_time_format_bound_range_to_parts_thunk as *const u8,
                 2,
             );
-            install_bound_instance_function(
-                obj,
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "resolvedOptions",
                 date_time_format_bound_resolved_options_thunk as *const u8,
                 0,
@@ -1272,10 +1368,10 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // TypeError) then GetOption in this exact order: usage, localeMatcher,
             // collation, numeric, caseFirst, sensitivity, ignorePunctuation
             // (constructor-options-throwing-getters / resolvedOptions order.js).
-            let options = coerce_options_reject_null(options);
-            let usage = enum_option_strict(options, "usage", &["sort", "search"], "sort");
+            let _ = coerce_options_reject_null(current_options());
+            let usage = enum_option_strict(current_options(), "usage", &["sort", "search"], "sort");
             let _ = enum_option_strict(
-                options,
+                current_options(),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
@@ -1284,71 +1380,79 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // /`search` values, are a RangeError (the latter are only valid as a
             // `usage` selector, never an explicit collation). A valid value wins
             // over any `-u-co-` keyword; absent ⇒ fall back to the extension.
-            let collation_opt = get_option_string_coerced(options, "collation").map(|v| {
-                if !is_well_formed_numbering_system(&v) || v == "standard" || v == "search" {
-                    throw_range_error(&format!(
-                        "Value {v} out of range for Intl options property collation"
-                    ));
-                }
-                v
-            });
-            let numeric_opt = get_bool_option(options, "numeric");
-            let case_first_opt = get_option_string_coerced(options, "caseFirst").map(|v| {
-                if ["upper", "lower", "false"].contains(&v.as_str()) {
+            let collation_opt =
+                get_option_string_coerced(current_options(), "collation").map(|v| {
+                    if !is_well_formed_numbering_system(&v) || v == "standard" || v == "search" {
+                        throw_range_error(&format!(
+                            "Value {v} out of range for Intl options property collation"
+                        ));
+                    }
                     v
-                } else {
-                    throw_range_error(&format!(
-                        "Value {v} out of range for Intl options property caseFirst"
-                    ))
-                }
-            });
+                });
+            let numeric_opt = get_bool_option(current_options(), "numeric");
+            let case_first_opt =
+                get_option_string_coerced(current_options(), "caseFirst").map(|v| {
+                    if ["upper", "lower", "false"].contains(&v.as_str()) {
+                        v
+                    } else {
+                        throw_range_error(&format!(
+                            "Value {v} out of range for Intl options property caseFirst"
+                        ))
+                    }
+                });
             let sensitivity = enum_option_strict(
-                options,
+                current_options(),
                 "sensitivity",
                 &["base", "accent", "case", "variant"],
                 "variant",
             );
-            let ignore_punct = get_bool_option(options, "ignorePunctuation").unwrap_or(false);
-            // ResolveLocale: when an option is absent, fall back to the matching
-            // Unicode (`-u-`) extension keyword in the resolved locale — `kn`
-            // (numeric, value-less ⇒ true) and `kf` (caseFirst).
-            let numeric =
-                numeric_opt.unwrap_or_else(|| match unicode_extension_keyword(&locale, "kn") {
-                    Some(v) => v != "false",
-                    None => false,
-                });
-            let case_first = case_first_opt.unwrap_or_else(|| {
-                unicode_extension_keyword(&locale, "kf")
-                    .filter(|v| ["upper", "lower", "false"].contains(&v.as_str()))
-                    .unwrap_or_else(|| "false".to_string())
-            });
-            let collation = collation_opt.unwrap_or_else(|| {
-                unicode_extension_keyword(&locale, "co")
-                    .filter(|v| !v.is_empty() && v != "standard" && v != "search")
-                    .unwrap_or_else(|| "default".to_string())
-            });
-            set_internal_field(obj, KEY_COL_USAGE, string_value(&usage));
-            set_internal_field(obj, KEY_COL_SENSITIVITY, string_value(&sensitivity));
-            set_internal_field(obj, KEY_COL_IGNORE_PUNCT, bool_value(ignore_punct));
-            set_internal_field(obj, KEY_COL_COLLATION, string_value(&collation));
-            set_internal_field(obj, KEY_COL_NUMERIC, bool_value(numeric));
-            set_internal_field(obj, KEY_COL_CASE_FIRST, string_value(&case_first));
-            let compare_fn = install_bound_instance_function(
-                obj,
+            let ignore_punct = get_bool_option(current_options(), "ignorePunctuation")
+                .unwrap_or_else(|| locale == "th" || locale.starts_with("th-"));
+            let (resolved_locale, collation, numeric, case_first) =
+                resolve_collator_locale(&locale, collation_opt, numeric_opt, case_first_opt);
+            set_internal_field_from_raw_handle(
+                &obj_handle,
+                KEY_LOCALE,
+                string_value(&resolved_locale),
+            );
+            set_internal_field_from_raw_handle(&obj_handle, KEY_COL_USAGE, string_value(&usage));
+            set_internal_field_from_raw_handle(
+                &obj_handle,
+                KEY_COL_SENSITIVITY,
+                string_value(&sensitivity),
+            );
+            set_internal_field_from_raw_handle(
+                &obj_handle,
+                KEY_COL_IGNORE_PUNCT,
+                bool_value(ignore_punct),
+            );
+            set_internal_field_from_raw_handle(
+                &obj_handle,
+                KEY_COL_COLLATION,
+                string_value(&collation),
+            );
+            set_internal_field_from_raw_handle(&obj_handle, KEY_COL_NUMERIC, bool_value(numeric));
+            set_internal_field_from_raw_handle(
+                &obj_handle,
+                KEY_COL_CASE_FIRST,
+                string_value(&case_first),
+            );
+            let compare_fn = install_bound_instance_function_from_handle(
+                &obj_handle,
                 "compare",
                 collator_bound_compare_thunk as *const u8,
                 2,
             );
             if !compare_fn.is_null() {
                 crate::object::set_bound_native_closure_name(compare_fn, "");
-                set_internal_field(
-                    obj,
+                set_internal_field_from_raw_handle(
+                    &obj_handle,
                     KEY_COL_BOUND_COMPARE,
                     js_nanbox_pointer(compare_fn as i64),
                 );
             }
-            install_bound_instance_function(
-                obj,
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "resolvedOptions",
                 collator_bound_resolved_options_thunk as *const u8,
                 0,
@@ -1357,24 +1461,28 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
         KIND_SEGMENTER => {
             // `? ToObject(options)` (null → TypeError), then GetOption in order:
             // localeMatcher, granularity (options-order.js / options-null.js).
-            let options = coerce_options_reject_null(options);
+            let _ = coerce_options_reject_null(current_options());
             let _ = enum_option_strict(
-                options,
+                current_options(),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
             );
             let granularity =
-                normalize_granularity(get_option_string_coerced(options, "granularity"));
-            set_internal_field(obj, KEY_GRANULARITY, string_value(&granularity));
-            install_bound_instance_function(
-                obj,
+                normalize_granularity(get_option_string_coerced(current_options(), "granularity"));
+            set_internal_field_from_raw_handle(
+                &obj_handle,
+                KEY_GRANULARITY,
+                string_value(&granularity),
+            );
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "segment",
                 segmenter_bound_segment_thunk as *const u8,
                 1,
             );
-            install_bound_instance_function(
-                obj,
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "resolvedOptions",
                 segmenter_bound_resolved_options_thunk as *const u8,
                 0,
@@ -1384,36 +1492,41 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // `? GetOptionsObject(options)` (any non-Object, non-undefined →
             // TypeError), then GetOption: localeMatcher, type, style
             // (options-getoptionsobject.js / options-order.js).
-            let options = get_options_object(options);
+            let _ = get_options_object(current_options());
             let _ = enum_option_strict(
-                options,
+                current_options(),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
             );
             let list_type = enum_option_strict(
-                options,
+                current_options(),
                 "type",
                 &["conjunction", "disjunction", "unit"],
                 "conjunction",
             );
-            let style = enum_option_strict(options, "style", &["long", "short", "narrow"], "long");
-            set_internal_field(obj, KEY_TYPE, string_value(&list_type));
-            set_internal_field(obj, KEY_LF_STYLE, string_value(&style));
-            install_bound_instance_function(
-                obj,
+            let style = enum_option_strict(
+                current_options(),
+                "style",
+                &["long", "short", "narrow"],
+                "long",
+            );
+            set_internal_field_from_raw_handle(&obj_handle, KEY_TYPE, string_value(&list_type));
+            set_internal_field_from_raw_handle(&obj_handle, KEY_LF_STYLE, string_value(&style));
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "format",
                 list_format_bound_format_thunk as *const u8,
                 1,
             );
-            install_bound_instance_function(
-                obj,
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "formatToParts",
                 list_format_bound_to_parts_thunk as *const u8,
                 1,
             );
-            install_bound_instance_function(
-                obj,
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "resolvedOptions",
                 list_format_bound_resolved_options_thunk as *const u8,
                 0,
@@ -1422,163 +1535,102 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
         KIND_RELATIVE_TIME => {
             // `? ToObject(options)` (null → TypeError), then GetOption in order:
             // localeMatcher, numberingSystem, style, numeric (options-order.js).
-            let options = coerce_options_reject_null(options);
+            options_handle.set_nanbox_f64(to_object_for_options(coerce_options_reject_null(
+                current_options(),
+            )));
             let _ = enum_option_strict(
-                options,
+                current_options(),
                 "localeMatcher",
                 &["lookup", "best fit"],
                 "best fit",
             );
-            if let Some(ns) = get_option_string_coerced(options, "numberingSystem") {
-                if !is_well_formed_numbering_system(&ns) {
-                    throw_range_error(&format!(
-                        "Value {ns} out of range for Intl options property numberingSystem"
-                    ));
+            let opt_ns = match get_option_string_coerced(current_options(), "numberingSystem") {
+                Some(ns) => {
+                    let lower = ns.to_ascii_lowercase();
+                    if !is_well_formed_numbering_system(&lower) {
+                        throw_range_error(&format!(
+                            "Value {ns} out of range for Intl options property numberingSystem"
+                        ));
+                    }
+                    Some(lower)
                 }
-            }
-            let style = enum_option_strict(options, "style", &["long", "short", "narrow"], "long");
-            let numeric = enum_option_strict(options, "numeric", &["always", "auto"], "always");
-            set_internal_field(obj, KEY_RTF_STYLE, string_value(&style));
-            set_internal_field(obj, KEY_NUMERIC, string_value(&numeric));
-            install_bound_instance_function(obj, "format", rtf_bound_format_thunk as *const u8, 2);
-            install_bound_instance_function(
-                obj,
+                None => None,
+            };
+            let (resolved_locale, numbering) = resolve_numbering_system(&locale, opt_ns.as_deref());
+            set_internal_field_from_raw_handle(
+                &obj_handle,
+                KEY_LOCALE,
+                string_value(&resolved_locale),
+            );
+            set_internal_field_from_raw_handle(
+                &obj_handle,
+                KEY_RTF_NUMBERING,
+                string_value(&numbering),
+            );
+            let style = enum_option_strict(
+                current_options(),
+                "style",
+                &["long", "short", "narrow"],
+                "long",
+            );
+            let numeric =
+                enum_option_strict(current_options(), "numeric", &["always", "auto"], "always");
+            set_internal_field_from_raw_handle(&obj_handle, KEY_RTF_STYLE, string_value(&style));
+            set_internal_field_from_raw_handle(&obj_handle, KEY_NUMERIC, string_value(&numeric));
+            install_bound_instance_function_from_handle(
+                &obj_handle,
+                "format",
+                rtf_bound_format_thunk as *const u8,
+                2,
+            );
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "formatToParts",
                 rtf_bound_to_parts_thunk as *const u8,
                 2,
             );
-            install_bound_instance_function(
-                obj,
+            install_bound_instance_function_from_handle(
+                &obj_handle,
                 "resolvedOptions",
                 rtf_bound_resolved_options_thunk as *const u8,
                 0,
             );
         }
         KIND_PLURAL_RULES => {
-            // `? GetOptionsObject(options)`, then GetOption in the exact order
-            // constructor-option-read-order.js asserts: localeMatcher, type,
-            // notation, compactDisplay, then SetNumberFormatDigitOptions
-            // (minimumIntegerDigits, min/maxFractionDigits, min/maxSignificantDigits,
-            // roundingIncrement, roundingMode, roundingPriority, trailingZeroDisplay).
-            let options = get_options_object(options);
-            let _ = enum_option_strict(
-                options,
-                "localeMatcher",
-                &["lookup", "best fit"],
-                "best fit",
-            );
-            let pr_type = enum_option_strict(options, "type", &["cardinal", "ordinal"], "cardinal");
-            set_internal_field(obj, KEY_TYPE, string_value(&pr_type));
-            let notation = enum_option_strict(
-                options,
-                "notation",
-                &["standard", "scientific", "engineering", "compact"],
-                "standard",
-            );
-            let compact_display =
-                enum_option_strict(options, "compactDisplay", &["short", "long"], "short");
-            set_internal_field(obj, KEY_PR_NOTATION, string_value(&notation));
-            if notation == "compact" {
-                set_internal_field(obj, KEY_PR_COMPACT_DISPLAY, string_value(&compact_display));
-            }
-            let min_int = get_option_number(options, "minimumIntegerDigits").unwrap_or(1.0);
-            set_internal_field(obj, KEY_PR_MIN_INT, min_int);
-            let min_frac_read = get_option_number(options, "minimumFractionDigits");
-            let max_frac_read = get_option_number(options, "maximumFractionDigits");
-            let min_sig = get_option_number(options, "minimumSignificantDigits");
-            let max_sig = get_option_number(options, "maximumSignificantDigits");
-            // Trailing SetNumberFormatDigitOptions reads — observed for read-order
-            // parity even though Perry's plural selection ignores their values.
-            let _ = get_option_value(options, "roundingIncrement");
-            let _ = get_option_value(options, "roundingMode");
-            let _ = get_option_value(options, "roundingPriority");
-            let _ = get_option_value(options, "trailingZeroDisplay");
-            if min_sig.is_some() || max_sig.is_some() {
-                set_internal_field(obj, KEY_PR_USE_SIG, bool_value(true));
-                set_internal_field(obj, KEY_PR_MIN_SIG, min_sig.unwrap_or(1.0));
-                set_internal_field(obj, KEY_PR_MAX_SIG, max_sig.unwrap_or(21.0));
-            } else {
-                set_internal_field(obj, KEY_PR_USE_SIG, bool_value(false));
-                // Reuse the values read above (in spec order) — re-reading would
-                // double-invoke the option getters and break read-order parity.
-                let min_frac = min_frac_read.unwrap_or(0.0);
-                let max_frac = max_frac_read.unwrap_or_else(|| min_frac.max(3.0));
-                set_internal_field(obj, KEY_PR_MIN_FRAC, min_frac);
-                set_internal_field(obj, KEY_PR_MAX_FRAC, max_frac);
-            }
-            install_bound_instance_function(
-                obj,
-                "select",
-                plural_rules_bound_select_thunk as *const u8,
-                1,
-            );
-            install_bound_instance_function(
-                obj,
-                "selectRange",
-                plural_rules_bound_select_range_thunk as *const u8,
-                2,
-            );
-            install_bound_instance_function(
-                obj,
-                "resolvedOptions",
-                plural_rules_bound_resolved_options_thunk as *const u8,
-                0,
-            );
+            let obj = obj_handle.with_mut_ptr(|obj| {
+                list_relative_plural::configure_plural_rules(obj, &options_handle)
+            });
+            obj_handle.set_raw_mut_ptr(obj);
         }
-        KIND_DURATION_FORMAT => duration_format::configure(obj, options),
-        KIND_DISPLAY_NAMES => display_names::configure(obj, options),
+        KIND_DURATION_FORMAT => {
+            obj_handle.with_mut_ptr(|obj| duration_format::configure(obj, current_options()))
+        }
+        KIND_DISPLAY_NAMES => {
+            obj_handle.with_mut_ptr(|obj| display_names::configure(obj, current_options()))
+        }
         _ => {}
     }
 
-    let proto = constructor_target_prototype(closure);
+    let proto = closure_handle.with_const_ptr(constructor_target_prototype);
     if JSValue::from_bits(proto.to_bits()).is_pointer() {
-        crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto.to_bits());
+        obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
+            crate::object::prototype_chain::object_set_static_prototype(
+                obj as usize,
+                proto.to_bits(),
+            )
+        });
     }
-    let instance = js_nanbox_pointer(obj as i64);
+    let instance = obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| js_nanbox_pointer(obj as i64));
     // ChainNumberFormat / ChainDateTimeFormat only (see `chain_legacy_constructed`):
     // Intl.Collator ignores its this-value, so it is deliberately excluded.
     if matches!(kind, KIND_NUMBER | KIND_DATE_TIME) {
-        if let Some(this_value) = ctor_guard::chain_legacy_constructed(closure, instance) {
+        if let Some(this_value) = closure_handle
+            .with_const_ptr(|closure| ctor_guard::chain_legacy_constructed(closure, instance))
+        {
             return this_value;
         }
     }
     instance
-}
-
-fn install_bound_instance_function(
-    obj: *mut ObjectHeader,
-    name: &str,
-    func_ptr: *const u8,
-    arity: u32,
-) -> *mut ClosureHeader {
-    let closure = crate::closure::js_closure_alloc(func_ptr, 1);
-    if closure.is_null() {
-        return closure;
-    }
-    crate::closure::js_register_closure_arity(func_ptr, arity);
-    crate::closure::js_closure_set_capture_f64(closure, 0, js_nanbox_pointer(obj as i64));
-    crate::object::set_bound_native_closure_name(closure, name);
-    crate::object::set_builtin_closure_length(closure as usize, arity);
-    // A bound Intl instance method (`nf.format`, `nf.resolvedOptions`, …) is a
-    // built-in non-constructor function: it has NO `[[Construct]]` and therefore
-    // no own `prototype` property (ECMA-262 §17 — built-in functions that aren't
-    // constructors don't get the auto-created `.prototype`). Flag it so
-    // `function_would_have_own_prototype` / the `new` path treat it like any
-    // other builtin (`Math.max`), matching `format-function-builtin.js`.
-    crate::object::set_builtin_closure_non_constructable(closure as usize);
-    crate::object::set_builtin_property_attrs(
-        closure as usize,
-        "name".to_string(),
-        PropertyAttrs::new(false, false, true),
-    );
-    crate::object::set_builtin_property_attrs(
-        closure as usize,
-        "length".to_string(),
-        PropertyAttrs::new(false, false, true),
-    );
-    set_field(obj, name, js_nanbox_pointer(closure as i64));
-    set_builtin_attrs(obj, name, PropertyAttrs::new(true, false, true));
-    closure
 }
 
 pub(super) extern "C" fn number_format_constructor_thunk(
@@ -1694,48 +1746,6 @@ fn supported_locales_array(locales: f64, options: f64) -> f64 {
 
 extern "C" fn supported_locales_of_thunk(_closure: *const ClosureHeader, rest: f64) -> f64 {
     supported_locales_array(rest_arg(rest, 0), rest_arg(rest, 1))
-}
-
-fn install_function(
-    owner: *mut ObjectHeader,
-    name: &str,
-    func_ptr: *const u8,
-    call_arity: u32,
-    length: u32,
-    has_rest: bool,
-) -> f64 {
-    let closure = crate::closure::js_closure_alloc(func_ptr, 0);
-    if closure.is_null() {
-        return undefined();
-    }
-    if has_rest {
-        crate::closure::js_register_closure_rest(func_ptr, call_arity);
-    } else {
-        crate::closure::js_register_closure_arity(func_ptr, call_arity);
-    }
-    crate::object::set_bound_native_closure_name(closure, name);
-    crate::object::set_builtin_closure_length(closure as usize, length);
-    // Intl prototype methods (`formatToParts`, `resolvedOptions`, …), the static
-    // `supportedLocalesOf`, and the this-based instance methods
-    // (`formatRange`/`formatRangeToParts`) installed through here are all
-    // built-in non-constructor functions: no `[[Construct]]`, hence no own
-    // `prototype` property (`builtin.js` asserts `hasOwnProperty("prototype")`
-    // is false and `isConstructor` is false). Flag them like any other builtin.
-    crate::object::set_builtin_closure_non_constructable(closure as usize);
-    crate::object::set_builtin_property_attrs(
-        closure as usize,
-        "name".to_string(),
-        PropertyAttrs::new(false, false, true),
-    );
-    crate::object::set_builtin_property_attrs(
-        closure as usize,
-        "length".to_string(),
-        PropertyAttrs::new(false, false, true),
-    );
-    let value = js_nanbox_pointer(closure as i64);
-    set_field(owner, name, value);
-    set_builtin_attrs(owner, name, PropertyAttrs::new(true, false, true));
-    value
 }
 
 /// Set `proto[Symbol.toStringTag]` to `tag` (non-writable, non-enumerable,

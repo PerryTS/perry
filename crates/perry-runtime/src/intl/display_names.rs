@@ -79,7 +79,7 @@ fn get_options_object(options: f64) -> f64 {
     if jv.is_undefined() {
         return options;
     }
-    if object_ptr_from_value(options).is_some() {
+    if crate::proxy::js_proxy_is_proxy(options) != 0 || object_ptr_from_value(options).is_some() {
         return options;
     }
     throw_type_error("Intl.DisplayNames: options must be an object");
@@ -88,18 +88,26 @@ fn get_options_object(options: f64) -> f64 {
 /// Configure a freshly-allocated `Intl.DisplayNames` instance: validate the
 /// options bag (in spec order) and install the bound instance methods.
 pub(super) fn configure(obj: *mut ObjectHeader, options_arg: f64) {
-    let options = get_options_object(options_arg);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let options_handle = scope.root_nanbox_f64(get_options_object(options_arg));
+    let current_options = || options_handle.get_nanbox_f64();
 
     // localeMatcher, then style, then type (required), then fallback, then
     // languageDisplay — the order the resolvedOptions / option-* tests rely on.
     let _matcher = dn_enum_option(
-        options,
+        current_options(),
         "localeMatcher",
         &["lookup", "best fit"],
         "best fit",
     );
-    let style = dn_enum_option(options, "style", &["narrow", "short", "long"], "long");
-    let type_ = match dn_get_option_string(options, "type") {
+    let style = dn_enum_option(
+        current_options(),
+        "style",
+        &["narrow", "short", "long"],
+        "long",
+    );
+    let type_ = match dn_get_option_string(current_options(), "type") {
         Some(v) => {
             if ![
                 "language",
@@ -119,26 +127,30 @@ pub(super) fn configure(obj: *mut ObjectHeader, options_arg: f64) {
         }
         None => throw_type_error("Intl.DisplayNames: options.type is required"),
     };
-    let fallback = dn_enum_option(options, "fallback", &["code", "none"], "code");
+    let fallback = dn_enum_option(current_options(), "fallback", &["code", "none"], "code");
     // languageDisplay is read + validated unconditionally, but only applies to —
     // and is reported by resolvedOptions for — `type: "language"`.
     let language_display = dn_enum_option(
-        options,
+        current_options(),
         "languageDisplay",
         &["dialect", "standard"],
         "dialect",
     );
 
-    set_internal_field(obj, KEY_STYLE, string_value(&style));
-    set_internal_field(obj, KEY_TYPE, string_value(&type_));
-    set_internal_field(obj, KEY_DN_FALLBACK, string_value(&fallback));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_STYLE, string_value(&style));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_TYPE, string_value(&type_));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_DN_FALLBACK, string_value(&fallback));
     if type_ == "language" {
-        set_internal_field(obj, KEY_DN_LANG_DISPLAY, string_value(&language_display));
+        set_internal_field_from_raw_handle(
+            &obj_handle,
+            KEY_DN_LANG_DISPLAY,
+            string_value(&language_display),
+        );
     }
 
-    install_bound_instance_function(obj, "of", bound_of_thunk as *const u8, 1);
-    install_bound_instance_function(
-        obj,
+    install_bound_instance_function_from_handle(&obj_handle, "of", bound_of_thunk as *const u8, 1);
+    install_bound_instance_function_from_handle(
+        &obj_handle,
         "resolvedOptions",
         bound_resolved_options_thunk as *const u8,
         0,

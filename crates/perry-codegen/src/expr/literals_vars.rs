@@ -13,7 +13,6 @@ use crate::lower_string_concat::{
     lower_string_self_append_chain,
 };
 use crate::nanbox::double_literal;
-use crate::native_value::MaterializationReason;
 use crate::type_analysis::{is_map_expr, is_set_expr, receiver_class_name};
 use crate::types::{DOUBLE, I32, I64};
 
@@ -21,7 +20,7 @@ use super::{
     can_lower_expr_as_i32_in_current_region, emit_root_nanbox_store_on_block,
     emit_shadow_slot_clear, emit_shadow_slot_update_for_expr, emit_write_barrier,
     is_global_this_builtin_function_name, lower_expr, lower_expr_as_i32,
-    lower_pod_local_reassignment, materialize_pod_local, nanbox_string_inline, FnCtx,
+    lower_pod_local_reassignment, materialize_pod_value_copy, nanbox_string_inline, FnCtx,
     TrustedBoxCapturePtr,
 };
 
@@ -439,7 +438,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // module-scope `let`s (the ones in `hir.init` at top level).
         Expr::LocalGet(id) => {
             if ctx.pod_records.contains_key(id) {
-                return materialize_pod_local(ctx, *id, MaterializationReason::PodMaterialization);
+                return materialize_pod_value_copy(ctx, *id);
             }
             // Captured by closure (from outer scope):
             if let Some(&capture_idx) = ctx.closure_captures.get(id) {

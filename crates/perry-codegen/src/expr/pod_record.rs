@@ -6,7 +6,7 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64, TAG_UNDEFINED_I64};
 use crate::native_value::{
     field_expected_rep, llvm_type_for_native_rep, materialize_js_value, BufferAccessMode,
     LoweredValue, MaterializationReason, NativeRep, NativeValueState, PodLayoutField,
-    PodLayoutManifest, SemanticKind,
+    PodLayoutManifest, PodLocal, SemanticKind,
 };
 use crate::type_analysis::expr_may_return_boxed_value_from_raw_f64_fallback;
 use crate::types::{DOUBLE, F32, I16, I32, I64, I8};
@@ -14,6 +14,198 @@ use crate::types::{DOUBLE, F32, I16, I32, I64, I8};
 use super::{
     emit_root_nanbox_store_on_block, lower_expr, lower_expr_native, nanbox_pointer_inline, FnCtx,
 };
+
+pub(crate) fn copy_pod_local(
+    ctx: &mut FnCtx<'_>,
+    destination_id: u32,
+    source_id: u32,
+) -> Result<Option<PodLocal>> {
+    let Some(source) = ctx.pod_records.get(&source_id).cloned() else {
+        return Ok(None);
+    };
+    let data_slot = ctx
+        .func
+        .alloca_entry_bytes_aligned(source.layout.size, source.layout.alignment);
+    let materialized_slot = ctx.func.alloca_entry(DOUBLE);
+    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    ctx.func
+        .entry_allocas_push_store(DOUBLE, &undef, &materialized_slot);
+
+    let current = ctx.block().load(DOUBLE, &source.materialized_slot);
+    let current_bits = ctx.block().bitcast_double_to_i64(&current);
+    let source_is_native = ctx.block().icmp_eq(I64, &current_bits, TAG_UNDEFINED_I64);
+    let native_idx = ctx.new_block("pod.copy.native");
+    let materialized_idx = ctx.new_block("pod.copy.materialized");
+    let merge_idx = ctx.new_block("pod.copy.merge");
+    let native_label = ctx.block_label(native_idx);
+    let materialized_label = ctx.block_label(materialized_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block()
+        .cond_br(&source_is_native, &native_label, &materialized_label);
+
+    // A still-native source can be copied field-for-field without forcing
+    // i64/u64 through a JavaScript number or allocating an object.
+    ctx.current_block = native_idx;
+    for field in &source.layout.fields {
+        let native = load_pod_field_native(
+            ctx,
+            source_id,
+            &source.data_slot,
+            field,
+            "pod_record_copy_source_native",
+        );
+        store_pod_field_native(ctx, destination_id, &data_slot, field, &native);
+    }
+    ctx.block().br(&merge_label);
+
+    // Once the source has materialized, its ordinary object is authoritative.
+    // Revalidate every declared scalar while snapshotting it back into the
+    // destination's independent native storage.
+    ctx.current_block = materialized_idx;
+    let source_handle = unbox_object_handle(ctx, &current);
+    for field in &source.layout.fields {
+        let value = load_materialized_pod_field_path(ctx, &source_handle, &field.path);
+        let native = strict_pod_copy_field(ctx, &value, field);
+        store_pod_field_native(ctx, destination_id, &data_slot, field, &native);
+    }
+    ctx.block().br(&merge_label);
+    ctx.current_block = merge_idx;
+
+    let lowered = LoweredValue {
+        semantic: SemanticKind::PodRecord,
+        rep: NativeRep::PodRecord {
+            layout_id: source.layout.layout_id.clone(),
+            size: source.layout.size,
+            alignment: source.layout.alignment,
+        },
+        llvm_ty: crate::types::PTR,
+        value: data_slot.clone(),
+    };
+    ctx.record_lowered_value(
+        "PodRecordCopyInit",
+        Some(destination_id),
+        "pod_record_value_copy",
+        &lowered,
+        None,
+        None,
+        Some(MaterializationReason::PodMaterialization),
+        false,
+        false,
+        vec![
+            format!("layout_id={}", source.layout.layout_id),
+            format!("source_local={source_id}"),
+            "assignment_semantics=copy".to_string(),
+            "source_representation=native_or_materialized".to_string(),
+        ],
+    );
+    if let Some(record) = ctx.native_rep_records.last_mut() {
+        record.pod_layout = Some(source.layout.clone());
+    }
+    Ok(Some(PodLocal {
+        layout: source.layout,
+        data_slot,
+        materialized_slot,
+    }))
+}
+
+fn load_materialized_pod_field_path(
+    ctx: &mut FnCtx<'_>,
+    object_handle: &str,
+    path: &[String],
+) -> String {
+    let mut current_object = object_handle.to_string();
+    let mut result = double_literal(f64::NAN);
+    for (index, part) in path.iter().enumerate() {
+        let key = interned_key_handle(ctx, part);
+        result = ctx.block().call(
+            DOUBLE,
+            "js_object_get_field_by_name_f64",
+            &[(I64, &current_object), (I64, &key)],
+        );
+        if index + 1 != path.len() {
+            current_object =
+                ctx.block()
+                    .call(I64, "js_native_abi_check_pod_object", &[(DOUBLE, &result)]);
+        }
+    }
+    result
+}
+
+fn strict_pod_copy_field(ctx: &mut FnCtx<'_>, value: &str, field: &PodLayoutField) -> LoweredValue {
+    match field.native_rep {
+        NativeRep::I8 => LoweredValue::i8(ctx.block().call(
+            I8,
+            "js_native_abi_check_i8",
+            &[(DOUBLE, value)],
+        )),
+        NativeRep::I16 => LoweredValue::i16(ctx.block().call(
+            I16,
+            "js_native_abi_check_i16",
+            &[(DOUBLE, value)],
+        )),
+        NativeRep::I32 => LoweredValue::i32(ctx.block().call(
+            I32,
+            "js_native_abi_check_i32",
+            &[(DOUBLE, value)],
+        )),
+        NativeRep::I64 => LoweredValue::i64(ctx.block().call(
+            I64,
+            "js_native_abi_check_i64",
+            &[(DOUBLE, value)],
+        )),
+        NativeRep::U8 => LoweredValue::u8(ctx.block().call(
+            I8,
+            "js_native_abi_check_u8",
+            &[(DOUBLE, value)],
+        )),
+        NativeRep::U16 => LoweredValue::u16(ctx.block().call(
+            I16,
+            "js_native_abi_check_u16",
+            &[(DOUBLE, value)],
+        )),
+        NativeRep::U32 => LoweredValue::u32(ctx.block().call(
+            I32,
+            "js_native_abi_check_u32",
+            &[(DOUBLE, value)],
+        )),
+        NativeRep::U64 => LoweredValue::u64(ctx.block().call(
+            I64,
+            "js_native_abi_check_u64",
+            &[(DOUBLE, value)],
+        )),
+        NativeRep::ISize => LoweredValue::isize(ctx.block().call(
+            I64,
+            "js_native_abi_check_isize",
+            &[(DOUBLE, value)],
+        )),
+        NativeRep::USize => LoweredValue::usize(ctx.block().call(
+            I64,
+            "js_native_abi_check_usize",
+            &[(DOUBLE, value)],
+        )),
+        NativeRep::F32 => LoweredValue::f32(ctx.block().call(
+            F32,
+            "js_native_abi_check_f32",
+            &[(DOUBLE, value)],
+        )),
+        NativeRep::F64 => LoweredValue::f64(ctx.block().call(
+            DOUBLE,
+            "js_native_abi_check_f64",
+            &[(DOUBLE, value)],
+        )),
+        NativeRep::BufferLen => LoweredValue::buffer_len(ctx.block().call(
+            I32,
+            "js_native_abi_check_u32",
+            &[(DOUBLE, value)],
+        )),
+        NativeRep::HandleId => LoweredValue::handle_id(ctx.block().call(
+            I64,
+            "js_native_abi_check_u64",
+            &[(DOUBLE, value)],
+        )),
+        ref other => unreachable!("POD copy contained non-scalar field {other:?}"),
+    }
+}
 
 pub(crate) fn materialize_pod_local(
     ctx: &mut FnCtx<'_>,
@@ -31,6 +223,28 @@ pub(crate) fn materialize_pod_local(
         &local.materialized_slot,
         reason,
     ))
+}
+
+pub(crate) fn materialize_pod_value_copy(ctx: &mut FnCtx<'_>, local_id: u32) -> Result<String> {
+    let value = materialize_pod_local(ctx, local_id, MaterializationReason::PodMaterialization)?;
+    let cloned = ctx
+        .block()
+        .call(DOUBLE, "js_structured_clone", &[(DOUBLE, &value)]);
+    let lowered = LoweredValue::js_value(cloned.clone());
+    ctx.record_lowered_value_with_access_mode(
+        "PodRecordValueRead",
+        Some(local_id),
+        "pod_record_materialized_value_copy",
+        &lowered,
+        None,
+        None,
+        Some(BufferAccessMode::DynamicFallback),
+        Some(MaterializationReason::PodMaterialization),
+        false,
+        false,
+        vec!["value_semantics=copy_at_managed_boundary".to_string()],
+    );
+    Ok(cloned)
 }
 
 pub(crate) fn try_lower_pod_field_get(
@@ -341,8 +555,37 @@ fn materialize_pod_parts(
     let obj_handle = ctx
         .block()
         .call(I64, "js_object_alloc", &[(I32, "0"), (I32, &field_count)]);
+    let mut nested_objects = std::collections::HashMap::<Vec<String>, String>::new();
+    nested_objects.insert(Vec::new(), obj_handle.clone());
     for field in &layout.fields {
-        let key_handle = interned_key_handle(ctx, &field.name);
+        let mut parent_path = Vec::new();
+        for part in field.path.iter().take(field.path.len().saturating_sub(1)) {
+            let mut child_path = parent_path.clone();
+            child_path.push(part.clone());
+            if !nested_objects.contains_key(&child_path) {
+                let child =
+                    ctx.block()
+                        .call(I64, "js_object_alloc", &[(I32, "0"), (I32, &field_count)]);
+                let child_value = nanbox_pointer_inline(ctx.block(), &child);
+                let parent = nested_objects
+                    .get(&parent_path)
+                    .expect("POD materialization parent exists")
+                    .clone();
+                let key = interned_key_handle(ctx, part);
+                ctx.block().call_void(
+                    "js_object_set_field_by_name",
+                    &[(I64, &parent), (I64, &key), (DOUBLE, &child_value)],
+                );
+                nested_objects.insert(child_path.clone(), child);
+            }
+            parent_path = child_path;
+        }
+        let parent = nested_objects
+            .get(&parent_path)
+            .expect("POD materialization object exists")
+            .clone();
+        let property = field.path.last().unwrap_or(&field.name);
+        let key_handle = interned_key_handle(ctx, property);
         let value_js = load_pod_field_as_js(
             ctx,
             local_id,
@@ -353,7 +596,7 @@ fn materialize_pod_parts(
         );
         ctx.block().call_void(
             "js_object_set_field_by_name",
-            &[(I64, &obj_handle), (I64, &key_handle), (DOUBLE, &value_js)],
+            &[(I64, &parent), (I64, &key_handle), (DOUBLE, &value_js)],
         );
     }
     let created_value = nanbox_pointer_inline(ctx.block(), &obj_handle);

@@ -232,9 +232,11 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
             crate::js_net_socket_on(handle, unbox_to_i64(args[0]), unbox_to_i64(args[1]));
             nanbox_handle(handle)
         }
-        "connect" if args.len() >= 2 => {
-            crate::js_net_socket_method_connect(handle, args[0], unbox_to_i64(args[1]));
-            undefined()
+        "connect" if !args.is_empty() => {
+            let arg2 = args.get(1).copied().unwrap_or_else(undefined);
+            let arg3 = args.get(2).copied().unwrap_or_else(undefined);
+            crate::js_ext_net_socket_method_connect(handle, args[0], arg2, arg3);
+            nanbox_handle(handle)
         }
         "upgradeToTLS" if !args.is_empty() => {
             let verify = args.get(1).copied().unwrap_or(1.0);

@@ -178,18 +178,76 @@ pub(crate) fn build_segments(granularity: &str, value: f64) -> f64 {
             index = end;
         }
     }
-    let segments = arr as *mut ObjectHeader;
-    set_internal_field(segments, KEY_SEGMENTS_BRAND, string_value(SEGMENTS_BRAND));
-    set_internal_field(segments, KEY_SEGMENTS_LENGTH, index as f64);
-    install_function(
-        segments,
-        "containing",
-        segmenter_containing_thunk as *const u8,
-        1,
-        1,
-        false,
-    );
-    js_nanbox_pointer(arr as i64)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let segments = scope.root_raw_mut_ptr(arr as *mut ObjectHeader);
+    let brand = string_value(SEGMENTS_BRAND);
+    segments.with_mut_ptr(|segments| set_internal_field(segments, KEY_SEGMENTS_BRAND, brand));
+    segments
+        .with_mut_ptr(|segments| set_internal_field(segments, KEY_SEGMENTS_LENGTH, index as f64));
+    segments.with_mut_ptr(|segments| {
+        install_function(
+            segments,
+            "containing",
+            segmenter_containing_thunk as *const u8,
+            1,
+            1,
+            false,
+        )
+    });
+    install_segments_iterator(&segments);
+    segments.with_mut_ptr(|segments: *mut ObjectHeader| js_nanbox_pointer(segments as i64))
+}
+
+fn install_segments_iterator(segments: &crate::gc::RuntimeHandle<'_>) {
+    let symbol = crate::symbol::well_known_symbol("iterator");
+    if symbol.is_null() {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let symbol = scope.root_raw_mut_ptr(symbol);
+    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        segments_iterator_thunk as *const u8,
+        0,
+    ));
+    if closure.with_mut_ptr(|closure: *mut ClosureHeader| closure.is_null()) {
+        return;
+    }
+    crate::closure::js_register_closure_arity(segments_iterator_thunk as *const u8, 0);
+    closure.with_mut_ptr::<ClosureHeader, _>(|ptr| {
+        crate::object::set_bound_native_closure_name(ptr, "[Symbol.iterator]")
+    });
+    closure.with_mut_ptr::<ClosureHeader, _>(|ptr| {
+        crate::object::set_builtin_closure_length(ptr as usize, 0)
+    });
+    let value = closure.with_mut_ptr::<ClosureHeader, _>(|ptr| js_nanbox_pointer(ptr as i64));
+    unsafe {
+        segments.with_mut_ptr(|segments: *mut ObjectHeader| {
+            symbol.with_const_ptr(|symbol: *const u8| {
+                crate::symbol::js_object_set_symbol_property(
+                    js_nanbox_pointer(segments as i64),
+                    f64::from_bits(JSValue::pointer(symbol).bits()),
+                    value,
+                )
+            })
+        });
+    }
+    segments.with_mut_ptr(|segments: *mut ObjectHeader| {
+        symbol.with_const_ptr(|symbol: *const u8| {
+            crate::symbol::set_symbol_property_attrs(
+                segments as usize,
+                symbol as usize,
+                PropertyAttrs::new(true, false, true),
+            )
+        })
+    });
+}
+
+extern "C" fn segments_iterator_thunk(_closure: *const ClosureHeader) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let segments = scope.root_raw_const_ptr(segments_from_this());
+    segments.with_const_ptr(|segments: *const crate::ArrayHeader| {
+        crate::array::array_values_iter(js_nanbox_pointer(segments as i64))
+    })
 }
 
 fn segments_from_this() -> *const crate::ArrayHeader {

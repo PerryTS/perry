@@ -89,7 +89,14 @@ pub(crate) fn layout_for_pod_view_type(
 pub(crate) fn collect_pod_init_fields(
     ctx: &FnCtx<'_>,
     init: &Expr,
+    layout: &PodLayoutManifest,
 ) -> Result<PodInitFields, String> {
+    let mut fields = Vec::with_capacity(layout.fields.len());
+    flatten_pod_init_fields(ctx, init, layout, &[], &mut fields)?;
+    Ok(PodInitFields { fields })
+}
+
+fn direct_pod_init_fields(ctx: &FnCtx<'_>, init: &Expr) -> Result<Vec<(String, Expr)>, String> {
     match init {
         Expr::Object(props) => {
             let mut seen = std::collections::HashSet::new();
@@ -100,7 +107,7 @@ pub(crate) fn collect_pod_init_fields(
                 }
                 fields.push((name.clone(), value.clone()));
             }
-            Ok(PodInitFields { fields })
+            Ok(fields)
         }
         Expr::New {
             class_name, args, ..
@@ -126,11 +133,40 @@ pub(crate) fn collect_pod_init_fields(
                 }
                 fields.push((field.name.clone(), arg.clone()));
             }
-            Ok(PodInitFields { fields })
+            Ok(fields)
         }
         Expr::ObjectSpread { .. } => Err("spread_property".to_string()),
         _ => Err("unsupported_initializer".to_string()),
     }
+}
+
+fn flatten_pod_init_fields(
+    ctx: &FnCtx<'_>,
+    init: &Expr,
+    layout: &PodLayoutManifest,
+    prefix: &[String],
+    output: &mut Vec<(String, Expr)>,
+) -> Result<(), String> {
+    for (name, value) in direct_pod_init_fields(ctx, init)? {
+        let mut path = prefix.to_vec();
+        path.push(name);
+        let flattened = path.join(".");
+        if layout.fields.iter().any(|field| field.path == path) {
+            output.push((flattened, value));
+            continue;
+        }
+        if layout
+            .fields
+            .iter()
+            .any(|field| field.path.len() > path.len() && field.path.starts_with(path.as_slice()))
+        {
+            flatten_pod_init_fields(ctx, &value, layout, &path, output)
+                .map_err(|reason| format!("nested_field:{flattened}:{reason}"))?;
+            continue;
+        }
+        output.push((flattened, value));
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_exact_init(
@@ -337,11 +373,16 @@ pub(crate) fn expected_rep_for_native_rep(rep: &NativeRep) -> Option<ExpectedNat
 
 pub(crate) fn native_rep_for_pod_abi_type(ty: &NativeAbiType) -> Option<NativeRep> {
     Some(match ty {
+        NativeAbiType::I8 => NativeRep::I8,
+        NativeAbiType::I16 => NativeRep::I16,
         NativeAbiType::I32 => NativeRep::I32,
         NativeAbiType::I64 => NativeRep::I64,
+        NativeAbiType::U8 => NativeRep::U8,
+        NativeAbiType::U16 => NativeRep::U16,
         NativeAbiType::U32 => NativeRep::U32,
         NativeAbiType::U64 => NativeRep::U64,
         NativeAbiType::USize => NativeRep::USize,
+        NativeAbiType::ISize => NativeRep::ISize,
         NativeAbiType::F32 => NativeRep::F32,
         NativeAbiType::F64 => NativeRep::F64,
         NativeAbiType::BufferLen => NativeRep::BufferLen,

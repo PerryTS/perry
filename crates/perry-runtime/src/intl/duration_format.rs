@@ -122,8 +122,11 @@ fn get_duration_unit_options(
     digital_base: &str,
     prev_style: Option<&str>,
 ) -> (String, String) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options_handle = scope.root_nanbox_f64(options);
+    let current_options = || options_handle.get_nanbox_f64();
     // 1. style = GetOption(options, unit, string, allowed, undefined)
-    let mut style = match df_get_option_string(options, unit) {
+    let mut style = match df_get_option_string(current_options(), unit) {
         Some(v) => {
             if !allowed.contains(&v.as_str()) {
                 throw_range_error(&format!(
@@ -163,7 +166,7 @@ fn get_duration_unit_options(
     }
     // 6. display = GetOption(options, unitDisplay, string, «auto,always», displayDefault)
     let display = df_enum_option(
-        options,
+        current_options(),
         &display_key_field(unit),
         &["auto", "always"],
         display_default,
@@ -212,16 +215,20 @@ fn report_style(style: &str) -> &str {
 /// Configure a freshly-allocated `Intl.DurationFormat` instance: read + validate
 /// the options bag (in spec order).
 pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let options_handle = scope.root_nanbox_f64(options);
+    let current_options = || options_handle.get_nanbox_f64();
     // GetOptionsObject: `undefined` → empty options; any other non-object
     // (notably `null` and primitives) is a TypeError. Object-like values —
     // including arrays, functions, and Proxies (all pointer-tagged) — are
     // accepted, so a property-bag Proxy still has its traps observed. Symbols
     // are also pointer-tagged, so `is_pointer()` alone would wrongly admit them;
     // exclude registered symbols explicitly.
-    let opts_jv = JSValue::from_bits(options.to_bits());
+    let opts_jv = JSValue::from_bits(current_options().to_bits());
     let is_symbol = opts_jv.is_pointer()
         && crate::symbol::is_registered_symbol(
-            (options.to_bits() & crate::value::POINTER_MASK) as usize,
+            (current_options().to_bits() & crate::value::POINTER_MASK) as usize,
         );
     if !opts_jv.is_undefined() && (!opts_jv.is_pointer() || is_symbol) {
         throw_type_error("Intl.DurationFormat: options must be an object");
@@ -230,13 +237,13 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     // Order (constructor-options-order): localeMatcher, numberingSystem, style,
     // then each unit + unitDisplay, then fractionalDigits.
     let _matcher = df_enum_option(
-        options,
+        current_options(),
         "localeMatcher",
         &["lookup", "best fit"],
         "best fit",
     );
 
-    let opt_ns = match df_get_option_string(options, "numberingSystem") {
+    let opt_ns = match df_get_option_string(current_options(), "numberingSystem") {
         Some(ns) => {
             if !valid_numbering_system(&ns) {
                 throw_range_error(&format!(
@@ -250,42 +257,47 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     // ResolveLocale for `nu`: reconcile the option with the requested locale's
     // `-u-nu-` keyword (stored in KEY_LOCALE at construction) and update both the
     // resolved locale and numbering system.
-    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
+    let locale = get_string_field_from_raw_handle(&obj_handle, KEY_LOCALE)
+        .unwrap_or_else(|| "en-US".to_string());
     let (resolved_locale, numbering) = super::resolve_numbering_system(&locale, opt_ns.as_deref());
-    set_internal_field(obj, KEY_LOCALE, string_value(&resolved_locale));
-    set_internal_field(obj, KEY_DF_NUMBERING, string_value(&numbering));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_LOCALE, string_value(&resolved_locale));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_DF_NUMBERING, string_value(&numbering));
 
     let base_style = df_enum_option(
-        options,
+        current_options(),
         "style",
         &["long", "short", "narrow", "digital"],
         "short",
     );
-    set_internal_field(obj, KEY_DF_STYLE, string_value(&base_style));
+    set_internal_field_from_raw_handle(&obj_handle, KEY_DF_STYLE, string_value(&base_style));
 
     let mut prev_style: Option<String> = None;
     for (unit, allowed, digital_base) in UNITS.iter().copied() {
         let (style, display) = get_duration_unit_options(
-            options,
+            current_options(),
             unit,
             allowed,
             &base_style,
             digital_base,
             prev_style.as_deref(),
         );
-        set_internal_field(obj, &style_key(unit), string_value(report_style(&style)));
-        set_internal_field(obj, &display_key(unit), string_value(&display));
+        set_internal_field_from_raw_handle(
+            &obj_handle,
+            &style_key(unit),
+            string_value(report_style(&style)),
+        );
+        set_internal_field_from_raw_handle(&obj_handle, &display_key(unit), string_value(&display));
         prev_style = Some(style);
     }
 
     // fractionalDigits: integer in [0, 9], else RangeError. Read last.
-    if let Some(n) = get_option_number(options, "fractionalDigits") {
+    if let Some(n) = get_option_number(current_options(), "fractionalDigits") {
         if !n.is_finite() || n.fract() != 0.0 || !(0.0..=9.0).contains(&n) {
             throw_range_error(
                 "Value out of range for Intl.DurationFormat options property fractionalDigits",
             );
         }
-        set_internal_field(obj, KEY_DF_FRACTIONAL, n);
+        set_internal_field_from_raw_handle(&obj_handle, KEY_DF_FRACTIONAL, n);
     }
 
     // Unlike `Intl.NumberFormat.prototype.format` (a bound getter), the
@@ -294,17 +306,24 @@ pub(super) fn configure(obj: *mut ObjectHeader, options: f64) {
     // We install them as own instance properties (Perry's method dispatch resolves
     // own properties) but back them with the implicit-`this` thunks, so a
     // detached call lands on an undefined receiver and `RequireInternalSlot` throws.
-    super::install_function(obj, "format", format_thunk as *const u8, 1, 1, false);
-    super::install_function(
-        obj,
+    super::install_function_from_handle(
+        &obj_handle,
+        "format",
+        format_thunk as *const u8,
+        1,
+        1,
+        false,
+    );
+    super::install_function_from_handle(
+        &obj_handle,
         "formatToParts",
         to_parts_thunk as *const u8,
         1,
         1,
         false,
     );
-    super::install_function(
-        obj,
+    super::install_function_from_handle(
+        &obj_handle,
         "resolvedOptions",
         resolved_options_thunk as *const u8,
         0,

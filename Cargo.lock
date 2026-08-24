@@ -6310,6 +6310,7 @@ dependencies = [
  "hostname",
  "icu_calendar",
  "icu_datetime",
+ "icu_locale",
  "icu_locale_core",
  "icu_time",
  "idna",

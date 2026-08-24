@@ -237,6 +237,12 @@ pub extern "C" fn js_object_delete_field(
                         return 0;
                     }
                 }
+                // Deleting an accessor from a class/Object prototype changes
+                // method resolution for this key just like installing it.
+                super::descriptor_state::disable_inline_guards_for_descriptor_target(
+                    obj as usize,
+                    name,
+                );
                 super::clear_accessor_descriptor(obj as usize, name);
                 super::clear_property_attrs(obj as usize, name);
                 // defineProperty may ALSO have planted a keys_array
@@ -308,6 +314,12 @@ pub extern "C" fn js_object_delete_field(
                     return 0;
                 }
             }
+            // A configurable data method on a class/Object prototype is about
+            // to disappear. Retire only this name's direct-method guards.
+            super::descriptor_state::disable_inline_guards_for_descriptor_target(
+                obj as usize,
+                name,
+            );
         }
 
         // Proper delete: shift remaining keys + values down by one, then

@@ -71,6 +71,7 @@ mod handle_ids;
 pub(crate) use handle_ids::{next_id, next_id_or_throw};
 mod dispatch;
 mod dispatch_custody;
+mod ipc;
 mod socket_emit;
 pub use socket_emit::{
     js_ext_net_register_http_agent_socket_event_hook, js_ext_net_set_http_agent_phase,
@@ -226,6 +227,9 @@ pub(crate) struct ServerState {
     pub shutdown_tx: Option<oneshot::Sender<()>>,
     pub bound_port: u16,
     pub bound_host: String,
+    /// Named-pipe / Unix-domain-socket path for an IPC listener. TCP servers
+    /// leave this unset and use `bound_host` + `bound_port`.
+    pub bound_path: Option<String>,
     pub listening: bool,
     pub active_connections: usize,
     pub pending_connections: usize,
@@ -489,7 +493,7 @@ where
 
 /// `net.createConnection(...)` / `net.connect(...)` — returns a handle
 /// immediately; connection happens in the background and emits
-/// `'connect'` or `'error'`. Supports both Node overloads:
+/// `'connect'` or `'error'`. Supports Node's TCP and IPC overloads:
 ///
 /// - Positional: `net.connect(port, host, cb?)`. `arg1_f64` is the
 ///   port as a regular f64 number, `arg2_f64` carries the host as a
@@ -499,6 +503,7 @@ where
 ///   `port`; `arg2_f64` is the optional `connectListener`. In this
 ///   form `arg3_f64` is unused (the dispatch table pads it with
 ///   `undefined`). Issue #770.
+/// - IPC: `net.connect(path, cb?)` or `net.connect({ path }, cb?)`.
 ///
 /// The `connectListener` (whichever slot it ends up in) is
 /// auto-registered as a `'connect'` listener on the new socket
@@ -527,27 +532,21 @@ pub unsafe extern "C" fn js_ext_net_socket_connect(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg3_f64: f64) -> i64 {
-    /// Register `cb_f64` as a `'connect'` listener on `handle` if it
-    /// carries a real closure pointer. No-op otherwise.
-    fn register_connect_cb(handle: i64, cb_f64: f64) {
-        if handle == 0 || !is_nanboxed_pointer(cb_f64) {
-            return;
-        }
-        let cb_ptr = unsafe { unbox_pointer(cb_f64) } as i64;
-        if cb_ptr == 0 {
-            return;
-        }
-        let mut listeners = statics::listeners().lock().unwrap();
-        listeners
-            .entry(handle)
-            .or_default()
-            .entry("connect".to_string())
-            .or_default()
-            .push(cb_ptr);
+    // Path overload: `net.connect(path[, cb])`.
+    if let Some(path) = ipc::string_value(arg1_f64) {
+        let handle = ipc::spawn_socket(path);
+        ipc::register_connect_cb(handle, arg2_f64);
+        return handle;
     }
 
     if is_nanboxed_pointer(arg1_f64) {
-        // Options-object overload: extract host/port from the object.
+        // Options-object overload. A `path` selects local IPC before the TCP
+        // host/port fields are considered, matching Node's normalization.
+        if let Some(path) = get_object_string_field(arg1_f64, "path") {
+            let handle = ipc::spawn_socket(path);
+            ipc::register_connect_cb(handle, arg2_f64);
+            return handle;
+        }
         let host = match get_object_string_field(arg1_f64, "host")
             .or_else(|| get_object_string_field(arg1_f64, "hostname"))
         {
@@ -564,7 +563,7 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg
         };
         let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
         // connectListener lives in arg2 for the options form.
-        register_connect_cb(handle, arg2_f64);
+        ipc::register_connect_cb(handle, arg2_f64);
         return handle;
     }
     // Positional overload: arg1 is the port number, arg2 is the host
@@ -588,7 +587,7 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg
     js_net_validate_connect_port(arg1_f64);
     let port = arg1_f64 as u16;
     let handle = spawn_socket_task(host, port, /* direct_tls: */ None);
-    register_connect_cb(handle, listener_f64);
+    ipc::register_connect_cb(handle, listener_f64);
     handle
 }
 
@@ -656,6 +655,7 @@ pub unsafe extern "C" fn js_net_create_server(
             shutdown_tx: None,
             bound_port: 0,
             bound_host: String::new(),
+            bound_path: None,
             listening: false,
             active_connections: 0,
             pending_connections: 0,
@@ -679,9 +679,9 @@ pub unsafe extern "C" fn js_net_create_server(
 
 // ─── FFI: net.Server.listen / .close / .address / .on ────────────────────────
 
-/// `server.listen(port, callback?)` — bind a tokio `TcpListener` on
-/// `0.0.0.0:port` and spawn an accept loop on the shared multi-thread
-/// runtime. The `callback` (a NaN-boxed closure pointer in the codegen's
+/// `server.listen(port | path, callback?)` — bind TCP, a Windows named pipe,
+/// or a Unix-domain socket and spawn an accept loop on the shared runtime.
+/// The `callback` (a NaN-boxed closure pointer in the codegen's
 /// NA_PTR slot, raw i64 here after unboxing in lower_call.rs) is
 /// registered as a one-shot `'listening'` listener; when the bind
 /// resolves, the accept-loop task pushes a `ServerListening` event so
@@ -704,13 +704,25 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
         0 => js_net_callback_ptr(arg2),
         cb => cb,
     };
-    // #2013: a numeric `port` must be an integer in [0, 65536); Node throws
-    // RangeError [ERR_SOCKET_BAD_PORT] otherwise. (A string is a pipe path and
-    // is left alone.)
-    js_net_validate_listen_port(port);
-    let port_u16 = port as u16;
-    let host = string_from_header_i64(js_get_string_pointer_unified(arg2))
-        .unwrap_or_else(|| "0.0.0.0".to_string());
+    let path = ipc::string_value(port)
+        .or_else(|| is_nanboxed_pointer(port).then(|| get_object_string_field(port, "path"))?);
+    let (port_u16, host) = if path.is_some() {
+        (0, String::new())
+    } else if is_nanboxed_pointer(port) {
+        let option_port = get_object_number_field(port, "port").unwrap_or(0.0);
+        js_net_validate_listen_port(option_port);
+        let option_host = get_object_string_field(port, "host")
+            .filter(|host| !host.is_empty())
+            .unwrap_or_else(|| "0.0.0.0".to_string());
+        (option_port as u16, option_host)
+    } else {
+        // #2013: a numeric `port` must be an integer in [0, 65536); Node throws
+        // RangeError [ERR_SOCKET_BAD_PORT] otherwise.
+        js_net_validate_listen_port(port);
+        let host = string_from_header_i64(js_get_string_pointer_unified(arg2))
+            .unwrap_or_else(|| "0.0.0.0".to_string());
+        (port as u16, host)
+    };
 
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
@@ -728,6 +740,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
         s.shutdown_tx = Some(shutdown_tx);
         s.bound_port = port_u16;
         s.bound_host = host.clone();
+        s.bound_path = path.clone();
         s.listening = true;
     }
 
@@ -747,6 +760,11 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
 
     let host_for_spawn = host.clone();
     let server_id = handle;
+
+    if let Some(path) = path {
+        ipc::spawn_listener(server_id, path, shutdown_rx);
+        return;
+    }
 
     // Run the accept loop cooperatively on Perry's shared multi-thread runtime
     // via `spawn_async` — no throwaway current-thread runtime, no blocking-pool
@@ -810,34 +828,6 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                                 push_event(PendingNetEvent::ServerDrop(server_id, info));
                                 continue;
                             }
-                            // Allocate a fresh Socket handle that
-                            // shares the existing socket machinery
-                            // (run_socket_task, command channel,
-                            // 'data'/'end'/'close'/'error' pump
-                            // dispatch). The accept side doesn't
-                            // need a tokio TcpStream::connect — we
-                            // already have the stream — so we
-                            // bypass `spawn_socket_task` (which
-                            // calls TcpStream::connect inside) and
-                            // call `run_socket_task` directly with
-                            // the accepted stream.
-                            let socket_id = next_id();
-                            // #6441: on a background thread there is no JS frame
-                            // to unwind to, so exhaustion can't throw here.
-                            // Drop the accepted stream — closing the connection,
-                            // the EMFILE-style degradation Node applies when it
-                            // can't accept — rather than register a phantom
-                            // socket under the `0` sentinel. Refuse quietly: once
-                            // the band is exhausted every accept fails, so an
-                            // 'error' event per connection would flood a hot
-                            // loop; the synchronous client-facing entry points
-                            // still surface a throwable EMFILE.
-                            if socket_id == perry_ffi::INVALID_HANDLE {
-                                server_state::cancel_pending_connection(server_id);
-                                drop(stream);
-                                continue;
-                            }
-                            let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
                             // Node sets TCP_NODELAY on every accepted socket by
                             // default (Nagle off). Match that so small writes
                             // aren't delayed waiting to coalesce; a later
@@ -849,64 +839,11 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                             // bound port/family instead of returning
                             // undefined.
                             let accepted_local = stream.local_addr().ok();
-                            statics::sockets().lock().unwrap().insert(
-                                socket_id,
-                                SocketState {
-                                    cmd_tx: tx,
-                                    pending_rx: None,
-                                    is_open: true,
-                                    refed: true,
-                                    local_addr: accepted_local,
-                                    raw: None,
-                                    destroyed: false,
-                                    bytes_read: 0,
-                                    bytes_written: 0,
-                                    timeout: None,
-                                    type_of_service: 0,
-                                    server_id: Some(server_id),
-                                    server_connection_active: false,
-                                    tls: TlsSocketMetadata::default(),
-                                },
+                            ipc::register_accepted_transport(
+                                server_id,
+                                Transport::Plain(stream),
+                                accepted_local,
                             );
-                            statics::listeners()
-                                .lock()
-                                .unwrap()
-                                .insert(socket_id, HashMap::new());
-
-                            // Surface the new socket to the user's
-                            // `'connection'` listener on the main
-                            // thread *before* spawning the read
-                            // loop — the listener typically registers
-                            // its own `.on('data', ...)` handlers
-                            // and we want those in place before
-                            // bytes start arriving. The accepted
-                            // stream's read loop spawns next.
-                            push_event(PendingNetEvent::ServerConnection(
-                                server_id, socket_id, false,
-                            ));
-
-                            // Spawn the per-socket read/write loop on
-                            // the same shared runtime as this accept
-                            // loop. A direct `tokio::spawn` (not
-                            // `spawn_socket_runner`, which routes
-                            // through the `perry_ffi::spawn_async` FFI
-                            // shim) is correct here because we're
-                            // already inside a task on the shared
-                            // runtime — `tokio::spawn` lands on it
-                            // directly, skipping the round-trip back
-                            // out through C. The shim only matters at
-                            // the FFI entry points that cross into
-                            // Rust-from-C, where no ambient runtime
-                            // task exists yet.
-                            tokio::spawn(async move {
-                                let mut rx = rx;
-                                run_socket_task(
-                                    socket_id,
-                                    Transport::Plain(stream),
-                                    &mut rx,
-                                )
-                                .await;
-                            });
                         }
                         Err(e) => {
                             push_event(PendingNetEvent::ServerError(
@@ -982,6 +919,12 @@ pub unsafe extern "C" fn js_net_server_address(handle: i64) -> *mut StringHeader
     let json = match statics::servers().lock() {
         Ok(g) => match g.get(&handle) {
             Some(s) if s.listening => {
+                if let Some(path) = &s.bound_path {
+                    return alloc_string(
+                        &serde_json::to_string(path).unwrap_or_else(|_| "null".to_string()),
+                    )
+                    .as_raw();
+                }
                 let family = if s.bound_host.contains(':') {
                     "IPv6"
                 } else {
@@ -1023,8 +966,8 @@ pub unsafe extern "C" fn js_net_server_on(handle: i64, event_ptr: i64, cb: i64) 
 
 // ─── FFI: socket.connect(port, host) (instance method on existing handle) ─────
 
-/// `socket.connect(port, host)` — initiates a TCP connection on a socket
-/// previously allocated by `new net.Socket()`. Pulls its receiver out of
+/// `socket.connect(port, host)` / `socket.connect(path)` — initiates a TCP or
+/// IPC connection on a socket previously allocated by `new net.Socket()`. Pulls its receiver out of
 /// the `SocketState::pending_rx` slot rather than allocating a fresh
 /// channel, so any listener already registered (`sock.on('data', cb)`)
 /// sees the same handle id once the connect completes.
@@ -1033,21 +976,63 @@ pub unsafe extern "C" fn js_net_server_on(handle: i64, event_ptr: i64, cb: i64) 
 ///
 /// See `js_net_socket_connect`.
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_method_connect(handle: i64, port: f64, host_ptr: i64) {
-    // #2013: validate the port first (RangeError [ERR_SOCKET_BAD_PORT]),
-    // before any host handling, matching Node's `Socket.prototype.connect`.
-    js_net_validate_connect_port(port);
-    let host = match string_from_header_i64(host_ptr) {
-        Some(h) => h,
-        None => {
-            push_event(PendingNetEvent::Error(
-                handle,
-                "socket.connect: invalid host string".to_string(),
-            ));
+pub unsafe extern "C" fn js_ext_net_socket_method_connect(
+    handle: i64,
+    arg1: f64,
+    arg2: f64,
+    arg3: f64,
+) {
+    js_net_socket_method_connect(handle, arg1, arg2, arg3);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_method_connect(
+    handle: i64,
+    arg1: f64,
+    arg2: f64,
+    arg3: f64,
+) {
+    if let Some(path) = ipc::string_value(arg1) {
+        ipc::register_connect_cb(handle, arg2);
+        ipc::connect_existing(handle, path);
+        return;
+    }
+
+    let (host, port, callback) = if is_nanboxed_pointer(arg1) {
+        if let Some(path) = get_object_string_field(arg1, "path") {
+            ipc::register_connect_cb(handle, arg2);
+            ipc::connect_existing(handle, path);
             return;
         }
+        let port = match get_object_number_field(arg1, "port") {
+            Some(port) => port,
+            None => {
+                push_event(PendingNetEvent::Error(
+                    handle,
+                    "socket.connect: options.port or options.path is required".to_string(),
+                ));
+                return;
+            }
+        };
+        let host = get_object_string_field(arg1, "host")
+            .or_else(|| get_object_string_field(arg1, "hostname"))
+            .filter(|host| !host.is_empty())
+            .unwrap_or_else(|| "localhost".to_string());
+        (host, port, arg2)
+    } else {
+        let host = ipc::string_value(arg2);
+        let callback = if host.is_some() { arg3 } else { arg2 };
+        (
+            host.unwrap_or_else(|| "127.0.0.1".to_string()),
+            arg1,
+            callback,
+        )
     };
+    // #2013: validate before truncating, matching Node's synchronous
+    // ERR_SOCKET_BAD_PORT behavior for positional and options overloads.
+    js_net_validate_connect_port(port);
     let port = port as u16;
+    ipc::register_connect_cb(handle, callback);
 
     let rx = {
         let mut guard = statics::sockets().lock().unwrap();
@@ -1373,6 +1358,12 @@ pub(crate) async fn run_socket_task(
                             Some(already_tls @ Transport::Tls(_)) => {
                                 transport = Some(already_tls);
                                 let _ = reply.send(Err("socket is already TLS".to_string()));
+                            }
+                            Some(ipc @ Transport::Ipc(_)) => {
+                                transport = Some(ipc);
+                                let _ = reply.send(Err(
+                                    "TLS upgrade is unsupported for IPC sockets".to_string(),
+                                ));
                             }
                             None => {
                                 let _ = reply.send(Err("socket closed".to_string()));

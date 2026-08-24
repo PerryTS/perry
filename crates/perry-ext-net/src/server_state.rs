@@ -220,6 +220,18 @@ pub(crate) fn build_drop_object(info: &DropInfo) -> f64 {
 }
 
 pub(crate) fn should_drop_connection(server_id: i64, stream: &TcpStream) -> Option<DropInfo> {
+    reserve_connection(server_id, stream.local_addr().ok(), stream.peer_addr().ok())
+}
+
+pub(crate) fn should_drop_ipc_connection(server_id: i64) -> Option<DropInfo> {
+    reserve_connection(server_id, None, None)
+}
+
+fn reserve_connection(
+    server_id: i64,
+    local: Option<SocketAddr>,
+    remote: Option<SocketAddr>,
+) -> Option<DropInfo> {
     let mut servers = statics::servers().lock().ok()?;
     let server = servers.get_mut(&server_id)?;
     if server
@@ -227,10 +239,7 @@ pub(crate) fn should_drop_connection(server_id: i64, stream: &TcpStream) -> Opti
         .is_some_and(|max| server.active_connections + server.pending_connections >= max)
         && server.drop_max_connection.unwrap_or(false)
     {
-        return Some(DropInfo {
-            local: stream.local_addr().ok(),
-            remote: stream.peer_addr().ok(),
-        });
+        return Some(DropInfo { local, remote });
     }
     server.pending_connections += 1;
     None
@@ -250,6 +259,26 @@ pub(crate) fn begin_local_connect(host: &str, port: u16) -> Option<(i64, bool)> 
     let (server_id, server) = servers
         .iter_mut()
         .find(|(_, server)| server.listening && server.bound_port == port)?;
+    let completed = connection_order_state()
+        .lock()
+        .unwrap()
+        .completed_local_connects
+        .get(server_id)
+        .copied()
+        .unwrap_or(0);
+    let expects_drop = server.drop_max_connection.unwrap_or(false)
+        && server.max_connections.is_some_and(|max| {
+            server.active_connections + server.pending_connections + completed >= max
+        });
+    server.pending_local_connect_events += 1;
+    Some((*server_id, expects_drop))
+}
+
+pub(crate) fn begin_local_path_connect(path: &str) -> Option<(i64, bool)> {
+    let mut servers = statics::servers().lock().ok()?;
+    let (server_id, server) = servers
+        .iter_mut()
+        .find(|(_, server)| server.listening && server.bound_path.as_deref() == Some(path))?;
     let completed = connection_order_state()
         .lock()
         .unwrap()

@@ -1,6 +1,75 @@
 use super::*;
 
 #[test]
+fn native_library_exact_width_scalars_use_distinct_guards_and_c_abi_slots() {
+    let opts = native_library_opts(vec![
+        (
+            "native_exact_args",
+            vec!["i8", "i16", "u8", "u16", "isize"],
+            "void",
+        ),
+        ("native_ret_i8", vec![], "i8"),
+        ("native_ret_i16", vec![], "i16"),
+        ("native_ret_u8", vec![], "u8"),
+        ("native_ret_u16", vec![], "u16"),
+        ("native_ret_isize", vec![], "isize"),
+    ]);
+    let module = module(
+        "native_library_exact_widths.ts",
+        vec![
+            Stmt::Expr(extern_call(
+                "native_exact_args",
+                vec![int(-8), int(-16), int(8), int(16), int(-64)],
+                Type::Void,
+            )),
+            Stmt::Expr(extern_call("native_ret_i8", vec![], Type::Number)),
+            Stmt::Expr(extern_call("native_ret_i16", vec![], Type::Number)),
+            Stmt::Expr(extern_call("native_ret_u8", vec![], Type::Number)),
+            Stmt::Expr(extern_call("native_ret_u16", vec![], Type::Number)),
+            Stmt::Return(Some(extern_call("native_ret_isize", vec![], Type::Number))),
+        ],
+    );
+    let ir = String::from_utf8(compile_module(&module, opts.clone()).unwrap()).unwrap();
+    for guard in [
+        "js_native_abi_check_i8",
+        "js_native_abi_check_i16",
+        "js_native_abi_check_u8",
+        "js_native_abi_check_u16",
+        "js_native_abi_check_isize",
+    ] {
+        assert!(ir.contains(guard), "missing guard {guard}:\n{ir}");
+    }
+    assert!(
+        ir.contains("declare void @native_exact_args(i8, i16, i8, i16, i64)")
+            && ir.contains("declare i8 @native_ret_i8()")
+            && ir.contains("declare i16 @native_ret_i16()")
+            && ir.contains("declare i8 @native_ret_u8()")
+            && ir.contains("declare i16 @native_ret_u16()")
+            && ir.contains("declare i64 @native_ret_isize()"),
+        "exact-width descriptors must preserve their C ABI slots:\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module_with_opts(module, opts);
+    let records = artifact["records"].as_array().unwrap();
+    for (kind, rep, helper) in [
+        ("i8", "i8", "js_native_abi_check_i8"),
+        ("i16", "i16", "js_native_abi_check_i16"),
+        ("u8", "u8", "js_native_abi_check_u8"),
+        ("u16", "u16", "js_native_abi_check_u16"),
+        ("isize", "isize", "js_native_abi_check_isize"),
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["native_abi_type"]["canonical_kind"] == kind
+                    && record["native_rep_name"] == rep
+                    && record["native_abi_type"]["runtime_guard"]["helper"] == helper
+            }),
+            "missing exact-width proof {kind}/{rep}/{helper}:\n{artifact:#}"
+        );
+    }
+}
+
+#[test]
 fn native_library_manifest_lowercase_abi_returns_emit_signatures_and_artifacts() {
     let opts = native_library_opts(vec![
         ("native_ret_jsvalue", vec![], "jsvalue"),
@@ -61,6 +130,8 @@ fn native_library_manifest_lowercase_abi_returns_emit_signatures_and_artifacts()
             && ir.contains("declare i32 @native_ret_buffer_len()")
             && ir.contains("declare i64 @native_ret_handle()")
             && ir.contains("declare i64 @native_ret_promise()")
+            && ir.contains("call double @js_native_abi_materialize_i64")
+            && ir.contains("call double @js_native_abi_materialize_u64")
             && ir.contains("call double @js_native_handle_new_borrowed"),
         "expected lowercase manifest return kinds to drive LLVM declarations:\n{ir}"
     );
@@ -121,13 +192,6 @@ fn native_library_manifest_lowercase_abi_returns_emit_signatures_and_artifacts()
         );
     }
     for (consumer, from_rep, op, lossy) in [
-        ("materialize_js_value", "u64", "unsigned_int_to_float", true),
-        (
-            "materialize_js_value",
-            "usize",
-            "unsigned_int_to_float",
-            true,
-        ),
         ("materialize_js_value", "f32", "float_extend", false),
         (
             "materialize_native_handle_runtime",
@@ -152,6 +216,24 @@ fn native_library_manifest_lowercase_abi_returns_emit_signatures_and_artifacts()
                     && record["native_abi_transition"]["lossy"] == lossy
             }),
             "expected native-library transition {from_rep}->{op}:\n{artifact:#}"
+        );
+    }
+    for (descriptor, guard) in [
+        ("i64", "js_native_abi_materialize_i64"),
+        ("u64", "js_native_abi_materialize_u64"),
+        ("usize", "js_native_abi_materialize_u64"),
+    ] {
+        assert!(
+            records.iter().any(|record| {
+                record["consumer"] == "native_library.checked_integer_return"
+                    && record["notes"].as_array().is_some_and(|notes| {
+                        notes
+                            .iter()
+                            .any(|note| note == &format!("descriptor={descriptor}"))
+                            && notes.iter().any(|note| note == &format!("guard={guard}"))
+                    })
+            }),
+            "missing exact safe-integer return guard for {descriptor}:\n{artifact:#}"
         );
     }
 }

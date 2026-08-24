@@ -56,8 +56,8 @@ arena.dispose();
 
 ## Supported scalar layouts
 
-The first public slice exposes the native representations the POD and native
-ABI verifier already supports:
+The public profile exposes the native representations the POD and native ABI
+verifier supports:
 
 | Type | Native representation |
 |---|---|
@@ -105,9 +105,10 @@ The scalar aliases establish representation inside a `pod` layout and at
 supported native ABI boundaries. A matching checked conversion may initialize
 a POD field from a dynamic value without forcing the whole record back to an
 ordinary object; the conversion guard runs before the value enters the native
-record. They do not change the semantics of
-standalone TypeScript arithmetic. Guaranteed native lanes across
-general-purpose collections are a later part of the native value profile.
+record. They do not change standalone TypeScript arithmetic: operators still
+follow ordinary JavaScript number rules unless an explicit checked conversion
+is used. The brand records intent for POD layout and native boundaries; it is
+not a second runtime number object.
 
 ## POD records
 
@@ -129,6 +130,30 @@ path, with dotted paths accepted for nested records.
 POD layout uses the target's native byte order. It does not define a portable
 serialization format; use `DataView` or another explicit encoder when stored
 or transmitted bytes require a specified endianness.
+
+POD assignment has value semantics. `const copy = header` snapshots the
+declared scalar fields into independent storage, so later property writes do
+not alias the original. Passing a standalone POD to an ordinary function also
+passes an independent value, even when the compiler would otherwise inline
+that function. Nested object initializers are flattened recursively according
+to the declared layout. `PodView<T>` is different: it is an explicit view over
+arena storage and aliases that storage by design.
+
+## Materialization and optimization guarantees
+
+The checked value and layout behavior above is stable language contract. The
+compiler may keep a proven POD local or scalar in native storage, but that is
+an optimization rather than an observable promise. Passing values through an
+ordinary TypeScript function, array, object, or other managed API may
+materialize JavaScript-compatible numbers or objects. Materialization must
+preserve the checked value; in particular, no `i64`, `u64`, `isize`, or
+`usize` conversion can silently introduce an imprecise JavaScript number.
+
+At a `perry.nativeLibrary` boundary, manifest descriptors restore the exact C
+ABI width and signedness. A manifest POD may reference the exported TypeScript
+`pod<T>` declaration; compilation and `perry native validate` reject drift in
+field type or order before generating a call. See [Native Library Manifest
+v1](../native-libraries/manifest-v1.md#functions).
 
 ## Arena ownership
 
