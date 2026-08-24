@@ -189,6 +189,42 @@ console.log(checksum);
 }
 
 #[test]
+fn typed_array_loops_keep_their_width_aware_lowering() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = r#"
+function xorU32(values: Uint32Array, n: number): number {
+  let result = 0 | 0;
+  for (let i = 0; i < n; i++) {
+    result = (result ^ values[i & 7]) | 0;
+  }
+  return result | 0;
+}
+
+const values = Uint32Array.from([
+  1, 4000000000, 0xffffffff, 7, 0x80000000, 0, 42, 999,
+]);
+console.log(xorU32(values, 8));
+"#;
+    let (bin, stderr) = compile(dir.path(), source, true);
+    let output = run(&bin, dir.path(), false);
+    assert_success(&output);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "-1852517324\n");
+
+    let ll_path = stderr
+        .lines()
+        .find_map(|line| line.split("kept LLVM IR: ").nth(1))
+        .map(str::trim)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| panic!("PERRY_LLVM_KEEP_IR did not report an IR path\n{stderr}"));
+    let ir = std::fs::read_to_string(&ll_path).expect("read kept LLVM IR");
+    let xor = function_ir(&ir, "__xorU32(");
+    assert!(
+        !xor.contains("js_packed_arraylike_loop_guard"),
+        "a statically known TypedArray must not enter Array loop versioning\n{xor}"
+    );
+}
+
+#[test]
 fn mutations_and_moving_gc_resume_with_generic_semantics() {
     let dir = tempfile::tempdir().expect("tempdir");
     let source = r#"
