@@ -95,12 +95,18 @@
             "string",
             "bool",
             "boolean",
+            "i8",
+            "i16",
             "i32",
             "i64",
             "i64_str",
+            "u8",
+            "byte",
+            "u16",
             "u32",
             "u64",
             "usize",
+            "isize",
             "f32",
             "f64",
             "number",
@@ -125,12 +131,18 @@
             "string",
             "bool",
             "boolean",
+            "i8",
+            "i16",
             "i32",
             "i64",
             "i64_str",
+            "u8",
+            "byte",
+            "u16",
             "u32",
             "u64",
             "usize",
+            "isize",
             "f32",
             "f64",
             "number",
@@ -155,12 +167,18 @@
             "string",
             "bool",
             "boolean",
+            "i8",
+            "i16",
             "i32",
             "i64",
             "i64_str",
+            "u8",
+            "byte",
+            "u16",
             "u32",
             "u64",
             "usize",
+            "isize",
             "f32",
             "f64",
             "number",
@@ -359,7 +377,11 @@
     "abiPodDescriptor": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "fields"],
+      "required": ["kind"],
+      "anyOf": [
+        { "required": ["fields"] },
+        { "required": ["source"] }
+      ],
       "properties": {
         "kind": { "const": "pod" },
         "name": {
@@ -373,13 +395,23 @@
           "minItems": 1,
           "items": { "$ref": "#/$defs/abiPodFieldDescriptor" },
           "description": "Ordered C-layout fields. Field order is part of the ABI."
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+?(?:#[^#]+)?$",
+          "description": "Package-relative TypeScript source contract, normally ./path.ts#ExportedPod. If fields are also present Perry rejects any ABI drift."
         }
       }
     },
     "abiPodAndCountDescriptor": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "fields"],
+      "required": ["kind"],
+      "anyOf": [
+        { "required": ["fields"] },
+        { "required": ["source"] }
+      ],
       "properties": {
         "kind": { "const": "pod+count" },
         "name": {
@@ -393,6 +425,12 @@
           "minItems": 1,
           "items": { "$ref": "#/$defs/abiPodFieldDescriptor" },
           "description": "Ordered C-layout record fields. The JS argument supplies a packed record view and Perry lowers it to data pointer plus record count."
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+?(?:#[^#]+)?$",
+          "description": "Package-relative TypeScript source contract, normally ./path.ts#ExportedPod. If fields are also present Perry rejects any ABI drift."
         }
       }
     },
@@ -431,10 +469,16 @@
     "abiPodFieldString": {
       "type": "string",
       "enum": [
+        "i8",
+        "i16",
         "i32",
         "i64",
+        "u8",
+        "byte",
+        "u16",
         "u32",
         "u64",
+        "isize",
         "usize",
         "f32",
         "f64",
@@ -452,10 +496,16 @@
           "properties": {
             "kind": {
               "enum": [
+                "i8",
+                "i16",
                 "i32",
                 "i64",
+                "u8",
+                "byte",
+                "u16",
                 "u32",
                 "u64",
+                "isize",
                 "usize",
                 "f32",
                 "f64",
@@ -483,12 +533,18 @@
             "string",
             "bool",
             "boolean",
+            "i8",
+            "i16",
             "i32",
             "i64",
             "i64_str",
+            "u8",
+            "byte",
+            "u16",
             "u32",
             "u64",
             "usize",
+            "isize",
             "f32",
             "f64",
             "number",

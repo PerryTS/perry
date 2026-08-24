@@ -226,6 +226,10 @@ pub enum NativeAbiType {
     Json,
     /// JavaScript truthiness lowered to a C `i32` boolean slot.
     Bool,
+    /// Signed 8-bit integer slot.
+    I8,
+    /// Signed 16-bit integer slot.
+    I16,
     /// Signed 32-bit integer slot.
     I32,
     /// Signed 64-bit integer slot.
@@ -233,6 +237,11 @@ pub enum NativeAbiType {
     /// Legacy string return where the native function returns the string
     /// pointer as an `i64` instead of a C pointer.
     I64String,
+    /// Unsigned 8-bit integer slot. The manifest spelling `byte` is accepted
+    /// as an alias and canonicalizes to `u8`.
+    U8,
+    /// Unsigned 16-bit integer slot.
+    U16,
     /// Unsigned 32-bit integer slot.
     U32,
     /// Unsigned 64-bit integer slot.
@@ -240,6 +249,9 @@ pub enum NativeAbiType {
     /// Pointer-sized unsigned integer slot. Perry's native runtime targets are
     /// currently 64-bit, so this lowers as an LLVM `i64`.
     USize,
+    /// Pointer-sized signed integer slot. Perry's native runtime targets are
+    /// currently 64-bit, so this lowers as an LLVM `i64`.
+    ISize,
     /// 32-bit float slot.
     F32,
     /// 64-bit float slot. The legacy manifest spelling `"number"` is accepted
@@ -280,12 +292,17 @@ impl NativeAbiType {
             "string" => Ok(Self::String),
             "json" => Ok(Self::Json),
             "bool" | "boolean" => Ok(Self::Bool),
+            "i8" => Ok(Self::I8),
+            "i16" => Ok(Self::I16),
             "i32" => Ok(Self::I32),
             "i64" => Ok(Self::I64),
             "i64_str" => Ok(Self::I64String),
+            "u8" | "byte" => Ok(Self::U8),
+            "u16" => Ok(Self::U16),
             "u32" => Ok(Self::U32),
             "u64" => Ok(Self::U64),
             "usize" => Ok(Self::USize),
+            "isize" => Ok(Self::ISize),
             "f32" => Ok(Self::F32),
             "f64" | "number" => Ok(Self::F64),
             "ptr" => Ok(Self::Ptr),
@@ -338,12 +355,17 @@ impl NativeAbiType {
             Self::String => "string",
             Self::Json => "json",
             Self::Bool => "bool",
+            Self::I8 => "i8",
+            Self::I16 => "i16",
             Self::I32 => "i32",
             Self::I64 => "i64",
             Self::I64String => "i64_str",
+            Self::U8 => "u8",
+            Self::U16 => "u16",
             Self::U32 => "u32",
             Self::U64 => "u64",
             Self::USize => "usize",
+            Self::ISize => "isize",
             Self::F32 => "f32",
             Self::F64 => "f64",
             Self::Ptr => "ptr",
@@ -419,11 +441,16 @@ impl NativeAbiType {
     pub fn is_valid_pod_field(&self) -> bool {
         matches!(
             self,
-            Self::I32
+            Self::I8
+                | Self::I16
+                | Self::I32
                 | Self::I64
+                | Self::U8
+                | Self::U16
                 | Self::U32
                 | Self::U64
                 | Self::USize
+                | Self::ISize
                 | Self::F32
                 | Self::F64
                 | Self::BufferLen
@@ -464,11 +491,16 @@ impl NativeAbiType {
             Self::Pod(_) => "object",
             Self::PodAndCount(_) => "PerryPodView<any>",
             Self::BufferAndLen => "Buffer",
-            Self::I32
+            Self::I8
+            | Self::I16
+            | Self::I32
             | Self::I64
+            | Self::U8
+            | Self::U16
             | Self::U32
             | Self::U64
             | Self::USize
+            | Self::ISize
             | Self::F32
             | Self::F64
             | Self::BufferLen
@@ -575,5 +607,25 @@ mod tests {
         assert!(!json.is_valid_return());
         // Not a scalar POD field.
         assert!(!json.is_valid_pod_field());
+    }
+
+    #[test]
+    fn exact_width_scalar_spellings_are_canonical_and_pod_safe() {
+        for (spelling, expected, canonical) in [
+            ("i8", NativeAbiType::I8, "i8"),
+            ("i16", NativeAbiType::I16, "i16"),
+            ("u8", NativeAbiType::U8, "u8"),
+            ("byte", NativeAbiType::U8, "u8"),
+            ("u16", NativeAbiType::U16, "u16"),
+            ("isize", NativeAbiType::ISize, "isize"),
+        ] {
+            let parsed = NativeAbiType::parse_str(spelling).expect("exact-width descriptor");
+            assert_eq!(parsed, expected);
+            assert_eq!(parsed.canonical_kind(), canonical);
+            assert!(parsed.is_valid_param());
+            assert!(parsed.is_valid_return());
+            assert!(parsed.is_valid_pod_field());
+            assert_eq!(parsed.js_type_name(), "number");
+        }
     }
 }

@@ -19,6 +19,13 @@ fn throw_type_error(message: &str) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+#[cold]
+fn throw_range_error(message: &str) -> ! {
+    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    let err = crate::error::js_rangeerror_new(msg);
+    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+}
+
 fn strict_number(value: f64, message: &str) -> f64 {
     let js_value = JSValue::from_bits(value.to_bits());
     if js_value.is_int32() {
@@ -198,6 +205,33 @@ static KEEP_JS_TYPED_STRING_ARG_GUARD: extern "C" fn(f64) -> i32 = js_typed_stri
 #[used]
 static KEEP_JS_TYPED_STRING_ARG_TO_RAW: extern "C" fn(f64) -> i64 = js_typed_string_arg_to_raw;
 
+// Manifest calls are emitted from generated LLVM IR and therefore have no
+// Rust call graph edge in a release staticlib. Keep every newly public exact-
+// width boundary helper alive under whole-program LTO/dead stripping.
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_NATIVE_ABI_CHECK_I8: extern "C" fn(f64) -> i8 = js_native_abi_check_i8;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_NATIVE_ABI_CHECK_I16: extern "C" fn(f64) -> i16 = js_native_abi_check_i16;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_NATIVE_ABI_CHECK_U8: extern "C" fn(f64) -> u8 = js_native_abi_check_u8;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_NATIVE_ABI_CHECK_U16: extern "C" fn(f64) -> u16 = js_native_abi_check_u16;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_NATIVE_ABI_CHECK_ISIZE: extern "C" fn(f64) -> isize = js_native_abi_check_isize;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_NATIVE_ABI_MATERIALIZE_I64: extern "C" fn(i64) -> f64 =
+    js_native_abi_materialize_i64;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_NATIVE_ABI_MATERIALIZE_U64: extern "C" fn(u64) -> f64 =
+    js_native_abi_materialize_u64;
+
 // Static-name and static-method lowering emits these by-id wrappers directly
 // from generated LLVM IR. Keep roots here so LTO cannot strip the symbols just
 // because the Rust crate graph has no ordinary caller.
@@ -245,6 +279,26 @@ pub extern "C" fn js_native_abi_check_i32(value: f64) -> i32 {
     number as i32
 }
 
+/// Validate and lower a manifest `i8` parameter.
+#[no_mangle]
+pub extern "C" fn js_native_abi_check_i8(value: f64) -> i8 {
+    let number = strict_integer(value, "Expected integer for native i8 parameter");
+    if number < i8::MIN as f64 || number > i8::MAX as f64 {
+        throw_type_error("Native i8 parameter is out of range");
+    }
+    number as i8
+}
+
+/// Validate and lower a manifest `i16` parameter.
+#[no_mangle]
+pub extern "C" fn js_native_abi_check_i16(value: f64) -> i16 {
+    let number = strict_integer(value, "Expected integer for native i16 parameter");
+    if number < i16::MIN as f64 || number > i16::MAX as f64 {
+        throw_type_error("Native i16 parameter is out of range");
+    }
+    number as i16
+}
+
 /// Validate and lower a manifest `i64` parameter.
 #[no_mangle]
 pub extern "C" fn js_native_abi_check_i64(value: f64) -> i64 {
@@ -265,6 +319,26 @@ pub extern "C" fn js_native_abi_check_u32(value: f64) -> u32 {
     number as u32
 }
 
+/// Validate and lower a manifest `u8`/`byte` parameter.
+#[no_mangle]
+pub extern "C" fn js_native_abi_check_u8(value: f64) -> u8 {
+    let number = strict_integer(value, "Expected integer for native u8 parameter");
+    if number < 0.0 || number > u8::MAX as f64 {
+        throw_type_error("Native u8 parameter is out of range");
+    }
+    number as u8
+}
+
+/// Validate and lower a manifest `u16` parameter.
+#[no_mangle]
+pub extern "C" fn js_native_abi_check_u16(value: f64) -> u16 {
+    let number = strict_integer(value, "Expected integer for native u16 parameter");
+    if number < 0.0 || number > u16::MAX as f64 {
+        throw_type_error("Native u16 parameter is out of range");
+    }
+    number as u16
+}
+
 /// Validate and lower a manifest `u64` parameter.
 #[no_mangle]
 pub extern "C" fn js_native_abi_check_u64(value: f64) -> u64 {
@@ -283,6 +357,30 @@ pub extern "C" fn js_native_abi_check_usize(value: f64) -> usize {
         throw_type_error("Native usize parameter is out of range");
     }
     number as usize
+}
+
+/// Validate and lower a manifest `isize` parameter on 64-bit native targets.
+#[no_mangle]
+pub extern "C" fn js_native_abi_check_isize(value: f64) -> isize {
+    strict_safe_integer(value, "Expected safe integer for native isize parameter") as isize
+}
+
+/// Materialize a signed 64-bit native value without silently rounding it.
+#[no_mangle]
+pub extern "C" fn js_native_abi_materialize_i64(value: i64) -> f64 {
+    if value < MIN_SAFE_INTEGER as i64 || value > MAX_SAFE_INTEGER as i64 {
+        throw_range_error("Native i64/isize value cannot be represented exactly as a number");
+    }
+    value as f64
+}
+
+/// Materialize an unsigned 64-bit native value without silently rounding it.
+#[no_mangle]
+pub extern "C" fn js_native_abi_materialize_u64(value: u64) -> f64 {
+    if value > MAX_SAFE_INTEGER as u64 {
+        throw_range_error("Native u64/usize value cannot be represented exactly as a number");
+    }
+    value as f64
 }
 
 /// Validate a manifest `string` parameter and return a raw StringHeader pointer.
@@ -388,18 +486,43 @@ mod tests {
 
     #[test]
     fn scalar_guards_reject_incompatible_js_values() {
+        assert_eq!(js_native_abi_check_i8(-128.0), -128);
+        assert_eq!(js_native_abi_check_i16(32_767.0), 32_767);
         assert_eq!(js_native_abi_check_i32(12.0), 12);
+        assert_eq!(js_native_abi_check_u8(255.0), 255);
+        assert_eq!(js_native_abi_check_u16(65_535.0), 65_535);
         assert_eq!(js_native_abi_check_u32(4_000_000_000.0), 4_000_000_000);
+        assert_eq!(js_native_abi_check_isize(-42.0), -42);
+        assert_eq!(
+            js_native_abi_materialize_i64(MIN_SAFE_INTEGER as i64),
+            MIN_SAFE_INTEGER
+        );
+        assert_eq!(
+            js_native_abi_materialize_u64(MAX_SAFE_INTEGER as u64),
+            MAX_SAFE_INTEGER
+        );
         assert_eq!(js_native_abi_check_f32(6.25), 6.25f32);
 
         assert!(catch_runtime_throw(|| {
             js_native_abi_check_i32(1.5);
         }));
         assert!(catch_runtime_throw(|| {
+            js_native_abi_check_i8(128.0);
+        }));
+        assert!(catch_runtime_throw(|| {
+            js_native_abi_check_u16(-1.0);
+        }));
+        assert!(catch_runtime_throw(|| {
             js_native_abi_check_u32(-1.0);
         }));
         assert!(catch_runtime_throw(|| {
             js_native_abi_check_i64(MAX_SAFE_INTEGER + 2.0);
+        }));
+        assert!(catch_runtime_throw(|| {
+            js_native_abi_materialize_i64(MAX_SAFE_INTEGER as i64 + 1);
+        }));
+        assert!(catch_runtime_throw(|| {
+            js_native_abi_materialize_u64(MAX_SAFE_INTEGER as u64 + 1);
         }));
         assert!(catch_runtime_throw(|| {
             let s = crate::string::js_string_from_bytes(b"no".as_ptr(), 2);

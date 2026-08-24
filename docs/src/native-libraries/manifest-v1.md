@@ -121,8 +121,9 @@ Existing string spellings remain valid. The canonical descriptor
 vocabulary is:
 
 ```text
-jsvalue, string, json, bool, i32, i64, i64_str, u32, u64, usize,
-f32, f64, number, ptr, buffer_len, buffer+len, handle<T>,
+jsvalue, string, json, bool, i8, i16, i32, i64, i64_str,
+u8, byte, u16, u32, u64, isize, usize, f32, f64, number,
+ptr, buffer_len, buffer+len, handle<T>,
 promise<T>, pod, void
 ```
 
@@ -153,8 +154,9 @@ Descriptors with metadata may also use object form:
 {
   "kind": "pod",
   "name": "Packet",
+  "source": "./src/native.ts#Packet",
   "fields": [
-    { "name": "tag", "type": "u32" },
+    { "name": "tag", "type": "u8" },
     { "name": "count", "type": "usize" },
     { "name": "weight", "abi": { "kind": "f32" } }
   ]
@@ -183,16 +185,35 @@ C-layout storage and pass to native code as a pointer. The `fields`
 array is ordered, and field order is part of the ABI. Each field must
 have a non-empty `name` and exactly one of `type` or `abi`.
 
+Instead of repeating the record, `source` may reference an exported
+`pod<T>` alias in the same package:
+
+```json
+{ "kind": "pod", "source": "./src/native.ts#Packet" }
+```
+
+The path must be package-relative and cannot escape the package. Perry derives
+the ordered fields from source during compilation and `perry native validate`.
+When both `source` and `fields` are present, they must match recursively;
+width, signedness, field order, and nested-record drift are reported before
+native code is called. A source without `#ExportName` uses the descriptor's
+`name`. The referenced declaration must be an exported, non-generic `pod<T>`
+alias whose record is closed and contains no optional, managed, or pointerful
+fields.
+
 POD field types are restricted to numeric ABI scalars that have stable
 C layout:
 
 ```text
-i32, i64, u32, u64, usize, f32, f64, number, buffer_len
+i8, i16, i32, i64, u8, byte, u16, u32, u64, isize, usize,
+f32, f64, number, buffer_len, handle_id, nested pod
 ```
 
-`number` aliases `f64`; `buffer_len` is a `u32` byte-length scalar.
+`byte` aliases `u8`, `number` aliases `f64`, and `buffer_len` is a `u32`
+byte-length scalar. `handle_id` is a pointer-free integer identifier; it is
+not an owned or borrowed `handle`.
 Dynamic or pointerful descriptors such as `jsvalue`, `string`, `json`,
-`bool`, `ptr`, `buffer+len`, `handle`, `promise`, nested `pod`, and
+`bool`, `ptr`, `buffer+len`, `handle`, `promise`, and
 `void` are rejected in POD fields.
 
 ### Param types
@@ -203,11 +224,16 @@ Dynamic or pointerful descriptors such as `jsvalue`, `string`, `json`,
 | `"string"` | `*const StringHeader` | `string` |
 | `"json"` | `*const StringHeader` | any JSON-serializable value (`JSON.stringify`d at the callsite) |
 | `"bool"` | `i32` truthy flag | `boolean` |
-| `"i32"` | `i32` | `number` truncated to signed 32-bit |
-| `"i64"` | `i64` | `number` converted to signed 64-bit |
-| `"u32"` | `u32` | `number` converted to unsigned 32-bit |
-| `"u64"` | `u64` | `number` converted to unsigned 64-bit |
-| `"usize"` | `usize` | `number` converted to pointer-sized unsigned integer |
+| `"i8"` | `i8` | checked signed 8-bit `number` |
+| `"i16"` | `i16` | checked signed 16-bit `number` |
+| `"i32"` | `i32` | checked signed 32-bit `number` |
+| `"i64"` | `i64` | checked safe-integer `number` |
+| `"u8"` / `"byte"` | `u8` | checked unsigned 8-bit `number` |
+| `"u16"` | `u16` | checked unsigned 16-bit `number` |
+| `"u32"` | `u32` | checked unsigned 32-bit `number` |
+| `"u64"` | `u64` | checked non-negative safe-integer `number` |
+| `"isize"` | `isize` | checked pointer-sized signed safe-integer `number` |
+| `"usize"` | `usize` | checked pointer-sized unsigned safe-integer `number` |
 | `"f32"` | `f32` | `number` narrowed to 32-bit float |
 | `"f64"` / `"number"` | `f64` | `number` |
 | `"ptr"` | `i64` raw boxed pointer payload | raw pointer escape hatch |
@@ -226,10 +252,15 @@ Dynamic or pointerful descriptors such as `jsvalue`, `string`, `json`,
 | `"ptr"` | `-> *const u8` *(see note)* | `string` legacy pointer return |
 | `"i64_str"` | `-> i64` | `string` (the `i64` is a `*StringHeader`) |
 | `"bool"` | `-> i32` | `boolean` |
+| `"i8"` | `-> i8` | `number` |
+| `"i16"` | `-> i16` | `number` |
 | `"i32"` | `-> i32` | `number` |
 | `"i64"` | `-> i64` | `number` |
+| `"u8"` / `"byte"` | `-> u8` | `number` |
+| `"u16"` | `-> u16` | `number` |
 | `"u32"` | `-> u32` | `number` |
 | `"u64"` | `-> u64` | `number` |
+| `"isize"` | `-> isize` | `number` |
 | `"usize"` | `-> usize` | `number` |
 | `"f32"` | `-> f32` | `number` via explicit `f32 -> f64` materialization |
 | `"f64"` / `"number"` | `-> f64` | `number` |
@@ -237,6 +268,10 @@ Dynamic or pointerful descriptors such as `jsvalue`, `string`, `json`,
 | `"handle"` / `"handle<T>"` | `-> i64` resource pointer | opaque native handle object |
 | `"promise"` / `"promise<T>"` | `-> i64` | JavaScript `Promise` |
 | `"void"` | `-> ()` | `undefined` |
+
+Signed and unsigned 64-bit returns (including `isize`/`usize`) are checked
+before becoming a TypeScript `number`. A value outside JavaScript's exact
+safe-integer range throws a `RangeError`; Perry never silently rounds it.
 
 > Note on `"string"` vs. `"i64_str"`: both produce a string on the
 > TypeScript side, but they differ in how Rust returns the pointer.
@@ -260,7 +295,8 @@ verifier-backed C-layout storage.
 > object. It is opt-in and param-only, so real-string `"string"` params
 > keep their strict non-string-rejecting check.
 
-Native-only numeric descriptors (`f32`, `u32`, `u64`, `usize`,
+Native-only numeric descriptors (`i8` through `i64`, `u8` through `u64`,
+`isize`, `usize`, `f32`,
 `buffer_len`) render as TypeScript `number`. Handles remain opaque
 GC-managed values, even though native functions still receive and
 return raw `i64` resource pointers at the ABI boundary. POD parameters

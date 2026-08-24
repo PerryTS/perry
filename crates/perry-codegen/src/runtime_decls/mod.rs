@@ -144,11 +144,18 @@ pub fn declare_phase1(module: &mut LlModule) {
     module.declare_function("js_typed_string_arg_to_raw", I64, &[DOUBLE]);
     module.declare_function("js_param_type_guard", I32, &[DOUBLE, PTR, I32]);
     module.declare_function("js_native_abi_check_f32", F32, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_i8", I8, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_i16", I16, &[DOUBLE]);
     module.declare_function("js_native_abi_check_i32", I32, &[DOUBLE]);
     module.declare_function("js_native_abi_check_i64", I64, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_u8", I8, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_u16", I16, &[DOUBLE]);
     module.declare_function("js_native_abi_check_u32", I32, &[DOUBLE]);
     module.declare_function("js_native_abi_check_u64", I64, &[DOUBLE]);
     module.declare_function("js_native_abi_check_usize", I64, &[DOUBLE]);
+    module.declare_function("js_native_abi_check_isize", I64, &[DOUBLE]);
+    module.declare_function("js_native_abi_materialize_i64", DOUBLE, &[I64]);
+    module.declare_function("js_native_abi_materialize_u64", DOUBLE, &[I64]);
     module.declare_function("js_native_abi_check_string_ptr", I64, &[DOUBLE]);
     module.declare_function("js_native_abi_check_ptr", I64, &[DOUBLE]);
     module.declare_function("js_native_abi_check_buffer_data_ptr", PTR, &[DOUBLE]);

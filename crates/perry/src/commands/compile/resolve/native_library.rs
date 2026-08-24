@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 use perry_api_manifest::{
@@ -625,7 +625,7 @@ fn parse_native_pod_descriptor(
     value: &serde_json::Value,
 ) -> Result<NativeAbiType> {
     let object = value.as_object().expect("pod descriptor is an object");
-    let allowed = ["kind", "name", "fields"];
+    let allowed = ["kind", "name", "fields", "source"];
     for key in object.keys() {
         if !allowed.contains(&key.as_str()) {
             return Err(invalid_native_abi_error(
@@ -639,7 +639,7 @@ fn parse_native_pod_descriptor(
         }
     }
 
-    let name = match object.get("name") {
+    let mut name = match object.get("name") {
         Some(v) => Some(
             v.as_str()
                 .filter(|s| !s.trim().is_empty())
@@ -658,23 +658,92 @@ fn parse_native_pod_descriptor(
         None => None,
     };
 
-    let fields_value = object.get("fields").ok_or_else(|| {
-        invalid_native_abi_error(
-            package_json,
-            function_index,
-            function_name,
-            slot,
-            &value.to_string(),
-            "pod descriptor requires a `fields` array",
-        )
-    })?;
+    let manifest_fields = object
+        .get("fields")
+        .map(|fields_value| {
+            parse_native_pod_fields(
+                package_json,
+                function_index,
+                function_name,
+                slot,
+                fields_value,
+            )
+        })
+        .transpose()?;
+    let source_pod = object
+        .get("source")
+        .map(|source| {
+            let source = source.as_str().filter(|s| !s.trim().is_empty()).ok_or_else(|| {
+                invalid_native_abi_error(
+                    package_json,
+                    function_index,
+                    function_name,
+                    slot,
+                    &value.to_string(),
+                    "pod descriptor `source` must be a non-empty relative path and exported type, such as `./src/native.ts#Point`",
+                )
+            })?;
+            parse_source_pod_contract(package_json, source, name.as_deref()).map_err(|reason| {
+                invalid_native_abi_error(
+                    package_json,
+                    function_index,
+                    function_name,
+                    slot,
+                    &value.to_string(),
+                    &reason,
+                )
+            })
+        })
+        .transpose()?;
+    if name.is_none() {
+        name = source_pod.as_ref().and_then(|pod| pod.name.clone());
+    }
+
+    let fields = match (manifest_fields, source_pod) {
+        (Some(fields), Some(source)) => {
+            if let Some(reason) = pod_contract_drift(&fields, &source.fields, "") {
+                return Err(invalid_native_abi_error(
+                    package_json,
+                    function_index,
+                    function_name,
+                    slot,
+                    &value.to_string(),
+                    &format!("POD manifest/source contract drift: {reason}"),
+                ));
+            }
+            fields
+        }
+        (Some(fields), None) => fields,
+        (None, Some(source)) => source.fields,
+        (None, None) => {
+            return Err(invalid_native_abi_error(
+                package_json,
+                function_index,
+                function_name,
+                slot,
+                &value.to_string(),
+                "pod descriptor requires either a `fields` array or a `source` reference",
+            ));
+        }
+    };
+
+    Ok(NativeAbiType::Pod(NativePodAbi { name, fields }))
+}
+
+fn parse_native_pod_fields(
+    package_json: &Path,
+    function_index: usize,
+    function_name: &str,
+    slot: &str,
+    fields_value: &serde_json::Value,
+) -> Result<Vec<NativePodFieldAbi>> {
     let fields_array = fields_value.as_array().ok_or_else(|| {
         invalid_native_abi_error(
             package_json,
             function_index,
             function_name,
             slot,
-            &value.to_string(),
+            &fields_value.to_string(),
             "pod descriptor `fields` must be an array",
         )
     })?;
@@ -684,7 +753,7 @@ fn parse_native_pod_descriptor(
             function_index,
             function_name,
             slot,
-            &value.to_string(),
+            &fields_value.to_string(),
             "pod descriptor `fields` must contain at least one field",
         ));
     }
@@ -778,7 +847,7 @@ fn parse_native_pod_descriptor(
                 function_name,
                 &format!("{slot}.fields[{field_index}].type"),
                 &ty.to_string(),
-                "pod field type must be one of i32, i64, u32, u64, usize, f32, f64, number, buffer_len, handle_id, or nested pod",
+                "pod field type must be a fixed-width scalar (i8/i16/i32/i64/u8/u16/u32/u64/isize/usize/f32/f64), number, buffer_len, handle_id, or nested pod",
             ));
         }
         fields.push(NativePodFieldAbi {
@@ -787,7 +856,224 @@ fn parse_native_pod_descriptor(
         });
     }
 
-    Ok(NativeAbiType::Pod(NativePodAbi { name, fields }))
+    Ok(fields)
+}
+
+fn parse_source_pod_contract(
+    package_json: &Path,
+    source_reference: &str,
+    fallback_name: Option<&str>,
+) -> Result<NativePodAbi, String> {
+    let (source_path, export_name) = match source_reference.rsplit_once('#') {
+        Some((path, export)) if !path.is_empty() && !export.is_empty() => (path, export),
+        Some(_) => {
+            return Err("pod descriptor `source` must use `<relative-path>#<exported-type>`".into())
+        }
+        None => (
+            source_reference,
+            fallback_name.ok_or_else(|| {
+                "pod descriptor `source` without `#ExportName` requires a non-empty `name`"
+                    .to_string()
+            })?,
+        ),
+    };
+    let relative = Path::new(source_path);
+    if relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err("pod descriptor `source` must stay inside the native package".into());
+    }
+    let package_dir = package_json
+        .parent()
+        .ok_or_else(|| "native package.json has no parent directory".to_string())?;
+    let canonical_package = package_dir
+        .canonicalize()
+        .map_err(|error| format!("could not resolve native package directory: {error}"))?;
+    let source_file = package_dir.join(relative);
+    let canonical_source = source_file.canonicalize().map_err(|error| {
+        format!(
+            "could not read POD source `{}`: {error}",
+            source_file.display()
+        )
+    })?;
+    if !canonical_source.starts_with(&canonical_package) {
+        return Err("pod descriptor `source` must stay inside the native package".into());
+    }
+    let source = fs::read_to_string(&canonical_source).map_err(|error| {
+        format!(
+            "could not read POD source `{}`: {error}",
+            canonical_source.display()
+        )
+    })?;
+    let filename = canonical_source.to_string_lossy();
+    let ast = perry_parser::parse_typescript(&source, &filename)
+        .map_err(|error| format!("could not parse POD source `{filename}`: {error}"))?;
+    perry_hir::set_current_module_source(source);
+    let lowered = perry_hir::lower_module(&ast, source_path, &filename);
+    perry_hir::clear_current_module_source();
+    let hir =
+        lowered.map_err(|error| format!("could not lower POD source `{filename}`: {error}"))?;
+    perry_hir::exported_native_pod_abi(&hir, export_name)
+        .map_err(|error| format!("invalid POD source `{source_reference}`: {error}"))
+}
+
+fn pod_contract_drift(
+    manifest: &[NativePodFieldAbi],
+    source: &[NativePodFieldAbi],
+    prefix: &str,
+) -> Option<String> {
+    if manifest.len() != source.len() {
+        return Some(format!(
+            "{prefix}field count is {} in the manifest but {} in source",
+            manifest.len(),
+            source.len()
+        ));
+    }
+    for (index, (manifest_field, source_field)) in manifest.iter().zip(source).enumerate() {
+        if manifest_field.name != source_field.name {
+            return Some(format!(
+                "{prefix}field {index} is `{}` in the manifest but `{}` in source (field order is ABI-significant)",
+                manifest_field.name, source_field.name
+            ));
+        }
+        match (&manifest_field.ty, &source_field.ty) {
+            (NativeAbiType::Pod(manifest_pod), NativeAbiType::Pod(source_pod)) => {
+                let nested_prefix = format!("{prefix}{}.", manifest_field.name);
+                if let Some(reason) =
+                    pod_contract_drift(&manifest_pod.fields, &source_pod.fields, &nested_prefix)
+                {
+                    return Some(reason);
+                }
+            }
+            (manifest_ty, source_ty) if manifest_ty != source_ty => {
+                return Some(format!(
+                    "{prefix}field `{}` is `{manifest_ty}` in the manifest but `{source_ty}` in source",
+                    manifest_field.name
+                ));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod pod_source_contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn source_package(source: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("temporary package");
+        let package_json = dir.path().join("package.json");
+        fs::write(&package_json, "{}").expect("package.json");
+        fs::write(dir.path().join("native.ts"), source).expect("native source");
+        (dir, package_json)
+    }
+
+    #[test]
+    fn source_reference_derives_the_exact_ordered_pod_contract() {
+        let (_dir, package_json) = source_package(
+            r#"
+import type { pod, i8, u16, isize, f32 } from "perry/native";
+export type Packet = pod<{ tag: i8; length: u16; cursor: isize; weight: f32 }>;
+"#,
+        );
+        let descriptor = json!({
+            "kind": "pod",
+            "source": "./native.ts#Packet"
+        });
+        let NativeAbiType::Pod(pod) = parse_native_pod_descriptor(
+            &package_json,
+            0,
+            "consume_packet",
+            "params[0]",
+            &descriptor,
+        )
+        .expect("source contract") else {
+            panic!("expected POD descriptor")
+        };
+        assert_eq!(pod.fields[0].ty, NativeAbiType::I8);
+        assert_eq!(pod.fields[1].ty, NativeAbiType::U16);
+        assert_eq!(pod.fields[2].ty, NativeAbiType::ISize);
+        assert_eq!(pod.fields[3].ty, NativeAbiType::F32);
+    }
+
+    #[test]
+    fn duplicate_manifest_contract_reports_order_and_width_drift() {
+        let (_dir, package_json) = source_package(
+            r#"
+import type { pod, u8, u16 } from "perry/native";
+export type Packet = pod<{ tag: u8; length: u16 }>;
+"#,
+        );
+        let wrong_order = json!({
+            "kind": "pod",
+            "source": "./native.ts#Packet",
+            "fields": [
+                { "name": "length", "type": "u16" },
+                { "name": "tag", "type": "u8" }
+            ]
+        });
+        let error = parse_native_pod_descriptor(
+            &package_json,
+            0,
+            "consume_packet",
+            "params[0]",
+            &wrong_order,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("field order is ABI-significant"), "{error}");
+
+        let wrong_width = json!({
+            "kind": "pod",
+            "source": "./native.ts#Packet",
+            "fields": [
+                { "name": "tag", "type": "u16" },
+                { "name": "length", "type": "u16" }
+            ]
+        });
+        let error = parse_native_pod_descriptor(
+            &package_json,
+            0,
+            "consume_packet",
+            "params[0]",
+            &wrong_width,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("is `u16` in the manifest but `u8` in source"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn source_reference_cannot_escape_the_package() {
+        let (_dir, package_json) = source_package(
+            r#"import type { pod, u8 } from "perry/native";
+export type Packet = pod<{ tag: u8 }>;"#,
+        );
+        let descriptor = json!({ "kind": "pod", "source": "../native.ts#Packet" });
+        let error = parse_native_pod_descriptor(
+            &package_json,
+            0,
+            "consume_packet",
+            "params[0]",
+            &descriptor,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("must stay inside the native package"),
+            "{error}"
+        );
+    }
 }
 
 fn invalid_native_abi_error(

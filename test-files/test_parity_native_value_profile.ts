@@ -16,6 +16,11 @@ type Narrow = NativeRecord<{
   pointerDelta: SignedSize;
 }>;
 
+type Nested = NativeRecord<{
+  outer: Octet;
+  inner: NativeRecord<{ code: HalfWord; delta: SignedByte }>;
+}>;
+
 const size = sizeOf<Header>();
 const alignment = alignOf<Header>();
 const sequenceOffset = offsetOf<Header>("sequence");
@@ -48,6 +53,16 @@ const convertedHeader: Header = {
   sequence: LongWord(42),
   gain: FloatWord(0.1),
 };
+const originalNested: Nested = {
+  outer: Octet(7),
+  inner: { code: HalfWord(513), delta: SignedByte(-8) },
+};
+let copiedNested = originalNested;
+copiedNested.outer = Octet(9);
+function mutateHeader(value: Header): void {
+  value.flags = Word(99);
+}
+mutateHeader(convertedHeader);
 let rejectedFraction = false;
 let rejectedType = false;
 let rejectedOctet = false;
@@ -125,6 +140,8 @@ console.log(
     ":" + convertedSignedHalfWord + ":" + convertedSignedSize + ":" + narrow.delta +
     ":" + narrow.count + ":" + narrow.offset + ":" + narrow.pointerDelta +
     ",header=" + convertedHeader.flags + ":" + convertedHeader.sequence + ":" + (convertedHeader.gain > 0.1) +
+    ",podCopy=" + originalNested.outer + ":" + copiedNested.outer +
+    ":" + originalNested.inner.code + ":" + copiedNested.inner.delta +
     ",rejectedFraction=" + rejectedFraction +
     ",rejectedType=" + rejectedType +
     ",rejectedOctet=" + rejectedOctet +

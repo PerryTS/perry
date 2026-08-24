@@ -796,7 +796,7 @@ fn inline_functions_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use perry_hir::{ImportSpecifier, ModuleKind};
+    use perry_hir::{ImportSpecifier, ModuleKind, Param};
 
     fn function(id: FuncId, body: Vec<Stmt>) -> Function {
         Function {
@@ -867,6 +867,26 @@ mod tests {
             byte_offset: 0,
             cap_args_appended: 0,
         })
+    }
+
+    #[test]
+    fn pod_value_parameters_preserve_the_call_copy_boundary() {
+        let mut func = function(1, vec![Stmt::Return(None)]);
+        func.params.push(Param {
+            id: 1,
+            name: "value".to_string(),
+            ty: Type::Generic {
+                base: "PerryPod".to_string(),
+                type_args: vec![Type::Object(Default::default())],
+            },
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        });
+
+        assert!(!is_inlinable(&func));
+        assert!(!is_inlinable_method(&func));
     }
 
     #[test]

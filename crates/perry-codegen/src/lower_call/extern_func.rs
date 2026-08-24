@@ -1,8 +1,5 @@
-//! Cross-module function call via `Expr::ExternFuncRef` — covers
-//! built-in extern names (setTimeout, setInterval, gc, jsx, …),
-//! perry/system + perry/updater + perry/background dispatch via the
-//! `lower_perry_ui_table_call` machinery, V8-fallback bridge calls,
-//! and the generic `perry_fn_<src>__<name>` consumer-prefix path.
+//! Cross-module `Expr::ExternFuncRef` calls: built-in externs, Perry dispatch
+//! tables, V8 fallback bridges, and generic `perry_fn_<src>__<name>` calls.
 
 use super::builtin_table_gate::callee_is_from_perry_module;
 use anyhow::{anyhow, Result};
@@ -22,7 +19,7 @@ use crate::native_value::{
     NativeAbiTypeRecord, NativeRep, PodLayoutManifest, PodRecordViewManifest, SemanticKind,
 };
 use crate::type_analysis::{is_array_expr, is_string_expr};
-use crate::types::{DOUBLE, F32, I1, I32, I64, I8, PTR, VOID};
+use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR, VOID};
 
 use super::{
     lower_perry_ui_table_call, perry_background_table_lookup, perry_system_table_lookup,
@@ -69,6 +66,33 @@ fn record_native_abi_return(
         NativeAbiTypeRecord::new(descriptor, NativeAbiDirection::Return, None, 0),
         vec![format!("runtime={}", name)],
     );
+}
+
+fn materialize_checked_integer_return(
+    ctx: &mut FnCtx<'_>,
+    raw: &str,
+    helper: &'static str,
+    descriptor: &NativeAbiType,
+) -> String {
+    let value = ctx.block().call(DOUBLE, helper, &[(I64, raw)]);
+    let lowered = LoweredValue::js_value(value.clone());
+    ctx.record_lowered_value(
+        "NativeLibraryReturnMaterialize",
+        None,
+        "native_library.checked_integer_return",
+        &lowered,
+        None,
+        None,
+        Some(MaterializationReason::ReturnAbi),
+        false,
+        false,
+        vec![
+            format!("descriptor={}", descriptor.canonical_kind()),
+            format!("guard={helper}"),
+            "requirement=exact_js_safe_integer".to_string(),
+        ],
+    );
+    value
 }
 
 pub(super) fn lower_buffer_and_len_param(
@@ -286,6 +310,18 @@ fn lower_pod_field_from_js_value(
     value: &str,
 ) -> LoweredValue {
     let (helper, lowered) = match &field.native_rep {
+        NativeRep::I8 => {
+            let raw = ctx
+                .block()
+                .call(I8, "js_native_abi_check_i8", &[(DOUBLE, value)]);
+            ("js_native_abi_check_i8", LoweredValue::i8(raw))
+        }
+        NativeRep::I16 => {
+            let raw = ctx
+                .block()
+                .call(I16, "js_native_abi_check_i16", &[(DOUBLE, value)]);
+            ("js_native_abi_check_i16", LoweredValue::i16(raw))
+        }
         NativeRep::I32 => {
             let raw = ctx
                 .block()
@@ -297,6 +333,18 @@ fn lower_pod_field_from_js_value(
                 .block()
                 .call(I64, "js_native_abi_check_i64", &[(DOUBLE, value)]);
             ("js_native_abi_check_i64", LoweredValue::i64(raw))
+        }
+        NativeRep::U8 => {
+            let raw = ctx
+                .block()
+                .call(I8, "js_native_abi_check_u8", &[(DOUBLE, value)]);
+            ("js_native_abi_check_u8", LoweredValue::u8(raw))
+        }
+        NativeRep::U16 => {
+            let raw = ctx
+                .block()
+                .call(I16, "js_native_abi_check_u16", &[(DOUBLE, value)]);
+            ("js_native_abi_check_u16", LoweredValue::u16(raw))
         }
         NativeRep::U32 => {
             let raw = ctx
@@ -315,6 +363,12 @@ fn lower_pod_field_from_js_value(
                 .block()
                 .call(I64, "js_native_abi_check_usize", &[(DOUBLE, value)]);
             ("js_native_abi_check_usize", LoweredValue::usize(raw))
+        }
+        NativeRep::ISize => {
+            let raw = ctx
+                .block()
+                .call(I64, "js_native_abi_check_isize", &[(DOUBLE, value)]);
+            ("js_native_abi_check_isize", LoweredValue::isize(raw))
         }
         NativeRep::F32 => {
             let raw = ctx
@@ -883,6 +937,40 @@ pub(super) fn lower_manifest_param(
             lowered.push(raw);
             arg_types.push(I32);
         }
+        NativeAbiType::I8 => {
+            let raw = ctx
+                .block()
+                .call(I8, "js_native_abi_check_i8", &[(DOUBLE, val)]);
+            let native = LoweredValue::i8(raw.clone());
+            record_native_abi_param(
+                ctx,
+                descriptor,
+                js_argument_index,
+                abi_slot_index,
+                &native,
+                Some(("js_native_abi_check_i8", "int8_range")),
+                "i8.checked",
+            );
+            lowered.push(raw);
+            arg_types.push(I8);
+        }
+        NativeAbiType::I16 => {
+            let raw = ctx
+                .block()
+                .call(I16, "js_native_abi_check_i16", &[(DOUBLE, val)]);
+            let native = LoweredValue::i16(raw.clone());
+            record_native_abi_param(
+                ctx,
+                descriptor,
+                js_argument_index,
+                abi_slot_index,
+                &native,
+                Some(("js_native_abi_check_i16", "int16_range")),
+                "i16.checked",
+            );
+            lowered.push(raw);
+            arg_types.push(I16);
+        }
         NativeAbiType::I32 => {
             let raw = ctx
                 .block()
@@ -916,6 +1004,40 @@ pub(super) fn lower_manifest_param(
             );
             lowered.push(raw);
             arg_types.push(I64);
+        }
+        NativeAbiType::U8 => {
+            let raw = ctx
+                .block()
+                .call(I8, "js_native_abi_check_u8", &[(DOUBLE, val)]);
+            let native = LoweredValue::u8(raw.clone());
+            record_native_abi_param(
+                ctx,
+                descriptor,
+                js_argument_index,
+                abi_slot_index,
+                &native,
+                Some(("js_native_abi_check_u8", "uint8_range")),
+                "u8.checked",
+            );
+            lowered.push(raw);
+            arg_types.push(I8);
+        }
+        NativeAbiType::U16 => {
+            let raw = ctx
+                .block()
+                .call(I16, "js_native_abi_check_u16", &[(DOUBLE, val)]);
+            let native = LoweredValue::u16(raw.clone());
+            record_native_abi_param(
+                ctx,
+                descriptor,
+                js_argument_index,
+                abi_slot_index,
+                &native,
+                Some(("js_native_abi_check_u16", "uint16_range")),
+                "u16.checked",
+            );
+            lowered.push(raw);
+            arg_types.push(I16);
         }
         NativeAbiType::U32 | NativeAbiType::BufferLen => {
             let raw = ctx
@@ -958,6 +1080,23 @@ pub(super) fn lower_manifest_param(
                 &native,
                 Some((helper, "safe_unsigned_integer")),
                 "u64.checked",
+            );
+            lowered.push(raw);
+            arg_types.push(I64);
+        }
+        NativeAbiType::ISize => {
+            let raw = ctx
+                .block()
+                .call(I64, "js_native_abi_check_isize", &[(DOUBLE, val)]);
+            let native = LoweredValue::isize(raw.clone());
+            record_native_abi_param(
+                ctx,
+                descriptor,
+                js_argument_index,
+                abi_slot_index,
+                &native,
+                Some(("js_native_abi_check_isize", "safe_integer_isize")),
+                "isize.checked",
             );
             lowered.push(raw);
             arg_types.push(I64);
@@ -1480,11 +1619,14 @@ pub fn try_lower_extern_func_call(
                     || name.contains("file_dialog")));
         let returns_void = matches!(manifest_ret, Some(NativeAbiType::Void))
             || (manifest_ret.is_none() && matches!(ext_return_type, HirType::Void));
+        let returns_i8 = matches!(manifest_ret, Some(NativeAbiType::I8 | NativeAbiType::U8));
+        let returns_i16 = matches!(manifest_ret, Some(NativeAbiType::I16 | NativeAbiType::U16));
         let returns_i32 = matches!(manifest_ret, Some(NativeAbiType::I32 | NativeAbiType::Bool));
         let returns_i64 = matches!(manifest_ret, Some(NativeAbiType::I64));
         let returns_u32 = matches!(manifest_ret, Some(NativeAbiType::U32));
         let returns_u64 = matches!(manifest_ret, Some(NativeAbiType::U64));
         let returns_usize = matches!(manifest_ret, Some(NativeAbiType::USize));
+        let returns_isize = matches!(manifest_ret, Some(NativeAbiType::ISize));
         let returns_f32 = matches!(manifest_ret, Some(NativeAbiType::F32));
         let returns_buffer_len = matches!(manifest_ret, Some(NativeAbiType::BufferLen));
         let returns_handle = matches!(manifest_ret, Some(NativeAbiType::Handle(_)));
@@ -1522,6 +1664,38 @@ pub fn try_lower_extern_func_call(
             }
             let boxed = nanbox_string_inline(ctx.block(), &ptr_i64);
             return Ok(Some(boxed));
+        } else if returns_i8 {
+            ctx.pending_declares.push((name.clone(), I8, arg_types));
+            let raw = ctx.block().call(I8, name, &arg_slices);
+            let lowered = if matches!(manifest_ret, Some(NativeAbiType::U8)) {
+                LoweredValue::u8(raw.clone())
+            } else {
+                LoweredValue::i8(raw.clone())
+            };
+            if let Some(descriptor) = manifest_ret {
+                record_native_abi_return(ctx, descriptor, &lowered, name);
+            }
+            return Ok(Some(materialize_js_value(
+                ctx,
+                lowered,
+                MaterializationReason::ReturnAbi,
+            )));
+        } else if returns_i16 {
+            ctx.pending_declares.push((name.clone(), I16, arg_types));
+            let raw = ctx.block().call(I16, name, &arg_slices);
+            let lowered = if matches!(manifest_ret, Some(NativeAbiType::U16)) {
+                LoweredValue::u16(raw.clone())
+            } else {
+                LoweredValue::i16(raw.clone())
+            };
+            if let Some(descriptor) = manifest_ret {
+                record_native_abi_return(ctx, descriptor, &lowered, name);
+            }
+            return Ok(Some(materialize_js_value(
+                ctx,
+                lowered,
+                MaterializationReason::ReturnAbi,
+            )));
         } else if returns_i32 {
             ctx.pending_declares.push((name.clone(), I32, arg_types));
             let raw = ctx.block().call(I32, name, &arg_slices);
@@ -1545,23 +1719,25 @@ pub fn try_lower_extern_func_call(
                 lowered,
                 MaterializationReason::ReturnAbi,
             )));
-        } else if returns_i64 {
-            // C function returns i64 in x0 (e.g. `*mut View`
-            // handles). Declare as I64; the value comes back as a
-            // raw integer. Convert via `sitofp` so callers see a
-            // normal JS number; subsequent FFI calls that pass it
-            // back as an i64 param will truncate via `fptosi`.
+        } else if returns_i64 || returns_isize {
+            // Reject native results outside JavaScript's exact integer range.
             ctx.pending_declares.push((name.clone(), I64, arg_types));
             let raw = ctx.block().call(I64, name, &arg_slices);
-            let lowered = LoweredValue::i64(raw.clone());
+            let lowered = if returns_isize {
+                LoweredValue::isize(raw.clone())
+            } else {
+                LoweredValue::i64(raw.clone())
+            };
             if let Some(descriptor) = manifest_ret {
                 record_native_abi_return(ctx, descriptor, &lowered, name);
+                return Ok(Some(materialize_checked_integer_return(
+                    ctx,
+                    &raw,
+                    "js_native_abi_materialize_i64",
+                    descriptor,
+                )));
             }
-            return Ok(Some(materialize_js_value(
-                ctx,
-                lowered,
-                MaterializationReason::ReturnAbi,
-            )));
+            unreachable!("i64 return routing requires a manifest descriptor");
         } else if returns_u32 || returns_buffer_len {
             ctx.pending_declares.push((name.clone(), I32, arg_types));
             let raw = ctx.block().call(I32, name, &arg_slices);
@@ -1588,12 +1764,14 @@ pub fn try_lower_extern_func_call(
             };
             if let Some(descriptor) = manifest_ret {
                 record_native_abi_return(ctx, descriptor, &lowered, name);
+                return Ok(Some(materialize_checked_integer_return(
+                    ctx,
+                    &raw,
+                    "js_native_abi_materialize_u64",
+                    descriptor,
+                )));
             }
-            return Ok(Some(materialize_js_value(
-                ctx,
-                lowered,
-                MaterializationReason::ReturnAbi,
-            )));
+            unreachable!("u64 return routing requires a manifest descriptor");
         } else if returns_f32 {
             ctx.pending_declares.push((name.clone(), F32, arg_types));
             let raw = ctx.block().call(F32, name, &arg_slices);

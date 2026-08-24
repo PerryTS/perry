@@ -1,4 +1,4 @@
-use perry_hir::types::{FuncId, LocalId};
+use perry_hir::types::{FuncId, LocalId, Type};
 use perry_hir::walker::walk_expr_children;
 use perry_hir::{Class, Expr, Function, Module, Stmt};
 use std::collections::{HashMap, HashSet};
@@ -92,6 +92,13 @@ pub fn is_inlinable(func: &Function) -> bool {
     // value happened to be passed — strings get treated as
     // single-element arrays, numbers as raw doubles, etc.
     if func.params.iter().any(|p| p.is_rest) {
+        return false;
+    }
+
+    // Standalone POD records are copy values. The ordinary call boundary
+    // materializes a fresh object for a POD argument, while substitution
+    // would make writes to the callee parameter target the caller's local.
+    if has_pod_value_param(func) {
         return false;
     }
 
@@ -331,6 +338,9 @@ pub fn is_inlinable_method(func: &Function) -> bool {
     if func.params.iter().any(|p| p.is_rest) {
         return false;
     }
+    if has_pod_value_param(func) {
+        return false;
+    }
     if func.body.len() > MAX_INLINE_STMTS {
         return false;
     }
@@ -351,6 +361,15 @@ pub fn is_inlinable_method(func: &Function) -> bool {
         return false;
     }
     true
+}
+
+fn has_pod_value_param(func: &Function) -> bool {
+    func.params.iter().any(|param| {
+        matches!(
+            &param.ty,
+            Type::Generic { base, type_args } if base == "PerryPod" && type_args.len() == 1
+        )
+    })
 }
 
 /// Check if `stmts` contains any `Expr::Call { callee: FuncRef(target_id) }`,

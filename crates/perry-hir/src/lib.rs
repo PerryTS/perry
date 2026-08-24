@@ -24,6 +24,7 @@ pub(crate) mod lower_decl;
 pub(crate) mod lower_patterns;
 pub(crate) mod lower_types;
 pub mod monomorph;
+pub mod native_profile;
 pub mod stable_hash;
 pub mod types;
 pub mod walker;
@@ -64,3 +65,4 @@ pub use lower::{
     lower_module_with_class_id_types_seed_and_entry,
 };
 pub use monomorph::monomorphize_module;
+pub use native_profile::exported_native_pod_abi;

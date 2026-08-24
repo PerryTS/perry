@@ -99,8 +99,9 @@ pub(crate) use nanbox_inline::{
 pub(crate) use native_record::{array_kind_fact, effect_fact, raw_f64_layout_fact};
 pub(crate) use object_literal::lower_object_literal;
 pub(crate) use pod_record::{
-    lower_and_store_initial_pod_field, lower_pod_local_reassignment, materialize_pod_local,
-    try_lower_pod_field_get, try_lower_pod_field_set,
+    copy_pod_local, lower_and_store_initial_pod_field, lower_pod_local_reassignment,
+    materialize_pod_local, materialize_pod_value_copy, try_lower_pod_field_get,
+    try_lower_pod_field_set,
 };
 pub(crate) use proven_view_access::{
     index_is_exact_i32_shape, local_is_proven_int_store_view,
@@ -2873,10 +2874,16 @@ fn native_number_to_f64(ctx: &mut FnCtx<'_>, lowered: &LoweredValue) -> Option<S
         NativeRep::U32 | NativeRep::BufferLen => {
             Some(ctx.block().uitofp(I32, &lowered.value, DOUBLE))
         }
-        NativeRep::I64 | NativeRep::ISize => Some(ctx.block().sitofp(I64, &lowered.value, DOUBLE)),
-        NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => {
-            Some(ctx.block().uitofp(I64, &lowered.value, DOUBLE))
-        }
+        NativeRep::I64 | NativeRep::ISize => Some(ctx.block().call(
+            DOUBLE,
+            "js_native_abi_materialize_i64",
+            &[(I64, &lowered.value)],
+        )),
+        NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => Some(ctx.block().call(
+            DOUBLE,
+            "js_native_abi_materialize_u64",
+            &[(I64, &lowered.value)],
+        )),
         _ => None,
     }
 }

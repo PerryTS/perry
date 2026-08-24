@@ -31,7 +31,7 @@ use super::extern_func::{
 };
 use crate::expr::FnCtx;
 use crate::nanbox::double_literal;
-use crate::types::{LlvmType, DOUBLE, F32, I32, I64, PTR};
+use crate::types::{LlvmType, DOUBLE, F32, I16, I32, I64, I8, PTR};
 
 /// Append a sentinel for every manifest param past `passed_args`. No-op when
 /// the caller passed at least as many args as the manifest declares.
@@ -106,10 +106,19 @@ pub(super) fn pad_omitted_native_params(
                 lowered.push("0".to_string());
                 arg_types.push(I32);
             }
+            NativeAbiType::I8 | NativeAbiType::U8 => {
+                lowered.push("0".to_string());
+                arg_types.push(I8);
+            }
+            NativeAbiType::I16 | NativeAbiType::U16 => {
+                lowered.push("0".to_string());
+                arg_types.push(I16);
+            }
             NativeAbiType::I64
             | NativeAbiType::I64String
             | NativeAbiType::U64
             | NativeAbiType::USize
+            | NativeAbiType::ISize
             | NativeAbiType::Ptr
             | NativeAbiType::HandleId
             | NativeAbiType::Handle(_)

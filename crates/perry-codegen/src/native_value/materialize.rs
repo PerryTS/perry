@@ -376,7 +376,11 @@ pub(crate) fn materialize_js_value_bits(
             ctx.block().bitcast_double_to_i64(&value)
         }
         NativeRep::I64 | NativeRep::ISize => {
-            let value = ctx.block().sitofp(I64, &lowered.value, DOUBLE);
+            let value = ctx.block().call(
+                DOUBLE,
+                "js_native_abi_materialize_i64",
+                &[(I64, &lowered.value)],
+            );
             ctx.block().bitcast_double_to_i64(&value)
         }
         NativeRep::U8 => {
@@ -394,7 +398,11 @@ pub(crate) fn materialize_js_value_bits(
             ctx.block().bitcast_double_to_i64(&value)
         }
         NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => {
-            let value = ctx.block().uitofp(I64, &lowered.value, DOUBLE);
+            let value = ctx.block().call(
+                DOUBLE,
+                "js_native_abi_materialize_u64",
+                &[(I64, &lowered.value)],
+            );
             ctx.block().bitcast_double_to_i64(&value)
         }
         NativeRep::BufferLen => {
@@ -579,7 +587,11 @@ pub(crate) fn materialize_js_value(
             ctx.block().sitofp(I32, &widened, DOUBLE)
         }
         NativeRep::I32 => ctx.block().sitofp(I32, &lowered.value, DOUBLE),
-        NativeRep::I64 | NativeRep::ISize => ctx.block().sitofp(I64, &lowered.value, DOUBLE),
+        NativeRep::I64 | NativeRep::ISize => ctx.block().call(
+            DOUBLE,
+            "js_native_abi_materialize_i64",
+            &[(I64, &lowered.value)],
+        ),
         NativeRep::U8 => {
             let widened = ctx.block().zext(I8, &lowered.value, I32);
             ctx.block().uitofp(I32, &widened, DOUBLE)
@@ -589,9 +601,11 @@ pub(crate) fn materialize_js_value(
             ctx.block().uitofp(I32, &widened, DOUBLE)
         }
         NativeRep::U32 => ctx.block().uitofp(I32, &lowered.value, DOUBLE),
-        NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => {
-            ctx.block().uitofp(I64, &lowered.value, DOUBLE)
-        }
+        NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => ctx.block().call(
+            DOUBLE,
+            "js_native_abi_materialize_u64",
+            &[(I64, &lowered.value)],
+        ),
         NativeRep::BufferLen => ctx.block().uitofp(I32, &lowered.value, DOUBLE),
         NativeRep::F32 => ctx.block().fpext(F32, &lowered.value, DOUBLE),
         NativeRep::StringRef => nanbox_string_ref_boxed(ctx, &lowered.value),
@@ -655,7 +669,11 @@ pub(crate) fn materialize_js_value_without_record(
             ctx.block().sitofp(I32, &widened, DOUBLE)
         }
         NativeRep::I32 => ctx.block().sitofp(I32, &lowered.value, DOUBLE),
-        NativeRep::I64 | NativeRep::ISize => ctx.block().sitofp(I64, &lowered.value, DOUBLE),
+        NativeRep::I64 | NativeRep::ISize => ctx.block().call(
+            DOUBLE,
+            "js_native_abi_materialize_i64",
+            &[(I64, &lowered.value)],
+        ),
         NativeRep::U8 => {
             let widened = ctx.block().zext(I8, &lowered.value, I32);
             ctx.block().uitofp(I32, &widened, DOUBLE)
@@ -665,9 +683,11 @@ pub(crate) fn materialize_js_value_without_record(
             ctx.block().uitofp(I32, &widened, DOUBLE)
         }
         NativeRep::U32 => ctx.block().uitofp(I32, &lowered.value, DOUBLE),
-        NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => {
-            ctx.block().uitofp(I64, &lowered.value, DOUBLE)
-        }
+        NativeRep::U64 | NativeRep::USize | NativeRep::HandleId => ctx.block().call(
+            DOUBLE,
+            "js_native_abi_materialize_u64",
+            &[(I64, &lowered.value)],
+        ),
         NativeRep::BufferLen => ctx.block().uitofp(I32, &lowered.value, DOUBLE),
         NativeRep::F32 => ctx.block().fpext(F32, &lowered.value, DOUBLE),
         NativeRep::BufferView(_)
