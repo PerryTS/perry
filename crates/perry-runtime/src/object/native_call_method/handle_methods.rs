@@ -1010,16 +1010,24 @@ pub(super) unsafe fn dispatch_handle(
                     },
                 }
                 let mut resolved_method: Option<ResolvedMethod> = None;
+                // Prototype assignments/deletes for this method are rare.
+                // Until its scoped guard is retired, the producer-registered
+                // vtable is authoritative and the per-class side tables cannot
+                // contain an override for this name.
+                let prototype_mutated = class_prototype_fast_guard_invalidated_for_method(
+                    class_prototype_method_guard_slot(method_name),
+                );
                 if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
                     if let Some(ref reg) = *registry {
                         let mut cur_cid = class_id;
                         let mut depth = 0u32;
                         while depth < 32 {
-                            let deleted = class_is_key_deleted(cur_cid, method_name);
-                            // `C.prototype.m = fn` replaces a declared `m` on
-                            // this exact prototype object, so the assignment
-                            // side table must win before the original vtable.
-                            if !deleted {
+                            let deleted =
+                                prototype_mutated && class_is_key_deleted(cur_cid, method_name);
+                            // A runtime assignment is an own property of this
+                            // exact prototype and replaces the declared vtable
+                            // entry. Resolve it first; deletion hides both.
+                            if prototype_mutated && !deleted {
                                 if let Some(method_value) =
                                     lookup_own_prototype_method(cur_cid, method_name)
                                 {

@@ -128,7 +128,7 @@ use perry_hir::{BinaryOp, Expr, Function, Stmt, UnaryOp};
 /// This is a *count*, not a cost model: it has no target-specific term, so it
 /// says the same thing on AArch64 and x86-64 (contrast the fusion term in
 /// #7146, which does not). It deliberately under-counts — see
-/// [`proven_receiver_clone_field_sites`].
+/// [`proven_receiver_clone_benefit_sites`].
 const TOWER_ROUTE_MIN_FIELD_SITES: u32 = 2;
 
 /// What the *consumer* of a read wants the value to be.
@@ -493,9 +493,14 @@ pub(crate) fn collect_unprofitable_canonical_i32_locals(
 /// refusing a route rather than taking one:
 ///
 /// * a site inside a loop is counted once, though it is paid per iteration;
-/// * `this.other()` calls that the clone also lowers guard-free (the
-///   `ThisFlowAnalysis` walk vets them transitively) are not followed.
-fn proven_receiver_clone_field_sites(method: &Function, chain_fields: &HashSet<String>) -> u32 {
+/// A direct `this.other()` call counts when `other` also has a proven-receiver
+/// clone: the caller clone routes that nested boundary directly, deleting the
+/// public body's method guard in addition to its own field sites.
+fn proven_receiver_clone_benefit_sites(
+    method: &Function,
+    chain_fields: &HashSet<String>,
+    pshape_methods: &HashSet<String>,
+) -> u32 {
     let mut sites = 0u32;
     super::scalar_method_dispatch::for_each_expr_in_stmts(&method.body, &mut |e| {
         let named = match e {
@@ -512,6 +517,12 @@ fn proven_receiver_clone_field_sites(method: &Function, chain_fields: &HashSet<S
                 matches!(target.as_ref(), Expr::This)
                     && matches!(key.as_ref(), Expr::String(k) if chain_fields.contains(k.as_str()))
             }
+            Expr::Call { callee, .. } => matches!(
+                callee.as_ref(),
+                Expr::PropertyGet { object, property, .. }
+                    if matches!(object.as_ref(), Expr::This)
+                        && pshape_methods.contains(property.as_str())
+            ),
             _ => false,
         };
         if named {
@@ -528,8 +539,13 @@ fn proven_receiver_clone_field_sites(method: &Function, chain_fields: &HashSet<S
 /// calling the public body, which is correct for any receiver), and the
 /// soundness half lives entirely in the emitted keys check. See
 /// [`TOWER_ROUTE_MIN_FIELD_SITES`] for the break-even argument.
-pub(crate) fn tower_route_profitable(method: &Function, chain_fields: &HashSet<String>) -> bool {
-    proven_receiver_clone_field_sites(method, chain_fields) >= TOWER_ROUTE_MIN_FIELD_SITES
+pub(crate) fn tower_route_profitable(
+    method: &Function,
+    chain_fields: &HashSet<String>,
+    pshape_methods: &HashSet<String>,
+) -> bool {
+    proven_receiver_clone_benefit_sites(method, chain_fields, pshape_methods)
+        >= TOWER_ROUTE_MIN_FIELD_SITES
 }
 
 #[cfg(test)]

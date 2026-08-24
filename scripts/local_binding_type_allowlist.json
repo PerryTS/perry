@@ -74,6 +74,14 @@
       "reason": "Array.isArray constant-folding uses only runtime-derived initializer evidence and rejects every binding written in the region."
     },
     {
+      "path": "crates/perry-codegen/src/expr/compare.rs",
+      "function": "is_proven_symbol_expr",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "Strict Symbol identity lowering accepts only constructor-derived runtime proof; the proof API rejects every binding written in the region, and fresh or registered Symbol storage is non-moving, so raw NaN-boxed pointer equality is the representation contract."
+    },
+    {
       "path": "crates/perry-codegen/src/expr/array_push.rs",
       "function": "guarded_numeric_add_push_candidate",
       "access": "local_type_hint",

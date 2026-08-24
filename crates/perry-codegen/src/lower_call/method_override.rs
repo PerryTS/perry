@@ -376,9 +376,9 @@ pub(super) fn emit_guarded_direct_method_call(
     // the `js_method_direct_shape_guard` /
     // `js_typed_feedback_method_direct_call_guard` branch, which matched the
     // exact class id AND the keys token. A `pshape_methods` hit additionally
-    // proves `receiver_class_name` DECLARES `property` (the map holds own
-    // declarations of module-local classes only), so the clone's `this` is
-    // exactly the class it was compiled for and can never be a subclass
+    // proves `receiver_class_name` DECLARES `property` (locally by analysis or
+    // across modules by a producer-authored capability), so the clone's `this`
+    // is exactly the class it was compiled for and can never be a subclass
     // instance.
     //
     // The `perry_static_` exclusion is carried forward from the guard-free
@@ -1043,9 +1043,9 @@ pub(super) fn emit_guarded_direct_method_call(
             // instead; identical ABI, so only the callee name changes.
             //
             // A `pshape_methods` hit additionally proves `receiver_class_name`
-            // DECLARES `property` (the map holds own declarations of
-            // module-local classes only), so the clone's `this` is exactly the
-            // class it was compiled for — an inherited `Base::m` reached
+            // DECLARES `property` (locally by analysis or across modules by a
+            // producer-authored capability), so the clone's `this` is exactly
+            // the class it was compiled for — an inherited `Base::m` reached
             // through a subclass receiver never routes here.
             //
             // NOTE: the per-field `js_typed_feedback_class_field_get_guard`
@@ -1065,7 +1065,39 @@ pub(super) fn emit_guarded_direct_method_call(
             let target = nonnegative_index_direct_fn
                 .or(pshape_fn.as_deref())
                 .unwrap_or(direct_fn);
-            ctx.block().call(DOUBLE, target, direct_arg_slices)
+            let result = ctx.block().call(DOUBLE, target, direct_arg_slices);
+            if nonnegative_index_direct_fn.is_none() {
+                if let Some(pshape) = pshape_fn.as_deref() {
+                    let receiver_provenance =
+                        if ctx.imported_class_sources.contains_key(receiver_class_name) {
+                            "imported_class_metadata"
+                        } else {
+                            "module_local_analysis"
+                        };
+                    ctx.record_lowered_value(
+                        "MethodCall",
+                        None,
+                        "proven_this_method_direct_call",
+                        &LoweredValue::js_value(result.clone()),
+                        None,
+                        None,
+                        None,
+                        false,
+                        false,
+                        vec![
+                            format!("typed_clone={pshape}"),
+                            format!("generic_method={direct_fn}"),
+                            format!("receiver_class={receiver_class_name}"),
+                            format!("method={property}"),
+                            format!("receiver_provenance={receiver_provenance}"),
+                            "this_representation=tagged_js_value_exact_shape".to_string(),
+                            "method_identity_guard=required".to_string(),
+                            "generic_dispatch_fallback=js_native_call_method_by_id".to_string(),
+                        ],
+                    );
+                }
+            }
+            result
         }
     };
     let after_fast = ctx.block().label.clone();

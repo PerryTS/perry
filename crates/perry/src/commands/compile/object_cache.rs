@@ -598,6 +598,14 @@ fn compute_object_cache_key_with_env(
                     .collect::<Vec<_>>()
                     .join(","),
             );
+            buf.push_str(":proven_this_methods=");
+            let mut proven_this_methods = c.proven_this_method_names.clone();
+            proven_this_methods.sort();
+            buf.push_str(&proven_this_methods.join(","));
+            buf.push_str(":proven_this_tower_methods=");
+            let mut proven_this_tower_methods = c.proven_this_tower_method_names.clone();
+            proven_this_tower_methods.sort();
+            buf.push_str(&proven_this_tower_methods.join(","));
             buf.push_str(":method_synthetic_arguments=");
             buf.push_str(
                 &c.method_has_synthetic_arguments

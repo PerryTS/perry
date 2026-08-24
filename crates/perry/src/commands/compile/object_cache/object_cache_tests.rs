@@ -352,6 +352,8 @@ fn key_stable_for_nested_type_hashmap_order() {
         constructor_has_rest: false,
         has_instance_fields: true,
         method_names: vec![],
+        proven_this_method_names: vec![],
+        proven_this_tower_method_names: vec![],
         method_return_types: vec![],
         method_param_counts: vec![],
         method_has_rest: vec![],
@@ -408,6 +410,8 @@ fn key_changes_with_imported_class_signature() {
         constructor_has_rest: false,
         has_instance_fields: true,
         method_names: vec!["bar".into()],
+        proven_this_method_names: vec![],
+        proven_this_tower_method_names: vec![],
         method_return_types: vec![perry_hir::types::Type::Number],
         method_param_counts: vec![0],
         method_has_rest: vec![false],
@@ -437,6 +441,8 @@ fn key_changes_with_imported_class_signature() {
         constructor_has_rest: false,
         has_instance_fields: true,
         method_names: vec!["bar".into()],
+        proven_this_method_names: vec![],
+        proven_this_tower_method_names: vec![],
         method_return_types: vec![perry_hir::types::Type::Number],
         method_param_counts: vec![0],
         method_has_rest: vec![false],
@@ -474,6 +480,8 @@ fn key_changes_with_imported_class_codegen_surface() {
         constructor_has_rest: false,
         has_instance_fields: true,
         method_names: vec!["bar".into()],
+        proven_this_method_names: vec![],
+        proven_this_tower_method_names: vec![],
         method_return_types: vec![perry_hir::types::Type::Number],
         method_param_counts: vec![1],
         method_has_rest: vec![false],
@@ -515,6 +523,14 @@ fn key_changes_with_imported_class_codegen_surface() {
 
     let mut changed = base.clone();
     changed.method_has_synthetic_arguments = vec![true];
+    assert_ne!(base_key, key_for(changed));
+
+    let mut changed = base.clone();
+    changed.proven_this_method_names = vec!["bar".into()];
+    assert_ne!(base_key, key_for(changed));
+
+    let mut changed = base.clone();
+    changed.proven_this_tower_method_names = vec!["bar".into()];
     assert_ne!(base_key, key_for(changed));
 
     let mut changed = base.clone();

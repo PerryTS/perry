@@ -46,6 +46,7 @@ fn module_global_runtime_type(
         Expr::String(_) | Expr::WtfString(_) | Expr::I18nString { .. } | Expr::TypeOf(_) => {
             Some(Type::String)
         }
+        Expr::SymbolNew(_) | Expr::SymbolFor(_) => Some(Type::Symbol),
         // Compiler-owned allocation HIR establishes these runtime classes
         // independently of the erased binding annotation. Keep module-global
         // facts aligned with `proven_type_from_init`; otherwise a value that
@@ -72,6 +73,39 @@ fn module_global_runtime_type(
             Some(Type::Named(class_name.clone()))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod runtime_type_tests {
+    use super::module_global_runtime_type;
+    use perry_hir::types::Type;
+    use perry_hir::Expr;
+
+    #[test]
+    fn symbol_constructors_are_module_global_runtime_proofs() {
+        assert_eq!(
+            module_global_runtime_type(&Expr::SymbolNew(None), true),
+            Some(Type::Symbol)
+        );
+        assert_eq!(
+            module_global_runtime_type(
+                &Expr::SymbolFor(Box::new(Expr::String("shared".to_string()))),
+                true,
+            ),
+            Some(Type::Symbol)
+        );
+    }
+
+    #[test]
+    fn an_object_initializer_cannot_inherit_a_symbol_annotation_as_proof() {
+        assert_eq!(
+            module_global_runtime_type(
+                &Expr::Object(vec![("x".to_string(), Expr::Number(1.0))]),
+                true,
+            ),
+            None
+        );
     }
 }
 

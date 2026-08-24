@@ -270,9 +270,12 @@ pub extern "C" fn js_object_delete_field(
             if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
                 if name != "constructor"
                     && (super::class_registry::class_own_accessor_ptrs(cid, name).is_some()
-                        || super::native_module::class_has_own_method(cid, name))
+                        || super::native_module::class_has_own_method(cid, name)
+                        || super::class_registry::lookup_own_prototype_method(cid, name).is_some())
                 {
                     super::class_registry::class_mark_key_deleted(cid, name);
+                    super::class_registry::invalidate_class_prototype_fast_guards_for_method(name);
+                    crate::typed_feedback::invalidate_method_change(cid);
                     // Accessors have no keys_array entry, so the scan below is a
                     // vacuous success for them; methods DO, so fall through to
                     // remove it. Either way, don't early-return.
@@ -435,6 +438,20 @@ fn delete_receiver_is_pointer(obj_value: f64) -> bool {
     crate::value::JSValue::from_bits(obj_value.to_bits()).is_pointer()
 }
 
+fn delete_class_prototype_key(class_id: u32, name: &str) -> i32 {
+    let has_own = name == "constructor"
+        || super::native_module::class_has_own_method(class_id, name)
+        || super::class_registry::class_own_accessor_ptrs(class_id, name).is_some()
+        || super::class_registry::lookup_own_prototype_method(class_id, name).is_some();
+    if !has_own {
+        return 1;
+    }
+    super::class_registry::class_mark_key_deleted(class_id, name);
+    super::class_registry::invalidate_class_prototype_fast_guards_for_method(name);
+    crate::typed_feedback::invalidate_method_change(class_id);
+    1
+}
+
 /// `delete prim.field` (static key): once RequireObjectCoercible has rejected
 /// null/undefined, a primitive receiver (number/boolean/…) has no deletable own
 /// property, so `delete` is a no-op that evaluates to `true` (spec ToObject of a
@@ -446,6 +463,16 @@ pub extern "C" fn js_object_delete_field_value(
     obj_value: f64,
     key: *const crate::StringHeader,
 ) -> i32 {
+    if let Some(class_id) = super::class_prototype_ref_id(obj_value) {
+        if key.is_null() {
+            return 1;
+        }
+        return unsafe {
+            super::has_own_helpers::str_from_string_header(key)
+                .map(|name| delete_class_prototype_key(class_id, name))
+                .unwrap_or(1)
+        };
+    }
     // A class reference (`delete C.m` for a `static m()`) is INT32-tagged, so
     // `is_pointer` is false and the guard below would no-op it. But a static
     // member delete must still unregister the method/field. `js_object_delete_field`
@@ -468,6 +495,13 @@ pub extern "C" fn js_object_delete_field_value(
 /// `js_object_delete_field_value`, delegating real objects to the dynamic path.
 #[no_mangle]
 pub extern "C" fn js_object_delete_dynamic_value(obj_value: f64, key: f64) -> i32 {
+    if let Some(class_id) = super::class_prototype_ref_id(obj_value) {
+        return unsafe {
+            super::native_module::metadata_key_to_string(key)
+                .map(|name| delete_class_prototype_key(class_id, &name))
+                .unwrap_or(1)
+        };
+    }
     // Class-ref receiver (`delete C["m"]`): see `js_object_delete_field_value`.
     if let Some(class_id) = super::native_module::class_ref_id(obj_value) {
         return js_object_delete_dynamic(class_id as usize as *mut ObjectHeader, key);

@@ -9,7 +9,7 @@
 
 use super::*;
 use perry_hir::types::Type;
-use perry_hir::{Class, ClassField, Function, Param};
+use perry_hir::{Class, ClassField, Function, Module, ModuleInitKind, Param};
 
 fn param(id: u32, name: &str) -> Param {
     Param {
@@ -586,4 +586,90 @@ fn single_class_predicate_still_refuses_heritage() {
         Some(func(vec![param(3, "w")], vec![user_this_assign("w", 3)])),
     );
     assert!(ctor_prologue_param_assigned_fields(&derived).is_empty());
+}
+
+fn captures_this_arrow_field() -> ClassField {
+    ClassField {
+        name: "createEntity".to_string(),
+        key_expr: None,
+        ty: Type::Any,
+        init: Some(Expr::Closure {
+            func_id: 8693,
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(Expr::PropertyGet {
+                object: Box::new(Expr::This),
+                property: "value".to_string(),
+                byte_offset: 0,
+            }))],
+            captures: Vec::new(),
+            mutable_captures: Vec::new(),
+            captures_this: true,
+            captures_new_target: false,
+            enclosing_class: Some("ArrowRegistry".to_string()),
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+        }),
+        is_private: false,
+        is_readonly: false,
+        decorators: Vec::new(),
+    }
+}
+
+fn captures_this_field_ir() -> String {
+    let mut registry = class(
+        vec![
+            ClassField {
+                name: "value".to_string(),
+                key_expr: None,
+                ty: Type::Number,
+                init: Some(Expr::Number(1.0)),
+                is_private: false,
+                is_readonly: false,
+                decorators: Vec::new(),
+            },
+            captures_this_arrow_field(),
+        ],
+        None,
+    );
+    registry.id = 8693;
+    registry.name = "ArrowRegistry".to_string();
+
+    let mut module = Module::new("issue_8693_arrow_field.ts");
+    module.classes = vec![registry];
+    module.init = vec![Stmt::Expr(Expr::New {
+        class_name: "ArrowRegistry".to_string(),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+        cap_args_appended: 0,
+    })];
+    module.init_kind = ModuleInitKind::Eager;
+    let opts = crate::CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".to_string(),
+        ..Default::default()
+    };
+    String::from_utf8(crate::compile_module(&module, opts).expect("fixture compiles"))
+        .expect("LLVM IR is UTF-8")
+}
+
+/// #8693: a captures-`this` arrow field on a fresh ordinary class instance
+/// must populate the field already present in the allocation's class-key
+/// shape. Full `DefineOwnProperty` marks the receiver dynamically shaped, so
+/// every exact-shape method guard inside the arrow would miss forever (the
+/// perform-ecs `createEntity = (...) => this.addComponentsToEntity(...)` case).
+#[test]
+fn captures_this_arrow_field_preserves_the_predeclared_class_shape() {
+    let ir = captures_this_field_ir();
+    assert!(
+        ir.contains("call void @js_object_set_field_by_name("),
+        "the arrow field must fill its existing own slot:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_class_field_add("),
+        "the ordinary arrow field must not dynamically reshape its receiver:\n{ir}"
+    );
 }

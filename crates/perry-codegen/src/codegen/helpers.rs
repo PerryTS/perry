@@ -339,6 +339,25 @@ pub(super) fn inline_hot_small_size_cap() -> usize {
     })
 }
 
+/// Give the representation-specialized method body the ordinary small-body
+/// inline bias. This lets producer-local chains such as `Registry.add ->
+/// Group.pushEntity` optimize through the second method boundary while the
+/// externally linked clone remains callable by importers.
+pub(super) fn apply_pshape_inline_policy(
+    lf: &mut crate::function::LlFunction,
+    method: &perry_hir::Function,
+    is_pshape_clone: bool,
+) {
+    if !is_pshape_clone || method.is_async || method.is_generator || method.was_plain_async {
+        return;
+    }
+    if method.body.len() <= 8 {
+        lf.force_inline = true;
+    } else if inline_hot_small_enabled() && method.body.len() <= inline_hot_small_size_cap() {
+        lf.inline_hint = true;
+    }
+}
+
 /// Maximum total (module-wide) direct call sites a function may have and still
 /// be hinted. This is the anti-bloat backstop: the raised `-inlinehint-threshold`
 /// lifts LLVM's ceiling for a hinted callee at *every* one of its call sites, so

@@ -15,7 +15,7 @@
 //! 2. `lower_call/property_get/dynamic_dispatch.rs` — the Phase 3b guard-free
 //!    `Ptr<Shape>` receiver arm, whose receiver is a shape-proven local.
 //!
-//! Phase 5a emits an `internal` `{public}$pshape` clone of the method whose
+//! Phase 5a emits a `{public}$pshape` clone of the method whose
 //! `this` carries the [`PtrShapeLocal`] proof, and routes those two sites to
 //! it. Net new proof work: zero. Net new GC work: zero — the clone keeps the
 //! identical `(double this, double args…)` ABI and the identical shadow-bound
@@ -148,9 +148,10 @@ pub fn ptr_shape_this_enabled() -> bool {
 /// composed-symbol collision prune here.)
 ///
 /// This symbol is NEVER registered into a runtime vtable
-/// (`js_register_class_method` keeps the public name) and is reachable only
-/// from the proven call sites. [`tests::pshape_symbol_reachability`]
-/// ratchets that.
+/// (`js_register_class_method` keeps the public name). It is externally
+/// visible solely so an importing native module can use it after receiving a
+/// producer-authored capability; every call remains one of the proven direct
+/// sites. [`tests::pshape_symbol_reachability`] ratchets that.
 pub(crate) fn pshape_method_name(public_name: &str) -> String {
     format!("{public_name}$pshape")
 }
@@ -602,6 +603,60 @@ pub(crate) fn method_proven_this(
     })
 }
 
+/// Producer-side capabilities that may be published to native-module
+/// consumers.
+///
+/// This deliberately uses only classes defined in `hir`. A class whose parent
+/// is imported therefore stays out of the published set even when the full
+/// compile options later make its chain resolvable. Under-publishing only
+/// leaves a guarded call on the public body; over-publishing could make a
+/// consumer reference a clone the producer did not emit.
+pub(crate) fn exportable_method_capabilities(
+    hir: &perry_hir::Module,
+) -> (HashMap<String, Vec<String>>, HashMap<String, Vec<String>>) {
+    let classes: HashMap<String, &Class> = hir
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class))
+        .collect();
+    let module_dispatch = super::collect_module_dispatch_facts(hir);
+    let mut exported = HashMap::new();
+    let mut tower_routable = HashMap::new();
+    let mut eligible = HashSet::new();
+
+    for class in &hir.classes {
+        let mut methods = Vec::new();
+        for method in &class.methods {
+            if method_proven_this(class, method, &classes, &module_dispatch).is_none() {
+                continue;
+            }
+            methods.push(method.name.clone());
+            eligible.insert((class.name.clone(), method.name.clone()));
+        }
+        if !methods.is_empty() {
+            exported.insert(class.name.clone(), methods);
+        }
+    }
+
+    // Price tower routes only after every clone capability is known: a clone
+    // can delete the public guard at a nested `this.other()` boundary too,
+    // including when `other` is inherited from another class in the chain.
+    for class in &hir.classes {
+        let tower_methods: Vec<String> = class
+            .methods
+            .iter()
+            .filter(|method| eligible.contains(&(class.name.clone(), method.name.clone())))
+            .filter(|method| tower_route_profitable(class, method, &classes, &eligible))
+            .map(|method| method.name.clone())
+            .collect();
+        if !tower_methods.is_empty() {
+            tower_routable.insert(class.name.clone(), tower_methods);
+        }
+    }
+
+    (exported, tower_routable)
+}
+
 /// #7142 profitability: should a class-id dispatch-tower case route to
 /// `method`'s `{public}$pshape` clone?
 ///
@@ -617,13 +672,18 @@ pub(crate) fn tower_route_profitable(
     class: &Class,
     method: &Function,
     classes: &HashMap<String, &Class>,
+    eligible: &HashSet<(String, String)>,
 ) -> bool {
     let chain = chain_classes(classes, &class.name);
     if chain.is_empty() {
         return false;
     }
     let fields = chain_field_names(&chain);
-    super::repsel_benefit::tower_route_profitable(method, &fields)
+    let pshape_methods = chain_method_map(&chain)
+        .into_iter()
+        .filter_map(|(name, (owner, _))| eligible.contains(&(owner, name.clone())).then_some(name))
+        .collect();
+    super::repsel_benefit::tower_route_profitable(method, &fields, &pshape_methods)
 }
 
 /// Does the method body READ `this.<declared chain field>` anywhere?
@@ -777,7 +837,7 @@ mod tests {
         assert!(
             offenders.is_empty(),
             "proven-`this` clone symbol fragments found outside the allowlist \
-             (the clone is `internal` and must NEVER be registered into a \
+             (the clone must NEVER be registered into a \
              runtime vtable or reached indirectly): {offenders:?}"
         );
     }

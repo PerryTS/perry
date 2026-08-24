@@ -474,6 +474,8 @@ fn imported_remote() -> ImportedClass {
         constructor_has_rest: false,
         has_instance_fields: true,
         method_names: vec!["read".to_string()],
+        proven_this_method_names: Vec::new(),
+        proven_this_tower_method_names: Vec::new(),
         method_return_types: vec![Type::Number],
         method_param_counts: vec![0],
         method_has_rest: vec![false],

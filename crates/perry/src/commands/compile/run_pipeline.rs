@@ -220,6 +220,8 @@ fn imported_class_from_hir(
     class: &perry_hir::Class,
     source_prefix: String,
     local_alias: Option<String>,
+    proven_this_method_names: Vec<String>,
+    proven_this_tower_method_names: Vec<String>,
 ) -> perry_codegen::ImportedClass {
     perry_codegen::ImportedClass {
         name: class.name.clone(),
@@ -242,6 +244,8 @@ fn imported_class_from_hir(
             .iter()
             .map(|method| method.name.clone())
             .collect(),
+        proven_this_method_names,
+        proven_this_tower_method_names,
         method_return_types: class
             .methods
             .iter()
@@ -336,6 +340,16 @@ fn imported_class_from_hir(
         source_class_id: Some(class.id),
         return_shape_imports: Vec::new(),
     }
+}
+
+fn proven_this_methods_for_import(
+    class: &perry_hir::Class,
+    published: &std::collections::HashMap<usize, Vec<String>>,
+) -> Vec<String> {
+    published
+        .get(&(class as *const perry_hir::Class as usize))
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Collect class names reachable through a declared type. Imported class
@@ -887,6 +901,30 @@ pub fn run_with_parse_cache(
                     .map(|m| (m.name.clone(), m.value.clone()))
                     .collect();
                 exported_enums.insert((path_str.clone(), en.name.clone()), members);
+            }
+        }
+    }
+
+    // Producer-authored proven-`this` capabilities. Key by the concrete HIR
+    // class object, just like `class_canonical_path`: re-export aliases point
+    // at the same definition and therefore publish the same clone set. This
+    // runs before parallel codegen so consumers never infer capabilities from
+    // their own (necessarily body-less) imported stubs.
+    let mut class_proven_this_methods: std::collections::HashMap<usize, Vec<String>> =
+        std::collections::HashMap::new();
+    let mut class_proven_this_tower_methods: std::collections::HashMap<usize, Vec<String>> =
+        std::collections::HashMap::new();
+    for hir_module in ctx.native_modules.values() {
+        let (by_name, tower_by_name) =
+            perry_codegen::exported_proven_this_method_capabilities(hir_module);
+        for class in &hir_module.classes {
+            if let Some(methods) = by_name.get(&class.name) {
+                class_proven_this_methods
+                    .insert(class as *const perry_hir::Class as usize, methods.clone());
+            }
+            if let Some(methods) = tower_by_name.get(&class.name) {
+                class_proven_this_tower_methods
+                    .insert(class as *const perry_hir::Class as usize, methods.clone());
             }
         }
     }
@@ -3185,6 +3223,14 @@ pub fn run_with_parse_cache(
                                         class,
                                         class_prefix,
                                         Some(local.clone()),
+                                        proven_this_methods_for_import(
+                                            class,
+                                            &class_proven_this_methods,
+                                        ),
+                                        proven_this_methods_for_import(
+                                            class,
+                                            &class_proven_this_tower_methods,
+                                        ),
                                     ));
                                 }
                                 if let Some(members) = exported_enums.get(&key) {
@@ -3339,6 +3385,14 @@ pub fn run_with_parse_cache(
                                         class,
                                         class_prefix,
                                         local_alias,
+                                        proven_this_methods_for_import(
+                                            class,
+                                            &class_proven_this_methods,
+                                        ),
+                                        proven_this_methods_for_import(
+                                            class,
+                                            &class_proven_this_tower_methods,
+                                        ),
                                     ));
                                 }
                                 if let Some(members) = exported_enums.get(&key) {
@@ -3791,6 +3845,14 @@ pub fn run_with_parse_cache(
                                             class,
                                             class_prefix,
                                             local_alias,
+                                            proven_this_methods_for_import(
+                                                class,
+                                                &class_proven_this_methods,
+                                            ),
+                                            proven_this_methods_for_import(
+                                                class,
+                                                &class_proven_this_tower_methods,
+                                            ),
                                         ));
                                     }
                                     if let Some(members) = exported_enums.get(&key) {
@@ -4042,6 +4104,14 @@ pub fn run_with_parse_cache(
                                 class,
                                 class_prefix.clone(),
                                 Some(exported_name.clone()),
+                                proven_this_methods_for_import(
+                                    class,
+                                    &class_proven_this_methods,
+                                ),
+                                proven_this_methods_for_import(
+                                    class,
+                                    &class_proven_this_tower_methods,
+                                ),
                             ));
                         }
                         imported_classes.push(imported_class_from_hir(
@@ -4052,6 +4122,11 @@ pub fn run_with_parse_cache(
                             } else {
                                 None
                             },
+                            proven_this_methods_for_import(class, &class_proven_this_methods),
+                            proven_this_methods_for_import(
+                                class,
+                                &class_proven_this_tower_methods,
+                            ),
                         ));
                     }
 
@@ -4113,6 +4188,14 @@ pub fn run_with_parse_cache(
                                     class,
                                     class_prefix,
                                     None,
+                                    proven_this_methods_for_import(
+                                        class,
+                                        &class_proven_this_methods,
+                                    ),
+                                    proven_this_methods_for_import(
+                                        class,
+                                        &class_proven_this_tower_methods,
+                                    ),
                                 ));
                                 imported_classes.len() - 1
                             }
@@ -4196,7 +4279,16 @@ pub fn run_with_parse_cache(
                             continue;
                         }
                         let class_prefix = compute_module_prefix(&src_path, &ctx.project_root);
-                        imported_classes.push(imported_class_from_hir(class, class_prefix, None));
+                        imported_classes.push(imported_class_from_hir(
+                            class,
+                            class_prefix,
+                            None,
+                            proven_this_methods_for_import(class, &class_proven_this_methods),
+                            proven_this_methods_for_import(
+                                class,
+                                &class_proven_this_tower_methods,
+                            ),
+                        ));
                     }
                 }
             }
@@ -4623,7 +4715,16 @@ pub fn run_with_parse_cache(
                         } else {
                             None
                         };
-                        imported_classes.push(imported_class_from_hir(class, class_prefix, alias));
+                        imported_classes.push(imported_class_from_hir(
+                            class,
+                            class_prefix,
+                            alias,
+                            proven_this_methods_for_import(class, &class_proven_this_methods),
+                            proven_this_methods_for_import(
+                                class,
+                                &class_proven_this_tower_methods,
+                            ),
+                        ));
                         visited_imports.insert(ref_name.clone());
                         // Process the entry we just pushed (by index, so a
                         // same-named distinct-module class isn't skipped). Refs #26.

@@ -372,83 +372,73 @@ pub extern "C" fn js_object_set_field_by_name(
                     let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
                         .unwrap_or("")
                         .to_string();
-                    // Empty-string is a legal accessor key (`set ''(v)`); the
-                    // `!name.is_empty()` guard below skips it, so dispatch a
-                    // prototype-ref instance setter / constructor-ref static setter
-                    // named "" here (Test262 accessor-name-* literal-string-empty).
-                    if name.is_empty() {
-                        let recv = f64::from_bits(bits);
-                        if super::class_prototype_ref_id(recv).is_some()
-                            && super::class_registry::class_instance_setter_apply(
-                                class_id, &name, recv, value,
-                            )
-                        {
-                            return;
-                        }
-                        if super::class_registry::class_static_accessor_setter_apply(
+                    let recv = f64::from_bits(bits);
+                    let is_prototype_ref = super::class_prototype_ref_id(recv).is_some();
+                    if !is_prototype_ref
+                        && name == "name"
+                        && !super::class_registry::class_is_key_deleted(class_id, &name)
+                        && super::class_registry::lookup_static_method_in_chain(class_id, &name)
+                            .is_none()
+                    {
+                        return;
+                    }
+                    let has_own_data = if is_prototype_ref {
+                        super::class_registry::lookup_own_prototype_method(class_id, &name)
+                            .is_some()
+                            || super::native_module::class_has_own_method(class_id, &name)
+                    } else {
+                        CLASS_DYNAMIC_PROPS.with(|m| {
+                            m.borrow()
+                                .get(&class_id)
+                                .is_some_and(|props| props.contains_key(&name))
+                        })
+                    };
+                    // `C.prototype[key] = v` where `key` is an instance
+                    // accessor invokes the setter with `this = C.prototype`.
+                    // A getter-only accessor absorbs a non-strict assignment.
+                    if is_prototype_ref && !has_own_data {
+                        if super::class_registry::class_instance_setter_apply(
                             class_id, &name, recv, value,
                         ) {
                             return;
                         }
+                        if super::class_registry::class_has_instance_getter(class_id, &name) {
+                            return;
+                        }
+                    } else if !is_prototype_ref
+                        && !has_own_data
+                        && super::class_registry::class_static_accessor_setter_apply(
+                            class_id, &name, recv, value,
+                        )
+                    {
+                        return;
                     }
-                    if !name.is_empty() {
-                        if name == "name"
-                            && !super::class_registry::class_is_key_deleted(class_id, &name)
-                            && super::class_registry::lookup_static_method_in_chain(class_id, &name)
-                                .is_none()
-                        {
-                            return;
-                        }
-                        let has_own_data = CLASS_DYNAMIC_PROPS.with(|m| {
-                            m.borrow()
-                                .get(&class_id)
-                                .is_some_and(|props| props.contains_key(&name))
-                        });
-                        // `C.prototype[key] = v` where `key` is an instance
-                        // `set key(v)` accessor defined on the prototype: invoke the
-                        // setter with `this` = the prototype ref. The prototype ref
-                        // and the constructor ref are both INT32-tagged class refs;
-                        // distinguish via `class_prototype_ref_id`. Instance setters
-                        // live in the vtable; static accessors (below) live in the
-                        // constructor ref's table (Test262 accessor-name-inst).
-                        if !has_own_data
-                            && super::class_prototype_ref_id(f64::from_bits(bits)).is_some()
-                            && super::class_registry::class_instance_setter_apply(
-                                class_id,
-                                &name,
-                                f64::from_bits(bits),
-                                value,
-                            )
-                        {
-                            return;
-                        }
-                        if !has_own_data
-                            && super::class_registry::class_static_accessor_setter_apply(
-                                class_id,
-                                &name,
-                                f64::from_bits(bits),
-                                value,
-                            )
-                        {
-                            return;
-                        }
-                        // Writing `.caller` / `.arguments` on a class constructor
-                        // hits the poison-pill %ThrowTypeError% accessor (which has
-                        // no [[Set]]) on `Function.prototype`, so a strict-mode
-                        // assignment throws. Mirrors the read side in
-                        // get_field_by_name and the ordinary-closure setter path.
-                        // A `defineProperty`-installed own data prop was handled by
-                        // `has_own_data` above; prototype-refs (`C.prototype`) are
-                        // plain objects with no such restriction.
-                        if !has_own_data
-                            && matches!(name.as_str(), "caller" | "arguments")
-                            && super::class_prototype_ref_id(f64::from_bits(bits)).is_none()
-                        {
-                            crate::fs::validate::throw_type_error_with_code(
-                                "Restricted function property access",
-                                "ERR_INVALID_ARG_TYPE",
-                            );
-                        }
+                    // Writing `.caller` / `.arguments` on a class constructor
+                    // hits the poison-pill %ThrowTypeError% accessor inherited
+                    // from Function.prototype. Prototype refs are plain objects.
+                    if !is_prototype_ref
+                        && !has_own_data
+                        && matches!(name.as_str(), "caller" | "arguments")
+                    {
+                        crate::fs::validate::throw_type_error_with_code(
+                            "Restricted function property access",
+                            "ERR_INVALID_ARG_TYPE",
+                        );
+                    }
+                    if is_prototype_ref {
+                        // Imported `C.prototype.m = value` reaches this generic
+                        // class-ref path. Publish it as an enumerable prototype
+                        // data property so instance dispatch sees the replacement.
+                        super::class_registry::class_prototype_method_set_enumerable(
+                            class_id, &name, true,
+                        );
+                        super::class_registry::class_prototype_method_root_store(
+                            class_id,
+                            name,
+                            value.to_bits(),
+                        );
+                        crate::typed_feedback::invalidate_method_change(class_id);
+                    } else {
                         class_dynamic_prop_root_store(class_id, &name, value);
                     }
                 }

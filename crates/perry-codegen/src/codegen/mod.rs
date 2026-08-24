@@ -1808,17 +1808,6 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 receiver_class_table,
                 &module_dispatch_facts,
             ) {
-                // #7142: the tower routing site emits its own inline shape
-                // re-check, so it only takes the clone where the clone deletes
-                // strictly more guarded field sites than that check costs. The
-                // other two sites are guard-dominated and route unconditionally.
-                if crate::collectors::pshape_tower_route_profitable(
-                    class,
-                    method,
-                    receiver_class_table,
-                ) {
-                    pshape_tower_routable.insert((class.name.clone(), method.name.clone()));
-                }
                 pshape_methods.insert((class.name.clone(), method.name.clone()), fact);
             }
             match typed_abi::typed_f64_method_rejection_reason(method) {
@@ -1930,6 +1919,60 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                         format!("function_id={}", method.id),
                     ],
                 ),
+            }
+        }
+    }
+    // #7142: the tower routing site emits its own inline shape re-check, so it
+    // only takes a clone where that clone deletes strictly more guarded work
+    // than the check costs. Price these routes after all local clone facts are
+    // known so nested `this.other()` calls can count an inherited clone too.
+    let local_pshape_methods: std::collections::HashSet<(String, String)> =
+        pshape_methods.keys().cloned().collect();
+    for class in &hir.classes {
+        for method in &class.methods {
+            let key = (class.name.clone(), method.name.clone());
+            if local_pshape_methods.contains(&key)
+                && crate::collectors::pshape_tower_route_profitable(
+                    class,
+                    method,
+                    receiver_class_table,
+                    &local_pshape_methods,
+                )
+            {
+                pshape_tower_routable.insert(key);
+            }
+        }
+    }
+    // Imported classes publish only clone names the defining module proved and
+    // emitted. Installing those capabilities in the same registries lets both
+    // the ordinary exact-class/shape guarded arm and profitable adapter-field
+    // dispatch towers retain the receiver proof across ESM and npm boundaries.
+    // The tower subset is producer-authored because only the defining module
+    // can see enough of the body to price its additional keys-token check.
+    for imported in &opts.imported_classes {
+        let effective_name = imported
+            .local_alias
+            .as_deref()
+            .unwrap_or(&imported.name)
+            .to_string();
+        if hir.classes.iter().any(|class| class.name == effective_name) {
+            continue;
+        }
+        for method in &imported.proven_this_method_names {
+            if !imported.method_names.contains(method) {
+                continue;
+            }
+            pshape_methods.insert(
+                (effective_name.clone(), method.clone()),
+                crate::collectors::PtrShapeLocal {
+                    class_name: effective_name.clone(),
+                    numeric_fields: std::collections::HashSet::new(),
+                    report_name: crate::opt_report::enabled()
+                        .then(|| format!("imported:{}", imported.source_prefix)),
+                },
+            );
+            if imported.proven_this_tower_method_names.contains(method) {
+                pshape_tower_routable.insert((effective_name.clone(), method.clone()));
             }
         }
     }

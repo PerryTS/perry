@@ -216,6 +216,10 @@ pub(crate) fn build_method_names(
             let param_types: Vec<crate::types::LlvmType> =
                 std::iter::repeat_n(DOUBLE, arity).collect();
             llmod.declare_function(&llvm_fn, DOUBLE, &param_types);
+            if ic.proven_this_method_names.contains(method_name) {
+                let clone = crate::collectors::pshape_method_name(&llvm_fn);
+                llmod.declare_function(&clone, DOUBLE, &param_types);
+            }
         }
 
         // Cross-module getters. The dispatch site at
