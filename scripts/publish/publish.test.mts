@@ -25,6 +25,10 @@ import { parseStageListJson } from './npm/shared.mts'
 import { perryStagedEntries } from './npm/approve.mts'
 import { tagExists } from './npm/bump.mts'
 import { freshStageState } from './pipeline.mts'
+import {
+  INLINE_RELEASE_NOTES_MAX_BYTES,
+  planReleaseNotes,
+} from './release.mts'
 import { NPM_MIN_VERSION } from './constants.mts'
 
 const PUBLISH_DIR = path.dirname(fileURLToPath(import.meta.url))
@@ -377,6 +381,20 @@ test('release runbook pins the staged-publish OIDC identity and action', () => {
   assert.match(runbook, /environment: `npm-publish`/)
   assert.match(runbook, /allowed action: \*\*`npm stage publish`\*\*/)
   assert.match(runbook, /npm permits only one trusted publisher per package/)
+})
+
+test('planReleaseNotes: oversized notes move to a stable release asset', () => {
+  const inline = planReleaseNotes('0.5.1519', 'small notes')
+  assert.deepEqual(inline, { body: 'small notes', attachFullNotes: false })
+
+  const large = planReleaseNotes(
+    '0.5.1519',
+    'x'.repeat(INLINE_RELEASE_NOTES_MAX_BYTES + 1),
+  )
+  assert.equal(large.attachFullNotes, true)
+  assert.match(large.body, /release-notes-full\.md/)
+  assert.match(large.body, /releases\/download\/v0\.5\.1519\/release-notes-full\.md/)
+  assert.ok(Buffer.byteLength(large.body, 'utf8') < INLINE_RELEASE_NOTES_MAX_BYTES)
 })
 
 test('pipeline.mts: two conflicting mode flags fail closed instead of picking one by argument order', () => {

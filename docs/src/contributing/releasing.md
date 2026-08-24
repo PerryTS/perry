@@ -117,6 +117,10 @@ npm run publish:approve     # explicit 2FA promote; waits for registry liveness
                             # and only then creates v0.x.y + the GitHub Release
 ```
 
+If the accumulated changelog fragments exceed the inline release-note budget,
+the publisher keeps the GitHub Release body concise and uploads the complete
+notes as the checksummed `release-notes-full.md` asset. No fragment is dropped.
+
 Do not run `git tag`, manually publish a GitHub Release, or use the legacy
 `release-packages.yml cut_release=true` route for a normal release. That older
 route creates the tag before npm publication; it does not satisfy the stricter
