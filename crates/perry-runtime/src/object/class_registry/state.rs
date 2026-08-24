@@ -752,7 +752,28 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
                 if crate::closure::is_closure_ptr(parent_addr) {
                     let parent_proto =
                         crate::closure::closure_get_dynamic_prop(parent_addr, "prototype");
-                    if let Some(bits) = class_parent_prototype_bits(parent_proto) {
+                    // A bound native-module constructor export imported directly
+                    // (`import { EventEmitter } from "events"; class X extends
+                    // EventEmitter {}`) carries `.prototype` only lazily: the raw
+                    // dynamic-slot read above is still `undefined` because the
+                    // synthetic prototype object (which carries the EventEmitter
+                    // method surface) is materialized on demand, not at closure
+                    // mint time. Resolve it exactly as an ordinary `Y.prototype`
+                    // property read does, so the `extends` edge links to that real
+                    // prototype instead of throwing. `Stream` and the net/http
+                    // server classes share this shape. A non-constructor bound
+                    // method still resolves to `None` here, so a genuinely
+                    // prototype-less parent (e.g. a bare `fn.bind(...)`) still
+                    // throws below, matching Node.
+                    let resolved_proto = if class_parent_prototype_bits(parent_proto).is_some() {
+                        parent_proto
+                    } else {
+                        super::function_prototype::ordinary_function_prototype_value_for_read(
+                            dynamic_parent.get_nanbox_f64(),
+                        )
+                        .unwrap_or(parent_proto)
+                    };
+                    if let Some(bits) = class_parent_prototype_bits(resolved_proto) {
                         Some(bits)
                     } else {
                         super::super::object_ops::throw_object_type_error(
@@ -949,5 +970,65 @@ mod class_parent_prototype_tests {
             None
         );
         assert_eq!(class_parent_prototype_bits(1.0), None);
+    }
+
+    /// #8760: a `class X extends <bound native EventEmitter export>` registered
+    /// through the dynamic-parent path (`import { EventEmitter as EE } from
+    /// "events"; class X extends EE {}` — cli.js 2.1.112's exact shape) must
+    /// link its declared prototype to EventEmitter's real, lazily-materialized
+    /// prototype instead of throwing "Class extends value does not have valid
+    /// prototype property". The raw `prototype` dynamic slot on the bound export
+    /// closure is still `undefined` here, so the resolution must fall through to
+    /// the same lazy materialization an ordinary `EE.prototype` read uses.
+    #[test]
+    fn native_constructor_export_parent_links_declared_prototype() {
+        const ISSUE_8760_CLASS_ID: u32 = 0x7d01_8760;
+        const CLASS_NAME: &[u8] = b"Issue8760Subclass";
+
+        // The bound `events.EventEmitter` export — a BOUND_METHOD closure whose
+        // `.prototype` object is materialized on demand, not at mint time.
+        let ee_ctor = crate::object::bound_native_callable_export_value("events", "EventEmitter");
+
+        // Precondition: the raw dynamic `prototype` slot is undefined — the exact
+        // condition that made the dynamic-parent registration throw before the fix.
+        let ee_addr = (ee_ctor.to_bits() & crate::value::POINTER_MASK) as usize;
+        assert_eq!(
+            crate::closure::closure_get_dynamic_prop(ee_addr, "prototype").to_bits(),
+            crate::value::TAG_UNDEFINED,
+            "precondition: the bound export's raw prototype slot must be undefined"
+        );
+
+        unsafe {
+            js_register_class_name(
+                ISSUE_8760_CLASS_ID,
+                CLASS_NAME.as_ptr(),
+                CLASS_NAME.len() as u32,
+            );
+        }
+        js_register_class_parent_dynamic(ISSUE_8760_CLASS_ID, ee_ctor);
+
+        // Must not throw, and must materialize a real prototype object.
+        let decl_proto = class_decl_prototype_value(ISSUE_8760_CLASS_ID);
+        assert_eq!(
+            decl_proto.to_bits() & crate::value::TAG_MASK,
+            crate::value::POINTER_TAG,
+            "the subclass prototype must materialize (no TypeError) for a native constructor parent"
+        );
+
+        // Its [[Prototype]] must be EventEmitter's canonical prototype — the same
+        // object an ordinary `EE.prototype` read resolves to — so `instanceof`
+        // and inherited `emit`/`on` work through the chain.
+        let ee_proto = super::function_prototype::ordinary_function_prototype_value_for_read(
+            crate::object::bound_native_callable_export_value("events", "EventEmitter"),
+        )
+        .expect("EventEmitter export must expose a prototype object");
+        let decl_proto_addr = (decl_proto.to_bits() & crate::value::POINTER_MASK) as usize;
+        let linked = super::super::prototype_chain::object_static_prototype(decl_proto_addr)
+            .expect("the subclass prototype must have a linked [[Prototype]]");
+        assert_eq!(
+            linked & crate::value::POINTER_MASK,
+            ee_proto.to_bits() & crate::value::POINTER_MASK,
+            "the subclass prototype must inherit from EventEmitter.prototype"
+        );
     }
 }
