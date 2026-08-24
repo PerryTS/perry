@@ -202,6 +202,7 @@ mod class_object_props;
 mod crypto_key;
 pub(crate) mod enumeration;
 mod field_ops;
+mod for_in_stable;
 mod get_field_by_name;
 #[cfg(test)]
 mod get_field_by_name_probe_tests;
@@ -266,6 +267,7 @@ pub use field_ops::{
     js_object_set_field_by_index, js_object_set_field_f64, js_object_set_keys, js_object_to_value,
     js_value_to_object,
 };
+pub use for_in_stable::js_for_in_keys_stable_value;
 pub use get_field_by_name::js_object_get_field_by_name;
 pub(crate) use get_field_by_name_tail::get_field_by_name_object_tail;
 pub(super) use has_property::native_module_own_field_by_key;

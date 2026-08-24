@@ -649,12 +649,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- for (key in obj) enumeration keys -> string[] --------
-        // Like ObjectKeys but nullish-safe (no throw) and walks the prototype
-        // chain for inherited enumerable keys. Backs the for-in desugar.
+        // The guarded runtime entry reuses a stable one-key shape's immutable
+        // key array without allocation, then falls back to the complete
+        // nullish/prototype-aware enumerator for every other receiver.
         Expr::ForInKeys(obj) => {
             let obj_box = lower_expr(ctx, obj)?;
             let blk = ctx.block();
-            let arr_handle = blk.call(I64, "js_for_in_keys_value", &[(DOUBLE, &obj_box)]);
+            let arr_handle = blk.call(I64, "js_for_in_keys_stable_value", &[(DOUBLE, &obj_box)]);
             Ok(nanbox_pointer_inline(blk, &arr_handle))
         }
 
