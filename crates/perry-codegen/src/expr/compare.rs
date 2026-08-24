@@ -18,6 +18,30 @@ use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 use super::{unbox_str_handle, unbox_to_i64, FnCtx};
 
+/// True only when compiler-owned initializer provenance establishes that this
+/// expression currently contains a Symbol identity.
+///
+/// This deliberately does not consult an erased TypeScript `symbol`
+/// annotation: `const s: symbol = value as any` is legal source and may hold a
+/// moving object at runtime. Fresh `Symbol()` values use system `gc_malloc`
+/// storage (reclaimable but non-moving), while `Symbol.for()` values are
+/// process-lifetime `Box` allocations. Therefore a proven Symbol can equal
+/// another JS value iff their NaN-boxed pointer bits are identical.
+fn is_proven_symbol_expr(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::SymbolNew(_) | Expr::SymbolFor(_) => true,
+        Expr::LocalGet(id) => {
+            matches!(ctx.stable_local_type_proof(id), Some(HirType::Symbol))
+                || (!ctx.reassigned_locals.contains(id)
+                    && matches!(
+                        ctx.module_global_proven_types.get(id),
+                        Some(HirType::Symbol)
+                    ))
+        }
+        _ => false,
+    }
+}
+
 /// Repsel Phase 3a shared dispatch for the canonical-Str compare arms:
 /// lower both operands' bits, branch on "both heap `STRING_TAG`", call
 /// `heap_fn(handle, handle)` on the hot arm and `boxed_fn(box, box)` on the
@@ -669,6 +693,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     };
                     let tagged = blk.select(
                         crate::types::I1,
+                        &bit,
+                        I64,
+                        crate::nanbox::TAG_TRUE_I64,
+                        crate::nanbox::TAG_FALSE_I64,
+                    );
+                    return Ok(blk.bitcast_i64_to_double(&tagged));
+                }
+                // Symbol identity is raw pointer identity when at least one
+                // operand is proven from a Symbol constructor. Unlike arrays,
+                // Symbols never relocate through grow forwarding, and unlike
+                // GC-arena objects their system allocation is never evacuated.
+                // Thus different bits are decisively unequal without entering
+                // `js_eq`'s tracked-GC forwarding classifier. This is the hot
+                // sentinel shape `value === MISSING_COMPONENT` in codehz/ecs.
+                // STRICT only: loose equality still has coercion/throw rules.
+                let either_proven_symbol =
+                    is_proven_symbol_expr(ctx, left) || is_proven_symbol_expr(ctx, right);
+                if either_proven_symbol && matches!(op, CompareOp::Eq | CompareOp::Ne) {
+                    let blk = ctx.block();
+                    let l_bits = blk.bitcast_double_to_i64(&l);
+                    let r_bits = blk.bitcast_double_to_i64(&r);
+                    let bit = if matches!(op, CompareOp::Ne) {
+                        blk.icmp_ne(I64, &l_bits, &r_bits)
+                    } else {
+                        blk.icmp_eq(I64, &l_bits, &r_bits)
+                    };
+                    let tagged = blk.select(
+                        I1,
                         &bit,
                         I64,
                         crate::nanbox::TAG_TRUE_I64,

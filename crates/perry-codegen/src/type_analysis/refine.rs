@@ -233,6 +233,11 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         Expr::String(_) | Expr::WtfString(_) | Expr::I18nString { .. } | Expr::TypeOf(_) => {
             Some(HirType::String)
         }
+        // `Symbol()` identities are system-allocated and never relocated;
+        // `Symbol.for()` identities are process-lifetime `Box` allocations.
+        // Recording the constructor provenance (rather than trusting a
+        // `symbol` annotation) lets strict equality use raw identity safely.
+        Expr::SymbolNew(_) | Expr::SymbolFor(_) => Some(HirType::Symbol),
         Expr::Array(_) | Expr::ArraySpread(_) => Some(HirType::Array(Box::new(HirType::Any))),
         Expr::MapNew | Expr::MapNewFromArray(_) => Some(HirType::Generic {
             base: "Map".to_string(),

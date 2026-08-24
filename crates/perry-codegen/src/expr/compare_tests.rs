@@ -71,6 +71,169 @@ fn cmp_ir(name: &str, op: CompareOp, lhs: Expr, rhs: Expr) -> String {
 const JS_EQ_CALL: &str = "call i64 @js_eq(";
 const JS_LOOSE_EQ_CALL: &str = "call i64 @js_loose_eq(";
 
+#[test]
+fn strict_eq_against_a_proven_symbol_is_raw_identity() {
+    let ir = ir_for(
+        "streq_proven_symbol",
+        vec![
+            Stmt::Let {
+                id: X,
+                name: "value".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            },
+            Stmt::Let {
+                id: Y,
+                name: "sentinel".to_string(),
+                // The proof must come from the initializer, not this erased
+                // declaration, so keep the source type deliberately broad.
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::SymbolNew(None)),
+            },
+            Stmt::Let {
+                id: R,
+                name: "r".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(X)),
+                    right: Box::new(Expr::LocalGet(Y)),
+                }),
+            },
+        ],
+    );
+    assert!(
+        !ir.contains(JS_EQ_CALL),
+        "proven Symbol identity fell through to js_eq:\n{ir}"
+    );
+    assert!(
+        ir.contains("icmp eq i64"),
+        "proven Symbol identity did not become a raw-bit compare:\n{ir}"
+    );
+}
+
+#[test]
+fn loose_eq_against_a_proven_symbol_keeps_the_coercing_helper() {
+    let ir = ir_for(
+        "looseeq_proven_symbol",
+        vec![
+            Stmt::Let {
+                id: X,
+                name: "value".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            },
+            Stmt::Let {
+                id: Y,
+                name: "sentinel".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::SymbolNew(None)),
+            },
+            Stmt::Let {
+                id: R,
+                name: "r".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Compare {
+                    op: CompareOp::LooseEq,
+                    left: Box::new(Expr::LocalGet(X)),
+                    right: Box::new(Expr::LocalGet(Y)),
+                }),
+            },
+        ],
+    );
+    assert!(ir.contains(JS_LOOSE_EQ_CALL), "{ir}");
+}
+
+#[test]
+fn a_symbol_annotation_without_symbol_provenance_keeps_js_eq() {
+    let ir = ir_for(
+        "streq_lying_symbol_annotation",
+        vec![
+            Stmt::Let {
+                id: X,
+                name: "value".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            },
+            Stmt::Let {
+                id: Y,
+                name: "not_really_a_symbol".to_string(),
+                ty: Type::Symbol,
+                mutable: false,
+                init: Some(Expr::Object(vec![("x".to_string(), Expr::Number(1.0))])),
+            },
+            Stmt::Let {
+                id: R,
+                name: "r".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(X)),
+                    right: Box::new(Expr::LocalGet(Y)),
+                }),
+            },
+        ],
+    );
+    assert!(
+        ir.contains(JS_EQ_CALL),
+        "an erased Symbol annotation was mistaken for runtime proof:\n{ir}"
+    );
+}
+
+#[test]
+fn a_reassigned_symbol_constructor_local_keeps_js_eq() {
+    let ir = ir_for(
+        "streq_reassigned_symbol_local",
+        vec![
+            Stmt::Let {
+                id: X,
+                name: "value".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            },
+            Stmt::Let {
+                id: Y,
+                name: "sentinel".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::SymbolNew(None)),
+            },
+            // Whole-region reassignment analysis must revoke the constructor
+            // proof even though this write appears before the comparison. The
+            // replacement may be a moving/forwarded object whose identity
+            // requires `js_eq`'s forwarding resolution.
+            Stmt::Expr(Expr::LocalSet(
+                Y,
+                Box::new(Expr::Object(vec![("x".to_string(), Expr::Number(1.0))])),
+            )),
+            Stmt::Let {
+                id: R,
+                name: "r".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(X)),
+                    right: Box::new(Expr::LocalGet(Y)),
+                }),
+            },
+        ],
+    );
+    assert!(
+        ir.contains(JS_EQ_CALL),
+        "a reassigned Symbol constructor local retained stale provenance:\n{ir}"
+    );
+}
+
 /// `makeLeft() === makeRight()` has to keep the first call result alive while
 /// the second call runs. Object literals give the IR test the same two
 /// allocating, pointer-valued temporaries without depending on call lowering:
