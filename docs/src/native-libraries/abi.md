@@ -102,6 +102,15 @@ return / parameter types — wrappers should write
 `pub extern "C" fn js_my_module_thing() -> *mut perry_ffi::StringHeader`,
 not import `StringHeader` from `perry-runtime` directly.
 
+### Async promise rejection
+
+`JsPromise::reject_string(message)` copies the message and rejects with a real
+JavaScript `Error` allocated on the runtime's main thread. Its `.message` and
+`.stack` are available to ordinary handlers, and `instanceof Error` succeeds.
+`JsPromise::reject(value)` remains the escape hatch for APIs that deliberately
+reject with an arbitrary JavaScript value. Use `JsPromise::reject_with` to
+construct a structured rejection value safely on the main thread.
+
 ### What's NOT in v0.5
 
 These will land as real wrappers force them, tracked under

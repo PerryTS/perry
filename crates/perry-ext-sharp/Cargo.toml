@@ -21,3 +21,6 @@ kamadak-exif = "0.6"
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
+# Standalone extension tests provide the runtime half of perry-ffi's async
+# bridge; the production dependency remains perry-ffi-only.
+perry-runtime = { workspace = true, features = ["default", "stdlib"] }

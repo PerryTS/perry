@@ -184,6 +184,22 @@ pub extern "C" fn perry_ffi_promise_resolve_deferred(
     });
 }
 
+/// `perry_ffi_promise_reject_deferred(promise, ctx, invoke)` — rejection-side
+/// twin of [`perry_ffi_promise_resolve_deferred`]. `invoke(ctx)` runs once on
+/// the main thread so external bindings can safely allocate Error objects and
+/// other structured rejection values after worker-thread work completes.
+#[no_mangle]
+pub extern "C" fn perry_ffi_promise_reject_deferred(
+    promise: *mut perry_runtime::Promise,
+    ctx: *mut std::ffi::c_void,
+    invoke: extern "C" fn(*mut std::ffi::c_void) -> u64,
+) {
+    let ctx_addr = ctx as usize;
+    async_bridge::queue_deferred_resolution(promise as usize, false, move || {
+        invoke(ctx_addr as *mut std::ffi::c_void)
+    });
+}
+
 /// `perry_ffi_spawn_blocking(ctx, invoke)` — run `invoke(ctx)` on
 /// the global tokio runtime's blocking pool. The caller is expected
 /// to box a closure into `ctx` before calling, and write a thin

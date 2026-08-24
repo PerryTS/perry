@@ -20,7 +20,7 @@ use perry_ffi::{
     spawn_blocking, take_handle, with_handle, ArrayHeader, Handle, JsPromise, JsValue,
     ObjectHeader, Promise, StringHeader,
 };
-use sqlx::mysql::{MySqlConnection, MySqlPool, MySqlPoolOptions, MySqlRow};
+use sqlx::mysql::{MySqlConnection, MySqlDatabaseError, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::pool::PoolConnection;
 use sqlx::{Column, Connection, MySql, Row, TypeInfo};
 use std::sync::Arc;
@@ -587,6 +587,86 @@ enum MysqlConnectionTarget {
     Pool(Arc<Mutex<Option<PoolConnection<MySql>>>>),
 }
 
+#[derive(Debug)]
+struct MysqlPromiseError {
+    message: String,
+    code: Option<&'static str>,
+    errno: Option<u16>,
+}
+
+impl MysqlPromiseError {
+    fn message(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            code: None,
+            errno: None,
+        }
+    }
+
+    fn from_sqlx(context: &str, error: sqlx::Error) -> Self {
+        let errno = error
+            .as_database_error()
+            .and_then(|database| database.try_downcast_ref::<MySqlDatabaseError>())
+            .map(MySqlDatabaseError::number);
+        Self {
+            message: format!("{context}: {error}"),
+            code: errno.and_then(mysql2_error_code),
+            errno,
+        }
+    }
+
+    fn reject(self, promise: JsPromise) {
+        if let Some(errno) = self.errno {
+            let code = self.code.unwrap_or("");
+            let message = self.message;
+            promise.reject_with(move || {
+                // MySQL server errors use positive protocol error numbers, as
+                // mysql2 does, rather than libuv's negative errno convention.
+                perry_ffi::system_error_value(&message, code, "", i64::from(errno))
+            });
+        } else {
+            promise.reject_string(&self.message);
+        }
+    }
+}
+
+/// mysql2 exposes symbolic server error names through `.code` and the numeric
+/// protocol value through `.errno`. Keep the common SQL/application failures
+/// stable here; unknown server numbers still retain `.errno`.
+fn mysql2_error_code(errno: u16) -> Option<&'static str> {
+    Some(match errno {
+        1022 => "ER_DUP_KEY",
+        1045 => "ER_ACCESS_DENIED_ERROR",
+        1048 => "ER_BAD_NULL_ERROR",
+        1049 => "ER_BAD_DB_ERROR",
+        1050 => "ER_TABLE_EXISTS_ERROR",
+        1051 => "ER_BAD_TABLE_ERROR",
+        1052 => "ER_NON_UNIQ_ERROR",
+        1054 => "ER_BAD_FIELD_ERROR",
+        1062 => "ER_DUP_ENTRY",
+        1064 => "ER_PARSE_ERROR",
+        1146 => "ER_NO_SUCH_TABLE",
+        1169 => "ER_DUP_UNIQUE",
+        1205 => "ER_LOCK_WAIT_TIMEOUT",
+        1213 => "ER_LOCK_DEADLOCK",
+        1216 => "ER_NO_REFERENCED_ROW",
+        1217 => "ER_ROW_IS_REFERENCED",
+        1264 => "ER_WARN_DATA_OUT_OF_RANGE",
+        1292 => "ER_TRUNCATED_WRONG_VALUE",
+        1364 => "ER_NO_DEFAULT_FOR_FIELD",
+        1406 => "ER_DATA_TOO_LONG",
+        1451 => "ER_ROW_IS_REFERENCED_2",
+        1452 => "ER_NO_REFERENCED_ROW_2",
+        1586 => "ER_DUP_ENTRY_WITH_KEY_NAME",
+        1830 => "ER_FK_COLUMN_NOT_NULL",
+        1834 => "ER_FK_CANNOT_DELETE_PARENT",
+        1859 => "ER_DUP_UNKNOWN_IN_INDEX",
+        3819 => "ER_CHECK_CONSTRAINT_VIOLATED",
+        4025 => "ER_CONSTRAINT_FAILED",
+        _ => return None,
+    })
+}
+
 /// Resolve either mysql2 connection handle family without returning a
 /// registry-backed `'static` reference. The old `get_handle_mut` calls dropped
 /// DashMap's guard before async work began, so overlapping workers could hold
@@ -605,7 +685,7 @@ fn connection_target(handle: Handle) -> Option<MysqlConnectionTarget> {
 async fn execute_query_on_connection(
     conn: &mut MySqlConnection,
     request: &QueryRequest,
-) -> Result<QueryOutcome, String> {
+) -> Result<QueryOutcome, MysqlPromiseError> {
     let is_select = request.is_row_returning();
 
     if !request.uses_prepared_statement() {
@@ -621,8 +701,8 @@ async fn execute_query_on_connection(
                 raw.fetch_all(conn),
             )
             .await
-            .map_err(|_| "Query timed out".to_string())?
-            .map_err(|e| format!("Query failed: {}", e))?;
+            .map_err(|_| MysqlPromiseError::message("Query timed out"))?
+            .map_err(|e| MysqlPromiseError::from_sqlx("Query failed", e))?;
             return Ok(QueryOutcome::Rows(raws_from_mysql_rows(rows)));
         }
 
@@ -631,8 +711,8 @@ async fn execute_query_on_connection(
             raw.execute(conn),
         )
         .await
-        .map_err(|_| "Query timed out".to_string())?
-        .map_err(|e| format!("Query failed: {}", e))?;
+        .map_err(|_| MysqlPromiseError::message("Query timed out"))?
+        .map_err(|e| MysqlPromiseError::from_sqlx("Query failed", e))?;
         return Ok(QueryOutcome::Executed {
             affected_rows: res.rows_affected(),
             last_insert_id: res.last_insert_id(),
@@ -663,8 +743,8 @@ async fn execute_query_on_connection(
             query.fetch_all(conn),
         )
         .await
-        .map_err(|_| "Query timed out".to_string())?
-        .map_err(|e| format!("Query failed: {}", e))?;
+        .map_err(|_| MysqlPromiseError::message("Query timed out"))?
+        .map_err(|e| MysqlPromiseError::from_sqlx("Query failed", e))?;
         Ok(QueryOutcome::Rows(raws_from_mysql_rows(rows)))
     } else {
         let res = tokio::time::timeout(
@@ -672,8 +752,8 @@ async fn execute_query_on_connection(
             query.execute(conn),
         )
         .await
-        .map_err(|_| "Query timed out".to_string())?
-        .map_err(|e| format!("Query failed: {}", e))?;
+        .map_err(|_| MysqlPromiseError::message("Query timed out"))?
+        .map_err(|e| MysqlPromiseError::from_sqlx("Query failed", e))?;
         Ok(QueryOutcome::Executed {
             affected_rows: res.rows_affected(),
             last_insert_id: res.last_insert_id(),
@@ -684,20 +764,20 @@ async fn execute_query_on_connection(
 async fn execute_query_on_target(
     target: MysqlConnectionTarget,
     request: &QueryRequest,
-) -> Result<QueryOutcome, String> {
+) -> Result<QueryOutcome, MysqlPromiseError> {
     match target {
         MysqlConnectionTarget::Direct(connection) => {
             let mut slot = connection.lock().await;
             let conn = slot
                 .as_mut()
-                .ok_or_else(|| "Connection already closed".to_string())?;
+                .ok_or_else(|| MysqlPromiseError::message("Connection already closed"))?;
             execute_query_on_connection(conn, request).await
         }
         MysqlConnectionTarget::Pool(connection) => {
             let mut slot = connection.lock().await;
             let conn = slot
                 .as_mut()
-                .ok_or_else(|| "Pool connection released".to_string())?;
+                .ok_or_else(|| MysqlPromiseError::message("Pool connection released"))?;
             execute_query_on_connection(conn, request).await
         }
     }
@@ -721,15 +801,15 @@ pub unsafe extern "C" fn js_mysql2_create_connection(config_f: f64) -> *mut Prom
                 MySqlConnection::connect(&url),
             )
             .await
-            .map_err(|_| "MySQL connection timed out".to_string())?
-            .map_err(|e| format!("Failed to connect: {}", e))
+            .map_err(|_| MysqlPromiseError::message("MySQL connection timed out"))?
+            .map_err(|e| MysqlPromiseError::from_sqlx("Failed to connect", e))
         });
         match result {
             Ok(conn) => {
                 let handle = register_handle(MysqlConnectionHandle::new(conn));
                 promise.resolve(JsValue::from_number(handle as f64));
             }
-            Err(e) => promise.reject_string(&e),
+            Err(error) => error.reject(promise),
         }
     });
     raw
@@ -748,7 +828,9 @@ pub extern "C" fn js_mysql2_connection_end(conn_handle: Handle) -> *mut Promise 
                 let result = tokio::runtime::Handle::current().block_on(conn.close());
                 match result {
                     Ok(()) => promise.resolve_undefined(),
-                    Err(e) => promise.reject_string(&format!("Failed to close: {}", e)),
+                    Err(error) => {
+                        MysqlPromiseError::from_sqlx("Failed to close", error).reject(promise)
+                    }
                 }
             } else {
                 promise.reject_string("Connection already closed");
@@ -778,9 +860,10 @@ unsafe fn run_connection_query(
 
     spawn_blocking(move || {
         let rows_as_array = request.rows_as_array;
-        let outcome: Result<QueryOutcome, String> =
-            tokio::runtime::Handle::current().block_on(async move {
-                let target = target.ok_or_else(|| "Invalid connection handle".to_string())?;
+        let outcome: Result<QueryOutcome, MysqlPromiseError> = tokio::runtime::Handle::current()
+            .block_on(async move {
+                let target = target
+                    .ok_or_else(|| MysqlPromiseError::message("Invalid connection handle"))?;
                 execute_query_on_target(target, &request).await
             });
         match outcome {
@@ -789,7 +872,7 @@ unsafe fn run_connection_query(
             // thread (worker thread-local arena → dangling on the main thread once
             // the pooled thread idles out). `out` is plain Send Rust data.
             Ok(out) => promise.resolve_with(move || outcome_to_jsvalue(&out, rows_as_array)),
-            Err(e) => promise.reject_string(&e),
+            Err(error) => error.reject(promise),
         }
     });
     raw
@@ -827,36 +910,38 @@ fn run_simple_command(conn_handle: Handle, sql: &'static str) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
     spawn_blocking(move || {
-        let result = tokio::runtime::Handle::current().block_on(async move {
-            let target = target.ok_or_else(|| "Invalid connection handle".to_string())?;
-            match target {
-                MysqlConnectionTarget::Direct(connection) => {
-                    let mut slot = connection.lock().await;
-                    let conn = slot
-                        .as_mut()
-                        .ok_or_else(|| "Connection already closed".to_string())?;
-                    sqlx::raw_sql(sql)
-                        .execute(conn)
-                        .await
-                        .map(|_| ())
-                        .map_err(|e| format!("{}: {}", sql, e))
+        let result: Result<(), MysqlPromiseError> =
+            tokio::runtime::Handle::current().block_on(async move {
+                let target = target
+                    .ok_or_else(|| MysqlPromiseError::message("Invalid connection handle"))?;
+                match target {
+                    MysqlConnectionTarget::Direct(connection) => {
+                        let mut slot = connection.lock().await;
+                        let conn = slot.as_mut().ok_or_else(|| {
+                            MysqlPromiseError::message("Connection already closed")
+                        })?;
+                        sqlx::raw_sql(sql)
+                            .execute(conn)
+                            .await
+                            .map(|_| ())
+                            .map_err(|e| MysqlPromiseError::from_sqlx(sql, e))
+                    }
+                    MysqlConnectionTarget::Pool(connection) => {
+                        let mut slot = connection.lock().await;
+                        let conn = slot.as_mut().ok_or_else(|| {
+                            MysqlPromiseError::message("Pool connection released")
+                        })?;
+                        sqlx::raw_sql(sql)
+                            .execute(&mut **conn)
+                            .await
+                            .map(|_| ())
+                            .map_err(|e| MysqlPromiseError::from_sqlx(sql, e))
+                    }
                 }
-                MysqlConnectionTarget::Pool(connection) => {
-                    let mut slot = connection.lock().await;
-                    let conn = slot
-                        .as_mut()
-                        .ok_or_else(|| "Pool connection released".to_string())?;
-                    sqlx::raw_sql(sql)
-                        .execute(&mut **conn)
-                        .await
-                        .map(|_| ())
-                        .map_err(|e| format!("{}: {}", sql, e))
-                }
-            }
-        });
+            });
         match result {
             Ok(()) => promise.resolve_undefined(),
-            Err(e) => promise.reject_string(&e),
+            Err(error) => error.reject(promise),
         }
     });
     raw
@@ -1141,9 +1226,9 @@ unsafe fn run_pool_query(
 
     spawn_blocking(move || {
         let rows_as_array = request.rows_as_array;
-        let outcome: Result<QueryOutcome, String> =
-            tokio::runtime::Handle::current().block_on(async move {
-                let pool = pool.ok_or_else(|| "Invalid pool handle".to_string())?;
+        let outcome: Result<QueryOutcome, MysqlPromiseError> = tokio::runtime::Handle::current()
+            .block_on(async move {
+                let pool = pool.ok_or_else(|| MysqlPromiseError::message("Invalid pool handle"))?;
                 // Explicitly check out one connection for the whole request so
                 // statement preparation, bind encoding, execution, and result
                 // draining cannot be split across independent pool operations.
@@ -1152,8 +1237,8 @@ unsafe fn run_pool_query(
                     pool.acquire(),
                 )
                 .await
-                .map_err(|_| "Pool acquire timed out".to_string())?
-                .map_err(|e| format!("Pool acquire failed: {}", e))?;
+                .map_err(|_| MysqlPromiseError::message("Pool acquire timed out"))?
+                .map_err(|e| MysqlPromiseError::from_sqlx("Pool acquire failed", e))?;
                 execute_query_on_connection(&mut conn, &request).await
             });
         match outcome {
@@ -1162,7 +1247,7 @@ unsafe fn run_pool_query(
             // thread (worker thread-local arena → dangling on the main thread once
             // the pooled thread idles out). `out` is plain Send Rust data.
             Ok(out) => promise.resolve_with(move || outcome_to_jsvalue(&out, rows_as_array)),
-            Err(e) => promise.reject_string(&e),
+            Err(error) => error.reject(promise),
         }
     });
     raw
@@ -1197,21 +1282,21 @@ pub extern "C" fn js_mysql2_pool_get_connection(pool_handle: Handle) -> *mut Pro
     let raw = promise.as_raw();
     spawn_blocking(move || {
         let result = tokio::runtime::Handle::current().block_on(async move {
-            let pool = pool.ok_or_else(|| "Invalid pool handle".to_string())?;
+            let pool = pool.ok_or_else(|| MysqlPromiseError::message("Invalid pool handle"))?;
             tokio::time::timeout(
                 Duration::from_secs(DEFAULT_ACQUIRE_TIMEOUT_SECS),
                 pool.acquire(),
             )
             .await
-            .map_err(|_| "Pool acquire timed out".to_string())?
-            .map_err(|e| format!("Pool acquire failed: {}", e))
+            .map_err(|_| MysqlPromiseError::message("Pool acquire timed out"))?
+            .map_err(|e| MysqlPromiseError::from_sqlx("Pool acquire failed", e))
         });
         match result {
             Ok(conn) => {
                 let h = register_handle(MysqlPoolConnectionHandle::new(conn));
                 promise.resolve(JsValue::from_number(h as f64));
             }
-            Err(e) => promise.reject_string(&e),
+            Err(error) => error.reject(promise),
         }
     });
     raw
@@ -1251,14 +1336,14 @@ unsafe fn run_pool_conn_query(
 
     spawn_blocking(move || {
         let rows_as_array = request.rows_as_array;
-        let outcome: Result<QueryOutcome, String> =
-            tokio::runtime::Handle::current().block_on(async move {
-                let connection =
-                    connection.ok_or_else(|| "Invalid pool-connection handle".to_string())?;
+        let outcome: Result<QueryOutcome, MysqlPromiseError> = tokio::runtime::Handle::current()
+            .block_on(async move {
+                let connection = connection
+                    .ok_or_else(|| MysqlPromiseError::message("Invalid pool-connection handle"))?;
                 let mut slot = connection.lock().await;
                 let conn = slot
                     .as_mut()
-                    .ok_or_else(|| "Pool connection released".to_string())?;
+                    .ok_or_else(|| MysqlPromiseError::message("Pool connection released"))?;
                 execute_query_on_connection(conn, &request).await
             });
         match outcome {
@@ -1267,7 +1352,7 @@ unsafe fn run_pool_conn_query(
             // thread (worker thread-local arena → dangling on the main thread once
             // the pooled thread idles out). `out` is plain Send Rust data.
             Ok(out) => promise.resolve_with(move || outcome_to_jsvalue(&out, rows_as_array)),
-            Err(e) => promise.reject_string(&e),
+            Err(error) => error.reject(promise),
         }
     });
     raw
@@ -1298,6 +1383,13 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    unsafe fn runtime_string(ptr: *const perry_runtime::StringHeader) -> String {
+        assert!(!ptr.is_null());
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<perry_runtime::StringHeader>());
+        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+    }
 
     #[test]
     fn config_defaults() {
@@ -1445,5 +1537,69 @@ mod tests {
         assert_eq!(transaction_sql_for_method("commit"), Some("COMMIT"));
         assert_eq!(transaction_sql_for_method("rollback"), Some("ROLLBACK"));
         assert_eq!(transaction_sql_for_method("release"), None);
+    }
+
+    #[test]
+    fn mysql_server_error_metadata_matches_mysql2_shape() {
+        assert_eq!(mysql2_error_code(1062), Some("ER_DUP_ENTRY"));
+        assert_eq!(mysql2_error_code(1213), Some("ER_LOCK_DEADLOCK"));
+        assert_eq!(mysql2_error_code(u16::MAX), None);
+
+        let promise = JsPromise::new();
+        let raw = promise.as_raw();
+        MysqlPromiseError {
+            message: "Query failed: 1062 duplicate entry".into(),
+            code: mysql2_error_code(1062),
+            errno: Some(1062),
+        }
+        .reject(promise);
+
+        let reason = perry_runtime::promise::js_promise_reason(raw.cast());
+        assert!(
+            JsValue::from_bits(perry_runtime::error::js_error_is_error(reason).to_bits()).to_bool()
+        );
+        let reason = JsValue::from_bits(reason.to_bits());
+        unsafe {
+            assert_eq!(
+                jsvalue_to_string(object_field_by_name(reason, "code")).as_deref(),
+                Some("ER_DUP_ENTRY")
+            );
+            assert_eq!(object_field_by_name(reason, "errno").to_number(), 1062.0);
+        }
+    }
+
+    #[test]
+    fn invalid_connection_rejects_with_error_object() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test tokio runtime");
+        let _runtime_guard = runtime.enter();
+        let sql = alloc_string("SELECT 1");
+
+        let promise = unsafe {
+            js_mysql2_connection_execute(
+                perry_ffi::INVALID_HANDLE,
+                sql.as_raw() as *const u8,
+                f64::from_bits(JsValue::UNDEFINED.bits()),
+            )
+        };
+
+        assert_eq!(perry_runtime::promise::js_promise_state(promise.cast()), 2);
+        let reason = perry_runtime::promise::js_promise_reason(promise.cast());
+        assert_eq!(
+            perry_runtime::error::js_error_is_error(reason).to_bits(),
+            JsValue::from_bool(true).bits()
+        );
+        let error =
+            JsValue::from_bits(reason.to_bits()).as_pointer::<perry_runtime::error::ErrorHeader>();
+        unsafe {
+            assert_eq!(
+                runtime_string((*error).message),
+                "Invalid connection handle"
+            );
+            let stack = runtime_string((*error).stack);
+            assert!(stack.contains("Error: Invalid connection handle"));
+        }
     }
 }

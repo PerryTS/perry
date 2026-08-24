@@ -23,11 +23,10 @@
 //! - A `JsPromise` is owned by Perry's runtime arena from
 //!   construction onwards. Once resolved or rejected, the
 //!   underlying `Promise` is consumed by the awaiter.
-//! - The "bits" passed to [`JsPromise::resolve_string`] /
-//!   [`JsPromise::reject_string`] are NaN-boxed `JSValue`
-//!   representations. The safe wrappers in this module produce
-//!   the right bit pattern so wrapper authors don't need to know
-//!   the tag values.
+//! - The "bits" passed to [`JsPromise::resolve_string`] are NaN-boxed
+//!   `JSValue` representations. [`JsPromise::reject_string`] copies its
+//!   message and constructs the corresponding JavaScript `Error` on the main
+//!   thread, so wrapper authors don't need to know the runtime layout.
 
 use std::ffi::c_void;
 
@@ -42,6 +41,11 @@ extern "C" {
     // constructing JSValues (objects/arrays/strings) — which is UB on a
     // blocking-pool thread. See `JsPromise::resolve_with`.
     fn perry_ffi_promise_resolve_deferred(
+        promise: *mut Promise,
+        ctx: *mut c_void,
+        invoke: extern "C" fn(*mut c_void) -> u64,
+    );
+    fn perry_ffi_promise_reject_deferred(
         promise: *mut Promise,
         ctx: *mut c_void,
         invoke: extern "C" fn(*mut c_void) -> u64,
@@ -221,18 +225,46 @@ impl JsPromise {
         unsafe { perry_ffi_promise_resolve_deferred(self.0, ctx, invoke) };
     }
 
+    /// Reject by building the reason on the **main thread**.
+    ///
+    /// This is the rejection-side twin of [`Self::resolve_with`]. It is useful
+    /// for native failures that need to allocate an Error object or attach
+    /// structured fields after worker-thread work has completed.
+    pub fn reject_with<F>(self, f: F)
+    where
+        F: FnOnce() -> crate::JsValue + Send + 'static,
+    {
+        let boxed: Box<dyn FnOnce() -> u64 + Send> = Box::new(move || f().bits());
+        let thin: Box<Box<dyn FnOnce() -> u64 + Send>> = Box::new(boxed);
+        let ctx = Box::into_raw(thin) as *mut c_void;
+
+        extern "C" fn invoke(ctx: *mut c_void) -> u64 {
+            let thin: Box<Box<dyn FnOnce() -> u64 + Send>> =
+                unsafe { Box::from_raw(ctx as *mut Box<dyn FnOnce() -> u64 + Send>) };
+            let f: Box<dyn FnOnce() -> u64 + Send> = *thin;
+            f()
+        }
+
+        unsafe { perry_ffi_promise_reject_deferred(self.0, ctx, invoke) };
+    }
+
     /// Reject with an arbitrary [`crate::JsValue`]. Mirror of
     /// [`Self::resolve`].
     pub fn reject(self, value: crate::JsValue) {
         unsafe { perry_ffi_promise_reject_bits(self.0, value.bits()) };
     }
 
-    /// Reject with an error message string. The wrapper layer
-    /// produces an Error-shaped JSValue downstream; here we just
-    /// pass the raw message bits.
+    /// Reject with a JavaScript [`Error`](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Error)
+    /// whose `.message` is `message`.
+    ///
+    /// The message is copied before returning and the Error is allocated on
+    /// the main thread. Use [`Self::reject`] when intentionally rejecting with
+    /// a non-Error JavaScript value.
     pub fn reject_string(self, message: &str) {
-        let str_handle = alloc_string(message);
-        unsafe { perry_ffi_promise_reject_bits(self.0, nanbox_string_bits(str_handle.as_raw())) };
+        let message = message.to_owned();
+        self.reject_with(move || {
+            crate::error_value_with_code(&message, "", crate::ErrorKind::Error)
+        });
     }
 }
 
@@ -299,8 +331,9 @@ impl JsNativeAsyncCompletion {
         self.resolve_bits(TAG_UNDEFINED)
     }
 
-    /// Reject with a string reason. The runtime copies the bytes immediately and
-    /// allocates the Perry JS string later on the main thread.
+    /// Reject with a JavaScript `Error` whose `.message` is `message`. The
+    /// runtime copies the bytes immediately and allocates the Error later on
+    /// the main thread.
     pub fn reject_string(self, message: &str) -> i32 {
         unsafe { perry_ffi_native_async_reject_string(self.0, message.as_ptr(), message.len()) }
     }

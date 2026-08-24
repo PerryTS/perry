@@ -191,17 +191,14 @@ fn complete_bits(token: *mut NativeAsyncCompletion, bits: u64, fulfilled: bool) 
     enqueue_with_thread_policy(token, payload, PERRY_NATIVE_ASYNC_OK)
 }
 
-fn bytes_value_bits(bytes: &[u8]) -> u64 {
-    let ptr = if bytes.is_empty() {
+fn error_value_bits(message: &[u8]) -> u64 {
+    let message = if message.is_empty() {
         crate::string::js_string_from_bytes(std::ptr::null(), 0)
     } else {
-        crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+        crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32)
     };
-    crate::value::JSValue::string_ptr(ptr).bits()
-}
-
-fn string_value_bits(message: &str) -> u64 {
-    bytes_value_bits(message.as_bytes())
+    let error = crate::error::js_error_new_with_message(message);
+    crate::value::js_nanbox_pointer(error as i64).to_bits()
 }
 
 fn payload_to_settlement(payload: PendingPayload) -> (bool, u64, u32) {
@@ -210,17 +207,17 @@ fn payload_to_settlement(payload: PendingPayload) -> (bool, u64, u32) {
         PendingPayload::RejectBits(bits) => (false, bits, PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT),
         PendingPayload::RejectString(bytes) => (
             false,
-            bytes_value_bits(&bytes),
+            error_value_bits(&bytes),
             PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT,
         ),
         PendingPayload::Cancel => (
             false,
-            string_value_bits(DEFAULT_CANCEL_REASON),
+            error_value_bits(DEFAULT_CANCEL_REASON.as_bytes()),
             PERRY_NATIVE_ASYNC_CLEANUP_ON_CANCEL,
         ),
         PendingPayload::WrongThread => (
             false,
-            string_value_bits(WRONG_THREAD_REASON),
+            error_value_bits(WRONG_THREAD_REASON.as_bytes()),
             PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT,
         ),
     }
@@ -333,10 +330,11 @@ pub extern "C" fn js_native_async_completion_reject_bits(
     complete_bits(token, bits, false)
 }
 
-/// Reject a native async token with caller-owned UTF-8 bytes.
+/// Reject a native async token with an Error carrying caller-owned UTF-8 bytes
+/// as its message.
 ///
 /// The bytes are copied before enqueueing so worker threads do not allocate
-/// Perry runtime strings; string allocation happens while draining on the main
+/// Perry runtime values; Error allocation happens while draining on the main
 /// thread.
 #[no_mangle]
 pub extern "C" fn js_native_async_completion_reject_string(
@@ -681,15 +679,26 @@ mod tests {
         )
     }
 
-    unsafe fn assert_heap_string_value(value: f64, expected: &[u8]) {
-        let value = crate::value::JSValue::from_bits(value.to_bits());
-        assert!(value.is_string(), "expected heap string JSValue");
-        let ptr = value.as_string_ptr();
+    unsafe fn string_bytes(ptr: *const crate::StringHeader) -> Vec<u8> {
         assert!(!ptr.is_null(), "expected non-null string pointer");
-        assert_eq!((*ptr).byte_len as usize, expected.len());
+        let len = (*ptr).byte_len as usize;
         let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        let bytes = std::slice::from_raw_parts(data, expected.len());
-        assert_eq!(bytes, expected);
+        std::slice::from_raw_parts(data, len).to_vec()
+    }
+
+    unsafe fn assert_error_value(value: f64, expected: &[u8]) {
+        let value = crate::value::JSValue::from_bits(value.to_bits());
+        assert!(value.is_pointer(), "expected Error pointer JSValue");
+        let error = value.as_pointer::<crate::error::ErrorHeader>();
+        assert!(crate::error::ptr_is_native_error(error as usize));
+        assert_eq!(string_bytes((*error).message), expected);
+
+        let stack = string_bytes((*error).stack);
+        assert!(
+            stack.starts_with(b"Error: ") && stack.windows(expected.len()).any(|w| w == expected),
+            "Error.stack must include the rejection message: {}",
+            String::from_utf8_lossy(&stack)
+        );
     }
 
     #[test]
@@ -757,7 +766,7 @@ mod tests {
         assert_eq!(js_native_async_process_pending(), 1);
         assert_eq!(super::super::js_promise_state(promise), 2);
         unsafe {
-            assert_heap_string_value(super::super::js_promise_reason(promise), &expected);
+            assert_error_value(super::super::js_promise_reason(promise), &expected);
         }
     }
 
@@ -786,7 +795,7 @@ mod tests {
 
         assert_eq!(super::super::js_promise_state(promise), 2);
         unsafe {
-            assert_heap_string_value(
+            assert_error_value(
                 super::super::js_promise_reason(promise),
                 DEFAULT_CANCEL_REASON.as_bytes(),
             );
@@ -881,7 +890,7 @@ mod tests {
         assert_eq!(js_native_async_process_pending(), 1);
         assert_eq!(super::super::js_promise_state(promise), 2);
         unsafe {
-            assert_heap_string_value(
+            assert_error_value(
                 super::super::js_promise_reason(promise),
                 WRONG_THREAD_REASON.as_bytes(),
             );
@@ -917,7 +926,7 @@ mod tests {
         assert_eq!(js_native_async_process_pending(), 1);
         assert_eq!(super::super::js_promise_state(promise), 2);
         unsafe {
-            assert_heap_string_value(
+            assert_error_value(
                 super::super::js_promise_reason(promise),
                 WRONG_THREAD_REASON.as_bytes(),
             );

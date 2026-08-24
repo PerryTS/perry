@@ -366,6 +366,12 @@ pub extern "C" fn js_my_fetch(url_ptr: *const StringHeader) -> *mut Promise {
 }
 ```
 
+`reject_string(message)` rejects with a real JavaScript `Error`: consumers can
+use `error instanceof Error`, `error.message`, and `error.stack`. Use
+`reject(value)` only when the API intentionally rejects with a non-Error value,
+or `reject_with(...)` when the Error needs structured fields built on the main
+thread.
+
 ### Sync handle-based class
 
 Use a `handle` descriptor for synchronous resource-style APIs. The

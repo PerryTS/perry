@@ -184,7 +184,7 @@ The 9 surface dimensions perry-ffi exposes today are:
 | Surface | What it does | Documented at |
 |---|---|---|
 | Strings | `JsString` / `alloc_string` / `read_string` / `read_bytes` / `alloc_bytes` | [`abi.md`](abi.md) |
-| Async / Promise | `JsPromise` (`new` / `resolve` / `reject_string`), `spawn_blocking` | [`abi.md`](abi.md) |
+| Async / Promise | `JsPromise` (`new` / `resolve` / `reject_string` as `Error` / `reject_with`), `spawn_blocking` | [`abi.md`](abi.md) |
 | Handles | `register_handle` / `get_handle` / `with_handle` / `take_handle` / `iter_handles_of` | [`abi.md`](abi.md) |
 | JsValue + objects/arrays | `JsValue`, `js_array_alloc/push/get/set`, `js_object_alloc_with_shape`, `js_object_get_field`, `js_object_set_field`, `build_object_shape` | [`abi.md`](abi.md) |
 | Closures | `JsClosure::call0..4` | [`abi.md`](abi.md) |

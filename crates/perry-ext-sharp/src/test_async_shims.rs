@@ -1,3 +1,5 @@
+//! Test-only host shims for the standalone sharp extension test binary.
+
 use perry_ffi::Promise;
 use std::ffi::c_void;
 
@@ -7,18 +9,14 @@ pub extern "C" fn perry_ffi_promise_new() -> *mut Promise {
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ffi_promise_resolve_bits(promise: *mut Promise, bits: u64) {
+pub extern "C" fn perry_ffi_promise_resolve_deferred(
+    promise: *mut Promise,
+    ctx: *mut c_void,
+    invoke: extern "C" fn(*mut c_void) -> u64,
+) {
     perry_runtime::promise::js_promise_resolve(
         promise as *mut perry_runtime::Promise,
-        f64::from_bits(bits),
-    );
-}
-
-#[no_mangle]
-pub extern "C" fn perry_ffi_promise_reject_bits(promise: *mut Promise, bits: u64) {
-    perry_runtime::promise::js_promise_reject(
-        promise as *mut perry_runtime::Promise,
-        f64::from_bits(bits),
+        f64::from_bits(invoke(ctx)),
     );
 }
 
@@ -28,7 +26,10 @@ pub extern "C" fn perry_ffi_promise_reject_deferred(
     ctx: *mut c_void,
     invoke: extern "C" fn(*mut c_void) -> u64,
 ) {
-    perry_ffi_promise_reject_bits(promise, invoke(ctx));
+    perry_runtime::promise::js_promise_reject(
+        promise as *mut perry_runtime::Promise,
+        f64::from_bits(invoke(ctx)),
+    );
 }
 
 #[no_mangle]
