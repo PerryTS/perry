@@ -185,6 +185,7 @@ impl RepeatMatcherRegex {
 #[derive(Clone, Copy)]
 struct GroupFrame {
     captures_before: usize,
+    negative_lookaround: bool,
 }
 
 fn named_capture_end(bytes: &[u8], open: usize) -> Option<usize> {
@@ -202,6 +203,12 @@ fn named_capture_end(bytes: &[u8], open: usize) -> Option<usize> {
 
 fn is_capturing_group(bytes: &[u8], open: usize) -> bool {
     bytes.get(open + 1) != Some(&b'?') || named_capture_end(bytes, open).is_some()
+}
+
+fn is_negative_lookaround(bytes: &[u8], open: usize) -> bool {
+    bytes.get(open + 1) == Some(&b'?')
+        && (bytes.get(open + 2) == Some(&b'!')
+            || (bytes.get(open + 2) == Some(&b'<') && bytes.get(open + 3) == Some(&b'!')))
 }
 
 fn has_braced_quantifier(bytes: &[u8], mut index: usize) -> bool {
@@ -230,10 +237,10 @@ fn quantifier_follows(bytes: &[u8], index: usize) -> bool {
         || has_braced_quantifier(bytes, index)
 }
 
-/// Return the capture-name layout when a pattern has a capture inside a
-/// quantified group. That is precisely the shape for which the linear engine's
-/// leftmost-first result can expose stale captures or stop after the wrong
-/// nullable iteration.
+/// Return the capture-name layout when a pattern needs ECMAScript backtracking
+/// capture semantics. Besides quantified captures, this includes captures in a
+/// negative lookaround: after a successful negative assertion those captures
+/// are unmatched, so a later backreference must match the empty string.
 fn quantified_capture_layout(pattern: &str) -> Option<Vec<Option<String>>> {
     let bytes = pattern.as_bytes();
     let mut captures = Vec::new();
@@ -260,7 +267,10 @@ fn quantified_capture_layout(pattern: &str) -> Option<Vec<Option<String>>> {
                         .map(|end| pattern[index + 3..end].to_string());
                     captures.push(name);
                 }
-                groups.push(GroupFrame { captures_before });
+                groups.push(GroupFrame {
+                    captures_before,
+                    negative_lookaround: is_negative_lookaround(bytes, index),
+                });
                 index += 1;
             }
             b')' if !in_class => {
@@ -268,7 +278,9 @@ fn quantified_capture_layout(pattern: &str) -> Option<Vec<Option<String>>> {
                     index += 1;
                     continue;
                 };
-                if captures.len() > group.captures_before && quantifier_follows(bytes, index + 1) {
+                if captures.len() > group.captures_before
+                    && (quantifier_follows(bytes, index + 1) || group.negative_lookaround)
+                {
                     needs_repeat_matcher = true;
                 }
                 index += 1;
@@ -432,7 +444,7 @@ pub(super) fn replace_wtf8_subject(
     global: bool,
 ) -> Option<Vec<u8>> {
     let (source, flags) = source_and_flags(re);
-    let regex = regress::Regex::with_flags(&source, &flags).ok()?;
+    let regex = regress::Regex::with_flags(&source, flags.as_str()).ok()?;
     let units = decode_wtf8_units(subject);
     let matches: Vec<regress::Match> = if flags.contains('u') || flags.contains('v') {
         regex.find_from_utf16(&units, 0).collect()
@@ -459,6 +471,8 @@ mod tests {
     fn detects_only_quantified_groups_with_captures() {
         assert!(quantified_capture_layout(r"(a?b??)*").is_some());
         assert!(quantified_capture_layout(r"(?:(?=(abc))){0,1}a").is_some());
+        assert!(quantified_capture_layout(r"(?!(a)b)\1").is_some());
+        assert!(quantified_capture_layout(r"(?<!(a)b)\1").is_some());
         assert!(quantified_capture_layout(r"[()]\\(literal\\)").is_none());
         assert!(quantified_capture_layout(r"(?:ab)*").is_none());
         assert!(quantified_capture_layout(r"(ab)c").is_none());

@@ -261,7 +261,7 @@ libc.workspace = true
 gimli = { version = "0.34", default-features = false, features = ["read"] }
 rand = "0.10"
 regex = { workspace = true, optional = true }
-regress = { workspace = true, optional = true }
+regress = { workspace = true, features = ["utf16"], optional = true }
 # Taffy — flexbox / grid layout engine for the perry/tui module
 # (#358 Phase 3). Same crate Bevy and Dioxus use; pure Rust, no FFI.
 taffy = { version = "0.13", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
