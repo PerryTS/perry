@@ -1036,14 +1036,15 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
 ///
 /// Descriptor invalidation is deliberately scoped rather than process-wide:
 /// an own descriptor sets `OBJ_FLAG_HAS_DESCRIPTORS` on this receiver, while a
-/// user descriptor on a registered class/Object prototype flips the same
-/// sticky prototype latch checked below. A descriptor on an unrelated object
-/// can affect neither method resolution nor this exact ShapeId proof and must
-/// not poison every direct-method site in the process.
+/// user descriptor on a registered class/Object prototype flips the matching
+/// method-name slot checked below. A descriptor on an unrelated object or for
+/// an unrelated key can affect neither this method's resolution nor this exact
+/// ShapeId proof and must not poison every direct-method site in the process.
 #[no_mangle]
 pub unsafe extern "C" fn js_method_direct_shape_class(
     receiver: f64,
     out_shape_id: *mut u32,
+    method_guard_slot: u32,
 ) -> u32 {
     if !out_shape_id.is_null() {
         *out_shape_id = 0;
@@ -1058,7 +1059,7 @@ pub unsafe extern "C" fn js_method_direct_shape_class(
     if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
         || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || (*gc_header)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
-        || crate::object::class_prototype_fast_guards_invalidated()
+        || crate::object::class_prototype_fast_guard_invalidated_for_method(method_guard_slot)
     {
         return 0;
     }
@@ -1089,12 +1090,13 @@ pub unsafe extern "C" fn js_method_direct_shape_guard(
     receiver: f64,
     expected_class_id: u32,
     expected_shape_id: u32,
+    method_guard_slot: u32,
 ) -> i32 {
     if expected_class_id == 0 || !crate::object::shapes::is_shape_id(expected_shape_id) {
         return 0;
     }
     let mut shape_id = 0;
-    let class_id = js_method_direct_shape_class(receiver, &mut shape_id);
+    let class_id = js_method_direct_shape_class(receiver, &mut shape_id, method_guard_slot);
     (class_id == expected_class_id && shape_id == expected_shape_id) as i32
 }
 
@@ -1185,7 +1187,7 @@ mod keep_guard_symbols {
     #[cfg(feature = "keepalive-anchors")]
     #[used] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G4: unsafe extern "C" fn(f64, u32, u32) -> i32 = js_method_direct_shape_guard;
+    #[used] static G4: unsafe extern "C" fn(f64, u32, u32, u32) -> i32 = js_method_direct_shape_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G4B: unsafe extern "C" fn(f64, *mut u32) -> u32 = js_method_direct_shape_class;
+    #[used] static G4B: unsafe extern "C" fn(f64, *mut u32, u32) -> u32 = js_method_direct_shape_class;
 }

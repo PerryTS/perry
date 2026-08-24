@@ -43,6 +43,14 @@ pub(crate) fn class_is_key_deleted(class_id: u32, key: &str) -> bool {
     })
 }
 
+pub(crate) fn class_unmark_key_deleted(class_id: u32, key: &str) {
+    CLASS_DELETED_KEYS.with(|m| {
+        if let Some(keys) = m.borrow_mut().get_mut(&class_id) {
+            keys.remove(key);
+        }
+    });
+}
+
 /// Record `C.<name> = value` in the class-ref side table that dynamic reads
 /// (`const K: any = C; K.name`, `Object.keys(C)`, `getOwnPropertyDescriptor`)
 /// consult, and shade the stored value for the incremental marker.
@@ -648,18 +656,9 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     // #7769 follow-up: materializing a declared class's prototype object is
-    // not prototype SURGERY, and it used to invalidate the fast guards as if
-    // it were.
-    //
-    // `invalidate_class_prototype_fast_guards()` trips a process-global,
-    // MONOTONIC latch. It disables every `js_method_direct_shape_guard` /
-    // `js_typed_feedback_method_direct_call_guard` in the program, retires
-    // every outstanding element-shape record (`invalidate_all_element_shapes`)
-    // and bumps `VTABLE_GEN`, retiring the `vtable_ic` / `obj_dispatch_ic`
-    // dispatch caches. It exists for the one event that can change which
-    // member `recv.m()` resolves to: a WRITE to a prototype
-    // (`Class.prototype.m = fn`), which is what the two call sites in
-    // `prototype_methods.rs` cover.
+    // not prototype surgery. A real keyed prototype write invalidates only
+    // the matching method-name guard slot, retires element-shape records, and
+    // bumps `VTABLE_GEN` so generic dispatch observes the replacement.
     //
     // Reaching this line changes none of that. The object being created is
     // fresh and unobserved; the writes immediately below install

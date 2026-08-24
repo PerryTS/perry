@@ -37,15 +37,17 @@ const SHAPE_ID_RANGE_LEN: &str = "1073741824"; // 0x4000_0000
 /// The first block proves that the value is a tagged heap pointer or the raw
 /// object-address form used by internal method ABIs before any dereference.
 /// The second block reproduces the runtime helper's production contract: the
-/// class-prototype invalidation latch is clear, the receiver is a non-forwarded
-/// ordinary object without own descriptors, and its exact `(class_id, ShapeId)`
-/// pair still matches the compiler-published pair. Any failed proof takes the
-/// unchanged dynamic method fallback.
+/// all-method escape latch and this method name's invalidation byte are clear,
+/// the receiver is a non-forwarded ordinary object without own descriptors,
+/// and its exact `(class_id, ShapeId)` pair still matches the
+/// compiler-published pair. Any failed proof takes the unchanged dynamic
+/// method fallback.
 fn emit_inline_direct_method_shape_guard(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
     expected_class_id: &str,
     expected_shape_id: &str,
+    method_guard_slot: &str,
     fast_label: &str,
     fallback_label: &str,
 ) {
@@ -60,7 +62,15 @@ fn emit_inline_direct_method_shape_guard(
         let blk = ctx.block();
         let invalidated =
             blk.load_atomic_acquire(I8, "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED", 1);
-        let prototype_ok = blk.icmp_eq(I8, &invalidated, "0");
+        let all_methods_ok = blk.icmp_eq(I8, &invalidated, "0");
+        let method_slot_ptr = blk.gep(
+            I8,
+            "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD",
+            &[(I64, method_guard_slot)],
+        );
+        let method_invalidated = blk.load_atomic_acquire(I8, &method_slot_ptr, 1);
+        let method_ok = blk.icmp_eq(I8, &method_invalidated, "0");
+        let prototype_ok = blk.and(I1, &all_methods_ok, &method_ok);
         let recv_bits = blk.bitcast_double_to_i64(recv_box);
         let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
         let tag = blk.lshr(I64, &recv_bits, "48");
@@ -395,6 +405,7 @@ pub(super) fn emit_guarded_direct_method_call(
     let entry = ctx.strings.entry(key_idx);
     let bytes_global = format!("@{}", entry.bytes_global);
     let name_len_str = entry.byte_len.to_string();
+    let method_guard_slot_str = (entry.dispatch_hash & 0xffff).to_string();
     let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
     let site_id = if shape_only_guard {
         None
@@ -452,7 +463,11 @@ pub(super) fn emit_guarded_direct_method_call(
         let cid = ctx.block().call(
             I32,
             "js_method_direct_shape_class",
-            &[(DOUBLE, recv_box), (crate::types::PTR, &shape_slot)],
+            &[
+                (DOUBLE, recv_box),
+                (crate::types::PTR, &shape_slot),
+                (I32, &method_guard_slot_str),
+            ],
         );
         let shape_id = ctx.block().load(I32, &shape_slot);
         {
@@ -486,6 +501,7 @@ pub(super) fn emit_guarded_direct_method_call(
             recv_box,
             &expected_class_id_str,
             &expected_shape_id,
+            &method_guard_slot_str,
             &fast_label,
             &fallback_label,
         );
@@ -504,6 +520,7 @@ pub(super) fn emit_guarded_direct_method_call(
                 (DOUBLE, recv_box),
                 (I32, &expected_class_id_str),
                 (I32, &expected_shape_id),
+                (I32, &method_guard_slot_str),
             ],
         )
     } else {

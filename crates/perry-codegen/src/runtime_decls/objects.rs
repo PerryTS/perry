@@ -33,6 +33,12 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // Direct-method lowering reads it with acquire ordering before touching a
     // receiver header; prototype mutation stores 1 with release ordering.
     module.add_external_global("PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED", I8);
+    // Per-method sticky invalidation table indexed by low FNV-1a bits. A
+    // collision is conservative: it only disables another direct guard.
+    module.add_external_global(
+        "PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD",
+        "[65536 x i8]",
+    );
     // #7834/#7873: process-global count of threads with per-object records.
     // `0` proves both per-object side tables are empty everywhere, so a
     // construction site can skip `js_gc_forget_object_layout` outright.
@@ -214,8 +220,12 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE, I32, I32, PTR, I64, PTR],
     );
-    module.declare_function("js_method_direct_shape_guard", I32, &[DOUBLE, I32, I32]);
-    module.declare_function("js_method_direct_shape_class", I32, &[DOUBLE, PTR]);
+    module.declare_function(
+        "js_method_direct_shape_guard",
+        I32,
+        &[DOUBLE, I32, I32, I32],
+    );
+    module.declare_function("js_method_direct_shape_class", I32, &[DOUBLE, PTR, I32]);
     module.declare_function(
         "js_typed_feedback_closure_direct_call_guard",
         I32,

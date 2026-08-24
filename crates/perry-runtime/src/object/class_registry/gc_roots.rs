@@ -622,6 +622,10 @@ pub(crate) fn test_clear_class_side_table_roots() {
         }
     });
     CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(false, std::sync::atomic::Ordering::Release);
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD
+        .write()
+        .unwrap()
+        .clear();
     FUNCTION_CLASS_IDS.with(|table| {
         if let Ok(mut guard) = table.write() {
             *guard = None;
