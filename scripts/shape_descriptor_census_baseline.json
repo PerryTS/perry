@@ -2,6 +2,8 @@
   "codegen_object_header_size_callsite_multiset": {
     "crates/perry-codegen/src/codegen/artifacts.rs|crate::target_layout::object_header_size_bytes(target_triple),": 1,
     "crates/perry-codegen/src/expr/element_shape_guard.rs|let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
+    "crates/perry-codegen/src/expr/index_get/inline_dyn_typed_array.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
+    "crates/perry-codegen/src/expr/index_get/inline_dyn_typed_array.rs|let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)": 1,
     "crates/perry-codegen/src/expr/member_update.rs|let header_skip = crate::target_layout::object_header_size_bytes(": 1,
     "crates/perry-codegen/src/expr/property_get.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple)": 3,
     "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
@@ -45,7 +47,7 @@
     "crates/perry-runtime/src/object/object_ops.rs|keys_array|declaration|pub(crate) use keys_array::{": 1
   },
   "summary": {
-    "codegen_object_header_size_sites": 34,
+    "codegen_object_header_size_sites": 36,
     "raw_member_files": 7,
     "raw_member_sites": {
       "keys_array": 24

@@ -582,7 +582,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     )
     require_code(
         generic_body,
-        r"select\s*\(\s*I1\s*,\s*&is_stamp\s*,\s*I64\s*,\s*&id_token\s*,\s*\"0\"\s*\)",
+        r"icmp_ne\s*\(\s*I32\s*,\s*&pcid\s*,\s*\"0\"\s*\)",
         "generic read PIC invalid-id fail-closed token",
     )
     for name in ("lower_put_value_static_write_ic", "lower_put_value_dyn_ic_inline"):
@@ -813,6 +813,28 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     expect_rejected(
         "legacy keys-header offset in emitted PIC",
         lambda: assert_authority_surfaces(legacy_ir),
+    )
+
+    # #8665: the generic read PIC's invalid-id fail-closed token (pcid != 0)
+    # must not go quietly missing. Plant a regression that emits an
+    # always-nonzero comparand instead of the real ShapeId register, and
+    # prove the census still catches it -- this is what stands between the
+    # check above and a vacuous pass, per #6942/#6946/#7024's precedent that
+    # an unexercised assertion is a decision nobody actually made.
+    dropped_fail_closed = dict(sources)
+    path = "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs"
+    sabotaged_body, substitutions = re.subn(
+        r'icmp_ne\(I32, &pcid, "0"\)',
+        'icmp_ne(I32, &pcid, "-1")',
+        dropped_fail_closed[path],
+        count=1,
+    )
+    if substitutions != 1:
+        raise CensusError("generic read PIC fail-closed sabotage fixture missing")
+    dropped_fail_closed[path] = sabotaged_body
+    expect_rejected(
+        "generic read PIC invalid-id fail-closed token silently changed",
+        lambda: assert_authority_surfaces(dropped_fail_closed),
     )
 
     # #8113: the gep-spelled emitted guards. This arm was VACUOUS before —
