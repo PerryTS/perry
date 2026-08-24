@@ -818,10 +818,20 @@ fn typed_feedback_guards_direct_class_method_specialization() {
     assert!(ir.contains("js_typed_feedback_method_direct_call_guard"));
     assert!(ir.contains("method_direct.fast"));
     assert!(ir.contains("method_direct.fallback"));
-    // Class field initialization follows DefineField semantics, so the
-    // synthesized initializer uses the class-field add helper rather than the
-    // ordinary property-set fallback.
-    assert!(ir.contains("call double @js_class_field_add"));
+    // Class field initialization follows DefineField semantics. Since #8653
+    // this fixture takes the guarded fast path rather than an unconditional
+    // `js_class_field_add`: the field is a known slot with no accessor
+    // anywhere on the chain and the chain's constructor cannot replace
+    // `this`, so the store is specialized behind a shape guard. DefineField
+    // semantics are preserved on the fallback arm, which is what keeps an
+    // inherited setter from running.
+    assert!(ir.contains("js_typed_feedback_class_field_set_guard"));
+    assert!(ir.contains("class_field_set.fast"));
+    assert!(ir.contains("class_field_set.fallback"));
+    assert!(ir.contains("call void @js_class_field_set_fallback"));
+    // The unconditional helper must NOT be called for this shape -- that was
+    // the #8648 regression (3.11x on `shapes`) that #8653 reverted.
+    assert!(!ir.contains("call double @js_class_field_add"));
     assert!(ir.contains("call double @js_native_call_method"));
 }
 
