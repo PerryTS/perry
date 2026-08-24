@@ -240,7 +240,16 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
         return None;
     }
     let class_id = (*obj).class_id;
-    if class_id != 0 && !is_anon_shape_class_id(class_id) {
+    // Declared ES class instances have a registered class id, but still end
+    // their implicit prototype chain at Object.prototype.  Their class
+    // methods/accessors have already been consulted before this fallback, so
+    // a miss must remain eligible for Object.prototype (including user-added
+    // properties).  Keep excluding unregistered native/synthetic class ids:
+    // those object kinds resolve their own intrinsic prototype chains.
+    if class_id != 0
+        && !is_anon_shape_class_id(class_id)
+        && !super::super::class_registry::is_class_id_registered(class_id)
+    {
         return None;
     }
     default_object_prototype_property_value(obj as usize, key)
