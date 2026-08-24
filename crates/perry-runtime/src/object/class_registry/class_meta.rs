@@ -186,6 +186,19 @@ pub(crate) fn identify_global_builtin_constructor(func_value: f64) -> Option<&'s
         let is_global_builtin_func = func_ptr
             == global_this_builtin_noop_thunk as *const u8 as usize
             || func_ptr == typed_array_constructor_call_thunk as *const u8 as usize
+            // ArrayBuffer / SharedArrayBuffer / DataView carry the shared
+            // construct-only call thunk (populate.rs). When one is captured into
+            // a variable and constructed — `const D = DataView; new D(buf)`,
+            // `Reflect.construct(DataView, …)`, `class X extends DataView` — the
+            // dynamic-`new` path lands here and must recognize the thunk so the
+            // singleton walk recovers the name and construct.rs's
+            // "ArrayBuffer"/"SharedArrayBuffer"/"DataView" arms build it, instead
+            // of falling through to invoke the bare-call thunk (which throws
+            // "Constructor requires 'new'"). Minified bundles capture these
+            // globals into locals pervasively (the Claude Code cli.js bundle
+            // fails at module init without this). Regression from the thunk swap
+            // in 06e1ab349 — before it these carried the recognized noop thunk.
+            || func_ptr == construct_only_builtin_call_thunk as *const u8 as usize
             // #4102: `Array`/`Object`/`Date` constructor *values* carry their own
             // coercion thunks (not the shared noop thunk), so the dynamic
             // `instanceof` / reflective `@@hasInstance` path could not recover
