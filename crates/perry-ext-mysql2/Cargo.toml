@@ -24,3 +24,6 @@ chrono.workspace = true
 
 [dev-dependencies]
 perry-ffi = { workspace = true, features = ["runtime-link"] }
+# Standalone extension tests need the runtime half of the test-only async FFI
+# shims; production code still depends on perry-ffi only.
+perry-runtime = { workspace = true, features = ["default", "stdlib"] }

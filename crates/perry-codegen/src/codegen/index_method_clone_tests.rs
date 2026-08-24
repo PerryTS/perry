@@ -516,6 +516,59 @@ fn checked_reader_callback_loop_versions_to_fast_and_resumable_slow_bodies() {
 }
 
 #[test]
+fn versioned_checked_reader_admission_canonicalizes_one_forwarding_edge() {
+    let ir = emit_versioned_checked_reader_loop();
+    let iterate = function_body(
+        &ir,
+        "@perry_method_versioned_checked_reader_loop_ts__Reader__iterate(",
+    );
+    let source_guard = iterate
+        .split("\nversioned_index.array.source_deref.")
+        .nth(1)
+        .and_then(|body| body.split("\nversioned_index.array.live_deref.").next())
+        .unwrap_or_else(|| panic!("loop has no forwarding-source guard:\n{iterate}"));
+    let live_handle = source_guard
+        .lines()
+        .find(|line| line.contains(" = select i1") && line.contains(", i64 "))
+        .and_then(|line| line.trim().split_once(" = ").map(|(name, _)| name))
+        .unwrap_or_else(|| panic!("source guard has no selected live handle:\n{source_guard}"));
+    assert!(
+        source_guard.contains("and i8")
+            && source_guard.contains(", 128")
+            && source_guard.contains("load i64")
+            && source_guard.contains("label %versioned_index.array.live_deref.")
+            && source_guard.contains("label %versioned_index.loop.slow.preheader")
+            && !source_guard.contains(&format!("sub i64 {live_handle}, 8")),
+        "admission must select one forwarding target and validate its address before \
+         reading its header:\n{source_guard}"
+    );
+    let live_guard = iterate
+        .split("\nversioned_index.array.live_deref.")
+        .nth(1)
+        .and_then(|body| body.split("\nversioned_index.array.canonicalize.").next())
+        .unwrap_or_else(|| panic!("loop has no selected-target header guard:\n{iterate}"));
+    assert!(
+        live_guard.contains(&format!("sub i64 {live_handle}, 8"))
+            && live_guard.contains("label %versioned_index.array.canonicalize.")
+            && live_guard.contains("label %versioned_index.loop.slow.preheader"),
+        "the selected target must be fully re-branded before admission:\n{live_guard}"
+    );
+    let canonicalize = iterate
+        .split("\nversioned_index.array.canonicalize.")
+        .nth(1)
+        .and_then(|body| body.split("\nversioned_index.array.source_deref.").next())
+        .unwrap_or_else(|| panic!("loop has no canonicalization block:\n{iterate}"));
+    assert!(
+        canonicalize.contains(&format!(
+            "or i64 {live_handle}, {}",
+            crate::nanbox::POINTER_TAG_I64
+        )) && canonicalize.contains("store ptr addrspace(1)"),
+        "the uncaptured array local must be rewritten to the admitted live target so \
+         iteration guards do not revisit an identity stub:\n{canonicalize}"
+    );
+}
+
+#[test]
 fn guarded_read_can_follow_one_forwarding_edge_but_rechecks_the_live_header() {
     let ir = emit();
     let clone = function_body(

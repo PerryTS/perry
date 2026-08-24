@@ -1,0 +1,1 @@
+Fixed shared HTTP/WS servers by scheduling HTTP and HTTPS accept loops through Perry's explicit reactor-owned async bridge, using the same path for Unix round-robin file-descriptor injection. Adds an end-to-end regression covering a `WebSocketServer` attached to a `node:http` server followed by a plain `fetch`.

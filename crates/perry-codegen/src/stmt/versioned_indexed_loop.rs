@@ -244,8 +244,12 @@ fn emit_array_admission(
     slow_label: &str,
 ) -> Option<(String, String)> {
     let local_slot = ctx.locals.get(&local_id)?.clone();
-    let deref_idx = ctx.new_block("versioned_index.array.deref");
-    let deref_label = ctx.block_label(deref_idx);
+    let source_deref_idx = ctx.new_block("versioned_index.array.source_deref");
+    let source_deref_label = ctx.block_label(source_deref_idx);
+    let live_deref_idx = ctx.new_block("versioned_index.array.live_deref");
+    let live_deref_label = ctx.block_label(live_deref_idx);
+    let canonicalize_idx = ctx.new_block("versioned_index.array.canonicalize");
+    let canonicalize_label = ctx.block_label(canonicalize_idx);
     let heap_floor =
         crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
     let heap_ceiling =
@@ -262,10 +266,40 @@ fn emit_array_admission(
     let below_ceiling = ctx.block().icmp_ult(I64, &array_handle, &heap_ceiling);
     let in_heap = ctx.block().and(I1, &above_floor, &below_ceiling);
     let safe = ctx.block().and(I1, &is_pointer, &in_heap);
-    ctx.block().cond_br(&safe, &deref_label, slow_label);
+    ctx.block().cond_br(&safe, &source_deref_label, slow_label);
 
-    ctx.current_block = deref_idx;
-    let fingerprint_addr = ctx.block().sub(I64, &array_handle, "8");
+    // Array growth leaves a forwarding stub at the identity-bearing address.
+    // Mirror the ordinary indexed-read guard: follow at most one edge, then
+    // validate the selected address before touching its header. A longer chain
+    // remains fail-closed and resumes the generic loop.
+    ctx.current_block = source_deref_idx;
+    let source_gc_type_addr = ctx.block().sub(I64, &array_handle, "8");
+    let source_gc_type_ptr = ctx.block().inttoptr(I64, &source_gc_type_addr);
+    let source_gc_type = ctx.block().load(I8, &source_gc_type_ptr);
+    let source_is_array = ctx.block().icmp_eq(I8, &source_gc_type, "1");
+    let source_flags_addr = ctx.block().sub(I64, &array_handle, "7");
+    let source_flags_ptr = ctx.block().inttoptr(I64, &source_flags_addr);
+    let source_flags = ctx.block().load(I8, &source_flags_ptr);
+    let source_forwarded_bits = ctx.block().and(I8, &source_flags, "128");
+    let source_is_forwarded = ctx.block().icmp_ne(I8, &source_forwarded_bits, "0");
+    let source_ptr = ctx.block().inttoptr(I64, &array_handle);
+    let forwarding_target = ctx.block().load(I64, &source_ptr);
+    let follow_forwarding = ctx.block().and(I1, &source_is_array, &source_is_forwarded);
+    let live_handle = ctx.block().select(
+        I1,
+        &follow_forwarding,
+        I64,
+        &forwarding_target,
+        &array_handle,
+    );
+    let live_above_floor = ctx.block().icmp_uge(I64, &live_handle, &heap_floor);
+    let live_below_ceiling = ctx.block().icmp_ult(I64, &live_handle, &heap_ceiling);
+    let live_in_heap = ctx.block().and(I1, &live_above_floor, &live_below_ceiling);
+    ctx.block()
+        .cond_br(&live_in_heap, &live_deref_label, slow_label);
+
+    ctx.current_block = live_deref_idx;
+    let fingerprint_addr = ctx.block().sub(I64, &live_handle, "8");
     let fingerprint_ptr = ctx.block().inttoptr(I64, &fingerprint_addr);
     let fingerprint = ctx.block().load_aligned(I128, &fingerprint_ptr, 8);
     let gc_header = ctx.block().trunc(I128, &fingerprint, I64);
@@ -298,7 +332,17 @@ fn emit_array_admission(
     pass = ctx.block().and(I1, &pass, &length_sane);
     pass = ctx.block().and(I1, &pass, &capacity_sane);
     pass = ctx.block().and(I1, &pass, &length_within_capacity);
-    ctx.block().cond_br(&pass, success_label, slow_label);
+    ctx.block().cond_br(&pass, &canonicalize_label, slow_label);
+
+    // Candidate analysis excludes rebinding and closure capture of this local,
+    // so replacing its internal root with the live address is unobservable.
+    // It also makes the existing per-iteration fingerprint guard O(1): a later
+    // growth/GC move turns this live address into a stub and side-exits before
+    // any effect, instead of re-walking an already-stale identity stub forever.
+    ctx.current_block = canonicalize_idx;
+    let live_box = crate::expr::nanbox_pointer_inline(ctx.block(), &live_handle);
+    ctx.block().store(DOUBLE, &live_box, &local_slot);
+    ctx.block().br(success_label);
     Some((local_slot, fingerprint))
 }
 

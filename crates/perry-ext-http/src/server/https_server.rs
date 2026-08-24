@@ -489,132 +489,133 @@ pub unsafe extern "C" fn js_node_https_server_listen(server_handle: i64, args_ar
     let request_tx_for_spawn = request_tx.clone();
     let tls_config_for_spawn = tls_config;
 
-    perry_ffi::spawn_blocking_with_reactor(move || {
-        tokio::spawn(async move {
-            let listener = match TcpListener::from_std(std_listener) {
-                Ok(l) => l,
-                Err(e) => {
-                    eprintln!("[node:https] tokio adopt failed: {}", e);
-                    return;
-                }
-            };
-            loop {
-                tokio::select! {
-                    accepted = listener.accept() => {
-                        match accepted {
-                            Ok((stream, peer)) => {
-                                // Node sets TCP_NODELAY on accepted connections by
-                                // default. Honor the server's `noDelay` option
-                                // (default true) on the raw TCP socket before the
-                                // TLS handshake; the option persists through rustls.
-                                crate::server::server::apply_accept_no_delay(&stream, no_delay);
-                                let tls_config = tls_config_for_spawn.clone();
-                                let request_tx = request_tx_for_spawn.clone();
-                                // #4905/#4971 — register the connection so
-                                // close()/closeAllConnections/
-                                // closeIdleConnections can reach this task
-                                // from the main thread, and queue the
-                                // 'connection' emit (Node fires it on the raw
-                                // TCP connection, before the TLS handshake).
-                                let conn_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
-                                let busy = Arc::new(AtomicUsize::new(0));
-                                let read_active = Arc::new(AtomicBool::new(false));
-                                let rewrite_chunked_header = Arc::new(AtomicBool::new(false));
-                                let close = Arc::new(tokio::sync::Notify::new());
-                                CONNECTIONS.lock().unwrap().insert(
-                                    conn_id,
-                                    TrackedConnection {
-                                        server_handle,
-                                        close: close.clone(),
-                                        busy: busy.clone(),
-                                        read_active: read_active.clone(),
-                                    },
-                                );
-                                if let Ok(mut q) = PENDING_CONNECTION_EVENTS.lock() {
-                                    q.push(server_handle);
-                                }
-                                tokio::spawn(async move {
-                                    let keylog = Arc::new(ConnectionKeyLog::default());
-                                    let mut connection_config = (*tls_config).clone();
-                                    connection_config.key_log = keylog.clone();
-                                    let acceptor = TlsAcceptor::from(Arc::new(connection_config));
-                                    let tls_stream = match acceptor.accept(stream).await {
-                                        Ok(s) => s,
-                                        Err(error) => {
-                                            queue_tls_client_error(
-                                                server_handle,
-                                                format!("TLS handshake failed: {error}"),
-                                            );
-                                            CONNECTIONS.lock().unwrap().remove(&conn_id);
-                                            return;
-                                        }
-                                    };
-                                    let negotiated_servername = tls_stream
-                                        .get_ref()
-                                        .1
-                                        .server_name()
-                                        .map(String::from);
-                                    queue_tls_keylog(server_handle, keylog.drain());
-                                    // Track read activity on the DECRYPTED
-                                    // stream — handshake bytes must not mark
-                                    // a request-less socket non-idle (#4971).
-                                    let io = TokioIo::new(ReadActivity::new(
-                                        tls_stream,
-                                        read_active.clone(),
-                                        rewrite_chunked_header.clone(),
-                                    ));
-                                    let close_for_service = close.clone();
-                                    let service = service_fn(move |req: Request<Incoming>| {
-                                        let request_tx = request_tx.clone();
-                                        let busy = busy.clone();
-                                        let read_active = read_active.clone();
-                                        let connection_close = close_for_service.clone();
-                                        let rewrite_chunked_header = rewrite_chunked_header.clone();
-                                        let negotiated_servername = negotiated_servername.clone();
-                                        async move {
-                                            busy.fetch_add(1, Ordering::SeqCst);
-                                            read_active.store(false, Ordering::SeqCst);
-                                            let res = handle_https_request(
-                                                server_handle,
-                                                peer,
-                                                req,
-                                                request_tx,
-                                                connection_close,
-                                                rewrite_chunked_header,
-                                                negotiated_servername,
-                                            )
-                                            .await;
-                                            busy.fetch_sub(1, Ordering::SeqCst);
-                                            res
-                                        }
-                                    });
-                                    let mut builder = http1::Builder::new();
-                                    builder.auto_date_header(false).title_case_headers(true);
-                                    let conn = builder.serve_connection(io, service).with_upgrades();
-                                    tokio::pin!(conn);
-                                    tokio::select! {
-                                        result = &mut conn => {
-                                            // Common when the client closes
-                                            // mid-request — silenced.
-                                            let _ = result;
-                                        }
-                                        _ = close.notified() => {
-                                            // close()/closeAllConnections/
-                                            // closeIdleConnections: dropping
-                                            // the pinned connection closes the
-                                            // socket immediately.
-                                        }
-                                    }
-                                    CONNECTIONS.lock().unwrap().remove(&conn_id);
-                                });
-                            }
-                            Err(e) => eprintln!("[node:https] accept error: {}", e),
-                        }
-                    }
-                    _ = &mut shutdown_rx => break,
-                }
+    // Use the same explicit reactor-owned scheduling path as the plain HTTP
+    // listener. HTTPS supports the same attached WebSocket-server link shape,
+    // so it must not depend on an ambient Tokio context either (#8747).
+    perry_ffi::spawn_async(async move {
+        let listener = match TcpListener::from_std(std_listener) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[node:https] tokio adopt failed: {}", e);
+                return;
             }
-        });
+        };
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    match accepted {
+                        Ok((stream, peer)) => {
+                            // Node sets TCP_NODELAY on accepted connections by
+                            // default. Honor the server's `noDelay` option
+                            // (default true) on the raw TCP socket before the
+                            // TLS handshake; the option persists through rustls.
+                            crate::server::server::apply_accept_no_delay(&stream, no_delay);
+                            let tls_config = tls_config_for_spawn.clone();
+                            let request_tx = request_tx_for_spawn.clone();
+                            // #4905/#4971 — register the connection so
+                            // close()/closeAllConnections/
+                            // closeIdleConnections can reach this task
+                            // from the main thread, and queue the
+                            // 'connection' emit (Node fires it on the raw
+                            // TCP connection, before the TLS handshake).
+                            let conn_id = NEXT_CONNECTION_ID.fetch_add(1, Ordering::SeqCst);
+                            let busy = Arc::new(AtomicUsize::new(0));
+                            let read_active = Arc::new(AtomicBool::new(false));
+                            let rewrite_chunked_header = Arc::new(AtomicBool::new(false));
+                            let close = Arc::new(tokio::sync::Notify::new());
+                            CONNECTIONS.lock().unwrap().insert(
+                                conn_id,
+                                TrackedConnection {
+                                    server_handle,
+                                    close: close.clone(),
+                                    busy: busy.clone(),
+                                    read_active: read_active.clone(),
+                                },
+                            );
+                            if let Ok(mut q) = PENDING_CONNECTION_EVENTS.lock() {
+                                q.push(server_handle);
+                            }
+                            tokio::spawn(async move {
+                                let keylog = Arc::new(ConnectionKeyLog::default());
+                                let mut connection_config = (*tls_config).clone();
+                                connection_config.key_log = keylog.clone();
+                                let acceptor = TlsAcceptor::from(Arc::new(connection_config));
+                                let tls_stream = match acceptor.accept(stream).await {
+                                    Ok(s) => s,
+                                    Err(error) => {
+                                        queue_tls_client_error(
+                                            server_handle,
+                                            format!("TLS handshake failed: {error}"),
+                                        );
+                                        CONNECTIONS.lock().unwrap().remove(&conn_id);
+                                        return;
+                                    }
+                                };
+                                let negotiated_servername = tls_stream
+                                    .get_ref()
+                                    .1
+                                    .server_name()
+                                    .map(String::from);
+                                queue_tls_keylog(server_handle, keylog.drain());
+                                // Track read activity on the DECRYPTED
+                                // stream — handshake bytes must not mark
+                                // a request-less socket non-idle (#4971).
+                                let io = TokioIo::new(ReadActivity::new(
+                                    tls_stream,
+                                    read_active.clone(),
+                                    rewrite_chunked_header.clone(),
+                                ));
+                                let close_for_service = close.clone();
+                                let service = service_fn(move |req: Request<Incoming>| {
+                                    let request_tx = request_tx.clone();
+                                    let busy = busy.clone();
+                                    let read_active = read_active.clone();
+                                    let connection_close = close_for_service.clone();
+                                    let rewrite_chunked_header = rewrite_chunked_header.clone();
+                                    let negotiated_servername = negotiated_servername.clone();
+                                    async move {
+                                        busy.fetch_add(1, Ordering::SeqCst);
+                                        read_active.store(false, Ordering::SeqCst);
+                                        let res = handle_https_request(
+                                            server_handle,
+                                            peer,
+                                            req,
+                                            request_tx,
+                                            connection_close,
+                                            rewrite_chunked_header,
+                                            negotiated_servername,
+                                        )
+                                        .await;
+                                        busy.fetch_sub(1, Ordering::SeqCst);
+                                        res
+                                    }
+                                });
+                                let mut builder = http1::Builder::new();
+                                builder.auto_date_header(false).title_case_headers(true);
+                                let conn = builder.serve_connection(io, service).with_upgrades();
+                                tokio::pin!(conn);
+                                tokio::select! {
+                                    result = &mut conn => {
+                                        // Common when the client closes
+                                        // mid-request — silenced.
+                                        let _ = result;
+                                    }
+                                    _ = close.notified() => {
+                                        // close()/closeAllConnections/
+                                        // closeIdleConnections: dropping
+                                        // the pinned connection closes the
+                                        // socket immediately.
+                                    }
+                                }
+                                CONNECTIONS.lock().unwrap().remove(&conn_id);
+                            });
+                        }
+                        Err(e) => eprintln!("[node:https] accept error: {}", e),
+                    }
+                }
+                _ = &mut shutdown_rx => break,
+            }
+        }
     });
 
     // #4903 — queue the `'listening'` emit + the optional `cb` for the

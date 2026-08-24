@@ -716,38 +716,39 @@ fn spawn_rr_inject_loop(
         }
     });
 
-    perry_ffi::spawn_blocking_with_reactor(move || {
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    maybe_fd = fd_rx.recv() => {
-                        let Some(fd) = maybe_fd else { break };
-                        let std_stream = unsafe { std::net::TcpStream::from_raw_fd(fd) };
-                        if std_stream.set_nonblocking(true).is_err() {
-                            continue;
-                        }
-                        let peer = std_stream
-                            .peer_addr()
-                            .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
-                        match tokio::net::TcpStream::from_std(std_stream) {
-                            Ok(stream) => {
-                                // Match Node's per-connection `noDelay` (default on).
-                                let _ = stream.set_nodelay(no_delay);
-                                serve_http_connection(
-                                    server_handle,
-                                    stream,
-                                    peer,
-                                    request_tx_for_spawn.clone(),
-                                    upgrade_tx_for_spawn.clone(),
-                                );
-                            }
-                            Err(e) => eprintln!("[node:http] rr adopt failed: {}", e),
-                        }
+    // Cross the FFI boundary as a future so Perry schedules the loop directly
+    // on its reactor-owned runtime. Relying on an ambient Tokio handle inside
+    // `spawn_blocking_with_reactor` is link-shape-sensitive (#8747).
+    perry_ffi::spawn_async(async move {
+        loop {
+            tokio::select! {
+                maybe_fd = fd_rx.recv() => {
+                    let Some(fd) = maybe_fd else { break };
+                    let std_stream = unsafe { std::net::TcpStream::from_raw_fd(fd) };
+                    if std_stream.set_nonblocking(true).is_err() {
+                        continue;
                     }
-                    _ = &mut shutdown_rx => break,
+                    let peer = std_stream
+                        .peer_addr()
+                        .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
+                    match tokio::net::TcpStream::from_std(std_stream) {
+                        Ok(stream) => {
+                            // Match Node's per-connection `noDelay` (default on).
+                            let _ = stream.set_nodelay(no_delay);
+                            serve_http_connection(
+                                server_handle,
+                                stream,
+                                peer,
+                                request_tx_for_spawn.clone(),
+                                upgrade_tx_for_spawn.clone(),
+                            );
+                        }
+                        Err(e) => eprintln!("[node:http] rr adopt failed: {}", e),
+                    }
                 }
+                _ = &mut shutdown_rx => break,
             }
-        });
+        }
     });
 }
 
@@ -887,46 +888,44 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
         // whole listener lifetime in a GC-unsafe zone would disable `gc()` for
         // long-running servers without adding safety.
 
-        // The closure passed to `spawn_blocking_with_reactor` runs INSIDE
-        // a tokio worker task (perry-stdlib's shim wraps it in
-        // `runtime().spawn(async { invoke(...) })`), so calling
-        // `Handle::current().block_on(fut)` would panic with
-        // "Cannot start a runtime from within a runtime". Spawn the
-        // accept loop as a separate async task on the existing runtime
-        // and let the closure return immediately.
-        perry_ffi::spawn_blocking_with_reactor(move || {
-            tokio::spawn(async move {
-                let listener = match TcpListener::from_std(std_listener) {
-                    Ok(l) => l,
-                    Err(e) => {
-                        eprintln!("[node:http] tokio adopt failed: {}", e);
-                        return;
-                    }
-                };
-                loop {
-                    tokio::select! {
-                        accepted = listener.accept() => {
-                            match accepted {
-                                Ok((stream, peer)) => {
-                                    // Match Node's per-connection `noDelay` (default on).
-                                    let _ = stream.set_nodelay(no_delay);
-                                    serve_http_connection(
-                                        server_handle,
-                                        stream,
-                                        peer,
-                                        request_tx_for_spawn.clone(),
-                                        upgrade_tx_for_spawn.clone(),
-                                    );
-                                }
-                                Err(e) => eprintln!("[node:http] accept error: {}", e),
+        // Schedule the accept future through Perry's explicit async bridge.
+        // `spawn_blocking_with_reactor(|| tokio::spawn(...))` depended on an
+        // ambient Tokio context inside the FFI callback; when `ws` changed the
+        // native-wrapper link shape, the spawned task reached `from_std`
+        // without the HTTP wrapper seeing a reactor and aborted (#8747).
+        // The server's `listening && refed` active gate above keeps Perry's
+        // event loop driving this detached future until `close()` fires.
+        perry_ffi::spawn_async(async move {
+            let listener = match TcpListener::from_std(std_listener) {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("[node:http] tokio adopt failed: {}", e);
+                    return;
+                }
+            };
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        match accepted {
+                            Ok((stream, peer)) => {
+                                // Match Node's per-connection `noDelay` (default on).
+                                let _ = stream.set_nodelay(no_delay);
+                                serve_http_connection(
+                                    server_handle,
+                                    stream,
+                                    peer,
+                                    request_tx_for_spawn.clone(),
+                                    upgrade_tx_for_spawn.clone(),
+                                );
                             }
+                            Err(e) => eprintln!("[node:http] accept error: {}", e),
                         }
-                        _ = &mut shutdown_rx => {
-                            break;
-                        }
+                    }
+                    _ = &mut shutdown_rx => {
+                        break;
                     }
                 }
-            });
+            }
         });
     }
 
