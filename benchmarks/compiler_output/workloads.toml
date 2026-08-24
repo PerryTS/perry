@@ -2076,6 +2076,7 @@ allowed_hot_loop_runtime_calls = [
   "js_for_in_keys_stable_value",
   "js_gc_loop_safepoint",
   "js_in_operator",
+  "js_value_typeof",
 ]
 
 [workloads.for_in_stable_keys.vectorization]
@@ -2091,6 +2092,8 @@ allowed_missed_reason_kinds = [
   "unsupported_instruction",
   "unsupported_reduction",
 ]
+
+[workloads.for_in_stable_keys.runtime_budgets]
 
 [[workloads.for_in_stable_keys.stdout_checks]]
 name = "for_in_stable_keys_checksum"
@@ -2114,3 +2117,40 @@ regex_none = [
   "call i64 @js_object_get_own_property_names",
 ]
 detail = "the stable arm does not directly allocate or rebuild generic key lists"
+
+[workloads.issue_8693_imported_this]
+source = "test-files/fixtures/issue_8693_imported_this/main.js"
+kind = "imported_class_method_specialization"
+allow_hot_loop_conversions = true
+allow_dynamic_property_runtime = true
+
+[workloads.issue_8693_imported_this.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: this fixture gates cross-module method dispatch, not loop vectorization"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.issue_8693_imported_this.runtime_budgets]
+
+[workloads.issue_8693_imported_this.native_rep_checks]
+allow_materialization_reasons = ["runtime_api"]
+
+[[workloads.issue_8693_imported_this.native_rep_checks.require_records]]
+name = "imported_registry_proven_this_selection"
+consumer = "proven_this_method_direct_call"
+notes_contains = "receiver_provenance=imported_class_metadata"
+min = 2
+
+[[workloads.issue_8693_imported_this.native_rep_checks.require_records]]
+name = "imported_registry_generic_fallback_retained"
+consumer = "proven_this_method_direct_call"
+notes_contains = "generic_dispatch_fallback=js_native_call_method_by_id"
+min = 2

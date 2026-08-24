@@ -463,6 +463,22 @@ pub(crate) enum FieldInitMode {
     AfterRoot,
 }
 
+/// Whether a named public field initializer can populate the allocation's
+/// predeclared own slot through the ordinary by-name store.
+///
+/// A fresh ordinary instance already owns every named field in its class-key
+/// layout, so overwriting that slot has the same DefineField semantics as
+/// CreateDataProperty: an inherited setter cannot intercept an existing own
+/// data property. The exception is a constructor chain that can replace
+/// `this` (the replacement may be a Proxy), or a name whose chain contains an
+/// accessor/redeclaration and therefore has no stable global field index.
+/// Those cases must keep `js_class_field_add` and its full
+/// `[[DefineOwnProperty]]` behavior.
+fn can_store_predeclared_public_field(ctx: &FnCtx<'_>, class_name: &str, property: &str) -> bool {
+    !crate::lower_call::ctor_chain_can_replace_this(ctx.classes, class_name)
+        && crate::type_analysis::class_field_global_index(ctx, class_name, property).is_some()
+}
+
 pub(crate) fn apply_field_initializers_recursive(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
@@ -824,15 +840,34 @@ pub(crate) fn apply_field_initializers_recursive(
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let blk = ctx.block();
                 let key_box = blk.load(DOUBLE, &key_handle_global);
-                blk.call(
-                    DOUBLE,
-                    "js_class_field_add",
-                    &[
-                        (DOUBLE, &this_val),
-                        (DOUBLE, &key_box),
-                        (DOUBLE, &closure_val),
-                    ],
-                );
+                if can_store_predeclared_public_field(ctx, &class_name_in_chain, &prop) {
+                    // The field is already an own key in the freshly allocated
+                    // exact class shape. Store by name so the runtime fills the
+                    // existing slot without `mark_object_dynamic_shape_unknown`.
+                    // This matters for the exact-shape guards emitted inside a
+                    // hot captures-`this` arrow: full DefineOwnProperty used to
+                    // change the receiver's shape before the arrow was ever
+                    // called, making every guard miss (#8693 / perform-ecs).
+                    let blk = ctx.block();
+                    let this_bits = blk.bitcast_double_to_i64(&this_val);
+                    let this_raw = blk.and(I64, &this_bits, POINTER_MASK_I64);
+                    let key_bits = blk.bitcast_double_to_i64(&key_box);
+                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
+                    blk.call_void(
+                        "js_object_set_field_by_name",
+                        &[(I64, &this_raw), (I64, &key_raw), (DOUBLE, &closure_val)],
+                    );
+                } else {
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_class_field_add",
+                        &[
+                            (DOUBLE, &this_val),
+                            (DOUBLE, &key_box),
+                            (DOUBLE, &closure_val),
+                        ],
+                    );
+                }
                 continue;
             }
 
@@ -858,12 +893,7 @@ pub(crate) fn apply_field_initializers_recursive(
             // `PropertySet` path (inline shape precheck -> direct slot store)
             // exactly as this did before #8630. Anything else keeps the full
             // DefineField call.
-            let chain_can_replace_this =
-                crate::lower_call::ctor_chain_can_replace_this(ctx.classes, &class_name_in_chain);
-            let no_accessor_on_chain =
-                crate::type_analysis::class_field_global_index(ctx, &class_name_in_chain, &prop)
-                    .is_some();
-            if no_accessor_on_chain && !chain_can_replace_this {
+            if can_store_predeclared_public_field(ctx, &class_name_in_chain, &prop) {
                 let set_expr = Expr::PropertySet {
                     object: Box::new(Expr::This),
                     property: prop,

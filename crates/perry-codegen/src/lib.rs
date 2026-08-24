@@ -76,6 +76,19 @@ pub use codegen::{
 };
 pub use collectors::CjsPreambleCensus;
 
+/// Return the guarded proven-`this` method-clone capabilities a native module
+/// may safely publish to importing codegen units. The first map contains all
+/// eligible methods; the second is the profitable subset for class-ID dispatch
+/// towers, whose extra receiver-shape recheck is not free.
+pub fn exported_proven_this_method_capabilities(
+    hir: &perry_hir::Module,
+) -> (
+    std::collections::HashMap<String, Vec<String>>,
+    std::collections::HashMap<String, Vec<String>>,
+) {
+    collectors::exportable_proven_this_method_capabilities(hir)
+}
+
 /// The shadow-stack field offsets generated code bakes into its inline root
 /// stores (#7088).
 ///

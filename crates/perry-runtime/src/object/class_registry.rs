@@ -105,13 +105,14 @@ pub(crate) use class_meta::{
 };
 #[cfg(test)]
 pub(crate) use prototype_methods::{
-    class_prototype_fast_guards_invalidated, class_prototype_method_guard_slot,
-    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED, CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD,
+    class_prototype_fast_guards_invalidated, CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED,
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD,
 };
 
 // ── prototype_methods.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_methods::{
-    class_prototype_fast_guard_invalidated_for_method, class_prototype_method_root_store,
+    class_prototype_fast_guard_invalidated_for_method, class_prototype_method_guard_slot,
+    class_prototype_method_root_remove, class_prototype_method_root_store,
     invalidate_class_prototype_fast_guards_for_method, mirror_prototype_method_on_object,
     synthetic_class_id_for_function,
 };

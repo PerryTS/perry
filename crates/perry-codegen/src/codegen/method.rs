@@ -306,10 +306,18 @@ pub(super) fn compile_method(
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
     let lf = llmod.define_function(&llvm_name, DOUBLE, params);
-    if is_pshape_clone || is_index_clone || typed_public_trampoline.is_some() || force_generic_body
+    // Plain `$pshape` clones are producer-published capabilities and need
+    // external linkage for guarded calls from importing modules. The stricter
+    // array-cache clone remains module-local: only containment-proven locals
+    // in this module may select it.
+    if ptr_array_cache_clone
+        || is_index_clone
+        || typed_public_trampoline.is_some()
+        || force_generic_body
     {
         lf.linkage = "internal".to_string();
     }
+    super::helpers::apply_pshape_inline_policy(lf, method, is_pshape_clone);
     if is_index_clone {
         lf.pre_statepoint_inline = true;
     }

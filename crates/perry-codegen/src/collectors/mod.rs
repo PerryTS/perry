@@ -87,6 +87,7 @@ pub(crate) use number_by_construction::collect_number_by_construction_locals;
 pub(crate) use param_ranges::{collect_param_int_ranges, ParamIntRanges};
 pub(crate) use pointer_locals::collect_pointer_typed_locals;
 pub(crate) use proven_this::{
+    exportable_method_capabilities as exportable_proven_this_method_capabilities,
     method_proven_this, prune_unregistered_clones, pshape_method_name, ptr_array_cache_fields,
     ptr_array_cache_method_name, ptr_array_cached_method,
     tower_route_profitable as pshape_tower_route_profitable,

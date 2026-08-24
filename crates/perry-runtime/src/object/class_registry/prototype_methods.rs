@@ -204,7 +204,8 @@ pub(crate) fn invalidate_class_prototype_fast_guards() {
 }
 
 pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, value_bits: u64) {
-    // Assignment after `delete C.prototype.m` creates the property again.
+    // Assignment / defineProperty after `delete C.prototype.m` recreates the
+    // own property and must make it visible to dispatch again.
     class_unmark_key_deleted(class_id, &name);
     CLASS_PROTOTYPE_METHODS.with(|table| {
         let mut guard = table.write().unwrap();
@@ -250,6 +251,19 @@ pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, val
     if !decl_proto.is_null() && decl_proto != proto {
         unsafe { mirror_prototype_method_on_object(decl_proto, &name, value_bits, enumerable) };
     }
+}
+
+/// Remove a runtime-assigned method when defineProperty restores a declared
+/// vtable method. The declaration becomes authoritative again after the
+/// caller clears the deletion marker and invalidates dispatch caches.
+pub(crate) fn class_prototype_method_root_remove(class_id: u32, name: &str) {
+    CLASS_PROTOTYPE_METHODS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(per_class) = guard.as_mut().and_then(|map| map.get_mut(&class_id)) {
+                per_class.remove(name);
+            }
+        }
+    });
 }
 
 /// #5024: write a side-table-registered prototype method onto the

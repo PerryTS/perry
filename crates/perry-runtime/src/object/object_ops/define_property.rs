@@ -79,6 +79,13 @@ unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits:
                         },
                     );
                     drop(guard);
+                    super::super::class_registry::class_prototype_method_root_remove(
+                        target_cid, name,
+                    );
+                    super::super::class_registry::class_unmark_key_deleted(target_cid, name);
+                    super::super::class_registry::invalidate_class_prototype_fast_guards_for_method(
+                        name,
+                    );
                     super::super::class_registry::js_register_class_id(target_cid);
                     crate::typed_feedback::invalidate_method_change(target_cid);
                     return;

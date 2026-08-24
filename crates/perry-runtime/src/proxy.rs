@@ -1173,6 +1173,19 @@ fn target_set(target: f64, key: f64, value: f64) {
     // already-heap `STRING_TAG` value, which `js_string_coerce` hands straight
     // back without touching the allocator.
     let key_ptr = crate::builtins::js_string_coerce(property_key) as *const crate::StringHeader;
+    let target_addr = extract_pointer(target.to_bits()) as usize;
+    if let Some(class_id) = crate::object::class_id_for_decl_prototype_object(target_addr) {
+        // Imported `C.prototype.m = value` materializes the declaration's
+        // prototype object before PutValue reaches this shared write tail.
+        // Keep the runtime method registry authoritative so instance dispatch
+        // observes the replacement and direct guards retire.
+        if let Some(name) = key_to_rust_string(property_key) {
+            crate::object::class_prototype_method_set_enumerable(class_id, &name, true);
+            crate::object::class_prototype_method_root_store(class_id, name, value.to_bits());
+            crate::typed_feedback::invalidate_method_change(class_id);
+        }
+        return;
+    }
     if crate::object::class_ref_id(target).is_some() {
         // Preserve the INT32-tagged class-ref bits so class dynamic props
         // land in CLASS_DYNAMIC_PROPS instead of being pointer-extracted to 0.
@@ -1185,7 +1198,7 @@ fn target_set(target: f64, key: f64, value: f64) {
         }
         return;
     }
-    let obj_addr = extract_pointer(target.to_bits()) as usize;
+    let obj_addr = target_addr;
     if crate::closure::is_closure_ptr(obj_addr) {
         if let Some(name) = key_to_rust_string(property_key) {
             crate::closure::closure_set_dynamic_prop(obj_addr, &name, value);

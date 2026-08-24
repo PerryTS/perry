@@ -622,16 +622,22 @@ fn tower_route_break_even_is_one_field_site() {
     let fields = declared(&["a", "c"]);
 
     let one = method(vec![Stmt::Return(Some(this_get("a")))]);
-    assert_eq!(proven_receiver_clone_field_sites(&one, &fields), 1);
-    assert!(!tower_route_profitable(&one, &fields));
+    assert_eq!(
+        proven_receiver_clone_benefit_sites(&one, &fields, &HashSet::new()),
+        1
+    );
+    assert!(!tower_route_profitable(&one, &fields, &HashSet::new()));
 
     let two = method(vec![Stmt::Return(Some(bin(
         BinaryOp::Add,
         this_get("a"),
         this_get("c"),
     )))]);
-    assert_eq!(proven_receiver_clone_field_sites(&two, &fields), 2);
-    assert!(tower_route_profitable(&two, &fields));
+    assert_eq!(
+        proven_receiver_clone_benefit_sites(&two, &fields, &HashSet::new()),
+        2
+    );
+    assert!(tower_route_profitable(&two, &fields, &HashSet::new()));
 }
 
 /// Only DECLARED chain fields get a fixed slot; anything else keeps its by-name
@@ -645,8 +651,11 @@ fn tower_route_counts_only_declared_fields() {
         Stmt::Expr(this_get("expando")),
         Stmt::Expr(this_get("alsoNotDeclared")),
     ]);
-    assert_eq!(proven_receiver_clone_field_sites(&m, &fields), 1);
-    assert!(!tower_route_profitable(&m, &fields));
+    assert_eq!(
+        proven_receiver_clone_benefit_sites(&m, &fields, &HashSet::new()),
+        1
+    );
+    assert!(!tower_route_profitable(&m, &fields, &HashSet::new()));
 }
 
 /// A field access on something that is not `this` is somebody else's receiver
@@ -662,7 +671,10 @@ fn tower_route_ignores_non_this_receivers() {
             byte_offset: 0,
         }),
     ]);
-    assert_eq!(proven_receiver_clone_field_sites(&m, &fields), 1);
+    assert_eq!(
+        proven_receiver_clone_benefit_sites(&m, &fields, &HashSet::new()),
+        1
+    );
 }
 
 /// Writes count as well as reads — a `this.f = …` site pays the same inline
@@ -684,6 +696,41 @@ fn tower_route_counts_writes() {
             strict: true,
         }),
     ]);
-    assert_eq!(proven_receiver_clone_field_sites(&m, &fields), 2);
-    assert!(tower_route_profitable(&m, &fields));
+    assert_eq!(
+        proven_receiver_clone_benefit_sites(&m, &fields, &HashSet::new()),
+        2
+    );
+    assert!(tower_route_profitable(&m, &fields, &HashSet::new()));
+}
+
+/// A proven-receiver clone also removes the public method guard at a nested
+/// `this.helper()` boundary. It counts only when the resolved helper has its
+/// own clone capability; otherwise that boundary remains generic.
+#[test]
+fn tower_route_counts_nested_proven_receiver_clone() {
+    let fields = declared(&["a"]);
+    let nested = Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::This),
+            property: "helper".to_string(),
+            byte_offset: 0,
+        }),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+    };
+    let m = method(vec![Stmt::Expr(this_get("a")), Stmt::Expr(nested)]);
+
+    assert_eq!(
+        proven_receiver_clone_benefit_sites(&m, &fields, &HashSet::new()),
+        1
+    );
+    assert!(!tower_route_profitable(&m, &fields, &HashSet::new()));
+
+    let methods = declared(&["helper"]);
+    assert_eq!(
+        proven_receiver_clone_benefit_sites(&m, &fields, &methods),
+        2
+    );
+    assert!(tower_route_profitable(&m, &fields, &methods));
 }
