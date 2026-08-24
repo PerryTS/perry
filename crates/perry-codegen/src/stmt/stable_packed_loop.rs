@@ -1,9 +1,9 @@
 //! Guarded loop versions for counted Array and Array-subclass iteration.
 //!
-//! A one-time runtime admission publishes scalar layout facts. The fast copy
-//! is entered only after its emitted blocks are proven call-free, so its
-//! preheader-cached receiver and storage bases stay valid for the whole copy.
-//! Failed admission runs the unchanged generic loop from the current counter.
+//! Runtime admission publishes scalar layout facts. Ordinary bindings use a
+//! call-free clone whose preheader-cached receiver stays valid throughout;
+//! immutable closure captures reload and revalidate at every iteration. A
+//! failed admission resumes the unchanged generic loop at the current counter.
 
 use anyhow::Result;
 use perry_hir::{CompareOp, Expr, Stmt, UpdateOp};
@@ -23,6 +23,10 @@ struct Candidate {
     array_id: u32,
     bound: LoopBound,
     numeric_elements: bool,
+    capture_index: Option<u32>,
+    capture_uses_box: bool,
+    nested_derived: bool,
+    nested_requires_access_revalidation: bool,
 }
 
 fn target_below_numeric_operator(
@@ -111,16 +115,30 @@ fn stmt_flags(stmt: &Stmt, array_id: u32, counter_id: u32) -> (bool, bool) {
 /// explicit user call. Later statements may allocate or invoke callbacks: the
 /// next iteration reloads the root and validates before using it again.
 fn body_has_safe_leading_read(body: &[Stmt], array_id: u32, counter_id: u32) -> bool {
-    let Some(first) = body.first() else {
-        return false;
-    };
-    let (first_target, first_call) = stmt_flags(first, array_id, counter_id);
-    if !first_target || first_call {
-        return false;
+    for (index, stmt) in body.iter().enumerate() {
+        let (has_target, has_call) = stmt_flags(stmt, array_id, counter_id);
+        if has_target {
+            return !has_call
+                && !body[index + 1..]
+                    .iter()
+                    .any(|later| stmt_flags(later, array_id, counter_id).0);
+        }
+        // Compound indexed assignments are lowered into pure receiver/key
+        // temporaries before the source indexed read. Replaying these local
+        // copies on a side exit has no observable effect. Keep the admitted
+        // prefix deliberately narrow; property reads, calls, and writes stay
+        // generic.
+        if !matches!(
+            stmt,
+            Stmt::Let {
+                init: Some(Expr::LocalGet(_)),
+                ..
+            }
+        ) {
+            return false;
+        }
     }
-    !body[1..]
-        .iter()
-        .any(|stmt| stmt_flags(stmt, array_id, counter_id).0)
+    false
 }
 
 fn stmt_contains_break(stmt: &Stmt) -> bool {
@@ -163,8 +181,33 @@ fn stmt_contains_break(stmt: &Stmt) -> bool {
     }
 }
 
+fn record_capture_rejection(ctx: &mut FnCtx<'_>, array_id: u32, reason: &str) {
+    let lowered = LoweredValue::js_value("closure_capture_candidate".to_string());
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        "StablePackedArraylikeLoop",
+        Some(array_id),
+        "stable_packed_arraylike_capture_rejected",
+        &lowered,
+        Some(BoundsState::Unknown),
+        None,
+        Some(BufferAccessMode::DynamicFallback),
+        Some(MaterializationReason::RuntimeApi),
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+        false,
+        false,
+        vec![
+            "candidate_storage=closure_capture_slot".to_string(),
+            format!("rejection={reason}"),
+            "fallback=generic_counted_loop".to_string(),
+        ],
+    );
+}
+
 fn match_candidate(
-    ctx: &FnCtx<'_>,
+    ctx: &mut FnCtx<'_>,
     init: Option<&Stmt>,
     condition: Option<&Expr>,
     update: Option<&Expr>,
@@ -216,30 +259,71 @@ fn match_candidate(
         _ => return None,
     };
     let receiver = Expr::LocalGet(array_id);
-    if ctx.reassigned_locals.contains(&array_id)
-        || ctx.closure_captures.contains_key(&array_id)
-        || (ctx.locals.contains_key(&array_id) && ctx.boxed_vars.contains(&array_id))
-        || (!ctx.locals.contains_key(&array_id) && !ctx.module_globals.contains_key(&array_id))
-        // TypedArrays have their own element-width-aware indexed lowering.
-        // Even though the runtime guard would decline their non-Array header,
-        // emitting the speculative clone can feed its numeric facts into
-        // function-wide native-representation selection. In particular a
-        // Uint32Array XOR then lost the required signed i32 canonicalization
-        // in the generic copy. Known TypedArrays are never valid candidates,
-        // so reject them before cloning rather than relying on the guard.
-        || crate::type_analysis::is_typed_array_expr(ctx, &receiver)
-        || super::loops::stmts_mutate_local(body, counter_id)
-        // A fast-loop `break` reaches that clone's exit block. Live-length
-        // versions use the same block to enter the generic continuation, so
-        // replaying the current iteration would duplicate preceding effects.
-        || body.iter().any(stmt_contains_break)
-        || !body_has_safe_leading_read(body, array_id, counter_id)
-        // Preserve the existing escape/materialization contract. A dynamic
-        // call before the loop may have exposed the binding to arbitrary JS;
-        // the broad #8690 guard must not resurrect a proof deliberately
-        // retired by that analysis.
-        || !super::loops::packed_loop_array_binding_is_eligible(ctx, array_id)
-    {
+    let capture_index = ctx.closure_captures.get(&array_id).copied();
+    let derived_parent = ctx
+        .stable_packed_loop_facts
+        .iter()
+        .rev()
+        .find(|fact| fact.derived_locals.contains(&array_id));
+    let nested_derived = derived_parent.is_some();
+    let nested_requires_access_revalidation = derived_parent
+        .is_some_and(|fact| fact.revalidate_each_iteration || fact.revalidate_before_indexed_read);
+    let storage_is_available = capture_index.is_some()
+        || (ctx.locals.contains_key(&array_id) && !ctx.boxed_vars.contains(&array_id))
+        || (!ctx.locals.contains_key(&array_id) && ctx.module_globals.contains_key(&array_id));
+    let binding_is_eligible = if capture_index.is_some() || nested_derived {
+        // Capturing the binding is itself an identity exposure in the
+        // whole-function fact graph. That historical hazard is exactly what
+        // this version repairs: an immutable capture is reloaded and fully
+        // guarded at every iteration, so an alias may mutate the object only
+        // by making the next guard fail to the generic loop. Semantic
+        // rebinding remains represented in `reassigned_locals` and is rejected
+        // below; a compiler-only TDZ/hoisting box does not imply mutation.
+        !ctx.scalar_replaced_arrays.contains_key(&array_id)
+    } else {
+        super::loops::packed_loop_array_binding_is_eligible(ctx, array_id)
+    };
+    let leading_read_is_first = body.first().is_some_and(|stmt| {
+        let (has_target, has_call) = stmt_flags(stmt, array_id, counter_id);
+        has_target && !has_call
+    });
+    let rejection = if ctx.reassigned_locals.contains(&array_id) {
+        Some("reassigned_binding")
+    } else if !storage_is_available {
+        Some("unavailable_storage")
+    // TypedArrays have their own element-width-aware indexed lowering. Even
+    // though the runtime guard would decline their non-Array header, emitting
+    // the speculative clone can feed its numeric facts into function-wide
+    // native-representation selection.
+    } else if crate::type_analysis::is_typed_array_expr(ctx, &receiver) {
+        Some("known_typed_array")
+    } else if super::loops::stmts_mutate_local(body, counter_id) {
+        Some("counter_mutated_in_body")
+    // A fast-loop `break` reaches that clone's exit block. Live-length
+    // versions use the same block to enter the generic continuation, so
+    // replaying the current iteration would duplicate preceding effects.
+    } else if body.iter().any(stmt_contains_break) {
+        Some("break_replays_current_iteration")
+    } else if !body_has_safe_leading_read(body, array_id, counter_id) {
+        Some("indexed_read_not_safe_and_leading")
+    // LocalGet prefixes are replay-safe for a nested derived receiver, whose
+    // guard is emitted at the indexed read. A capture is guarded at iteration
+    // entry instead, and another captured LocalGet in such a prefix can run a
+    // GC helper before the cached address is consumed. Keep that shape on the
+    // generic path until entry guards can be placed after the prefix.
+    } else if capture_index.is_some() && !leading_read_is_first {
+        Some("capture_read_after_safepoint_capable_prefix")
+    // Preserve the existing escape/materialization contract for ordinary
+    // locals/globals. Captures use their separate guarded eligibility above.
+    } else if !binding_is_eligible {
+        Some("binding_not_eligible")
+    } else {
+        None
+    };
+    if let Some(reason) = rejection {
+        if capture_index.is_some() {
+            record_capture_rejection(ctx, array_id, reason);
+        }
         return None;
     }
     Some(Candidate {
@@ -247,7 +331,36 @@ fn match_candidate(
         array_id,
         bound,
         numeric_elements: leading_read_requires_numeric(body, array_id, counter_id),
+        capture_index,
+        capture_uses_box: capture_index.is_some() && ctx.boxed_vars.contains(&array_id),
+        nested_derived,
+        nested_requires_access_revalidation,
     })
+}
+
+/// Mark a local whose initializer is the exact direct indexed read admitted by
+/// the active stable-packed fact. The mark lives on that fact, so it cannot
+/// leak from the fast clone into the generic clone.
+pub(super) fn record_derived_local(ctx: &mut FnCtx<'_>, id: u32, init: &Expr, mutable: bool) {
+    if mutable || ctx.reassigned_locals.contains(&id) {
+        return;
+    }
+    let Expr::IndexGet { object, index } = init else {
+        return;
+    };
+    let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) = (object.as_ref(), index.as_ref())
+    else {
+        return;
+    };
+    let Some(fact) = ctx
+        .stable_packed_loop_facts
+        .iter_mut()
+        .rev()
+        .find(|fact| fact.array_local_id == *array_id && fact.counter_local_id == *index_id)
+    else {
+        return;
+    };
+    fact.derived_locals.insert(id);
 }
 
 fn descriptor_word(ctx: &mut FnCtx<'_>, descriptor: &str, index: u64) -> String {
@@ -257,8 +370,137 @@ fn descriptor_word(ctx: &mut FnCtx<'_>, descriptor: &str, index: u64) -> String 
     ctx.block().load(I64, &ptr)
 }
 
-fn record_artifacts(ctx: &mut FnCtx<'_>, array_id: u32, receiver: &str) {
+/// Derive raw numeric storage bases from a freshly validated receiver. This is
+/// used once in ordinary call-free loops and at every iteration entry for a
+/// closure capture, where a nested guard/callback may have moved the receiver
+/// since the preceding iteration.
+fn build_numeric_access(
+    ctx: &mut FnCtx<'_>,
+    descriptor: &str,
+    live_raw: &str,
+) -> StablePackedNumericAccess {
+    let kind = descriptor_word(ctx, descriptor, 0);
+    let is_plain = ctx.block().icmp_eq(I64, &kind, "1");
+    let plain_base = ctx.block().add(I64, live_raw, "8");
+
+    let element_base = descriptor_word(ctx, descriptor, 4);
+    let packed_bounds = descriptor_word(ctx, descriptor, 5);
+    let inline_bound = ctx.block().lshr(I64, &packed_bounds, "32");
+    let has_inline = ctx.block().icmp_ult(I64, &element_base, &inline_bound);
+    let inline_span = ctx.block().sub(I64, &inline_bound, &element_base);
+    let object_inline_count = ctx.block().select(I1, &has_inline, I64, &inline_span, "0");
+    let element_bytes = ctx.block().shl(I64, &element_base, "3");
+    let object_header_size =
+        crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let inline_offset = ctx.block().add(I64, &object_header_size, &element_bytes);
+    let object_inline_base = ctx.block().add(I64, live_raw, &inline_offset);
+
+    // Only Array-subclass objects own ObjectMeta. Keep the metadata load
+    // control-dependent so a plain Array never interprets element bits as a
+    // pointer. A missing spill is valid when the admitted bound fits inline.
+    let plain_setup_idx = ctx.new_block("stable_packed.setup.plain");
+    let object_setup_idx = ctx.new_block("stable_packed.setup.object");
+    let meta_setup_idx = ctx.new_block("stable_packed.setup.meta");
+    let setup_merge_idx = ctx.new_block("stable_packed.setup.merge");
+    let plain_setup_label = ctx.block_label(plain_setup_idx);
+    let object_setup_label = ctx.block_label(object_setup_idx);
+    let meta_setup_label = ctx.block_label(meta_setup_idx);
+    let setup_merge_label = ctx.block_label(setup_merge_idx);
+    ctx.block()
+        .cond_br(&is_plain, &plain_setup_label, &object_setup_label);
+
+    ctx.current_block = plain_setup_idx;
+    ctx.block().br(&setup_merge_label);
+
+    ctx.current_block = object_setup_idx;
+    let pointer_size = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        4
+    } else {
+        8
+    };
+    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
+        - pointer_size)
+        .to_string();
+    let meta_addr = ctx.block().add(I64, live_raw, &meta_offset);
+    let meta_slot = ctx.block().inttoptr(I64, &meta_addr);
+    let meta_native = ctx
+        .block()
+        .load(if pointer_size == 4 { I32 } else { I64 }, &meta_slot);
+    let meta = if pointer_size == 4 {
+        ctx.block().zext(I32, &meta_native, I64)
+    } else {
+        meta_native
+    };
+    let has_meta = ctx.block().icmp_ne(I64, &meta, "0");
+    ctx.block()
+        .cond_br(&has_meta, &meta_setup_label, &setup_merge_label);
+
+    ctx.current_block = meta_setup_idx;
+    let meta_ptr = ctx.block().inttoptr(I64, &meta);
+    let spill_slot = ctx.block().gep(I64, &meta_ptr, &[(I64, "4")]);
+    let spill = ctx.block().load(I64, &spill_slot);
+    ctx.block().br(&setup_merge_label);
+
+    ctx.current_block = setup_merge_idx;
+    let spill = ctx.block().phi(
+        I64,
+        &[
+            ("0", &plain_setup_label),
+            ("0", &object_setup_label),
+            (&spill, &meta_setup_label),
+        ],
+    );
+    let has_spill = ctx.block().icmp_ne(I64, &spill, "0");
+    let safe_spill = ctx.block().select(I1, &has_spill, I64, &spill, live_raw);
+    let spill_offset = ctx.block().add(I64, &element_bytes, "8");
+    let object_spill_base = ctx.block().add(I64, &safe_spill, &spill_offset);
+    StablePackedNumericAccess {
+        is_plain,
+        plain_base,
+        object_inline_count,
+        object_inline_base,
+        object_spill_base,
+    }
+}
+
+fn record_artifacts(ctx: &mut FnCtx<'_>, candidate: &Candidate, receiver: &str) {
+    let array_id = candidate.array_id;
     let lowered = LoweredValue::js_value(receiver.to_string());
+    let mut selected_facts = vec![
+        "loop_versioning=stable_packed_arraylike".to_string(),
+        "proof=preheader_scalar_layout".to_string(),
+        if candidate.capture_index.is_some() {
+            "candidate_storage=closure_capture_slot".to_string()
+        } else {
+            "candidate_storage=addressable_binding".to_string()
+        },
+        if candidate.capture_index.is_some() {
+            "revalidation=each_iteration_capture_reload".to_string()
+        } else if candidate.nested_requires_access_revalidation {
+            "revalidation=before_nested_indexed_read".to_string()
+        } else {
+            "revalidation=none_call_free_clone".to_string()
+        },
+        format!(
+            "guard_identity=stable_packed_arraylike:{}:{}",
+            candidate.array_id, candidate.counter_id
+        ),
+        "side_exit=current_index".to_string(),
+    ];
+    if let Some(capture_index) = candidate.capture_index {
+        selected_facts.push(format!("capture_index={capture_index}"));
+        selected_facts.push(format!(
+            "capture_value_storage={}",
+            if candidate.capture_uses_box {
+                "compiler_box"
+            } else {
+                "inline_value"
+            }
+        ));
+    }
+    if candidate.nested_derived {
+        selected_facts.push("candidate_origin=guarded_outer_index_read".to_string());
+    }
     ctx.record_lowered_value_with_access_mode_and_facts(
         "StablePackedArraylikeLoop",
         Some(array_id),
@@ -276,12 +518,7 @@ fn record_artifacts(ctx: &mut FnCtx<'_>, array_id: u32, receiver: &str) {
         Vec::new(),
         false,
         false,
-        vec![
-            "loop_versioning=stable_packed_arraylike".to_string(),
-            "proof=preheader_scalar_layout".to_string(),
-            "revalidation=none_call_free_clone".to_string(),
-            "side_exit=current_index".to_string(),
-        ],
+        selected_facts,
     );
     ctx.record_lowered_value_with_access_mode_and_facts(
         "StablePackedArraylikeLoop",
@@ -300,6 +537,10 @@ fn record_artifacts(ctx: &mut FnCtx<'_>, array_id: u32, receiver: &str) {
         false,
         vec![
             "loop_versioning=stable_packed_arraylike_fallback".to_string(),
+            format!(
+                "fallback_identity=stable_packed_arraylike:{}:{}",
+                candidate.array_id, candidate.counter_id
+            ),
             "resume=current_index".to_string(),
         ],
     );
@@ -313,6 +554,51 @@ pub(crate) fn try_lower_index_get(
     let (Expr::LocalGet(array_id), Expr::LocalGet(counter_id)) = (object, index) else {
         return None;
     };
+    let fact = ctx
+        .stable_packed_loop_facts
+        .iter()
+        .rev()
+        .find(|fact| fact.array_local_id == *array_id && fact.counter_local_id == *counter_id)?
+        .clone();
+    if fact.revalidate_before_indexed_read {
+        let receiver_slot = ctx.locals.get(array_id)?.clone();
+        let receiver = ctx.block().load(DOUBLE, &receiver_slot);
+        let live_raw = ctx.block().call(
+            I64,
+            "js_packed_arraylike_loop_guard_live",
+            &[
+                (DOUBLE, &receiver),
+                (DOUBLE, &fact.bound),
+                (I32, if fact.numeric_elements { "1" } else { "0" }),
+                (PTR, &fact.descriptor),
+            ],
+        );
+        let mut pass = ctx.block().icmp_ne(I64, &live_raw, "0");
+        if fact.live_length_bound {
+            let refreshed_bound = descriptor_word(ctx, &fact.descriptor, 6);
+            let length_unchanged = ctx
+                .block()
+                .icmp_eq(I64, &refreshed_bound, &fact.admitted_bound);
+            pass = ctx.block().and(I1, &pass, &length_unchanged);
+        }
+        let continue_idx = ctx.new_block("stable_packed.indexed_read.derived_valid");
+        let continue_label = ctx.block_label(continue_idx);
+        ctx.block()
+            .cond_br(&pass, &continue_label, &fact.side_exit_label);
+        ctx.current_block = continue_idx;
+        let numeric_access = fact
+            .numeric_elements
+            .then(|| build_numeric_access(ctx, &fact.descriptor, &live_raw));
+        let active = ctx
+            .stable_packed_loop_facts
+            .iter_mut()
+            .rev()
+            .find(|active| {
+                active.array_local_id == *array_id && active.counter_local_id == *counter_id
+            })?;
+        active.live_receiver_handle = Some(live_raw);
+        active.numeric_access = numeric_access;
+    }
     let fact = ctx
         .stable_packed_loop_facts
         .iter()
@@ -478,6 +764,58 @@ pub(crate) fn has_numeric_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     })
 }
 
+/// Refresh a captured receiver at fast-iteration entry. The closure pointer is
+/// reloaded through its GC root by ordinary `LocalGet` lowering, then the full
+/// runtime admission rechecks identity, forwarding, layout, descriptors,
+/// prototype state, packedness, and the admitted range. Only the returned live
+/// address is published to direct indexed reads in this iteration.
+pub(super) fn emit_iteration_guard(
+    ctx: &mut FnCtx<'_>,
+    loop_counter_id: Option<u32>,
+) -> Result<bool> {
+    let Some(fact) = ctx.stable_packed_loop_facts.last().cloned() else {
+        return Ok(false);
+    };
+    if !fact.revalidate_each_iteration || loop_counter_id != Some(fact.counter_local_id) {
+        return Ok(false);
+    }
+
+    let receiver = crate::expr::lower_expr(ctx, &Expr::LocalGet(fact.array_local_id))?;
+    let live_raw = ctx.block().call(
+        I64,
+        "js_packed_arraylike_loop_guard_live",
+        &[
+            (DOUBLE, &receiver),
+            (DOUBLE, &fact.bound),
+            (I32, if fact.numeric_elements { "1" } else { "0" }),
+            (PTR, &fact.descriptor),
+        ],
+    );
+    let mut pass = ctx.block().icmp_ne(I64, &live_raw, "0");
+    if fact.live_length_bound {
+        let refreshed_bound = descriptor_word(ctx, &fact.descriptor, 6);
+        let length_unchanged = ctx
+            .block()
+            .icmp_eq(I64, &refreshed_bound, &fact.admitted_bound);
+        pass = ctx.block().and(I1, &pass, &length_unchanged);
+    }
+
+    let continue_idx = ctx.new_block("stable_packed.iteration.capture_valid");
+    let continue_label = ctx.block_label(continue_idx);
+    ctx.block()
+        .cond_br(&pass, &continue_label, &fact.side_exit_label);
+    ctx.current_block = continue_idx;
+
+    let numeric_access = fact
+        .numeric_elements
+        .then(|| build_numeric_access(ctx, &fact.descriptor, &live_raw));
+    if let Some(active) = ctx.stable_packed_loop_facts.last_mut() {
+        active.live_receiver_handle = Some(live_raw);
+        active.numeric_access = numeric_access;
+    }
+    Ok(true)
+}
+
 pub(super) fn lower(
     ctx: &mut FnCtx<'_>,
     init: Option<&Stmt>,
@@ -508,17 +846,23 @@ pub(super) fn lower(
         LoopBound::LiveLength => "-1.0".to_string(),
     };
     let descriptor = ctx.func.alloca_entry_array(I64, 7);
-    let guard = ctx.block().call(
-        I32,
-        "js_packed_arraylike_loop_guard",
-        &[
-            (DOUBLE, &receiver),
-            (DOUBLE, &bound_box),
-            (I32, if candidate.numeric_elements { "1" } else { "0" }),
-            (PTR, &descriptor),
-        ],
-    );
-    let admitted = ctx.block().icmp_ne(I32, &guard, "0");
+    let guard_args = [
+        (DOUBLE, receiver.as_str()),
+        (DOUBLE, bound_box.as_str()),
+        (I32, if candidate.numeric_elements { "1" } else { "0" }),
+        (PTR, descriptor.as_str()),
+    ];
+    let (admitted, admitted_live_raw) = if candidate.capture_index.is_some() {
+        let live_raw = ctx
+            .block()
+            .call(I64, "js_packed_arraylike_loop_guard_live", &guard_args);
+        (ctx.block().icmp_ne(I64, &live_raw, "0"), Some(live_raw))
+    } else {
+        let guard = ctx
+            .block()
+            .call(I32, "js_packed_arraylike_loop_guard", &guard_args);
+        (ctx.block().icmp_ne(I32, &guard, "0"), None)
+    };
     // Deliberately left unterminated until the emitted fast clone has been
     // scanned. The cached receiver below is safe only when no runtime call can
     // allocate, collect, or revoke an admitted layout while that clone runs.
@@ -536,99 +880,21 @@ pub(super) fn lower(
         descriptor_word(ctx, &descriptor, 6)
     };
     let bound_i32 = ctx.block().trunc(I64, &bound64, I32);
-    // Reload after the runtime admission call. Once the clone scan succeeds,
-    // this root cannot move until the clone returns because the clone contains
-    // no GC-unsafe call or allocation point.
-    let fast_receiver = crate::expr::lower_expr(ctx, &Expr::LocalGet(candidate.array_id))?;
-    let fast_bits = ctx.block().bitcast_double_to_i64(&fast_receiver);
-    let fast_raw = ctx
-        .block()
-        .and(I64, &fast_bits, crate::nanbox::POINTER_MASK_I64);
+    // A capture reload is itself a runtime call, so its admission returns the
+    // post-call live address. Ordinary addressable bindings retain the old
+    // guard/reload sequence; their reload is a plain load and their clone must
+    // still pass the call-free scan unless it has explicit access revalidation.
+    let fast_raw = if let Some(live_raw) = admitted_live_raw {
+        live_raw
+    } else {
+        let fast_receiver = crate::expr::lower_expr(ctx, &Expr::LocalGet(candidate.array_id))?;
+        let fast_bits = ctx.block().bitcast_double_to_i64(&fast_receiver);
+        ctx.block()
+            .and(I64, &fast_bits, crate::nanbox::POINTER_MASK_I64)
+    };
     let fast_scan_start = ctx.func.num_blocks();
     let numeric_access = if candidate.numeric_elements {
-        let kind = descriptor_word(ctx, &descriptor, 0);
-        let is_plain = ctx.block().icmp_eq(I64, &kind, "1");
-        let plain_base = ctx.block().add(I64, &fast_raw, "8");
-
-        let element_base = descriptor_word(ctx, &descriptor, 4);
-        let packed_bounds = descriptor_word(ctx, &descriptor, 5);
-        let inline_bound = ctx.block().lshr(I64, &packed_bounds, "32");
-        let has_inline = ctx.block().icmp_ult(I64, &element_base, &inline_bound);
-        let inline_span = ctx.block().sub(I64, &inline_bound, &element_base);
-        let object_inline_count = ctx.block().select(I1, &has_inline, I64, &inline_span, "0");
-        let element_bytes = ctx.block().shl(I64, &element_base, "3");
-        let object_header_size =
-            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
-        let inline_offset = ctx.block().add(I64, &object_header_size, &element_bytes);
-        let object_inline_base = ctx.block().add(I64, &fast_raw, &inline_offset);
-
-        // Only Array-subclass objects own ObjectMeta. Keep the metadata load
-        // control-dependent so a plain Array never interprets element bits as
-        // a pointer. A missing spill is valid when the admitted bound fits in
-        // inline storage; the selected fallback address is then never loaded.
-        let plain_setup_idx = ctx.new_block("stable_packed.setup.plain");
-        let object_setup_idx = ctx.new_block("stable_packed.setup.object");
-        let meta_setup_idx = ctx.new_block("stable_packed.setup.meta");
-        let setup_merge_idx = ctx.new_block("stable_packed.setup.merge");
-        let plain_setup_label = ctx.block_label(plain_setup_idx);
-        let object_setup_label = ctx.block_label(object_setup_idx);
-        let meta_setup_label = ctx.block_label(meta_setup_idx);
-        let setup_merge_label = ctx.block_label(setup_merge_idx);
-        ctx.block()
-            .cond_br(&is_plain, &plain_setup_label, &object_setup_label);
-
-        ctx.current_block = plain_setup_idx;
-        ctx.block().br(&setup_merge_label);
-
-        ctx.current_block = object_setup_idx;
-        let pointer_size = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-            4
-        } else {
-            8
-        };
-        let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
-            - pointer_size)
-            .to_string();
-        let meta_addr = ctx.block().add(I64, &fast_raw, &meta_offset);
-        let meta_slot = ctx.block().inttoptr(I64, &meta_addr);
-        let meta_native = ctx
-            .block()
-            .load(if pointer_size == 4 { I32 } else { I64 }, &meta_slot);
-        let meta = if pointer_size == 4 {
-            ctx.block().zext(I32, &meta_native, I64)
-        } else {
-            meta_native
-        };
-        let has_meta = ctx.block().icmp_ne(I64, &meta, "0");
-        ctx.block()
-            .cond_br(&has_meta, &meta_setup_label, &setup_merge_label);
-
-        ctx.current_block = meta_setup_idx;
-        let meta_ptr = ctx.block().inttoptr(I64, &meta);
-        let spill_slot = ctx.block().gep(I64, &meta_ptr, &[(I64, "4")]);
-        let spill = ctx.block().load(I64, &spill_slot);
-        ctx.block().br(&setup_merge_label);
-
-        ctx.current_block = setup_merge_idx;
-        let spill = ctx.block().phi(
-            I64,
-            &[
-                ("0", &plain_setup_label),
-                ("0", &object_setup_label),
-                (&spill, &meta_setup_label),
-            ],
-        );
-        let has_spill = ctx.block().icmp_ne(I64, &spill, "0");
-        let safe_spill = ctx.block().select(I1, &has_spill, I64, &spill, &fast_raw);
-        let spill_offset = ctx.block().add(I64, &element_bytes, "8");
-        let object_spill_base = ctx.block().add(I64, &safe_spill, &spill_offset);
-        Some(StablePackedNumericAccess {
-            is_plain,
-            plain_base,
-            object_inline_count,
-            object_inline_base,
-            object_spill_base,
-        })
+        Some(build_numeric_access(ctx, &descriptor, &fast_raw))
     } else {
         None
     };
@@ -637,9 +903,15 @@ pub(super) fn lower(
         array_local_id: candidate.array_id,
         side_exit_label: slow_pre_label.clone(),
         descriptor,
+        bound: bound_box,
+        admitted_bound: bound64,
+        live_length_bound: matches!(candidate.bound, LoopBound::LiveLength),
+        revalidate_each_iteration: candidate.capture_index.is_some(),
+        revalidate_before_indexed_read: candidate.nested_requires_access_revalidation,
         live_receiver_handle: Some(fast_raw),
         numeric_elements: candidate.numeric_elements,
         numeric_access,
+        derived_locals: std::collections::HashSet::new(),
     });
     super::loops::lower_for_after_init_with_i32_bound(
         ctx,
@@ -661,8 +933,11 @@ pub(super) fn lower(
         && (fast_scan_start..fast_scan_end)
             .all(|idx| !ctx.func.blocks()[idx].contains_gc_unsafe_call());
     ctx.current_block = admission_idx;
-    if fast_clone_call_free {
-        record_artifacts(ctx, candidate.array_id, &receiver);
+    let fast_clone_is_safe = fast_clone_call_free
+        || candidate.capture_index.is_some()
+        || candidate.nested_requires_access_revalidation;
+    if fast_clone_is_safe {
+        record_artifacts(ctx, &candidate, &receiver);
         ctx.block()
             .cond_br(&admitted, &fast_pre_label, &slow_pre_label);
     } else {
