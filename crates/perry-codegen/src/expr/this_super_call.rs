@@ -840,6 +840,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
                         };
                         lower_event_emitter_async_resource_subclass_init(ctx, &this_box, &options);
+                        bind_derived_this_after_super(ctx);
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
                         crate::lower_call::apply_field_initializers_recursive(
@@ -862,6 +863,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "js_async_local_storage_subclass_init",
                             &[(DOUBLE, &this_box)],
                         );
+                        bind_derived_this_after_super(ctx);
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
                         crate::lower_call::apply_field_initializers_recursive(
@@ -892,6 +894,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (DOUBLE, &options),
                             ],
                         );
+                        bind_derived_this_after_super(ctx);
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
                         crate::lower_call::apply_field_initializers_recursive(
