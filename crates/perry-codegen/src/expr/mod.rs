@@ -2158,6 +2158,8 @@ mod compare;
 mod compare_tests;
 mod conditional;
 mod dyn_extern_i18n;
+#[cfg(test)]
+mod dynamic_add_tree_tests;
 mod env_clones;
 mod fs_await;
 mod index_get;
