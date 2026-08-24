@@ -841,14 +841,27 @@ fn compile_ll_inprocess_in(
             Ok(bytes)
         }
         Err(e) => {
-            let error = anyhow!(
+            // Preserve typed backend errors through this diagnostic layer.
+            // In particular, #8679's codegen caller must be able to recover
+            // an `Rs4gcBudgetExceeded` and re-lower the named functions; a
+            // freshly formatted anyhow string would turn that retry request
+            // back into the old hard refusal.
+            let error = e.context(format!(
                 "in-process LLVM compile failed (PERRY_LLVM_INPROCESS).\n\
-                 requested -target: {}\n\
-                 \n\
-                 {}",
-                plan.effective_target,
-                e
-            );
+                 requested -target: {}",
+                plan.effective_target
+            ));
+            if crate::inprocess::rs4gc_budget_retry(&error).is_some() {
+                // This is expected control flow, not a failed compile: the
+                // lowering owner will rebuild the named functions. Do not
+                // consume the process-wide "retain the first LLVM failure"
+                // slot or leave an intermediate behind unless the user
+                // explicitly requested all IR via PERRY_LLVM_KEEP_IR.
+                if !policy.keep {
+                    let _ = fs::remove_dir_all(&paths.scratch_dir);
+                }
+                return Err(error);
+            }
             Err(failed_scratch.finish_with_ir(error, ll_text))
         }
     }

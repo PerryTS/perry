@@ -41,8 +41,9 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_RS4GC",
     // `-Os` vs `-O3` for every native module.
     "PERRY_LL_SIZE_OPT",
-    // The post-RS4GC per-function instruction budget (#8583): a unit that one
-    // setting refuses must not be served from a build another accepted.
+    // The post-RS4GC per-function instruction budget (#8583/#8679): a function
+    // one setting re-lowers must not be served from a build another kept on
+    // statepoints.
     "PERRY_LL_RS4GC_MAX_INSTRS",
     // #8583: the relocation estimate above which a function spills its GC roots
     // to a shadow frame. It changes which functions carry statepoints, so it

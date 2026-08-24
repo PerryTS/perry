@@ -387,9 +387,10 @@ pub(crate) fn inline_hot_small_max_call_sites() -> u32 {
 /// fan-out it avoids (an ~8M function spilled in 303 s vs 180 s fanned out,
 /// #8620) — and above it fan-out risks not finishing and the shadow frame wins.
 /// The former 4M default fired on ~8M functions that fan out fine in minutes.
-/// The post-RS4GC instruction-budget assertion (#8586, inprocess.rs) backstops
-/// any function this estimate misses: it fails loudly rather than hanging, so
-/// raising the threshold is safe.
+/// The post-RS4GC instruction budget (#8586/#8679, inprocess.rs) backstops any
+/// function this estimate misses: it re-lowers that function onto a precise
+/// shadow frame and retries before LLVM's optimizer can hang, so raising the
+/// estimate threshold is safe.
 ///
 /// `PERRY_ROOT_SPILL_RELOCATIONS=<n>` overrides it; `0` disables spilling
 /// (every function stays on native statepoints, the pre-#8583 behavior).

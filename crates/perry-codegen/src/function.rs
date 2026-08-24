@@ -302,12 +302,35 @@ impl LlFunction {
     /// into every caller's hot loop. Skip the frame entirely; the
     /// to_ir() rewrite pass keys off `shadow_frame_slot.is_some()`,
     /// so no matching pop is emitted either.
-    /// #8583: route this function's precise roots through the heap shadow
-    /// frame instead of native statepoints. Must be called BEFORE
-    /// `enable_shadow_frame` / `enable_post_init_shadow_frame` so the frame is
-    /// built in shadow form. No effect once a frame has been emitted.
-    pub fn request_shadow_frame_spill(&mut self) {
+    /// #8583/#8679: route this function's precise roots through the heap
+    /// shadow frame instead of native statepoints.
+    ///
+    /// The estimate-driven path calls this before `enable_shadow_frame`, while
+    /// the post-RS4GC budget retry calls it after lowering is complete. In the
+    /// latter case the native-root path deliberately retained the original
+    /// `js_shadow_slot_bind` calls until final rendering, so converting the
+    /// recorded stack-map request back into a shadow-frame push is a complete
+    /// re-lowering: final rendering keeps those binds, adds the matching pops,
+    /// and drops the GC strategy so RS4GC skips the function on retry.
+    ///
+    /// Returns `true` only when this call changed the lowering. A retry driver
+    /// uses that to reject an impossible second retry instead of looping.
+    pub fn request_shadow_frame_spill(&mut self) -> bool {
+        if self.force_shadow_frame {
+            return false;
+        }
         self.force_shadow_frame = true;
+        self.stack_map_requested = false;
+        if self.shadow_frame_requested
+            && self.shadow_frame_slot.is_none()
+            && self.stack_map_slot_count != 0
+        {
+            self.emit_shadow_frame_push(
+                self.stack_map_slot_count,
+                self.shadow_frame_post_init_region,
+            );
+        }
+        true
     }
 
     /// Whether this function spills its roots to the shadow frame (#8583).
@@ -1361,6 +1384,53 @@ mod define_header_tests {
             "the native sibling has no heap shadow frame; its roots are stack-map \
              slots and its binds are lowered away:\n{native_ir}"
         );
+    }
+
+    /// #8679's budget is learned only after RS4GC, so the durable fallback
+    /// necessarily asks an already-lowered function to change root lowering.
+    /// This pins that late request to the same complete shadow-frame shape as
+    /// the estimate-driven early request, including balanced return pops.
+    #[test]
+    fn a_post_lowering_spill_request_rebuilds_the_shadow_frame() {
+        use crate::codegen::helpers::NativeRootsPin;
+        use crate::types::{I64, PTR};
+        const STRATEGY: &str = "gc \"statepoint-example\"";
+
+        let _native = NativeRootsPin::native();
+        let mut function = LlFunction::new("late_spill", crate::types::VOID, vec![]);
+        function.enable_post_init_shadow_frame(0);
+        let idx = function
+            .reserve_shadow_slot()
+            .expect("native lowering reserves a precise-root slot");
+        let root = function.alloca_entry(I64);
+        function.entry_allocas_push_store(I64, "0", &root);
+        function.entry_setup_call_void(
+            "js_shadow_slot_bind",
+            &[(crate::types::I32, &idx.to_string()), (PTR, &root)],
+        );
+        function.mark_entry_init_boundary();
+        let entry = function.create_block("entry");
+        let _ = entry.call(I64, "may_collect", &[]);
+        entry.ret_void();
+
+        let native_ir = function.to_ir();
+        assert!(native_ir.contains(STRATEGY));
+        assert!(!native_ir.contains("@js_shadow_frame_enter"));
+        assert!(!native_ir.contains("@js_shadow_slot_bind"));
+
+        assert!(
+            function.request_shadow_frame_spill(),
+            "the first late request must change the lowering"
+        );
+        assert!(
+            !function.request_shadow_frame_spill(),
+            "a repeated request must report that no retry progress is possible"
+        );
+        let shadow_ir = function.to_ir();
+        assert!(!shadow_ir.contains(STRATEGY), "{shadow_ir}");
+        assert!(shadow_ir.contains("call ptr @js_shadow_frame_enter(i32 1)"));
+        assert!(shadow_ir.contains("call void @js_shadow_slot_bind(i32 0"));
+        assert!(shadow_ir.contains("call void @js_shadow_frame_pop(i64"));
     }
 
     /// `force_external` drops only the linkage keyword. The codegen-unit path
