@@ -100,7 +100,7 @@ enum HookKind {
     AfterEach,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static TEST_RUNNER: RefCell<RunnerState> = RefCell::new(RunnerState::new());
     static ACTIVE_CHILDREN: RefCell<Vec<Vec<TestResult>>> = const { RefCell::new(Vec::new()) };
     static ACTIVE_ANCESTORS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
