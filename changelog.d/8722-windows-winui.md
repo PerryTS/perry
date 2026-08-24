@@ -1,0 +1,1 @@
+`--target windows-winui` now renders Perry's core UI controls with native WinUI 3 / Fluent controls and Mica chrome through Windows Reactor. The compiler deploys the required unpackaged Windows App SDK bootstrap assets automatically, while the default `--target windows` backend remains unchanged.
