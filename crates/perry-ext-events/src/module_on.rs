@@ -161,29 +161,47 @@ extern "C" fn events_abort_listener_dispose(closure: *const RawClosureHeader) ->
 
 #[no_mangle]
 pub unsafe extern "C" fn js_events_add_abort_listener(signal: f64, listener: f64) -> i64 {
-    let signal = validate_abort_signal_arg(signal, "signal");
-    let signal_ptr = object_ptr_from_value(signal).unwrap_or_else(|| {
+    let root_scope = TransientRootScope::enter();
+    let signal_root = root_scope.root_nanbox(signal);
+    let listener_root = root_scope.root_nanbox(listener);
+    let signal = validate_abort_signal_arg(signal_root.get(), "signal");
+    let signal_ptr = object_ptr_from_value(signal_root.get()).unwrap_or_else(|| {
         throw_invalid_arg_type(&invalid_instance_arg_message(
             "signal",
             "AbortSignal",
             signal,
         ))
     });
-    let callback_ptr = validate_event_listener(listener.to_bits() as i64);
+    let callback_ptr = validate_event_listener(listener_root.get().to_bits() as i64);
     js_abort_signal_add_listener(
         signal_ptr as *mut u8,
         abort_event_value(),
         nanbox_pointer_bits(callback_ptr),
     );
     let dispose_closure = js_closure_alloc(events_abort_listener_dispose as *const u8, 2);
-    js_closure_set_capture_ptr(dispose_closure, 0, signal_ptr as i64);
-    js_closure_set_capture_ptr(dispose_closure, 1, callback_ptr);
-    let dispose_val = nanbox_pointer_bits(dispose_closure as i64);
+    let dispose_closure_root = root_scope.root_addr(dispose_closure as i64);
+    let signal_ptr = object_ptr_from_value(signal_root.get())
+        .expect("validated AbortSignal remained a rooted object");
+    let callback_ptr = validate_event_listener(listener_root.get().to_bits() as i64);
+    js_closure_set_capture_ptr(
+        dispose_closure_root.get() as *mut RawClosureHeader,
+        0,
+        signal_ptr as i64,
+    );
+    js_closure_set_capture_ptr(
+        dispose_closure_root.get() as *mut RawClosureHeader,
+        1,
+        callback_ptr,
+    );
     let disposable = js_object_alloc(0, 0);
-    let disposable_val = nanbox_pointer_bits(disposable as i64);
+    let disposable_root = root_scope.root_addr(disposable as i64);
     let dispose_key = b"@@__perry_wk_dispose";
     let dispose_key_ptr = js_string_from_bytes(dispose_key.as_ptr(), dispose_key.len() as u32);
     let dispose_sym_val = js_symbol_for(f64::from_bits(nanbox_string_bits(dispose_key_ptr)));
-    js_object_set_symbol_property(disposable_val, dispose_sym_val, dispose_val);
-    disposable as i64
+    js_object_set_symbol_property(
+        nanbox_pointer_bits(disposable_root.get()),
+        dispose_sym_val,
+        nanbox_pointer_bits(dispose_closure_root.get()),
+    );
+    disposable_root.get()
 }
