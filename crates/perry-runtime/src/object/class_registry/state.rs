@@ -624,6 +624,11 @@ fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id
     }
 }
 
+fn class_parent_prototype_bits(value: f64) -> Option<u64> {
+    let bits = value.to_bits();
+    (bits == crate::value::TAG_NULL || (bits >> 48) == 0x7FFD).then_some(bits)
+}
+
 pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     // #7757: a specialization answers with its generic's prototype.
     let class_id = decl_prototype_identity_id(class_id);
@@ -711,8 +716,9 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         unsafe { mirror_prototype_method_on_object(proto, &name, value_bits, enumerable) };
     }
 
-    let dynamic_parent = js_get_dynamic_parent_value(class_id);
-    let null_heritage = dynamic_parent.to_bits() == crate::value::TAG_NULL;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let dynamic_parent = scope.root_nanbox_f64(js_get_dynamic_parent_value(class_id));
+    let null_heritage = dynamic_parent.get_nanbox_f64().to_bits() == crate::value::TAG_NULL;
     let parent_proto_bits = if null_heritage {
         // A class extending null creates a prototype object whose
         // [[Prototype]] is null, not Object.prototype.  Record TAG_NULL
@@ -720,33 +726,41 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         // Object.prototype default.
         Some(crate::value::TAG_NULL)
     } else {
-        get_parent_class_id(class_id)
+        let registered_parent_proto = get_parent_class_id(class_id)
             .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
             .and_then(|parent_id| {
                 let parent_proto = class_decl_prototype_value(parent_id);
                 let parent_bits = parent_proto.to_bits();
                 ((parent_bits >> 48) == 0x7FFD).then_some(parent_bits)
-            })
+            });
+        if registered_parent_proto.is_some() {
+            registered_parent_proto
+        } else {
             // A runtime function-valued superclass (including Intl service
             // constructors) has no class-id edge. Link the declared prototype
             // to the parent's own `.prototype` exactly once, while this fresh
             // class prototype is initialized. Construction must never rewrite
             // this edge after user code mutates it.
-            .or_else(|| {
-                let parent = JSValue::from_bits(dynamic_parent.to_bits());
-                if !parent.is_pointer() {
-                    return None;
-                }
+            let parent = JSValue::from_bits(dynamic_parent.get_nanbox_f64().to_bits());
+            if parent.is_pointer() {
                 let parent_addr = parent.as_pointer::<u8>() as usize;
-                if !crate::closure::is_closure_ptr(parent_addr) {
-                    return None;
+                if crate::closure::is_closure_ptr(parent_addr) {
+                    let parent_proto =
+                        crate::closure::closure_get_dynamic_prop(parent_addr, "prototype");
+                    if let Some(bits) = class_parent_prototype_bits(parent_proto) {
+                        Some(bits)
+                    } else {
+                        super::super::object_ops::throw_object_type_error(
+                            b"Class extends value does not have valid prototype property",
+                        );
+                    }
+                } else {
+                    global_object_prototype_bits()
                 }
-                let parent_proto =
-                    crate::closure::closure_get_dynamic_prop(parent_addr, "prototype");
-                let bits = parent_proto.to_bits();
-                ((bits >> 48) == 0x7FFD).then_some(bits)
-            })
-            .or_else(global_object_prototype_bits)
+            } else {
+                global_object_prototype_bits()
+            }
+        }
     };
     if let Some(bits) = parent_proto_bits {
         let proto = class_decl_prototype_object(class_id);
@@ -904,5 +918,25 @@ mod class_dynamic_prop_store_tests {
         // is non-empty for the whole process), still updates the value.
         class_dynamic_prop_root_store(cid, "k", 3.0);
         assert_eq!(stored(cid, "k"), Some(3.0));
+    }
+}
+
+#[cfg(test)]
+mod class_parent_prototype_tests {
+    use super::*;
+
+    #[test]
+    fn only_object_and_null_parent_prototypes_are_valid() {
+        let object = f64::from_bits(crate::value::POINTER_TAG | 0x1234);
+        assert_eq!(class_parent_prototype_bits(object), Some(object.to_bits()));
+        assert_eq!(
+            class_parent_prototype_bits(f64::from_bits(crate::value::TAG_NULL)),
+            Some(crate::value::TAG_NULL)
+        );
+        assert_eq!(
+            class_parent_prototype_bits(f64::from_bits(crate::value::TAG_UNDEFINED)),
+            None
+        );
+        assert_eq!(class_parent_prototype_bits(1.0), None);
     }
 }
