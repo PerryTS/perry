@@ -5,6 +5,7 @@ static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 struct GcTestGuard {
     frame: u64,
+    previous_force_evacuation: Option<std::ffi::OsString>,
     _lock: MutexGuard<'static, ()>,
 }
 
@@ -13,9 +14,23 @@ impl GcTestGuard {
         let lock = GC_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Rewriting is observable only when the collector moves the root.
+        // Unit-test heaps are normally too quiet for the evacuation policy to
+        // choose that path, so make the test's collection deterministic. The
+        // lock serializes this crate's GC tests, and Drop restores any value
+        // supplied by the test runner.
+        let previous_force_evacuation = std::env::var_os("PERRY_GC_FORCE_EVACUATE");
+        // SAFETY: GC_TEST_LOCK is held until this guard is dropped, so no
+        // other GC test in this binary observes the temporary environment
+        // value.
+        unsafe { std::env::set_var("PERRY_GC_FORCE_EVACUATE", "1") };
         perry_runtime::gc::js_gc_write_barriers_emitted(1);
-        let frame = perry_runtime::gc::js_shadow_frame_push(0);
-        Self { frame, _lock: lock }
+        let frame = perry_runtime::gc::js_shadow_frame_push(1);
+        Self {
+            frame,
+            previous_force_evacuation,
+            _lock: lock,
+        }
     }
 }
 
@@ -23,6 +38,14 @@ impl Drop for GcTestGuard {
     fn drop(&mut self) {
         perry_runtime::gc::js_shadow_frame_pop(self.frame);
         perry_runtime::gc::js_gc_write_barriers_emitted(0);
+        // SAFETY: GC_TEST_LOCK is still held here and is released only after
+        // this Drop implementation returns.
+        unsafe {
+            match self.previous_force_evacuation.take() {
+                Some(value) => std::env::set_var("PERRY_GC_FORCE_EVACUATE", value),
+                None => std::env::remove_var("PERRY_GC_FORCE_EVACUATE"),
+            }
+        }
     }
 }
 
@@ -65,6 +88,12 @@ fn gc_mutable_scanner_rewrites_listener_roots() {
     let _guard = GcTestGuard::new();
     perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-net", scan_net_roots);
 
+    // Keep an ordinary shadow-stack root as the control. Its rewrite proves
+    // the collection copied live objects independently of scan_net_roots, so
+    // a listener that stays at its old address is an actual scanner failure.
+    let control = young_gc_root();
+    perry_runtime::gc::js_shadow_slot_set(0, control as u64);
+
     let socket_id = -9_001;
     let _cleanup = NetHandleCleanup::new(vec![socket_id]);
     let callback = young_gc_root();
@@ -78,7 +107,19 @@ fn gc_mutable_scanner_rewrites_listener_roots() {
             .push(callback);
     }
 
+    let copying_cycles_before = perry_runtime::gc::copying_minor_cycles();
+    let moved_objects_before = perry_runtime::gc::moved_objects_total();
     let _ = perry_runtime::gc::gc_collect_minor();
+
+    assert!(
+        perry_runtime::gc::copying_minor_cycles() > copying_cycles_before,
+        "minor GC did not run the copying collector, so the scanner was not exercised"
+    );
+    assert!(
+        perry_runtime::gc::moved_objects_total() > moved_objects_before,
+        "copying minor did not relocate an object, so the scanner was not exercised"
+    );
+    assert_rewritten(control, perry_runtime::gc::js_shadow_slot_get(0) as i64);
 
     let after = {
         let listeners = statics::listeners().lock().unwrap();
