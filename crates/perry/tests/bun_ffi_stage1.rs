@@ -88,6 +88,7 @@ fn build_test_dylib(dir: &Path) -> PathBuf {
         .arg("-o")
         .arg(&lib_path)
         .arg(&c_path)
+        .arg("-pthread")
         .status()
         .expect("run cc (the perry link driver requires it too)");
     assert!(status.success(), "cc failed to build the test dylib");
@@ -101,6 +102,8 @@ const TEST_LIB_C: &str = r#"
 #include <stddef.h>
 #include <string.h>
 #include <stdbool.h>
+#include <pthread.h>
+#include <stdlib.h>
 
 #define EXPORT __attribute__((visibility("default")))
 
@@ -145,6 +148,12 @@ EXPORT int64_t ffi_sum8(int32_t a, int32_t b, int32_t c, int32_t d,
 EXPORT double ffi_dsum8(double a, double b, double c, double d,
                         double e, double f, double g, double h) {
     return a + b + c + d + e + f + g + h;
+}
+EXPORT int64_t ffi_sum14(int32_t a, int32_t b, int32_t c, int32_t d,
+                         int32_t e, int32_t f, int32_t g, int32_t h,
+                         int32_t i, int32_t j, int32_t k, int32_t l,
+                         int32_t m, int32_t n) {
+    return (int64_t)a+b+c+d+e+f+g+h+i+j+k+l+m+n;
 }
 
 EXPORT void *ffi_ptr_identity(void *p) { return p; }
@@ -203,13 +212,39 @@ EXPORT int32_t ffi_call_cstring_callback(
     return callback("native callback");
 }
 EXPORT void *ffi_echo_callback(void *callback) { return callback; }
+EXPORT void *ffi_i32_add1_ptr(void) { return (void *)&ffi_i32_add1; }
+
+struct threaded_callback_ctx { void (*callback)(uint32_t); uint32_t value; };
+static void *ffi_thread_entry(void *raw) {
+    struct threaded_callback_ctx *ctx = raw;
+    ctx->callback(ctx->value);
+    free(ctx);
+    return NULL;
+}
+EXPORT void ffi_start_thread_callback(void (*callback)(uint32_t), uint32_t value) {
+    struct threaded_callback_ctx *ctx = malloc(sizeof(*ctx));
+    ctx->callback = callback;
+    ctx->value = value;
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, ffi_thread_entry, ctx) == 0) {
+        pthread_detach(thread);
+    } else {
+        free(ctx);
+    }
+}
 "#;
 
 const TIER1_TS: &str = r#"
-import { dlopen, FFIType, ptr, CString, JSCallback, suffix, toArrayBuffer, toBuffer } from "bun:ffi";
+import { dlopen, FFIType, ptr, CString, JSCallback, CFunction, linkSymbols, viewSource, read, suffix, toArrayBuffer, toBuffer } from "bun:ffi";
 import * as ffiNamespace from "bun:ffi";
+import * as nodeFfi from "node:ffi";
+import nodeFfiDefault from "node:ffi";
+import { createRequire } from "node:module";
+
+const nodeFfiRequired = createRequire(import.meta.url)("node:ffi");
 
 console.log("suffix-ok:", suffix === "dylib" || suffix === "so");
+console.log("node-require:", typeof nodeFfiRequired.dlopen, nodeFfiRequired.suffix === nodeFfi.suffix);
 console.log("ffitype:", FFIType.i32, FFIType.cstring, FFIType.ptr, FFIType.void, FFIType.u64);
 console.log("ffitype-aliases:", FFIType.pointer === FFIType.ptr, FFIType["int32_t"] === FFIType.i32, FFIType.usize === FFIType.u64);
 
@@ -243,6 +278,10 @@ const lib = dlopen(process.env.FFI_TEST_LIB!, {
   ffi_dsum8: {
     args: [FFIType.f64, FFIType.f64, FFIType.f64, FFIType.f64, FFIType.f64, FFIType.f64, FFIType.f64, FFIType.f64],
     returns: FFIType.f64,
+  },
+  ffi_sum14: {
+    args: [FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32],
+    returns: FFIType.i64,
   },
   ffi_ptr_identity: { args: [FFIType.ptr], returns: FFIType.ptr },
   ffi_null_ptr: { args: [], returns: FFIType.ptr },
@@ -278,6 +317,7 @@ const lib = dlopen(process.env.FFI_TEST_LIB!, {
     args: [FFIType.function],
     returns: FFIType.function,
   },
+  ffi_i32_add1_ptr: { args: [], returns: FFIType.ptr },
 });
 const s = lib.symbols;
 
@@ -314,6 +354,7 @@ console.log("f32:", s.ffi_f32_half(9), "f64:", s.ffi_f64_half(9));
 console.log("mixed:", s.ffi_mixed(10, 2.0, 20, 4.0, 30, 1.5));
 console.log("sum8:", s.ffi_sum8(1, 2, 3, 4, 5, 6, 7, 8));
 console.log("dsum8:", s.ffi_dsum8(0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5));
+console.log("sum14:", s.ffi_sum14(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14));
 
 // pointers: JS buffer -> native (read) and native -> JS buffer (write)
 const buf = new Uint8Array(16);
@@ -342,10 +383,12 @@ console.log("concat:", s.ffi_concat(Buffer.from("foo\0"), Buffer.from("bar\0")))
 // CString: read a NUL-terminated string from a raw pointer
 const utf8Ptr = s.ffi_utf8();
 console.log("cstring-read:", CString(utf8Ptr));
+console.log("cstring-null:", JSON.stringify(CString(null as any)));
 
 // Stage 2: zero-copy native-memory wrappers. Both directions must alias the
 // C static allocation; a copy would fail one of these checks.
 const externalPtr = s.ffi_external_ptr();
+console.log("read-namespace:", read.u8(externalPtr), read.u16(externalPtr));
 const externalAB = toArrayBuffer(externalPtr, 1, 3);
 const externalView = new Uint8Array(externalAB);
 console.log("external-ab:", externalAB instanceof ArrayBuffer, externalAB.byteLength);
@@ -412,6 +455,16 @@ namespaceCallback.close();
 stringCallback.close();
 throwingCallback.close();
 
+// Pointer-owned typed functions and tables use the same ABI stubs without a
+// library handle. `new CFunction` must preserve its explicit callable return.
+const addPointer = s.ffi_i32_add1_ptr();
+const cFunction = new CFunction({ ptr: addPointer, args: [FFIType.i32], returns: FFIType.i32 });
+console.log("cfunction:", cFunction(41));
+const linked = linkSymbols({ addOne: { ptr: addPointer, args: [FFIType.i32], returns: FFIType.i32 } });
+console.log("linksymbols:", linked.symbols.addOne(41), typeof linked.close);
+console.log("viewsource:", Array.isArray(viewSource({ addOne: { ptr: addPointer, args: [FFIType.i32], returns: FFIType.i32 } })));
+linked.close();
+
 lib.close();
 
 // use-after-close throws a descriptive error instead of crashing
@@ -422,6 +475,47 @@ try {
   closedError = String(e && e.message);
 }
 console.log("closed-throws:", closedError.includes("close()"));
+
+// Node 26's node:ffi shape, including lossless bigint pointers, zero-copy
+// native memory, library-owned callbacks, and the full stack-argument call.
+const nodeOpened = nodeFfi.dlopen(process.env.FFI_TEST_LIB!, {
+  ffi_sum14: { arguments: ["i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32", "i32"], return: "i64" },
+  ffi_external_ptr: { arguments: [], return: "pointer" },
+  ffi_external_get: { arguments: ["i32"], return: "u8" },
+  ffi_call_callback: { arguments: ["function", "i32", "f64", "f32"], return: "i32" },
+});
+const requiredOpened = nodeFfiRequired.dlopen(process.env.FFI_TEST_LIB!, {
+  ffi_i32_add1: { arguments: ["i32"], return: "i32" },
+});
+console.log("node-require-call:", requiredOpened.functions.ffi_i32_add1(41));
+requiredOpened.lib.close();
+console.log("node-default:", nodeFfiDefault.suffix === nodeFfi.suffix);
+console.log("node-sum14:", nodeOpened.functions.ffi_sum14(1,2,3,4,5,6,7,8,9,10,11,12,13,14));
+const nodePointer = nodeOpened.functions.ffi_external_ptr();
+const nodeExternal = nodeFfi.toArrayBuffer(nodePointer, 4, false);
+console.log("node-pointer-view:", typeof nodePointer, new Uint8Array(nodeExternal)[0]);
+console.log("node-raw-pointer:", nodeFfi.getRawPointer(nodeExternal) === nodePointer);
+const nodeCallbackPointer = nodeOpened.lib.registerCallback(
+  { arguments: ["i32", "f64", "f32"], return: "i32" },
+  (a: number, b: number, c: number) => a + b + c,
+);
+console.log("node-callback:", typeof nodeCallbackPointer, nodeOpened.functions.ffi_call_callback(nodeCallbackPointer, 10, 20.5, 11.5));
+nodeOpened.lib.unregisterCallback(nodeCallbackPointer);
+nodeOpened.lib.close();
+
+// FFF uses a `threadsafe: true` JSCallback from a native watcher thread.
+// Keep this dylib open until process exit: the foreign thread returns through
+// its code immediately after the owning JS thread services the callback.
+const threadedLib = dlopen(process.env.FFI_TEST_LIB!, {
+  ffi_start_thread_callback: { args: [FFIType.function, FFIType.u32], returns: FFIType.void },
+});
+let threadedCallback: any;
+threadedCallback = new JSCallback((value: number) => {
+  console.log("threadsafe-callback:", value);
+  threadedCallback.close();
+}, { args: [FFIType.u32], returns: FFIType.void, threadsafe: true });
+console.log("threadsafe-shape:", threadedCallback.threadsafe);
+threadedLib.symbols.ffi_start_thread_callback(threadedCallback.ptr, 6562);
 
 console.log("TIER1-DONE");
 "#;
@@ -450,6 +544,7 @@ fn tier1_every_ffi_type_against_test_dylib() {
     assert!(ok, "binary failed\nstdout:\n{stdout}\nstderr:\n{stderr}");
     for needle in [
         "suffix-ok: true",
+        "node-require: function true",
         "ffitype: 5 14 12 13 8",
         "ffitype-aliases: true true true",
         "void-calls: 2",
@@ -473,6 +568,7 @@ fn tier1_every_ffi_type_against_test_dylib() {
         "mixed: 249",
         "sum8: 36n",
         "dsum8: 32",
+        "sum14: 105n",
         "ptr-type: number true",
         "ptr-identity: true",
         "ptr-offset: true",
@@ -487,6 +583,8 @@ fn tier1_every_ffi_type_against_test_dylib() {
         "strlen: 11",
         "concat: foobar",
         "cstring-read: caf\u{e9} \u{2713}",
+        "cstring-null: \"\"",
+        "read-namespace: 65 16961",
         "external-ab: true 3",
         "external-initial: 66 0 67",
         "external-native-write: 88",
@@ -506,7 +604,19 @@ fn tier1_every_ffi_type_against_test_dylib() {
         "callback-cstring-return: 15",
         "callback-throw-zero: 0",
         "callback-closed-zero: 0",
+        "cfunction: 42",
+        "linksymbols: 42 function",
+        "viewsource: true",
         "closed-throws: true",
+        "node-sum14: 105n",
+        "node-default: true",
+        "node-require-call: 42",
+        // Reopening the dylib after `lib.close()` resets its static fixture.
+        "node-pointer-view: bigint 65",
+        "node-raw-pointer: true",
+        "node-callback: bigint 42",
+        "threadsafe-shape: true",
+        "threadsafe-callback: 6562",
         "TIER1-DONE",
     ] {
         assert!(
@@ -548,19 +658,17 @@ try {
   console.log("function-type: false");
 }
 
-// Constructor validation is explicit, including the same-thread contract.
+// Constructor validation is explicit; threadsafe callbacks advertise the
+// foreign-thread handoff and can be closed without invocation.
 try {
   JSCallback(1 as any, {});
   console.log("jscallback-type: false");
 } catch (e: any) {
   console.log("jscallback-type:", String(e.message).includes("expects a function"));
 }
-try {
-  JSCallback(() => {}, { threadsafe: true });
-  console.log("jscallback-threadsafe: false");
-} catch (e: any) {
-  console.log("jscallback-threadsafe:", String(e.message).includes("creating thread"));
-}
+const threadsafe = JSCallback(() => {}, { threadsafe: true });
+console.log("jscallback-threadsafe:", threadsafe.threadsafe);
+threadsafe.close();
 
 // strings are not pointers (Bun-compatible hint)
 try {

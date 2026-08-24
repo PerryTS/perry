@@ -219,10 +219,10 @@ pub(crate) unsafe fn nm_dispatch_bun_ffi(ctx: &NmCtx, module_name: &str, method_
         assert_skip_prototype,
     } = *ctx;
     let _ = (obj, assert_skip_prototype);
-    if module_name != "bun:ffi" {
+    if !matches!(module_name, "bun:ffi" | "ffi" | "ffi.default") {
         return f64::from_bits(JSValue::undefined().bits());
     }
-    match crate::bun_ffi::dispatch(method_name, args_ptr, args_len) {
+    match crate::bun_ffi::dispatch(module_name, method_name, args_ptr, args_len) {
         Some(v) => v,
         None => f64::from_bits(JSValue::undefined().bits()),
     }

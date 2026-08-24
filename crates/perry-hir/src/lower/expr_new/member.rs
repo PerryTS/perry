@@ -94,12 +94,12 @@ pub(crate) fn lower_new_member_native(
                     .is_some_and(|(module, export)| {
                         module == "bun:ffi" && (export.is_none() || export == Some("default"))
                     });
-            if is_bun_ffi_module && prop_ident.sym.as_ref() == "JSCallback" {
+            if is_bun_ffi_module && matches!(prop_ident.sym.as_ref(), "JSCallback" | "CFunction") {
                 return Ok(Some(Expr::NativeMethodCall {
                     module: "bun:ffi".to_string(),
                     class_name: None,
                     object: None,
-                    method: "JSCallback".to_string(),
+                    method: prop_ident.sym.to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                 }));
             }

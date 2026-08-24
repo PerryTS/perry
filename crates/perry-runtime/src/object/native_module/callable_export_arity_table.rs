@@ -8,7 +8,9 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         ("bun:ffi", "JSCallback") => Some(2),
         ("bun:ffi", "toArrayBuffer" | "toBuffer") => Some(3),
         ("bun:ffi", "viewSource") => Some(2),
-        ("bun:ffi", "read") => Some(0),
+        ("ffi", "dlopen") => Some(2),
+        ("ffi", "getRawPointer" | "toString") => Some(1),
+        ("ffi", "toArrayBuffer" | "toBuffer") => Some(3),
         // #3687: node:cluster — module-method `.length` matches Node.
         ("cluster", "fork" | "disconnect" | "setupPrimary" | "setupMaster" | "Worker") => Some(1),
         ("cluster", "emit") => Some(1),
@@ -285,7 +287,6 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
             ("dlopen", 2),
             ("linkSymbols", 1),
             ("ptr", 1),
-            ("read", 0),
             ("toArrayBuffer", 3),
             ("toBuffer", 3),
             ("viewSource", 2),
@@ -368,6 +369,16 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
             ("on", 2),
             ("once", 2),
             ("setMaxListeners", 0),
+        ],
+    ),
+    (
+        "ffi",
+        &[
+            ("dlopen", 2),
+            ("getRawPointer", 1),
+            ("toArrayBuffer", 3),
+            ("toBuffer", 3),
+            ("toString", 1),
         ],
     ),
     (

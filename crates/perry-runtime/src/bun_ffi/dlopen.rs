@@ -11,7 +11,7 @@
 //! calls throw instead of jumping through a dangling handle. This is
 //! deliberately stricter than Bun (which leaves use-after-close as UB).
 
-use super::call::{self, MAX_ARGS, MAX_FLOAT_ARGS, MAX_INT_ARGS};
+use super::call::{self, MAX_ARGS};
 use super::types::{self, T_BUFFER, T_NAPI_ENV, T_NAPI_VALUE, T_VOID};
 use crate::closure::ClosureHeader;
 use crate::value::JSValue;
@@ -23,14 +23,17 @@ use std::sync::Mutex;
 // supports unix x86_64/aarch64 only.
 
 #[cfg(unix)]
-unsafe fn open_library(path: &str) -> Result<usize, String> {
-    let c_path = match std::ffi::CString::new(path) {
+unsafe fn open_library(path: Option<&str>) -> Result<usize, String> {
+    let c_path = match path.map(std::ffi::CString::new).transpose() {
         Ok(p) => p,
         Err(_) => return Err("path contains a NUL byte".to_string()),
     };
     // Clear any stale error state, then capture dlerror on failure.
     libc::dlerror();
-    let h = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+    let raw_path = c_path
+        .as_ref()
+        .map_or(std::ptr::null(), |path| path.as_ptr());
+    let h = libc::dlopen(raw_path, libc::RTLD_NOW | libc::RTLD_LOCAL);
     if h.is_null() {
         let err = libc::dlerror();
         let msg = if err.is_null() {
@@ -61,7 +64,7 @@ unsafe fn close_library(handle: usize) {
 }
 
 #[cfg(not(unix))]
-unsafe fn open_library(_path: &str) -> Result<usize, String> {
+unsafe fn open_library(_path: Option<&str>) -> Result<usize, String> {
     Err("bun:ffi is not supported on this platform".to_string())
 }
 #[cfg(not(unix))]
@@ -85,13 +88,16 @@ struct LibRecord {
 #[derive(Clone, Copy)]
 pub(crate) struct SymRecord {
     fn_ptr: usize,
-    lib: usize,
+    /// `None` for `CFunction` / `linkSymbols`, whose pointer is caller-owned.
+    lib: Option<usize>,
     ret: u8,
     argc: u8,
     args: [u8; MAX_ARGS],
     /// Leaked once per dlopen'd symbol — used in error messages and as the
     /// stable closure display name.
     name: &'static str,
+    /// Node's compatibility API boxes pointer/function returns as BigInt.
+    pointer_bigint: bool,
 }
 
 static LIBS: Mutex<Vec<LibRecord>> = Mutex::new(Vec::new());
@@ -132,13 +138,33 @@ unsafe fn object_ptr_of(v: f64) -> Option<*mut crate::object::ObjectHeader> {
 }
 
 unsafe fn get_field(obj: *mut crate::object::ObjectHeader, name: &str) -> f64 {
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    f64::from_bits(crate::object::js_object_get_field_by_name(obj, key).bits())
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        name.as_ptr(),
+        name.len() as u32,
+    ));
+    f64::from_bits(
+        obj.with_mut_ptr(|obj| {
+            key.with_const_ptr(|key| crate::object::js_object_get_field_by_name(obj, key))
+        })
+        .bits(),
+    )
 }
 
 fn set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f64) {
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_set_field_by_name(obj, key, value);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    let value = scope.root_nanbox_f64(value);
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        name.as_ptr(),
+        name.len() as u32,
+    ));
+    obj.with_mut_ptr(|obj| {
+        key.with_const_ptr(|key| {
+            crate::object::js_object_set_field_by_name(obj, key, value.get_nanbox_f64())
+        })
+    });
 }
 
 // ── the per-arity call-stub thunks ──────────────────────────────────────────
@@ -158,17 +184,23 @@ unsafe fn invoke_from_closure(closure: *const ClosureHeader, js_args: &[f64]) ->
             }
         }
     };
-    if let Some(path) = lib_is_closed(sym.lib) {
-        crate::fs::validate::throw_error_with_code(
-            &format!(
-                "bun:ffi: symbol \"{}\" was called after close() on \"{path}\"",
-                sym.name
-            ),
-            "ERR_INVALID_STATE",
-        );
+    if let Some(lib) = sym.lib {
+        if let Some(path) = lib_is_closed(lib) {
+            crate::fs::validate::throw_error_with_code(
+                &format!(
+                    "bun:ffi: symbol \"{}\" was called after close() on \"{path}\"",
+                    sym.name
+                ),
+                "ERR_INVALID_STATE",
+            );
+        }
     }
     let image = call::marshal_args(&sym.args[..sym.argc as usize], js_args);
-    call::call_and_convert(sym.fn_ptr, sym.ret, &image)
+    if sym.pointer_bigint {
+        call::call_and_convert_node(sym.fn_ptr, sym.ret, &image)
+    } else {
+        call::call_and_convert(sym.fn_ptr, sym.ret, &image)
+    }
 }
 
 macro_rules! sym_thunk {
@@ -302,16 +334,21 @@ fn sym_thunk_for(arity: usize) -> *const u8 {
 
 extern "C" fn close_thunk(closure: *const ClosureHeader) -> f64 {
     let lib_index = crate::closure::js_closure_get_capture_bits(closure, 0) as usize;
+    close_library_index(lib_index);
+    super::undefined()
+}
+
+pub(crate) fn close_library_index(lib_index: usize) {
     let mut libs = LIBS.lock().unwrap();
     if let Some(rec) = libs.get_mut(lib_index) {
         if !rec.closed {
             rec.closed = true;
             let handle = rec.handle;
             drop(libs);
+            super::callback::close_callbacks_for_library(lib_index);
             unsafe { close_library(handle) };
         }
     }
-    super::undefined()
 }
 
 /// Allocate a call-stub closure whose capture 0 is a plain (non-pointer)
@@ -323,6 +360,19 @@ fn index_closure(func: *const u8, index: usize, arity: u32, name: &str) -> f64 {
     crate::closure::js_register_closure_length(func, arity);
     let closure = crate::closure::js_closure_alloc(func, 1);
     crate::closure::js_closure_set_capture_bits(closure, 0, index as u64);
+    crate::object::set_bound_native_closure_name(closure, name);
+    crate::object::set_builtin_closure_length(closure as usize, arity);
+    crate::value::js_nanbox_pointer(closure as i64)
+}
+
+extern "C" fn noop_close_thunk(_closure: *const ClosureHeader) -> f64 {
+    super::undefined()
+}
+
+fn no_capture_closure(func: *const u8, arity: u32, name: &str) -> f64 {
+    crate::closure::js_register_closure_arity(func, arity);
+    crate::closure::js_register_closure_length(func, arity);
+    let closure = crate::closure::js_closure_alloc(func, 0);
     crate::object::set_bound_native_closure_name(closure, name);
     crate::object::set_builtin_closure_length(closure as usize, arity);
     crate::value::js_nanbox_pointer(closure as i64)
@@ -341,15 +391,12 @@ fn throw_dlopen_failed(name: &str, detail: &str) -> ! {
 /// `dlopen` can roll back its transaction before throwing at a single site.
 fn validate_signature_checked(sym: &str, args: &[u8], ret: u8) -> Result<(), String> {
     let reject = |what: &str| -> String { format!("bun:ffi: symbol \"{sym}\": {what}") };
-    let mut ints = 0usize;
-    let mut floats = 0usize;
     for &t in args {
         match t {
             T_NAPI_ENV | T_NAPI_VALUE => return Err(reject("napi types are not supported")),
             T_BUFFER => return Err(reject("FFIType.buffer is not yet supported (use ptr)")),
             T_VOID => return Err(reject("void is not a valid argument type")),
-            t if types::is_float_class(t) => floats += 1,
-            _ => ints += 1,
+            _ => {}
         }
     }
     match ret {
@@ -366,18 +413,6 @@ fn validate_signature_checked(sym: &str, args: &[u8], ret: u8) -> Result<(), Str
             "more than {MAX_ARGS} arguments are not supported"
         )));
     }
-    if ints > MAX_INT_ARGS {
-        return Err(reject(&format!(
-            "more than {MAX_INT_ARGS} integer/pointer arguments are not supported \
-             by perry's stage-1 call stubs"
-        )));
-    }
-    if floats > MAX_FLOAT_ARGS {
-        return Err(reject(&format!(
-            "more than {MAX_FLOAT_ARGS} float arguments are not supported \
-             by perry's stage-1 call stubs"
-        )));
-    }
     Ok(())
 }
 
@@ -389,6 +424,86 @@ struct PreparedSym {
     ret: u8,
     argc: usize,
     args: [u8; MAX_ARGS],
+}
+
+unsafe fn parse_bun_definition(
+    name: String,
+    entry: *mut crate::object::ObjectHeader,
+    handle: Option<(usize, &str)>,
+) -> Result<PreparedSym, (String, &'static str)> {
+    let type_err = |m: String| (m, "ERR_INVALID_ARG_TYPE");
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let entry = scope.root_raw_mut_ptr(entry);
+    let mut args = [0u8; MAX_ARGS];
+    let mut argc = 0usize;
+    let args_value = scope.root_nanbox_f64(
+        entry.with_mut_ptr(|entry: *mut crate::object::ObjectHeader| get_field(entry, "args")),
+    );
+    let args_jv = JSValue::from_bits(args_value.get_nanbox_f64().to_bits());
+    if !args_jv.is_undefined() && !args_jv.is_null() {
+        if !JSValue::from_bits(
+            crate::array::js_array_is_array(args_value.get_nanbox_f64()).to_bits(),
+        )
+        .as_bool()
+        {
+            return Err(type_err(format!(
+                "bun:ffi: symbol \"{name}\": args must be an array"
+            )));
+        }
+        let args_array = || {
+            crate::value::js_nanbox_get_pointer(args_value.get_nanbox_f64()) as usize
+                as *const crate::array::ArrayHeader
+        };
+        let len = crate::array::js_array_length(args_array());
+        if len as usize > MAX_ARGS {
+            return Err(type_err(format!(
+                "bun:ffi: symbol \"{name}\": more than {MAX_ARGS} arguments are not supported"
+            )));
+        }
+        for j in 0..len {
+            let value = crate::array::js_array_get(args_array(), j);
+            args[argc] = types::parse_ffi_type_checked(f64::from_bits(value.bits()))
+                .map_err(|m| type_err(format!("bun:ffi: symbol \"{name}\": {m}")))?;
+            argc += 1;
+        }
+    }
+    let returns_value =
+        entry.with_mut_ptr(|entry: *mut crate::object::ObjectHeader| get_field(entry, "returns"));
+    let returns_jv = JSValue::from_bits(returns_value.to_bits());
+    let ret = if returns_jv.is_undefined() || returns_jv.is_null() {
+        T_VOID
+    } else {
+        types::parse_ffi_type_checked(returns_value)
+            .map_err(|m| type_err(format!("bun:ffi: symbol \"{name}\": {m}")))?
+    };
+    validate_signature_checked(&name, &args[..argc], ret).map_err(type_err)?;
+
+    let ptr_value =
+        entry.with_mut_ptr(|entry: *mut crate::object::ObjectHeader| get_field(entry, "ptr"));
+    let ptr_jv = JSValue::from_bits(ptr_value.to_bits());
+    let fn_ptr = if !ptr_jv.is_undefined() && !ptr_jv.is_null() {
+        call::value_to_pointer_arg(ptr_value)
+    } else if let Some((handle, path)) = handle {
+        find_symbol(handle, &name)
+            .ok_or_else(|| type_err(format!("Symbol \"{name}\" not found in \"{path}\"")))?
+    } else {
+        return Err(type_err(format!(
+            "bun:ffi: symbol \"{name}\": expected a non-zero ptr"
+        )));
+    };
+    if fn_ptr == 0 {
+        return Err(type_err(format!(
+            "bun:ffi: symbol \"{name}\": ptr cannot be zero"
+        )));
+    }
+
+    Ok(PreparedSym {
+        name,
+        fn_ptr,
+        ret,
+        argc,
+        args,
+    })
 }
 
 /// Walk + validate + resolve every symbol WITHOUT mutating any global
@@ -403,8 +518,13 @@ unsafe fn prepare_symbols(
 ) -> Result<Vec<PreparedSym>, (String, &'static str)> {
     let type_err = |m: String| (m, "ERR_INVALID_ARG_TYPE");
 
-    let keys = crate::object::js_object_keys(table);
-    let key_count = crate::array::js_array_length(keys);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let table = scope.root_raw_mut_ptr(table);
+    let keys = scope.root_raw_mut_ptr(table.with_mut_ptr(
+        |table: *mut crate::object::ObjectHeader| crate::object::js_object_keys(table),
+    ));
+    let key_count = keys
+        .with_mut_ptr(|keys: *mut crate::array::ArrayHeader| crate::array::js_array_length(keys));
     if key_count == 0 {
         return Err((
             format!("Failed to open library \"{path}\": Expected at least 1 symbol"),
@@ -414,72 +534,22 @@ unsafe fn prepare_symbols(
 
     let mut prepared: Vec<PreparedSym> = Vec::with_capacity(key_count as usize);
     for i in 0..key_count {
-        let key_value = crate::array::js_array_get(keys, i);
+        let key_value = keys.with_mut_ptr(|keys: *mut crate::array::ArrayHeader| {
+            crate::array::js_array_get(keys, i)
+        });
         let name = match value_to_owned_string(f64::from_bits(key_value.bits())) {
             Some(n) => n,
             None => continue,
         };
-        let Some(entry) = object_ptr_of(get_field(table, &name)) else {
+        let field =
+            table.with_mut_ptr(|table: *mut crate::object::ObjectHeader| get_field(table, &name));
+        let Some(entry) = object_ptr_of(field) else {
             return Err(type_err(format!(
                 "bun:ffi: symbol \"{name}\": expected {{ args, returns }}"
             )));
         };
 
-        // args: optional array of FFIType values; returns: optional FFIType
-        // (missing → void), both exactly as Bun accepts them.
-        let mut args = [0u8; MAX_ARGS];
-        let mut argc = 0usize;
-        let args_value = get_field(entry, "args");
-        let args_jv = JSValue::from_bits(args_value.to_bits());
-        if !args_jv.is_undefined() && !args_jv.is_null() {
-            // #6580(CodeRabbit): verify the value is genuinely an Array before
-            // reading it as an ArrayHeader — a non-array object/closure would
-            // otherwise be misinterpreted (arbitrary-memory read).
-            if !JSValue::from_bits(crate::array::js_array_is_array(args_value).to_bits()).as_bool()
-            {
-                return Err(type_err(format!(
-                    "bun:ffi: symbol \"{name}\": args must be an array"
-                )));
-            }
-            let arr = crate::value::js_nanbox_get_pointer(args_value) as usize
-                as *const crate::array::ArrayHeader;
-            let len = crate::array::js_array_length(arr);
-            if len as usize > MAX_ARGS {
-                return Err(type_err(format!(
-                    "bun:ffi: symbol \"{name}\": more than {MAX_ARGS} arguments \
-                     are not supported"
-                )));
-            }
-            for j in 0..len {
-                let t = crate::array::js_array_get(arr, j);
-                args[argc] = types::parse_ffi_type_checked(f64::from_bits(t.bits()))
-                    .map_err(|m| type_err(format!("bun:ffi: symbol \"{name}\": {m}")))?;
-                argc += 1;
-            }
-        }
-        let returns_value = get_field(entry, "returns");
-        let returns_jv = JSValue::from_bits(returns_value.to_bits());
-        let ret = if returns_jv.is_undefined() || returns_jv.is_null() {
-            T_VOID
-        } else {
-            types::parse_ffi_type_checked(returns_value)
-                .map_err(|m| type_err(format!("bun:ffi: symbol \"{name}\": {m}")))?
-        };
-        validate_signature_checked(&name, &args[..argc], ret).map_err(type_err)?;
-
-        let Some(fn_ptr) = find_symbol(handle, &name) else {
-            return Err(type_err(format!(
-                "Symbol \"{name}\" not found in \"{path}\""
-            )));
-        };
-
-        prepared.push(PreparedSym {
-            name,
-            fn_ptr,
-            ret,
-            argc,
-            args,
-        });
+        prepared.push(parse_bun_definition(name, entry, Some((handle, path)))?);
     }
     Ok(prepared)
 }
@@ -506,7 +576,7 @@ pub(crate) unsafe fn dlopen_value(path_arg: f64, table_arg: f64) -> f64 {
         );
     };
 
-    let handle = match open_library(&path) {
+    let handle = match open_library(Some(&path)) {
         Ok(h) => h,
         Err(msg) => throw_dlopen_failed(&path, &msg),
     };
@@ -546,11 +616,12 @@ pub(crate) unsafe fn dlopen_value(path_arg: f64, table_arg: f64) -> f64 {
             let leaked_name: &'static str = p.name.clone().leak();
             syms.push(SymRecord {
                 fn_ptr: p.fn_ptr,
-                lib: lib_index,
+                lib: Some(lib_index),
                 ret: p.ret,
                 argc: p.argc as u8,
                 args: p.args,
                 name: leaked_name,
+                pointer_bigint: false,
             });
             committed.push(Committed {
                 name: p.name,
@@ -568,11 +639,9 @@ pub(crate) unsafe fn dlopen_value(path_arg: f64, table_arg: f64) -> f64 {
     for p in &committed {
         let value = index_closure(sym_thunk_for(p.argc as usize), p.sym_index, p.argc, &p.name);
         let value_handle = scope.root_nanbox_f64(value);
-        set_field(
-            symbols_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-            &p.name,
-            value_handle.get_nanbox_f64(),
-        );
+        symbols_handle.with_mut_ptr(|symbols: *mut crate::object::ObjectHeader| {
+            set_field(symbols, &p.name, value_handle.get_nanbox_f64())
+        });
     }
 
     let close_value = index_closure(close_thunk as *const u8, lib_index, 0, "close");
@@ -580,19 +649,404 @@ pub(crate) unsafe fn dlopen_value(path_arg: f64, table_arg: f64) -> f64 {
 
     let result = crate::object::js_object_alloc(0, 2);
     let result_handle = scope.root_raw_mut_ptr(result);
-    let symbols_value =
-        f64::from_bits(JSValue::object_ptr(symbols_handle.get_raw_mut_ptr::<u8>()).bits());
-    set_field(
-        result_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        "symbols",
-        symbols_value,
-    );
-    set_field(
-        result_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+    let symbols_value = symbols_handle
+        .with_mut_ptr(|symbols: *mut u8| f64::from_bits(JSValue::object_ptr(symbols).bits()));
+    result_handle.with_mut_ptr(|result: *mut crate::object::ObjectHeader| {
+        set_field(result, "symbols", symbols_value)
+    });
+    result_handle.with_mut_ptr(|result: *mut crate::object::ObjectHeader| {
+        set_field(result, "close", close_handle.get_nanbox_f64())
+    });
+    result_handle.with_mut_ptr(|result: *mut u8| f64::from_bits(JSValue::object_ptr(result).bits()))
+}
+
+fn commit_pointer_symbol(prepared: PreparedSym, pointer_bigint: bool) -> f64 {
+    let argc = prepared.argc as u32;
+    let name = prepared.name;
+    let leaked_name: &'static str = name.clone().leak();
+    let index = {
+        let mut syms = SYMS.lock().unwrap();
+        syms.push(SymRecord {
+            fn_ptr: prepared.fn_ptr,
+            lib: None,
+            ret: prepared.ret,
+            argc: argc as u8,
+            args: prepared.args,
+            name: leaked_name,
+            pointer_bigint,
+        });
+        syms.len() - 1
+    };
+    index_closure(sym_thunk_for(argc as usize), index, argc, &name)
+}
+
+/// `CFunction({ ptr, args, returns })` wraps a caller-owned function pointer.
+pub(crate) unsafe fn c_function_value(definition: f64) -> f64 {
+    if !call::platform_supported() {
+        crate::fs::validate::throw_error_with_code(
+            "bun:ffi CFunction is supported only on unix x86_64 / aarch64",
+            "ERR_NOT_IMPLEMENTED",
+        );
+    }
+    let Some(entry) = object_ptr_of(definition) else {
+        crate::fs::validate::throw_type_error_with_code(
+            "CFunction expects a { ptr, args, returns } object",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    };
+    match parse_bun_definition("CFunction".to_string(), entry, None) {
+        Ok(prepared) => commit_pointer_symbol(prepared, false),
+        Err((message, code)) => crate::fs::validate::throw_error_with_code(&message, code),
+    }
+}
+
+/// `linkSymbols({ name: { ptr, args, returns } })` uses the same typed stubs
+/// as `dlopen`, but does not own or close the supplied function pointers.
+pub(crate) unsafe fn link_symbols_value(table_arg: f64) -> f64 {
+    let Some(table) = object_ptr_of(table_arg) else {
+        crate::fs::validate::throw_type_error_with_code(
+            "linkSymbols expects a symbol definitions object",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let table = scope.root_raw_mut_ptr(table);
+    let keys = scope.root_raw_mut_ptr(table.with_mut_ptr(
+        |table: *mut crate::object::ObjectHeader| crate::object::js_object_keys(table),
+    ));
+    let count = keys
+        .with_mut_ptr(|keys: *mut crate::array::ArrayHeader| crate::array::js_array_length(keys));
+    let mut prepared = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let key = keys.with_mut_ptr(|keys: *mut crate::array::ArrayHeader| {
+            crate::array::js_array_get(keys, index)
+        });
+        let Some(name) = value_to_owned_string(f64::from_bits(key.bits())) else {
+            continue;
+        };
+        let field =
+            table.with_mut_ptr(|table: *mut crate::object::ObjectHeader| get_field(table, &name));
+        let Some(entry) = object_ptr_of(field) else {
+            crate::fs::validate::throw_type_error_with_code(
+                &format!("bun:ffi: symbol \"{name}\": expected {{ ptr, args, returns }}"),
+                "ERR_INVALID_ARG_TYPE",
+            );
+        };
+        match parse_bun_definition(name, entry, None) {
+            Ok(symbol) => prepared.push(symbol),
+            Err((message, code)) => crate::fs::validate::throw_error_with_code(&message, code),
+        }
+    }
+
+    let symbols = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, count));
+    for symbol in prepared {
+        let name = symbol.name.clone();
+        let value = scope.root_nanbox_f64(commit_pointer_symbol(symbol, false));
+        symbols.with_mut_ptr(|symbols: *mut crate::object::ObjectHeader| {
+            set_field(symbols, &name, value.get_nanbox_f64())
+        });
+    }
+    let close = scope.root_nanbox_f64(no_capture_closure(
+        noop_close_thunk as *const u8,
+        0,
         "close",
-        close_handle.get_nanbox_f64(),
+    ));
+    let result = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 2));
+    let symbols_value = symbols
+        .with_mut_ptr(|symbols: *mut u8| f64::from_bits(JSValue::object_ptr(symbols).bits()));
+    result.with_mut_ptr(|result: *mut crate::object::ObjectHeader| {
+        set_field(result, "symbols", symbols_value)
+    });
+    result.with_mut_ptr(|result: *mut crate::object::ObjectHeader| {
+        set_field(result, "close", close.get_nanbox_f64())
+    });
+    result.with_mut_ptr(|result: *mut u8| f64::from_bits(JSValue::object_ptr(result).bits()))
+}
+
+/// Return deterministic diagnostics for Bun's development-only `viewSource`
+/// helper. Perry uses one shared native assembly thunk rather than generated
+/// JavaScript, so the useful source description is the signature inventory.
+pub(crate) unsafe fn view_source_value(definitions: f64) -> f64 {
+    let Some(table) = object_ptr_of(definitions) else {
+        crate::fs::validate::throw_type_error_with_code(
+            "viewSource expects a symbol definitions object",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let table = scope.root_raw_mut_ptr(table);
+    let keys = scope.root_raw_mut_ptr(table.with_mut_ptr(
+        |table: *mut crate::object::ObjectHeader| crate::object::js_object_keys(table),
+    ));
+    let count = keys
+        .with_mut_ptr(|keys: *mut crate::array::ArrayHeader| crate::array::js_array_length(keys));
+    let mut result = crate::array::js_array_alloc(count);
+    let result_handle = scope.root_raw_mut_ptr(result);
+    for index in 0..count {
+        let key = keys.with_mut_ptr(|keys: *mut crate::array::ArrayHeader| {
+            crate::array::js_array_get(keys, index)
+        });
+        let name = value_to_owned_string(f64::from_bits(key.bits()))
+            .unwrap_or_else(|| "<symbol>".to_string());
+        let line = super::string_value(&format!("/* Perry C-ABI scalar thunk for {name} */"));
+        result = result_handle.with_mut_ptr(|result: *mut crate::array::ArrayHeader| {
+            crate::array::js_array_push_f64(result, line)
+        });
+        result_handle.set_raw_mut_ptr(result);
+    }
+    result_handle.with_mut_ptr(|result: *mut u8| f64::from_bits(JSValue::object_ptr(result).bits()))
+}
+
+// ── node:ffi compatibility ─────────────────────────────────────────────────
+
+pub(crate) unsafe fn parse_node_ffi_type(value: f64, is_return: bool) -> Result<u8, String> {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_any_string() {
+        return types::parse_ffi_type_checked(value);
+    }
+    let name = value_to_owned_string(value).unwrap_or_default();
+    let ty = match name.as_str() {
+        "void" if is_return => T_VOID,
+        "char" | "i8" | "int8" | "int8_t" => types::T_I8,
+        "u8" | "uint8" | "uint8_t" => types::T_U8,
+        "i16" | "int16" | "int16_t" => types::T_I16,
+        "u16" | "uint16" | "uint16_t" => types::T_U16,
+        "i32" | "int" | "int32" | "int32_t" => types::T_I32,
+        "u32" | "uint" | "uint32" | "uint32_t" => types::T_U32,
+        "i64" | "int64" | "int64_t" | "isize" => types::T_I64,
+        "u64" | "uint64" | "uint64_t" | "usize" => types::T_U64,
+        "f32" | "float" | "float32" => types::T_F32,
+        "f64" | "double" | "float64" => types::T_F64,
+        "bool" => types::T_U8,
+        "pointer" | "ptr" | "void*" | "buffer" | "arraybuffer" => types::T_PTR,
+        "function" | "callback" | "fn" => types::T_FUNCTION,
+        "string" | "str" | "cstring" => types::T_CSTRING,
+        _ => return Err(format!("node:ffi: unsupported FFI type \"{name}\"")),
+    };
+    if ty == T_VOID && !is_return {
+        return Err("node:ffi: void is not a valid argument type".to_string());
+    }
+    Ok(ty)
+}
+
+unsafe fn parse_node_definition(
+    name: String,
+    entry: *mut crate::object::ObjectHeader,
+    handle: usize,
+    path: &str,
+) -> Result<PreparedSym, String> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let entry = scope.root_raw_mut_ptr(entry);
+    let arguments = scope.root_nanbox_f64(
+        entry.with_mut_ptr(|entry: *mut crate::object::ObjectHeader| get_field(entry, "arguments")),
     );
-    f64::from_bits(JSValue::object_ptr(result_handle.get_raw_mut_ptr::<u8>()).bits())
+    let arguments_jv = JSValue::from_bits(arguments.get_nanbox_f64().to_bits());
+    let argc = if arguments_jv.is_undefined() || arguments_jv.is_null() {
+        0
+    } else if JSValue::from_bits(
+        crate::array::js_array_is_array(arguments.get_nanbox_f64()).to_bits(),
+    )
+    .as_bool()
+    {
+        let array = crate::value::js_nanbox_get_pointer(arguments.get_nanbox_f64()) as usize
+            as *const crate::array::ArrayHeader;
+        crate::array::js_array_length(array) as usize
+    } else {
+        return Err(format!(
+            "node:ffi: symbol \"{name}\": arguments must be an array"
+        ));
+    };
+    if argc > MAX_ARGS {
+        return Err(format!(
+            "node:ffi: symbol \"{name}\": more than {MAX_ARGS} arguments are not supported"
+        ));
+    }
+    let mut args = [T_VOID; MAX_ARGS];
+    for (index, slot) in args.iter_mut().take(argc).enumerate() {
+        let array = crate::value::js_nanbox_get_pointer(arguments.get_nanbox_f64()) as usize
+            as *const crate::array::ArrayHeader;
+        let value = crate::array::js_array_get(array, index as u32);
+        *slot = parse_node_ffi_type(f64::from_bits(value.bits()), false)?;
+    }
+    let return_value =
+        entry.with_mut_ptr(|entry: *mut crate::object::ObjectHeader| get_field(entry, "return"));
+    let return_jv = JSValue::from_bits(return_value.to_bits());
+    let ret = if return_jv.is_undefined() || return_jv.is_null() {
+        T_VOID
+    } else {
+        parse_node_ffi_type(return_value, true)?
+    };
+    validate_signature_checked(&name, &args[..argc], ret)?;
+    let fn_ptr = find_symbol(handle, &name)
+        .ok_or_else(|| format!("Symbol \"{name}\" not found in \"{path}\""))?;
+    Ok(PreparedSym {
+        name,
+        fn_ptr,
+        ret,
+        argc,
+        args,
+    })
+}
+
+extern "C" fn node_register_callback_thunk(
+    closure: *const ClosureHeader,
+    signature: f64,
+    callback: f64,
+) -> f64 {
+    let lib = crate::closure::js_closure_get_capture_bits(closure, 0) as usize;
+    unsafe { super::callback::node_register_callback_value(lib, signature, callback) }
+}
+
+extern "C" fn node_unregister_callback_thunk(_closure: *const ClosureHeader, pointer: f64) -> f64 {
+    unsafe { super::callback::node_unregister_callback_value(pointer) }
+}
+
+/// Node 26's `ffi.dlopen(path, definitions)` compatibility shape used by
+/// OpenTUI's Node adapter: `{ lib, functions }` with callbacks rooted by lib.
+pub(crate) unsafe fn node_dlopen_value(path_arg: f64, definitions_arg: f64) -> f64 {
+    if !call::platform_supported() {
+        crate::fs::validate::throw_error_with_code(
+            "node:ffi is supported only on unix x86_64 / aarch64",
+            "ERR_NOT_IMPLEMENTED",
+        );
+    }
+    let path_jv = JSValue::from_bits(path_arg.to_bits());
+    let path = if path_jv.is_null() || path_jv.is_undefined() {
+        None
+    } else {
+        Some(value_to_owned_string(path_arg).unwrap_or_else(|| {
+            crate::fs::validate::throw_type_error_with_code(
+                "ffi.dlopen(path, definitions) expects a string or null path",
+                "ERR_INVALID_ARG_TYPE",
+            )
+        }))
+    };
+    let label = path.as_deref().unwrap_or("<current process>");
+    let Some(table) = object_ptr_of(definitions_arg) else {
+        crate::fs::validate::throw_type_error_with_code(
+            "ffi.dlopen(path, definitions) expects a definitions object",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    };
+    let handle = match open_library(path.as_deref()) {
+        Ok(handle) => handle,
+        Err(message) => throw_dlopen_failed(label, &message),
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let table = scope.root_raw_mut_ptr(table);
+    let keys = scope.root_raw_mut_ptr(table.with_mut_ptr(
+        |table: *mut crate::object::ObjectHeader| crate::object::js_object_keys(table),
+    ));
+    let count = keys
+        .with_mut_ptr(|keys: *mut crate::array::ArrayHeader| crate::array::js_array_length(keys));
+    let mut prepared = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let key = keys.with_mut_ptr(|keys: *mut crate::array::ArrayHeader| {
+            crate::array::js_array_get(keys, index)
+        });
+        let Some(name) = value_to_owned_string(f64::from_bits(key.bits())) else {
+            continue;
+        };
+        let field =
+            table.with_mut_ptr(|table: *mut crate::object::ObjectHeader| get_field(table, &name));
+        let Some(entry) = object_ptr_of(field) else {
+            close_library(handle);
+            crate::fs::validate::throw_type_error_with_code(
+                &format!("node:ffi: symbol \"{name}\": expected a signature object"),
+                "ERR_INVALID_ARG_TYPE",
+            );
+        };
+        match parse_node_definition(name, entry, handle, label) {
+            Ok(symbol) => prepared.push(symbol),
+            Err(message) => {
+                close_library(handle);
+                crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+            }
+        }
+    }
+
+    let lib_index = {
+        let mut libs = LIBS.lock().unwrap();
+        libs.push(LibRecord {
+            handle,
+            path: label.to_string(),
+            closed: false,
+        });
+        libs.len() - 1
+    };
+    let functions = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, count));
+    for symbol in prepared {
+        let name = symbol.name.clone();
+        let argc = symbol.argc as u32;
+        let leaked_name: &'static str = name.clone().leak();
+        let sym_index = {
+            let mut syms = SYMS.lock().unwrap();
+            syms.push(SymRecord {
+                fn_ptr: symbol.fn_ptr,
+                lib: Some(lib_index),
+                ret: symbol.ret,
+                argc: argc as u8,
+                args: symbol.args,
+                name: leaked_name,
+                pointer_bigint: true,
+            });
+            syms.len() - 1
+        };
+        let function = scope.root_nanbox_f64(index_closure(
+            sym_thunk_for(argc as usize),
+            sym_index,
+            argc,
+            &name,
+        ));
+        let pointer = scope.root_nanbox_f64(call::bigint_value_u64(symbol.fn_ptr as u64));
+        let function_object = crate::value::js_nanbox_get_pointer(function.get_nanbox_f64())
+            as usize as *mut crate::object::ObjectHeader;
+        set_field(function_object, "pointer", pointer.get_nanbox_f64());
+        functions.with_mut_ptr(|functions: *mut crate::object::ObjectHeader| {
+            set_field(functions, &name, function.get_nanbox_f64())
+        });
+    }
+
+    let lib = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 3));
+    let close = scope.root_nanbox_f64(index_closure(
+        close_thunk as *const u8,
+        lib_index,
+        0,
+        "close",
+    ));
+    let register = scope.root_nanbox_f64(index_closure(
+        node_register_callback_thunk as *const u8,
+        lib_index,
+        2,
+        "registerCallback",
+    ));
+    let unregister = scope.root_nanbox_f64(index_closure(
+        node_unregister_callback_thunk as *const u8,
+        lib_index,
+        1,
+        "unregisterCallback",
+    ));
+    lib.with_mut_ptr(|lib: *mut crate::object::ObjectHeader| {
+        set_field(lib, "close", close.get_nanbox_f64())
+    });
+    lib.with_mut_ptr(|lib: *mut crate::object::ObjectHeader| {
+        set_field(lib, "registerCallback", register.get_nanbox_f64())
+    });
+    lib.with_mut_ptr(|lib: *mut crate::object::ObjectHeader| {
+        set_field(lib, "unregisterCallback", unregister.get_nanbox_f64())
+    });
+    let result = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 2));
+    let lib_value =
+        lib.with_mut_ptr(|lib: *mut u8| f64::from_bits(JSValue::object_ptr(lib).bits()));
+    result.with_mut_ptr(|result: *mut crate::object::ObjectHeader| {
+        set_field(result, "lib", lib_value)
+    });
+    let functions_value = functions
+        .with_mut_ptr(|functions: *mut u8| f64::from_bits(JSValue::object_ptr(functions).bits()));
+    result.with_mut_ptr(|result: *mut crate::object::ObjectHeader| {
+        set_field(result, "functions", functions_value)
+    });
+    result.with_mut_ptr(|result: *mut u8| f64::from_bits(JSValue::object_ptr(result).bits()))
 }
 
 // ── ptr / CString ───────────────────────────────────────────────────────────
@@ -638,8 +1092,8 @@ pub(crate) unsafe fn ptr_value(view_arg: f64, offset_arg: f64) -> f64 {
 ///
 /// Stage-1 divergence from Bun (documented): returns a primitive string
 /// rather than a `String` subclass carrying `.ptr` — the decoded text is
-/// identical. NULL pointers return `null` like Bun's `cstring` return
-/// conversion.
+/// identical. A falsy pointer returns an empty string; `cstring` function
+/// returns still use `null` for a native NULL pointer.
 pub(crate) unsafe fn cstring_value(ptr_arg: f64, offset_arg: f64, length_arg: f64) -> f64 {
     let jv = JSValue::from_bits(ptr_arg.to_bits());
     // `managed_end`: exclusive upper bound of the SOURCE's managed storage,
@@ -671,7 +1125,7 @@ pub(crate) unsafe fn cstring_value(ptr_arg: f64, offset_arg: f64, length_arg: f6
         );
     };
     if base == 0 {
-        return super::null();
+        return super::string_value("");
     }
     let offset_jv = JSValue::from_bits(offset_arg.to_bits());
     let offset = if offset_jv.is_int32() {
@@ -772,21 +1226,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_over_register_class_limits() {
-        // 9 integer-class args > MAX_INT_ARGS (8).
-        let nine_ints = [T_I32; 9];
-        let e = validate_signature_checked("f", &nine_ints, T_VOID).unwrap_err();
-        assert!(e.contains("integer/pointer arguments"), "{e}");
-        // 9 float-class args > MAX_FLOAT_ARGS (8).
-        let nine_floats = [T_F64; 9];
-        let e = validate_signature_checked("f", &nine_floats, T_VOID).unwrap_err();
-        assert!(e.contains("float arguments"), "{e}");
-        // But 8 + 8 mixed is fine.
-        let mut mixed = [T_I32; 16];
-        for m in mixed.iter_mut().take(8) {
-            *m = T_F64;
-        }
-        assert!(validate_signature_checked("f", &mixed, T_VOID).is_ok());
+    fn accepts_stack_arguments_up_to_the_public_limit() {
+        // OpenTUI reaches 14 scalar arguments and FFF reaches 13. Both must
+        // pass validation; the ABI shim places overflow arguments on stack.
+        assert!(validate_signature_checked("opentui", &[T_I32; 14], T_VOID).is_ok());
+        assert!(validate_signature_checked("fff", &[T_I32; 13], T_VOID).is_ok());
+        assert!(validate_signature_checked("max", &[T_F64; MAX_ARGS], T_VOID).is_ok());
     }
 
     #[test]

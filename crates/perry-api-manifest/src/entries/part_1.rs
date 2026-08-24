@@ -206,9 +206,8 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     // bun:ffi (#6562). `FFIType` and `suffix` are
     // constants; symbol-table call stubs live on the object `dlopen`
     // returns, so the module surface itself is small. The later-stage
-    // exports (linkSymbols / CFunction / viewSource / read) are
-    // declared and throw a descriptive
-    // ERR_NOT_IMPLEMENTED at runtime.
+    // exports (linkSymbols / CFunction / viewSource / read) share the same
+    // scalar ABI and pinned-memory implementation.
     method("bun:ffi", "dlopen", false, None),
     method("bun:ffi", "ptr", false, None),
     method("bun:ffi", "CString", false, None),
@@ -217,18 +216,18 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("bun:ffi", "toArrayBuffer", false, None),
     method("bun:ffi", "toBuffer", false, None),
     method("bun:ffi", "JSCallback", false, None),
-    // Remaining surface: declared so feature-probes get a clear error rather
-    // than `undefined is not a function`, but NOT implemented yet — each
-    // throws at runtime. Marked `.stub_note` so the generated `.d.ts` /
-    // `reference.md` say so instead of reading as usable APIs (#6562).
-    method("bun:ffi", "CFunction", false, None)
-        .stub_note("stage 3 — not yet implemented, throws at runtime (#6562)"),
-    method("bun:ffi", "linkSymbols", false, None)
-        .stub_note("stage ≥2 — not yet implemented, throws at runtime (#6562)"),
-    method("bun:ffi", "viewSource", false, None)
-        .stub_note("stage ≥2 — not yet implemented, throws at runtime (#6562)"),
-    method("bun:ffi", "read", false, None)
-        .stub_note("stage ≥2 — not yet implemented, throws at runtime (#6562)"),
+    method("bun:ffi", "CFunction", false, None),
+    method("bun:ffi", "linkSymbols", false, None),
+    method("bun:ffi", "viewSource", false, None),
+    property("bun:ffi", "read"),
+    // node:ffi compatibility surface (Node 26), consumed by OpenTUI's Node
+    // adapter. Callback registration lives on the library returned by dlopen.
+    method("ffi", "dlopen", false, None),
+    method("ffi", "getRawPointer", false, None),
+    method("ffi", "toArrayBuffer", false, None),
+    method("ffi", "toBuffer", false, None),
+    method("ffi", "toString", false, None),
+    property("ffi", "suffix"),
     // bun:sqlite (#8510) shares node:sqlite's rusqlite handles while keeping
     // Bun's public constructor and statement vocabulary.
     class("bun:sqlite", "Database"),

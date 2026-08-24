@@ -1166,6 +1166,9 @@ pub(super) fn compile_module_entry(
                     "0".to_string()
                 };
                 let has_stdlib = ctx.block().call(I32, "js_stdlib_has_active_handles", &[]);
+                let has_ffi_callbacks =
+                    ctx.block()
+                        .call(I32, "js_bun_ffi_has_active_threadsafe_callbacks", &[]);
                 // #591: TASK_QUEUE may carry a pending `.then` continuation
                 // that was queued by `js_run_stdlib_pump`'s resolution path
                 // in the SAME body iteration that already drained the inflight
@@ -1175,6 +1178,7 @@ pub(super) fn compile_module_entry(
                 let has_microtasks = ctx.block().call(I32, "js_microtasks_pending", &[]);
                 let any1 = ctx.block().or(I32, &has_timers, &has_callbacks);
                 let any2 = ctx.block().or(I32, &has_intervals, &has_stdlib);
+                let any2 = ctx.block().or(I32, &any2, &has_ffi_callbacks);
                 let any3 = ctx.block().or(I32, &any1, &any2);
                 let any4 = ctx.block().or(I32, &any3, &has_cron);
                 let any = ctx.block().or(I32, &any4, &has_microtasks);

@@ -82,7 +82,7 @@ fn nm_module_index(name: &str) -> Option<NmBucket> {
         "bun" => Some(NmBucket::Bun),
         // #6562: the `bun:` prefix is part of the name (not stripped like
         // `node:`).
-        "bun:ffi" => Some(NmBucket::BunFfi),
+        "bun:ffi" | "ffi" | "ffi.default" => Some(NmBucket::BunFfi),
         "child_process" => Some(NmBucket::ChildProcess),
         "cluster" => Some(NmBucket::Cluster),
         "console" => Some(NmBucket::Console),

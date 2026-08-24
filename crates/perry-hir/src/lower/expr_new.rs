@@ -613,12 +613,15 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 // through the module call directly so `new JSCallback(...)`
                 // observes that explicit object return instead of generic
                 // `Expr::New` manufacturing and retaining a blank instance.
-                if module_name == "bun:ffi" && method_name == Some("JSCallback") {
+                if module_name == "bun:ffi"
+                    && matches!(method_name, Some("JSCallback") | Some("CFunction"))
+                {
+                    let method = method_name.unwrap_or("JSCallback").to_string();
                     return Ok(Expr::NativeMethodCall {
                         module: "bun:ffi".to_string(),
                         class_name: None,
                         object: None,
-                        method: "JSCallback".to_string(),
+                        method,
                         args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     });
                 }

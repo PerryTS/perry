@@ -105,6 +105,13 @@ pub(super) fn try_imported_module_dispatch(
                 if module_name == "worker_threads" && method_name == "workerData" {
                     return Ok(Err(args));
                 }
+                // `read` is a data namespace (`read.u32(pointer)`), not a
+                // class/module prefix. A named import must call the reader
+                // closure stored on that runtime object instead of being
+                // reinterpreted as a nonexistent `bun:ffi.u32` export.
+                if module_name == "bun:ffi" && imported_method == Some("read") {
+                    return Ok(Err(args));
+                }
                 if module_name.strip_prefix("node:").unwrap_or(module_name) == "vm"
                     && imported_method.is_none()
                     && method_name == "Module"

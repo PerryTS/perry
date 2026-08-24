@@ -260,8 +260,12 @@ pub(crate) unsafe fn get_native_module_constant(
         match property {
             "FFIType" => return Some(crate::bun_ffi::types::ffi_type_object_value()),
             "suffix" => return Some(crate::bun_ffi::types::suffix_value()),
+            "read" => return Some(crate::bun_ffi::read::read_object_value()),
             _ => {}
         }
+    }
+    if module_name == "ffi" && property == "suffix" {
+        return Some(crate::bun_ffi::types::suffix_value());
     }
 
     let o_nofollow: f64 = {

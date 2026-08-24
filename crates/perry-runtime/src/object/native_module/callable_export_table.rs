@@ -90,7 +90,6 @@ pub(super) static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
             "dlopen",
             "linkSymbols",
             "ptr",
-            "read",
             "toArrayBuffer",
             "toBuffer",
             "viewSource",
@@ -312,6 +311,16 @@ pub(super) static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
             "on",
             "once",
             "setMaxListeners",
+        ],
+    ),
+    (
+        "ffi",
+        &[
+            "dlopen",
+            "getRawPointer",
+            "toArrayBuffer",
+            "toBuffer",
+            "toString",
         ],
     ),
     (
