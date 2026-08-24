@@ -106,7 +106,8 @@ export async function verifyStagedEntry(
     `Pre-approve verify: shasum mismatch for ${name}@${version}.\n` +
       `    local pack:  ${local.sha1}\n` +
       `    npm staging: ${stagedShasum}\n` +
-      `  Fix: reject stage ${stageId} and re-run publish:stage; the retained CI proof and npm staging record disagree. Not approving unverified bytes.`,
+      `  Fix: reject/re-stage pending entry ${stageId}; if this version is already public, ship a new version. ` +
+      `The retained CI proof and npm registry record disagree. Not approving unverified bytes.`,
   )
   return false
 }

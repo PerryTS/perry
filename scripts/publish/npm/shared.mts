@@ -18,6 +18,8 @@ export interface StagedEntry {
   shasum?: string | undefined
   /** The staging id `npm stage approve <id>` promotes. */
   stageId: string
+  /** Synthetic recovery entry: this exact tarball is already public. */
+  alreadyLive?: boolean | undefined
 }
 
 /** Read the subject package.json. */
@@ -133,4 +135,28 @@ export async function fetchPublishedVersion(
 ): Promise<boolean> {
   const { code } = await runCapture('npm', ['view', `${name}@${version}`, 'version'], rootPath)
   return code === 0
+}
+
+/** Normalize `npm view ... dist.shasum` without accepting noisy output. */
+export function normalizePublishedShasum(
+  stdout: string,
+  code: number,
+): string | undefined {
+  const shasum = stdout.trim()
+  return code === 0 && /^[0-9a-f]{40}$/i.test(shasum)
+    ? shasum.toLowerCase()
+    : undefined
+}
+
+/** Read the immutable registry sha1 for an already-public exact version. */
+export async function fetchPublishedShasum(
+  name: string,
+  version: string,
+): Promise<string | undefined> {
+  const { code, stdout } = await runCapture(
+    'npm',
+    ['view', `${name}@${version}`, 'dist.shasum'],
+    rootPath,
+  )
+  return normalizePublishedShasum(stdout, code)
 }

@@ -121,6 +121,12 @@ npm run publish:approve     # explicit 2FA promote; waits for registry liveness
                             # and only then creates v0.x.y + the GitHub Release
 ```
 
+Approval promotes nine packages sequentially. If 2FA or the network interrupts
+that loop after some packages are already public, re-run `publish:approve` with
+the same retained CI proof. It resumes only when each already-public package's
+immutable registry shasum matches the exact CI tarball; otherwise use a new
+version. Do not discard the proof directory until the tag and release exist.
+
 If the accumulated changelog fragments exceed the inline release-note budget,
 the publisher keeps the GitHub Release body concise and uploads the complete
 notes as the checksummed `release-notes-full.md` asset. No fragment is dropped.

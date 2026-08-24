@@ -28,8 +28,14 @@ import { summarizePolicyAlerts, normalizeFullScanArtifacts } from './scan.mts'
 import { formatHumanGate } from './human-gate.mts'
 import { publishAuthPreflight } from './auth-posture.mts'
 import { compareSemver, extractFirstJson } from './shared.mts'
-import { parseStageListJson } from './npm/shared.mts'
-import { perryStagedEntries } from './npm/approve.mts'
+import {
+  normalizePublishedShasum,
+  parseStageListJson,
+} from './npm/shared.mts'
+import {
+  completeCandidatesWithPublished,
+  perryStagedEntries,
+} from './npm/approve.mts'
 import { tagExists } from './npm/bump.mts'
 import { verifyStagedEntry } from './npm/staged.mts'
 import { freshStageState, isCompleteScanReceipt } from './pipeline.mts'
@@ -127,6 +133,16 @@ test('parseStageListJson: array of entries parses to staged entries', () => {
   assert.equal(entries2[0]!.name, '@perryts/perry-darwin-arm64')
 })
 
+test('normalizePublishedShasum: accepts only a successful bare sha1', () => {
+  assert.equal(
+    normalizePublishedShasum(`  ${'A'.repeat(40)}\n`, 0),
+    'a'.repeat(40),
+  )
+  assert.equal(normalizePublishedShasum('not found', 1), undefined)
+  assert.equal(normalizePublishedShasum(`warning\n${'a'.repeat(40)}`, 0), undefined)
+  assert.equal(normalizePublishedShasum('a'.repeat(39), 0), undefined)
+})
+
 test('perryStagedEntries: approval is restricted to the candidate version', () => {
   const entries = [
     {
@@ -149,6 +165,25 @@ test('perryStagedEntries: approval is restricted to the candidate version', () =
     perryStagedEntries(entries, '0.5.1519').map(e => e.stageId),
     ['candidate'],
   )
+})
+
+test('completeCandidatesWithPublished: safely resumes a partial promotion', async () => {
+  const version = '0.5.1519'
+  const first = ALL_PACKAGES[0]!
+  const lookedUp: string[] = []
+  const candidates = await completeCandidatesWithPublished(
+    [{ name: first, version, stageId: 'still-staged', shasum: '1'.repeat(40) }],
+    version,
+    async name => {
+      lookedUp.push(name)
+      return '2'.repeat(40)
+    },
+  )
+  assert.deepEqual(candidates.map(entry => entry.name), [...ALL_PACKAGES])
+  assert.deepEqual(lookedUp, ALL_PACKAGES.slice(1))
+  assert.equal(candidates[0]!.alreadyLive, undefined)
+  assert.equal(candidates[1]!.alreadyLive, true)
+  assert.equal(candidates[1]!.shasum, '2'.repeat(40))
 })
 
 test('tagExists: inability to query origin fails closed', async () => {
