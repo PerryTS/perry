@@ -2226,9 +2226,57 @@ jobs:
   # in the full tier (scripts/ci_plan.py GAP_SUITE). The `gate` fan-in below is
   # what branch protection requires; a single shard's red bubbles up through it.
   # ---------------------------------------------------------------------------
-  gap-suite:
+  # Builds the fast-mode gap-suite's shared release archives ONCE instead of
+  # redundantly rebuilding the identical archives in every shard (measured
+  # ~10 min per shard, repeated across all 6 PR-tier shards -- ~50 min of
+  # pure redundant compute per run). Full mode is unaffected: its shards
+  # build their own feature-stripped runtime per distinct test through
+  # run_gap_tests.sh's own auto-optimize path, which this job does not
+  # attempt to share.
+  gap-suite-build:
     needs: plan
-    if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite
+    if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite && fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build compiler + runtime archives (fast mode, shared across shards)
+        # Release profile, codegen-units=1: the parity harness's own build
+        # command. cu=16 miscompiles the release runtime (see CLAUDE.md).
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+
+      # Only the three files the fast-mode harness actually links against
+      # (PERRY_BIN / PERRY_RUNTIME_DIR below) -- not the rest of target/release,
+      # which is Rust-internal build state the downloading shard doesn't need.
+      - name: Upload the shared fast-mode build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gap-suite-fast-build
+          path: |
+            target/release/perry
+            target/release/libperry_runtime.a
+            target/release/libperry_stdlib.a
+          if-no-files-found: error
+          retention-days: 1
+
+  gap-suite:
+    needs: [plan, gap-suite-build]
+    # `always()` so a SKIPPED gap-suite-build (full mode, where it never
+    # runs) doesn't cascade into skipping gap-suite too -- only a genuine
+    # build FAILURE should stop the shards from starting.
+    if: >-
+      always() &&
+      fromJSON(needs.plan.outputs.plan).jobs.gap_suite &&
+      (needs.gap-suite-build.result == 'success' || needs.gap-suite-build.result == 'skipped')
     # 2026-07-02 audit §11: nothing on the default PR path exercised
     # TypeScript SEMANTICS — lint/cargo-test/api-docs-drift build and unit-
     # test the compiler but never diff a compiled program against node, so
@@ -2280,21 +2328,19 @@ jobs:
     # the #6456 reshard lands.
     timeout-minutes: 110
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 'nightly-2026-08-20'
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -2310,23 +2356,31 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
 
       # Two harness modes, chosen by the plan (see ci_plan.py GAP_SUITE):
-      #   fast: build the release compiler + runtime archives ONCE here, then
-      #         PERRY_SKIP_BUILD=1 so every test links the prebuilt archives
-      #         (~1.5 s/test). Only ext-routed tests (http/net/ws/zlib/events)
-      #         still take the per-test auto-optimize path, because no single
+      #   fast: PERRY_SKIP_BUILD=1 so every test links the prebuilt archives
+      #         (~1.5 s/test) that gap-suite-build compiled ONCE and shared
+      #         below. Only ext-routed tests (http/net/ws/zlib/events) still
+      #         take the per-test auto-optimize path, because no single
       #         prebuilt stdlib can serve them (#7629). PR + sweep tiers.
       #   full: the harness's default -- every test compiles through
       #         auto-optimize, which rebuilds a feature-stripped runtime per
       #         distinct feature set (~200 s each; measured 96% of a shard's
       #         wall time). It is the arm that sees auto-optimize-only bugs,
-      #         so it stays in the nightly/release tier at 8 shards.
+      #         so it stays in the nightly/release tier at 8 shards, and never
+      #         downloads a shared build.
       # Both compare against the SAME committed Linux snapshot; a divergence
       # between them is a real auto-optimize-specific finding, not noise.
-      - name: Build compiler + runtime archives (fast mode)
+      - name: Download the shared fast-mode build
         if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
-        # Release profile, codegen-units=1: the parity harness's own build
-        # command. cu=16 miscompiles the release runtime (see CLAUDE.md).
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: gap-suite-fast-build
+          path: target/release
+
+      # Belt-and-suspenders: make sure the downloaded binary is runnable
+      # regardless of how the artifact round-trip handled its permission bits.
+      - name: Ensure the downloaded perry binary is executable
+        if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
+        run: chmod +x target/release/perry
 
       - name: Run gap suite (shard ${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).gap.total }}, ${{ fromJSON(needs.plan.outputs.plan).gap.mode }} mode)
         env:
