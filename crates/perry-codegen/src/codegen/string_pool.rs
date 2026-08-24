@@ -132,6 +132,7 @@ pub(super) fn emit_string_pool(
         u32,
         super::closure_collect::TrustedBoxClosure,
     >,
+    versioned_loop_callbacks: &std::collections::HashSet<u32>,
     // Issue #653: wrappers (`__perry_wrap_<name>`) for top-level user functions
     // that declare a rest param. Each entry is `(wrapper_symbol, fixed_arity)`
     // — the runtime side-table is keyed on the wrapper's func_ptr, NOT the
@@ -1390,6 +1391,18 @@ pub(super) fn emit_string_pool(
                 (I64, &plan.boxed_capture_mask.to_string()),
             ],
         );
+        if versioned_loop_callbacks.contains(&fid) {
+            let versioned_ref = format!("{}$trusted_boxes$versioned_loop", public_ref);
+            blk.call_void(
+                "js_register_closure_versioned_loop_direct",
+                &[
+                    (PTR, &public_ref),
+                    (PTR, &versioned_ref),
+                    (I32, &plan.capture_count.to_string()),
+                    (I64, &plan.boxed_capture_mask.to_string()),
+                ],
+            );
+        }
     }
 
     // Issue #653: register `__perry_wrap_<name>` wrappers for top-level user

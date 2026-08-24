@@ -459,6 +459,41 @@ pub fn try_lower_closure_typed_local_call(
             // Exact immutable aliases (`const cb = callback`) have the same
             // identity whenever their read succeeds. A TDZ read throws while
             // lowering `callee` above, before this dispatch arm is reached.
+            if let Some(crate::expr::VersionedIndexedGuardMode::CallbackDeopt {
+                callback_local_id,
+                callback_arity,
+                target,
+                context,
+                ..
+            }) = ctx
+                .versioned_indexed_loop_facts
+                .last()
+                .map(|fact| fact.guard_mode.clone())
+            {
+                if callback_local_id == *id && callback_arity == lowered_args.len() {
+                    let context_bits = ctx.block().ptrtoint(&context, I64);
+                    let context_box = ctx.block().bitcast_i64_to_double(&context_bits);
+                    let mut direct_args: Vec<(crate::types::LlvmType, &str)> =
+                        Vec::with_capacity(lowered_args.len() + 1);
+                    direct_args.push((I64, &closure_handle));
+                    direct_args.extend(lowered_args.iter().enumerate().map(|(index, value)| {
+                        if index == 0 {
+                            (DOUBLE, context_box.as_str())
+                        } else {
+                            (DOUBLE, value.as_str())
+                        }
+                    }));
+                    // The exact clone marks the caller's counter for an
+                    // immediate side exit before any cold arm that can run
+                    // user code or collect. Hot returns cannot collect; cold
+                    // returns never observe caller-side cached heap handles.
+                    let value = ctx
+                        .block()
+                        .call_indirect_gc_leaf(DOUBLE, &target, &direct_args);
+                    callee_group.release(ctx);
+                    return Ok(Some(value));
+                }
+            }
             if let Some(target) = ctx
                 .resolved_arrow_callback_targets
                 .get(&(*id, lowered_args.len()))

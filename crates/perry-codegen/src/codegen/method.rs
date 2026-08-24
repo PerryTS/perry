@@ -416,7 +416,9 @@ pub(super) fn compile_method(
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
         resolved_arrow_callback_targets: HashMap::new(),
+        resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
+        versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
         local_func_ref_ids: HashMap::new(),
         option_object_locals: HashMap::new(),
@@ -601,6 +603,7 @@ pub(super) fn compile_method(
         .map(|call| (call.source_param, call.arity))
         .collect();
     let mut resolved_callback_ptrs = HashMap::new();
+    let mut resolved_versioned_callback_ptrs = HashMap::new();
     for (source_param, arity) in callback_keys {
         let Some(source_slot) = ctx.locals.get(&source_param).cloned() else {
             continue;
@@ -613,6 +616,12 @@ pub(super) fn compile_method(
             &[(I64, &source_handle), (I32, &arity.to_string())],
         );
         resolved_callback_ptrs.insert((source_param, arity), fn_ptr);
+        let versioned_fn_ptr = ctx.block().call(
+            PTR,
+            "js_closure_resolve_versioned_loop_direct_call",
+            &[(I64, &source_handle), (I32, &arity.to_string())],
+        );
+        resolved_versioned_callback_ptrs.insert((source_param, arity), versioned_fn_ptr);
     }
     for call in hoisted_callback_calls {
         let Some(fn_ptr) = resolved_callback_ptrs
@@ -623,6 +632,13 @@ pub(super) fn compile_method(
         };
         ctx.resolved_arrow_callback_targets
             .insert((call.callee_local, call.arity), fn_ptr);
+        if let Some(versioned_fn_ptr) = resolved_versioned_callback_ptrs
+            .get(&(call.source_param, call.arity))
+            .cloned()
+        {
+            ctx.resolved_versioned_loop_callback_targets
+                .insert((call.callee_local, call.arity), versioned_fn_ptr);
+        }
     }
 
     super::arguments::materialize_arguments_object(
@@ -1688,7 +1704,9 @@ pub(super) fn compile_static_method(
         local_closure_func_ids: HashMap::new(),
         local_closure_param_counts: HashMap::new(),
         resolved_arrow_callback_targets: HashMap::new(),
+        resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures: false,
+        versioned_loop_deopt_context: None,
         trusted_box_capture_ptrs: HashMap::new(),
         local_func_ref_ids: HashMap::new(),
         option_object_locals: HashMap::new(),

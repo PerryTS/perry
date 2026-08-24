@@ -651,6 +651,7 @@ pub(crate) fn lower_generic_property_get(
 
     // PIC miss: slow path with cache population.
     ctx.current_block = call_idx;
+    crate::expr::emit_versioned_loop_callback_deopt(ctx);
     let miss_key_handle = emit_key_handle(ctx, &key_handle_global);
     let val_miss = ctx.block().call(
         DOUBLE,

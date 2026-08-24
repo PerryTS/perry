@@ -74,6 +74,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         closure_lengths,
         closure_arrow_functions,
         trusted_box_closures,
+        versioned_loop_callbacks,
         closures,
         class_keys_init_data,
         class_header_image_inits,
@@ -162,6 +163,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             closure_rest_params,
             cross_module,
             false,
+            false,
         )
         .with_context(|| format!("lowering closure func_id={}", func_id))?;
         if trusted_box_closures.contains_key(func_id) {
@@ -187,8 +189,36 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 closure_rest_params,
                 cross_module,
                 true,
+                false,
             )
             .with_context(|| format!("lowering trusted-box closure func_id={}", func_id))?;
+        }
+        if versioned_loop_callbacks.contains(func_id) {
+            compile_closure(
+                llmod,
+                *func_id,
+                closure_expr,
+                func_names,
+                strings,
+                class_table,
+                method_names,
+                module_globals,
+                opts.import_function_prefixes,
+                enum_table,
+                static_field_globals,
+                class_ids,
+                func_signatures,
+                func_synthetic_arguments,
+                module_prefix,
+                module_boxed_vars,
+                module_receiver_types,
+                &module_reassigned_locals,
+                closure_rest_params,
+                cross_module,
+                true,
+                true,
+            )
+            .with_context(|| format!("lowering versioned-loop closure func_id={}", func_id))?;
         }
         let done = closure_index + 1;
         if done == closures.len() || done % closure_progress_step == 0 {
@@ -1812,6 +1842,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         closure_lengths,
         closure_arrow_functions,
         trusted_box_closures,
+        versioned_loop_callbacks,
         &user_fn_wrapper_rest,
         closure_synthetic_arguments,
         &user_fn_wrapper_synthetic_arguments,

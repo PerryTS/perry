@@ -227,6 +227,7 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
         ctx.block().br(&merge_label);
 
         ctx.current_block = slow_idx;
+        crate::expr::emit_versioned_loop_callback_deopt(ctx);
         let slow_val = rebuild_add_tree(ctx, expr, values, &mut 0, false);
         let slow_end = ctx.block().label.clone();
         ctx.block().br(&merge_label);

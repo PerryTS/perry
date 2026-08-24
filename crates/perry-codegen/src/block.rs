@@ -879,6 +879,7 @@ impl LlBlock {
                 callee: "llvm.aarch64.fjcvtzs".to_string(),
                 args: vec![("double", val.to_string())],
                 cconv: None,
+                gc_leaf: false,
             });
             return r;
         }
@@ -1224,6 +1225,26 @@ impl LlBlock {
     }
 
     pub fn call(&mut self, ret_ty: LlvmType, func_name: &str, args: &[(LlvmType, &str)]) -> String {
+        self.call_with_gc_leaf(ret_ty, func_name, args, false)
+    }
+
+    /// Direct-call counterpart of [`Self::call_indirect_gc_leaf`].
+    pub fn call_gc_leaf(
+        &mut self,
+        ret_ty: LlvmType,
+        func_name: &str,
+        args: &[(LlvmType, &str)],
+    ) -> String {
+        self.call_with_gc_leaf(ret_ty, func_name, args, true)
+    }
+
+    fn call_with_gc_leaf(
+        &mut self,
+        ret_ty: LlvmType,
+        func_name: &str,
+        args: &[(LlvmType, &str)],
+        gc_leaf: bool,
+    ) -> String {
         // #835 + #846: record this emission against the FFI provenance
         // registry. The driver consults the registry after all per-module
         // codegen finishes to auto-link the providing crate.
@@ -1244,9 +1265,10 @@ impl LlBlock {
         if let Some((cont, lpad)) = self.eh_invoke_suffix(func_name) {
             let arg_str = format_args(args);
             let cc = cconv.map(|c| format!("{c} ")).unwrap_or_default();
+            let leaf_attr = if gc_leaf { " \"gc-leaf-function\"" } else { "" };
             self.emit(format!(
-                "{} = invoke {}{} @{}({}) to label %{} unwind label %{}",
-                r, cc, ret_ty, func_name, arg_str, cont, lpad
+                "{} = invoke {}{} @{}({}){} to label %{} unwind label %{}",
+                r, cc, ret_ty, func_name, arg_str, leaf_attr, cont, lpad
             ));
             self.emit_inline_label(&cont);
         } else {
@@ -1256,6 +1278,7 @@ impl LlBlock {
                 callee: func_name.to_string(),
                 args: args.iter().map(|(t, v)| (*t, v.to_string())).collect(),
                 cconv,
+                gc_leaf,
             });
         }
         r
@@ -1285,6 +1308,7 @@ impl LlBlock {
                 callee: func_name.to_string(),
                 args: args.iter().map(|(t, v)| (*t, v.to_string())).collect(),
                 cconv,
+                gc_leaf: false,
             });
         }
     }
@@ -1307,14 +1331,37 @@ impl LlBlock {
         fn_ptr: &str,
         args: &[(LlvmType, &str)],
     ) -> String {
+        self.call_indirect_with_gc_leaf(ret_ty, fn_ptr, args, false)
+    }
+
+    /// Emit an indirect call whose caller-side native GC values need not be
+    /// relocated across the call. The target may still collect, so this must
+    /// only be used when every collecting return path makes those values dead.
+    pub fn call_indirect_gc_leaf(
+        &mut self,
+        ret_ty: LlvmType,
+        fn_ptr: &str,
+        args: &[(LlvmType, &str)],
+    ) -> String {
+        self.call_indirect_with_gc_leaf(ret_ty, fn_ptr, args, true)
+    }
+
+    fn call_indirect_with_gc_leaf(
+        &mut self,
+        ret_ty: LlvmType,
+        fn_ptr: &str,
+        args: &[(LlvmType, &str)],
+        gc_leaf: bool,
+    ) -> String {
         let r = self.reg();
         // Indirect targets (closures, method pointers) can always throw.
         if let Some(lpad) = self.counter.current_eh_unwind_label() {
             let arg_str = format_args(args);
             let cont = format!("eh.cont{}", self.counter.next());
+            let leaf_attr = if gc_leaf { " \"gc-leaf-function\"" } else { "" };
             self.emit(format!(
-                "{} = invoke {} {}({}) to label %{} unwind label %{}",
-                r, ret_ty, fn_ptr, arg_str, cont, lpad
+                "{} = invoke {} {}({}){} to label %{} unwind label %{}",
+                r, ret_ty, fn_ptr, arg_str, leaf_attr, cont, lpad
             ));
             self.emit_inline_label(&cont);
         } else {
@@ -1323,6 +1370,7 @@ impl LlBlock {
                 ret: ret_ty,
                 fptr: fn_ptr.to_string(),
                 args: args.iter().map(|(t, v)| (*t, v.to_string())).collect(),
+                gc_leaf,
             });
         }
         r
@@ -1564,6 +1612,17 @@ mod tests {
     }
 
     #[test]
+    fn direct_gc_leaf_call_places_the_callsite_attribute_after_arguments() {
+        let mut b = fresh();
+        let r = b.call_gc_leaf(DOUBLE, "guarded_reader", &[(I64, "%handle")]);
+        assert_eq!(r, "%r1");
+        assert_eq!(
+            b.to_ir(),
+            "entry.0:\n  %r1 = call double @guarded_reader(i64 %handle) \"gc-leaf-function\""
+        );
+    }
+
+    #[test]
     fn indirect_call_uses_opaque_pointer_syntax() {
         let mut b = fresh();
         let r = b.call_indirect(DOUBLE, "%callback", &[(I64, "%closure"), (DOUBLE, "%arg")]);
@@ -1571,6 +1630,18 @@ mod tests {
         assert_eq!(
             b.to_ir(),
             "entry.0:\n  %r1 = call double %callback(i64 %closure, double %arg)"
+        );
+    }
+
+    #[test]
+    fn indirect_gc_leaf_call_places_the_callsite_attribute_after_arguments() {
+        let mut b = fresh();
+        let r =
+            b.call_indirect_gc_leaf(DOUBLE, "%callback", &[(I64, "%closure"), (DOUBLE, "%arg")]);
+        assert_eq!(r, "%r1");
+        assert_eq!(
+            b.to_ir(),
+            "entry.0:\n  %r1 = call double %callback(i64 %closure, double %arg) \"gc-leaf-function\""
         );
     }
 
@@ -1583,6 +1654,19 @@ mod tests {
         assert_eq!(
             b.to_ir(),
             "entry.0:\n  %r1 = invoke double %callback(i64 %closure, double %arg) to label %eh.cont2 unwind label %catch.0\neh.cont2:"
+        );
+    }
+
+    #[test]
+    fn indirect_gc_leaf_invoke_places_the_attribute_before_the_successor() {
+        let mut b = fresh();
+        b.counter.push_eh_scope("catch.0".to_string());
+        let r =
+            b.call_indirect_gc_leaf(DOUBLE, "%callback", &[(I64, "%closure"), (DOUBLE, "%arg")]);
+        assert_eq!(r, "%r1");
+        assert_eq!(
+            b.to_ir(),
+            "entry.0:\n  %r1 = invoke double %callback(i64 %closure, double %arg) \"gc-leaf-function\" to label %eh.cont2 unwind label %catch.0\neh.cont2:"
         );
     }
 

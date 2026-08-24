@@ -889,7 +889,10 @@ mod tests {
         let wrapper = void_function("wrapper", &["leaf"]);
         let recursive_a = void_function("recursive_a", &["recursive_b"]);
         let recursive_b = void_function("recursive_b", &["recursive_a"]);
-        let allocating = void_function("allocating", &["js_array_alloc"]);
+        let mut allocating = LlFunction::new("allocating", crate::types::I64, vec![]);
+        let entry = allocating.create_block("entry");
+        entry.call_void("js_array_alloc", &[]);
+        entry.ret(crate::types::I64, "0");
         let reaches_allocating = void_function("reaches_allocating", &["allocating"]);
         let functions = [
             &leaf,
@@ -919,12 +922,21 @@ mod tests {
         let entry = indirect.create_block("entry");
         entry.call_indirect(crate::types::I64, "%callback", &[]);
         entry.ret_void();
-        let functions = [&unknown, &indirect];
+        let mut guarded = LlFunction::new("guarded", crate::types::VOID, vec![]);
+        let entry = guarded.create_block("entry");
+        entry.call_indirect_gc_leaf(crate::types::I64, "%callback", &[]);
+        entry.ret_void();
+        let allocating = void_function("allocating", &["js_array_alloc"]);
+        let mut guarded_direct = LlFunction::new("guarded_direct", crate::types::VOID, vec![]);
+        let entry = guarded_direct.create_block("entry");
+        entry.call_gc_leaf(crate::types::I64, "allocating", &[]);
+        entry.ret_void();
+        let functions = [&unknown, &indirect, &guarded, &allocating, &guarded_direct];
 
         let safe = transitive_leaf_functions(&functions);
         assert!(
             safe.is_empty(),
-            "unknown and indirect calls must fail closed"
+            "unknown, indirect, and collecting direct calls must fail closed; a guarded call-site marker must not turn its containing function transitively leaf"
         );
     }
 

@@ -1535,6 +1535,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 callee,
                 args,
                 cconv,
+                gc_leaf,
             } => {
                 let mut argv: Vec<BasicMetadataValueEnum> = Vec::with_capacity(args.len());
                 let mut argtys: Vec<inkwell::types::BasicMetadataTypeEnum> =
@@ -1572,6 +1573,12 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                     // not something to normalize away silently.
                     Some(cc) => bail!("unknown calling-convention token `{cc}`"),
                 }
+                if *gc_leaf {
+                    site.add_attribute(
+                        inkwell::attributes::AttributeLoc::Function,
+                        self.ctx.create_string_attribute("gc-leaf-function", ""),
+                    );
+                }
                 if let Some(d) = dst {
                     match site.try_as_basic_value() {
                         inkwell::values::ValueKind::Basic(v) => self.def(d, v)?,
@@ -1585,6 +1592,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 ret,
                 fptr,
                 args,
+                gc_leaf,
             } => {
                 let mut argv: Vec<BasicMetadataValueEnum> = Vec::with_capacity(args.len());
                 let mut argtys: Vec<inkwell::types::BasicMetadataTypeEnum> =
@@ -1602,6 +1610,12 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                     .builder
                     .build_indirect_call(fn_ty, fp, &argv, dst.trim_start_matches('%'))
                     .map_err(be)?;
+                if *gc_leaf {
+                    site.add_attribute(
+                        inkwell::attributes::AttributeLoc::Function,
+                        self.ctx.create_string_attribute("gc-leaf-function", ""),
+                    );
+                }
                 match site.try_as_basic_value() {
                     inkwell::values::ValueKind::Basic(v) => self.def(dst, v),
                     other => bail!("typed indirect call expected a value, got {other:?}"),

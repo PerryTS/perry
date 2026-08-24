@@ -14,7 +14,8 @@ use anyhow::Result;
 use perry_hir::{CompareOp, Expr, LogicalOp, Stmt, UpdateOp};
 
 use crate::expr::{
-    FnCtx, VersionedIndexedArrayFact, VersionedIndexedLoopFact, VersionedIndexedMethodFact,
+    FnCtx, VersionedIndexedArrayFact, VersionedIndexedGuardMode, VersionedIndexedLoopFact,
+    VersionedIndexedMethodFact,
 };
 use crate::types::{DOUBLE, I1, I128, I16, I32, I64, I8};
 
@@ -26,6 +27,8 @@ struct Candidate {
     arrays: Vec<u32>,
     class_name: String,
     method_name: String,
+    callback_id: u32,
+    callback_arity: usize,
 }
 
 fn checked_reader_call(
@@ -233,6 +236,8 @@ fn match_candidate(
         arrays: arrays.into_iter().collect(),
         class_name,
         method_name,
+        callback_id,
+        callback_arity: callback_args.len(),
     })
 }
 
@@ -352,6 +357,17 @@ pub(super) fn emit_iteration_guard(ctx: &mut FnCtx<'_>) -> bool {
     let Some(fact) = ctx.versioned_indexed_loop_facts.last().cloned() else {
         return false;
     };
+    if matches!(
+        fact.guard_mode,
+        VersionedIndexedGuardMode::CallbackDeopt { .. }
+    ) {
+        // The callback clone's hot path cannot collect. Every cold arm first
+        // poisons the private counter so the loop exits without another body
+        // iteration. The preheader handles therefore remain live exactly on
+        // the paths which can use them; reloading shadow roots here would add
+        // two loads and masks to every ECS entity.
+        return true;
+    }
     let continue_idx = ctx.new_block("versioned_index.iteration.fast");
     let continue_label = ctx.block_label(continue_idx);
     let array_invalidated = ctx
@@ -431,11 +447,32 @@ pub(super) fn lower(
         return Ok(false);
     };
 
-    let fast_pre_idx = ctx.new_block("versioned_index.loop.fast.preheader");
+    // A cold callback arm may collect and then throw. Keep the specialized
+    // call out of an active EH scope: a local catch/finally could otherwise
+    // observe caller roots across the call's unwind edge. Ordinary guarded
+    // loop versioning remains available there.
+    let versioned_callback_target = (ctx.try_depth == 0
+        && ctx.i32_counter_slots.contains_key(&candidate.counter_id))
+    .then(|| {
+        ctx.resolved_versioned_loop_callback_targets
+            .get(&(candidate.callback_id, candidate.callback_arity))
+            .cloned()
+    })
+    .flatten();
+    let guarded_pre_idx = ctx.new_block("versioned_index.loop.fast.preheader");
+    let callback_pre_idx = versioned_callback_target
+        .as_ref()
+        .map(|_| ctx.new_block("versioned_index.loop.callback.preheader"));
+    let fast_pre_idx = if callback_pre_idx.is_some() {
+        ctx.new_block("versioned_index.loop.fast.dispatch")
+    } else {
+        guarded_pre_idx
+    };
     let slow_pre_idx = ctx.new_block("versioned_index.loop.slow.preheader");
     let merge_idx = ctx.new_block("versioned_index.loop.merge");
     let convert_idx = ctx.new_block("versioned_index.bound.convert");
     let fast_pre_label = ctx.block_label(fast_pre_idx);
+    let guarded_pre_label = ctx.block_label(guarded_pre_idx);
     let slow_pre_label = ctx.block_label(slow_pre_idx);
     let merge_label = ctx.block_label(merge_idx);
     let convert_label = ctx.block_label(convert_idx);
@@ -552,7 +589,85 @@ pub(super) fn lower(
         expected_shape_id,
         method_guard_slot,
     };
-    ctx.current_block = fast_pre_idx;
+    if let (Some(target), Some(callback_pre_idx)) = (versioned_callback_target, callback_pre_idx) {
+        let callback_pre_label = ctx.block_label(callback_pre_idx);
+        ctx.current_block = fast_pre_idx;
+        let target_is_exact = ctx.block().icmp_ne(crate::types::PTR, &target, "null");
+        ctx.block()
+            .cond_br(&target_is_exact, &callback_pre_label, &guarded_pre_label);
+
+        ctx.current_block = callback_pre_idx;
+        let counter_i32_slot = ctx
+            .i32_counter_slots
+            .get(&candidate.counter_id)
+            .expect("matched integer counter has i32 storage")
+            .clone();
+        let deopt_context = ctx.func.alloca_entry_array(I64, 3);
+        let counter_ptr_bits = ctx.block().ptrtoint(&counter_i32_slot, I64);
+        let context_counter_ptr = ctx.block().gep(I64, &deopt_context, &[(I64, "0")]);
+        ctx.block()
+            .store(I64, &counter_ptr_bits, &context_counter_ptr);
+        let context_bound_ptr = ctx.block().gep(I64, &deopt_context, &[(I64, "1")]);
+        let bound_i64 = ctx.block().zext(I32, &bound_i32, I64);
+        ctx.block().store(I64, &bound_i64, &context_bound_ptr);
+        let context_resume_ptr = ctx.block().gep(I64, &deopt_context, &[(I64, "2")]);
+        ctx.block().store(I64, "-1", &context_resume_ptr);
+
+        let mut callback_live_handles = HashMap::new();
+        for array in &array_facts {
+            let array_box = ctx.block().load(DOUBLE, &array.local_slot);
+            let array_bits = ctx.block().bitcast_double_to_i64(&array_box);
+            let array_handle = ctx
+                .block()
+                .and(I64, &array_bits, crate::nanbox::POINTER_MASK_I64);
+            callback_live_handles.insert(array.local_id, array_handle);
+        }
+
+        ctx.versioned_indexed_loop_facts
+            .push(VersionedIndexedLoopFact {
+                counter_local_id: candidate.counter_id,
+                falsy_local_id: candidate.filter_id,
+                side_exit_label: slow_pre_label.clone(),
+                arrays: array_facts.clone(),
+                method: method_fact.clone(),
+                guard_mode: VersionedIndexedGuardMode::CallbackDeopt {
+                    callback_local_id: candidate.callback_id,
+                    callback_arity: candidate.callback_arity,
+                    target,
+                    context: deopt_context,
+                },
+                live_array_handles: callback_live_handles,
+            });
+        super::loops::lower_for_after_init_with_i32_bound(
+            ctx,
+            init,
+            condition,
+            update,
+            body,
+            "for.versioned_index_callback",
+            Some((candidate.counter_id, bound_i32.clone())),
+        )?;
+        ctx.versioned_indexed_loop_facts.pop();
+        if !ctx.block().is_terminated() {
+            let resume = ctx.block().load(I64, &context_resume_ptr);
+            let completed_without_deopt = ctx.block().icmp_eq(I64, &resume, "-1");
+            let resume_idx = ctx.new_block("versioned_index.loop.callback.resume");
+            let resume_label = ctx.block_label(resume_idx);
+            ctx.block()
+                .cond_br(&completed_without_deopt, &merge_label, &resume_label);
+
+            ctx.current_block = resume_idx;
+            let resume_i32 = ctx.block().trunc(I64, &resume, I32);
+            ctx.block().store(I32, &resume_i32, &counter_i32_slot);
+            if let Some(counter_slot) = ctx.locals.get(&candidate.counter_id).cloned() {
+                let resume_f64 = ctx.block().sitofp(I32, &resume_i32, DOUBLE);
+                ctx.block().store(DOUBLE, &resume_f64, &counter_slot);
+            }
+            ctx.block().br(&slow_pre_label);
+        }
+    }
+
+    ctx.current_block = guarded_pre_idx;
     ctx.versioned_indexed_loop_facts
         .push(VersionedIndexedLoopFact {
             counter_local_id: candidate.counter_id,
@@ -560,6 +675,7 @@ pub(super) fn lower(
             side_exit_label: slow_pre_label.clone(),
             arrays: array_facts,
             method: method_fact,
+            guard_mode: VersionedIndexedGuardMode::Fingerprints,
             live_array_handles: HashMap::new(),
         });
     super::loops::lower_for_after_init_with_i32_bound(
