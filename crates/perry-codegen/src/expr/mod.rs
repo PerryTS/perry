@@ -587,6 +587,12 @@ pub(crate) struct FnCtx<'a> {
     /// raw helpers. Public and dynamically dispatched closure bodies keep the
     /// defensive runtime registry validation.
     pub trusted_box_captures: bool,
+    /// Raw box capture pointers loaded once in the entry block of a
+    /// compiler-private exact-arrow clone. The capture slots are immutable,
+    /// and a live exact capture edge keeps each box cell alive and non-moving
+    /// for the invocation, so these SSA values remain valid across safepoints
+    /// even though the closure object itself may relocate.
+    pub trusted_box_capture_ptrs: std::collections::HashMap<u32, TrustedBoxCapturePtr>,
     /// Immutable local aliases of same-module function declarations.
     /// Calling one is semantically the same as calling its `FuncRef` directly;
     /// retain the runtime function object in the local for identity/property
@@ -1482,6 +1488,14 @@ pub(crate) struct FnCtx<'a> {
     /// after the function finishes lowering the caller bumps the module
     /// counter by the number of slots it used (closes #71).
     pub buffer_alias_base: u32,
+}
+
+#[derive(Clone)]
+pub(crate) struct TrustedBoxCapturePtr {
+    /// Integer form used as the write-barrier parent.
+    pub bits: String,
+    /// Opaque LLVM pointer used by direct box-cell loads and stores.
+    pub ptr: String,
 }
 
 /// (Issue #50) Info about a flat-folded const 2D int array.
