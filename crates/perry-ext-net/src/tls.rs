@@ -649,6 +649,17 @@ pub(crate) fn record_tls_handshake(
 /// ABI — see `NA_F64` lowering in perry-codegen.
 #[no_mangle]
 pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64 {
+    // `js_tls_prepare_connect` may invoke a user-replaced createSecureContext
+    // before overload resolution. Keep every incoming value in the runtime's
+    // moving-GC root stack, and re-read the selected options/callback values
+    // after every later callback-capable runtime call.
+    let root_scope = perry_ffi::TransientRootScope::enter();
+    let rooted_args = [
+        root_scope.root_nanbox(arg1),
+        root_scope.root_nanbox(arg2),
+        root_scope.root_nanbox(arg3),
+        root_scope.root_nanbox(arg4),
+    ];
     extern "C" {
         fn js_tls_prepare_connect();
     }
@@ -685,29 +696,30 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
         (j.is_bool() && !j.to_bool()) || (j.is_number() && j.to_number() == 0.0)
     };
 
-    let (host, port, servername, verify, cb_f64, metadata_options);
-    if let Some(h) = as_string(arg1) {
+    let (host, port, servername, verify, callback_arg, metadata_options_arg);
+    if let Some(h) = as_string(rooted_args[0].get()) {
         // Legacy Perry positional: (host, port, servername?, verify?).
-        let p = JsValue::from_bits(arg2.to_bits());
+        let p = JsValue::from_bits(rooted_args[1].get().to_bits());
         if !p.is_number() && !p.is_int32() {
             return 0;
         }
         port = p.to_number() as u16;
-        servername = as_string(arg3).unwrap_or_else(|| h.clone());
+        servername = as_string(rooted_args[2].get()).unwrap_or_else(|| h.clone());
         host = h;
-        verify = !explicitly_off(arg4);
-        cb_f64 = None;
-        metadata_options = f64::from_bits(0x7FFC_0000_0000_0001);
-    } else if JsValue::from_bits(arg1.to_bits()).is_number()
-        || JsValue::from_bits(arg1.to_bits()).is_int32()
+        verify = !explicitly_off(rooted_args[3].get());
+        callback_arg = None;
+        metadata_options_arg = None;
+    } else if JsValue::from_bits(rooted_args[0].get().to_bits()).is_number()
+        || JsValue::from_bits(rooted_args[0].get().to_bits()).is_int32()
     {
         // Node positional form: tls.connect(port[, host][, options][, cb]).
-        js_net_validate_connect_port(arg1);
-        port = JsValue::from_bits(arg1.to_bits()).to_number() as u16;
+        js_net_validate_connect_port(rooted_args[0].get());
+        port = JsValue::from_bits(rooted_args[0].get().to_bits()).to_number() as u16;
         let mut opt_host: Option<String> = None;
-        let mut opts: Option<f64> = None;
-        let mut cb: Option<f64> = None;
-        for v in [arg2, arg3, arg4] {
+        let mut opts_arg: Option<usize> = None;
+        let mut cb_arg: Option<usize> = None;
+        for index in [1, 2, 3] {
+            let v = rooted_args[index].get();
             if opt_host.is_none() {
                 if let Some(h) = as_string(v) {
                     opt_host = Some(h);
@@ -715,41 +727,42 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
                 }
             }
             if is_closure(v) {
-                cb = cb.or(Some(v));
+                cb_arg = cb_arg.or(Some(index));
             } else if is_nanboxed_pointer(v) {
-                opts = opts.or(Some(v));
+                opts_arg = opts_arg.or(Some(index));
             }
         }
-        if let Some(options) = opts {
+        if let Some(index) = opts_arg {
             extern "C" {
                 fn js_tls_validate_positional_connect_options(options: f64);
             }
-            js_tls_validate_positional_connect_options(options);
+            js_tls_validate_positional_connect_options(rooted_args[index].get());
         }
         host = opt_host
             .or_else(|| {
-                opts.and_then(|o| {
-                    get_object_string_field(o, "host")
-                        .or_else(|| get_object_string_field(o, "hostname"))
+                opts_arg.and_then(|index| {
+                    let options = rooted_args[index].get();
+                    get_object_string_field(options, "host")
+                        .or_else(|| get_object_string_field(rooted_args[index].get(), "hostname"))
                 })
             })
             .filter(|h| !h.is_empty())
             .unwrap_or_else(|| "localhost".to_string());
-        servername = opts
-            .and_then(|o| get_object_string_field(o, "servername"))
+        servername = opts_arg
+            .and_then(|index| get_object_string_field(rooted_args[index].get(), "servername"))
             .unwrap_or_else(|| host.clone());
-        verify = opts
-            .and_then(|o| get_object_bool_field(o, "rejectUnauthorized"))
+        verify = opts_arg
+            .and_then(|index| get_object_bool_field(rooted_args[index].get(), "rejectUnauthorized"))
             .unwrap_or(true);
-        cb_f64 = cb;
-        metadata_options = opts.unwrap_or_else(|| f64::from_bits(0x7FFC_0000_0000_0001));
-    } else if is_nanboxed_pointer(arg1) && !is_closure(arg1) {
+        callback_arg = cb_arg;
+        metadata_options_arg = opts_arg;
+    } else if is_nanboxed_pointer(rooted_args[0].get()) && !is_closure(rooted_args[0].get()) {
         // Node options form: tls.connect(options[, callback]).
         extern "C" {
             fn js_tls_validate_connect_options(options: f64);
         }
-        js_tls_validate_connect_options(arg1);
-        if let Some(socket_value) = crate::get_object_value_field(arg1, "socket") {
+        js_tls_validate_connect_options(rooted_args[0].get());
+        if let Some(socket_value) = crate::get_object_value_field(rooted_args[0].get(), "socket") {
             let socket_js = JsValue::from_bits(socket_value.to_bits());
             let handle = if socket_js.is_pointer() {
                 crate::unbox_pointer(socket_value) as i64
@@ -757,15 +770,15 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
                 0
             };
             if handle != 0 {
-                host = get_object_string_field(arg1, "host")
-                    .or_else(|| get_object_string_field(arg1, "hostname"))
+                host = get_object_string_field(rooted_args[0].get(), "host")
+                    .or_else(|| get_object_string_field(rooted_args[0].get(), "hostname"))
                     .unwrap_or_else(|| "localhost".to_string());
-                servername =
-                    get_object_string_field(arg1, "servername").unwrap_or_else(|| host.clone());
-                verify = get_object_bool_field(arg1, "rejectUnauthorized").unwrap_or(true);
-                cb_f64 = is_closure(arg2).then_some(arg2);
-                metadata_options = arg1;
-                let config = tls_client_config_data(metadata_options);
+                servername = get_object_string_field(rooted_args[0].get(), "servername")
+                    .unwrap_or_else(|| host.clone());
+                verify = get_object_bool_field(rooted_args[0].get(), "rejectUnauthorized")
+                    .unwrap_or(true);
+                callback_arg = is_closure(rooted_args[1].get()).then_some(1);
+                let config = tls_client_config_data(rooted_args[0].get());
                 extern "C" {
                     fn js_tls_client_record_start(
                         handle: i64,
@@ -776,12 +789,12 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
                 }
                 js_tls_client_record_start(
                     handle,
-                    metadata_options,
+                    rooted_args[0].get(),
                     servername.as_ptr(),
                     servername.len(),
                 );
-                if let Some(cb) = cb_f64 {
-                    let cb_ptr = unbox_pointer(cb) as i64;
+                if let Some(index) = callback_arg {
+                    let cb_ptr = unbox_pointer(rooted_args[index].get()) as i64;
                     if cb_ptr != 0 {
                         statics::listeners()
                             .lock()
@@ -793,7 +806,7 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
                             .push(cb_ptr);
                     }
                 }
-                let preflight = tls_preflight(0, &servername, metadata_options);
+                let preflight = tls_preflight(0, &servername, rooted_args[0].get());
                 if preflight != 0 {
                     crate::push_event(crate::PendingNetEvent::Error(
                         handle,
@@ -807,29 +820,35 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
                 return handle;
             }
         }
-        port = match get_object_number_field(arg1, "port") {
+        port = match get_object_number_field(rooted_args[0].get(), "port") {
             Some(p) => {
                 js_net_validate_connect_port(p);
                 p as u16
             }
             None => return 0,
         };
-        host = match get_object_string_field(arg1, "host")
-            .or_else(|| get_object_string_field(arg1, "hostname"))
+        host = match get_object_string_field(rooted_args[0].get(), "host")
+            .or_else(|| get_object_string_field(rooted_args[0].get(), "hostname"))
         {
             Some(h) if !h.is_empty() => h,
             _ => "localhost".to_string(),
         };
-        servername = get_object_string_field(arg1, "servername").unwrap_or_else(|| host.clone());
-        verify = get_object_bool_field(arg1, "rejectUnauthorized").unwrap_or(true);
-        cb_f64 = is_closure(arg2).then_some(arg2);
-        metadata_options = arg1;
+        servername = get_object_string_field(rooted_args[0].get(), "servername")
+            .unwrap_or_else(|| host.clone());
+        verify = get_object_bool_field(rooted_args[0].get(), "rejectUnauthorized").unwrap_or(true);
+        callback_arg = is_closure(rooted_args[1].get()).then_some(1);
+        metadata_options_arg = Some(0);
     } else {
         return 0;
     }
 
-    let config = tls_client_config_data(metadata_options);
-    if signal_is_pre_aborted(metadata_options) {
+    let metadata_options = || {
+        metadata_options_arg
+            .map(|index| rooted_args[index].get())
+            .unwrap_or_else(|| f64::from_bits(0x7FFC_0000_0000_0001))
+    };
+    let config = tls_client_config_data(metadata_options());
+    if signal_is_pre_aborted(metadata_options()) {
         let handle = crate::js_net_socket_alloc();
         extern "C" {
             fn js_tls_client_record_start(
@@ -841,14 +860,14 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
         }
         js_tls_client_record_start(
             handle,
-            metadata_options,
+            metadata_options(),
             servername.as_ptr(),
             servername.len(),
         );
         schedule_tls_abort(handle);
         return handle;
     }
-    let preflight = tls_preflight(port, &servername, metadata_options);
+    let preflight = tls_preflight(port, &servername, metadata_options());
     if preflight != 0 {
         let handle = crate::js_net_socket_alloc();
         extern "C" {
@@ -861,7 +880,7 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
         }
         js_tls_client_record_start(
             handle,
-            metadata_options,
+            metadata_options(),
             servername.as_ptr(),
             servername.len(),
         );
@@ -885,14 +904,14 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
             }
             js_tls_client_record_start(
                 handle,
-                metadata_options,
+                metadata_options(),
                 metadata_servername.as_ptr(),
                 metadata_servername.len(),
             );
         });
-    if let Some(cb) = cb_f64 {
+    if let Some(index) = callback_arg {
         if handle != 0 {
-            let cb_ptr = unbox_pointer(cb) as i64;
+            let cb_ptr = unbox_pointer(rooted_args[index].get()) as i64;
             if cb_ptr != 0 {
                 statics::listeners()
                     .lock()
