@@ -698,6 +698,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, PTR],
     );
+    module.declare_function(
+        "js_packed_arraylike_loop_guard",
+        I32,
+        &[DOUBLE, DOUBLE, I32, PTR],
+    );
     // Issue #957: tag-aware dynamic index write. Used by `Expr::IndexUpdate`
     // codegen to write back the incremented value without rebuilding the
     // IndexSet dispatch tree. Routes to `js_array_set_index_or_string` for

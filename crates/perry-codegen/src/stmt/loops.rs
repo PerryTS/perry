@@ -4258,7 +4258,7 @@ fn local_array_element_type<'t>(
 /// an alloca (`ctx.locals`) this body does not have. Reading the flag without
 /// that distinction is what kept a captured `const rows: number[]` off the fast
 /// loop in a closure while the same code in a plain function got it.
-fn packed_loop_array_binding_is_eligible(ctx: &FnCtx<'_>, arr_id: u32) -> bool {
+pub(super) fn packed_loop_array_binding_is_eligible(ctx: &FnCtx<'_>, arr_id: u32) -> bool {
     packed_loop_array_binding_storage_is_addressable(ctx, arr_id)
         && !ctx.scalar_replaced_arrays.contains_key(&arr_id)
         && !ctx.native_facts.has_materialization_hazard(arr_id)
@@ -4888,6 +4888,10 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
+    if super::versioned_indexed_loop::lower(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
+
     // #5093: monomorphic class-field hot loops (`counter.value = counter.value
     // + 1` after method inlining). Shape check hoisted to a preheader; fast
     // clone is call-free raw slot access.
@@ -4901,6 +4905,14 @@ pub(crate) fn lower_for(
     if super::element_shape_loop::lower_element_shape_versioned_for(
         ctx, init, condition, update, body,
     )? {
+        return Ok(());
+    }
+
+    // #8690 owns only loops left over after the established packed-number,
+    // indexed-method, class-field, and homogeneous element-shape clones have
+    // had first refusal. Its runtime admission is deliberately broader, so
+    // trying it earlier would steal those specialized access shapes.
+    if super::stable_packed_loop::lower(ctx, init, condition, update, body)? {
         return Ok(());
     }
 
@@ -4957,9 +4969,12 @@ pub(super) fn lower_for_after_init_with_i32_bound(
     // Saves ~25-30% on `for (let i = 0; i < arr.length; i++) arr[i] = i`
     // and `for (let i = 0; i < arr.length; i++) for (let j = 0; j <
     // arr.length; j++) ...` patterns.
+    // A precomputed bound replaces only the emitted length LOAD. Keep the
+    // structural classification: bounded-index facts, buffer-width facts and
+    // the counter's i32 slot are independent proofs consumed inside clones.
     let raw_hoist_classification: Option<LengthHoist> =
         condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body));
-    let hoist_rejection = if raw_hoist_classification.is_none() {
+    let hoist_rejection = if raw_hoist_classification.is_none() && precomputed_i32_bound.is_none() {
         condition.and_then(|cond| classify_for_length_hoist_rejection(ctx, cond, update, body))
     } else {
         None
@@ -5013,8 +5028,10 @@ pub(super) fn lower_for_after_init_with_i32_bound(
     // i32 counter slot below are proofs and storage, not emitted work, and the
     // clone's other lowering may depend on them; suppressing those too would
     // trade one silent loss for another.
-    let in_call_free_clone =
-        !ctx.element_shape_loop_facts.is_empty() || !ctx.class_field_loop_facts.is_empty();
+    let in_call_free_clone = !ctx.element_shape_loop_facts.is_empty()
+        || !ctx.class_field_loop_facts.is_empty()
+        || !ctx.stable_packed_loop_facts.is_empty()
+        || precomputed_i32_bound.is_some();
     let hoisted_length_slot: Option<String> = if let Some(hoist) = hoist_classification {
         let hoisted_slot = if in_call_free_clone {
             None
@@ -5115,7 +5132,7 @@ pub(super) fn lower_for_after_init_with_i32_bound(
     // `fcmp olt double`, letting LLVM's SCEV model `i` as a clean integer
     // induction variable.
     let local_bound_classification: Option<(u32, u32, perry_hir::CompareOp)> =
-        if hoist_classification.is_none() {
+        if hoist_classification.is_none() && precomputed_i32_bound.is_none() {
             condition.and_then(|cond| classify_for_local_bound(cond, update, body, ctx))
         } else {
             None
@@ -5178,6 +5195,7 @@ pub(super) fn lower_for_after_init_with_i32_bound(
     // safe and fall back to the generic comparison otherwise.
     let dynamic_i32_bound: Option<DynamicI32Bound> = if hoist_classification.is_none()
         && local_bound_classification.is_none()
+        && precomputed_i32_bound.is_none()
     {
         condition
             .and_then(|cond| classify_for_local_bound_dynamic(cond, update, body, ctx))
@@ -5393,6 +5411,7 @@ pub(super) fn lower_for_after_init_with_i32_bound(
 
     // Body block.
     ctx.current_block = body_idx;
+    super::versioned_indexed_loop::emit_iteration_guard(ctx);
     if let Some(cond) = condition {
         let mut guarded =
             crate::expr::guarded_buffer_indices_for_condition(ctx, cond, loop_proof_scope_id);
@@ -5580,9 +5599,9 @@ pub(crate) fn emit_gc_loop_safepoint(
     }
     // #7480 step 4: never inside a call-free-by-construction fast clone.
     //
-    // `lower_class_field_versioned_for` and `lower_element_shape_versioned_for`
-    // hoist a guard into a preheader and clone the body against it, and both
-    // rest on the SAME safety argument: the clone makes no call, therefore
+    // `lower_class_field_versioned_for`, `lower_element_shape_versioned_for`,
+    // and the stable-packed loop tier hoist a guard into a preheader and clone
+    // the body against it. All rest on the SAME safety argument: the clone makes no call, therefore
     // allocates nothing, therefore cannot collect, therefore the pointer the
     // preheader cached cannot move. Each verifies that by scanning its own
     // emitted blocks afterwards, and a clone whose call-freeness is unproven is
@@ -5616,7 +5635,10 @@ pub(crate) fn emit_gc_loop_safepoint(
     // than to the generic diamond. Inside a fact scope, it can: the clone is
     // call-free or it is not entered, and the slow clone — lowered after the
     // scope is popped — keeps its poll either way.
-    if !ctx.element_shape_loop_facts.is_empty() || !ctx.class_field_loop_facts.is_empty() {
+    if !ctx.element_shape_loop_facts.is_empty()
+        || !ctx.class_field_loop_facts.is_empty()
+        || !ctx.stable_packed_loop_facts.is_empty()
+    {
         return;
     }
     // Only an ALLOCATING loop body can defer a collection to this poll; skip the

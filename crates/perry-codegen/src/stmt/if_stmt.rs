@@ -97,7 +97,10 @@ fn try_const_fold_condition(ctx: &FnCtx<'_>, condition: &perry_hir::Expr) -> Opt
             if matches!(
                 ctx.stable_local_type_proof(id),
                 Some(perry_hir::types::Type::Void)
-            ) =>
+            ) || ctx
+                .versioned_indexed_loop_facts
+                .last()
+                .is_some_and(|fact| fact.falsy_local_id == Some(*id)) =>
         {
             Some(false)
         }

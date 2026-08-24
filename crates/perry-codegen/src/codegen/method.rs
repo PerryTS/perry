@@ -12,7 +12,7 @@ use crate::stmt;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I1, I32, I64, PTR};
 
-use super::helpers::scoped_static_method_name;
+use super::helpers::{node_stream_parent_kind, scoped_static_method_name};
 use super::method_trampolines::{
     emit_guarded_undefined, emit_public_generic, emit_public_typed, guarded_undefined_name,
 };
@@ -24,31 +24,6 @@ use super::typed_abi::{
     typed_param_reps_for_params, typed_string_method_name, TypedFunctionTrampolineKind,
     TypedReceiverMethodInfo,
 };
-
-fn node_stream_parent_kind(
-    classes: &HashMap<String, &perry_hir::Class>,
-    class: &perry_hir::Class,
-) -> Option<&'static str> {
-    let mut cur = class.extends_name.as_deref();
-    let mut depth = 0usize;
-    while let Some(name) = cur {
-        match name {
-            "Readable" => return Some("readable"),
-            "Duplex" => return Some("duplex"),
-            "Transform" => return Some("transform"),
-            _ => {}
-        }
-        cur = classes
-            .get(name)
-            .copied()
-            .and_then(|parent| parent.extends_name.as_deref());
-        depth += 1;
-        if depth > 32 {
-            break;
-        }
-    }
-    None
-}
 
 /// Compile a class instance method as a top-level LLVM function with the
 /// signature `perry_method_<class>_<name>(this_box: double, args: double…)
@@ -78,6 +53,7 @@ pub(super) fn compile_method(
     force_generic_body: bool,
     proven_this: Option<crate::collectors::PtrShapeLocal>,
     nonnegative_index_params: Option<&[u32]>,
+    fast_array_handle_clone: bool,
     ptr_array_cache_clone: bool,
     guarded_undefined_clone: bool,
 ) -> Result<()> {
@@ -106,7 +82,17 @@ pub(super) fn compile_method(
                 .copied()
         })
         .flatten();
+    let fast_array_param_ids = if fast_array_handle_clone {
+        crate::codegen::typed_abi::nonnegative_index_fast_array_params(
+            method,
+            nonnegative_index_params.expect("fast-array clone has index parameters"),
+        )
+    } else {
+        Vec::new()
+    };
     debug_assert!(!(is_pshape_clone && is_index_clone));
+    debug_assert!(!fast_array_handle_clone || is_index_clone);
+    debug_assert!(!fast_array_handle_clone || !fast_array_param_ids.is_empty());
     debug_assert!(!ptr_array_cache_clone || is_pshape_clone);
     debug_assert!(!guarded_undefined_clone || guarded_undefined_param.is_some());
     debug_assert!(!guarded_undefined_clone || !is_index_clone);
@@ -118,7 +104,12 @@ pub(super) fn compile_method(
     } else {
         public_llvm_name.clone()
     };
-    let llvm_name = if let Some(params) = nonnegative_index_params {
+    let llvm_name = if fast_array_handle_clone {
+        crate::codegen::nonnegative_index_fast_array_method_name(
+            &public_llvm_name,
+            nonnegative_index_params.expect("fast-array clone has index parameters"),
+        )
+    } else if let Some(params) = nonnegative_index_params {
         crate::codegen::nonnegative_index_method_name(&public_llvm_name, params)
     } else if guarded_undefined_clone {
         guarded_undefined_name(
@@ -136,10 +127,14 @@ pub(super) fn compile_method(
     };
 
     // Build the param list: (this, arg0, arg1, ...). All are doubles.
-    let mut params: Vec<(LlvmType, String)> = Vec::with_capacity(method.params.len() + 1);
+    let mut params: Vec<(LlvmType, String)> =
+        Vec::with_capacity(method.params.len() + 1 + fast_array_param_ids.len());
     params.push((DOUBLE, "%this_arg".to_string()));
     for p in &method.params {
         params.push((DOUBLE, format!("%arg{}", p.id)));
+    }
+    for id in &fast_array_param_ids {
+        params.push((I64, format!("%fast_array_handle{id}")));
     }
 
     let ic_base = llmod.ic_counter;
@@ -439,6 +434,7 @@ pub(super) fn compile_method(
         class_shape_slots: HashMap::new(),
         class_header_images: HashMap::new(),
         cached_lengths: HashMap::new(),
+        array_length_snapshots: HashMap::new(),
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),
         masked_window_array_facts: Vec::new(),
@@ -512,6 +508,13 @@ pub(super) fn compile_method(
         typed_f64_methods: &cross_module.typed_f64_methods,
         pshape_methods: &cross_module.pshape_methods,
         nonnegative_index_methods: &cross_module.nonnegative_index_methods,
+        trusted_array_param_handles: fast_array_param_ids
+            .iter()
+            .copied()
+            .map(|id| (id, format!("%fast_array_handle{id}")))
+            .collect(),
+        versioned_indexed_loop_facts: Vec::new(),
+        stable_packed_loop_facts: Vec::new(),
         pshape_tower_routable: &cross_module.pshape_tower_routable,
         proven_this,
         typed_i32_methods: &cross_module.typed_i32_methods,
@@ -1694,6 +1697,7 @@ pub(super) fn compile_static_method(
         class_shape_slots: HashMap::new(),
         class_header_images: HashMap::new(),
         cached_lengths: HashMap::new(),
+        array_length_snapshots: HashMap::new(),
         bounded_index_pairs: Vec::new(),
         packed_f64_loop_facts: Vec::new(),
         masked_window_array_facts: Vec::new(),
@@ -1767,6 +1771,9 @@ pub(super) fn compile_static_method(
         typed_f64_methods: &cross_module.typed_f64_methods,
         pshape_methods: &cross_module.pshape_methods,
         nonnegative_index_methods: &cross_module.nonnegative_index_methods,
+        trusted_array_param_handles: HashMap::new(),
+        versioned_indexed_loop_facts: Vec::new(),
+        stable_packed_loop_facts: Vec::new(),
         pshape_tower_routable: &cross_module.pshape_tower_routable,
         proven_this: None,
         typed_i32_methods: &cross_module.typed_i32_methods,

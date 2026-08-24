@@ -1323,6 +1323,62 @@ pub(crate) fn try_lower_instance_method_call(
                             crate::codegen::nonnegative_index_method_name(&fallback_fn, params)
                         })
                     });
+                // A versioned loop revalidated this exact `this.method` target
+                // and every array argument at the current iteration entry.
+                // Route directly to the private handle-ABI clone: unlike the
+                // ordinary `$idx_u31` body it contains no array fallback edge.
+                // The structural matcher admits no user code between that
+                // revalidation and these checked-reader calls.
+                let versioned_fact = ctx.versioned_indexed_loop_facts.last().cloned();
+                if matches!(object, Expr::This)
+                    && nonnegative_index_direct_name.is_some()
+                    && versioned_fact.as_ref().is_some_and(|fact| {
+                        fact.method.class_name == class_name && fact.method.method_name == property
+                    })
+                {
+                    let fact = versioned_fact.expect("checked above");
+                    let params = ctx
+                        .nonnegative_index_methods
+                        .get(&typed_method_key)
+                        .expect("versioned method remains indexed");
+                    let method = ctx
+                        .classes
+                        .get(&class_name)
+                        .expect("versioned method class remains registered")
+                        .methods
+                        .iter()
+                        .find(|method| method.name.as_str() == property)
+                        .expect("versioned method remains registered");
+                    let array_params =
+                        crate::codegen::nonnegative_index_fast_array_params(method, params);
+                    let mut handle_storage = Vec::with_capacity(array_params.len());
+                    for array_param in array_params {
+                        let position = method
+                            .params
+                            .iter()
+                            .position(|param| param.id == array_param)
+                            .expect("versioned array parameter remains registered");
+                        let Some(Expr::LocalGet(local_id)) = args.get(position) else {
+                            handle_storage.clear();
+                            break;
+                        };
+                        let Some(handle) = fact.live_array_handles.get(local_id) else {
+                            handle_storage.clear();
+                            break;
+                        };
+                        handle_storage.push(handle.clone());
+                    }
+                    if !handle_storage.is_empty() {
+                        let mut fast_args = arg_slices.clone();
+                        fast_args
+                            .extend(handle_storage.iter().map(|handle| (I64, handle.as_str())));
+                        let target = crate::codegen::nonnegative_index_fast_array_method_name(
+                            &fallback_fn,
+                            params,
+                        );
+                        return Ok(Some(ctx.block().call(DOUBLE, &target, &fast_args)));
+                    }
+                }
                 let typed_receiver_direct = match (
                     typed_receiver_direct_name.as_ref(),
                     typed_receiver_info.as_ref(),

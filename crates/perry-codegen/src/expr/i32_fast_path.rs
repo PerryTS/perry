@@ -1762,8 +1762,10 @@ fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         );
         return Ok(lowered);
     }
-    let needs_raw_f64_fallback_coercion = expr_may_return_boxed_value_from_raw_f64_fallback(ctx, e)
-        || matches!(e, Expr::IndexGet { .. }) && is_numeric_expr(ctx, e);
+    let stable_numeric_index = crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e);
+    let needs_raw_f64_fallback_coercion = !stable_numeric_index
+        && (expr_may_return_boxed_value_from_raw_f64_fallback(ctx, e)
+            || matches!(e, Expr::IndexGet { .. }) && is_numeric_expr(ctx, e));
     let raw = lower_expr(ctx, e)?;
     let value = if needs_raw_f64_fallback_coercion {
         ctx.block()
@@ -1788,8 +1790,10 @@ fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
 }
 
 fn lower_expr_native_f32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
-    let needs_raw_f64_fallback_coercion = expr_may_return_boxed_value_from_raw_f64_fallback(ctx, e)
-        || matches!(e, Expr::IndexGet { .. }) && is_numeric_expr(ctx, e);
+    let stable_numeric_index = crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e);
+    let needs_raw_f64_fallback_coercion = !stable_numeric_index
+        && (expr_may_return_boxed_value_from_raw_f64_fallback(ctx, e)
+            || matches!(e, Expr::IndexGet { .. }) && is_numeric_expr(ctx, e));
     let raw = lower_expr(ctx, e)?;
     let d = if needs_raw_f64_fallback_coercion {
         ctx.block()

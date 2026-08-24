@@ -19,7 +19,8 @@
 
 use super::subclass::{
     array_object_receiver, array_subclass_fast_index_get, array_subclass_fast_length,
-    is_array_subclass_class_id, js_packed_arraylike_index_get, raw_receiver_is_heap_object,
+    is_array_subclass_class_id, js_packed_arraylike_index_get, js_packed_arraylike_loop_guard,
+    raw_receiver_is_heap_object,
 };
 use crate::array::{clean_arr_ptr, js_array_alloc, ArrayHeader};
 use crate::object::{js_object_alloc, ObjectHeader};
@@ -199,6 +200,68 @@ fn dense_array_subclass_reads_slots_until_its_shape_changes() {
         js_packed_arraylike_index_get(receiver, 1.0, std::ptr::null_mut()).to_bits(),
         crate::value::TAG_UNDEFINED,
         "the wrapper must preserve the generic hole result"
+    );
+}
+
+/// #8690: pointer-free tagged values skip the GC write barrier. The generic
+/// successful-index hook must still retire a numeric-prefix proof, otherwise a
+/// later loop clone would reinterpret the SSO bits as an f64 Number.
+#[test]
+fn packed_numeric_proof_is_retired_by_sso_index_overwrite() {
+    let class_id = 0x0074_8690;
+    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
+    let obj = js_object_alloc(class_id, 2);
+    assert!(!obj.is_null());
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_h = scope.root_nanbox_f64(receiver);
+    crate::node_stream::js_array_subclass_init(receiver_h.get_nanbox_f64(), 0.0);
+    for (index, value) in [11.0, 22.0, 33.0].into_iter().enumerate() {
+        let live_raw = receiver_h.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF;
+        crate::object::js_object_set_index_polymorphic(live_raw as i64, index as f64, value);
+    }
+
+    let mut facts = [0u64; 7];
+    assert_eq!(
+        js_packed_arraylike_loop_guard(receiver_h.get_nanbox_f64(), 3.0, 1, facts.as_mut_ptr(),),
+        2,
+        "the numeric object-backed range should establish a proof"
+    );
+    let live_raw = (receiver_h.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut u8;
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(live_raw as usize) }
+        .expect("the rooted receiver is a live GC object");
+    assert_ne!(
+        header._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
+        0
+    );
+
+    let key_ptr = crate::string::js_string_from_bytes(b"1".as_ptr(), 1);
+    let key = f64::from_bits(crate::value::js_nanbox_string(key_ptr as i64).to_bits());
+    let sso = f64::from_bits(
+        crate::value::JSValue::try_short_string(b"9")
+            .expect("one byte is an inline SSO")
+            .bits(),
+    );
+    crate::proxy::js_put_value_set(
+        receiver_h.get_nanbox_f64(),
+        key,
+        sso,
+        receiver_h.get_nanbox_f64(),
+        0,
+    );
+
+    let live_raw = (receiver_h.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut u8;
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(live_raw as usize) }
+        .expect("the rooted receiver is a live GC object");
+    assert_eq!(
+        header._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
+        0,
+        "a successful SSO overwrite must retire numeric authority without a GC barrier"
+    );
+    assert_eq!(
+        js_packed_arraylike_loop_guard(receiver_h.get_nanbox_f64(), 3.0, 1, facts.as_mut_ptr(),),
+        0,
+        "the next numeric loop must side-exit after an element-kind transition"
     );
 }
 

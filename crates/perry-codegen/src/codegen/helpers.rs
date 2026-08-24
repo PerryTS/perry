@@ -776,6 +776,31 @@ pub(super) fn scoped_static_method_name(
     )
 }
 
+pub(super) fn node_stream_parent_kind(
+    classes: &HashMap<String, &perry_hir::Class>,
+    class: &perry_hir::Class,
+) -> Option<&'static str> {
+    let mut cur = class.extends_name.as_deref();
+    let mut depth = 0usize;
+    while let Some(name) = cur {
+        match name {
+            "Readable" => return Some("readable"),
+            "Duplex" => return Some("duplex"),
+            "Transform" => return Some("transform"),
+            _ => {}
+        }
+        cur = classes
+            .get(name)
+            .copied()
+            .and_then(|parent| parent.extends_name.as_deref());
+        depth += 1;
+        if depth > 32 {
+            break;
+        }
+    }
+    None
+}
+
 /// Walk a function body looking for `Return(Some(expr))` shapes that
 /// identify the function as a factory returning a class. Sets
 /// `*produced` to the resolved class name when the first qualifying

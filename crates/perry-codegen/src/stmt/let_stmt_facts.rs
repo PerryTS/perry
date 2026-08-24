@@ -5,6 +5,25 @@
 
 use super::*;
 
+/// Remember an immutable `const n = receiver.length` association for guarded
+/// counted-loop admission. The property read itself keeps ordinary semantics;
+/// only a later runtime proof is allowed to consume this association.
+pub(super) fn record_array_length_snapshot(ctx: &mut FnCtx<'_>, id: u32, init: &perry_hir::Expr) {
+    if ctx.reassigned_locals.contains(&id) {
+        return;
+    }
+    if let perry_hir::Expr::PropertyGet {
+        object, property, ..
+    } = init
+    {
+        if property == "length" {
+            if let perry_hir::Expr::LocalGet(array_id) = object.as_ref() {
+                ctx.array_length_snapshots.insert(id, *array_id);
+            }
+        }
+    }
+}
+
 use crate::native_value::BufferAccessMode;
 
 /// #8691: the aggregate scalar-replacement transform erases the carrier array

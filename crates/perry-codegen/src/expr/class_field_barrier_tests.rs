@@ -232,6 +232,19 @@ pub(super) fn ir() -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+/// #8690: pointer-free tagged writes (SSO and booleans) skip the shared
+/// value-is-pointer bookkeeping arm. The receiver precheck must therefore
+/// reject the packed-numeric authority bit before entering the inline store.
+#[test]
+fn class_field_set_precheck_blocks_packed_numeric_proof_receivers() {
+    let ir = ir();
+    assert!(
+        ir.lines()
+            .any(|line| line.contains("and i16") && line.trim_end().ends_with(", 128")),
+        "class-field set admission must mask OBJ_FLAG_PACKED_NUMERIC_PROOF (0x80)\n{ir}"
+    );
+}
+
 /// The `br i1 %cond, label %class_field_set.barrier.N, label %...` line, plus
 /// the body of the block that contains it.
 ///

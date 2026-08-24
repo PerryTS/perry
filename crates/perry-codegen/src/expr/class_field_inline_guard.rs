@@ -48,9 +48,10 @@ const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
 const TYPED_LAYOUT_INTACT_BIT: &str = "4096"; // GC_OBJ_TYPED_LAYOUT_INTACT (0x1000)
 const OBJ_FLAG_FROZEN_BIT: &str = "1"; // OBJ_FLAG_FROZEN (0x01)
 const OBJ_FLAG_HAS_DESCRIPTORS_BIT: &str = "2048"; // OBJ_FLAG_HAS_DESCRIPTORS (0x800)
-/// `OBJ_FLAG_FROZEN | OBJ_FLAG_HAS_DESCRIPTORS` — both live in the same
-/// `GcHeader::_reserved` i16, so one mask tests both.
-const OBJ_FLAG_FROZEN_OR_DESCRIPTORS: &str = "2049";
+const OBJ_FLAG_PACKED_NUMERIC_PROOF_BIT: &str = "128"; // OBJ_FLAG_PACKED_NUMERIC_PROOF (0x080)
+/// `OBJ_FLAG_FROZEN | OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_PACKED_NUMERIC_PROOF`
+/// — all live in the same `GcHeader::_reserved` i16, so one mask tests them.
+const OBJ_FLAG_WRITE_FAST_PATH_BLOCKED: &str = "2177";
 const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 
 /// A widening arm for the class-field shape check: one concrete subclass whose
@@ -308,9 +309,9 @@ pub(crate) fn emit_class_field_loop_preheader_check(
         }
 
         if require_not_frozen {
-            let frozen = blk.and(I16, &reserved, OBJ_FLAG_FROZEN_BIT);
-            let not_frozen = blk.icmp_eq(I16, &frozen, "0");
-            acc = blk.and(I1, &acc, &not_frozen);
+            let blocked = blk.and(I16, &reserved, OBJ_FLAG_WRITE_FAST_PATH_BLOCKED);
+            let write_fast_path_ok = blk.icmp_eq(I16, &blocked, "0");
+            acc = blk.and(I1, &acc, &write_fast_path_ok);
         }
 
         // No terminator: the caller branches after verifying the fast clone.
@@ -394,7 +395,7 @@ pub(crate) fn emit_proven_shape_recheck(
 
     let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
     let reserved = blk.load(I16, &res_ptr);
-    let latched = blk.and(I16, &reserved, OBJ_FLAG_FROZEN_OR_DESCRIPTORS);
+    let latched = blk.and(I16, &reserved, OBJ_FLAG_WRITE_FAST_PATH_BLOCKED);
     let unlatched = blk.icmp_eq(I16, &latched, "0");
 
     // `class_id` @0 was already matched by the tower. ShapeId @4 proves the
@@ -553,6 +554,13 @@ pub(crate) fn emit_class_field_inline_precheck(
             let frozen = blk.and(I16, &reserved, OBJ_FLAG_FROZEN_BIT);
             let not_frozen = blk.icmp_eq(I16, &frozen, "0");
             acc = blk.and(I1, &acc, &not_frozen);
+
+            // #8690: an inline field write can overlap an Array-subclass
+            // numeric prefix. Route proof-authoritative receivers through the
+            // runtime setter so pointer-free SSO/boolean stores retire it too.
+            let numeric_proof = blk.and(I16, &reserved, OBJ_FLAG_PACKED_NUMERIC_PROOF_BIT);
+            let no_numeric_proof = blk.icmp_eq(I16, &numeric_proof, "0");
+            acc = blk.and(I1, &acc, &no_numeric_proof);
 
             if require_raw_f64 {
                 // Only a plain finite number may be stored raw. Non-finite

@@ -709,6 +709,16 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 slot_index,
                 value_bits,
             );
+        } else if (*header).obj_type == GC_TYPE_OBJECT
+            && (*header)._reserved & OBJ_FLAG_PACKED_NUMERIC_PROOF != 0
+        {
+            // #8690: the proof payload lives with ObjectMeta, but this
+            // GcHeader bit is its cheap authority. Retire it before an inline
+            // owner store; object-owned spill stores use the matching owner
+            // hook because their physical layout note names the spill Array.
+            crate::array::clear_packed_subclass_numeric_proof(
+                parent_user as *mut crate::object::ObjectHeader,
+            );
         }
         if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN {
             return;

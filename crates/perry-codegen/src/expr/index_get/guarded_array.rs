@@ -30,6 +30,28 @@ use super::{
     TypedFeedbackKind,
 };
 
+/// Load one generic JavaScript array element through a handle admitted by a
+/// versioned caller. Bounds, descriptor/prototype state, forwarding state, and
+/// the live array header were checked at that iteration's entry. This function
+/// intentionally has no branch to an ordinary array fallback.
+pub(super) fn lower_trusted_plain_array_index_get(
+    ctx: &mut FnCtx<'_>,
+    array_handle: &str,
+    idx_i32: &str,
+) -> String {
+    let blk = ctx.block();
+    let idx_i64 = blk.zext(I32, idx_i32, I64);
+    let byte_offset = blk.shl(I64, &idx_i64, "3");
+    let with_header = blk.add(I64, &byte_offset, "8");
+    let element_addr = blk.add(I64, array_handle, &with_header);
+    let element_ptr = blk.inttoptr(I64, &element_addr);
+    let raw = blk.load(DOUBLE, &element_ptr);
+    let raw_bits = blk.bitcast_double_to_i64(&raw);
+    let is_hole = blk.icmp_eq(I64, &raw_bits, crate::nanbox::TAG_HOLE_I64);
+    let undefined = blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
+    blk.select(I1, &is_hole, DOUBLE, &undefined, &raw)
+}
+
 pub(super) fn lower_guarded_array_index_get(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,

@@ -476,7 +476,10 @@ fn class_field_set_fast_contract(
         let Some(gc_header) = gc_header_for_user_addr(object_addr) else {
             return false;
         };
-        if (*gc_header)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
+        if (*gc_header)._reserved
+            & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF)
+            != 0
+        {
             return false;
         }
     }
@@ -547,7 +550,10 @@ fn class_field_set_contract(
         if (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
             return (0, 0, gc_type, false);
         }
-        if (*gc_header)._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
+        if (*gc_header)._reserved
+            & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF)
+            != 0
+        {
             let obj = object_addr as *mut ObjectHeader;
             return (
                 crate::object::shapes::object_shape_id(obj) as usize,
@@ -1058,7 +1064,9 @@ pub unsafe extern "C" fn js_method_direct_shape_class(
     };
     if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
         || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || (*gc_header)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
+        || (*gc_header)._reserved
+            & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF)
+            != 0
         || crate::object::class_prototype_fast_guard_invalidated_for_method(method_guard_slot)
     {
         return 0;

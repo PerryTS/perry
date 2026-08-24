@@ -635,11 +635,57 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // via one sitofp per write so non-int readers (e.g. `acc / K`)
             // still see the current value.
             if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
+                let structurally_i32 = can_lower_expr_as_i32_in_current_region(ctx, value);
+                // When `x` is a canonical raw Number, `x | 0` may feed the canonical
+                // i32 slot directly: materializing a double here only to
+                // convert it back would duplicate the spec ToInt32. Keep the
+                // canonical gate explicit — declared Number types are erased,
+                // so a local can still hold a String or BigInt at runtime.
+                //
+                // This is a claim about the VALUE the ordinary lowering of `x`
+                // produces, NOT a licence to re-evaluate `x`'s operands
+                // natively — see the lowering below.
+                let explicit_numeric_toint32 = matches!(
+                value.as_ref(),
+                Expr::Binary {
+                    op: BinaryOp::BitOr,
+                    left,
+                    right,
+                    ..
+                } if matches!(right.as_ref(), Expr::Integer(0))
+                    && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left)
+                );
                 if !ctx.closure_captures.contains_key(id)
                     && !(ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id))
-                    && can_lower_expr_as_i32_in_current_region(ctx, value)
+                    && (structurally_i32 || explicit_numeric_toint32)
                 {
-                    let v_i32 = lower_expr_as_i32(ctx, value)?;
+                    let v_i32 = if structurally_i32 {
+                        lower_expr_as_i32(ctx, value)?
+                    } else {
+                        // `expr_produces_canonical_raw_f64` vouches for the
+                        // RESULT of `x | 0`; it says nothing about `x`'s
+                        // OPERANDS. Lowering the tree as native i32 would let
+                        // `lower_expr_native_i32`'s i32-chain arm `fptosi`
+                        // every operand it cannot lower natively — turning
+                        // `h ^ recv.charCodeAt(i)` on an unproven receiver into
+                        // an inline `xor i32` over whatever that method
+                        // returned, so a BigInt silently yields garbage instead
+                        // of the spec's TypeError (the #7773 family: only a
+                        // live guard is a proof, an inferred type is not).
+                        //
+                        // Lower through `lower_expr` instead. `expr/binary.rs`
+                        // applies `is_provably_not_bigint` PER OPERAND, so a
+                        // proven tree still gets the inline `xor i32`/`or i32`
+                        // and an unproven one keeps the BigInt-aware
+                        // `js_dynamic_bit*` helper. The trailing conversion is
+                        // free: `x | 0` always lowers to `sitofp i32`, so
+                        // instcombine folds `trunc(fptosi(sitofp(v)))` back to
+                        // `v` — and that `sitofp` is exactly why `toint32_fast`
+                        // (whose contract is a known-finite input) is the right
+                        // conversion here.
+                        let d = lower_expr(ctx, value)?;
+                        ctx.block().toint32_fast(&d)
+                    };
                     let unsigned_i32 = ctx.unsigned_i32_locals.contains(id);
                     let blk = ctx.block();
                     blk.store(I32, &v_i32, &i32_slot);

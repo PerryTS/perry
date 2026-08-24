@@ -140,6 +140,11 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // operands, the non-BigInt bitwise fast path.
         Expr::Uint8ArrayGet { index, .. } => is_numeric_expr(ctx, index),
         Expr::BufferIndexGet { .. } | Expr::Uint8ArrayLength(_) | Expr::BufferLength(_) => true,
+        Expr::IndexGet { .. }
+            if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e) =>
+        {
+            true
+        }
         Expr::LocalGet(id) => {
             ctx.element_shape_loop_facts
                 .iter()
@@ -522,6 +527,11 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) => true,
+        Expr::IndexGet { .. }
+            if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e) =>
+        {
+            true
+        }
         Expr::Binary { .. } => {
             is_numeric_expr(ctx, e)
                 && is_provably_not_bigint(ctx, e)
