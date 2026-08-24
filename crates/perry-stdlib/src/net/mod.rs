@@ -1856,10 +1856,11 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
                 // so user code can read `err.message`. Pre-fix the listener
                 // received a raw NaN-boxed string and `err.message` came
                 // back as `undefined`.
-                let err_f64 = build_error_object(&msg);
+                let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                let error = scope.root_nanbox_f64(build_error_object(&msg));
                 for cb in cbs {
                     if cb != 0 {
-                        js_closure_call1(cb as *const ClosureHeader, err_f64);
+                        js_closure_call1(cb as *const ClosureHeader, error.get_nanbox_f64());
                     }
                 }
             }

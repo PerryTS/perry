@@ -22,7 +22,7 @@ const READERS: &[(&str, u8)] = &[
     ("f64", super::types::T_F64),
 ];
 
-thread_local! {
+crate::perry_thread_local! {
     static READ_OBJECT_CACHE: Cell<u64> = const { Cell::new(0) };
 }
 
