@@ -114,7 +114,8 @@ jobs:
   # Soak parity gate + external-tool pin gate. Always-run (deliberately not
   # path-filtered — nub hid this gate in a path-gated job and it silently
   # skipped Rust-only PRs). The scripts are dep-free erasable-TS .mts run
-  # with the pinned Node's native type stripping; no npm install needed.
+  # with the pinned Node's native type stripping. The publish tests exercise
+  # the Socket SDK wrapper, so install the lockfile-pinned dev dependencies.
   soak-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -125,6 +126,9 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
+          cache: npm
+      - name: Install script test dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Soak window parity (npm run soak)
         run: node scripts/soak/soak.mts --check
       - name: External-tool pins valid (npm run tools:check)
