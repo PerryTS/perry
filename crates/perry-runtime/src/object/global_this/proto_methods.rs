@@ -30,10 +30,11 @@ const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
 /// `typeof Array.prototype.map === "function"` and `.name === "map"`
 /// agree with Node when the value is read through indirection.
 ///
-/// Two of these methods retain dedicated thunks for spec-accurate call
-/// behavior — `Array.prototype.slice` (ramda's curry/variadic helpers
+/// These methods retain dedicated thunks for spec-accurate call behavior —
+/// `Array.prototype.slice` (ramda's curry/variadic helpers
 /// reach through `Array.prototype.slice.call(args, …)` and depend on it
-/// returning a real sliced array, even via indirection) and
+/// returning a real sliced array, even via indirection),
+/// `Array.prototype.toString` (generic `join` dispatch), and
 /// `Object.prototype.toString` (ramda's `_isArguments.js` IIFE calls
 /// `Object.prototype.toString.call(arguments)` at module-init time).
 /// All other methods are noop-backed: typeof + `.name` introspection
@@ -116,6 +117,12 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 array_prototype_slice_thunk as *const u8,
                 2,
             );
+            install_proto_method(
+                proto_obj,
+                "toString",
+                array_prototype_to_string_thunk as *const u8,
+                0,
+            );
             install_noop_proto_methods(
                 proto_obj,
                 &[
@@ -127,7 +134,6 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     ("toReversed", 0),
                     ("toSorted", 1),
                     ("toSpliced", 2),
-                    ("toString", 0),
                     ("with", 2),
                 ],
             );

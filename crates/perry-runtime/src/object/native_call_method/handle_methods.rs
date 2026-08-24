@@ -268,12 +268,10 @@ pub(super) unsafe fn dispatch_handle(
                 }
                 match method_name {
                     "toString" => {
-                        let arr = raw_ptr as *const crate::array::ArrayHeader;
-                        let s = crate::array::js_array_join_value(
-                            arr,
-                            f64::from_bits(crate::value::TAG_UNDEFINED),
-                        );
-                        return Some(f64::from_bits(JSValue::string_ptr(s).bits()));
+                        return Some(crate::value::call_array_prototype_to_string_method(
+                            object_handle.get_nanbox_f64(),
+                            arg_handles,
+                        ));
                     }
                     "map" if args_len >= 1 && !args_ptr.is_null() => {
                         let arr = raw_ptr as *const crate::array::ArrayHeader;

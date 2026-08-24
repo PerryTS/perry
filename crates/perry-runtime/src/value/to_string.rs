@@ -660,8 +660,16 @@ enum ArrayToStringOutcome {
 }
 
 unsafe fn array_prototype_to_string_override(value: f64) -> ArrayToStringOutcome {
+    // `value`, the prototype, its key, and the resolved method are all live
+    // across allocating operations below. Keep each one visible to the moving
+    // collector and re-read its address after every allocation.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    let key_handle =
+        scope.root_raw_mut_ptr(crate::string::js_string_from_bytes(b"toString".as_ptr(), 8));
     let proto = crate::object::builtin_prototype_value("Array");
-    let proto_bits = proto.to_bits();
+    let proto_handle = scope.root_nanbox_f64(proto);
+    let proto_bits = proto_handle.get_nanbox_f64().to_bits();
     if (proto_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
         return ArrayToStringOutcome::UseDefaultJoin;
     }
@@ -669,9 +677,10 @@ unsafe fn array_prototype_to_string_override(value: f64) -> ArrayToStringOutcome
     if proto_ptr.is_null() {
         return ArrayToStringOutcome::UseDefaultJoin;
     }
-    let key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+    let key = key_handle.get_raw_mut_ptr();
     let method = crate::object::js_object_get_field_by_name(proto_ptr, key);
-    let method_bits = method.bits();
+    let method_handle = scope.root_nanbox_u64(method.bits());
+    let method_bits = method_handle.get_nanbox_u64();
     if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
         return ArrayToStringOutcome::UseDefaultJoin;
     }
@@ -683,15 +692,110 @@ unsafe fn array_prototype_to_string_override(value: f64) -> ArrayToStringOutcome
     if (*closure).func_ptr == crate::object::global_this_builtin_noop_thunk as *const u8 {
         return ArrayToStringOutcome::UseDefaultJoin;
     }
-    let bound = crate::closure::clone_closure_rebind_this(method_bits, value);
-    let prev_this = crate::object::js_implicit_this_set(value);
-    let ret = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
-    crate::object::js_implicit_this_set(prev_this);
+    let receiver = value_handle.get_nanbox_f64();
+    let bound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
+    let bound_handle = scope.root_nanbox_u64(bound);
+    let prev_this = crate::object::js_implicit_this_set(receiver);
+    let prev_this_handle = scope.root_nanbox_f64(prev_this);
+    let ret =
+        crate::closure::js_native_call_value(bound_handle.get_nanbox_f64(), std::ptr::null(), 0);
+    crate::object::js_implicit_this_set(prev_this_handle.get_nanbox_f64());
     if is_primitive_value(ret) {
         ArrayToStringOutcome::Primitive(ret)
     } else {
         ArrayToStringOutcome::TypeError
     }
+}
+
+/// Resolve and invoke the current `Array.prototype.toString` method for a
+/// source-level `array.toString()` call. Static array lowering must not replace
+/// this with `join(",")`: the prototype property is writable and its live value
+/// (for example `Object.prototype.toString`) must win.
+pub(crate) fn call_array_prototype_to_string_method(
+    value: f64,
+    arg_handles: &[crate::gc::RuntimeHandle<'_>],
+) -> f64 {
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver_handle = scope.root_nanbox_f64(value);
+        let key_handle =
+            scope.root_raw_mut_ptr(crate::string::js_string_from_bytes(b"toString".as_ptr(), 8));
+        let prototype_handle =
+            scope.root_nanbox_f64(crate::object::builtin_prototype_value("Array"));
+        let prototype_bits = prototype_handle.get_nanbox_f64().to_bits();
+        if (prototype_bits & TAG_MASK) != POINTER_TAG {
+            crate::error::js_throw_type_error_not_a_function(
+                std::ptr::null(),
+                0,
+                b"toString".as_ptr(),
+                8,
+            );
+        }
+
+        let prototype = (prototype_bits & POINTER_MASK) as *const crate::object::ObjectHeader;
+        let method =
+            crate::object::js_object_get_field_by_name(prototype, key_handle.get_raw_mut_ptr());
+        let method_handle = scope.root_nanbox_u64(method.bits());
+        if !crate::object::value_is_callable(method_handle.get_nanbox_f64()) {
+            crate::error::js_throw_type_error_not_a_function(
+                std::ptr::null(),
+                0,
+                b"toString".as_ptr(),
+                8,
+            );
+        }
+
+        let receiver = receiver_handle.get_nanbox_f64();
+        let rebound =
+            crate::closure::rebind_explicit_this(method_handle.get_nanbox_f64(), receiver);
+        let rebound_handle = scope.root_nanbox_f64(rebound);
+        let previous = crate::object::js_implicit_this_set(receiver);
+        let previous_handle = scope.root_nanbox_f64(previous);
+        let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
+        let result = crate::closure::js_native_call_value(
+            rebound_handle.get_nanbox_f64(),
+            args.as_ptr(),
+            args.len(),
+        );
+        crate::object::js_implicit_this_set(previous_handle.get_nanbox_f64());
+        result
+    }
+}
+
+/// Execute the generic `Array.prototype.toString` algorithm for a call-site
+/// receiver. Kept here so both the reflective prototype thunk and the native
+/// array method dispatcher use the same live `join` lookup and intrinsic
+/// Object-toString fallback.
+pub(crate) fn array_prototype_to_string(value: f64) -> f64 {
+    let value_kind = JSValue::from_bits(value.to_bits());
+    if value_kind.is_undefined() || value_kind.is_null() {
+        crate::object::has_own_helpers::throw_to_object_nullish_type_error();
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_handle = scope.root_nanbox_f64(value);
+    let join = unsafe {
+        crate::value::js_get_property(
+            receiver_handle.get_nanbox_f64(),
+            b"join".as_ptr() as i64,
+            b"join".len() as i64,
+        )
+    };
+    let join_handle = scope.root_nanbox_f64(join);
+    if !crate::object::value_is_callable(join_handle.get_nanbox_f64()) {
+        return unsafe { crate::object::js_object_to_string(receiver_handle.get_nanbox_f64()) };
+    }
+
+    let receiver = receiver_handle.get_nanbox_f64();
+    let rebound = crate::closure::rebind_explicit_this(join_handle.get_nanbox_f64(), receiver);
+    let rebound_handle = scope.root_nanbox_f64(rebound);
+    let previous = crate::object::js_implicit_this_set(receiver);
+    let previous_handle = scope.root_nanbox_f64(previous);
+    let result = unsafe {
+        crate::closure::js_native_call_value(rebound_handle.get_nanbox_f64(), std::ptr::null(), 0)
+    };
+    crate::object::js_implicit_this_set(previous_handle.get_nanbox_f64());
+    result
 }
 
 unsafe fn call_method_for_primitive(
