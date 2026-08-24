@@ -115,6 +115,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // #8105 — number-by-construction locals (see the collector of the same
     // name); `=0` empties the fact and changes every affected function's IR.
     "PERRY_NUMBER_BY_CONSTRUCTION",
+    // #8583 follow-up gate: `=0/off/false` reverts every large constant array
+    // literal from the const-descriptor path to procedural construction —
+    // different emitted IR for the same source.
+    "PERRY_CONST_ARRAY_DESCRIPTOR",
 ];
 
 /// #7183: codegen env vars that deliberately do NOT key the build cache.
@@ -147,6 +151,10 @@ const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
     "PERRY_CODEGEN_UNIT_TIMINGS",
     // Entry outlining report output is observational only.
     "PERRY_OUTLINE_ENTRY_REPORT",
+    // Only read on an already-fatal dialect-construction failure (a unit that
+    // never parses); it writes a diagnostic IR dump to `<dir>/<name>.ll` for
+    // triage and cannot affect the bytes of any build that actually succeeds.
+    "PERRY_DIALECT_DUMP",
 ];
 
 #[cfg(test)]

@@ -214,11 +214,7 @@ def scan_text(rel_path: str, text: str) -> list[Finding]:
             findings.append(Finding(rel_path, line_no, "handle-floor", raw))
         if VALID_OBJ_PTR_RE.search(code) and "fn is_valid_obj_ptr" not in code:
             # A band predicate anywhere in the enclosing guard clears it.
-            start = max(0, idx - BAND_PREDICATE_LOOKBACK)
-            context = "\n".join(
-                strip_comment(l) for l in lines[start : idx + 2]
-            )
-            if not BAND_PREDICATE_RE.search(context):
+            if not band_predicate_near(lines, idx):
                 findings.append(
                     Finding(rel_path, line_no, "lone-valid-obj-ptr", raw)
                 )

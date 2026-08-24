@@ -582,7 +582,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     )
     require_code(
         generic_body,
-        r"select\s*\(\s*I1\s*,\s*&is_stamp\s*,\s*I64\s*,\s*&id_token\s*,\s*\"0\"\s*\)",
+        r"icmp_ne\s*\(\s*I32\s*,\s*&pcid\s*,\s*\"0\"\s*\)",
         "generic read PIC invalid-id fail-closed token",
     )
     for name in ("lower_put_value_static_write_ic", "lower_put_value_dyn_ic_inline"):
