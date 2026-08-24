@@ -18,6 +18,8 @@
     "crates/perry-codegen/src/lower_call/scalar_method.rs|let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
     "crates/perry-codegen/src/lower_call/typed_shape_bake_tests.rs|8 + crate::target_layout::object_header_size_bytes( ) + 8 * slots;": 1,
     "crates/perry-codegen/src/stmt/loops.rs|let object_header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple);": 1,
+    "crates/perry-codegen/src/stmt/stable_packed_loop.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 2,
+    "crates/perry-codegen/src/stmt/stable_packed_loop.rs|let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)": 2,
     "crates/perry-codegen/src/target_layout.rs|assert_eq!(object_header_size_bytes( ), 16);": 6,
     "crates/perry-codegen/src/target_layout.rs|let total = 8 + object_header_size_bytes(triple) + 8 * INLINE_SLOT_FLOOR;": 1,
     "crates/perry-codegen/src/target_layout.rs|object_header_size_bytes(target_triple) + alloc_field_count * FIELD_SLOT_SIZE_BYTES;": 1,
@@ -47,7 +49,7 @@
     "crates/perry-runtime/src/object/object_ops.rs|keys_array|declaration|pub(crate) use keys_array::{": 1
   },
   "summary": {
-    "codegen_object_header_size_sites": 36,
+    "codegen_object_header_size_sites": 40,
     "raw_member_files": 7,
     "raw_member_sites": {
       "keys_array": 24

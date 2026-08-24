@@ -228,9 +228,10 @@ fn packed_numeric_proof_is_retired_by_sso_index_overwrite() {
         "the numeric object-backed range should establish a proof"
     );
     let live_raw = (receiver_h.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut u8;
-    let header = unsafe { live_raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader };
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(live_raw as usize) }
+        .expect("the rooted receiver is a live GC object");
     assert_ne!(
-        unsafe { (*header)._reserved } & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
+        header._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
         0
     );
 
@@ -250,9 +251,10 @@ fn packed_numeric_proof_is_retired_by_sso_index_overwrite() {
     );
 
     let live_raw = (receiver_h.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut u8;
-    let header = unsafe { live_raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader };
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(live_raw as usize) }
+        .expect("the rooted receiver is a live GC object");
     assert_eq!(
-        unsafe { (*header)._reserved } & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
+        header._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF,
         0,
         "a successful SSO overwrite must retire numeric authority without a GC barrier"
     );

@@ -225,6 +225,11 @@ fn match_candidate(
         // replaying the current iteration would duplicate preceding effects.
         || body.iter().any(stmt_contains_break)
         || !body_has_safe_leading_read(body, array_id, counter_id)
+        // Preserve the existing escape/materialization contract. A dynamic
+        // call before the loop may have exposed the binding to arbitrary JS;
+        // the broad #8690 guard must not resurrect a proof deliberately
+        // retired by that analysis.
+        || !super::loops::packed_loop_array_binding_is_eligible(ctx, array_id)
     {
         return None;
     }

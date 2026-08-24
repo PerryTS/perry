@@ -12,7 +12,9 @@ use crate::stmt;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I1, I32, I64, PTR};
 
-use super::helpers::scoped_static_method_name;
+use super::helpers::{
+    emit_public_generic_method_forwarder, node_stream_parent_kind, scoped_static_method_name,
+};
 use super::opts::CrossModuleCtx;
 use super::typed_abi::{
     emit_typed_arg_guard, emit_typed_arg_to_raw, generic_method_body_name, lower_typed_f64_body,
@@ -181,58 +183,6 @@ fn emit_public_typed_method_trampoline(
     wf.block_mut(fallback_idx)
         .unwrap()
         .ret(DOUBLE, &fallback_value);
-}
-
-fn emit_public_generic_method_forwarder(
-    llmod: &mut LlModule,
-    method: &Function,
-    public_name: &str,
-    generic_body_name: &str,
-) {
-    let mut params: Vec<(LlvmType, String)> = Vec::with_capacity(method.params.len() + 1);
-    params.push((DOUBLE, "%this_arg".to_string()));
-    for p in &method.params {
-        params.push((DOUBLE, format!("%arg{}", p.id)));
-    }
-    let wf = llmod.define_function(public_name, DOUBLE, params);
-    let _ = wf.create_block("entry");
-    let mut arg_names: Vec<String> = Vec::with_capacity(method.params.len() + 1);
-    arg_names.push("%this_arg".to_string());
-    for p in &method.params {
-        arg_names.push(format!("%arg{}", p.id));
-    }
-    let call_args: Vec<(LlvmType, &str)> =
-        arg_names.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
-    let value = wf
-        .block_mut(0)
-        .unwrap()
-        .call(DOUBLE, generic_body_name, &call_args);
-    wf.block_mut(0).unwrap().ret(DOUBLE, &value);
-}
-
-fn node_stream_parent_kind(
-    classes: &HashMap<String, &perry_hir::Class>,
-    class: &perry_hir::Class,
-) -> Option<&'static str> {
-    let mut cur = class.extends_name.as_deref();
-    let mut depth = 0usize;
-    while let Some(name) = cur {
-        match name {
-            "Readable" => return Some("readable"),
-            "Duplex" => return Some("duplex"),
-            "Transform" => return Some("transform"),
-            _ => {}
-        }
-        cur = classes
-            .get(name)
-            .copied()
-            .and_then(|parent| parent.extends_name.as_deref());
-        depth += 1;
-        if depth > 32 {
-            break;
-        }
-    }
-    None
 }
 
 /// Compile a class instance method as a top-level LLVM function with the

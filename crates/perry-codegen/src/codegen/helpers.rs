@@ -776,6 +776,59 @@ pub(super) fn scoped_static_method_name(
     )
 }
 
+pub(super) fn node_stream_parent_kind(
+    classes: &HashMap<String, &perry_hir::Class>,
+    class: &perry_hir::Class,
+) -> Option<&'static str> {
+    let mut cur = class.extends_name.as_deref();
+    let mut depth = 0usize;
+    while let Some(name) = cur {
+        match name {
+            "Readable" => return Some("readable"),
+            "Duplex" => return Some("duplex"),
+            "Transform" => return Some("transform"),
+            _ => {}
+        }
+        cur = classes
+            .get(name)
+            .copied()
+            .and_then(|parent| parent.extends_name.as_deref());
+        depth += 1;
+        if depth > 32 {
+            break;
+        }
+    }
+    None
+}
+
+pub(super) fn emit_public_generic_method_forwarder(
+    llmod: &mut LlModule,
+    method: &perry_hir::Function,
+    public_name: &str,
+    generic_body_name: &str,
+) {
+    let mut params: Vec<(crate::types::LlvmType, String)> =
+        Vec::with_capacity(method.params.len() + 1);
+    params.push((DOUBLE, "%this_arg".to_string()));
+    for p in &method.params {
+        params.push((DOUBLE, format!("%arg{}", p.id)));
+    }
+    let wf = llmod.define_function(public_name, DOUBLE, params);
+    let _ = wf.create_block("entry");
+    let mut arg_names: Vec<String> = Vec::with_capacity(method.params.len() + 1);
+    arg_names.push("%this_arg".to_string());
+    for p in &method.params {
+        arg_names.push(format!("%arg{}", p.id));
+    }
+    let call_args: Vec<(crate::types::LlvmType, &str)> =
+        arg_names.iter().map(|arg| (DOUBLE, arg.as_str())).collect();
+    let value = wf
+        .block_mut(0)
+        .unwrap()
+        .call(DOUBLE, generic_body_name, &call_args);
+    wf.block_mut(0).unwrap().ret(DOUBLE, &value);
+}
+
 /// Walk a function body looking for `Return(Some(expr))` shapes that
 /// identify the function as a factory returning a class. Sets
 /// `*produced` to the resolved class name when the first qualifying

@@ -284,15 +284,15 @@ fn dense_layout_for_value(value: f64) -> Option<(*const ObjectHeader, DenseSubcl
 /// on the child Array buffer instead.
 #[inline]
 pub(crate) unsafe fn clear_packed_subclass_numeric_proof(obj: *mut ObjectHeader) {
-    if obj.is_null() || (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
         return;
-    }
-    let header = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    if (*header).obj_type != crate::gc::GC_TYPE_OBJECT
-        || (*header)._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF == 0
+    };
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF == 0
     {
         return;
     }
+    let header = std::ptr::from_ref(header).cast_mut();
     // Retire the authority first. A missing/moving meta then merely leaves an
     // unreachable payload, never a proof a future query can consume.
     (*header)._reserved &= !crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
@@ -321,7 +321,10 @@ unsafe fn subclass_numeric_prefix_is_proven(
     shape_id: u32,
     bound: u32,
 ) -> bool {
-    let header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+        return false;
+    };
+    let header = std::ptr::from_ref(header).cast_mut();
     if (*header)._reserved & crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF == 0 {
         return false;
     }
@@ -357,7 +360,10 @@ unsafe fn publish_subclass_numeric_prefix(
         | PACKED_NUMERIC_META_VALID
         | (u64::from(bound) << PACKED_NUMERIC_META_BOUND_SHIFT)
         | (u64::from(shape_id) << 32);
-    let header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+        return false;
+    };
+    let header = std::ptr::from_ref(header).cast_mut();
     (*header)._reserved |= crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF;
     true
 }
@@ -410,6 +416,8 @@ unsafe fn ensure_subclass_numeric_prefix(
             // verification walk. This is pointer-free -> pointer-free and
             // changes no JS-observable type/value, hence needs neither a GC
             // barrier nor a layout downgrade.
+            // GC_STORE_AUDIT(POINTER_FREE): canonical raw-f64 Number bits
+            // replace compact int32 Number bits in an already numeric slot.
             ptr::write(value_ptr, (value.as_int32() as f64).to_bits());
         } else if !value.is_number() {
             return false;

@@ -1,12 +1,11 @@
-use super::*;
-
 use super::let_buffer_views::{math_min_length_buffer_ids, register_noalias_buffer_view};
 use super::let_stmt_facts::{
     buffer_local_alias_source, collect_scalar_class_data, native_i32_alias_source,
-    note_ptr_shape_scalar_replaced, pod_view_count_source, record_pod_rejection,
-    record_scalar_aggregate_field,
+    note_ptr_shape_scalar_replaced, pod_view_count_source, record_array_length_snapshot,
+    record_pod_rejection, record_scalar_aggregate_field,
 };
 use super::unused_expr::lower_unused_expr;
+use super::*;
 use crate::expr::{
     box_i1_for_compat_shadow, emit_root_nanbox_store_on_block,
     expr_produces_non_pointer_bits_by_construction, lower_expr_value,
@@ -122,18 +121,7 @@ pub(crate) fn lower_let(
     }
     if let Some(init_expr) = init {
         crate::expr::record_local_value_alias_for_write(ctx, id, init_expr);
-        if !ctx.reassigned_locals.contains(&id) {
-            if let perry_hir::Expr::PropertyGet {
-                object, property, ..
-            } = init_expr
-            {
-                if property == "length" {
-                    if let perry_hir::Expr::LocalGet(array_id) = object.as_ref() {
-                        ctx.array_length_snapshots.insert(id, *array_id);
-                    }
-                }
-            }
-        }
+        record_array_length_snapshot(ctx, id, init_expr);
         ctx.guarded_discriminant_aliases.remove(&id);
         if !mutable && !ctx.reassigned_locals.contains(&id) {
             if let perry_hir::Expr::PropertyGet {

@@ -4258,7 +4258,7 @@ fn local_array_element_type<'t>(
 /// an alloca (`ctx.locals`) this body does not have. Reading the flag without
 /// that distinction is what kept a captured `const rows: number[]` off the fast
 /// loop in a closure while the same code in a plain function got it.
-fn packed_loop_array_binding_is_eligible(ctx: &FnCtx<'_>, arr_id: u32) -> bool {
+pub(super) fn packed_loop_array_binding_is_eligible(ctx: &FnCtx<'_>, arr_id: u32) -> bool {
     packed_loop_array_binding_storage_is_addressable(ctx, arr_id)
         && !ctx.scalar_replaced_arrays.contains_key(&arr_id)
         && !ctx.native_facts.has_materialization_hazard(arr_id)
@@ -4892,10 +4892,6 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
-    if super::stable_packed_loop::lower(ctx, init, condition, update, body)? {
-        return Ok(());
-    }
-
     // #5093: monomorphic class-field hot loops (`counter.value = counter.value
     // + 1` after method inlining). Shape check hoisted to a preheader; fast
     // clone is call-free raw slot access.
@@ -4909,6 +4905,14 @@ pub(crate) fn lower_for(
     if super::element_shape_loop::lower_element_shape_versioned_for(
         ctx, init, condition, update, body,
     )? {
+        return Ok(());
+    }
+
+    // #8690 owns only loops left over after the established packed-number,
+    // indexed-method, class-field, and homogeneous element-shape clones have
+    // had first refusal. Its runtime admission is deliberately broader, so
+    // trying it earlier would steal those specialized access shapes.
+    if super::stable_packed_loop::lower(ctx, init, condition, update, body)? {
         return Ok(());
     }
 

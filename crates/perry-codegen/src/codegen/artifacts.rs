@@ -21,6 +21,7 @@ use super::entry::compile_module_entry;
 use super::helpers::{
     function_body_returns_generator_object, sanitize, scoped_fn_name, unknown_func_wrapper_name,
 };
+use super::indexed_method_artifacts::{compile_indexed_method_clones, IndexedMethodArtifactsCtx};
 use super::method::{
     compile_method, compile_static_method, compile_typed_f64_method,
     compile_typed_f64_receiver_method, compile_typed_i1_method, compile_typed_i32_method,
@@ -369,56 +370,19 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 .nonnegative_index_methods
                 .get(&(class.name.clone(), method.name.clone()))
             {
-                compile_method(
-                    llmod,
-                    class,
-                    method,
-                    func_names,
-                    strings,
-                    class_table,
-                    method_names,
-                    module_globals,
-                    module_global_types,
-                    opts.import_function_prefixes,
-                    enum_table,
-                    static_field_globals,
-                    class_ids,
-                    func_signatures,
-                    func_synthetic_arguments,
-                    module_boxed_vars,
-                    closure_rest_params,
-                    cross_module,
-                    None,
-                    false,
-                    None,
-                    Some(nonnegative_index_params),
-                    false,
-                    false,
-                )
-                .with_context(|| {
-                    format!(
-                        "lowering nonnegative-index method clone '{}::{}'",
-                        class.name, method.name
-                    )
-                })?;
-                if !crate::codegen::typed_abi::nonnegative_index_fast_array_params(
-                    method,
-                    nonnegative_index_params,
-                )
-                .is_empty()
-                {
-                    compile_method(
+                compile_indexed_method_clones(
+                    IndexedMethodArtifactsCtx {
                         llmod,
                         class,
                         method,
                         func_names,
                         strings,
-                        class_table,
-                        method_names,
+                        classes: class_table,
+                        methods: method_names,
                         module_globals,
                         module_global_types,
-                        opts.import_function_prefixes,
-                        enum_table,
+                        import_function_prefixes: opts.import_function_prefixes,
+                        enums: enum_table,
                         static_field_globals,
                         class_ids,
                         func_signatures,
@@ -426,20 +390,9 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                         module_boxed_vars,
                         closure_rest_params,
                         cross_module,
-                        None,
-                        false,
-                        None,
-                        Some(nonnegative_index_params),
-                        true,
-                        false,
-                    )
-                    .with_context(|| {
-                        format!(
-                            "lowering fallback-free indexed-array method clone '{}::{}'",
-                            class.name, method.name
-                        )
-                    })?;
-                }
+                    },
+                    nonnegative_index_params,
+                )?;
             }
             compile_method(
                 llmod,

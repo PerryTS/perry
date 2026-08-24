@@ -190,6 +190,7 @@ mod function;
 mod hoisted_callback_method_tests;
 #[cfg(test)]
 mod index_method_clone_tests;
+mod indexed_method_artifacts;
 // `pub(crate)` so `crate::linker` can read the inline-hot-small policy
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
 #[cfg(test)]
