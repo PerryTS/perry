@@ -543,6 +543,7 @@ unsafe fn get_object_bool_field(obj_f64: f64, field_name: &str) -> Option<bool> 
 /// mirrors `crates/perry-stdlib/src/sqlite.rs::build_packed_keys`.
 unsafe fn build_error_object(msg: &str) -> f64 {
     use perry_runtime::JSValue;
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let keys = ["message", "code", "name"];
     let mut packed = Vec::new();
     for key in keys {
@@ -554,17 +555,27 @@ unsafe fn build_error_object(msg: &str) -> f64 {
         shape_id = shape_id.wrapping_mul(31).wrapping_add(b as u32);
     }
     shape_id = shape_id.wrapping_add(3);
-    let s_msg = perry_runtime::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let obj = perry_runtime::js_object_alloc_with_shape(
+    let s_msg = scope.root_string_ptr(perry_runtime::js_string_from_bytes(
+        msg.as_ptr(),
+        msg.len() as u32,
+    ));
+    let obj_ptr = perry_runtime::js_object_alloc_with_shape(
         shape_id,
         3,
         packed.as_ptr(),
         packed.len() as u32,
     );
-    if obj.is_null() {
-        return f64::from_bits(0x7FFF_0000_0000_0000u64 | (s_msg as u64 & 0x0000_FFFF_FFFF_FFFF));
+    if obj_ptr.is_null() {
+        return s_msg.with_const_ptr(|s_msg: *const perry_runtime::StringHeader| {
+            f64::from_bits(0x7FFF_0000_0000_0000u64 | (s_msg as u64 & 0x0000_FFFF_FFFF_FFFF))
+        });
     }
-    perry_runtime::js_object_set_field(obj, 0, JSValue::string_ptr(s_msg));
+    let obj = scope.root_raw_mut_ptr(obj_ptr);
+    obj.with_mut_ptr(|obj| {
+        s_msg.with_mut_ptr(|s_msg| {
+            perry_runtime::js_object_set_field(obj, 0, JSValue::string_ptr(s_msg))
+        })
+    });
     let code = if msg.starts_with("ERR_") {
         Some(msg)
     } else if msg.contains("UnknownIssuer")
@@ -578,13 +589,25 @@ unsafe fn build_error_object(msg: &str) -> f64 {
         None
     };
     if let Some(code) = code {
-        let code = perry_runtime::js_string_from_bytes(code.as_ptr(), code.len() as u32);
-        perry_runtime::js_object_set_field(obj, 1, JSValue::string_ptr(code));
+        let code = scope.root_string_ptr(perry_runtime::js_string_from_bytes(
+            code.as_ptr(),
+            code.len() as u32,
+        ));
+        obj.with_mut_ptr(|obj| {
+            code.with_mut_ptr(|code| {
+                perry_runtime::js_object_set_field(obj, 1, JSValue::string_ptr(code))
+            })
+        });
     }
-    let name = perry_runtime::js_string_from_bytes(b"Error".as_ptr(), 5);
-    perry_runtime::js_object_set_field(obj, 2, JSValue::string_ptr(name));
-    let obj_bits = (obj as u64 & 0x0000_FFFF_FFFF_FFFF) | 0x7FFD_0000_0000_0000;
-    f64::from_bits(obj_bits)
+    let name = scope.root_string_ptr(perry_runtime::js_string_from_bytes(b"Error".as_ptr(), 5));
+    obj.with_mut_ptr(|obj| {
+        name.with_mut_ptr(|name| {
+            perry_runtime::js_object_set_field(obj, 2, JSValue::string_ptr(name))
+        })
+    });
+    obj.with_mut_ptr(|obj: *mut perry_runtime::ObjectHeader| {
+        f64::from_bits((obj as u64 & 0x0000_FFFF_FFFF_FFFF) | 0x7FFD_0000_0000_0000)
+    })
 }
 
 fn next_id() -> i64 {
