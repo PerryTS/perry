@@ -11,7 +11,8 @@
  *   runDirect    — escape hatch: classic `npm publish` (no stage/approve).
  */
 
-import { existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { createReadStream, existsSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
 import { ALL_PACKAGES, npmPackageDir, rootPath } from '../constants.mts'
@@ -45,11 +46,40 @@ export async function packTarball(pkgDir: string): Promise<{
 }
 
 /**
+ * Resolve the exact tarball to verify/scan. In CI, pack the materialized npm
+ * directory. In the local approval handoff, consume the short-lived tarball
+ * proof downloaded from the successful staging run.
+ */
+export async function resolveStagedTarball(
+  entry: Pick<StagedEntry, 'name'>,
+  proofRoot?: string,
+): Promise<{ path: string; sha1: string } | undefined> {
+  const pkgDir = path.join(proofRoot ?? rootPath, npmPackageDir(entry.name))
+  if (!proofRoot) return packTarball(pkgDir)
+  if (!existsSync(pkgDir)) return undefined
+  const tarballs = readdirSync(pkgDir).filter(f => f.endsWith('.tgz'))
+  if (tarballs.length !== 1) return undefined
+  const tarball = path.join(pkgDir, tarballs[0]!)
+  const sha1 = await new Promise<string | undefined>(resolve => {
+    const hash = createHash('sha1')
+    createReadStream(tarball)
+      .on('data', chunk => hash.update(chunk))
+      .on('error', () => resolve(undefined))
+      .on('end', () => resolve(hash.digest('hex')))
+  })
+  if (!sha1) return undefined
+  return { path: tarball, sha1 }
+}
+
+/**
  * Verify a staged entry: the local pack's sha1 equals the shasum npm recorded
  * when the tarball was staged. LOUD refusal on mismatch or missing shasum —
  * never approve unverified bytes.
  */
-export async function verifyStagedEntry(entry: StagedEntry): Promise<boolean> {
+export async function verifyStagedEntry(
+  entry: StagedEntry,
+  proofRoot?: string,
+): Promise<boolean> {
   const { name, version, shasum: stagedShasum, stageId } = entry
   if (!stagedShasum) {
     logger.fail(
@@ -59,19 +89,12 @@ export async function verifyStagedEntry(entry: StagedEntry): Promise<boolean> {
     )
     return false
   }
-  const pkgDir = path.join(rootPath, npmPackageDir(name))
-  if (!existsSync(pkgDir)) {
-    logger.fail(
-      `Pre-approve verify: no package dir for ${name}@${version} at ${pkgDir}.\n` +
-        `  Fix: run scripts/stage-npm.sh to materialize the npm/ package dirs first.`,
-    )
-    return false
-  }
-  const local = await packTarball(pkgDir)
+  const local = await resolveStagedTarball(entry, proofRoot)
   if (!local) {
     logger.fail(
-      `Pre-approve verify: npm pack failed for ${name}@${version} in ${pkgDir}.\n` +
-        `  Saw vs wanted: no local tarball; wanted one to hash against npm's staged shasum.`,
+      `Pre-approve verify: no unique tarball for ${name}@${version}.\n` +
+        `  Saw vs wanted: ${proofRoot ? `no proof archive under ${path.join(proofRoot, npmPackageDir(name))}` : 'npm pack failed'}; ` +
+        `wanted one tarball to hash against npm's staged shasum.`,
     )
     return false
   }
@@ -83,7 +106,8 @@ export async function verifyStagedEntry(entry: StagedEntry): Promise<boolean> {
     `Pre-approve verify: shasum mismatch for ${name}@${version}.\n` +
       `    local pack:  ${local.sha1}\n` +
       `    npm staging: ${stagedShasum}\n` +
-      `  Fix: check npm auth (npm stage download ${stageId}), or reject + re-stage. Not approving unverified bytes.`,
+      `  Fix: reject/re-stage pending entry ${stageId}; if this version is already public, ship a new version. ` +
+      `The retained CI proof and npm registry record disagree. Not approving unverified bytes.`,
   )
   return false
 }

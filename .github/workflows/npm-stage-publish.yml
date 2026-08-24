@@ -19,8 +19,9 @@ name: npm stage publish
 #
 # Auth: OIDC trusted publishing only — id-token: write, NO long-lived NPM_TOKEN.
 # Each @perryts/* package must list this workflow + the `npm-publish` environment
-# as a trusted publisher on npmjs.com (same one-time setup npm/README.md
-# describes for release-packages.yml). The auth-posture gate in
+# as its one trusted publisher on npmjs.com, with the `npm stage publish`
+# action explicitly allowed (see docs/src/contributing/releasing.md).
+# The auth-posture gate in
 # scripts/publish/auth-posture.mts refuses any long-lived token present here.
 #
 # Guardrails: dispatches for the same dist-tag are serialized (concurrency:
@@ -44,6 +45,10 @@ on:
         description: 'Reuse an existing release-packages.yml stage-mode build run instead of dispatching a new one.'
         type: string
         default: ''
+      candidate-sha:
+        description: 'Expected release-candidate commit. Required when publish=true; protects a branch-tip race.'
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -57,11 +62,69 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A real registry stage is a release operation even though it is not public
+  # yet. Require the same exact-SHA gates as the release workflow before
+  # spending the cross-platform build or writing staged registry entries.
+  release-gates:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Require full Tests + Simulator Tests on this commit
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          EXPECTED_SHA: ${{ inputs.candidate-sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF" != refs/heads/* ]] || [ "$REF_NAME" = "main" ]; then
+            echo "::error::A real staged publish requires a named non-main candidate branch; got $REF." >&2
+            exit 1
+          fi
+          if [ -z "$EXPECTED_SHA" ]; then
+            echo "::error::candidate-sha is required for a real staged publish. Use the local npm run publish:stage command." >&2
+            exit 1
+          fi
+          if [ "$SHA" != "$EXPECTED_SHA" ]; then
+            echo "::error::Candidate branch moved: workflow is on $SHA, but the dispatcher pinned $EXPECTED_SHA." >&2
+            exit 1
+          fi
+          tests=$(gh api --paginate --slurp \
+            "/repos/$REPO/actions/workflows/test.yml/runs?head_sha=$SHA&per_page=100")
+          full_run=""
+          for run_id in $(echo "$tests" | jq -r '.[] | .workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .id'); do
+            if gh api "/repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
+                 --jq '.jobs[] | select(.name == "full-suite-gate" and .conclusion == "success") | .name' \
+                 | grep -q full-suite-gate; then
+              full_run="$run_id"
+              break
+            fi
+          done
+          if [ -z "$full_run" ]; then
+            echo "::error::No successful full-tier test.yml run (full-suite-gate) exists on $SHA. Dispatch test.yml with tier=full first." >&2
+            exit 1
+          fi
+          sim_runs=$(gh api --paginate --slurp \
+            "/repos/$REPO/actions/workflows/simctl-tests.yml/runs?head_sha=$SHA&per_page=100")
+          sim_run=$(echo "$sim_runs" | jq -r \
+            'first(.[] | .workflow_runs[] | select(.status == "completed" and .conclusion == "success") | .id) // empty')
+          if [ -z "$sim_run" ]; then
+            echo "::error::No successful simctl-tests.yml run exists on $SHA. Dispatch it first." >&2
+            exit 1
+          fi
+          echo "Release gates passed on $SHA: test run $full_run, simulator run $sim_run."
+
   # Resolve the build run to stage from: either a caller-supplied build-run-id
   # (re-use), or dispatch release-packages.yml in stage mode and capture its
   # run id. The build matrix itself lives in release-packages.yml — single
   # source of truth, no drift.
   resolve-build:
+    needs: release-gates
     runs-on: ubuntu-latest
     permissions:
       actions: write   # dispatch release-packages.yml (stage mode) + watch it
@@ -76,6 +139,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           EXISTING: ${{ inputs.build-run-id }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           # The commit THIS workflow run is dispatching from — every downstream
@@ -109,8 +173,9 @@ jobs:
             fi
             echo "Reusing build run $RUN_ID (verified: Release Packages, success, sha $RUN_SHA)."
           else
-            # Dispatch release-packages.yml in stage mode, pinned to OUR exact
-            # commit via --ref. Without this, `gh workflow run` dispatches
+            # Dispatch release-packages.yml in stage mode on our named branch,
+            # after proving that its remote tip is OUR exact commit. Without
+            # this, `gh workflow run` dispatches
             # against the repo's default branch tip at call time — which can
             # differ from the commit this npm-stage-publish.yml run itself
             # checked out (a different ref triggered it, or main advanced in
@@ -120,7 +185,12 @@ jobs:
             # preflight job's else-branch sets MODE=stage), so no other input
             # is needed.
             DISPATCHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-            gh workflow run release-packages.yml -R "$REPO" --ref "$CUR_SHA"
+            TIP_SHA=$(gh api "/repos/$REPO/git/ref/heads/$REF_NAME" --jq '.object.sha')
+            if [ "$TIP_SHA" != "$CUR_SHA" ]; then
+              echo "::error::$REF_NAME moved to $TIP_SHA, but this staging run is on $CUR_SHA — re-dispatch from a pinned candidate branch." >&2
+              exit 1
+            fi
+            gh workflow run release-packages.yml -R "$REPO" --ref "$REF_NAME"
             # Poll for the workflow_dispatch run we just created. Match by
             # event + createdAt AFTER the dispatch timestamp AND headSha ==
             # our commit — createdAt alone could still match a concurrent
@@ -128,7 +198,7 @@ jobs:
             # to land in the same window, which would stage the wrong commit.
             sleep 5
             RUN_ID=""
-            for i in $(seq 1 20); do
+            for _attempt in $(seq 1 20); do
               RUN_ID=$(gh run list --workflow release-packages.yml -R "$REPO" \
                 --event workflow_dispatch --limit 5 \
                 --json databaseId,createdAt,headSha \
@@ -298,3 +368,27 @@ jobs:
         # code, same gate, whether it runs in CI or locally.
         if: env.PUBLISH == 'true'
         run: node scripts/publish/pipeline.mts --scan-only
+
+      - name: Bundle exact staged-package proofs
+        if: env.PUBLISH == 'true'
+        run: |
+          set -euo pipefail
+          mapfile -t proofs < <(
+            find npm -mindepth 2 -maxdepth 2 -type f -name '*.tgz' | sort
+          )
+          if [ "${#proofs[@]}" -ne 9 ]; then
+            echo "::error::Expected 9 exact tarballs after verify + scan; found ${#proofs[@]}." >&2
+            printf '  %s\n' "${proofs[@]}" >&2
+            exit 1
+          fi
+          tar -cf npm-staged-package-proofs.tar "${proofs[@]}"
+
+      - name: Retain exact staged-package proofs for local 2FA approval
+        if: env.PUBLISH == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: npm-staged-package-proofs
+          path: npm-staged-package-proofs.tar
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0 # the nine .tgz payloads are already compressed

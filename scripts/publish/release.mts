@@ -4,7 +4,8 @@
  *   fragments (via scripts/cut_release_notes.sh --notes-only — Perry froze
  *   CHANGELOG.md at v0.5.1264), then creates the git tag + the IMMUTABLE
  *   (draft → upload → undraft) GitHub release carrying packaging/install.sh +
- *   a checksums file.
+ *   a checksums file (plus the complete notes as an asset when they are too
+ *   large for a useful inline release body).
  *
  *   The platform tarballs (perry-macos-aarch64.tar.gz, …) are built in CI, not
  *   locally — a follow-up CI leg uploads them to this release. The local cut
@@ -16,7 +17,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
@@ -24,6 +25,36 @@ import process from 'node:process'
 import { INSTALL_SH, RELEASE_REPO, rootPath } from './constants.mts'
 import { logger, runCapture } from './shared.mts'
 import { fetchPublishedVersion } from './npm/shared.mts'
+
+/** Keep the rendered GitHub page responsive; larger notes become an asset. */
+export const INLINE_RELEASE_NOTES_MAX_BYTES = 120_000
+
+export interface ReleaseNotesPlan {
+  body: string
+  attachFullNotes: boolean
+}
+
+/** Decide whether release notes are safe to send as the inline release body. */
+export function planReleaseNotes(
+  version: string,
+  notes: string,
+  maxBytes: number = INLINE_RELEASE_NOTES_MAX_BYTES,
+): ReleaseNotesPlan {
+  const body = notes.trim() || `Release ${version}.`
+  const bytes = Buffer.byteLength(body, 'utf8')
+  if (bytes <= maxBytes) return { body, attachFullNotes: false }
+  const mib = (bytes / (1024 * 1024)).toFixed(2)
+  const tagName = `v${version}`
+  return {
+    body:
+      `# ${tagName}\n\n` +
+      `This release accumulated ${mib} MiB of changelog notes. ` +
+      `The complete, checksummed notes are available as ` +
+      `[\`release-notes-full.md\`](` +
+      `https://github.com/${RELEASE_REPO}/releases/download/${tagName}/release-notes-full.md).\n`,
+    attachFullNotes: true,
+  }
+}
 
 /** Concatenate changelog.d/ fragments into the release body. */
 export async function extractReleaseNotes(cwd: string = rootPath): Promise<string> {
@@ -89,8 +120,27 @@ export function writeChecksums(files: readonly string[], cwd: string = rootPath)
  * uploaded by a follow-up CI leg. Returns true only when the tag is on origin
  * AND the release is published (or already existed).
  */
-export async function ensureTagAndRelease(version: string): Promise<boolean> {
+export async function ensureTagAndRelease(
+  version: string,
+  expectedCommit: string,
+): Promise<boolean> {
   const tagName = `v${version}`
+
+  // The staged artifacts and approval receipt are tied to one commit. Refuse
+  // to let a later checkout (or an old local tag) turn that receipt into a tag
+  // for different source bytes.
+  const head = await runCapture('git', ['rev-parse', 'HEAD'], rootPath)
+  const headCommit = head.stdout.trim()
+  if (head.code !== 0 || !headCommit) {
+    logger.fail('could not resolve HEAD — refusing to create a release tag.')
+    return false
+  }
+  if (headCommit !== expectedCommit) {
+    logger.fail(
+      `release receipt is for ${expectedCommit}, but HEAD is ${headCommit} — refusing to tag different source bytes.`,
+    )
+    return false
+  }
 
   // 1. Assets FIRST. install.sh is a REQUIRED release asset (the release
   //    advertises `curl ... install.sh | sh`), and the tag is immutable once
@@ -107,8 +157,22 @@ export async function ensureTagAndRelease(version: string): Promise<boolean> {
     process.exitCode = 1
     return false
   }
-  const checksums = writeChecksums([installSh])
-  const assets: string[] = [installSh, checksums]
+  const fullNotes = await extractReleaseNotes()
+  const notesPlan = planReleaseNotes(version, fullNotes)
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), `perry-release-${version}-`))
+  const notesFile = path.join(tempDir, 'release-notes.md')
+  writeFileSync(notesFile, notesPlan.body)
+  const assets: string[] = [installSh]
+  if (notesPlan.attachFullNotes) {
+    const fullNotesFile = path.join(tempDir, 'release-notes-full.md')
+    writeFileSync(fullNotesFile, fullNotes.endsWith('\n') ? fullNotes : `${fullNotes}\n`)
+    assets.push(fullNotesFile)
+    logger.log(
+      `Release notes exceed ${INLINE_RELEASE_NOTES_MAX_BYTES} bytes; attaching the complete notes as release-notes-full.md.`,
+    )
+  }
+  const checksums = writeChecksums(assets)
+  assets.push(checksums)
 
   try {
     // 2. Tag (on HEAD — the bump commit is already on main).
@@ -117,7 +181,19 @@ export async function ensureTagAndRelease(version: string): Promise<boolean> {
       ['rev-parse', '-q', '--verify', `refs/tags/${tagName}`],
       rootPath,
     )
-    if (tagCheck.code !== 0) {
+    if (tagCheck.code === 0) {
+      const localTag = await runCapture(
+        'git',
+        ['rev-parse', `refs/tags/${tagName}^{commit}`],
+        rootPath,
+      )
+      if (localTag.code !== 0 || localTag.stdout.trim() !== headCommit) {
+        logger.fail(
+          `local tag ${tagName} does not point to release-candidate commit ${headCommit} — refusing to push it.`,
+        )
+        return false
+      }
+    } else {
       const created = await runCapture('git', ['tag', tagName], rootPath)
       if (created.code !== 0) {
         logger.fail(`could not create tag ${tagName}`)
@@ -216,12 +292,7 @@ export async function ensureTagAndRelease(version: string): Promise<boolean> {
       return true
     }
 
-    // 5. Release notes from changelog.d fragments.
-    const notes = await extractReleaseNotes()
-    const notesFile = path.join(os.tmpdir(), `release-notes-${version}.md`)
-    writeFileSync(notesFile, notes || `Release ${version}.`)
-
-    // 6. Immutable release: draft → upload → undraft.
+    // 5. Immutable release: draft → upload → undraft.
     const create = await runCapture(
       'gh',
       ['release', 'create', tagName, '--draft', '--verify-tag', '--title', tagName, '--notes-file', notesFile],
@@ -250,7 +321,7 @@ export async function ensureTagAndRelease(version: string): Promise<boolean> {
     )
     return true
   } finally {
-    // checksums.txt is written into the repo tree solely for the upload.
+    // Generated files exist solely for the upload.
     for (const a of assets) {
       if (path.basename(a) === 'checksums.txt') {
         try {
@@ -259,6 +330,11 @@ export async function ensureTagAndRelease(version: string): Promise<boolean> {
           /* best-effort */
         }
       }
+    }
+    try {
+      rmSync(tempDir, { recursive: true, force: true })
+    } catch {
+      /* best-effort */
     }
   }
 }

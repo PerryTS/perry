@@ -1,54 +1,154 @@
 # Releasing Perry
 
-Maintainer runbook. Release cadence: patch releases (`0.5.118 → 0.5.119`) ship
-weekly-ish behind the macOS CI gate. **Major releases** — any bump of the major
-or minor number (e.g. `0.5.x → 0.6.0`, and the upcoming `1.0.0`) — **must be
-verified on every supported platform** before the tag is pushed. Patch releases
-only require the default CI gate.
+Maintainer runbook. Every release, including a patch, is gated on the exact
+release-candidate commit by the full Tests workflow, Simulator Tests, and the
+complete package-build matrix. A PR-tier or ordinary push-to-main run is not a
+release gate.
 
 ## 1. Pre-release checklist (every release)
 
-Run on macOS (the canonical dev host):
+Start from a clean checkout that contains current `origin/main`. Do not release
+from a detached HEAD or from a moving `main` branch. The staged pipeline records
+the candidate branch, commit SHA, and build run, then refuses to approve or tag
+if any of them changes.
 
 ```bash
-# Full rebuild — runtime/stdlib/UI libs must match the compiler version.
-cargo build --release
+# Confirm the checkout is current and clean.
+git fetch origin
+git rev-list --count HEAD..origin/main       # must print 0
+git status --short                          # must print nothing
 
-# Core gates.
+# Fast policy and script checks.
+python3 scripts/ci_plan.py --self-test
+BASE_SHA=origin/main scripts/run_lint_gates.sh
+npm ci --ignore-scripts --no-audit --no-fund
+npm run test:scripts
+./scripts/regen_api_docs.sh
+git diff --exit-code -- docs/src/api/reference.md docs/api/perry.d.ts
+
+# Host-runnable behavioral checks. These improve turnaround, but do not
+# replace the required cross-platform CI jobs.
 cargo test --workspace --exclude perry-ui-ios --exclude perry-ui-tvos \
   --exclude perry-ui-watchos --exclude perry-ui-gtk4 \
   --exclude perry-ui-android --exclude perry-ui-windows
-./run_parity_tests.sh                       # Perry vs node stdout parity
-./scripts/run_doc_tests.sh                  # Compile + run every docs/examples/*.ts
+./run_parity_tests.sh
+./scripts/run_doc_tests.sh
 ```
 
-Then bump and tag:
+Prepare the release candidate. Perry's normal merges already advance the
+workspace version, so use the version at the chosen commit; do not add another
+bump merely to release it. The version must exist in the source before builds
+start because it is embedded in Cargo and npm artifacts. `Cargo.toml` and
+`CLAUDE.md` must agree, release-note fragments must exist, and the Git tag must
+not exist locally or on origin. If that version was already tagged, land a new
+version bump through the normal merge process first.
 
 ```bash
-# Bump [workspace.package] version in Cargo.toml AND the "Current Version"
-# line in CLAUDE.md (the two must move together), then add a changelog
-# entry in CHANGELOG.md.
-git commit -am "release: v0.x.y"
-git tag v0.x.y && git push origin v0.x.y
+# Substitute the version already present in Cargo.toml.
+VERSION=0.x.y
+grep -m1 '^version' Cargo.toml
+grep -F "**Current Version:** $VERSION" CLAUDE.md
+find changelog.d -maxdepth 1 -type f -name '[0-9]*.md' | grep .
+git ls-remote --tags origin "refs/tags/v$VERSION"  # must print nothing
+git switch -c "release/v$VERSION"
+git push -u origin "release/v$VERSION"
 ```
 
-The tag push runs the test workflows, but does **not** publish packages on
-its own: `release-packages.yml` triggers on a **published GitHub Release**
-(or a manual `workflow_dispatch`). After pushing the tag, create and publish
-the GitHub Release for `v0.x.y`; that fires the cross-platform package
-matrix (see [§3](#3-what-ci-does-on-the-release)).
+Run the two exact-SHA CI gates on that pinned branch and wait for both to pass:
 
-## 2. Major-release verification (all platforms)
+```bash
+gh workflow run test.yml --ref "release/v$VERSION" -f tier=full
+gh workflow run simctl-tests.yml --ref "release/v$VERSION"
+```
 
-Before tagging a major/minor bump, these must all pass:
+Then use the staged pipeline:
+
+The local publish/approve process requires npm 11.17 or newer and a valid
+`SOCKET_API_TOKEN` for the mandatory tarball scan. CI uses OIDC for staging;
+do not set a long-lived npm publish token. The local npm account must be a
+maintainer of all nine packages because it lists and approves their staged
+entries.
+
+```bash
+npm --version                 # must be >= 11.17.0
+# If needed: npm install -g npm@latest
+npm whoami                    # must succeed as an @perryts package maintainer
+```
+
+One-time GitHub setup: create the environment named in the OIDC identity and
+store the Socket credential at environment scope (the secret value is entered
+interactively and must never be committed):
+
+```bash
+gh api --method PUT repos/PerryTS/perry/environments/npm-publish
+gh secret set SOCKET_API_TOKEN --repo PerryTS/perry --env npm-publish
+```
+
+Before the first nine-package release, an npm organization owner must confirm
+that every name in `scripts/publish/constants.mts` exists and has this single
+Trusted Publisher configuration:
+
+- provider: GitHub Actions
+- organization/repository: `PerryTS/perry`
+- workflow filename: `npm-stage-publish.yml`
+- environment: `npm-publish`
+- allowed action: **`npm stage publish`**
+
+npm permits only one trusted publisher per package. Configurations created
+before May 20, 2026 were carried forward with only direct **`npm publish`**
+allowed, so edit every existing package and explicitly enable
+**`npm stage publish`**; merely seeing a trusted publisher entry is not enough.
+The old `release-packages.yml` direct-publish path cannot occupy a second
+trusted-publisher slot and is not part of the canonical release.
+
+In particular, verify the ARM64 Windows package:
+
+```bash
+npm view @perryts/perry-win32-arm64 name
+```
+
+If that returns `E404`, an `@perryts` npm owner must make the initial public
+name-reservation publish (the repository permits version `0.0.0` only for this
+bootstrap), then configure the same Trusted Publisher fields above. The
+pipeline intentionally refuses a partial set.
+
+```bash
+npm run publish:stage       # CI builds all platforms, stages 9 npm packages,
+                            # verifies sha1, runs the mandatory Socket scan,
+                            # and downloads the exact proof tarballs locally
+npm run publish:status      # inspect the commit/run/package receipt
+npm run publish:approve     # explicit 2FA promote; waits for registry liveness
+                            # and only then creates v0.x.y + the GitHub Release
+```
+
+Approval promotes nine packages sequentially. If 2FA or the network interrupts
+that loop after some packages are already public, re-run `publish:approve` with
+the same retained CI proof. It resumes only when each already-public package's
+immutable registry shasum matches the exact CI tarball; otherwise use a new
+version. Do not discard the proof directory until the tag and release exist.
+
+If the accumulated changelog fragments exceed the inline release-note budget,
+the publisher keeps the GitHub Release body concise and uploads the complete
+notes as the checksummed `release-notes-full.md` asset. No fragment is dropped.
+
+Do not run `git tag`, manually publish a GitHub Release, or use the legacy
+`release-packages.yml cut_release=true` route for a normal release. That older
+route creates the tag before npm publication; it does not satisfy the stricter
+registry-first/tag-last contract.
+
+## 2. Additional major-release verification
+
+The automated gates above apply to every release. For a major/minor release,
+also perform the product-level platform checks that are not fully represented
+by the automated suites:
 
 | Platform | What to run | Runs in CI? |
 |---|---|---|
-| **macOS** (arm64 + x86_64) | `cargo test` + `run_parity_tests.sh` + `scripts/run_doc_tests.sh` | Yes, `test.yml` (arm64 only) |
-| **Linux glibc** (x86_64 + aarch64) | Same, under `xvfb-run -a` for UI; `apt install libgtk-4-dev libadwaita-1-dev xvfb` first | Partial — release build only |
-| **Linux musl** (x86_64 + aarch64) | Release build via `release-packages.yml`; spot-check a compiled `hello.ts` runs on Alpine | Build only |
-| **Windows** (x86_64 MSVC) | `scripts/run_doc_tests.ps1`; smoke-test `perry compile hello.ts -o hello.exe && .\hello.exe` | Build only |
-| **iOS Simulator** | `perry compile --target ios-simulator examples/widget_demo.ts && xcrun simctl install booted out.app` | No (Xcode required) |
+| **macOS** (arm64 + x86_64) | Smoke-test installed archives on both architectures | Builds in release matrix; full tests on macOS arm64 |
+| **Linux glibc** (x86_64 + aarch64) | Smoke-test the packaged binary on the oldest supported glibc | Builds in release matrix |
+| **Linux musl** (x86_64 + aarch64) | Spot-check a compiled `hello.ts` on Alpine | Builds in release matrix |
+| **Windows** (x86_64 + ARM64 MSVC) | Smoke-test installed archives on both architectures | Build plus full-tier Windows checks |
+| **iOS Simulator** | Exercise a representative app with `xcrun simctl` | Required `simctl-tests.yml` |
 | **visionOS Simulator** | `perry compile --target visionos-simulator ...`, launch in Apple Vision Pro Simulator | No (Xcode required) |
 | **tvOS Simulator** | `perry compile --target tvos-simulator ...`, launch in Simulator | No (Xcode required) |
 | **watchOS Simulator** | `perry compile --target watchos-simulator ...` — requires `rustup toolchain install nightly` + `cargo +nightly -Zbuild-std` | No (Xcode + nightly required) |
@@ -56,11 +156,8 @@ Before tagging a major/minor bump, these must all pass:
 | **Web / WASM** | `perry compile --target web examples/wasm_ui_demo.ts`, open `out.html` in a browser | No |
 | **Home-screen widgets** | `perry compile --target widgetkit ... && perry publish ios` | No |
 
-For v1.0, expect to spend half a day spinning through the four OS VMs locally.
-Only the macOS doc-tests lane currently runs in `test.yml` — the Linux (gtk4)
-and Windows matrix entries are disabled pending testkit fixes (see the
-commented-out entries in the `doc-tests` job), so run those manually, as with
-the mobile/watch/web lanes.
+Record the manual results in the release issue. These checks supplement CI;
+they never waive a red required workflow.
 
 ### 2a. Simulator-run recipe (iOS / tvOS)
 
@@ -104,29 +201,28 @@ runners build:
   afterward (glibc 2.31 compiler floor; keep `GLIBC_BUILD_FLOOR` in
   `npm/perry/bin/detect.cjs` synchronized)
 - `ubuntu-24.04` / `ubuntu-24.04-arm` — musl x86_64 + aarch64 (fully static)
-- `windows-latest` — x86_64 MSVC
+- `windows-latest` / `windows-11-arm` — x86_64 + ARM64 MSVC
 
 Artifacts are published to:
 
-1. **npm** (`@perryts/perry` + seven per-platform optional-deps) — via OIDC
+1. **npm** (`@perryts/perry` + eight per-platform optional-deps) — via OIDC
    Trusted Publisher
 2. **Homebrew** — formula auto-update
 3. **APT** (Debian/Ubuntu) — GPG-signed repository
 4. **winget** — manifest auto-update
 5. **hub.perryts.com** — worker notification so cloud build workers refresh
 
-A release with a failing platform build aborts the publish step for that
-platform only; fix-forward with a new patch tag (e.g. `v0.6.1`) rather than
-amending the existing one.
+In the canonical staged flow, any failing host or cross build prevents all npm
+staging, so no partial package set is promoted. Once a version has become public,
+fix-forward with a new patch version rather than amending an existing tag.
 
 ## 4. Release gates (what blocks a release)
 
-`release-packages.yml`'s `await-tests` job dispatches `test.yml` with `tier=full`
-on the pinned release branch and waits for a run whose **`full-suite-gate`** job
-succeeded (a green PR-tier or push-to-main sweep run on the same SHA does *not*
-count — only the full tier carries the release-grade suites; see
-[CI tiers](../testing/ci-tiers.md)). It also waits for `simctl-tests.yml`. The
-full tier is:
+`npm-stage-publish.yml` rejects a real stage unless `test.yml` has a successful
+**`full-suite-gate`** and `simctl-tests.yml` has a successful run on the exact
+candidate SHA. A green PR-tier or push-to-main sweep does *not* count. The same
+two gates are enforced by `release-packages.yml`'s legacy release path. See
+[CI tiers](../testing/ci-tiers.md). The full tier is:
 
 - everything the PR gate and the post-merge sweep run (`lint`, `check`, `warnings`,
   `cargo test --workspace`, the gap suite, `gc-stress`, Windows x64 + ARM64 builds,
@@ -142,14 +238,20 @@ full tier is:
   `docs/examples/`
 - the package smokes (`drizzle-mysql-smoke`, `ink-link-smoke`, `effect-basic-smoke`)
   and `native-abi-evidence-packet`
-- Benchmark regressions in `benchmark.yml` hard-fail on release tags (warn only
-  on main-branch pushes)
+- `full-suite-gate`, the fan-in which proves every required full-tier job above
+  succeeded
 
 None of these carries `continue-on-error` any more: a red suite in the full tier
 blocks the release. If a suite is red for a reason that is not the release
 candidate's fault, fix it on `main` first (or open an issue and consciously
 re-add a job-level `continue-on-error: true` with that issue number) — do not
 publish past it.
+
+The staging workflow then requires every host/cross package build, all nine npm
+stages, sha1 verification, and the Socket scan. `benchmark.yml`, docs, container
+tests, Homebrew, APT, winget, and worker refresh are tag riders or distribution
+steps: monitor them after the GitHub Release is created, but do not mistake them
+for pre-tag gates.
 
 ## 4a. What tells you a release is overdue
 
@@ -188,8 +290,11 @@ a release has been cut is not something a PR author can fix.
 
 - **Wrong artifact published**: tag a new patch release with the fix; npm
   rejects re-publishes of the same version anyway.
-- **Broken binary on one platform**: the `release-packages.yml` matrix is not
-  `fail-fast: true`, so other platforms still publish. Ship a follow-up patch
-  for the broken one.
-- **CI hook failed after tag**: run `workflow_dispatch` with
-  `publish_npm: true` to retry the npm step.
+- **Broken build before approval**: fix it and stage the complete nine-package
+  set again; the canonical flow will not promote a partial set.
+- **Broken binary discovered after approval**: ship a follow-up patch version;
+  neither npm versions nor release tags are mutable.
+- **A post-tag distribution hook failed**: re-run the failed workflow. To retry
+  the legacy release-packages distribution legs, dispatch it with
+  `existing_tag=vX.Y.Z`; add `publish_npm=true` only when the idempotent npm leg
+  itself also needs retrying.

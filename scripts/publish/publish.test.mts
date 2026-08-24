@@ -9,7 +9,15 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { spawnSync } from 'node:child_process'
@@ -20,8 +28,22 @@ import { summarizePolicyAlerts, normalizeFullScanArtifacts } from './scan.mts'
 import { formatHumanGate } from './human-gate.mts'
 import { publishAuthPreflight } from './auth-posture.mts'
 import { compareSemver, extractFirstJson } from './shared.mts'
-import { parseStageListJson } from './npm/shared.mts'
-import { NPM_MIN_VERSION } from './constants.mts'
+import {
+  normalizePublishedShasum,
+  parseStageListJson,
+} from './npm/shared.mts'
+import {
+  completeCandidatesWithPublished,
+  perryStagedEntries,
+} from './npm/approve.mts'
+import { tagExists } from './npm/bump.mts'
+import { verifyStagedEntry } from './npm/staged.mts'
+import { freshStageState, isCompleteScanReceipt } from './pipeline.mts'
+import {
+  INLINE_RELEASE_NOTES_MAX_BYTES,
+  planReleaseNotes,
+} from './release.mts'
+import { ALL_PACKAGES, NPM_MIN_VERSION } from './constants.mts'
 
 const PUBLISH_DIR = path.dirname(fileURLToPath(import.meta.url))
 
@@ -109,6 +131,141 @@ test('parseStageListJson: array of entries parses to staged entries', () => {
   const entries2 = parseStageListJson(noisy)
   assert.equal(entries2.length, 1)
   assert.equal(entries2[0]!.name, '@perryts/perry-darwin-arm64')
+})
+
+test('normalizePublishedShasum: accepts only a successful bare sha1', () => {
+  assert.equal(
+    normalizePublishedShasum(`  ${'A'.repeat(40)}\n`, 0),
+    'a'.repeat(40),
+  )
+  assert.equal(normalizePublishedShasum('not found', 1), undefined)
+  assert.equal(normalizePublishedShasum(`warning\n${'a'.repeat(40)}`, 0), undefined)
+  assert.equal(normalizePublishedShasum('a'.repeat(39), 0), undefined)
+})
+
+test('perryStagedEntries: approval is restricted to the candidate version', () => {
+  const entries = [
+    {
+      name: '@perryts/perry-darwin-arm64',
+      version: '0.5.1519',
+      stageId: 'candidate',
+    },
+    {
+      name: '@perryts/perry-darwin-arm64',
+      version: '0.5.1518',
+      stageId: 'stale',
+    },
+    {
+      name: '@somewhere/else',
+      version: '0.5.1519',
+      stageId: 'foreign',
+    },
+  ]
+  assert.deepEqual(
+    perryStagedEntries(entries, '0.5.1519').map(e => e.stageId),
+    ['candidate'],
+  )
+})
+
+test('completeCandidatesWithPublished: safely resumes a partial promotion', async () => {
+  const version = '0.5.1519'
+  const first = ALL_PACKAGES[0]!
+  const lookedUp: string[] = []
+  const candidates = await completeCandidatesWithPublished(
+    [{ name: first, version, stageId: 'still-staged', shasum: '1'.repeat(40) }],
+    version,
+    async name => {
+      lookedUp.push(name)
+      return '2'.repeat(40)
+    },
+  )
+  assert.deepEqual(candidates.map(entry => entry.name), [...ALL_PACKAGES])
+  assert.deepEqual(lookedUp, ALL_PACKAGES.slice(1))
+  assert.equal(candidates[0]!.alreadyLive, undefined)
+  assert.equal(candidates[1]!.alreadyLive, true)
+  assert.equal(candidates[1]!.shasum, '2'.repeat(40))
+})
+
+test('tagExists: inability to query origin fails closed', async () => {
+  const cwd = mkdtempSync(path.join(os.tmpdir(), 'perry-tag-gate-'))
+  try {
+    const init = spawnSync('git', ['init', '--quiet'], { cwd, encoding: 'utf8' })
+    assert.equal(init.status, 0)
+    await assert.rejects(
+      tagExists('0.5.1519', cwd),
+      /could not query origin for refs\/tags\/v0\.5\.1519/,
+    )
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test('freshStageState: a new stage cannot inherit an old approval receipt', () => {
+  const state = freshStageState('0.5.1519', {
+    sha: 'a'.repeat(40),
+    ref: 'release/v0.5.1519',
+    runId: '12345',
+    stageProofDir: '.cache/perry/publish-pipeline/artifacts/12345',
+  })
+  assert.deepEqual(state.staged, [])
+  assert.deepEqual(state.verified, [])
+  assert.deepEqual(state.scanResults, [])
+  assert.deepEqual(state.approved, [])
+  assert.equal(state.registryLive, false)
+  assert.equal(state.released, false)
+  assert.equal(state.candidateSha, 'a'.repeat(40))
+  assert.equal(state.candidateRef, 'release/v0.5.1519')
+  assert.equal(state.stageRunId, '12345')
+  assert.equal(
+    state.stageProofDir,
+    '.cache/perry/publish-pipeline/artifacts/12345',
+  )
+})
+
+test('verifyStagedEntry: local approval verifies the exact CI proof tarball', async () => {
+  const proofRoot = mkdtempSync(path.join(os.tmpdir(), 'perry-stage-proof-'))
+  try {
+    const packageDir = path.join(proofRoot, 'npm/perry-win32-arm64')
+    mkdirSync(packageDir, { recursive: true })
+    const tarball = path.join(packageDir, 'perryts-perry-win32-arm64-0.5.1519.tgz')
+    writeFileSync(tarball, 'exact staged bytes')
+    const shasum = createHash('sha1')
+      .update(readFileSync(tarball))
+      .digest('hex')
+    const entry = {
+      name: '@perryts/perry-win32-arm64',
+      version: '0.5.1519',
+      stageId: 'stage-proof',
+      shasum,
+    }
+    assert.equal(await verifyStagedEntry(entry, proofRoot), true)
+    assert.equal(
+      await verifyStagedEntry({ ...entry, shasum: '0'.repeat(40) }, proofRoot),
+      false,
+    )
+  } finally {
+    rmSync(proofRoot, { recursive: true, force: true })
+  }
+})
+
+test('isCompleteScanReceipt: every exact package/version must pass', () => {
+  const version = '0.5.1519'
+  const packages = [...ALL_PACKAGES]
+  const state = {
+    version,
+    staged: packages.map(name => `${name}@${version}`),
+    verified: packages.map(name => `${name}@${version}`),
+    scanResults: packages.map(name => ({
+      name,
+      version,
+      status: 'passed' as const,
+      summary: { error: [], total: 0, warn: [] },
+    })),
+    updatedAt: new Date().toISOString(),
+  }
+  assert.equal(isCompleteScanReceipt(state), true)
+  state.scanResults[0] = { ...state.scanResults[0]!, status: 'blocked' }
+  assert.equal(isCompleteScanReceipt(state), false)
 })
 
 test('formatHumanGate: the 🖐 block shape with both lanes', () => {
@@ -298,6 +455,49 @@ test('pipeline.mts: --scan-only sets a failing exit code on an incomplete/blocke
     /process\.exitCode = 1/,
     '--scan-only must set a non-zero exit code when the scan did not fully pass',
   )
+})
+
+test('pipeline.mts: stage dispatch and release receipt are pinned to one commit', () => {
+  const src = readFileSync(path.join(PUBLISH_DIR, 'pipeline.mts'), 'utf8')
+  const workflow = readFileSync(
+    path.join(PUBLISH_DIR, '../../.github/workflows/npm-stage-publish.yml'),
+    'utf8',
+  )
+  assert.match(src, /'--ref',\s*candidate\.ref/)
+  assert.match(src, /`candidate-sha=\$\{candidate\.sha\}`/)
+  assert.match(src, /r\.headSha === candidate\.sha/)
+  assert.match(src, /npm-staged-package-proofs/)
+  assert.match(src, /downloadStageProof\(runId\)/)
+  assert.match(src, /requirePinnedCandidate\(state\)/)
+  assert.match(src, /ensureTagAndRelease\(gate\.version, candidate\.sha\)/)
+  assert.match(workflow, /\[ "\$REF_NAME" = "main" \]/)
+  assert.match(workflow, /"\$REF" != refs\/heads\/\*/)
+  assert.match(workflow, /gh api --paginate --slurp/)
+})
+
+test('release runbook pins the staged-publish OIDC identity and action', () => {
+  const runbook = readFileSync(
+    path.join(PUBLISH_DIR, '../../docs/src/contributing/releasing.md'),
+    'utf8',
+  )
+  assert.match(runbook, /workflow filename: `npm-stage-publish\.yml`/)
+  assert.match(runbook, /environment: `npm-publish`/)
+  assert.match(runbook, /allowed action: \*\*`npm stage publish`\*\*/)
+  assert.match(runbook, /npm permits only one trusted publisher per package/)
+})
+
+test('planReleaseNotes: oversized notes move to a stable release asset', () => {
+  const inline = planReleaseNotes('0.5.1519', 'small notes')
+  assert.deepEqual(inline, { body: 'small notes', attachFullNotes: false })
+
+  const large = planReleaseNotes(
+    '0.5.1519',
+    'x'.repeat(INLINE_RELEASE_NOTES_MAX_BYTES + 1),
+  )
+  assert.equal(large.attachFullNotes, true)
+  assert.match(large.body, /release-notes-full\.md/)
+  assert.match(large.body, /releases\/download\/v0\.5\.1519\/release-notes-full\.md/)
+  assert.ok(Buffer.byteLength(large.body, 'utf8') < INLINE_RELEASE_NOTES_MAX_BYTES)
 })
 
 test('pipeline.mts: two conflicting mode flags fail closed instead of picking one by argument order', () => {

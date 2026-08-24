@@ -14,19 +14,13 @@
  */
 
 import { existsSync } from 'node:fs'
-import path from 'node:path'
 import process from 'node:process'
 
 import { SocketSdk } from '@socketsecurity/sdk'
 
-import {
-  npmPackageDir,
-  rootPath,
-  SOCKET_ORG_SLUG,
-  SOCKET_SCAN_REPO,
-} from './constants.mts'
+import { SOCKET_ORG_SLUG, SOCKET_SCAN_REPO } from './constants.mts'
 import { logger } from './shared.mts'
-import { packTarball } from './npm/staged.mts'
+import { resolveStagedTarball } from './npm/staged.mts'
 
 export const SOCKET_TOKEN_ENV_VAR = 'SOCKET_API_TOKEN'
 export const SOCKET_TOKEN_MINT_URL = 'https://socket.dev/dashboard'
@@ -164,10 +158,11 @@ export interface ScanResult {
 }
 
 /**
- * Scan one package's tarball. Packs locally and — when the caller passes the
- * staged shasum — verifies the packed tarball's sha1 matches the staged bytes
- * BEFORE submitting, so a worktree change between verify and scan can never
- * make Socket scan different bytes from the artifact that promotion releases.
+ * Scan one package's tarball. CI packs the materialized package; local approval
+ * consumes the exact tarball proof retained by that CI run. When the caller
+ * passes the staged shasum, verify the tarball's sha1 matches the staged bytes
+ * BEFORE submitting, so a worktree change can never make Socket scan different
+ * bytes from the artifact that promotion releases.
  * Submits as a tmp full scan, reads results + org security policy in parallel,
  * and buckets alerts. `error`-action alerts → failed; an unreachable/empty
  * scan → blocked (never a pass).
@@ -177,10 +172,10 @@ export async function scanTarball(
   name: string,
   version: string,
   stagedShasum?: string,
+  proofRoot?: string,
 ): Promise<ScanResult> {
   const { orgSlug, sdk } = ctx
-  const pkgDir = path.join(rootPath, npmPackageDir(name))
-  const packed = await packTarball(pkgDir)
+  const packed = await resolveStagedTarball({ name }, proofRoot)
   if (!packed || !existsSync(packed.path)) {
     logger.fail(`scan: no local tarball for ${name}@${version} — run verify first.`)
     return { name, version, status: 'blocked', summary: { error: [], total: 0, warn: [] } }

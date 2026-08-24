@@ -54,10 +54,18 @@ export function hasChangelogFragments(cwd: string = rootPath): boolean {
   return readdirSync(dir).some(f => /^\d+-.*\.md$/.test(f))
 }
 
-/** True when the vX.Y.Z tag already exists on the repo. */
+/** True when the vX.Y.Z tag exists locally or on origin. */
 export async function tagExists(version: string, cwd: string = rootPath): Promise<boolean> {
-  const { code } = await runCapture('git', ['rev-parse', '-q', '--verify', `refs/tags/v${version}`], cwd)
-  return code === 0
+  const tag = `refs/tags/v${version}`
+  const local = await runCapture('git', ['rev-parse', '-q', '--verify', tag], cwd)
+  if (local.code === 0) return true
+  const remote = await runCapture('git', ['ls-remote', '--tags', 'origin', tag], cwd)
+  if (remote.code !== 0) {
+    throw new Error(
+      `could not query origin for ${tag} (git ls-remote exited ${remote.code})`,
+    )
+  }
+  return remote.stdout.includes(tag)
 }
 
 export interface VersionGate {
@@ -85,9 +93,15 @@ export async function checkVersionGate(cwd: string = rootPath): Promise<VersionG
       `Cargo.toml says ${version} but CLAUDE.md's Current Version line says ${claude ?? '(missing)'} — fix the drift before releasing.`,
     )
   }
-  if (await tagExists(version, cwd)) {
+  try {
+    if (await tagExists(version, cwd)) {
+      reasons.push(
+        `tag v${version} already exists — the version in Cargo.toml was already released. Land a version bump.`,
+      )
+    }
+  } catch (err) {
     reasons.push(
-      `tag v${version} already exists — the version in Cargo.toml was already released. Land a version bump.`,
+      `${err instanceof Error ? err.message : String(err)} — refusing to assume the tag is absent.`,
     )
   }
   if (!hasChangelogFragments(cwd)) {

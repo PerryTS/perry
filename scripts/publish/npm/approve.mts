@@ -23,14 +23,23 @@ import {
   scanTarball,
   type ScanResult,
 } from '../scan.mts'
-import { fetchPublishedVersion, listStagedEntries, type StagedEntry } from './shared.mts'
+import {
+  fetchPublishedShasum,
+  fetchPublishedVersion,
+  listStagedEntries,
+  type StagedEntry,
+} from './shared.mts'
 import { verifyStagedEntry } from './staged.mts'
 
 export interface ApproveOptions {
+  /** The one release version this approval is allowed to promote. */
+  version: string
   /** TOTP code (CI / scripted). */
   otp?: string
   /** Approve without prompting; browser web-OTP drives 2FA. */
   yes?: boolean
+  /** Root containing the exact tarballs downloaded from the staging CI run. */
+  proofRoot?: string
 }
 
 export interface ApproveReceipt {
@@ -44,11 +53,40 @@ export interface ApproveReceipt {
 /** Filter staged entries to Perry's 9 packages, in publish order. */
 export function perryStagedEntries(
   entries: readonly StagedEntry[],
+  version?: string,
 ): StagedEntry[] {
   const order = new Map(ALL_PACKAGES.map((n, i) => [n, i]))
   return entries
-    .filter(e => order.has(e.name))
+    .filter(e => order.has(e.name) && (version === undefined || e.version === version))
     .sort((a, b) => (order.get(a.name)! - order.get(b.name)!))
+}
+
+/**
+ * Complete a partially promoted staging set with exact-version registry
+ * entries. The caller still has to verify every shasum against the CI proof.
+ */
+export async function completeCandidatesWithPublished(
+  staged: readonly StagedEntry[],
+  version: string,
+  lookup: (name: string, version: string) => Promise<string | undefined> =
+    fetchPublishedShasum,
+): Promise<StagedEntry[]> {
+  const stagedNames = new Set(staged.map(e => e.name))
+  const alreadyLive: StagedEntry[] = []
+  for (const name of ALL_PACKAGES) {
+    if (stagedNames.has(name)) continue
+    const shasum = await lookup(name, version)
+    if (shasum) {
+      alreadyLive.push({
+        name,
+        version,
+        stageId: `already-live:${name}@${version}`,
+        shasum,
+        alreadyLive: true,
+      })
+    }
+  }
+  return perryStagedEntries([...staged, ...alreadyLive], version)
 }
 
 /** Run `npm stage approve <stageId>` for one entry, PTY-wrapped for web-OTP. */
@@ -79,29 +117,32 @@ export async function approveEntry(
  * release stage on `registryLive && approved.length > 0`.
  */
 export async function runApprove(opts: ApproveOptions): Promise<ApproveReceipt> {
-  const staged = perryStagedEntries(await listStagedEntries(process.cwd()))
-  if (staged.length === 0) {
-    logger.fail(
-      'No staged @perryts/* entries to approve. Run `npm run publish:stage` first.',
-    )
-    return { approved: [], failed: [], registryLive: false, scanResults: [] }
-  }
+  const staged = perryStagedEntries(
+    await listStagedEntries(process.cwd()),
+    opts.version,
+  )
+
+  // Approval is nine sequential 2FA operations. If one fails after earlier
+  // entries became public, npm removes those successful entries from staging.
+  // Recover only when the immutable public dist.shasum matches this run's exact
+  // CI proof; this cannot turn an old same-version artifact into a new receipt.
+  const candidates = await completeCandidatesWithPublished(staged, opts.version)
 
   // 0. Reject a partial package set. The 9 @perryts/* packages are a fixed
   // release set (the wrapper's optionalDependencies are the platform binaries);
-  // promoting a subset ships a broken install. Require every ALL_PACKAGES
-  // member to be staged before any verification or approval proceeds.
-  const stagedNames = new Set(staged.map(e => e.name))
-  const missing = ALL_PACKAGES.filter(n => !stagedNames.has(n))
+  // promoting a subset ships a broken install. An entry may be pending in
+  // staging or already live with a registry SHA that the proof verifies.
+  const candidateNames = new Set(candidates.map(e => e.name))
+  const missing = ALL_PACKAGES.filter(n => !candidateNames.has(n))
   if (missing.length > 0) {
     logger.fail(
-      `Partial staged set — refusing to approve. Missing: ${missing.join(', ')}.\n` +
+      `Partial staged/live set — refusing to approve. Missing: ${missing.join(', ')}.\n` +
         `  Why: the @perryts/* packages are a fixed release set; a partial promote ships a broken install.\n` +
-        `  Fix: re-run publish:stage so every package is staged, then re-approve.`,
+        `  Fix: re-run publish:stage so every missing package is staged, then re-approve.`,
     )
     return {
       approved: [],
-      failed: staged.map(e => `${e.name}@${e.version}`),
+      failed: candidates.map(e => `${e.name}@${e.version}`),
       registryLive: false,
       scanResults: [],
     }
@@ -109,22 +150,22 @@ export async function runApprove(opts: ApproveOptions): Promise<ApproveReceipt> 
 
   // 1. Verify each staged entry (sha1 gate).
   const verified: StagedEntry[] = []
-  for (const entry of staged) {
-    if (await verifyStagedEntry(entry)) verified.push(entry)
+  for (const entry of candidates) {
+    if (await verifyStagedEntry(entry, opts.proofRoot)) verified.push(entry)
   }
   if (verified.length === 0) {
     logger.fail('No staged entries passed the verify gate — not approving.')
-    return { approved: [], failed: staged.map(e => `${e.name}@${e.version}`), registryLive: false, scanResults: [] }
+    return { approved: [], failed: candidates.map(e => `${e.name}@${e.version}`), registryLive: false, scanResults: [] }
   }
   if (verified.length !== ALL_PACKAGES.length) {
-    const failedVerify = staged.filter(e => !verified.includes(e))
+    const failedVerify = candidates.filter(e => !verified.includes(e))
     logger.fail(
       `Partial verify — refusing to approve. ${failedVerify.length} of ${ALL_PACKAGES.length} entries failed the sha1 gate: ` +
         `${failedVerify.map(e => `${e.name}@${e.version}`).join(', ')}.`,
     )
     return {
       approved: [],
-      failed: staged.map(e => `${e.name}@${e.version}`),
+      failed: candidates.map(e => `${e.name}@${e.version}`),
       registryLive: false,
       scanResults: [],
     }
@@ -146,7 +187,13 @@ export async function runApprove(opts: ApproveOptions): Promise<ApproveReceipt> 
   }
   const passed: StagedEntry[] = []
   for (const entry of verified) {
-    const res = await scanTarball(ctx, entry.name, entry.version, entry.shasum)
+    const res = await scanTarball(
+      ctx,
+      entry.name,
+      entry.version,
+      entry.shasum,
+      opts.proofRoot,
+    )
     scanResults.push(res)
     if (res.status === 'passed') passed.push(entry)
     else logger.fail(`scan ${res.status}: ${entry.name}@${entry.version} dropped from approve`)
@@ -171,8 +218,14 @@ export async function runApprove(opts: ApproveOptions): Promise<ApproveReceipt> 
   verified.length = 0
   verified.push(...passed)
 
-  // 3. OTP resolution (last, after every slow gate).
-  if (!opts.otp && !opts.yes && !process.stdin.isTTY) {
+  const pending = verified.filter(entry =>
+    !entry.alreadyLive,
+  )
+
+  // 3. OTP resolution (last, after every slow gate). A fully promoted release
+  // can be recovered and receipted non-interactively because no mutation or
+  // 2FA operation remains; its exact public shasums were verified above.
+  if (pending.length > 0 && !opts.otp && !opts.yes && !process.stdin.isTTY) {
     logger.fail(
       'approve needs an interactive terminal, or --yes / --otp.\n' +
         '  What: the promote is a 2FA action (browser web-OTP or TOTP).\n' +
@@ -182,9 +235,14 @@ export async function runApprove(opts: ApproveOptions): Promise<ApproveReceipt> 
   }
 
   // 4. npm stage approve each entry.
-  const approvedEntries: StagedEntry[] = []
+  const approvedEntries: StagedEntry[] = verified.filter(entry =>
+    entry.alreadyLive,
+  )
   const failed: string[] = []
-  for (const entry of verified) {
+  for (const entry of approvedEntries) {
+    logger.info(`already live with matching proof: ${entry.name}@${entry.version}`)
+  }
+  for (const entry of pending) {
     const ok = await approveEntry(entry, opts)
     if (ok) approvedEntries.push(entry)
     else failed.push(`${entry.name}@${entry.version}`)
@@ -196,13 +254,14 @@ export async function runApprove(opts: ApproveOptions): Promise<ApproveReceipt> 
   // before the caller can gate a release on the surviving subset.
   if (failed.length > 0) {
     logger.fail(
-      `Partial approve — ${failed.length} of ${verified.length} entries failed the promote: ${failed.join(', ')}. ` +
+      `Partial approve — ${failed.length} of ${pending.length} pending entries failed the promote: ${failed.join(', ')}. ` +
         'Not cutting the release — re-run publish:approve after fixing the failures.',
     )
   }
 
   // 5. Registry liveness — exit 0 is NOT proof.
-  let registryLive = failed.length === 0
+  let registryLive =
+    failed.length === 0 && approvedEntries.length === ALL_PACKAGES.length
   for (const entry of approvedEntries) {
     if (!(await fetchPublishedVersion(entry.name, entry.version))) {
       logger.fail(`registry liveness: ${entry.name}@${entry.version} not resolvable after approve — do NOT cut the release.`)

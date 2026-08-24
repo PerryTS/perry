@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       cut_release:
-        description: "Tag-last release: gate on tests, build every leg, then create the vX.Y.Z tag (version from Cargo.toml) + GitHub Release and publish. Dispatch on a branch pinned at the release-candidate commit."
+        description: "Legacy build-before-tag route: gates/builds, then tags before npm. Normal releases use npm run publish:stage/approve for registry-first tag-last ordering."
         type: boolean
         default: false
       existing_tag:
@@ -48,10 +48,10 @@ jobs:
   # Modes:
   #   release      release: published event (legacy tag-first path — a human
   #                created the tag + release; still fully supported)
-  #   cut-release  workflow_dispatch with cut_release=true — tag-LAST: nothing
-  #                is tagged or published until the gate + every build leg is
-  #                green; create-release then makes the tag + GH release and
-  #                the publish legs run in this same workflow run
+  #   cut-release  workflow_dispatch with cut_release=true — legacy route:
+  #                nothing is tagged until gate + build legs are green, but
+  #                the tag still precedes npm. The staged local pipeline is
+  #                canonical when registry-first/tag-last ordering is required.
   #   republish    workflow_dispatch with existing_tag=vX.Y.Z — rebuild and
   #                re-run the publish legs for an already-published release
   #                (the old "bypass" lever, now with an explicit tag)
@@ -1971,9 +1971,12 @@ jobs:
   # ---------------------------------------------------------------------------
   # Publish npm packages (@perryts/perry + 8 per-platform packages)
   #
-  # Uses OIDC / Trusted Publishers (no long-lived NPM_TOKEN). Each of the 9
-  # package names must be registered on npmjs.com with this repo + workflow
-  # as a Trusted Publisher. See npm/README.md for the one-time setup.
+  # Uses OIDC / Trusted Publishers (no long-lived NPM_TOKEN). This direct npm
+  # leg is legacy: npm permits only one trusted publisher per package, while
+  # Perry's canonical posture assigns that slot to npm-stage-publish.yml with
+  # the `npm stage publish` action. A normal registry-first release reaches
+  # this release-event job only after all versions are live, so its idempotency
+  # checks skip every direct publish. See the release runbook.
   # ---------------------------------------------------------------------------
   npm-publish:
     # The irreversible leg. build-cross is in `needs` (completed, not
