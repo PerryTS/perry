@@ -173,6 +173,28 @@ fn wrapper_guards_actual_bits_and_clone_erases_the_loop_filter_arm() {
 }
 
 #[test]
+fn a_pshape_family_guard_wrapper_is_a_published_capability() {
+    let candidate = method(Vec::new());
+    let base = "perry_method_guarded_undefined_method_ts__Scanner__scan$pshape";
+    let mut llmod = crate::module::LlModule::new(super::default_target_triple());
+    super::method_trampolines::emit_guarded_undefined(
+        &mut llmod,
+        &candidate,
+        base,
+        &format!("{base}$generic"),
+        0,
+    );
+    let ir = llmod.to_ir();
+    let wrapper = function_body(&ir, &format!("@{base}("));
+    assert!(
+        wrapper.starts_with("define double "),
+        "the producer-published `$pshape` wrapper must retain external linkage:\n{wrapper}"
+    );
+    assert!(wrapper.contains(&format!("@{base}$undef0(")));
+    assert!(wrapper.contains(&format!("@{base}$generic(")));
+}
+
+#[test]
 fn a_real_parameter_write_keeps_one_unspecialized_public_body() {
     let mut candidate = method(Vec::new());
     candidate.body.push(Stmt::Expr(Expr::LocalSet(
