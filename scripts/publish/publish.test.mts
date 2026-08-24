@@ -24,6 +24,7 @@ import { compareSemver, extractFirstJson } from './shared.mts'
 import { parseStageListJson } from './npm/shared.mts'
 import { perryStagedEntries } from './npm/approve.mts'
 import { tagExists } from './npm/bump.mts'
+import { freshStageState } from './pipeline.mts'
 import { NPM_MIN_VERSION } from './constants.mts'
 
 const PUBLISH_DIR = path.dirname(fileURLToPath(import.meta.url))
@@ -150,6 +151,23 @@ test('tagExists: inability to query origin fails closed', async () => {
   } finally {
     rmSync(cwd, { recursive: true, force: true })
   }
+})
+
+test('freshStageState: a new stage cannot inherit an old approval receipt', () => {
+  const state = freshStageState('0.5.1519', {
+    sha: 'a'.repeat(40),
+    ref: 'release/v0.5.1519',
+    runId: '12345',
+  })
+  assert.deepEqual(state.staged, [])
+  assert.deepEqual(state.verified, [])
+  assert.deepEqual(state.scanResults, [])
+  assert.deepEqual(state.approved, [])
+  assert.equal(state.registryLive, false)
+  assert.equal(state.released, false)
+  assert.equal(state.candidateSha, 'a'.repeat(40))
+  assert.equal(state.candidateRef, 'release/v0.5.1519')
+  assert.equal(state.stageRunId, '12345')
 })
 
 test('formatHumanGate: the 🖐 block shape with both lanes', () => {

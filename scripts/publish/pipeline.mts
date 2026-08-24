@@ -66,6 +66,26 @@ interface StageWorkflowReceipt extends Candidate {
   runId: string
 }
 
+/** A successful real stage invalidates every receipt from an earlier attempt. */
+export function freshStageState(
+  version: string,
+  receipt: StageWorkflowReceipt,
+): PipelineState {
+  return {
+    version,
+    candidateSha: receipt.sha,
+    candidateRef: receipt.ref,
+    stageRunId: receipt.runId,
+    staged: [],
+    verified: [],
+    scanResults: [],
+    approved: [],
+    registryLive: false,
+    released: false,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
 function statePath(version: string): string {
   return path.join(rootPath, PIPELINE_STATE_DIR, `${version}.json`)
 }
@@ -427,16 +447,15 @@ async function main(): Promise<void> {
       process.exitCode = 1
       return
     }
-    state.candidateSha = receipt.sha
-    state.candidateRef = receipt.ref
-    state.stageRunId = receipt.runId
-    state.updatedAt = new Date().toISOString()
-    writeState(state)
     if (dryRun) {
       logger.log('Dry-run build succeeded; no registry stage was created or scanned.')
-      printStatus(state)
+      // A dry build is evidence about CI only. It must not replace the real
+      // staging receipt or carry old approval/liveness fields to a new SHA.
+      printStatus(freshStageState(gate.version, receipt))
       return
     }
+    state = freshStageState(gate.version, receipt)
+    writeState(state)
     state = await verifyAndScan(gate.version, state)
     printStatus(state)
     logger.log(formatApproveGate({ version: gate.version, repoPath: rootPath }))
