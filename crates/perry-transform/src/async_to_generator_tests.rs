@@ -576,16 +576,49 @@ fn async_generator_linearizes_every_await_position() {
                 finally: None,
             }],
         ),
-        // NOTE: `await` inside a `finally` of a REAL async generator
-        // (`async function*`) is a SEPARATE, pre-existing gap in the
-        // `#4438` B2-finally lowering — the yielding finally's states are
-        // built with a raw `Expr::Await` instead of an async suspend, so it
-        // block-waits the same way. It is NOT addressed by this PR (which
-        // fixes the `was_plain_async` catch path); the closure test
-        // `async_closure_rewrite_leaves_no_residual_await` DOES cover
-        // `in-finally` for the `was_plain_async` path, which is clean.
-        // Tracked separately in #8715; omitted here so this test asserts
-        // only what this change fixes.
+        // #8715: `await` inside a `finally` of a REAL async generator
+        // (`async function*`). The yielding finally is linearized into its own
+        // dispatch states, but the `.return()` closure used to re-drive them
+        // through an async_step=false busy-wait loop (`__sent = await v;
+        // continue`) — a blocking wait, the finally analog of the #8681 catch
+        // deadlock. `.return()` now delegates the continuation to the shared
+        // `__agstep` driver, so the finally `await` suspends on the microtask
+        // queue and no raw `Expr::Await` survives.
+        (
+            "await-in-finally",
+            vec![Stmt::Try {
+                body: vec![y(Expr::Integer(0))],
+                catch: None,
+                finally: Some(vec![Stmt::Expr(await_(Expr::Integer(1)))]),
+            }],
+        ),
+        (
+            "await-in-try-and-finally",
+            vec![Stmt::Try {
+                body: vec![Stmt::Expr(await_(Expr::Integer(0))), y(Expr::Integer(5))],
+                catch: None,
+                finally: Some(vec![Stmt::Expr(await_(Expr::Integer(1)))]),
+            }],
+        ),
+        (
+            "await-in-try-catch-finally",
+            vec![Stmt::Try {
+                body: vec![y(Expr::Integer(0))],
+                catch: Some(CatchClause {
+                    param: None,
+                    body: vec![Stmt::Expr(await_(Expr::Integer(1)))],
+                }),
+                finally: Some(vec![Stmt::Expr(await_(Expr::Integer(2)))]),
+            }],
+        ),
+        (
+            "yield-in-finally-with-await",
+            vec![Stmt::Try {
+                body: vec![y(Expr::Integer(0))],
+                catch: None,
+                finally: Some(vec![y(Expr::Integer(8)), Stmt::Expr(await_(Expr::Integer(9)))]),
+            }],
+        ),
         (
             "await-in-if-inside-try-inside-loop",
             // The pi #6728 shape: await buried in nested control flow.
