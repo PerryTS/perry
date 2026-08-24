@@ -750,30 +750,16 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
             if parent.is_pointer() {
                 let parent_addr = parent.as_pointer::<u8>() as usize;
                 if crate::closure::is_closure_ptr(parent_addr) {
+                    // Use the same observable `.prototype` read as ordinary
+                    // property access. Plain functions and bound native-module
+                    // constructor exports materialize this object lazily, while
+                    // explicit, deleted, and generator prototypes must retain
+                    // their own semantics.
                     let parent_proto =
-                        crate::closure::closure_get_dynamic_prop(parent_addr, "prototype");
-                    // A bound native-module constructor export imported directly
-                    // (`import { EventEmitter } from "events"; class X extends
-                    // EventEmitter {}`) carries `.prototype` only lazily: the raw
-                    // dynamic-slot read above is still `undefined` because the
-                    // synthetic prototype object (which carries the EventEmitter
-                    // method surface) is materialized on demand, not at closure
-                    // mint time. Resolve it exactly as an ordinary `Y.prototype`
-                    // property read does, so the `extends` edge links to that real
-                    // prototype instead of throwing. `Stream` and the net/http
-                    // server classes share this shape. A non-constructor bound
-                    // method still resolves to `None` here, so a genuinely
-                    // prototype-less parent (e.g. a bare `fn.bind(...)`) still
-                    // throws below, matching Node.
-                    let resolved_proto = if class_parent_prototype_bits(parent_proto).is_some() {
-                        parent_proto
-                    } else {
-                        super::function_prototype::ordinary_function_prototype_value_for_read(
+                        super::function_prototype::js_function_prototype_value_for_read(
                             dynamic_parent.get_nanbox_f64(),
-                        )
-                        .unwrap_or(parent_proto)
-                    };
-                    if let Some(bits) = class_parent_prototype_bits(resolved_proto) {
+                        );
+                    if let Some(bits) = class_parent_prototype_bits(parent_proto) {
                         Some(bits)
                     } else {
                         super::super::object_ops::throw_object_type_error(
