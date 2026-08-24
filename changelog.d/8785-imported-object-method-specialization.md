@@ -1,0 +1,1 @@
+Stable imported object-literal methods now use guarded direct calls to their defining closure bodies. The fast path validates the exported receiver identity, exact own-property shape, and live function identity, while replacements, deletions, accessors, proxies, receiver changes, and other dynamic cases retain the universal method-dispatch fallback.
