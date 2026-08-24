@@ -409,6 +409,27 @@ fn is_string_prototype_generic_method(recv: &ast::Expr, method: &str) -> bool {
         )
 }
 
+/// `Array.prototype.toString` is itself a generic dispatch operation: it gets
+/// `this.join`, calls that value when callable, and otherwise calls the
+/// intrinsic `Object.prototype.toString`. Folding `.call(receiver)` into
+/// `receiver.toString()` changes all three operations, so leave this one method
+/// on the reflective runtime path.
+fn is_array_prototype_to_string(recv: &ast::Expr, method: &str) -> bool {
+    if method != "toString" {
+        return false;
+    }
+    let ast::Expr::Member(member) = recv else {
+        return false;
+    };
+    let ast::MemberProp::Ident(prop) = &member.prop else {
+        return false;
+    };
+    if prop.sym.as_ref() != "prototype" {
+        return false;
+    }
+    matches!(member.obj.as_ref(), ast::Expr::Ident(base) if base.sym.as_ref() == "Array")
+}
+
 pub(crate) fn try_builtin_prototype_method_apply_call(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -473,6 +494,9 @@ pub(crate) fn try_builtin_prototype_method_apply_call(
             // `is_string_prototype_generic_method`). Folding to `x.<m>()` would
             // dispatch on `x`'s own type and throw.
             if is_string_prototype_generic_method(inner.obj.as_ref(), method_ident.sym.as_ref()) {
+                return Ok(None);
+            }
+            if is_array_prototype_to_string(inner.obj.as_ref(), method_ident.sym.as_ref()) {
                 return Ok(None);
             }
             method_ident.clone()
@@ -745,6 +769,9 @@ pub(crate) fn as_builtin_proto_method_ref(
     if is_string_prototype_generic_method(&member.obj, method.sym.as_ref()) {
         return None;
     }
+    if is_array_prototype_to_string(&member.obj, method.sym.as_ref()) {
+        return None;
+    }
     // For a `<Ctor>.prototype` receiver, any method ident is accepted (mirrors
     // the existing `.call`/`.apply` rewrite, which doesn't gate on the method
     // name). For an array/string literal receiver, gate on the known
@@ -833,5 +860,16 @@ mod tests {
         assert!(is_string_prototype_generic_method(&recv, "charAt"));
         assert!(!is_string_prototype_generic_method(&recv, "toString"));
         assert!(!is_string_prototype_generic_method(&recv, "valueOf"));
+    }
+
+    #[test]
+    fn array_to_string_stays_reflective() {
+        let recv = prototype_member("Array");
+        assert!(is_array_prototype_to_string(&recv, "toString"));
+        assert!(!is_array_prototype_to_string(&recv, "join"));
+        assert!(!is_array_prototype_to_string(
+            &prototype_member("String"),
+            "toString"
+        ));
     }
 }

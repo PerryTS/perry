@@ -45,24 +45,12 @@
 //! so `arr.slice(1, 2)`, `arr.includes(x)`, `arr.join(",")` and every no-arg
 //! method emit byte-identical IR.
 //!
-//! ## Known window deliberately NOT closed here: #7213
-//!
-//! The `toString` arm unboxes the interned `","` through
-//! `js_get_string_pointer_unified`, whose SSO branch allocates, while the
-//! receiver handle is already in a register. `js_string_materialize_to_heap`'s
-//! rustdoc records why that is unexploitable today (the alloc-point arm forces
-//! a conservative stack scan, which both makes the copying minor ineligible and
-//! finds the register) and why it is tracked as #7213 rather than papered over.
-//! Closing it needs a combinator that roots across a collection point this
-//! module *emits* rather than one it infers from an operand list; that
-//! combinator should arrive with the slice that needs it, not ahead of one.
-
 use anyhow::{bail, Result};
 use perry_hir::Expr;
 
 use crate::expr::{
     emit_root_nanbox_store_on_block, emit_write_barrier, nanbox_pointer_inline,
-    nanbox_string_inline, unbox_str_handle, unbox_to_i64, FnCtx,
+    nanbox_string_inline, unbox_to_i64, FnCtx,
 };
 use crate::nanbox::{double_literal, TAG_UNDEFINED};
 use crate::rooting;
@@ -147,10 +135,10 @@ pub(crate) fn emit_grow_mutator_writeback(
 /// migration, so no behaviour changes in this slice.
 fn lowered_arg_count(property: &str, args: &[Expr]) -> usize {
     let declared = match property {
-        // Receiver-only. `arr.toString()` and `arr.reverse()` ignore their
-        // arguments entirely today; lowering them here would be a behaviour
-        // change (an added evaluation), not a rooting fix.
-        "toString" | "reverse" => 0,
+        // Receiver-only. `arr.reverse()` ignores its arguments entirely today;
+        // lowering them here would be a behaviour change (an added evaluation),
+        // not a rooting fix.
+        "reverse" => 0,
         // One: separator, depth, callback, comparator or index.
         "join" | "flat" | "flatMap" | "sort" | "at" | "findLast" | "findLastIndex" => 1,
         // Two: callback + thisArg, value + fromIndex, start + end, source +
@@ -282,27 +270,12 @@ pub(crate) fn lower_array_method(
                 ))
             }
             "toString" => {
-                // arr.toString() == arr.join(",")
-                let key_idx = ctx.strings.intern(",");
-                let handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                let blk = ctx.block();
-                let sep_box = blk.load(DOUBLE, &handle_global);
-                let recv_handle = unbox_to_i64(blk, recv_box);
-                // Interned literal "," — heap allocated at module init, so
-                // `unbox_to_i64` would technically work, but routing through
-                // `unbox_str_handle` keeps the path uniform with the `join`
-                // arm and is robust if interning ever changes to SSO-eligible.
-                //
-                // This call is the #7213 window described in the module header:
-                // its SSO branch allocates while `recv_handle` is already in a
-                // register. Left as-is, with its reasoning recorded there.
-                let sep_handle = unbox_str_handle(blk, &sep_box);
-                let result_handle = blk.call(
-                    I64,
-                    "js_array_join",
-                    &[(I64, &recv_handle), (I64, &sep_handle)],
-                );
-                Ok(nanbox_string_inline(blk, &result_handle))
+                // A source-level method call must resolve the current property:
+                // `Array.prototype.toString` is writable, and replacing it with
+                // `Object.prototype.toString` must affect even statically-known
+                // arrays. The runtime dispatcher preserves own-property
+                // precedence and invokes the live prototype method.
+                emit_native_method_dispatch(ctx, recv_box, property, arg_vals)
             }
             "concat" => {
                 // #2805: arr.concat(...args) — spec-complete, non-mutating, variadic.
@@ -1236,7 +1209,6 @@ mod tests {
         // (property, args supplied, arguments lowered)
         let cases: &[(&str, usize, usize)] = &[
             // Receiver-only: arguments are not evaluated at all today.
-            ("toString", 2, 0),
             ("reverse", 1, 0),
             // One leading argument.
             ("join", 0, 0),
@@ -1268,6 +1240,8 @@ mod tests {
             ("pop", 2, 2),
             ("shift", 1, 1),
             ("entries", 1, 1),
+            // Live method dispatch forwards every argument to a user override.
+            ("toString", 2, 2),
             ("next", 2, 2),
             ("someUserMethod", 3, 3),
         ];

@@ -877,6 +877,19 @@ pub(crate) extern "C" fn array_proto_join_thunk(
     let this = crate::object::js_implicit_this_get();
     crate::array::js_arraylike_join(this, sep)
 }
+
+/// Spec `Array.prototype.toString`: `ToObject(this)`, get the receiver's live
+/// `join` property, call it when callable, and otherwise use the intrinsic
+/// `Object.prototype.toString`. This must be a real thunk because keeping
+/// `Array.prototype.toString.call(x)` reflective is what preserves the generic
+/// receiver semantics; rewriting it to `x.toString()` loses the Array method.
+pub(crate) extern "C" fn array_prototype_to_string_thunk(
+    _c: *const crate::closure::ClosureHeader,
+) -> f64 {
+    let this = crate::object::js_implicit_this_get();
+    crate::value::array_prototype_to_string(this)
+}
+
 pub(crate) extern "C" fn array_prototype_concat_thunk(
     _c: *const crate::closure::ClosureHeader,
     rest: f64,
