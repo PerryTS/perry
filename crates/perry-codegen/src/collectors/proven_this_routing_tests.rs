@@ -737,17 +737,21 @@ fn single_arm_method_shape_guard_is_inlined_with_the_runtime_contract() {
         probe.contains("method_direct.inline_deref")
             && probe.contains("getelementptr i8, ptr")
             && probe.contains("i64 -8")
-            && probe.contains("i64 -7")
-            && probe.contains("i64 -6")
-            && probe.contains("and i16")
-            && probe.contains(", 2048")
-            && probe.contains("icmp ne i32")
-            && probe.contains("i64 4")
+            && probe.contains("and i32")
+            && probe.contains(", 134250751")
+            && probe.contains("icmp eq i32")
+            && probe.contains(", 2")
+            && probe.contains("load i64, ptr")
+            && probe.contains("zext i32")
+            && probe.contains("shl i64")
+            && probe.contains(", 32")
+            && probe.contains("or i64")
+            && probe.contains("icmp eq i64")
             && probe.contains("add i32")
             && probe.contains(", -2147483648")
             && probe.contains("icmp ult i32")
             && probe.contains(", 1073741824"),
-        "the header block must check the GC type, forwarding flag, own-descriptor bit, nonzero class id, ShapeId domain, and live ShapeId:\n{probe}"
+        "the packed header block must check the GC type, forwarding flag, own-descriptor bit, exact class/ShapeId pair, and ShapeId domain:\n{probe}"
     );
 }
 
