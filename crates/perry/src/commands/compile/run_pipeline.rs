@@ -339,6 +339,61 @@ fn imported_class_from_hir(
             .collect(),
         source_class_id: Some(class.id),
         return_shape_imports: Vec::new(),
+        object_literal: None,
+    }
+}
+
+fn imported_object_literal_from_capability(
+    capability: &perry_codegen::ExportedObjectLiteralCapability,
+    source_prefix: String,
+    source_export_name: String,
+    local_binding: String,
+) -> perry_codegen::ImportedClass {
+    // Keep the anonymous shape distinct from user-visible class/import names
+    // in the consumer while retaining the producer's class name for external
+    // keys/constructor symbol formation.
+    let receiver_class_name = format!(
+        "__ImportedObject_{}_{}_{}",
+        source_prefix, capability.global_id, local_binding
+    );
+    perry_codegen::ImportedClass {
+        name: capability.class_name.clone(),
+        local_alias: Some(receiver_class_name.clone()),
+        source_prefix: source_prefix.clone(),
+        constructor_param_count: capability.field_names.len(),
+        has_own_constructor: true,
+        constructor_has_rest: false,
+        has_instance_fields: !capability.field_names.is_empty(),
+        method_names: Vec::new(),
+        proven_this_method_names: Vec::new(),
+        proven_this_tower_method_names: Vec::new(),
+        method_return_types: Vec::new(),
+        method_param_counts: Vec::new(),
+        method_has_rest: Vec::new(),
+        method_has_synthetic_arguments: Vec::new(),
+        static_field_names: Vec::new(),
+        static_method_names: Vec::new(),
+        static_method_return_types: Vec::new(),
+        static_method_param_counts: Vec::new(),
+        static_method_has_rest: Vec::new(),
+        static_method_has_user_rest: Vec::new(),
+        static_method_has_synthetic_arguments: Vec::new(),
+        getter_names: Vec::new(),
+        getter_return_types: Vec::new(),
+        setter_names: Vec::new(),
+        parent_name: None,
+        field_names: capability.field_names.clone(),
+        field_types: vec![perry_hir::types::Type::Any; capability.field_names.len()],
+        source_class_id: Some(capability.class_id),
+        return_shape_imports: Vec::new(),
+        object_literal: Some(perry_codegen::ImportedObjectLiteral {
+            local_binding,
+            source_export_name,
+            source_prefix,
+            receiver_class_name,
+            source_global_id: capability.global_id,
+            methods: capability.methods.clone(),
+        }),
     }
 }
 
@@ -926,6 +981,22 @@ pub fn run_with_parse_cache(
                 class_proven_this_tower_methods
                     .insert(class as *const perry_hir::Class as usize, methods.clone());
             }
+        }
+    }
+
+    // Immutable object-literal method capabilities are keyed exactly like the
+    // other producer facts below. Import resolution later follows barrels to
+    // this defining path/name before installing a consumer-local binding.
+    let mut exported_object_literals: BTreeMap<
+        (String, String),
+        perry_codegen::ExportedObjectLiteralCapability,
+    > = BTreeMap::new();
+    for (path, hir_module) in &ctx.native_modules {
+        let path_str = path.to_string_lossy().to_string();
+        for (export_name, capability) in
+            perry_codegen::exported_object_literal_method_capabilities(hir_module)
+        {
+            exported_object_literals.insert((path_str.clone(), export_name), capability);
         }
     }
 
@@ -4066,6 +4137,20 @@ pub fn run_with_parse_cache(
                         imported_vars.insert(exported_name.clone());
                         if local_name != exported_name {
                             imported_vars.insert(local_name.clone());
+                        }
+
+                        let origin_export_name = resolved_origin_name
+                            .clone()
+                            .unwrap_or_else(|| exported_name.clone());
+                        if let Some(capability) = exported_object_literals
+                            .get(&(origin_path.clone(), origin_export_name.clone()))
+                        {
+                            imported_classes.push(imported_object_literal_from_capability(
+                                capability,
+                                effective_prefix.clone(),
+                                origin_export_name,
+                                local_name.clone(),
+                            ));
                         }
                     }
 

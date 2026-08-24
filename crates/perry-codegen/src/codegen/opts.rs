@@ -607,6 +607,48 @@ pub struct ImportedClass {
     /// facts. Kept beside the class metadata so the proof and the field layout
     /// it names enter the consumer atomically and share one object-cache key.
     pub return_shape_imports: Vec<String>,
+    /// Producer-authored capability for an imported, immutable object-literal
+    /// binding. Such entries also carry the anonymous shape class above so the
+    /// consumer can validate its source class/ShapeId pair, but they are not
+    /// JavaScript class imports and are only consumed by the guarded own-method
+    /// lowering.
+    pub object_literal: Option<ImportedObjectLiteral>,
+}
+
+/// One concise own method published by an exported object-literal capability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedObjectLiteralMethod {
+    pub name: String,
+    pub func_id: u32,
+    pub param_count: usize,
+    pub field_index: u32,
+}
+
+/// Consumer-resolved capability for one imported object-literal binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedObjectLiteral {
+    /// The identifier carried by `Expr::ExternFuncRef` in the consumer.
+    pub local_binding: String,
+    /// Public export name at the defining module, retained for diagnostics.
+    pub source_export_name: String,
+    pub source_prefix: String,
+    /// Consumer-local name of the imported anonymous shape stub.
+    pub receiver_class_name: String,
+    /// LocalId of the defining module's immutable global binding.
+    pub source_global_id: u32,
+    pub methods: Vec<ImportedObjectLiteralMethod>,
+}
+
+/// Defining-module fact harvested before parallel code generation. Absence is
+/// authoritative: importers never infer an object capability from a getter or
+/// from their own call-site observations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportedObjectLiteralCapability {
+    pub class_name: String,
+    pub class_id: u32,
+    pub global_id: u32,
+    pub field_names: Vec<String>,
+    pub methods: Vec<ImportedObjectLiteralMethod>,
 }
 
 /// Constructor metadata for a class imported from another module.
@@ -793,6 +835,9 @@ pub(crate) struct CrossModuleCtx {
     pub i18n: Option<crate::expr::I18nLowerCtx>,
     /// Names of imports that are exported variables (not functions).
     pub imported_vars: std::collections::HashSet<String>,
+    /// Producer-authored immutable imported object-literal capabilities,
+    /// keyed by the consumer's local import binding.
+    pub imported_object_literals: std::collections::HashMap<String, ImportedObjectLiteral>,
     /// Whether perry-stdlib will be linked into the final binary. When
     /// false, compile_module_entry skips the `js_stdlib_init_dispatch()`
     /// call in main's prologue because only the runtime is linked and

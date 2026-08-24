@@ -498,6 +498,7 @@ fn imported_remote() -> ImportedClass {
         ])],
         source_class_id: Some(55),
         return_shape_imports: Vec::new(),
+        object_literal: None,
     }
 }
 

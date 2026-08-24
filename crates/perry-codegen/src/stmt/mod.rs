@@ -21,6 +21,7 @@ mod element_shape_loop;
 mod element_shape_loop_tests;
 mod if_stmt;
 mod let_buffer_views;
+mod let_object_facts;
 mod let_stmt;
 mod let_stmt_facts;
 mod loops;

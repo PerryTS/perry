@@ -2134,3 +2134,62 @@ name = "imported_registry_generic_fallback_retained"
 consumer = "proven_this_method_direct_call"
 notes_contains = "generic_dispatch_fallback=js_native_call_method_by_id"
 min = 2
+
+[workloads.issue_8775_imported_object]
+source = "test-files/fixtures/issue_8775_imported_object/main.js"
+kind = "imported_object_literal_method_specialization"
+allow_hot_loop_conversions = true
+allow_dynamic_property_runtime = true
+
+[workloads.issue_8775_imported_object.vectorization]
+min_vectorized_loops = 0
+scalar_baseline = "allowed: this fixture gates cross-module own-method dispatch"
+allowed_missed_reason_kinds = [
+  "call_instruction",
+  "control_flow",
+  "generic_not_vectorized",
+  "not_beneficial",
+  "uncountable_loop",
+  "unknown_trip_count",
+  "unsupported_instruction",
+  "unsupported_reduction",
+]
+
+[workloads.issue_8775_imported_object.runtime_budgets]
+
+[[workloads.issue_8775_imported_object.stdout_checks]]
+name = "imported_object_checksum"
+equals = "{\"checksum\":400000,\"remaining\":0}\n"
+detail = "stable imported object methods preserve the Node checksum"
+
+[[workloads.issue_8775_imported_object.ir_checks]]
+name = "direct_producer_closure_calls"
+section = "llvm_before"
+contains_all = [
+  "call double @perry_closure_adapter_js__6",
+  "call double @perry_closure_adapter_js__7",
+  "call double @perry_closure_adapter_js__8",
+  "call double @perry_closure_adapter_js__9",
+]
+detail = "stable arms directly call producer closure bodies"
+
+[[workloads.issue_8775_imported_object.ir_checks]]
+name = "generic_method_fallback_retained"
+section = "llvm_before"
+contains = "call double @js_native_call_method_by_id"
+detail = "guard failures retain the universal method dispatcher"
+
+[workloads.issue_8775_imported_object.native_rep_checks]
+allow_materialization_reasons = ["runtime_api"]
+
+[[workloads.issue_8775_imported_object.native_rep_checks.require_records]]
+name = "imported_object_direct_selection"
+consumer = "imported_object_literal_method_direct_call"
+notes_contains = "receiver_provenance=imported_object_literal_metadata"
+min = 5
+
+[[workloads.issue_8775_imported_object.native_rep_checks.require_records]]
+name = "imported_object_generic_fallback_retained"
+consumer = "imported_object_literal_method_direct_call"
+notes_contains = "generic_dispatch_fallback=js_native_call_method_by_id"
+min = 5

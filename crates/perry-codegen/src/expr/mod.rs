@@ -1265,10 +1265,17 @@ pub(crate) struct FnCtx<'a> {
     /// receiver calls.
     pub local_value_aliases: std::collections::HashMap<u32, u32>,
 
+    /// Immutable local aliases of producer-proven imported object literals.
+    /// The value is the original consumer import binding used to look up the
+    /// cross-module capability.
+    pub local_imported_object_aliases: std::collections::HashMap<u32, String>,
+
     /// Names of imports that are exported variables (not functions).
     /// When an ExternFuncRef with one of these names appears as a value,
     /// the codegen calls the getter instead of wrapping as a closure.
     pub imported_vars: &'a std::collections::HashSet<String>,
+    pub imported_object_literals:
+        &'a std::collections::HashMap<String, crate::codegen::ImportedObjectLiteral>,
 
     /// Compile-time constant values for specific module globals. When a
     /// global is a known compile-time constant (e.g., `__platform__`),

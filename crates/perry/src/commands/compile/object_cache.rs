@@ -569,6 +569,7 @@ fn compute_object_cache_key_with_env(
             a.name
                 .cmp(&b.name)
                 .then(a.source_prefix.cmp(&b.source_prefix))
+                .then(a.local_alias.cmp(&b.local_alias))
         });
         let mut buf = String::new();
         for c in v {
@@ -693,6 +694,25 @@ fn compute_object_cache_key_with_env(
             let mut return_shape_imports = c.return_shape_imports.clone();
             return_shape_imports.sort();
             buf.push_str(&return_shape_imports.join(","));
+            buf.push_str(":object_literal=");
+            if let Some(object) = &c.object_literal {
+                buf.push_str(&format!(
+                    "{}@{}:{}:{}:{}:",
+                    object.local_binding,
+                    object.source_prefix,
+                    object.source_export_name,
+                    object.receiver_class_name,
+                    object.source_global_id,
+                ));
+                let mut methods = object.methods.clone();
+                methods.sort_by(|left, right| left.name.cmp(&right.name));
+                for method in methods {
+                    buf.push_str(&format!(
+                        "{}={}/{}/{};",
+                        method.name, method.func_id, method.param_count, method.field_index
+                    ));
+                }
+            }
             buf.push('|');
         }
         h.field("imported_classes", &buf);
