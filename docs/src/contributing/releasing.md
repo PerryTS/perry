@@ -65,11 +65,14 @@ Then use the staged pipeline:
 
 The local publish/approve process requires npm 11.17 or newer and a valid
 `SOCKET_API_TOKEN` for the mandatory tarball scan. CI uses OIDC for staging;
-do not set a long-lived npm publish token.
+do not set a long-lived npm publish token. The local npm account must be a
+maintainer of all nine packages because it lists and approves their staged
+entries.
 
 ```bash
 npm --version                 # must be >= 11.17.0
 # If needed: npm install -g npm@latest
+npm whoami                    # must succeed as an @perryts package maintainer
 ```
 
 One-time GitHub setup: create the environment named in the OIDC identity and
@@ -111,7 +114,8 @@ pipeline intentionally refuses a partial set.
 
 ```bash
 npm run publish:stage       # CI builds all platforms, stages 9 npm packages,
-                            # verifies sha1, and runs the mandatory Socket scan
+                            # verifies sha1, runs the mandatory Socket scan,
+                            # and downloads the exact proof tarballs locally
 npm run publish:status      # inspect the commit/run/package receipt
 npm run publish:approve     # explicit 2FA promote; waits for registry liveness
                             # and only then creates v0.x.y + the GitHub Release

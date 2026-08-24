@@ -33,6 +33,8 @@ export interface ApproveOptions {
   otp?: string
   /** Approve without prompting; browser web-OTP drives 2FA. */
   yes?: boolean
+  /** Root containing the exact tarballs downloaded from the staging CI run. */
+  proofRoot?: string
 }
 
 export interface ApproveReceipt {
@@ -116,7 +118,7 @@ export async function runApprove(opts: ApproveOptions): Promise<ApproveReceipt> 
   // 1. Verify each staged entry (sha1 gate).
   const verified: StagedEntry[] = []
   for (const entry of staged) {
-    if (await verifyStagedEntry(entry)) verified.push(entry)
+    if (await verifyStagedEntry(entry, opts.proofRoot)) verified.push(entry)
   }
   if (verified.length === 0) {
     logger.fail('No staged entries passed the verify gate — not approving.')
@@ -152,7 +154,13 @@ export async function runApprove(opts: ApproveOptions): Promise<ApproveReceipt> 
   }
   const passed: StagedEntry[] = []
   for (const entry of verified) {
-    const res = await scanTarball(ctx, entry.name, entry.version, entry.shasum)
+    const res = await scanTarball(
+      ctx,
+      entry.name,
+      entry.version,
+      entry.shasum,
+      opts.proofRoot,
+    )
     scanResults.push(res)
     if (res.status === 'passed') passed.push(entry)
     else logger.fail(`scan ${res.status}: ${entry.name}@${entry.version} dropped from approve`)

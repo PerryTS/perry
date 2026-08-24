@@ -9,7 +9,14 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
@@ -24,12 +31,13 @@ import { compareSemver, extractFirstJson } from './shared.mts'
 import { parseStageListJson } from './npm/shared.mts'
 import { perryStagedEntries } from './npm/approve.mts'
 import { tagExists } from './npm/bump.mts'
-import { freshStageState } from './pipeline.mts'
+import { verifyStagedEntry } from './npm/staged.mts'
+import { freshStageState, isCompleteScanReceipt } from './pipeline.mts'
 import {
   INLINE_RELEASE_NOTES_MAX_BYTES,
   planReleaseNotes,
 } from './release.mts'
-import { NPM_MIN_VERSION } from './constants.mts'
+import { ALL_PACKAGES, NPM_MIN_VERSION } from './constants.mts'
 
 const PUBLISH_DIR = path.dirname(fileURLToPath(import.meta.url))
 
@@ -162,6 +170,7 @@ test('freshStageState: a new stage cannot inherit an old approval receipt', () =
     sha: 'a'.repeat(40),
     ref: 'release/v0.5.1519',
     runId: '12345',
+    stageProofDir: '.cache/perry/publish-pipeline/artifacts/12345',
   })
   assert.deepEqual(state.staged, [])
   assert.deepEqual(state.verified, [])
@@ -172,6 +181,56 @@ test('freshStageState: a new stage cannot inherit an old approval receipt', () =
   assert.equal(state.candidateSha, 'a'.repeat(40))
   assert.equal(state.candidateRef, 'release/v0.5.1519')
   assert.equal(state.stageRunId, '12345')
+  assert.equal(
+    state.stageProofDir,
+    '.cache/perry/publish-pipeline/artifacts/12345',
+  )
+})
+
+test('verifyStagedEntry: local approval verifies the exact CI proof tarball', async () => {
+  const proofRoot = mkdtempSync(path.join(os.tmpdir(), 'perry-stage-proof-'))
+  try {
+    const packageDir = path.join(proofRoot, 'npm/perry-win32-arm64')
+    mkdirSync(packageDir, { recursive: true })
+    const tarball = path.join(packageDir, 'perryts-perry-win32-arm64-0.5.1519.tgz')
+    writeFileSync(tarball, 'exact staged bytes')
+    const shasum = createHash('sha1')
+      .update(readFileSync(tarball))
+      .digest('hex')
+    const entry = {
+      name: '@perryts/perry-win32-arm64',
+      version: '0.5.1519',
+      stageId: 'stage-proof',
+      shasum,
+    }
+    assert.equal(await verifyStagedEntry(entry, proofRoot), true)
+    assert.equal(
+      await verifyStagedEntry({ ...entry, shasum: '0'.repeat(40) }, proofRoot),
+      false,
+    )
+  } finally {
+    rmSync(proofRoot, { recursive: true, force: true })
+  }
+})
+
+test('isCompleteScanReceipt: every exact package/version must pass', () => {
+  const version = '0.5.1519'
+  const packages = [...ALL_PACKAGES]
+  const state = {
+    version,
+    staged: packages.map(name => `${name}@${version}`),
+    verified: packages.map(name => `${name}@${version}`),
+    scanResults: packages.map(name => ({
+      name,
+      version,
+      status: 'passed' as const,
+      summary: { error: [], total: 0, warn: [] },
+    })),
+    updatedAt: new Date().toISOString(),
+  }
+  assert.equal(isCompleteScanReceipt(state), true)
+  state.scanResults[0] = { ...state.scanResults[0]!, status: 'blocked' }
+  assert.equal(isCompleteScanReceipt(state), false)
 })
 
 test('formatHumanGate: the 🖐 block shape with both lanes', () => {
@@ -368,6 +427,8 @@ test('pipeline.mts: stage dispatch and release receipt are pinned to one commit'
   assert.match(src, /'--ref',\s*candidate\.ref/)
   assert.match(src, /`candidate-sha=\$\{candidate\.sha\}`/)
   assert.match(src, /r\.headSha === candidate\.sha/)
+  assert.match(src, /npm-staged-package-proofs/)
+  assert.match(src, /downloadStageProof\(runId\)/)
   assert.match(src, /requirePinnedCandidate\(state\)/)
   assert.match(src, /ensureTagAndRelease\(gate\.version, candidate\.sha\)/)
 })

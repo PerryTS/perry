@@ -360,3 +360,27 @@ jobs:
         # code, same gate, whether it runs in CI or locally.
         if: env.PUBLISH == 'true'
         run: node scripts/publish/pipeline.mts --scan-only
+
+      - name: Bundle exact staged-package proofs
+        if: env.PUBLISH == 'true'
+        run: |
+          set -euo pipefail
+          mapfile -t proofs < <(
+            find npm -mindepth 2 -maxdepth 2 -type f -name '*.tgz' | sort
+          )
+          if [ "${#proofs[@]}" -ne 9 ]; then
+            echo "::error::Expected 9 exact tarballs after verify + scan; found ${#proofs[@]}." >&2
+            printf '  %s\n' "${proofs[@]}" >&2
+            exit 1
+          fi
+          tar -cf npm-staged-package-proofs.tar "${proofs[@]}"
+
+      - name: Retain exact staged-package proofs for local 2FA approval
+        if: env.PUBLISH == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: npm-staged-package-proofs
+          path: npm-staged-package-proofs.tar
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0 # the nine .tgz payloads are already compressed

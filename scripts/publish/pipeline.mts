@@ -15,18 +15,26 @@
  *   approved — so a release cut earlier can mark a version that never shipped).
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 
 import {
   ALL_PACKAGES,
+  npmPackageDir,
   PIPELINE_STATE_DIR,
   rootPath,
 } from './constants.mts'
 import { logger, runCapture, checkNpmFloor } from './shared.mts'
 import { checkVersionGate } from './npm/bump.mts'
-import { runStaged, verifyStagedEntry } from './npm/staged.mts'
+import { verifyStagedEntry } from './npm/staged.mts'
 import { listStagedEntries, type StagedEntry } from './npm/shared.mts'
 import { runApprove } from './npm/approve.mts'
 import {
@@ -46,6 +54,8 @@ export interface PipelineState {
   candidateSha?: string
   candidateRef?: string
   stageRunId?: string
+  /** Cache-relative root containing CI's exact nine staged tarballs. */
+  stageProofDir?: string
   staged: string[]
   verified: string[]
   scanResults: ScanResult[]
@@ -64,6 +74,7 @@ interface Candidate {
 
 interface StageWorkflowReceipt extends Candidate {
   runId: string
+  stageProofDir?: string
 }
 
 /** A successful real stage invalidates every receipt from an earlier attempt. */
@@ -76,6 +87,7 @@ export function freshStageState(
     candidateSha: receipt.sha,
     candidateRef: receipt.ref,
     stageRunId: receipt.runId,
+    stageProofDir: receipt.stageProofDir,
     staged: [],
     verified: [],
     scanResults: [],
@@ -104,6 +116,58 @@ function writeState(state: PipelineState): void {
   const dir = path.join(rootPath, PIPELINE_STATE_DIR)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   writeFileSync(statePath(state.version), JSON.stringify(state, null, 2) + '\n')
+}
+
+/** Download and validate the exact tarballs retained by a successful stage run. */
+async function downloadStageProof(runId: string): Promise<string | undefined> {
+  const relativeDir = path.join(PIPELINE_STATE_DIR, 'artifacts', runId)
+  const artifactDir = path.join(rootPath, relativeDir)
+  rmSync(artifactDir, { recursive: true, force: true })
+  mkdirSync(artifactDir, { recursive: true })
+  const download = await runCapture(
+    'gh',
+    [
+      'run', 'download', runId, '-R', 'PerryTS/perry',
+      '--name', 'npm-staged-package-proofs', '--dir', artifactDir,
+    ],
+    rootPath,
+  )
+  const archive = path.join(artifactDir, 'npm-staged-package-proofs.tar')
+  if (download.code !== 0 || !existsSync(archive)) {
+    logger.fail(
+      `Could not download the exact staged-package proofs from run ${runId}. ` +
+        'Do not approve without those tarballs.',
+    )
+    return undefined
+  }
+  const extract = await runCapture(
+    'tar',
+    ['-xf', archive, '-C', artifactDir],
+    rootPath,
+  )
+  rmSync(archive, { force: true })
+  if (extract.code !== 0) {
+    logger.fail(`Could not extract the staged-package proofs from run ${runId}.`)
+    return undefined
+  }
+  const missing = ALL_PACKAGES.filter(name => {
+    const packageDir = path.join(
+      artifactDir,
+      npmPackageDir(name),
+    )
+    return (
+      !existsSync(packageDir) ||
+      readdirSync(packageDir).filter(file => file.endsWith('.tgz')).length !== 1
+    )
+  })
+  if (missing.length > 0) {
+    logger.fail(
+      `Stage run ${runId} did not retain one proof tarball for every package. ` +
+        `Missing/ambiguous: ${missing.join(', ')}.`,
+    )
+    return undefined
+  }
+  return relativeDir
 }
 
 /** Resolve a clean, pushed branch tip. workflow_dispatch accepts a branch/tag, not a raw SHA. */
@@ -214,6 +278,23 @@ function isCompleteVersionSet(items: readonly string[], version: string): boolea
   )
 }
 
+export function isCompleteScanReceipt(state: PipelineState): boolean {
+  return (
+    isCompleteVersionSet(state.staged, state.version) &&
+    isCompleteVersionSet(state.verified, state.version) &&
+    !state.scanBlocked &&
+    state.scanResults.length === ALL_PACKAGES.length &&
+    ALL_PACKAGES.every(name =>
+      state.scanResults.some(
+        result =>
+          result.name === name &&
+          result.version === state.version &&
+          result.status === 'passed',
+      ),
+    )
+  )
+}
+
 /** Dispatch the CI stage workflow and watch it to completion. */
 async function dispatchStageWorkflow(
   version: string,
@@ -285,8 +366,10 @@ async function dispatchStageWorkflow(
     logger.fail(`CI stage workflow run ${runId} did not succeed (${watch.code}).`)
     return undefined
   }
+  const stageProofDir = dryRun ? undefined : await downloadStageProof(runId)
+  if (!dryRun && !stageProofDir) return undefined
   logger.log(`CI stage workflow run ${runId} succeeded — staged @perryts/* v${version}.`)
-  return { ...candidate, runId }
+  return { ...candidate, runId, stageProofDir }
 }
 
 /** Verify + scan the currently-staged @perryts/* entries; update state. */
@@ -294,6 +377,9 @@ async function verifyAndScan(
   version: string,
   state: PipelineState,
 ): Promise<PipelineState> {
+  const proofRoot = state.stageProofDir
+    ? path.join(rootPath, state.stageProofDir)
+    : undefined
   const staged = (await listStagedEntries(rootPath)).filter(
     e =>
       e.version === version &&
@@ -310,7 +396,7 @@ async function verifyAndScan(
   }
   const verified: StagedEntry[] = []
   for (const entry of staged) {
-    if (await verifyStagedEntry(entry)) verified.push(entry)
+    if (await verifyStagedEntry(entry, proofRoot)) verified.push(entry)
   }
   state.verified = verified.map(e => `${e.name}@${e.version}`)
   // The scan gate is mandatory — there is no flag to skip it. A missing/invalid
@@ -320,7 +406,15 @@ async function verifyAndScan(
   if (ctx) {
     const results: ScanResult[] = []
     for (const entry of verified) {
-      results.push(await scanTarball(ctx, entry.name, entry.version, entry.shasum))
+      results.push(
+        await scanTarball(
+          ctx,
+          entry.name,
+          entry.version,
+          entry.shasum,
+          proofRoot,
+        ),
+      )
     }
     state.scanResults = results
     state.scanBlocked = false
@@ -346,6 +440,7 @@ function printStatus(state: PipelineState): void {
     `  candidate: ${state.candidateSha ? `${state.candidateRef}@${state.candidateSha}` : '(not pinned)'}`,
   )
   logger.log(`  stage run: ${state.stageRunId ?? '(none)'}`)
+  logger.log(`  proof:     ${state.stageProofDir ?? '(none)'}`)
   logger.log(`  staged:    ${state.staged.length ? state.staged.join(', ') : '(none)'}`)
   logger.log(`  verified:  ${state.verified.length ? state.verified.join(', ') : '(none)'}`)
   logger.log(
@@ -458,6 +553,13 @@ async function main(): Promise<void> {
     writeState(state)
     state = await verifyAndScan(gate.version, state)
     printStatus(state)
+    if (!isCompleteScanReceipt(state)) {
+      logger.fail(
+        'The local exact-tarball verification/scan receipt is incomplete — fix npm login or Socket auth, then run `npm run publish:scan`.',
+      )
+      process.exitCode = 1
+      return
+    }
     logger.log(formatApproveGate({ version: gate.version, repoPath: rootPath }))
     return
   }
@@ -469,13 +571,7 @@ async function main(): Promise<void> {
     // publish:approve is the real enforcement point), --scan-only is what CI
     // uses as a gate — a caller checking only the exit code must see a
     // failure for a blocked/incomplete/not-passed scan, not just a log line.
-    const complete = state.staged.length === ALL_PACKAGES.length
-    const allVerified = state.verified.length === state.staged.length
-    const allScanned =
-      !state.scanBlocked &&
-      state.scanResults.length === state.verified.length &&
-      state.scanResults.every(r => r.status === 'passed')
-    if (!complete || !allVerified || !allScanned) {
+    if (!isCompleteScanReceipt(state)) {
       process.exitCode = 1
     }
     return
@@ -487,10 +583,21 @@ async function main(): Promise<void> {
       process.exitCode = 1
       return
     }
+    const proofRoot = state.stageProofDir
+      ? path.join(rootPath, state.stageProofDir)
+      : undefined
+    if (!proofRoot || !existsSync(proofRoot)) {
+      logger.fail(
+        'The exact staged-package proof is missing — re-run `npm run publish:stage`; refusing to repack template directories.',
+      )
+      process.exitCode = 1
+      return
+    }
     const receipt = await runApprove({
       version: gate.version,
       yes: flags.has('--yes'),
       otp,
+      proofRoot,
     })
     state.approved = receipt.approved
     state.registryLive = receipt.registryLive
