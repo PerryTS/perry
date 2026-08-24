@@ -1419,7 +1419,17 @@ fn inline_arg_needs_value_boundary(param: &Param, arg: &Expr) -> bool {
     // value semantics there: codegen materializes a managed copy for `any`
     // and copies exact POD layouts. Direct substitution would let later POD
     // recognition target the caller's native local from inside the callee.
-    matches!(arg, Expr::LocalGet(_)) && !param.ty.is_primitive()
+    if !matches!(arg, Expr::LocalGet(_)) || param.ty.is_primitive() {
+        return false;
+    }
+    // Typed arrays have reference semantics and cannot resolve to a PerryPod
+    // alias. Keeping a redundant parameter local for them hides their element
+    // reads from the canonical-i32 collector (the int-valued-TA liveness
+    // fixture loses two proven locals), with no value boundary to preserve.
+    !matches!(
+        &param.ty,
+        Type::Named(name) if perry_hir::typed_array_kind_for_name(name).is_some()
+    )
 }
 
 /// Try to inline a simple function or method call.

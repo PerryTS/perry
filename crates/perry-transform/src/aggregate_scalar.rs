@@ -20,7 +20,7 @@
 use std::collections::{HashMap, HashSet};
 
 use perry_hir::types::{LocalId, Type};
-use perry_hir::{Expr, Module, Stmt};
+use perry_hir::{Expr, Function, Module, Stmt};
 
 const MAX_SCALAR_AGGREGATE_LEN: usize = 8;
 const MAX_SCALAR_AGGREGATE_FIELDS: usize = 16;
@@ -52,19 +52,70 @@ pub fn run(module: &mut Module) {
         })
         .collect();
 
+    // LocalIds are module-unique, but generated object/class methods live in
+    // separate HIR function bodies. A carrier declared in one body must stay
+    // materialized when another body references it, even if every use in the
+    // declaring body looks scalarizable. Count the distinct HIR regions that
+    // reference each local before mutating any of them.
+    let mut region_refs = vec![collect_stmt_refs(&module.init)];
+    region_refs.extend(module.functions.iter().map(collect_function_refs));
+    for class in &module.classes {
+        if let Some(constructor) = &class.constructor {
+            region_refs.push(collect_function_refs(constructor));
+        }
+        region_refs.extend(class.methods.iter().map(collect_function_refs));
+        region_refs.extend(
+            class
+                .getters
+                .iter()
+                .map(|(_, function)| collect_function_refs(function)),
+        );
+        region_refs.extend(
+            class
+                .setters
+                .iter()
+                .map(|(_, function)| collect_function_refs(function)),
+        );
+        region_refs.extend(class.static_methods.iter().map(collect_function_refs));
+    }
+    // Computed members are code-generated from their own retained Function
+    // bodies rather than passed through scalarize_stmts below. They still
+    // count as separate consumers of a carrier declared elsewhere.
+    for class in &module.classes {
+        region_refs.extend(
+            class
+                .computed_members
+                .iter()
+                .map(|member| collect_function_refs(&member.function)),
+        );
+    }
+    let mut reference_region_counts: HashMap<LocalId, usize> = HashMap::new();
+    for refs in &region_refs {
+        for id in refs {
+            *reference_region_counts.entry(*id).or_default() += 1;
+        }
+    }
+    let mut region_index = 0;
+
     scalarize_stmts(
         &mut module.init,
         &mut next_local_id,
         &mut source_span_remaps,
         &anon_shape_fields,
+        &region_refs[region_index],
+        &reference_region_counts,
     );
+    region_index += 1;
     for function in &mut module.functions {
         scalarize_stmts(
             &mut function.body,
             &mut next_local_id,
             &mut source_span_remaps,
             &anon_shape_fields,
+            &region_refs[region_index],
+            &reference_region_counts,
         );
+        region_index += 1;
     }
     for class in &mut module.classes {
         if let Some(constructor) = &mut class.constructor {
@@ -73,7 +124,10 @@ pub fn run(module: &mut Module) {
                 &mut next_local_id,
                 &mut source_span_remaps,
                 &anon_shape_fields,
+                &region_refs[region_index],
+                &reference_region_counts,
             );
+            region_index += 1;
         }
         for method in &mut class.methods {
             scalarize_stmts(
@@ -81,7 +135,10 @@ pub fn run(module: &mut Module) {
                 &mut next_local_id,
                 &mut source_span_remaps,
                 &anon_shape_fields,
+                &region_refs[region_index],
+                &reference_region_counts,
             );
+            region_index += 1;
         }
         for (_, getter) in &mut class.getters {
             scalarize_stmts(
@@ -89,7 +146,10 @@ pub fn run(module: &mut Module) {
                 &mut next_local_id,
                 &mut source_span_remaps,
                 &anon_shape_fields,
+                &region_refs[region_index],
+                &reference_region_counts,
             );
+            region_index += 1;
         }
         for (_, setter) in &mut class.setters {
             scalarize_stmts(
@@ -97,7 +157,10 @@ pub fn run(module: &mut Module) {
                 &mut next_local_id,
                 &mut source_span_remaps,
                 &anon_shape_fields,
+                &region_refs[region_index],
+                &reference_region_counts,
             );
+            region_index += 1;
         }
         for method in &mut class.static_methods {
             scalarize_stmts(
@@ -105,7 +168,10 @@ pub fn run(module: &mut Module) {
                 &mut next_local_id,
                 &mut source_span_remaps,
                 &anon_shape_fields,
+                &region_refs[region_index],
+                &reference_region_counts,
             );
+            region_index += 1;
         }
     }
 
@@ -116,11 +182,28 @@ pub fn run(module: &mut Module) {
     }
 }
 
+fn collect_stmt_refs(stmts: &[Stmt]) -> HashSet<LocalId> {
+    let mut refs = Vec::new();
+    let mut visited = HashSet::new();
+    for stmt in stmts {
+        perry_hir::collect_local_refs_stmt(stmt, &mut refs, &mut visited);
+    }
+    refs.into_iter().collect()
+}
+
+fn collect_function_refs(function: &Function) -> HashSet<LocalId> {
+    let mut refs = collect_stmt_refs(&function.body);
+    refs.extend(function.captures.iter().copied());
+    refs
+}
+
 fn scalarize_stmts(
     stmts: &mut Vec<Stmt>,
     next_local_id: &mut LocalId,
     source_span_remaps: &mut Vec<(LocalId, LocalId)>,
     anon_shape_fields: &AnonShapeFields,
+    region_refs: &HashSet<LocalId>,
+    reference_region_counts: &HashMap<LocalId, usize>,
 ) {
     let candidates: Vec<LocalId> = stmts
         .iter()
@@ -142,6 +225,8 @@ fn scalarize_stmts(
             next_local_id,
             source_span_remaps,
             anon_shape_fields,
+            region_refs,
+            reference_region_counts,
         );
     }
 
@@ -159,6 +244,8 @@ fn scalarize_stmts(
                     next_local_id,
                     source_span_remaps,
                     anon_shape_fields,
+                    region_refs,
+                    reference_region_counts,
                 );
                 if let Some(else_branch) = else_branch {
                     scalarize_stmts(
@@ -166,11 +253,20 @@ fn scalarize_stmts(
                         next_local_id,
                         source_span_remaps,
                         anon_shape_fields,
+                        region_refs,
+                        reference_region_counts,
                     );
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                scalarize_stmts(body, next_local_id, source_span_remaps, anon_shape_fields);
+                scalarize_stmts(
+                    body,
+                    next_local_id,
+                    source_span_remaps,
+                    anon_shape_fields,
+                    region_refs,
+                    reference_region_counts,
+                );
             }
             Stmt::For { init, body, .. } => {
                 if let Some(init) = init {
@@ -180,25 +276,43 @@ fn scalarize_stmts(
                         next_local_id,
                         source_span_remaps,
                         anon_shape_fields,
+                        region_refs,
+                        reference_region_counts,
                     );
                     if init_vec.len() == 1 {
                         **init = init_vec.remove(0);
                     }
                 }
-                scalarize_stmts(body, next_local_id, source_span_remaps, anon_shape_fields);
+                scalarize_stmts(
+                    body,
+                    next_local_id,
+                    source_span_remaps,
+                    anon_shape_fields,
+                    region_refs,
+                    reference_region_counts,
+                );
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
             } => {
-                scalarize_stmts(body, next_local_id, source_span_remaps, anon_shape_fields);
+                scalarize_stmts(
+                    body,
+                    next_local_id,
+                    source_span_remaps,
+                    anon_shape_fields,
+                    region_refs,
+                    reference_region_counts,
+                );
                 if let Some(catch) = catch {
                     scalarize_stmts(
                         &mut catch.body,
                         next_local_id,
                         source_span_remaps,
                         anon_shape_fields,
+                        region_refs,
+                        reference_region_counts,
                     );
                 }
                 if let Some(finally) = finally {
@@ -207,6 +321,8 @@ fn scalarize_stmts(
                         next_local_id,
                         source_span_remaps,
                         anon_shape_fields,
+                        region_refs,
+                        reference_region_counts,
                     );
                 }
             }
@@ -217,6 +333,8 @@ fn scalarize_stmts(
                         next_local_id,
                         source_span_remaps,
                         anon_shape_fields,
+                        region_refs,
+                        reference_region_counts,
                     );
                 }
             }
@@ -301,7 +419,18 @@ fn scalarize_candidate(
     next_local_id: &mut LocalId,
     source_span_remaps: &mut Vec<(LocalId, LocalId)>,
     anon_shape_fields: &AnonShapeFields,
+    region_refs: &HashSet<LocalId>,
+    reference_region_counts: &HashMap<LocalId, usize>,
 ) -> bool {
+    let own_region_reference = usize::from(region_refs.contains(&array_id));
+    if reference_region_counts
+        .get(&array_id)
+        .copied()
+        .unwrap_or_default()
+        > own_region_reference
+    {
+        return false;
+    }
     let Some(elements) = stmts.iter().find_map(|stmt| match stmt {
         Stmt::Let {
             id,
@@ -880,5 +1009,39 @@ mod tests {
                 )
             }));
         }
+    }
+
+    #[test]
+    fn reference_from_generated_function_keeps_materialized_aggregate() {
+        let mut module = aggregate_fixture(false);
+        module.functions.push(Function {
+            id: 99,
+            name: "__obj_method_computed".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(Expr::LocalGet(1)))],
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+
+        run(&mut module);
+
+        assert!(module.init.iter().any(|stmt| {
+            matches!(
+                stmt,
+                Stmt::Let {
+                    id: 1,
+                    init: Some(Expr::Array(_)),
+                    ..
+                }
+            )
+        }));
     }
 }

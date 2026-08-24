@@ -227,10 +227,23 @@ fn scan_symbol_side_table_root_slot(
             rewrite_symbol_property_owner_if_forwarded(visitor, owner);
         }
         SymbolSideTableRootSlot::SymbolPropertyEntry { owner, sym_key } => {
+            // The preceding budget slice may already have rekeyed this
+            // owner's map entry. Heal the snapshot's owner before looking up
+            // the entry, otherwise every later slice searches the stale key
+            // and skips both the symbol key and its value.
+            let mut healed_owner = owner;
+            visitor.visit_metadata_usize_slot(&mut healed_owner);
             let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-            let Some((entry_sym, value_bits)) = guard
-                .as_mut()
-                .and_then(|map| map.get_mut(&owner))
+            let Some(map) = guard.as_mut() else {
+                return;
+            };
+            let lookup_owner = if map.contains_key(&healed_owner) {
+                healed_owner
+            } else {
+                owner
+            };
+            let Some((entry_sym, value_bits)) = map
+                .get_mut(&lookup_owner)
                 .and_then(|entries| entries.iter_mut().find(|entry| entry.0 == sym_key))
             else {
                 return;

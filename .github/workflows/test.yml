@@ -3424,7 +3424,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build compiler + UI backend + harness
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p ${{ matrix.ui_backend }} -p perry-doc-tests
+        # The database/mail examples route through async wrapper staticlibs.
+        # Build them in this SAME Cargo graph as perry-stdlib: otherwise each
+        # no-auto fallback build bundles a distinct tokio TLS/runtime and the
+        # linker rejects the unsafe pair (#507, #7629).
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p ${{ matrix.ui_backend }} -p perry-doc-tests -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-mysql2 -p perry-ext-pg -p perry-ext-nodemailer
 
       - name: Pre-build Apple UI libs for cross-compile (macOS only)
         if: matrix.os == 'macos-14'

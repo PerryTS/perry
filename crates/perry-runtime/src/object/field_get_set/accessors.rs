@@ -163,6 +163,22 @@ unsafe fn default_object_prototype_property_value(
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
     let _guard = object_prototype_lookup_guard()?;
+    let proto_addr = crate::array::object_prototype_addr();
+    if proto_addr == 0 {
+        return None;
+    }
+    prototype_property_value_with_guard(proto_addr, receiver_addr, key)
+}
+
+/// Read an inherited property while the caller holds
+/// [`ObjectPrototypeLookupGuard`]. Keeping guard acquisition outside this
+/// helper lets Error-family lookup resolve a lazy builtin prototype without a
+/// recursive ordinary-object fallback.
+unsafe fn prototype_property_value_with_guard(
+    proto_addr: usize,
+    receiver_addr: usize,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
     // #7498: THIS IS THE FRAME `PERRY_GC_PROTECT_FROMSPACE=1` FAULTS IN on the
     // `[...obj.arr]` path — a 56-byte from-space `GC_TYPE_STRING`, i.e. `key`.
     // Both arguments are GC-managed and both are live across the call below
@@ -194,10 +210,6 @@ unsafe fn default_object_prototype_property_value(
     // (`scan_prototype_addr_cache_roots_mut`) — the array index-read fast path
     // already depends on it. `Object.prototype` is non-writable and
     // non-configurable per spec, so the memo cannot go stale.
-    let proto_addr = crate::array::object_prototype_addr();
-    if proto_addr == 0 {
-        return None;
-    }
     let proto_ptr = proto_addr as *mut ObjectHeader;
     if proto_ptr as usize == receiver_addr() {
         return None;
@@ -246,11 +258,78 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
     // a miss must remain eligible for Object.prototype (including user-added
     // properties).  Keep excluding unregistered native/synthetic class ids:
     // those object kinds resolve their own intrinsic prototype chains.
-    if class_id != 0
-        && !is_anon_shape_class_id(class_id)
-        && !super::super::class_registry::is_class_id_registered(class_id)
-    {
-        return None;
+    if class_id != 0 && !is_anon_shape_class_id(class_id) {
+        if !super::super::class_registry::is_class_id_registered(class_id) {
+            return None;
+        }
+        if super::super::extends_builtin_error(class_id) {
+            // Error subclasses end at an Error-family prototype before
+            // Object.prototype. Hold the recursion guard while resolving the
+            // lazy builtin: constructor/prototype lookup itself may miss an
+            // ordinary property, and must not re-enter this same fallback.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let receiver_h =
+                scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as usize as i64));
+            let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
+            let _guard = object_prototype_lookup_guard()?;
+            let mut current = class_id;
+            let mut prototype_name = "Error";
+            for _ in 0..32 {
+                match current {
+                    crate::error::CLASS_ID_TYPE_ERROR => {
+                        prototype_name = "TypeError";
+                        break;
+                    }
+                    crate::error::CLASS_ID_RANGE_ERROR => {
+                        prototype_name = "RangeError";
+                        break;
+                    }
+                    crate::error::CLASS_ID_REFERENCE_ERROR => {
+                        prototype_name = "ReferenceError";
+                        break;
+                    }
+                    crate::error::CLASS_ID_SYNTAX_ERROR => {
+                        prototype_name = "SyntaxError";
+                        break;
+                    }
+                    crate::error::CLASS_ID_EVAL_ERROR => {
+                        prototype_name = "EvalError";
+                        break;
+                    }
+                    crate::error::CLASS_ID_URI_ERROR => {
+                        prototype_name = "URIError";
+                        break;
+                    }
+                    crate::error::CLASS_ID_AGGREGATE_ERROR => {
+                        prototype_name = "AggregateError";
+                        break;
+                    }
+                    crate::error::CLASS_ID_ERROR => break,
+                    _ => match super::super::get_parent_class_id(current) {
+                        Some(parent) if parent != 0 && parent != current => current = parent,
+                        _ => break,
+                    },
+                }
+            }
+            let prototype = super::super::builtin_prototype_value(prototype_name);
+            let prototype_value = JSValue::from_bits(prototype.to_bits());
+            if prototype_value.is_pointer() {
+                let prototype_addr = prototype_value.as_pointer::<ObjectHeader>() as usize;
+                if prototype_addr != 0 {
+                    let receiver_addr =
+                        crate::value::js_nanbox_get_pointer(receiver_h.get_nanbox_f64()) as usize;
+                    let key = crate::value::js_nanbox_get_pointer(key_h.get_nanbox_f64())
+                        as *const crate::StringHeader;
+                    if let Some(value) =
+                        prototype_property_value_with_guard(prototype_addr, receiver_addr, key)
+                    {
+                        return Some(value);
+                    }
+                }
+            }
+            // The guard drops with this branch; let the ordinary final
+            // fallback consult Object.prototype on a genuine Error miss.
+        }
     }
     default_object_prototype_property_value(obj as usize, key)
 }

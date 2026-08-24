@@ -329,6 +329,59 @@ fn test_symbol_side_table_registered_scanner_rewrites_roots_and_metadata() {
 }
 
 #[test]
+fn test_symbol_side_table_budgeted_scanner_heals_entries_after_owner_rekey() {
+    let _guard = GcTestIsolationGuard::new();
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::symbol::test_clear_symbol_side_table_roots();
+
+    let owner = crate::object::js_object_alloc(0, 0) as usize;
+    let sym_key = unsafe { alloc_nursery_test_symbol() };
+    let value = young_leaf();
+    let valid_ptrs = build_valid_pointer_set();
+    let owner_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
+    let sym_key_old = unsafe { alloc_old_test_symbol() };
+    let value_old = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_STRING) as usize;
+    unsafe {
+        set_forwarding_address(
+            header_from_user_ptr(owner as *const u8) as *mut GcHeader,
+            owner_old as *mut u8,
+        );
+        set_forwarding_address(
+            header_from_user_ptr(sym_key as *const u8) as *mut GcHeader,
+            sym_key_old as *mut u8,
+        );
+        set_forwarding_address(
+            header_from_user_ptr(value as *const u8) as *mut GcHeader,
+            value_old as *mut u8,
+        );
+    }
+    crate::symbol::test_seed_symbol_property_root(owner, sym_key, string_bits(value));
+
+    // One slot per step forces the owner-rekey and entry-rewrite slots into
+    // separate budget slices. The later slice must still find and rewrite the
+    // entry after its owner key moved in the earlier slice.
+    let mut state = crate::symbol::new_symbol_side_table_root_scan_state();
+    let mut visitor = RuntimeRootVisitor::for_rewrite(&valid_ptrs);
+    loop {
+        let mut remaining = 1;
+        if crate::symbol::scan_symbol_side_table_roots_mut_step(
+            &mut visitor,
+            state.as_mut(),
+            &mut remaining,
+        ) {
+            break;
+        }
+    }
+
+    assert!(!crate::symbol::test_symbol_property_owner_exists(owner));
+    assert_eq!(
+        crate::symbol::test_symbol_property_root_bits(owner_old, sym_key_old),
+        Some(string_bits(value_old))
+    );
+    crate::symbol::test_clear_symbol_side_table_roots();
+}
+
+#[test]
 fn test_runtime_root_visitor_rewrites_raw_pointer_slots() {
     // `nursery_user` is live across the `arena_alloc_gc_old` call below.
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

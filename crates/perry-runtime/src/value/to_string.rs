@@ -524,11 +524,6 @@ unsafe fn custom_to_primitive_number(value: f64) -> CustomToPrimitiveOutcome {
     if (method_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
         return CustomToPrimitiveOutcome::TypeError;
     }
-    let method_ptr = (method_bits & POINTER_MASK) as usize;
-    if !crate::closure::is_closure_ptr(method_ptr) {
-        return CustomToPrimitiveOutcome::TypeError;
-    }
-
     let method_handle = scope.root_nanbox_f64(method);
     let hint_ptr = crate::string::js_string_from_bytes(b"number".as_ptr(), 6);
     let hint_handle = scope.root_string_ptr(hint_ptr);
@@ -538,9 +533,22 @@ unsafe fn custom_to_primitive_number(value: f64) -> CustomToPrimitiveOutcome {
                 & POINTER_MASK),
     );
     let receiver = value_handle.get_nanbox_f64();
-    let prev_this = crate::object::js_implicit_this_set(receiver);
-    let result = crate::closure::js_native_call_value(method_handle.get_nanbox_f64(), &hint, 1);
-    crate::object::js_implicit_this_set(prev_this);
+    let method = method_handle.get_nanbox_f64();
+    let result = if crate::proxy::js_proxy_is_proxy(method) == 1 {
+        if !crate::proxy::proxy_wraps_callable(method) {
+            return CustomToPrimitiveOutcome::TypeError;
+        }
+        crate::proxy::call_proxy_value_with_this(method, receiver, &[hint])
+    } else {
+        let method_ptr = (method.to_bits() & POINTER_MASK) as usize;
+        if !crate::closure::is_closure_ptr(method_ptr) {
+            return CustomToPrimitiveOutcome::TypeError;
+        }
+        let prev_this = crate::object::js_implicit_this_set(receiver);
+        let result = crate::closure::js_native_call_value(method, &hint, 1);
+        crate::object::js_implicit_this_set(prev_this);
+        result
+    };
 
     if is_primitive_value(result) {
         CustomToPrimitiveOutcome::Primitive(result)

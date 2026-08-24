@@ -12,7 +12,8 @@ $RepoRoot  = Resolve-Path (Join-Path $ScriptDir '..')
 Set-Location $RepoRoot
 
 # Build perry + UI backend + harness in release mode. Skipped transparently
-# if already built.
+# if already built. Keep the async database/mail wrappers in this same Cargo
+# graph as perry-stdlib so they share one tokio runtime compilation.
 cargo build --release `
     -p perry `
     -p perry-runtime `
@@ -20,7 +21,12 @@ cargo build --release `
     -p perry-runtime-static `
     -p perry-stdlib-static `
     -p perry-ui-windows `
-    -p perry-doc-tests
+    -p perry-doc-tests `
+    -p perry-ext-ioredis `
+    -p perry-ext-mongodb `
+    -p perry-ext-mysql2 `
+    -p perry-ext-pg `
+    -p perry-ext-nodemailer
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # Host doc-tests can reuse the full prebuilt runtime/stdlib archives above.
