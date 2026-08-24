@@ -8,6 +8,106 @@
 //! platform needs before any of the per-link-line code runs.
 
 use super::*;
+use sha2::{Digest, Sha256};
+
+const FOUNDATION_MODELS_SWIFT: &str =
+    include_str!("../../../../../perry-ui-ios/swift/PerryFoundationModels.swift");
+const NOW_PLAYING_SWIFT: &str =
+    include_str!("../../../../../perry-ui-ios/swift/PerryNowPlaying.swift");
+
+fn needs_foundation_models_bridge(ctx: &CompilationContext) -> bool {
+    ctx.native_module_imports.contains("perry/ios")
+}
+
+fn framework_exists(sysroot: &str, name: &str) -> bool {
+    Path::new(sysroot)
+        .join("System/Library/Frameworks")
+        .join(format!("{name}.framework"))
+        .exists()
+}
+
+fn compile_swift_bridge(
+    ctx: &CompilationContext,
+    sdk: &str,
+    sysroot: &str,
+    triple: &str,
+    source_contents: &str,
+    source_stem: &str,
+    module_name: &str,
+) -> Result<PathBuf> {
+    let swiftc = String::from_utf8(
+        Command::new("xcrun")
+            .args(["--sdk", sdk, "--find", "swiftc"])
+            .output()?
+            .stdout,
+    )?
+    .trim()
+    .to_string();
+    if swiftc.is_empty() {
+        return Err(anyhow!("swiftc was not found for the {sdk} SDK"));
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(source_contents.as_bytes());
+    hasher.update(sysroot.as_bytes());
+    hasher.update(triple.as_bytes());
+    let digest = hex::encode(hasher.finalize());
+    let bridge_dir = ctx.cache_dir.join("swift-bridges");
+    fs::create_dir_all(&bridge_dir)?;
+    let source = bridge_dir.join(format!("{source_stem}-{}.swift", &digest[..16]));
+    let object = bridge_dir.join(format!("{source_stem}-{}.o", &digest[..16]));
+
+    if !object.exists() {
+        fs::write(&source, source_contents)?;
+        let output = Command::new(&swiftc)
+            .arg("-parse-as-library")
+            .arg("-emit-object")
+            .arg("-O")
+            .arg("-module-name")
+            .arg(module_name)
+            .arg("-target")
+            .arg(triple)
+            .arg("-sdk")
+            .arg(sysroot)
+            .arg(&source)
+            .arg("-o")
+            .arg(&object)
+            .output()?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "swiftc failed compiling Perry's {source_stem} bridge:\n{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+    Ok(object)
+}
+
+/// Compile the Swift-only Foundation Models adapter to a content-addressed
+/// object. Unrelated iOS builds stay on the existing clang-only path and keep
+/// working with older Xcode installations.
+fn compile_foundation_models_bridge(
+    ctx: &CompilationContext,
+    sdk: &str,
+    sysroot: &str,
+    triple: &str,
+) -> Result<PathBuf> {
+    if !framework_exists(sysroot, "FoundationModels") {
+        return Err(anyhow!(
+            "perry/ios Foundation Models support requires an Xcode SDK that contains FoundationModels.framework (Xcode 26 or later)"
+        ));
+    }
+    compile_swift_bridge(
+        ctx,
+        sdk,
+        sysroot,
+        triple,
+        FOUNDATION_MODELS_SWIFT,
+        "PerryFoundationModels",
+        "PerryFoundationModelsBridge",
+    )
+}
 
 /// Construct the platform-specific linker `Command` and prime it with the
 /// toolchain/sysroot/triple flags that every per-platform branch needs
@@ -35,8 +135,12 @@ pub fn select_linker_command(
     is_tvos: bool,
     is_cross_tvos: bool,
 ) -> Result<Command> {
-    let _ = ctx; // reserved for future per-platform context-driven flags
-                 // For cross-compilation targets, use the appropriate toolchain
+    if is_cross_ios && needs_foundation_models_bridge(ctx) {
+        return Err(anyhow!(
+            "perry/ios requires Apple's Swift compiler and Foundation Models SDK; build this target on macOS with Xcode 26 or later"
+        ));
+    }
+    // For cross-compilation targets, use the appropriate toolchain
     let cmd = if is_watchos {
         let is_watchos_game_loop = compiled_features.iter().any(|f| f == "watchos-game-loop");
         let is_watchos_swift_app = compiled_features.iter().any(|f| f == "watchos-swift-app");
@@ -474,6 +578,37 @@ pub fn select_linker_command(
             // explicitly. Mirrors the cross-iOS branch.
             .arg("-lc++")
             .arg("-lc++abi");
+        if needs_foundation_models_bridge(ctx) {
+            c.arg(compile_foundation_models_bridge(
+                ctx, sdk, &sysroot, triple,
+            )?);
+        }
+        if ctx.native_module_imports.contains("perry/media")
+            && framework_exists(&sysroot, "NowPlaying")
+        {
+            c.arg(compile_swift_bridge(
+                ctx,
+                sdk,
+                &sysroot,
+                triple,
+                NOW_PLAYING_SWIFT,
+                "PerryNowPlaying",
+                "PerryNowPlayingBridge",
+            )?)
+            .arg("-weak_framework")
+            .arg("NowPlaying");
+            // Rust locates these optional bridge entry points with `dlsym`
+            // so old-SDK binaries retain the MediaPlayer fallback. Preserve
+            // the string-referenced exports when the final link dead-strips.
+            for symbol in [
+                "perry_swift_now_playing_is_available",
+                "perry_swift_now_playing_publish",
+                "perry_swift_now_playing_update",
+                "perry_swift_now_playing_remove",
+            ] {
+                c.arg(format!("-Wl,-u,_{symbol}"));
+            }
+        }
         c
     } else if is_tvos && is_cross_tvos {
         // Cross-compile tvOS from Linux using ld64.lld + Apple SDK sysroot.

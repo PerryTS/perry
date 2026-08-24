@@ -1094,6 +1094,19 @@ fn collect_module_one(
             // program uses no widgets.
             if import.source == "perry/media" {
                 ctx.needs_ui = true;
+                // On Xcode 27 the final linker uses this marker to compile
+                // Perry's Swift NowPlaying MediaSession adapter. Older SDKs
+                // keep using the existing MediaPlayer fallback.
+                ctx.native_module_imports.insert("perry/media".to_string());
+            }
+            // iOS 27 adoption surface (#5536). The Rust ABI lives in
+            // libperry_ui_ios.a, while Foundation Models also needs a tiny
+            // Swift bridge compiled at final-link time. Keep a marker in the
+            // existing import set so the linker can opt in without forcing
+            // Swift/Xcode 26+ on unrelated iOS builds.
+            if import.source == "perry/ios" {
+                ctx.needs_ui = true;
+                ctx.native_module_imports.insert("perry/ios".to_string());
             }
             // perry/system: most bindings (preferences, locale, device
             // info) live in stdlib, but the audio-recording, geolocation,

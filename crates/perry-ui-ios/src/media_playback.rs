@@ -15,15 +15,18 @@
 //!   `AVPlayerItemDidPlayToEndTimeNotification`. A 10 Hz `NSTimer` drives
 //!   both the state-change callback (on transition) and the time-update
 //!   callback (every tick while playing/loading).
-//! - Now Playing metadata uses `MPNowPlayingInfoCenter`. Lock-screen / Touch
-//!   Bar / Siri Remote play/pause/skip routes through `MPRemoteCommandCenter`.
+//! - iOS 27 uses the Swift `NowPlaying` framework's observable `MediaSession`.
+//!   Earlier SDKs/OS versions retain the `MPNowPlayingInfoCenter` and
+//!   `MPRemoteCommandCenter` implementation as a compatibility fallback.
 
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use std::cell::RefCell;
+use std::ffi::CStr;
 use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 extern "C" {
     fn js_nanbox_get_pointer(value: f64) -> i64;
@@ -91,6 +94,18 @@ impl MediaState {
             MediaState::Error => "error",
         }
     }
+
+    fn as_now_playing_code(self) -> i32 {
+        match self {
+            MediaState::Idle => 0,
+            MediaState::Loading => 1,
+            MediaState::Ready => 2,
+            MediaState::Playing => 3,
+            MediaState::Paused => 4,
+            MediaState::Ended => 5,
+            MediaState::Error => 6,
+        }
+    }
 }
 
 struct PlayerEntry {
@@ -128,6 +143,120 @@ use perry_ffi::copy_string_from_raw as str_from_header;
 
 fn nsstring(s: &str) -> Retained<objc2_foundation::NSString> {
     objc2_foundation::NSString::from_str(s)
+}
+
+// ---------------------------------------------------------------------------
+// iOS 27 NowPlaying bridge
+// ---------------------------------------------------------------------------
+
+type NowPlayingIsAvailable = unsafe extern "C" fn() -> i32;
+type NowPlayingPublish = unsafe extern "C" fn(
+    i64,
+    *const u8,
+    i32,
+    *const u8,
+    i32,
+    *const u8,
+    i32,
+    *const u8,
+    i32,
+    i32,
+    f64,
+    f64,
+);
+type NowPlayingUpdate = unsafe extern "C" fn(i64, i32, f64, f64);
+type NowPlayingRemove = unsafe extern "C" fn(i64);
+
+static NOW_PLAYING_IS_AVAILABLE: OnceLock<Option<NowPlayingIsAvailable>> = OnceLock::new();
+static NOW_PLAYING_PUBLISH: OnceLock<Option<NowPlayingPublish>> = OnceLock::new();
+static NOW_PLAYING_UPDATE: OnceLock<Option<NowPlayingUpdate>> = OnceLock::new();
+static NOW_PLAYING_REMOVE: OnceLock<Option<NowPlayingRemove>> = OnceLock::new();
+
+fn dynamic_symbol<T: Copy>(cell: &OnceLock<Option<T>>, name: &CStr) -> Option<T> {
+    *cell.get_or_init(|| unsafe {
+        let raw = libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr());
+        if raw.is_null() {
+            None
+        } else {
+            // Mach-O function pointers have pointer width. `T` is one of the
+            // concrete C function-pointer aliases above.
+            Some(std::mem::transmute_copy::<*mut libc::c_void, T>(&raw))
+        }
+    })
+}
+
+fn now_playing_bridge_available() -> bool {
+    dynamic_symbol(
+        &NOW_PLAYING_IS_AVAILABLE,
+        c"perry_swift_now_playing_is_available",
+    )
+    .is_some_and(|function| unsafe { function() != 0 })
+}
+
+fn publish_now_playing_session(
+    handle: i64,
+    title: &str,
+    artist: &str,
+    album: &str,
+    artwork: &str,
+    state: MediaState,
+    elapsed_time: f64,
+    duration: f64,
+) -> bool {
+    if !now_playing_bridge_available() {
+        return false;
+    }
+    let Some(function) = dynamic_symbol(&NOW_PLAYING_PUBLISH, c"perry_swift_now_playing_publish")
+    else {
+        return false;
+    };
+    unsafe {
+        function(
+            handle,
+            title.as_ptr(),
+            title.len() as i32,
+            artist.as_ptr(),
+            artist.len() as i32,
+            album.as_ptr(),
+            album.len() as i32,
+            artwork.as_ptr(),
+            artwork.len() as i32,
+            state.as_now_playing_code(),
+            elapsed_time,
+            duration,
+        );
+    }
+    true
+}
+
+fn update_now_playing_session(handle: i64, state: MediaState, elapsed_time: f64, duration: f64) {
+    if !now_playing_bridge_available() {
+        return;
+    }
+    if let Some(function) = dynamic_symbol(&NOW_PLAYING_UPDATE, c"perry_swift_now_playing_update") {
+        unsafe { function(handle, state.as_now_playing_code(), elapsed_time, duration) };
+    }
+}
+
+fn remove_now_playing_session(handle: i64) {
+    if !now_playing_bridge_available() {
+        return;
+    }
+    if let Some(function) = dynamic_symbol(&NOW_PLAYING_REMOVE, c"perry_swift_now_playing_remove") {
+        unsafe { function(handle) };
+    }
+}
+
+/// Command callback used by the iOS 27 Swift `MediaSession` bridge.
+#[no_mangle]
+pub extern "C" fn perry_ios_now_playing_command(handle: i64, command: i32, value: f64) {
+    match command {
+        1 => play(handle as f64),
+        2 => pause(handle as f64),
+        3 => stop(handle as f64),
+        4 => seek(handle as f64, value),
+        _ => {}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -423,12 +552,40 @@ pub fn set_now_playing(
     let artist = unsafe { str_from_header(artist_ptr) };
     let album = unsafe { str_from_header(album_ptr) };
     let artwork = unsafe { str_from_header(artwork_ptr) };
-    // The handle is currently advisory — MPNowPlayingInfoCenter is a
-    // process-wide singleton, so the most recent setNowPlaying wins.
-    // Holding the handle in the API keeps room for multi-player apps to
-    // associate metadata with a specific player when we add a remote-
-    // command dispatch table keyed by handle.
-    let _ = handle;
+
+    if let Some(index) = handle_to_index(handle) {
+        let snapshot = PLAYERS.with(|players| {
+            players.borrow().get(index).and_then(|slot| {
+                slot.as_ref().map(|entry| {
+                    (
+                        entry.state,
+                        unsafe { current_time_seconds(&entry.player) },
+                        entry.duration_seconds,
+                    )
+                })
+            })
+        });
+        if let Some((state, elapsed_time, duration)) = snapshot {
+            if publish_now_playing_session(
+                handle as i64,
+                &title,
+                &artist,
+                &album,
+                &artwork,
+                state,
+                elapsed_time,
+                duration,
+            ) {
+                // Apple explicitly forbids mixing NowPlaying with the legacy
+                // MediaPlayer now-playing APIs in one local session.
+                return;
+            }
+        }
+    }
+
+    // Compatibility path for apps built with an older SDK or running before
+    // iOS 27. MPNowPlayingInfoCenter is process-wide, so the most recent call
+    // wins here; the iOS 27 path above is handle-scoped.
 
     unsafe {
         let center_cls = match AnyClass::get(c"MPNowPlayingInfoCenter") {
@@ -501,6 +658,7 @@ pub fn destroy(handle: f64) {
             }
         }
     });
+    remove_now_playing_session((idx + 1) as i64);
 }
 
 // ---------------------------------------------------------------------------
@@ -652,7 +810,7 @@ unsafe extern "C" fn poll_tick(
 ) {
     PLAYERS.with(|p| {
         let mut players = p.borrow_mut();
-        for slot in players.iter_mut() {
+        for (index, slot) in players.iter_mut().enumerate() {
             let entry = match slot {
                 Some(e) => e,
                 None => continue,
@@ -686,6 +844,8 @@ unsafe extern "C" fn poll_tick(
             };
             let cur = current_time_seconds(&entry.player);
             let dur = entry.duration_seconds;
+
+            update_now_playing_session((index + 1) as i64, new_state, cur, dur);
 
             if let Some(cb) = on_state {
                 fire_state_callback(cb, new_state);

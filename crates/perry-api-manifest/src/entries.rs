@@ -132,6 +132,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "perry/tui",      // terminal-UI framework
     "perry/yoga",     // Yoga flexbox layout
     "perry/ui",       // native UI (AppKit/UIKit/Win32/GTK4/…)
+    "perry/ios",      // iOS-only UIKit/Foundation Models APIs
     "perry/system",   // OS integration (keychain, notifications, …)
     "perry/plugin",   // compile-time plugin surface
     "perry/widget",   // home-screen widgets (WidgetKit/Glance)
@@ -265,6 +266,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     // (registry + fs interception); no perry-stdlib surface needed.
     "perry",
     "perry/ui",
+    "perry/ios",
     "perry/system",
     "perry/widget",
     "perry/i18n",

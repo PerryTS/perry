@@ -20,6 +20,7 @@ pub struct TypesArgs {
 
 // Canonical `.d.ts` sources, embedded at compile time from `types/perry/`.
 const PERRY_UI_DTS: &str = include_str!("../../../../types/perry/ui/index.d.ts");
+const PERRY_IOS_DTS: &str = include_str!("../../../../types/perry/ios/index.d.ts");
 const PERRY_THREAD_DTS: &str = include_str!("../../../../types/perry/thread/index.d.ts");
 const PERRY_GC_DTS: &str = include_str!("../../../../types/perry/gc/index.d.ts");
 const PERRY_I18N_DTS: &str = include_str!("../../../../types/perry/i18n/index.d.ts");
@@ -46,6 +47,7 @@ pub fn write_perry_type_stubs(project_path: &Path, quiet: bool) -> Result<()> {
 
     let modules: &[(&str, &str)] = &[
         ("ui", PERRY_UI_DTS),
+        ("ios", PERRY_IOS_DTS),
         ("thread", PERRY_THREAD_DTS),
         ("gc", PERRY_GC_DTS),
         ("i18n", PERRY_I18N_DTS),
@@ -84,7 +86,7 @@ pub fn write_perry_type_stubs(project_path: &Path, quiet: bool) -> Result<()> {
 
     if !quiet {
         println!(
-            "  Created .perry/types/ type stubs (ui, thread, i18n, system, media, audio, tui, webassembly, build, native, stdlib)"
+            "  Created .perry/types/ type stubs (ui, ios, thread, i18n, system, media, audio, tui, webassembly, build, native, stdlib)"
         );
     }
 
@@ -139,5 +141,17 @@ mod tests {
         assert!(source.contains("export declare function u32(value: number): u32"));
         assert!(source.contains("export type pod<T>"));
         assert!(source.contains("export declare const NativeArena"));
+    }
+
+    #[test]
+    fn writes_perry_ios_type_stub() {
+        let project = tempfile::tempdir().expect("temporary project");
+        write_perry_type_stubs(project.path(), true).expect("write type stubs");
+
+        let ios_stub = project.path().join(".perry/types/perry/ios/index.d.ts");
+        let source = fs::read_to_string(ios_stub).expect("read iOS type stub");
+        assert!(source.contains("export interface LayoutEnvironment"));
+        assert!(source.contains("foundationModelAvailability"));
+        assert!(source.contains("Promise<string>"));
     }
 }

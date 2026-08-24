@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2994 entries across 135 modules.
+Total: 3009 entries across 136 modules.
 
 ## Modules
 
@@ -91,6 +91,7 @@ Total: 2994 entries across 135 modules.
 - [`perry/container-compose`](#perrycontainer-compose)
 - [`perry/gc`](#perrygc)
 - [`perry/i18n`](#perryi18n)
+- [`perry/ios`](#perryios)
 - [`perry/media`](#perrymedia)
 - [`perry/native`](#perrynative)
 - [`perry/plugin`](#perryplugin)
@@ -2221,10 +2222,16 @@ Total: 2994 entries across 135 modules.
 - `getConnections` — instance *(class: `Server`)*
 - `getDefaultAutoSelectFamily` — module
 - `getDefaultAutoSelectFamilyAttemptTimeout` — module
+- `getEphemeralKeyInfo` — instance *(class: `Socket`)*
+- `getFinished` — instance *(class: `Socket`)*
 - `getPeerCertificate` — instance *(class: `Socket`)*
+- `getPeerFinished` — instance *(class: `Socket`)*
+- `getPeerX509Certificate` — instance *(class: `Socket`)*
 - `getProtocol` — instance *(class: `Socket`)*
 - `getSession` — instance *(class: `Socket`)*
+- `getSharedSigalgs` — instance *(class: `Socket`)*
 - `getTypeOfService` — instance *(class: `Socket`)*
+- `getX509Certificate` — instance *(class: `Socket`)*
 - `isBlockList` — module *(class: `BlockList`)*
 - `isIP` — module
 - `isIPv4` — module
@@ -2268,6 +2275,7 @@ Total: 2994 entries across 135 modules.
 - `setDefaultEncoding` — instance *(class: `Socket`)*
 - `setEncoding` — instance *(class: `Socket`)*
 - `setKeepAlive` — instance *(class: `Socket`)*
+- `setKeyCert` — instance *(class: `Socket`)*
 - `setMaxSendFragment` — instance *(class: `Socket`)*
 - `setNoDelay` — instance *(class: `Socket`)*
 - `setTimeout` — instance *(class: `Socket`)*
@@ -2609,6 +2617,18 @@ Total: 2994 entries across 135 modules.
 - `Raw` — module
 - `ShortDate` — module
 - `t` — module
+
+## `perry/ios`
+
+### Methods
+
+- `createLanguageModelSession` — module
+- `destroyLanguageModelSession` — module
+- `foundationModelAvailability` — module
+- `getLayoutEnvironment` — module
+- `offLayoutChange` — module
+- `onLayoutChange` — module
+- `respond` — module
 
 ## `perry/media`
 
@@ -3639,6 +3659,7 @@ Total: 2994 entries across 135 modules.
 - `createServer` — module
 - `eventNames` — instance *(class: `Server`)*
 - `getCACertificates` — module
+- `getCertificateCompressionAlgorithms` — module
 - `getCiphers` — module
 - `getTicketKeys` — instance *(class: `Server`)*
 - `listen` — instance *(class: `Server`)*

@@ -40,7 +40,12 @@ unsafe extern "C" fn frame_split_layout_subviews(
 ) {
     let bounds: objc2_core_foundation::CGRect = objc2::msg_send![this, bounds];
     let tag: i64 = objc2::msg_send![this, tag];
-    let left_width = tag as f64 / 100.0;
+    // Keep the detail pane usable when iPad Split View, Stage Manager, or a
+    // future resizable display makes the scene narrower than the preferred
+    // sidebar width. This is scene-relative; device-model checks would miss
+    // size changes while the app is already running.
+    let preferred_left_width = (tag as f64 / 100.0).max(0.0);
+    let left_width = preferred_left_width.min((bounds.size.width * 0.45).max(0.0));
 
     let subviews: *mut AnyObject = objc2::msg_send![this, subviews];
     let count: usize = objc2::msg_send![subviews, count];
@@ -151,7 +156,8 @@ pub fn frame_split_add_child(parent: &UIView, child: &UIView) {
 /// Create a plain UIView that lays out exactly two children side by side
 /// using Auto Layout constraints (not UIStackView).
 ///
-/// The first child added gets a fixed width (left_width) pinned to the left.
+/// The first child added gets its preferred width (`left_width`) pinned to the
+/// left, capped at 45% of the current scene width for adaptive layouts.
 /// The second child fills the remaining space on the right.
 /// This avoids UIStackView layout conflicts with embedded native views.
 pub fn create(left_width: f64) -> i64 {
@@ -169,7 +175,7 @@ pub fn create(left_width: f64) -> i64 {
 }
 
 /// Add a child to a split view container. The first child becomes the left panel
-/// (fixed width from tag), the second becomes the right panel (fills remaining).
+/// (preferred width from tag), the second becomes the right panel (fills remaining).
 pub fn add_child(parent: &UIView, child: &UIView, child_index: usize) {
     unsafe {
         let _: () = msg_send![child, setTranslatesAutoresizingMaskIntoConstraints: false];
@@ -192,7 +198,9 @@ pub fn add_child(parent: &UIView, child: &UIView, child_index: usize) {
         let _: () = msg_send![&*bc, setActive: true];
 
         if child_index == 0 {
-            // Left panel: pin leading to parent, fixed width
+            // Left panel: pin leading to parent and prefer the requested width,
+            // but cap it relative to the live scene width. The lower-priority
+            // preferred constraint yields in narrow split-screen/window modes.
             let child_leading: Retained<AnyObject> = msg_send![child, leadingAnchor];
             let parent_leading: Retained<AnyObject> = msg_send![parent, leadingAnchor];
             let lc: Retained<AnyObject> =
@@ -200,9 +208,18 @@ pub fn add_child(parent: &UIView, child: &UIView, child_index: usize) {
             let _: () = msg_send![&*lc, setActive: true];
 
             let child_width: Retained<AnyObject> = msg_send![child, widthAnchor];
-            let wc: Retained<AnyObject> =
+            let preferred_width: Retained<AnyObject> =
                 msg_send![&*child_width, constraintEqualToConstant: left_width];
-            let _: () = msg_send![&*wc, setActive: true];
+            let _: () = msg_send![&*preferred_width, setPriority: 750.0f32];
+            let _: () = msg_send![&*preferred_width, setActive: true];
+
+            let parent_width: Retained<AnyObject> = msg_send![parent, widthAnchor];
+            let adaptive_max: Retained<AnyObject> = msg_send![
+                &*child_width,
+                constraintLessThanOrEqualToAnchor: &*parent_width,
+                multiplier: 0.45f64
+            ];
+            let _: () = msg_send![&*adaptive_max, setActive: true];
         } else {
             // Right panel: pin trailing to parent, leading to previous sibling's trailing
             let child_leading: Retained<AnyObject> = msg_send![child, leadingAnchor];

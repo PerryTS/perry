@@ -97,6 +97,7 @@ pub struct MethodRow {
 mod audio_table;
 mod background_table;
 mod i18n_table;
+mod ios_table;
 mod media_table;
 mod system_table;
 mod ui_instance_table;
@@ -106,6 +107,7 @@ mod updater_table;
 pub use audio_table::PERRY_AUDIO_TABLE;
 pub use background_table::PERRY_BACKGROUND_TABLE;
 pub use i18n_table::PERRY_I18N_TABLE;
+pub use ios_table::PERRY_IOS_TABLE;
 pub use media_table::PERRY_MEDIA_TABLE;
 pub use system_table::PERRY_SYSTEM_TABLE;
 pub use ui_instance_table::PERRY_UI_INSTANCE_TABLE;
@@ -132,6 +134,11 @@ pub fn perry_system_lookup(method: &str) -> Option<&'static MethodRow> {
 /// Look up a TS method name in the perry/i18n table.
 pub fn perry_i18n_lookup(method: &str) -> Option<&'static MethodRow> {
     PERRY_I18N_TABLE.iter().find(|s| s.method == method)
+}
+
+/// Look up a TS method name in the iOS-only platform table.
+pub fn perry_ios_lookup(method: &str) -> Option<&'static MethodRow> {
+    PERRY_IOS_TABLE.iter().find(|s| s.method == method)
 }
 
 /// Look up a TS method name in the perry/updater table.

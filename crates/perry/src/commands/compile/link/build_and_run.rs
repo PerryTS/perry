@@ -766,6 +766,12 @@ pub(crate) fn build_and_run_link(
             .arg("-lresolv")
             .arg("-lobjc")
             .arg("-lSystem");
+        if ctx.native_module_imports.contains("perry/ios") {
+            // FoundationModels is Swift-only. The bridge object is compiled
+            // in platform_cmd; weak-link so the app's iOS 17 deployment
+            // target still launches and reports `unsupported` before iOS 26.
+            cmd.arg("-weak_framework").arg("FoundationModels");
+        }
     } else if is_visionos {
         cmd.arg("-framework")
             .arg("SwiftUI")

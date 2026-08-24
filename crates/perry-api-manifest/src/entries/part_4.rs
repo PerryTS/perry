@@ -593,6 +593,14 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("perry/media", "onTimeUpdate", false, None),
     method("perry/media", "setNowPlaying", false, None),
     method("perry/media", "destroy", false, None),
+    // --- perry/ios (issue #5536) — auto-derivable from PERRY_IOS_TABLE. ---
+    method("perry/ios", "getLayoutEnvironment", false, None),
+    method("perry/ios", "onLayoutChange", false, None),
+    method("perry/ios", "offLayoutChange", false, None),
+    method("perry/ios", "foundationModelAvailability", false, None),
+    method("perry/ios", "createLanguageModelSession", false, None),
+    method("perry/ios", "respond", false, None),
+    method("perry/ios", "destroyLanguageModelSession", false, None),
     // --- perry/audio (issue #1867) — auto-derivable from PERRY_AUDIO_TABLE. ---
     method("perry/audio", "loadSound", false, None),
     method("perry/audio", "unload", false, None),

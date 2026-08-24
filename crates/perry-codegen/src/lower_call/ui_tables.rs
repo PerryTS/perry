@@ -16,8 +16,8 @@ use crate::types::{DOUBLE, I64};
 
 use perry_dispatch::{
     ArgKind as UiArgKind, MethodRow as UiSig, ReturnKind as UiReturnKind, PERRY_AUDIO_TABLE,
-    PERRY_BACKGROUND_TABLE, PERRY_I18N_TABLE, PERRY_MEDIA_TABLE, PERRY_SYSTEM_TABLE,
-    PERRY_UI_INSTANCE_TABLE, PERRY_UI_TABLE, PERRY_UPDATER_TABLE,
+    PERRY_BACKGROUND_TABLE, PERRY_I18N_TABLE, PERRY_IOS_TABLE, PERRY_MEDIA_TABLE,
+    PERRY_SYSTEM_TABLE, PERRY_UI_INSTANCE_TABLE, PERRY_UI_TABLE, PERRY_UPDATER_TABLE,
 };
 
 use super::apply_inline_style;
@@ -52,6 +52,14 @@ pub fn perry_system_table_lookup(method: &str) -> Option<&'static UiSig> {
 /// to their `perry_media_*` runtime symbols.
 pub fn perry_media_table_lookup(method: &str) -> Option<&'static UiSig> {
     PERRY_MEDIA_TABLE.iter().find(|s| s.method == method)
+}
+
+// =============================================================================
+// perry/ios dispatch table (issue #5536)
+// =============================================================================
+
+pub fn perry_ios_table_lookup(method: &str) -> Option<&'static UiSig> {
+    PERRY_IOS_TABLE.iter().find(|s| s.method == method)
 }
 
 // =============================================================================
