@@ -30,3 +30,18 @@ await storage.run(
 );
 
 console.log("events outside:", String(storage.getStore()));
+
+let eventNameConversions = 0;
+const convertedName = {
+  toString() {
+    eventNameConversions += 1;
+    return "converted";
+  },
+};
+const conversionEmitter = new EventEmitter();
+let convertedValue = "missing";
+conversionEmitter.on("converted", (value) => {
+  convertedValue = value;
+});
+conversionEmitter.emit(convertedName as unknown as string, "value");
+console.log("event name conversion:", eventNameConversions, convertedValue);

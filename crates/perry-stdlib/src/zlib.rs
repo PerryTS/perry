@@ -1351,112 +1351,181 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                 .and_then(|streams| streams.get(id).map(|stream| stream.async_ids)),
             _ => None,
         };
-        if let Some(ids) = event_ids {
-            perry_runtime::async_hooks::enter_resource_scope(ids);
-        }
-        let mut destroy_after_dispatch = None;
-        match ev {
-            ZlibEvent::Data(id, bytes) => {
-                publish_zlib_bytes_written(id);
-                let cbs = listeners_for(id, "data");
-                if !cbs.is_empty() {
-                    if let Some(buf_f64) = make_buffer(&bytes) {
-                        for cb in cbs {
-                            if cb != 0 {
-                                js_closure_call1(cb as *const ClosureHeader, buf_f64);
+        let destroy_after_dispatch = match (&ev, event_ids) {
+            (ZlibEvent::End(_) | ZlibEvent::Error(_, _), Some(ids)) => Some(ids.async_id),
+            _ => None,
+        };
+        let dispatch = || {
+            match ev {
+                ZlibEvent::Data(id, bytes) => {
+                    publish_zlib_bytes_written(id);
+                    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                    let callbacks = listeners_for(id, "data")
+                        .into_iter()
+                        .map(|callback| scope.root_raw_const_ptr(callback as *const ClosureHeader))
+                        .collect::<Vec<_>>();
+                    let destinations = pipes_for(id)
+                        .into_iter()
+                        .map(|destination| scope.root_nanbox_f64(f64::from_bits(destination)))
+                        .collect::<Vec<_>>();
+                    if !callbacks.is_empty() {
+                        if let Some(buf_f64) = make_buffer(&bytes) {
+                            let buffer = scope.root_nanbox_f64(buf_f64);
+                            for callback in callbacks {
+                                let callback = callback.get_raw_const_ptr::<ClosureHeader>();
+                                if !callback.is_null() {
+                                    js_closure_call1(callback, buffer.get_nanbox_f64());
+                                }
                             }
                         }
                     }
-                }
-                // Fresh Buffer per pipe dest (the chunk lives in the owned
-                // `bytes`, so this is safe even after listener callbacks GC'd).
-                for dest in pipes_for(id) {
-                    forward_write(dest, &bytes);
-                }
-            }
-            ZlibEvent::End(id) => {
-                publish_zlib_bytes_written(id);
-                for cb in listeners_for(id, "end") {
-                    if cb != 0 {
-                        js_closure_call0(cb as *const ClosureHeader);
+                    // Fresh Buffer per pipe dest (the chunk lives in the owned
+                    // `bytes`, so this is safe even after listener callbacks GC'd).
+                    for destination in destinations {
+                        forward_write(destination.get_nanbox_f64().to_bits(), &bytes);
                     }
                 }
-                for cb in listeners_for(id, "finish") {
-                    if cb != 0 {
-                        js_closure_call0(cb as *const ClosureHeader);
+                ZlibEvent::End(id) => {
+                    publish_zlib_bytes_written(id);
+                    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                    let end_callbacks = listeners_for(id, "end")
+                        .into_iter()
+                        .map(|callback| scope.root_raw_const_ptr(callback as *const ClosureHeader))
+                        .collect::<Vec<_>>();
+                    let finish_callbacks = listeners_for(id, "finish")
+                        .into_iter()
+                        .map(|callback| scope.root_raw_const_ptr(callback as *const ClosureHeader))
+                        .collect::<Vec<_>>();
+                    let destinations = pipes_for(id)
+                        .into_iter()
+                        .map(|destination| scope.root_nanbox_f64(f64::from_bits(destination)))
+                        .collect::<Vec<_>>();
+                    let close_callbacks = listeners_for(id, "close")
+                        .into_iter()
+                        .map(|callback| scope.root_raw_const_ptr(callback as *const ClosureHeader))
+                        .collect::<Vec<_>>();
+                    ZLIB_LISTENERS.lock().unwrap().remove(&id);
+                    ZLIB_STREAMS.lock().unwrap().remove(&id);
+                    for callback in end_callbacks {
+                        let callback = callback.get_raw_const_ptr::<ClosureHeader>();
+                        if !callback.is_null() {
+                            js_closure_call0(callback);
+                        }
+                    }
+                    for callback in finish_callbacks {
+                        let callback = callback.get_raw_const_ptr::<ClosureHeader>();
+                        if !callback.is_null() {
+                            js_closure_call0(callback);
+                        }
+                    }
+                    for destination in destinations {
+                        forward_end(destination.get_nanbox_f64().to_bits());
+                    }
+                    for callback in close_callbacks {
+                        let callback = callback.get_raw_const_ptr::<ClosureHeader>();
+                        if !callback.is_null() {
+                            js_closure_call0(callback);
+                        }
                     }
                 }
-                for dest in pipes_for(id) {
-                    forward_end(dest);
-                }
-                for cb in listeners_for(id, "close") {
-                    if cb != 0 {
-                        js_closure_call0(cb as *const ClosureHeader);
+                ZlibEvent::Callback(cb) => {
+                    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                    let callback = scope.root_raw_const_ptr(cb as *const ClosureHeader);
+                    let callback = callback.get_raw_const_ptr::<ClosureHeader>();
+                    if !callback.is_null() {
+                        js_closure_call0(callback);
                     }
                 }
-                ZLIB_LISTENERS.lock().unwrap().remove(&id);
-                ZLIB_STREAMS.lock().unwrap().remove(&id);
-                destroy_after_dispatch = event_ids.map(|ids| ids.async_id);
-            }
-            ZlibEvent::Callback(cb) => {
-                if cb != 0 {
-                    js_closure_call0(cb as *const ClosureHeader);
-                }
-            }
-            ZlibEvent::OneShotCallback(cb, result, ids) => {
-                // Node exposes two ZLIB provider phases for one-shot helpers:
-                // native compression completion, followed by delivery of the
-                // JavaScript callback. They intentionally share one resource.
-                perry_runtime::async_hooks::run_resource_scope(ids, || {});
-                perry_runtime::async_hooks::enter_resource_scope(ids);
-                if cb != 0 {
-                    match result {
-                        Ok(bytes) => {
-                            if let Some(buf_f64) = make_buffer(&bytes) {
-                                js_closure_call2(
-                                    cb as *const ClosureHeader,
-                                    f64::from_bits(JSValue::null().bits()),
-                                    buf_f64,
-                                );
-                            } else {
-                                let err_f64 = build_zlib_error("Buffer allocation failed");
-                                js_closure_call2(
-                                    cb as *const ClosureHeader,
-                                    err_f64,
-                                    f64::from_bits(JSValue::undefined().bits()),
-                                );
+                ZlibEvent::OneShotCallback(cb, result, ids) => {
+                    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                    let callback = scope.root_raw_const_ptr(cb as *const ClosureHeader);
+                    // Node exposes two ZLIB provider phases for one-shot helpers:
+                    // native compression completion, followed by delivery of the
+                    // JavaScript callback. They intentionally share one resource.
+                    let first_phase =
+                        perry_runtime::async_hooks::try_run_resource_scope(ids, || {
+                            f64::from_bits(JSValue::undefined().bits())
+                        });
+                    if let Err(error) = first_phase {
+                        let error = scope.root_nanbox_f64(error);
+                        perry_runtime::async_hooks::defer_destroy_after_check_turns(
+                            ids.async_id,
+                            4,
+                        );
+                        perry_runtime::exception::js_throw(error.get_nanbox_f64());
+                    }
+                    let outcome = perry_runtime::async_hooks::try_run_resource_scope(ids, || {
+                        if !callback.get_raw_const_ptr::<ClosureHeader>().is_null() {
+                            match result {
+                                Ok(bytes) => {
+                                    if let Some(buf_f64) = make_buffer(&bytes) {
+                                        let buffer = scope.root_nanbox_f64(buf_f64);
+                                        js_closure_call2(
+                                            callback.get_raw_const_ptr::<ClosureHeader>(),
+                                            f64::from_bits(JSValue::null().bits()),
+                                            buffer.get_nanbox_f64(),
+                                        );
+                                    } else {
+                                        let error = scope.root_nanbox_f64(build_zlib_error(
+                                            "Buffer allocation failed",
+                                        ));
+                                        js_closure_call2(
+                                            callback.get_raw_const_ptr::<ClosureHeader>(),
+                                            error.get_nanbox_f64(),
+                                            f64::from_bits(JSValue::undefined().bits()),
+                                        );
+                                    }
+                                }
+                                Err(msg) => {
+                                    let error = scope.root_nanbox_f64(build_zlib_error(&msg));
+                                    js_closure_call2(
+                                        callback.get_raw_const_ptr::<ClosureHeader>(),
+                                        error.get_nanbox_f64(),
+                                        f64::from_bits(JSValue::undefined().bits()),
+                                    );
+                                }
                             }
                         }
-                        Err(msg) => {
-                            let err_f64 = build_zlib_error(&msg);
-                            js_closure_call2(
-                                cb as *const ClosureHeader,
-                                err_f64,
-                                f64::from_bits(JSValue::undefined().bits()),
-                            );
+                        f64::from_bits(JSValue::undefined().bits())
+                    });
+                    let error = outcome.err().map(|error| scope.root_nanbox_f64(error));
+                    perry_runtime::async_hooks::defer_destroy_after_check_turns(ids.async_id, 4);
+                    if let Some(error) = error {
+                        perry_runtime::exception::js_throw(error.get_nanbox_f64());
+                    }
+                }
+                ZlibEvent::Error(id, msg) => {
+                    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                    let callbacks = listeners_for(id, "error")
+                        .into_iter()
+                        .map(|callback| scope.root_raw_const_ptr(callback as *const ClosureHeader))
+                        .collect::<Vec<_>>();
+                    ZLIB_LISTENERS.lock().unwrap().remove(&id);
+                    ZLIB_STREAMS.lock().unwrap().remove(&id);
+                    let error = scope.root_nanbox_f64(build_zlib_error(&msg));
+                    for callback in callbacks {
+                        let callback = callback.get_raw_const_ptr::<ClosureHeader>();
+                        if !callback.is_null() {
+                            js_closure_call1(callback, error.get_nanbox_f64());
                         }
                     }
                 }
-                perry_runtime::async_hooks::leave_resource_scope(ids.async_id);
-                perry_runtime::async_hooks::defer_destroy_after_check_turns(ids.async_id, 4);
             }
-            ZlibEvent::Error(id, msg) => {
-                let err_f64 = build_zlib_error(&msg);
-                for cb in listeners_for(id, "error") {
-                    if cb != 0 {
-                        js_closure_call1(cb as *const ClosureHeader, err_f64);
-                    }
-                }
-                ZLIB_LISTENERS.lock().unwrap().remove(&id);
-                ZLIB_STREAMS.lock().unwrap().remove(&id);
-                destroy_after_dispatch = event_ids.map(|ids| ids.async_id);
-            }
-        }
-        if let Some(ids) = event_ids {
-            perry_runtime::async_hooks::leave_resource_scope(ids.async_id);
-        }
+            f64::from_bits(JSValue::undefined().bits())
+        };
+        let outcome = match event_ids {
+            Some(ids) => perry_runtime::async_hooks::try_run_resource_scope(ids, dispatch),
+            None => Ok(dispatch()),
+        };
+        let error_scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let error = outcome
+            .err()
+            .map(|error| error_scope.root_nanbox_f64(error));
         if let Some(async_id) = destroy_after_dispatch {
             perry_runtime::async_hooks::defer_destroy_after_check_turns(async_id, 4);
+        }
+        if let Some(error) = error {
+            perry_runtime::exception::js_throw(error.get_nanbox_f64());
         }
     }
     count

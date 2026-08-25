@@ -84,10 +84,17 @@ pub(crate) unsafe fn dispatch_socket_completion(completion: u64, error: Option<S
 }
 
 pub(crate) fn drop_socket_completions(socket_id: i64) {
-    socket_completions()
+    let completions = socket_completions()
         .lock()
         .unwrap()
-        .retain(|_, (owner, _)| *owner != socket_id);
+        .iter()
+        .filter_map(|(completion, (owner, _))| (*owner == socket_id).then_some(*completion))
+        .collect::<Vec<_>>();
+    for completion in completions {
+        unsafe {
+            dispatch_socket_completion(completion, Some("Socket is closed".to_string()));
+        }
+    }
 }
 
 /// NaN-box a freshly allocated runtime string as an `f64` JS value.
@@ -336,17 +343,26 @@ pub unsafe extern "C" fn js_ext_net_socket_write(handle: i64, chunk_bits: i64) {
 
 fn enqueue_socket_write(handle: i64, bytes: Vec<u8>, completion: u64) {
     let mut sockets = statics::sockets().lock().unwrap();
-    if let Some(s) = sockets.get_mut(&handle) {
+    let failure = if let Some(s) = sockets.get_mut(&handle) {
         s.bytes_written = s.bytes_written.saturating_add(bytes.len() as u64);
         if s.cmd_tx
             .send(crate::SocketCommand::Write(bytes, completion))
             .is_err()
-            && completion != 0
         {
-            socket_completions().lock().unwrap().remove(&completion);
+            Some("Socket write failed")
+        } else {
+            None
         }
-    } else if completion != 0 {
-        socket_completions().lock().unwrap().remove(&completion);
+    } else {
+        Some("Socket is closed")
+    };
+    drop(sockets);
+    if completion != 0 {
+        if let Some(message) = failure {
+            unsafe {
+                dispatch_socket_completion(completion, Some(message.to_string()));
+            }
+        }
     }
 }
 
@@ -405,7 +421,10 @@ pub unsafe extern "C" fn js_ext_net_socket_write3(
     let completion = register_socket_completion(handle, completion);
     let Some(bytes) = crate::jsvalue_to_socket_bytes(chunk) else {
         if completion != 0 {
-            socket_completions().lock().unwrap().remove(&completion);
+            dispatch_socket_completion(
+                completion,
+                Some("Invalid data passed to socket.write".to_string()),
+            );
         }
         return;
     };

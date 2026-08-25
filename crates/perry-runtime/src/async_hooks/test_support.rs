@@ -63,6 +63,26 @@ pub(crate) fn test_async_hooks_scanner_snapshot() -> (usize, u64) {
 mod tests {
     use super::*;
 
+    extern "C" fn throwing_lifecycle_hook(_closure: *const ClosureHeader, _async_id: f64) -> f64 {
+        crate::exception::js_throw(73.0)
+    }
+
+    fn enable_throwing_lifecycle_hook(before_phase: bool) {
+        let callback = js_closure_alloc(throwing_lifecycle_hook as *const u8, 0);
+        let mut callbacks = HookCallbacks::empty();
+        if before_phase {
+            callbacks.before = callback;
+        } else {
+            callbacks.after = callback;
+        }
+        HOOKS.lock().unwrap().push(HookRecord {
+            callbacks,
+            enabled: true,
+            track_promises: false,
+        });
+        HOOKS_ACTIVE.store(1, Ordering::Relaxed);
+    }
+
     // #7680: no lock needed here anymore. The per-test globals isolate this
     // thread's reset and resource-id sequence from concurrent tests.
     #[test]
@@ -82,6 +102,33 @@ mod tests {
         assert_eq!(execution_async_id_u64(), ids.async_id);
         after(ids.async_id);
         assert_eq!(execution_async_id_u64(), 0);
+    }
+
+    #[test]
+    fn resource_scope_restores_context_when_lifecycle_hooks_throw() {
+        const STORE: i64 = -9_401;
+        for before_phase in [true, false] {
+            reset_for_tests();
+            crate::async_context::clear_store(STORE);
+            crate::async_context::enter_with(STORE, 11.0);
+            let ids = init_resource("throwing-scope", TAG_UNDEFINED_F64, true);
+            crate::async_context::enter_with(STORE, 22.0);
+            enable_throwing_lifecycle_hook(before_phase);
+
+            let mut completion_ran = false;
+            let outcome = try_run_resource_scope(ids, || {
+                completion_ran = true;
+                TAG_UNDEFINED_F64
+            });
+
+            assert_eq!(outcome.unwrap_err().to_bits(), 73.0f64.to_bits());
+            assert_eq!(completion_ran, !before_phase);
+            assert_eq!(execution_async_id_u64(), 0);
+            assert!(EXECUTION_STACK.with(|stack| stack.borrow().is_empty()));
+            assert_eq!(crate::async_context::get_store(STORE), Some(22.0));
+            crate::async_context::clear_store(STORE);
+        }
+        reset_for_tests();
     }
 
     #[test]
