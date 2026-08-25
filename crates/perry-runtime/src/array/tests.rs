@@ -1384,7 +1384,7 @@ fn test_array_last_index_of() {
     assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, -10.0, 1), -1); // < -length
     assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 100.0, 1), 3); // clamp to len-1
     assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 0.0, 1), -1); // only index 0
-    // Empty array.
+                                                                      // Empty array.
     let empty = js_array_alloc(1);
     assert_eq!(js_array_last_index_of_jsvalue(empty, 1.0, 0.0, 0), -1);
 }

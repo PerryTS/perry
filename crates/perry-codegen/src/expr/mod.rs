@@ -24,7 +24,7 @@ use crate::native_value::{
 };
 use crate::strings::StringPool;
 use crate::type_analysis::{is_bigint_expr, is_bool_expr, is_numeric_expr};
-use crate::types::{DOUBLE, F32, I1, I8, I16, I32, I64, PTR};
+use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 
 // Issue #1098: expr.rs split into expr/ submodules. These are pure
 // mechanical moves of self-contained helper clusters out of this file;
@@ -60,10 +60,10 @@ mod write_barrier;
 pub(crate) use crate::native_value::{materialize_js_value, materialize_js_value_without_record};
 pub(crate) use array_literal::lower_array_literal;
 pub(crate) use buffer_access::{
-    BufferAccessSpec, access_facts_for_spec, can_lower_buffer_access_without_calls,
+    access_facts_for_spec, can_lower_buffer_access_without_calls,
     can_lower_integer_typed_array_store_value, emit_buffer_access_pointer,
     lower_buffer_access_proof, lower_buffer_load, lower_buffer_store, lower_typed_array_load,
-    lower_typed_array_store,
+    lower_typed_array_store, BufferAccessSpec,
 };
 pub(crate) use buffer_views::{
     alias_buffer_view_slot, attach_buffer_view_facts, attach_buffer_view_pointer_state_for_expr,
@@ -108,15 +108,16 @@ pub(crate) use proven_view_access::{
     try_lower_proven_view_checked_f64_load, try_lower_proven_view_checked_store,
 };
 pub(crate) use range_facts::{
-    IntRange, IntRangeFact, bounds_for_buffer_access_width, effective_alias_state_for_access,
+    bounds_for_buffer_access_width, effective_alias_state_for_access,
     guarded_buffer_indices_for_condition, int_range_expr, invalidate_local_write_facts,
     local_value_alias_root, record_int_facts_for_let, record_int_facts_for_local_set,
     record_int_facts_for_update, record_local_value_alias_for_write, while_condition_range_fact,
+    IntRange, IntRangeFact,
 };
 pub(crate) use strings::emit_string_literal_global;
 pub(crate) use typed_feedback::{
-    TypedFeedbackContract, TypedFeedbackKind, emit_typed_feedback_record_call,
-    emit_typed_feedback_register_site, native_region_slug, typed_feedback_emission_enabled,
+    emit_typed_feedback_record_call, emit_typed_feedback_register_site, native_region_slug,
+    typed_feedback_emission_enabled, TypedFeedbackContract, TypedFeedbackKind,
 };
 pub(crate) use url_helpers::lower_url_string_getter;
 pub(crate) use v8_interop::{
@@ -174,19 +175,18 @@ mod slot_rep;
 // #7128: the env-knob table and the pure `gates -> context flags` derivation.
 // Every `FnCtx` construction site goes through `RepselContextFlags` so that a
 // knob cannot silently acquire a second representation's sites again.
-pub(crate) use repsel_gates::{RepselContextFlags, static_string_lowering_enabled};
+pub(crate) use repsel_gates::{static_string_lowering_enabled, RepselContextFlags};
 // `body_context_denial` / `report_context_denial` / `MODULE_INIT_CONTEXT` are
 // deliberately NOT re-exported: since #7128 the only legitimate consumer is
 // `repsel_gates::RepselContextFlags::derive`, and a `FnCtx` construction site
 // that reaches for the structural rule directly is exactly how the two gates
 // drifted back into one bool the last two times.
 pub(crate) use slot_rep::{
-    CanonicalI32Denial, PTR_SHAPE_SCALAR_REPLACED, SlotRep, canonical_i32_locals_enabled,
-    canonical_local_i32_slot, canonical_str_locals_enabled,
+    canonical_i32_locals_enabled, canonical_local_i32_slot, canonical_str_locals_enabled,
     collect_canonical_str_ineligible_locals, collect_closure_referenced_locals,
     deny_canonical_context, deny_canonical_i32, load_canonical_local_boxed, local_is_canonical_str,
     local_rep_is_canonical_i32, note_canonical_local, ptr_shape_context_rule_text,
-    store_canonical_local_from_double,
+    store_canonical_local_from_double, CanonicalI32Denial, SlotRep, PTR_SHAPE_SCALAR_REPLACED,
 };
 
 pub(crate) use dispatch::{lower_expr, lower_math_operand};

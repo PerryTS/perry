@@ -25,8 +25,8 @@
 //! Buffer iterator one.
 
 use super::*;
-use crate::object::{ObjectHeader, js_object_alloc, js_object_get_field, js_object_set_field};
-use crate::value::{JSValue, TAG_UNDEFINED, js_nanbox_get_pointer, js_nanbox_pointer};
+use crate::object::{js_object_alloc, js_object_get_field, js_object_set_field, ObjectHeader};
+use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_UNDEFINED};
 
 /// Class id reserved for array iterators. Sits adjacent to the Buffer
 /// iterator id (0xFFFF0005) in the 0xFFFF prefix reserved for

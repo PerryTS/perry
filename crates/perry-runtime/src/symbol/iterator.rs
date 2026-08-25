@@ -3,7 +3,7 @@
 //! `ToPrimitive` (`[Symbol.toPrimitive]`) dispatch.
 
 use super::*;
-use crate::string::{StringHeader, js_string_from_bytes};
+use crate::string::{js_string_from_bytes, StringHeader};
 
 /// `Object.getOwnPropertySymbols(obj)` — returns an array of symbol keys on
 /// the object. Looks up the side table populated by
@@ -37,7 +37,11 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
             }
             keys.sort_by_key(|sym_key| {
                 let ptr = *sym_key as *const SymbolHeader;
-                if ptr.is_null() { u64::MAX } else { (*ptr).id }
+                if ptr.is_null() {
+                    u64::MAX
+                } else {
+                    (*ptr).id
+                }
             });
             keys
         };
@@ -103,7 +107,11 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     }
     entries[data_len..].sort_by_key(|(sym_ptr_usize, _)| {
         let ptr = *sym_ptr_usize as *const SymbolHeader;
-        if ptr.is_null() { u64::MAX } else { (*ptr).id }
+        if ptr.is_null() {
+            u64::MAX
+        } else {
+            (*ptr).id
+        }
     });
     let mut arr = crate::array::js_array_alloc(entries.len() as u32);
     for (sym_ptr_usize, _val_bits) in entries.iter() {

@@ -12,6 +12,7 @@ use crate::ir::*;
 mod namespace;
 mod native_default_import;
 pub(super) mod native_profile_import;
+mod object_literal;
 mod typescript;
 
 // Re-export moved items so existing `crate::...` / `super::*` call paths keep
@@ -21,22 +22,7 @@ use native_default_import::{
     canonicalize_native_import_source, is_cjs_style_native_default_import,
     node_submodule_default_export_key,
 };
-
-fn is_direct_object_literal(expr: &ast::Expr) -> bool {
-    let mut current = expr;
-    loop {
-        match current {
-            ast::Expr::TsAs(wrapper) => current = &wrapper.expr,
-            ast::Expr::TsNonNull(wrapper) => current = &wrapper.expr,
-            ast::Expr::TsSatisfies(wrapper) => current = &wrapper.expr,
-            ast::Expr::TsTypeAssertion(wrapper) => current = &wrapper.expr,
-            ast::Expr::TsConstAssertion(wrapper) => current = &wrapper.expr,
-            ast::Expr::Paren(wrapper) => current = &wrapper.expr,
-            ast::Expr::Object(_) => return true,
-            _ => return false,
-        }
-    }
-}
+use object_literal::is_direct_object_literal;
 
 pub(crate) fn lower_module_decl(
     ctx: &mut LoweringContext,

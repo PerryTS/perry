@@ -4,7 +4,7 @@
 //! used by the rest of the runtime. Manifest lowering calls them before handing
 //! raw scalars, pointers, buffer spans, strings, or promises to native code.
 
-use crate::buffer::{BufferHeader, is_registered_buffer, resolve_span_data_ptr};
+use crate::buffer::{is_registered_buffer, resolve_span_data_ptr, BufferHeader};
 use crate::object::ObjectHeader;
 use crate::promise::Promise;
 use crate::value::{JSValue, POINTER_MASK, TAG_FALSE, TAG_TRUE};
