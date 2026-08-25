@@ -1653,34 +1653,16 @@ pub(super) fn strip_bundled_shared_deps_from_well_known_lib(
             "failed to inspect stdlib symbols (empty set)"
         ));
     }
-    let empty = std::collections::HashSet::new();
-
     // Fixed-point loop: start by assuming every candidate is removable, then
     // repeatedly protect (un-mark) any candidate whose symbols are still
     // needed by the current kept-set (members - to_remove), until a round
     // protects nothing new.
-    let mut to_remove: std::collections::BTreeSet<String> = candidates.clone();
-    loop {
-        let kept_undefined: std::collections::HashSet<&String> = undefined_by_member
-            .iter()
-            .filter(|(m, _)| !to_remove.contains(m.as_str()))
-            .flat_map(|(_, syms)| syms.iter())
-            .collect();
-        let mut protected_this_round = false;
-        for c in to_remove.clone().iter() {
-            let defined = defined_by_member.get(c).unwrap_or(&empty);
-            let still_needed = kept_undefined
-                .iter()
-                .any(|s| defined.contains(*s) && !stdlib_defined.contains(*s));
-            if still_needed {
-                to_remove.remove(c);
-                protected_this_round = true;
-            }
-        }
-        if !protected_this_round {
-            break;
-        }
-    }
+    let to_remove = shared_dep_members_to_remove(
+        &candidates,
+        &defined_by_member,
+        &undefined_by_member,
+        &stdlib_defined,
+    );
     if to_remove.is_empty() {
         return Ok(lib_path.clone());
     }
@@ -1688,7 +1670,7 @@ pub(super) fn strip_bundled_shared_deps_from_well_known_lib(
         if !to_remove.contains(c) {
             eprintln!(
                 "[strip-dedup] {lib_name}: keeping bundled {c} — needed by a kept \
-                 sibling and not provided by stdlib"
+                 sibling and not safely replaceable by stdlib"
             );
         }
     }
@@ -1733,6 +1715,51 @@ pub(super) fn strip_bundled_shared_deps_from_well_known_lib(
     );
     let _ = std::fs::remove_dir_all(&extract_dir);
     Ok(trimmed_lib)
+}
+
+fn shared_dep_members_to_remove(
+    candidates: &std::collections::BTreeSet<String>,
+    defined_by_member: &std::collections::HashMap<String, std::collections::HashSet<String>>,
+    undefined_by_member: &std::collections::HashMap<String, std::collections::HashSet<String>>,
+    stdlib_defined: &std::collections::HashSet<String>,
+) -> std::collections::BTreeSet<String> {
+    let empty = std::collections::HashSet::new();
+    let mut to_remove = candidates.clone();
+    loop {
+        let kept_undefined: std::collections::HashSet<&String> = undefined_by_member
+            .iter()
+            .filter(|(m, _)| !to_remove.contains(m.as_str()))
+            .flat_map(|(_, syms)| syms.iter())
+            .collect();
+        let mut protected_this_round = false;
+        for c in to_remove.clone().iter() {
+            let defined = defined_by_member.get(c).unwrap_or(&empty);
+            let still_needed = kept_undefined.iter().any(|s| {
+                defined.contains(*s)
+                    && (!stdlib_defined.contains(*s) || requires_bundled_native_companion(s))
+            });
+            if still_needed {
+                to_remove.remove(c);
+                protected_this_round = true;
+            }
+        }
+        if !protected_this_round {
+            break;
+        }
+    }
+    to_remove
+}
+
+/// Native objects emitted by Ring's build script are one half of the Ring
+/// crate artifact. They are not interchangeable with a same-named object from
+/// another staticlib merely because both archives advertise the same stable
+/// `ring_core_<version>__*` C ABI in their symbol indexes. If fixed-point
+/// pruning has to keep a wrapper's Ring Rust CGU (for a wrapper-specific
+/// monomorphization), keep the C/assembly members that satisfy its Ring ABI as
+/// well. Otherwise the reduced wrapper contains the Rust half alone and ELF
+/// links fail with hundreds of undefined `ring_core_*` references.
+fn requires_bundled_native_companion(symbol: &str) -> bool {
+    symbol.trim_start_matches('_').starts_with("ring_core_")
 }
 
 mod stub_symbols;

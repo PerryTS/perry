@@ -3,7 +3,10 @@
 //! evidence handling). Child module of `strip_dedup`, so `super::` sees its
 //! private items exactly as the inline `mod strip_dedup_tests` did.
 
-use super::{force_localize_symbol, is_panic_unwind_symbol, parse_nm_archive_output};
+use super::{
+    force_localize_symbol, is_panic_unwind_symbol, parse_nm_archive_output,
+    requires_bundled_native_companion, shared_dep_members_to_remove,
+};
 
 #[test]
 fn panic_unwind_classification_matches_dwref() {
@@ -127,6 +130,74 @@ empty_marker.o:
 
     // empty_marker.o → no entry; call site keeps it defensively.
     assert!(!by_member.contains_key("empty_marker.o"));
+}
+
+#[test]
+fn ring_core_symbols_require_the_bundled_native_companion() {
+    assert!(requires_bundled_native_companion(
+        "ring_core_0_17_14__p384_point_mul"
+    ));
+    // Mach-O's external-symbol spelling carries a leading underscore.
+    assert!(requires_bundled_native_companion(
+        "_ring_core_0_17_14__OPENSSL_cpuid_setup"
+    ));
+    assert!(!requires_bundled_native_companion(
+        "_RINvNtNtCsinkE3tyG5t6_4ring"
+    ));
+    assert!(!requires_bundled_native_companion("aws_lc_0_39_0_symbol"));
+}
+
+#[test]
+fn shared_dep_fixed_point_keeps_ring_native_half_with_kept_rust_half() {
+    use std::collections::{BTreeSet, HashMap, HashSet};
+
+    let candidates: BTreeSet<String> = ["ring-rust.o", "ring-native.o", "ordinary.o"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let defined_by_member: HashMap<String, HashSet<String>> = [
+        ("ring-rust.o", ["ring_wrapper_unique"]),
+        ("ring-native.o", ["ring_core_0_17_14__p384_point_mul"]),
+        ("ordinary.o", ["ordinary_shared"]),
+    ]
+    .into_iter()
+    .map(|(member, symbols)| {
+        (
+            member.to_string(),
+            symbols.into_iter().map(str::to_string).collect(),
+        )
+    })
+    .collect();
+    let undefined_by_member: HashMap<String, HashSet<String>> = [
+        (
+            "wrapper-entry.o",
+            vec!["ring_wrapper_unique", "ordinary_shared"],
+        ),
+        ("ring-rust.o", vec!["ring_core_0_17_14__p384_point_mul"]),
+    ]
+    .into_iter()
+    .map(|(member, symbols)| {
+        (
+            member.to_string(),
+            symbols.into_iter().map(str::to_string).collect(),
+        )
+    })
+    .collect();
+    let stdlib_defined: HashSet<String> = ["ring_core_0_17_14__p384_point_mul", "ordinary_shared"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
+    let removed = shared_dep_members_to_remove(
+        &candidates,
+        &defined_by_member,
+        &undefined_by_member,
+        &stdlib_defined,
+    );
+
+    assert!(!removed.contains("ring-rust.o"));
+    assert!(!removed.contains("ring-native.o"));
+    assert!(removed.contains("ordinary.o"));
 }
 
 #[cfg(target_os = "windows")]
