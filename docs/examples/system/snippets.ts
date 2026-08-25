@@ -1,6 +1,9 @@
 // demonstrates: per-API system snippets shown in docs/src/system/*.md
 // docs: docs/src/system/overview.md
-// platforms: macos, linux, windows
+// platforms: macos, linux
+// Windows excluded: this complete-file example uses try/catch, which the
+// default Windows RS4GC pipeline intentionally refuses until WinEH funclet
+// statepoints are supported (#7354).
 // run: false
 
 // `run: false` because most system APIs are interactive (open URLs, ask for

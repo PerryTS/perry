@@ -573,31 +573,42 @@ pub(crate) fn scan_windows_app_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'
 
 /// Set the root widget of an app.
 pub fn app_set_body(app_handle: i64, root_handle: i64) {
+    #[cfg(target_os = "windows")]
+    let hwnd = APPS.with(|apps| {
+        let mut apps = apps.borrow_mut();
+        let idx = (app_handle - 1) as usize;
+        let app = apps.get_mut(idx)?;
+        app.root_widget = Some(root_handle);
+        Some(app.hwnd)
+    });
+
+    #[cfg(not(target_os = "windows"))]
     APPS.with(|apps| {
         let mut apps = apps.borrow_mut();
         let idx = (app_handle - 1) as usize;
         if idx < apps.len() {
             apps[idx].root_widget = Some(root_handle);
-
-            #[cfg(target_os = "windows")]
-            {
-                let hwnd = apps[idx].hwnd;
-                // Set the root widget's HWND as a child of the main window
-                if let Some(child_hwnd) = crate::widgets::get_hwnd(root_handle) {
-                    unsafe {
-                        let _ = SetParent(child_hwnd, Some(hwnd));
-                        let style = GetWindowLongW(child_hwnd, GWL_STYLE) as u32;
-                        SetWindowLongW(child_hwnd, GWL_STYLE, (style | WS_CHILD.0) as i32);
-                        // Trigger initial layout
-                        let mut rect = RECT::default();
-                        let _ = GetClientRect(hwnd, &mut rect);
-                        let _ = MoveWindow(child_hwnd, 0, 0, rect.right, rect.bottom, true);
-                        crate::layout::layout_widget(root_handle, rect.right, rect.bottom);
-                    }
-                }
-            }
         }
     });
+
+    #[cfg(target_os = "windows")]
+    if let Some(hwnd) = hwnd {
+        // Win32 APIs below can synchronously dispatch window messages. Keep
+        // the APPS RefCell borrow above scoped to the state update so a
+        // re-entrant WM_SIZE/WM_ERASEBKGND can call get_root_widget safely.
+        if let Some(child_hwnd) = crate::widgets::get_hwnd(root_handle) {
+            unsafe {
+                let _ = SetParent(child_hwnd, Some(hwnd));
+                let style = GetWindowLongW(child_hwnd, GWL_STYLE) as u32;
+                SetWindowLongW(child_hwnd, GWL_STYLE, (style | WS_CHILD.0) as i32);
+                // Trigger initial layout
+                let mut rect = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rect);
+                let _ = MoveWindow(child_hwnd, 0, 0, rect.right, rect.bottom, true);
+                crate::layout::layout_widget(root_handle, rect.right, rect.bottom);
+            }
+        }
+    }
 }
 
 /// Run the app event loop (blocks until window closes).

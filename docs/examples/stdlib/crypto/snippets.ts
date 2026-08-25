@@ -1,6 +1,9 @@
 // demonstrates: per-API cryptography snippets shown in docs/src/stdlib/crypto.md
 // docs: docs/src/stdlib/crypto.md
-// platforms: macos, linux, windows
+// platforms: macos, linux
+// Windows excluded: this complete-file example uses try/catch, which the
+// default Windows RS4GC pipeline intentionally refuses until WinEH funclet
+// statepoints are supported (#7354).
 // run: false
 
 // Each ANCHOR block below is the exact code that the crypto docs page renders

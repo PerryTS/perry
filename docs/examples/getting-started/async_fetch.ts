@@ -1,6 +1,9 @@
 // demonstrates: async/await fetch shown in hello-world.md
 // docs: docs/src/getting-started/hello-world.md
-// platforms: macos, linux, windows
+// platforms: macos, linux
+// Windows excluded: this complete-file example uses try/catch, which the
+// default Windows RS4GC pipeline intentionally refuses until WinEH funclet
+// statepoints are supported (#7354).
 // run: false
 
 async function fetchData(): Promise<string> {

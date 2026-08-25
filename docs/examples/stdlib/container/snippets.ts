@@ -1,7 +1,10 @@
 // demonstrates: per-snippet examples for the perry/container + perry/compose
 //   docs page (docs/src/stdlib/container.md)
 // docs: docs/src/stdlib/container.md
-// platforms: macos, linux, windows
+// platforms: macos, linux
+// Windows excluded: this complete-file example uses try/catch, which the
+// default Windows RS4GC pipeline intentionally refuses until WinEH funclet
+// statepoints are supported (#7354).
 // run: false
 
 // Each ANCHOR block below is the code that the container docs page renders

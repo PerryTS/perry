@@ -1,6 +1,9 @@
 // demonstrates: per-API styling snippets shown in docs/src/ui/styling.md
 // docs: docs/src/ui/styling.md
-// platforms: macos, linux, windows
+// platforms: macos, linux
+// Windows excluded: this complete-file example uses try/catch, which the
+// default Windows RS4GC pipeline intentionally refuses until WinEH funclet
+// statepoints are supported (#7354).
 
 // Each ANCHOR block below is the exact code that the styling docs page
 // renders inline (via {{#include ... :NAME}}). The whole file is compiled

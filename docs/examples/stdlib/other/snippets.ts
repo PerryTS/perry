@@ -1,7 +1,10 @@
 // demonstrates: per-package "other" snippets shown in
 //   docs/src/stdlib/other.md
 // docs: docs/src/stdlib/other.md
-// platforms: macos, linux, windows
+// platforms: macos, linux
+// Windows excluded: this complete-file example uses try/catch, which the
+// default Windows RS4GC pipeline intentionally refuses until WinEH funclet
+// statepoints are supported (#7354).
 // run: false
 
 // Each ANCHOR block below is the exact code that the other-modules docs page

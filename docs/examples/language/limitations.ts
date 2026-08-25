@@ -1,6 +1,9 @@
 // demonstrates: TypeScript subset shown in docs/src/language/limitations.md
 // docs: docs/src/language/limitations.md
-// platforms: macos, linux, windows
+// platforms: macos, linux
+// Windows excluded: this complete-file example uses try/catch, which the
+// default Windows RS4GC pipeline intentionally refuses until WinEH funclet
+// statepoints are supported (#7354).
 
 // Each ANCHOR block below is the exact code that the limitations docs
 // page renders inline (via {{#include ... :NAME}}). Snippets are wrapped

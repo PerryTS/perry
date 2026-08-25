@@ -1,7 +1,10 @@
 // demonstrates: home-screen widget declarations from docs/src/widgets/*.md
 // docs: docs/src/widgets/overview.md, creating-widgets.md, components.md,
 //       configuration.md, data-fetching.md, watchos.md, wearos.md
-// platforms: macos, linux, windows
+// platforms: macos, linux
+// Windows excluded: this complete-file example uses try/catch, which the
+// default Windows RS4GC pipeline intentionally refuses until WinEH funclet
+// statepoints are supported (#7354).
 // run: false
 
 // `run: false` because `Widget({...})` lowers to a no-op on the host LLVM
