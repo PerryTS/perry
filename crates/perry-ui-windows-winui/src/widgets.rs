@@ -147,14 +147,10 @@ thread_local! {
 /// `js_nanbox_get_pointer`), so each stored slot is a GC root that an
 /// evacuating collection must rewrite.
 ///
-/// KNOWN RESIDUAL (not fixable by scanning): `render_handle` works on a CLONE
-/// of the node and captures the unboxed pointer by value into the `move`
-/// closures it hands to Windows Reactor (`fluent_button(..).on_click(move ||
-/// invoke0(selected))`, `apply_common`'s `on_tapped`, and the per-widget
-/// handlers). Those captured copies live inside boxed Rust closures owned by
-/// the element tree, which no scanner can reach or rewrite. Re-reading the
-/// scanned `NODES` slot at invoke time — the indirection `perry-ui-macos` gets
-/// from its handle-keyed callback maps — is the real fix and is a follow-up.
+/// Reactor callbacks capture only a widget handle and `CallbackSlot`, then
+/// re-read the corresponding slot below at invocation time. The raw pointer
+/// therefore remains in this scanned table instead of escaping into a boxed
+/// Rust closure that the collector cannot visit or rewrite.
 pub(crate) fn scan_winui_widgets_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
     NODES.with(|nodes| {
         for node in nodes.borrow_mut().iter_mut() {
@@ -200,11 +196,55 @@ fn callback_ptr(value: f64) -> usize {
     unsafe { js_nanbox_get_pointer(value) as usize }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CallbackSlot {
+    CommonOnClick,
+    ButtonClick,
+    TextFieldChange,
+    SecureFieldChange,
+    ToggleChange,
+    SliderChange,
+}
+
 fn read_string(ptr: *const u8) -> String {
     unsafe { perry_ffi::copy_string_from_raw(ptr) }.to_owned()
 }
 
-fn invoke0(callback: usize) {
+fn node_callback(handle: i64, slot: CallbackSlot) -> usize {
+    NODES.with(|nodes| {
+        let nodes = nodes.borrow();
+        let Some(node) = nodes.get(handle.saturating_sub(1) as usize) else {
+            return 0;
+        };
+        match slot {
+            CallbackSlot::CommonOnClick => node.common.on_click,
+            CallbackSlot::ButtonClick if node.common.on_click != 0 => node.common.on_click,
+            CallbackSlot::ButtonClick => match &node.kind {
+                NodeKind::Button { callback, .. } => *callback,
+                _ => 0,
+            },
+            CallbackSlot::TextFieldChange => match &node.kind {
+                NodeKind::TextField { callback, .. } => *callback,
+                _ => 0,
+            },
+            CallbackSlot::SecureFieldChange => match &node.kind {
+                NodeKind::SecureField { callback, .. } => *callback,
+                _ => 0,
+            },
+            CallbackSlot::ToggleChange => match &node.kind {
+                NodeKind::Toggle { callback, .. } => *callback,
+                _ => 0,
+            },
+            CallbackSlot::SliderChange => match &node.kind {
+                NodeKind::Slider { callback, .. } => *callback,
+                _ => 0,
+            },
+        }
+    })
+}
+
+fn invoke_node0(handle: i64, slot: CallbackSlot) {
+    let callback = node_callback(handle, slot);
     if callback != 0 {
         unsafe {
             js_closure_call0(callback as *const u8);
@@ -212,7 +252,8 @@ fn invoke0(callback: usize) {
     }
 }
 
-fn invoke1(callback: usize, value: f64) {
+fn invoke_node1(handle: i64, slot: CallbackSlot, value: f64) {
+    let callback = node_callback(handle, slot);
     if callback != 0 {
         unsafe {
             js_closure_call1(callback as *const u8, value);
@@ -220,14 +261,16 @@ fn invoke1(callback: usize, value: f64) {
     }
 }
 
-fn invoke_string(callback: usize, value: &str) {
-    if callback == 0 {
-        return;
-    }
+fn invoke_node_string(handle: i64, slot: CallbackSlot, value: &str) {
     unsafe {
         let string = js_string_from_bytes(value.as_ptr(), value.len() as u32);
         let boxed = js_nanbox_string(string as i64);
-        js_closure_call1(callback as *const u8, boxed);
+        // String allocation may collect. Resolve the callback only afterwards
+        // so even that collection's rewritten slot is observed.
+        let callback = node_callback(handle, slot);
+        if callback != 0 {
+            js_closure_call1(callback as *const u8, boxed);
+        }
     }
 }
 
@@ -307,7 +350,7 @@ pub(crate) fn render_root(cx: &mut RenderCx) -> Element {
         .into()
 }
 
-fn apply_common(modifiers: &mut Modifiers, common: &Common) {
+fn apply_common(modifiers: &mut Modifiers, handle: i64, common: &Common) {
     modifiers.width = common.width;
     modifiers.height = common.height;
     modifiers.opacity = common.opacity;
@@ -329,11 +372,12 @@ fn apply_common(modifiers: &mut Modifiers, common: &Common) {
         });
     }
     if common.on_click != 0 {
-        let callback = common.on_click;
-        modifiers
+        let handlers = modifiers
             .pointer_handlers
-            .get_or_insert_with(Default::default)
-            .on_tapped = Some(Callback::new(move |()| invoke0(callback)));
+            .get_or_insert_with(Default::default);
+        handlers.on_tapped = Some(Callback::new(move |()| {
+            invoke_node0(handle, CallbackSlot::CommonOnClick)
+        }));
     }
 }
 
@@ -373,27 +417,23 @@ fn render_handle(handle: i64) -> Element {
             view.font_size = *font_size;
             view.font_weight = *font_weight;
             view.modifiers.font_family = font_family.clone();
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
         NodeKind::Button {
             label,
-            callback,
+            callback: _,
             bordered,
         } => {
-            let selected = if node.common.on_click != 0 {
-                node.common.on_click
-            } else {
-                *callback
-            };
-            let mut view = fluent_button(label.clone()).on_click(move || invoke0(selected));
+            let mut view = fluent_button(label.clone())
+                .on_click(move || invoke_node0(handle, CallbackSlot::ButtonClick));
             view.style = if *bordered {
                 ButtonStyle::Default
             } else {
                 ButtonStyle::Subtle
             };
             view.is_enabled = node.common.enabled;
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             // `Button::on_click` already owns the generic callback.
             view.modifiers.pointer_handlers = None;
             view.into()
@@ -401,26 +441,26 @@ fn render_handle(handle: i64) -> Element {
         NodeKind::VStack { spacing } | NodeKind::LazyVStack { spacing } => {
             let children = render_children(&node.common.children, node.common.detaches_hidden);
             let mut view = fluent_vstack(children).spacing(*spacing);
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
         NodeKind::HStack { spacing } => {
             let children = render_children(&node.common.children, node.common.detaches_hidden);
             let mut view = fluent_hstack(children).spacing(*spacing);
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
         NodeKind::ZStack => {
             let children = render_children(&node.common.children, node.common.detaches_hidden);
             let mut view = grid(children);
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
         NodeKind::Spacer => {
             let mut view = Border::default();
             view.modifiers.min_width = Some(8.0);
             view.modifiers.min_height = Some(8.0);
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
         NodeKind::Divider => {
@@ -428,76 +468,76 @@ fn render_handle(handle: i64) -> Element {
             view.modifiers.height = Some(1.0);
             view.modifiers.horizontal_alignment = Some(HorizontalAlignment::Stretch);
             view.modifiers.background = Some(Brush::Solid(Color::rgb(128, 128, 128)));
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
         NodeKind::TextField {
             value,
             placeholder,
-            callback,
+            callback: _,
             borderless: _,
             font_size,
         } => {
-            let cb = *callback;
             let mut view = TextBox::new(value.clone())
                 .placeholder(placeholder.clone())
                 .on_changed(move |value: String| {
                     set_textfield_value(handle, value.clone());
-                    invoke_string(cb, &value);
+                    invoke_node_string(handle, CallbackSlot::TextFieldChange, &value);
                 });
             view.is_enabled = node.common.enabled;
             view.modifiers.font_size = *font_size;
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
         NodeKind::SecureField {
             value,
             placeholder,
-            callback,
+            callback: _,
         } => {
-            let cb = *callback;
             let mut view = PasswordBox::new()
                 .value(value.clone())
                 .placeholder(placeholder.clone())
                 .on_changed(move |value: String| {
                     set_securefield_value(handle, value.clone());
-                    invoke_string(cb, &value);
+                    invoke_node_string(handle, CallbackSlot::SecureFieldChange, &value);
                 });
             view.is_enabled = node.common.enabled;
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
         NodeKind::Toggle {
             label,
             on,
-            callback,
+            callback: _,
         } => {
-            let cb = *callback;
             let mut view = ToggleSwitch::new(*on)
                 .header(label.clone())
                 .on_changed(move |value| {
                     set_toggle_value(handle, value);
-                    invoke1(cb, if value { 1.0 } else { 0.0 });
+                    invoke_node1(
+                        handle,
+                        CallbackSlot::ToggleChange,
+                        if value { 1.0 } else { 0.0 },
+                    );
                 });
             view.is_enabled = node.common.enabled;
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
         NodeKind::Slider {
             min,
             max,
             value,
-            callback,
+            callback: _,
         } => {
-            let cb = *callback;
             let mut view = Slider::new(*value)
                 .range(*min, *max)
                 .on_changed(move |value| {
                     set_slider_value(handle, value);
-                    invoke1(cb, value);
+                    invoke_node1(handle, CallbackSlot::SliderChange, value);
                 });
             view.is_enabled = node.common.enabled;
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
         NodeKind::ScrollView { .. } => {
@@ -509,13 +549,13 @@ fn render_handle(handle: i64) -> Element {
                 .map(render_handle)
                 .unwrap_or(Element::Empty);
             let mut view = ScrollViewer::new(child);
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
         NodeKind::Form => {
             let children = render_children(&node.common.children, node.common.detaches_hidden);
             let mut view = fluent_vstack(children).spacing(12.0);
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
         NodeKind::Section { title } => {
@@ -525,7 +565,7 @@ fn render_handle(handle: i64) -> Element {
                 node.common.detaches_hidden,
             ));
             let mut view = fluent_vstack(children).spacing(8.0);
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
         NodeKind::Progress { value } => {
@@ -534,7 +574,7 @@ fn render_handle(handle: i64) -> Element {
             } else {
                 ProgressBar::new(value.clamp(0.0, 1.0)).range(0.0, 1.0)
             };
-            apply_common(&mut view.modifiers, &node.common);
+            apply_common(&mut view.modifiers, handle, &node.common);
             view.into()
         }
     };
@@ -1403,5 +1443,90 @@ mod tests {
         let node = node(parent).unwrap();
         assert_eq!(node.common.children, vec![first, second]);
         assert_eq!(render_handle(parent).kind_name(), "StackPanel");
+    }
+
+    #[test]
+    fn reactor_callback_keys_observe_rewritten_node_slots() {
+        let handle = register(NodeKind::Button {
+            label: "move-safe".into(),
+            callback: 0x111,
+            bordered: true,
+        });
+
+        assert_eq!(node_callback(handle, CallbackSlot::ButtonClick), 0x111);
+        with_node_mut(handle, |node| {
+            if let NodeKind::Button { callback, .. } = &mut node.kind {
+                *callback = 0x222;
+            }
+        });
+        assert_eq!(node_callback(handle, CallbackSlot::ButtonClick), 0x222);
+
+        // The generic on-click slot has precedence for Button and is itself
+        // resolved from the live node rather than copied into Reactor.
+        with_node_mut(handle, |node| node.common.on_click = 0x333);
+        assert_eq!(node_callback(handle, CallbackSlot::ButtonClick), 0x333);
+        assert_eq!(node_callback(handle, CallbackSlot::CommonOnClick), 0x333);
+
+        let textfield = register(NodeKind::TextField {
+            value: String::new(),
+            placeholder: String::new(),
+            callback: 0x444,
+            borderless: false,
+            font_size: None,
+        });
+        let securefield = register(NodeKind::SecureField {
+            value: String::new(),
+            placeholder: String::new(),
+            callback: 0x555,
+        });
+        let toggle = register(NodeKind::Toggle {
+            label: String::new(),
+            on: false,
+            callback: 0x666,
+        });
+        let slider = register(NodeKind::Slider {
+            min: 0.0,
+            max: 1.0,
+            value: 0.5,
+            callback: 0x777,
+        });
+        assert_eq!(
+            node_callback(textfield, CallbackSlot::TextFieldChange),
+            0x444
+        );
+        assert_eq!(
+            node_callback(securefield, CallbackSlot::SecureFieldChange),
+            0x555
+        );
+        assert_eq!(node_callback(toggle, CallbackSlot::ToggleChange), 0x666);
+        assert_eq!(node_callback(slider, CallbackSlot::SliderChange), 0x777);
+
+        for (handle, rewritten) in [
+            (textfield, 0x844),
+            (securefield, 0x855),
+            (toggle, 0x866),
+            (slider, 0x877),
+        ] {
+            with_node_mut(handle, |node| {
+                let callback = match &mut node.kind {
+                    NodeKind::TextField { callback, .. }
+                    | NodeKind::SecureField { callback, .. }
+                    | NodeKind::Toggle { callback, .. }
+                    | NodeKind::Slider { callback, .. } => callback,
+                    _ => unreachable!(),
+                };
+                *callback = rewritten;
+            });
+        }
+        assert_eq!(
+            node_callback(textfield, CallbackSlot::TextFieldChange),
+            0x844
+        );
+        assert_eq!(
+            node_callback(securefield, CallbackSlot::SecureFieldChange),
+            0x855
+        );
+        assert_eq!(node_callback(toggle, CallbackSlot::ToggleChange), 0x866);
+        assert_eq!(node_callback(slider, CallbackSlot::SliderChange), 0x877);
     }
 }
