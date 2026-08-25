@@ -202,7 +202,7 @@ fn error_value_bits(message: &[u8]) -> u64 {
     // `js_error_new_with_message` -> `alloc_error` roots its `message`
     // argument in its own handle scope before its first allocation, so a
     // scoped raw argument is sound here (#7341 self-rooting entry point).
-    let error = message.with_mut_ptr::<crate::string::StringHeader, _>(|ptr| unsafe {
+    let error = message.with_mut_ptr::<crate::string::StringHeader, _>(|ptr| {
         crate::error::js_error_new_with_message(ptr)
     });
     crate::value::js_nanbox_pointer(error as i64).to_bits()
