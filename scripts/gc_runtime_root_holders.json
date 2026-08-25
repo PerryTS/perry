@@ -132,6 +132,12 @@
       "why": "Monotonic counter of live async-resource handles. Holds no address at all; the resource objects live in RESOURCES, which scan_async_hooks_roots_mut visits."
     },
     {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "TEST_FORCE_RESOLVE_GC",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] AtomicUsize one-shot flag that asks resolve_async_resource_handle to force a collection; stores only 0 or 1 and is absent from shipped binaries."
+    },
+    {
       "file": "crates/perry-runtime/src/child_process/reactor.rs",
       "name": "CP_NEXT_LIVE_ID",
       "verdict": "not_a_gc_pointer",
