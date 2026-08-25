@@ -7,7 +7,7 @@ use lettre::message::header::ContentType;
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use perry_runtime::{
-    js_promise_new, js_string_from_bytes, JSValue, ObjectHeader, Promise, StringHeader,
+    js_promise_new_cross_thread, js_string_from_bytes, JSValue, ObjectHeader, Promise, StringHeader,
 };
 
 use crate::common::{register_handle, Handle};
@@ -193,7 +193,7 @@ pub unsafe extern "C" fn js_nodemailer_send_mail(
     transporter_handle: Handle,
     options: JSValue,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     // Parse mail options
     let mail_opts = match parse_mail_options(options) {
@@ -298,7 +298,7 @@ pub unsafe extern "C" fn js_nodemailer_send_mail(
 /// Verifies that the transporter can connect to the SMTP server.
 #[no_mangle]
 pub unsafe extern "C" fn js_nodemailer_verify(transporter_handle: Handle) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
         use crate::common::get_handle;

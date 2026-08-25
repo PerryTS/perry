@@ -6,7 +6,7 @@ pub use types::{
 };
 
 pub use backend::{detect_backend, ContainerBackend};
-use perry_runtime::{js_promise_new, Promise, StringHeader};
+use perry_runtime::{js_promise_new_cross_thread, Promise, StringHeader};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -19,7 +19,7 @@ use std::sync::OnceLock;
 pub unsafe extern "C" fn js_container_pullImage(
     reference_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let reference = match string_from_header(reference_ptr) {
         Some(s) => s,
@@ -52,7 +52,7 @@ pub unsafe extern "C" fn js_container_pullImage(
 /// FFI: js_container_listImages() -> *mut Promise
 #[no_mangle]
 pub unsafe extern "C" fn js_container_listImages() -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     // Resolves with a JSON-encoded `ImageInfo[]` string.
     crate::common::spawn_for_promise_deferred(
@@ -78,7 +78,7 @@ pub unsafe extern "C" fn js_container_build(
     spec_ptr: *const StringHeader,
     image_name_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let spec_json = string_from_header(spec_ptr).unwrap_or_else(|| "{}".to_string());
     let image_name = string_from_header(image_name_ptr).unwrap_or_default();
@@ -108,7 +108,7 @@ pub unsafe extern "C" fn js_container_removeImage(
     reference_ptr: *const StringHeader,
     force: i32,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let reference = match string_from_header(reference_ptr) {
         Some(s) => s,

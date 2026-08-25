@@ -380,7 +380,7 @@ fn tagged_bool(value: bool) -> f64 {
 /// fetch(url) -> Promise<Response>
 #[no_mangle]
 pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let url = match string_from_header(url_ptr) {
@@ -450,7 +450,7 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
     url_ptr: *const StringHeader,
     auth_header_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let url = match string_from_header(url_ptr) {
@@ -526,7 +526,7 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
     auth_header_ptr: *const StringHeader,
     body_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let url = match string_from_header(url_ptr) {
@@ -604,7 +604,7 @@ pub unsafe extern "C" fn js_fetch_post(
     body_ptr: *const StringHeader,
     content_type_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let url = match string_from_header(url_ptr) {
@@ -696,7 +696,7 @@ pub unsafe extern "C" fn js_fetch_with_options(
     // allocation can't move the still-TLS-stashed signal before we read it.
     let abort_state = abort_bridge::take_pending_signal_watch();
 
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     // An already-aborted signal rejects the request up front; otherwise keep the
@@ -824,7 +824,7 @@ fn consume_response_body(handle: f64) -> Result<Vec<u8>, &'static str> {
 /// `Expr::Await` for the rationale).
 #[no_mangle]
 pub unsafe extern "C" fn js_fetch_response_text(handle: f64) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let body = match consume_response_body(handle) {
         Ok(body) => body,
         Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
@@ -893,7 +893,7 @@ unsafe fn json_value_to_jsvalue(value: &serde_json::Value) -> JSValue {
 /// response.json() -> Promise<object>
 #[no_mangle]
 pub unsafe extern "C" fn js_fetch_response_json(handle: f64) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let body = match consume_response_body(handle) {
         Ok(body) => body,
         Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
@@ -932,7 +932,7 @@ pub unsafe extern "C" fn js_fetch_response_json(handle: f64) -> *mut perry_runti
 pub unsafe extern "C" fn js_fetch_text(
     url_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let url = match string_from_header(url_ptr) {
@@ -1284,7 +1284,7 @@ fn alloc_headers(store: HeadersStore) -> usize {
 /// doesn't hang. See `js_fetch_response_text` for rationale.
 #[no_mangle]
 pub unsafe extern "C" fn js_response_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let body = match consume_response_body(handle) {
         Ok(body) => body,
         Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
@@ -1322,7 +1322,7 @@ pub unsafe extern "C" fn js_response_array_buffer(handle: f64) -> *mut perry_run
 /// `.slice()` / `.size` / `.type` to the FFIs below.
 #[no_mangle]
 pub unsafe extern "C" fn js_response_blob(handle: f64) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let id = handle_id(handle);
     let content_type = {
         let guard = FETCH_RESPONSES.lock().unwrap();
@@ -1391,7 +1391,7 @@ pub unsafe extern "C" fn js_blob_type(handle: f64) -> *mut StringHeader {
 /// property dispatch in `value.rs`. Resolved synchronously.
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let id = handle_id(handle);
     let body: Vec<u8> = BLOB_REGISTRY
         .lock()
@@ -1427,7 +1427,7 @@ pub unsafe extern "C" fn js_blob_bytes(handle: f64) -> *mut perry_runtime::Promi
 /// characters; lossy_utf8 produces U+FFFD identically).
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_text(handle: f64) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let id = handle_id(handle);
     let body: Vec<u8> = BLOB_REGISTRY
         .lock()
@@ -1850,7 +1850,7 @@ fn consume_request_body(handle: f64) -> Result<Vec<u8>, &'static str> {
 /// (#1688)
 #[no_mangle]
 pub unsafe extern "C" fn js_request_text(handle: f64) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     match consume_request_body(handle) {
         Ok(body) => {
             let text = String::from_utf8_lossy(&body).to_string();
@@ -1873,7 +1873,7 @@ pub unsafe extern "C" fn js_request_text(handle: f64) -> *mut perry_runtime::Pro
 /// `js_fetch_response_json`. (#1688)
 #[no_mangle]
 pub unsafe extern "C" fn js_request_json(handle: f64) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let body = match consume_request_body(handle) {
         Ok(b) => b,
         Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
@@ -1904,7 +1904,7 @@ pub unsafe extern "C" fn js_request_json(handle: f64) -> *mut perry_runtime::Pro
 /// BufferHeader over the body bytes, mirroring `js_response_array_buffer`. (#1688)
 #[no_mangle]
 pub unsafe extern "C" fn js_request_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let body = match consume_request_body(handle) {
         Ok(b) => b,
         Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {

@@ -1,6 +1,6 @@
 //! PostgreSQL connection pool implementation
 
-use perry_runtime::{js_promise_new, JSValue, Promise};
+use perry_runtime::{js_promise_new_cross_thread, JSValue, Promise};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn js_pg_create_pool(config_f: f64) -> *mut Promise {
     // Take f64 at the FFI boundary to avoid SysV AMD64 ABI mismatch
     // (see js_mysql2_create_pool for details).
     let config = JSValue::from_bits(config_f.to_bits());
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     // Parse the config
     let pg_config = parse_pg_config(config);
@@ -119,7 +119,7 @@ pub unsafe extern "C" fn js_pg_create_pool(config_f: f64) -> *mut Promise {
 /// Executes a query on the pool.
 #[no_mangle]
 pub unsafe extern "C" fn js_pg_pool_query(pool_handle: Handle, sql_ptr: *const u8) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     // Extract the SQL string
     let sql = if sql_ptr.is_null() {
@@ -176,7 +176,7 @@ pub unsafe extern "C" fn js_pg_pool_query(pool_handle: Handle, sql_ptr: *const u
 /// Closes all connections in the pool.
 #[no_mangle]
 pub unsafe extern "C" fn js_pg_pool_end(pool_handle: Handle) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
         use crate::common::take_handle;

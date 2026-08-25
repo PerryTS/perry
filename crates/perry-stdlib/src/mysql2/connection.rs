@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use perry_runtime::{js_promise_new, JSValue, Promise};
+use perry_runtime::{js_promise_new_cross_thread, JSValue, Promise};
 use sqlx::mysql::MySqlConnection;
 use sqlx::Connection;
 
@@ -45,7 +45,7 @@ pub unsafe extern "C" fn js_mysql2_create_connection(config_f: f64) -> *mut Prom
     // Take f64 at the FFI boundary to avoid SysV AMD64 ABI mismatch
     // (see js_mysql2_create_pool for details).
     let config = JSValue::from_bits(config_f.to_bits());
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     // Parse the config
     let mysql_config = parse_mysql_config(config);
@@ -84,7 +84,7 @@ pub unsafe extern "C" fn js_mysql2_create_connection(config_f: f64) -> *mut Prom
 /// Closes the MySQL connection.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_connection_end(conn_handle: Handle) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
         use crate::common::take_handle;
@@ -129,7 +129,7 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
     sql_ptr: *const u8,
     params: JSValue,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     // Extract the SQL string
     let sql = if sql_ptr.is_null() {
@@ -262,7 +262,7 @@ pub unsafe extern "C" fn js_mysql2_connection_execute(
     sql_ptr: *const u8,
     params: JSValue,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let sql = if sql_ptr.is_null() {
         String::new()
@@ -415,7 +415,7 @@ pub unsafe extern "C" fn js_mysql2_connection_execute(
 pub unsafe extern "C" fn js_mysql2_connection_begin_transaction(
     conn_handle: Handle,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
         use crate::common::get_handle_mut;
@@ -451,7 +451,7 @@ pub unsafe extern "C" fn js_mysql2_connection_begin_transaction(
 /// connection.commit() -> Promise<void>
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_connection_commit(conn_handle: Handle) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
         use crate::common::get_handle_mut;
@@ -487,7 +487,7 @@ pub unsafe extern "C" fn js_mysql2_connection_commit(conn_handle: Handle) -> *mu
 /// connection.rollback() -> Promise<void>
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_connection_rollback(conn_handle: Handle) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
         use crate::common::get_handle_mut;

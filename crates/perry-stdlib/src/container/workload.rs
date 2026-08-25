@@ -6,7 +6,7 @@ pub use types::{
 };
 
 pub use backend::{detect_backend, ContainerBackend};
-use perry_runtime::{js_promise_new, Promise, StringHeader};
+use perry_runtime::{js_promise_new_cross_thread, Promise, StringHeader};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -69,7 +69,7 @@ pub unsafe extern "C" fn js_workload_runGraph(
     graph_json_ptr: *const StringHeader,
     opts_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let graph_json = string_from_header(graph_json_ptr).unwrap_or_else(|| "{}".to_string());
     let opts_json = string_from_header(opts_json_ptr).unwrap_or_else(|| "{}".to_string());
@@ -104,7 +104,7 @@ pub unsafe extern "C" fn js_workload_runGraph(
 /// FFI: js_workload_inspectGraph(handle_id: i64) -> *mut Promise
 #[no_mangle]
 pub unsafe extern "C" fn js_workload_inspectGraph(handle_id: i64) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let id = handle_id as u64;
 
     crate::common::spawn_for_promise_deferred(
@@ -136,7 +136,7 @@ pub unsafe extern "C" fn js_workload_inspectGraph(handle_id: i64) -> *mut Promis
 /// FFI: js_workload_handle_down(handle_id: i64, force: i32) -> *mut Promise
 #[no_mangle]
 pub unsafe extern "C" fn js_workload_handle_down(handle_id: i64, force: i32) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let id = handle_id as u64;
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
@@ -163,7 +163,7 @@ pub unsafe extern "C" fn js_workload_handle_down(handle_id: i64, force: i32) -> 
 /// FFI: js_workload_handle_status(handle_id: i64) -> *mut Promise
 #[no_mangle]
 pub unsafe extern "C" fn js_workload_handle_status(handle_id: i64) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let id = handle_id as u64;
 
     crate::common::spawn_for_promise_deferred(
@@ -199,7 +199,7 @@ pub unsafe extern "C" fn js_workload_handle_logs(
     node_id_ptr: *const StringHeader,
     tail: i32,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let id = handle_id as u64;
     let node_id = string_from_header(node_id_ptr).unwrap_or_default();
     let tail_opt = if tail >= 0 { Some(tail as u32) } else { None };
@@ -230,7 +230,7 @@ pub unsafe extern "C" fn js_workload_handle_exec(
     node_id_ptr: *const StringHeader,
     cmd_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let id = handle_id as u64;
     let node_id = string_from_header(node_id_ptr).unwrap_or_default();
     let cmd_json = string_from_header(cmd_json_ptr).unwrap_or_else(|| "[]".to_string());
@@ -258,7 +258,7 @@ pub unsafe extern "C" fn js_workload_handle_exec(
 /// FFI: js_workload_handle_ps(handle_id: i64) -> *mut Promise
 #[no_mangle]
 pub unsafe extern "C" fn js_workload_handle_ps(handle_id: i64) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let id = handle_id as u64;
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {

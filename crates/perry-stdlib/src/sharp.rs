@@ -8,7 +8,7 @@ use crate::common::{
     string_from_header_lossy as string_from_header, Handle,
 };
 use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageFormat};
-use perry_runtime::{js_promise_new, js_string_from_bytes, JSValue, Promise, StringHeader};
+use perry_runtime::{js_promise_new_cross_thread, js_string_from_bytes, JSValue, Promise, StringHeader};
 use std::io::Cursor;
 
 /// Sharp image handle with pending operations
@@ -269,7 +269,7 @@ pub unsafe extern "C" fn js_sharp_to_file(
     handle: Handle,
     path_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let path = match string_from_header(path_ptr) {
         Some(p) => p,
@@ -317,7 +317,7 @@ pub unsafe extern "C" fn js_sharp_to_file(
 /// Get the image as a buffer.
 #[no_mangle]
 pub unsafe extern "C" fn js_sharp_to_buffer(handle: Handle) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     spawn_for_promise(promise as *mut u8, async move {
         if let Some(sharp) = get_handle::<SharpHandle>(handle) {
@@ -346,7 +346,7 @@ pub unsafe extern "C" fn js_sharp_to_buffer(handle: Handle) -> *mut Promise {
 /// Get image metadata.
 #[no_mangle]
 pub unsafe extern "C" fn js_sharp_metadata(handle: Handle) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     spawn_for_promise(promise as *mut u8, async move {
         if let Some(sharp) = get_handle::<SharpHandle>(handle) {

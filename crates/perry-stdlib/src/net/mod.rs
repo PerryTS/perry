@@ -1695,7 +1695,7 @@ pub unsafe extern "C" fn js_net_socket_upgrade_tls(
     servername_ptr: i64,
     verify: f64,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as *mut u8;
 
     let servername = match string_from_header_i64(servername_ptr) {

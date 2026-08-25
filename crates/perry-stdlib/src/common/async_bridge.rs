@@ -83,7 +83,18 @@ unsafe fn unpin_promise_after_native_resolution(promise_ptr: usize) {
 #[inline]
 pub unsafe fn js_promise_new_for_native_resolution() -> *mut perry_runtime::Promise {
     ensure_gc_scanner_registered();
-    let p = perry_runtime::js_promise_new();
+    // #8770: allocate in MALLOC space (non-moving), not the nursery arena. A
+    // native-resolution promise is handed to a tokio worker as a raw `usize` and,
+    // until its resolution is queued into PENDING_RESOLUTIONS (which the root
+    // scanner visits), it is reachable only through that worker-thread capture —
+    // invisible to the main-thread copying minor. A nursery resident in that
+    // window is wiped by the from-space flip REGARDLESS of its PIN flag (the flip
+    // resets eden/survivor blocks wholesale; only root-reachable pins force the
+    // fallback — see `js_promise_new_cross_thread`). Then `js_stdlib_process_
+    // pending` unpins/resolves through the stale pointer and faults on the
+    // reclaimed header. Malloc space is non-moving and both sweep paths honor
+    // GC_FLAG_PINNED, so the pin actually protects it there.
+    let p = perry_runtime::js_promise_new_cross_thread();
     pin_promise_for_native_resolution(p as usize);
     p
 }
