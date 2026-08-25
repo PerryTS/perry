@@ -32,7 +32,8 @@ pub(crate) fn build_and_run_link(
     // No-auto / auto-fallback keeps the full prebuilt stdlib, so the
     // matching perry-stdlib feature was not stripped. Put wrappers first
     // in that shape so wrapper-only handles keep using their own surface
-    // symbols instead of the bundled stdlib copies.
+    // symbols instead of the bundled stdlib copies, but only after archive
+    // preparation has removed unsafe duplicate allocator/runtime objects.
     prefer_well_known_before_stdlib: bool,
     // Issue #76 — `libperry_wasm_host.a` (wasmi-backed WebAssembly host
     // runtime). Only `Some(...)` when the user passed `--enable-wasm-runtime`
@@ -397,9 +398,9 @@ pub(crate) fn build_and_run_link(
             .collect();
         (paths, cacheable.get())
     };
-    let well_known_libs: Vec<PathBuf> =
+    let (well_known_libs, wrappers_may_precede_stdlib): (Vec<PathBuf>, bool) =
         if prefer_well_known_before_stdlib && !source_well_known_libs.is_empty() {
-            prepare_well_known_archives(
+            let prepared = prepare_well_known_archives(
                 PreparedArchiveInputs {
                     cache_dir: &ctx.cache_dir,
                     target,
@@ -410,10 +411,17 @@ pub(crate) fn build_and_run_link(
                     well_known_libs: &source_well_known_libs,
                 },
                 prepare_well_known,
-            )
+            );
+            (prepared.paths, prepared.safe_to_precede_stdlib)
         } else {
-            source_well_known_libs
+            (source_well_known_libs, true)
         };
+    let wrappers_precede_stdlib = prefer_well_known_before_stdlib && wrappers_may_precede_stdlib;
+    if prefer_well_known_before_stdlib && !wrappers_may_precede_stdlib {
+        eprintln!(
+            "[strip-dedup] warning: archive preparation was incomplete; linking the full stdlib before wrappers to keep its allocator and runtime authoritative"
+        );
+    }
     // Multiple specifiers can route to the same native archive (`http` and
     // `https` both select perry_ext_http). They were de-duplicated before the
     // archive-preparation pass so the expensive transform also runs once.
@@ -427,7 +435,7 @@ pub(crate) fn build_and_run_link(
                 // graph. Put selected wrappers first, then let stdlib fill the
                 // unresolved surface. The stdlib staticlib already bundles
                 // perry-runtime, so Windows must not add it again.
-                if prefer_well_known_before_stdlib {
+                if wrappers_precede_stdlib {
                     for wk in &well_known_libs {
                         cmd.arg(wk);
                     }
@@ -442,7 +450,7 @@ pub(crate) fn build_and_run_link(
                 // Non-Windows archive linkers retain the historical repeat for
                 // stdlib bridge references. On Windows each wrapper appears
                 // exactly once; if there was no wrapper-first pass, put it here.
-                if !is_windows || !prefer_well_known_before_stdlib {
+                if !is_windows || !wrappers_precede_stdlib {
                     for wk in &well_known_libs {
                         cmd.arg(wk);
                     }
@@ -515,7 +523,7 @@ pub(crate) fn build_and_run_link(
         // Android + UI: runtime is provided by UI lib, but stdlib must still be linked
         // separately (UI lib does not bundle perry-stdlib).
         if let Some(ref stdlib) = stdlib_lib {
-            if prefer_well_known_before_stdlib {
+            if wrappers_precede_stdlib {
                 for wk in &well_known_libs {
                     cmd.arg(wk);
                 }

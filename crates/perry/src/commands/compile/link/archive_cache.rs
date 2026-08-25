@@ -33,6 +33,15 @@ pub(super) struct PreparedArchiveInputs<'a> {
     pub well_known_libs: &'a [PathBuf],
 }
 
+pub(super) struct PreparedArchives {
+    pub paths: Vec<PathBuf>,
+    /// Cached entries are only written after every required archive transform
+    /// succeeds. A false value means at least one original wrapper was kept
+    /// as a non-fatal fallback and must not precede the full stdlib at link
+    /// time: its bundled allocator/runtime objects could otherwise win.
+    pub safe_to_precede_stdlib: bool,
+}
+
 /// Cache the expensive, deterministic strip/dedup pass over well-known native
 /// archives. This is an intermediate-artifact cache: application objects and
 /// linker flags remain covered by the final-link cache and are deliberately
@@ -41,7 +50,7 @@ pub(super) struct PreparedArchiveInputs<'a> {
 pub(super) fn prepare_well_known_archives<F>(
     inputs: PreparedArchiveInputs<'_>,
     prepare: F,
-) -> Vec<PathBuf>
+) -> PreparedArchives
 where
     F: FnOnce() -> (Vec<PathBuf>, bool),
 {
@@ -49,7 +58,11 @@ where
         || std::env::var("PERRY_NO_CACHE").as_deref() == Ok("1")
     {
         debug_cache("MISS", "disabled");
-        return prepare().0;
+        let (paths, safe_to_precede_stdlib) = prepare();
+        return PreparedArchives {
+            paths,
+            safe_to_precede_stdlib,
+        };
     }
 
     let compiler = std::env::current_exe().ok();
@@ -66,7 +79,11 @@ where
         Ok(key) => key,
         Err(error) => {
             debug_cache("MISS", &format!("could not fingerprint inputs: {error}"));
-            return prepare().0;
+            let (paths, safe_to_precede_stdlib) = prepare();
+            return PreparedArchives {
+                paths,
+                safe_to_precede_stdlib,
+            };
         }
     };
     let entry_dir = inputs
@@ -77,18 +94,28 @@ where
 
     if let Some(paths) = load_cached_archives(&entry_dir, &key, inputs.well_known_libs) {
         debug_cache("HIT", &key);
-        return paths;
+        return PreparedArchives {
+            paths,
+            safe_to_precede_stdlib: true,
+        };
     }
 
     debug_cache("MISS", &key);
     let (prepared, cacheable) = prepare();
     if !cacheable {
         debug_cache("MISS", "archive preparation used a non-fatal fallback");
-        return prepared;
+        return PreparedArchives {
+            paths: prepared,
+            safe_to_precede_stdlib: false,
+        };
     }
-    match store_cached_archives(&entry_dir, &key, inputs.well_known_libs, &prepared) {
+    let paths = match store_cached_archives(&entry_dir, &key, inputs.well_known_libs, &prepared) {
         Some(paths) => paths,
         None => prepared,
+    };
+    PreparedArchives {
+        paths,
+        safe_to_precede_stdlib: true,
     }
 }
 
@@ -369,5 +396,48 @@ mod tests {
         assert!(load_cached_archives(&entry, key, &archives).is_some());
         fs::write(&stored[0], b"corrupt").unwrap();
         assert!(load_cached_archives(&entry, key, &archives).is_none());
+    }
+
+    #[test]
+    fn preparation_safety_survives_fallback_and_cache_hit() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let runtime = root.join("runtime.a");
+        let stdlib = root.join("stdlib.a");
+        let wrapper = root.join("wrapper.a");
+        let prepared = root.join("prepared.a");
+        for (path, bytes) in [
+            (&runtime, b"runtime".as_slice()),
+            (&stdlib, b"stdlib".as_slice()),
+            (&wrapper, b"wrapper".as_slice()),
+            (&prepared, b"prepared".as_slice()),
+        ] {
+            fs::write(path, bytes).unwrap();
+        }
+        let archives = vec![wrapper.clone()];
+        let make_inputs = || PreparedArchiveInputs {
+            cache_dir: root,
+            target: Some("test-target"),
+            target_triple: Some("test-target"),
+            compiled_features: &[],
+            runtime_lib: &runtime,
+            stdlib_lib: Some(&stdlib),
+            well_known_libs: &archives,
+        };
+
+        let fallback =
+            prepare_well_known_archives(make_inputs(), || (vec![wrapper.clone()], false));
+        assert_eq!(fallback.paths, vec![wrapper]);
+        assert!(!fallback.safe_to_precede_stdlib);
+
+        let stored = prepare_well_known_archives(make_inputs(), || (vec![prepared.clone()], true));
+        assert!(stored.safe_to_precede_stdlib);
+        assert_eq!(fs::read(&stored.paths[0]).unwrap(), b"prepared");
+
+        let cached = prepare_well_known_archives(make_inputs(), || -> (Vec<PathBuf>, bool) {
+            panic!("a valid cache hit must not prepare the archives again")
+        });
+        assert!(cached.safe_to_precede_stdlib);
+        assert_eq!(cached.paths, stored.paths);
     }
 }

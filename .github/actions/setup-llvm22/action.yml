@@ -102,10 +102,14 @@ runs:
         # `full-suite-gate` and blocked the release (run 32298711372).
         # `--connect-timeout`/`--max-time` turn that into a fast, retryable
         # failure; `--retry-all-errors` makes the retries actually cover
-        # transport stalls.
+        # transport stalls. Keep each attempt to five minutes and the retry
+        # window to twenty: `--max-time` resets for every retry, so the former
+        # 25-minute value could take 150+ minutes across six attempts and
+        # outlive this job's 120-minute cap without reaching any tests.
         $archive = "$env:RUNNER_TEMP\llvm.tar.xz"
         curl.exe -sSL --retry 5 --retry-all-errors --retry-delay 10 `
-          --connect-timeout 30 --max-time 1500 -o "$archive" $url
+          --connect-timeout 30 --max-time 300 --retry-max-time 1200 `
+          -o "$archive" $url
         # A native command's non-zero exit does NOT trip
         # $ErrorActionPreference, so check it explicitly — otherwise a failed
         # download fell through to `tar` and surfaced as a confusing archive

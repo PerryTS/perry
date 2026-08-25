@@ -1,0 +1,1 @@
+- Fix packaged and no-auto builds when the available LLVM tools cannot inspect Rust's native wrapper archives: Perry now keeps the full stdlib's allocator and runtime authoritative instead of producing binaries that can abort on an invalid free.
