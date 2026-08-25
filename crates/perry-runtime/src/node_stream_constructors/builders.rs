@@ -134,12 +134,14 @@ pub extern "C" fn js_event_emitter_async_resource_subclass_init(this: f64, optio
             crate::string::js_string_from_bytes(default_name.as_ptr(), default_name.len() as u32);
         name = f64::from_bits(JSValue::string_ptr(name_ptr).bits());
     }
+    let name_handle = scope.root_nanbox_f64(name);
     let async_options = if options_value.is_any_string() {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     } else {
         options_handle.get_nanbox_f64()
     };
-    let resource = crate::async_hooks::js_async_resource_new(name, async_options);
+    let resource =
+        crate::async_hooks::js_async_resource_new(name_handle.get_nanbox_f64(), async_options);
     let obj = this_handle.get_nanbox_f64();
     let raw = raw_ptr_from_value(obj);
     crate::async_hooks::js_async_resource_set_event_emitter(resource, raw as i64);

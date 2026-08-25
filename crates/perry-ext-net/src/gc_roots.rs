@@ -60,6 +60,11 @@ pub(crate) fn scan_net_roots(visitor: &mut GcRootVisitor<'_>) {
             }
         }
     }
+    if let Ok(mut completions) = crate::lifecycle::socket_completions().lock() {
+        for (_, callback) in completions.values_mut() {
+            visitor.visit_i64_slot(callback);
+        }
+    }
     // #8259 — the pump's in-flight dispatch frames (snapshotted callbacks +
     // parked payloads), which the table walks above cannot see.
     dispatch_custody::scan(visitor);

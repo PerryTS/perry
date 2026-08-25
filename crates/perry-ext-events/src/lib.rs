@@ -62,6 +62,7 @@ use module_iterators::{
     events_on_queue_listener, events_on_state_new, events_on_state_set_target,
     events_once_abort_listener, events_once_event_target_listener,
     events_once_stream_reject_listener, events_once_stream_resolve_listener,
+    EVENTS_ON_EVENT_EMITTER, EVENTS_ON_EVENT_TARGET, EVENTS_ON_NET_HANDLE, EVENTS_ON_STREAM,
 };
 
 const MIN_HEAP_POINTER: u64 = 0x1000;
@@ -201,8 +202,11 @@ extern "C" {
     fn js_async_resource_emit_destroy(handle: i64) -> i64;
     fn js_async_resource_set_event_emitter(handle: i64, event_emitter: i64);
     fn js_event_emitter_async_resource_subclass_backing(receiver: i64) -> i64;
-    fn js_async_hooks_provider_enter(async_id: u64);
-    fn js_async_hooks_provider_leave(async_id: u64);
+    fn js_async_hooks_provider_run_catching(
+        async_id: u64,
+        callback: unsafe extern "C" fn(*mut std::ffi::c_void) -> f64,
+        data: *mut std::ffi::c_void,
+    ) -> f64;
 }
 
 /// #3072: validate an EventEmitter listener argument, returning the closure
@@ -1292,15 +1296,46 @@ pub unsafe extern "C" fn js_event_emitter_emit(
     event_bits: i64,
     args_ptr: *mut ArrayHeader,
 ) -> f64 {
+    if event_name_from_bits(event_bits).is_none() {
+        return f64::from_bits(0x7FFC_0000_0000_0003);
+    }
+    let async_id = event_emitter_async_id(handle);
+    if async_id == 0 {
+        return js_event_emitter_emit_impl(handle, event_bits, args_ptr);
+    }
+    let mut call = EventEmitterEmitCall {
+        handle,
+        event_bits,
+        args_ptr,
+    };
+    js_async_hooks_provider_run_catching(
+        async_id,
+        event_emitter_emit_thunk,
+        &mut call as *mut EventEmitterEmitCall as *mut std::ffi::c_void,
+    )
+}
+
+struct EventEmitterEmitCall {
+    handle: Handle,
+    event_bits: i64,
+    args_ptr: *mut ArrayHeader,
+}
+
+unsafe extern "C" fn event_emitter_emit_thunk(data: *mut std::ffi::c_void) -> f64 {
+    let call = &mut *(data as *mut EventEmitterEmitCall);
+    js_event_emitter_emit_impl(call.handle, call.event_bits, call.args_ptr)
+}
+
+unsafe fn js_event_emitter_emit_impl(
+    handle: Handle,
+    event_bits: i64,
+    args_ptr: *mut ArrayHeader,
+) -> f64 {
     const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
     const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
     let Some(event_name) = event_name_from_bits(event_bits) else {
         return TAG_FALSE_F64;
     };
-    let async_id = event_emitter_async_id(handle);
-    if async_id != 0 {
-        js_async_hooks_provider_enter(async_id);
-    }
     let mut had_listeners = false;
     let mut domain_error: Option<(Handle, f64)> = None;
     let mut throw_error: Option<f64> = None;
@@ -1354,23 +1389,16 @@ pub unsafe extern "C" fn js_event_emitter_emit(
     }
     if let Some((domain, error)) = domain_error {
         let _ = js_domain_emit_error(domain, error, nanbox_pointer_bits(handle), false);
-        if async_id != 0 {
-            js_async_hooks_provider_leave(async_id);
-        }
         return TAG_FALSE_F64;
     }
     if let Some(error) = throw_error {
         js_throw(error);
     }
-    let result = if had_listeners {
+    if had_listeners {
         TAG_TRUE_F64
     } else {
         TAG_FALSE_F64
-    };
-    if async_id != 0 {
-        js_async_hooks_provider_leave(async_id);
     }
-    result
 }
 
 /// `emitter.emit(eventName)` — no-args variant.
@@ -1384,15 +1412,37 @@ pub unsafe extern "C" fn js_event_emitter_emit(
 /// `event_name_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64) -> f64 {
+    if event_name_from_bits(event_bits).is_none() {
+        return f64::from_bits(0x7FFC_0000_0000_0003);
+    }
+    let async_id = event_emitter_async_id(handle);
+    if async_id == 0 {
+        return js_event_emitter_emit0_impl(handle, event_bits);
+    }
+    let mut call = EventEmitterEmit0Call { handle, event_bits };
+    js_async_hooks_provider_run_catching(
+        async_id,
+        event_emitter_emit0_thunk,
+        &mut call as *mut EventEmitterEmit0Call as *mut std::ffi::c_void,
+    )
+}
+
+struct EventEmitterEmit0Call {
+    handle: Handle,
+    event_bits: i64,
+}
+
+unsafe extern "C" fn event_emitter_emit0_thunk(data: *mut std::ffi::c_void) -> f64 {
+    let call = &mut *(data as *mut EventEmitterEmit0Call);
+    js_event_emitter_emit0_impl(call.handle, call.event_bits)
+}
+
+unsafe fn js_event_emitter_emit0_impl(handle: Handle, event_bits: i64) -> f64 {
     const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
     const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
     let Some(event_name) = event_name_from_bits(event_bits) else {
         return TAG_FALSE_F64;
     };
-    let async_id = event_emitter_async_id(handle);
-    if async_id != 0 {
-        js_async_hooks_provider_enter(async_id);
-    }
     let mut had_listeners = false;
     let mut domain_error: Option<(Handle, f64)> = None;
     let mut throw_error: Option<f64> = None;
@@ -1445,23 +1495,16 @@ pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64)
     }
     if let Some((domain, error)) = domain_error {
         let _ = js_domain_emit_error(domain, error, nanbox_pointer_bits(handle), false);
-        if async_id != 0 {
-            js_async_hooks_provider_leave(async_id);
-        }
         return TAG_FALSE_F64;
     }
     if let Some(error) = throw_error {
         js_throw(error);
     }
-    let result = if had_listeners {
+    if had_listeners {
         TAG_TRUE_F64
     } else {
         TAG_FALSE_F64
-    };
-    if async_id != 0 {
-        js_async_hooks_provider_leave(async_id);
     }
-    result
 }
 
 /// `emitter.removeListener(event, listener)`. Removes the most recently added

@@ -20,11 +20,10 @@
 //! `NativeModSig` rows live in
 //! `perry-codegen/src/lower_call/native_table/net_events.rs`.
 
-use perry_ffi::{
-    alloc_string, nanbox_string_bits, ArrayHeader, JsClosure, JsValue, RawClosureHeader,
-    StringHeader,
-};
+use perry_ffi::{alloc_string, nanbox_string_bits, ArrayHeader, JsValue, StringHeader};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use crate::statics;
 use crate::string_from_header_i64;
@@ -55,6 +54,40 @@ fn nanbox_bool(b: bool) -> f64 {
 
 fn nanbox_undefined() -> f64 {
     f64::from_bits(TAG_UNDEFINED_BITS)
+}
+
+/// Main-thread custody for write/end callbacks awaiting socket-task I/O.
+pub(crate) fn socket_completions() -> &'static Mutex<std::collections::HashMap<u64, (i64, i64)>> {
+    static COMPLETIONS: OnceLock<Mutex<std::collections::HashMap<u64, (i64, i64)>>> =
+        OnceLock::new();
+    COMPLETIONS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+pub(crate) unsafe fn dispatch_socket_completion(completion: u64, error: Option<String>) {
+    let callback = (completion != 0)
+        .then(|| socket_completions().lock().unwrap().remove(&completion))
+        .flatten()
+        .map(|(_, callback)| callback)
+        .unwrap_or(0);
+    if callback == 0 {
+        return;
+    }
+    let mut frame = crate::dispatch_custody::DispatchFrame::park(vec![callback]);
+    if let Some(message) = error {
+        frame.set_payload(crate::build_error_object(&message).to_bits());
+        let _ = perry_ffi::JsClosure::from_raw(frame.cb(0) as *const perry_ffi::RawClosureHeader)
+            .call1(f64::from_bits(frame.payload_bits()));
+    } else {
+        let _ = perry_ffi::JsClosure::from_raw(frame.cb(0) as *const perry_ffi::RawClosureHeader)
+            .call0();
+    }
+}
+
+pub(crate) fn drop_socket_completions(socket_id: i64) {
+    socket_completions()
+        .lock()
+        .unwrap()
+        .retain(|_, (owner, _)| *owner != socket_id);
 }
 
 /// NaN-box a freshly allocated runtime string as an `f64` JS value.
@@ -298,10 +331,22 @@ pub unsafe extern "C" fn js_ext_net_socket_write(handle: i64, chunk_bits: i64) {
         Some(b) => b,
         None => return,
     };
+    enqueue_socket_write(handle, bytes, 0);
+}
+
+fn enqueue_socket_write(handle: i64, bytes: Vec<u8>, completion: u64) {
     let mut sockets = statics::sockets().lock().unwrap();
     if let Some(s) = sockets.get_mut(&handle) {
         s.bytes_written = s.bytes_written.saturating_add(bytes.len() as u64);
-        let _ = s.cmd_tx.send(crate::SocketCommand::Write(bytes));
+        if s.cmd_tx
+            .send(crate::SocketCommand::Write(bytes, completion))
+            .is_err()
+            && completion != 0
+        {
+            socket_completions().lock().unwrap().remove(&completion);
+        }
+    } else if completion != 0 {
+        socket_completions().lock().unwrap().remove(&completion);
     }
 }
 
@@ -318,20 +363,31 @@ pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
     js_ext_net_socket_write(handle, chunk_bits);
 }
 
-unsafe fn call_socket_completion(values: [f64; 3]) {
+unsafe fn socket_completion(values: [f64; 3]) -> i64 {
     extern "C" {
         fn js_value_is_closure(value_bits: i64) -> i32;
     }
-    if let Some(callback) = values
+    values
         .into_iter()
         .find(|value| js_value_is_closure(value.to_bits() as i64) != 0)
-    {
-        const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-        let raw = (callback.to_bits() & POINTER_MASK) as *const RawClosureHeader;
-        if !raw.is_null() {
-            let _ = JsClosure::from_raw(raw).call0();
-        }
+        .map(|callback| {
+            const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+            (callback.to_bits() & POINTER_MASK) as i64
+        })
+        .unwrap_or(0)
+}
+
+fn register_socket_completion(handle: i64, callback: i64) -> u64 {
+    static NEXT_COMPLETION: AtomicU64 = AtomicU64::new(1);
+    if callback == 0 {
+        return 0;
     }
+    let token = NEXT_COMPLETION.fetch_add(1, Ordering::Relaxed);
+    socket_completions()
+        .lock()
+        .unwrap()
+        .insert(token, (handle, callback));
+    token
 }
 
 /// Full Node overload for `socket.write(chunk[, encoding][, callback])`.
@@ -342,8 +398,18 @@ pub unsafe extern "C" fn js_ext_net_socket_write3(
     encoding_or_callback: f64,
     callback: f64,
 ) {
-    js_ext_net_socket_write(handle, chunk.to_bits() as i64);
-    call_socket_completion([chunk, encoding_or_callback, callback]);
+    let roots = perry_ffi::TransientRootScope::enter();
+    let callback = roots.root_nanbox(callback);
+    let encoding_or_callback = roots.root_nanbox(encoding_or_callback);
+    let completion = socket_completion([chunk, encoding_or_callback.get(), callback.get()]);
+    let completion = register_socket_completion(handle, completion);
+    let Some(bytes) = crate::jsvalue_to_socket_bytes(chunk) else {
+        if completion != 0 {
+            socket_completions().lock().unwrap().remove(&completion);
+        }
+        return;
+    };
+    enqueue_socket_write(handle, bytes, completion);
 }
 
 /// `socket.end([data])` — optionally write a final chunk, then half-close the
@@ -361,6 +427,9 @@ pub unsafe extern "C" fn js_ext_net_socket_write3(
 /// must reference live runtime allocations.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_end(handle: i64, chunk_bits: i64) {
+    // Decode the GC-managed input before provider init can run user hooks and
+    // move it. Only owned bytes survive across that callback boundary.
+    let final_bytes = crate::jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64));
     let trigger = statics::sockets().lock().ok().and_then(|sockets| {
         sockets
             .get(&handle)
@@ -374,13 +443,13 @@ pub unsafe extern "C" fn js_ext_net_socket_end(handle: i64, chunk_bits: i64) {
     }
     let mut sockets = statics::sockets().lock().unwrap();
     if let Some(s) = sockets.get_mut(&handle) {
-        if let Some(bytes) = crate::jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
+        if let Some(bytes) = final_bytes {
             if !bytes.is_empty() {
                 s.bytes_written = s.bytes_written.saturating_add(bytes.len() as u64);
-                let _ = s.cmd_tx.send(crate::SocketCommand::Write(bytes));
+                let _ = s.cmd_tx.send(crate::SocketCommand::Write(bytes, 0));
             }
         }
-        let _ = s.cmd_tx.send(crate::SocketCommand::End);
+        let _ = s.cmd_tx.send(crate::SocketCommand::End(0));
     }
 }
 
@@ -403,8 +472,45 @@ pub unsafe extern "C" fn js_ext_net_socket_end3(
     encoding_or_callback: f64,
     callback: f64,
 ) {
-    js_ext_net_socket_end(handle, chunk_or_callback.to_bits() as i64);
-    call_socket_completion([chunk_or_callback, encoding_or_callback, callback]);
+    let roots = perry_ffi::TransientRootScope::enter();
+    let chunk_or_callback = roots.root_nanbox(chunk_or_callback);
+    let encoding_or_callback = roots.root_nanbox(encoding_or_callback);
+    let callback = roots.root_nanbox(callback);
+    let completion = socket_completion([
+        chunk_or_callback.get(),
+        encoding_or_callback.get(),
+        callback.get(),
+    ]);
+    let completion = register_socket_completion(handle, completion);
+    let final_bytes = crate::jsvalue_to_socket_bytes(chunk_or_callback.get());
+    let trigger = statics::sockets().lock().ok().and_then(|sockets| {
+        sockets
+            .get(&handle)
+            .and_then(|socket| (socket.shutdown_async_id == 0).then_some(socket.tcp_async_id))
+    });
+    if let Some(trigger) = trigger {
+        let async_id = crate::init_provider_with_trigger(b"SHUTDOWNWRAP", trigger);
+        if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
+            socket.shutdown_async_id = async_id;
+        }
+    }
+    let mut sockets = statics::sockets().lock().unwrap();
+    if let Some(socket) = sockets.get_mut(&handle) {
+        if let Some(bytes) = final_bytes.filter(|bytes| !bytes.is_empty()) {
+            socket.bytes_written = socket.bytes_written.saturating_add(bytes.len() as u64);
+            let _ = socket.cmd_tx.send(crate::SocketCommand::Write(bytes, 0));
+        }
+        if socket
+            .cmd_tx
+            .send(crate::SocketCommand::End(completion))
+            .is_err()
+            && completion != 0
+        {
+            socket_completions().lock().unwrap().remove(&completion);
+        }
+    } else if completion != 0 {
+        socket_completions().lock().unwrap().remove(&completion);
+    }
 }
 
 /// `socket.destroy()` — hard close. Flags the handle destroyed (so

@@ -2,6 +2,29 @@
 
 use super::*;
 
+struct DeferredCallbacksCall {
+    callbacks: *const perry_ffi::TransientRootedAddr,
+    len: usize,
+}
+
+unsafe extern "C" fn call_deferred_callbacks(data: *mut std::ffi::c_void) -> f64 {
+    let call = &*(data as *const DeferredCallbacksCall);
+    let callbacks = std::slice::from_raw_parts(call.callbacks, call.len);
+    let mut fired = 0;
+    for callback in callbacks {
+        let callback = callback.get();
+        if callback == 0 {
+            continue;
+        }
+        let closure = JsClosure::from_raw(callback as *const RawClosureHeader);
+        if !closure.is_null() {
+            let _ = closure.call0();
+            fired += 1;
+        }
+    }
+    fired as f64
+}
+
 /// #4903 — record a pending `'listening'` emit on a server (http / https /
 /// http2 all share the `HttpServer` base). Node registers the
 /// `listen(port, cb)` callback as a *once* `'listening'` listener inside
@@ -68,32 +91,23 @@ where
         }
         None => return 0,
     };
-    if async_id != 0 {
-        unsafe { crate::js_async_hooks_provider_enter(async_id) };
-    }
     let this_val = handle_to_pointer_f64(server_handle);
-    let mut fired = 0i32;
     // #8082: the drained snapshot crosses each callback — root it.
     let scope = perry_ffi::TransientRootScope::enter();
     let rooted = scope.root_addrs(&cbs);
-    for cb in &rooted {
-        let addr = cb.get();
-        if addr == 0 {
-            continue;
-        }
-        let raw = addr as *const RawClosureHeader;
-        let closure = unsafe { JsClosure::from_raw(raw) };
-        if !closure.is_null() {
-            with_implicit_this(this_val, || {
-                let _ = unsafe { closure.call0() };
-            });
-            fired += 1;
-        }
+    let mut call = DeferredCallbacksCall {
+        callbacks: rooted.as_ptr(),
+        len: rooted.len(),
+    };
+    unsafe {
+        crate::js_async_hooks_provider_run_catching_with_this(
+            async_id,
+            this_val,
+            0,
+            call_deferred_callbacks,
+            &mut call as *mut DeferredCallbacksCall as *mut std::ffi::c_void,
+        ) as i32
     }
-    if async_id != 0 {
-        unsafe { crate::js_async_hooks_provider_leave(async_id) };
-    }
-    fired
 }
 
 pub(crate) fn drain_deferred_close_for<T, F>(server_handle: i64, base_of: F) -> i32
@@ -101,7 +115,7 @@ where
     T: Send + Sync + 'static,
     F: FnOnce(&mut T) -> &mut HttpServer,
 {
-    let callbacks = match get_handle_mut::<T>(server_handle) {
+    let (callbacks, async_id) = match get_handle_mut::<T>(server_handle) {
         Some(server) => {
             let base = base_of(server);
             if !std::mem::take(&mut base.pending_close_emit) {
@@ -116,28 +130,27 @@ where
                     }
                 }
             }
-            callbacks
+            let async_id = std::mem::take(&mut base.async_id);
+            (callbacks, async_id)
         }
         None => return 0,
     };
     let this_value = handle_to_pointer_f64(server_handle);
     let scope = perry_ffi::TransientRootScope::enter();
     let callbacks = scope.root_addrs(&callbacks);
-    let mut fired = 0;
-    for callback in &callbacks {
-        let callback = callback.get();
-        if callback == 0 {
-            continue;
-        }
-        let closure = unsafe { JsClosure::from_raw(callback as *const RawClosureHeader) };
-        if !closure.is_null() {
-            with_implicit_this(this_value, || unsafe {
-                let _ = closure.call0();
-            });
-            fired += 1;
-        }
+    let mut call = DeferredCallbacksCall {
+        callbacks: callbacks.as_ptr(),
+        len: callbacks.len(),
+    };
+    unsafe {
+        crate::js_async_hooks_provider_run_catching_with_this(
+            async_id,
+            this_value,
+            1,
+            call_deferred_callbacks,
+            &mut call as *mut DeferredCallbacksCall as *mut std::ffi::c_void,
+        ) as i32
     }
-    fired
 }
 pub(super) fn server_is_active(s: &HttpServer) -> bool {
     // #5011 — an `unref()`ed server no longer keeps the event loop alive

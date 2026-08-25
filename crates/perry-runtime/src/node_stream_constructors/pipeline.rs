@@ -231,11 +231,6 @@ pub extern "C" fn js_node_stream_finished(args: *const crate::array::ArrayHeader
     if let Some(signal) = options_signal(options) {
         add_finished_signal_abort_listener(stream, signal, callback);
     }
-    if get_hidden_value(options, hidden_key(b"cleanup"))
-        .is_some_and(|v| crate::value::js_is_truthy(v) != 0)
-    {
-        add_finished_cleanup_completion_listener(stream, callback);
-    }
     f64::from_bits(TAG_UNDEFINED)
 }
 

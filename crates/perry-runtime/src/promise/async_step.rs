@@ -678,6 +678,14 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
     } else {
         unsafe { ((*next).async_id, (*next).trigger_async_id) }
     };
+    let next = {
+        let value = next_handle.get_nanbox_f64();
+        if value.to_bits() == crate::value::TAG_UNDEFINED {
+            std::ptr::null_mut()
+        } else {
+            crate::value::js_nanbox_get_pointer(value) as *mut Promise
+        }
+    };
     crate::r#box::retain_async_box_activation(trap.box_activation);
     TASK_QUEUE.with(|q| {
         q.borrow_mut().push_back(Task::AsyncStep(

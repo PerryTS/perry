@@ -1084,20 +1084,30 @@ fn async_resource_handle_from_value(value: f64) -> Option<i64> {
 }
 
 fn set_handle_property(target: f64, key: f64, value: f64) -> Option<bool> {
-    if let Some(handle) = async_resource_handle_from_value(target) {
-        if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
-            unsafe { crate::symbol::js_object_set_symbol_property(target, key, value) };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(target);
+    let key = scope.root_nanbox_f64(key);
+    let value = scope.root_nanbox_f64(value);
+    if let Some(handle) = async_resource_handle_from_value(target.get_nanbox_f64()) {
+        if unsafe { crate::symbol::js_is_symbol(key.get_nanbox_f64()) } != 0 {
+            unsafe {
+                crate::symbol::js_object_set_symbol_property(
+                    target.get_nanbox_f64(),
+                    key.get_nanbox_f64(),
+                    value.get_nanbox_f64(),
+                )
+            };
             return Some(true);
         }
-        let Some(name) = key_to_rust_string(key) else {
+        let Some(name) = key_to_rust_string(key.get_nanbox_f64()) else {
             return Some(false);
         };
-        crate::object::handle_expando::handle_expando_set(handle, &name, value);
+        crate::object::handle_expando::handle_expando_set(handle, &name, value.get_nanbox_f64());
         return Some(true);
     }
 
-    let handle = small_handle_from_value(target)?;
-    let Some(name) = key_to_rust_string(key) else {
+    let handle = small_handle_from_value(target.get_nanbox_f64())?;
+    let Some(name) = key_to_rust_string(key.get_nanbox_f64()) else {
         // A SYMBOL-keyed write on a small native handle (e.g. the
         // @hono/node-server `incoming[wrapBodyStream] = true` on the HTTP
         // IncomingMessage handle). The handle is not a heap ObjectHeader, so
@@ -1106,14 +1116,20 @@ fn set_handle_property(target: f64, key: f64, value: f64) -> Option<bool> {
         // object) and report success. Returning `Some(false)` here made
         // strict-mode assignment throw `TypeError: Cannot assign to read only
         // property` and 500 every POST/PUT served by Hono's node adapter.
-        if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
-            unsafe { crate::symbol::js_object_set_symbol_property(target, key, value) };
+        if unsafe { crate::symbol::js_is_symbol(key.get_nanbox_f64()) } != 0 {
+            unsafe {
+                crate::symbol::js_object_set_symbol_property(
+                    target.get_nanbox_f64(),
+                    key.get_nanbox_f64(),
+                    value.get_nanbox_f64(),
+                )
+            };
             return Some(true);
         }
         return Some(false);
     };
     if let Some(dispatch) = crate::object::handle_property_set_dispatch() {
-        unsafe { dispatch(handle, name.as_ptr(), name.len(), value) };
+        unsafe { dispatch(handle, name.as_ptr(), name.len(), value.get_nanbox_f64()) };
     }
     Some(true)
 }

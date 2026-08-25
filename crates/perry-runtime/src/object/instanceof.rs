@@ -344,7 +344,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             let raw = value_addr(value);
             let matched = if method == "AsyncResource" {
                 crate::async_hooks::resolve_async_resource_handle(raw as i64).is_some()
-                    || (raw >= crate::value::addr_class::HANDLE_BAND_MAX
+                    || (crate::value::addr_class::is_plausible_heap_addr(raw)
                         && ordinary_has_instance_prototype_walk(value, type_ref))
             } else {
                 let candidate = small_native_handle_id(value).unwrap_or(raw as i64);
@@ -357,7 +357,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
                     })
                 };
                 native
-                    || (raw >= crate::value::addr_class::HANDLE_BAND_MAX
+                    || (crate::value::addr_class::is_plausible_heap_addr(raw)
                         && ordinary_has_instance_prototype_walk(value, type_ref))
             };
             return f64::from_bits(if matched {

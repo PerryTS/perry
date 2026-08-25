@@ -391,7 +391,7 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "once",
         class_filter: Some("IncomingMessage"),
-        runtime: "js_node_http_im_on",
+        runtime: "js_node_http_im_once",
         args: &[NA_STR, NA_PTR],
         ret: NR_F64,
     },

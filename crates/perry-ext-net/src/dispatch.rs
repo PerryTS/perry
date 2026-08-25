@@ -204,36 +204,21 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
 
     let result = match method {
         "write" if !args.is_empty() => {
-            // #5021 — call the DISTINCT, twin-free symbol directly so the
-            // write reaches ext-net's registry regardless of link order.
-            crate::js_ext_net_socket_write(handle, args[0].to_bits() as i64);
-            if let Some(callback) = args.iter().copied().skip(1).find(|value| {
-                extern "C" {
-                    fn js_value_is_closure(value_bits: i64) -> i32;
-                }
-                js_value_is_closure(value.to_bits() as i64) != 0
-            }) {
-                let raw = unbox_to_i64(callback) as *const RawClosureHeader;
-                if !raw.is_null() {
-                    let _ = JsClosure::from_raw(raw).call0();
-                }
-            }
+            crate::js_ext_net_socket_write3(
+                handle,
+                args[0],
+                args.get(1).copied().unwrap_or_else(undefined),
+                args.get(2).copied().unwrap_or_else(undefined),
+            );
             undefined()
         }
         "end" => {
-            let chunk = args.first().copied().unwrap_or_else(undefined);
-            crate::js_ext_net_socket_end(handle, chunk.to_bits() as i64);
-            if let Some(callback) = args.iter().copied().find(|value| {
-                extern "C" {
-                    fn js_value_is_closure(value_bits: i64) -> i32;
-                }
-                js_value_is_closure(value.to_bits() as i64) != 0
-            }) {
-                let raw = unbox_to_i64(callback) as *const RawClosureHeader;
-                if !raw.is_null() {
-                    let _ = JsClosure::from_raw(raw).call0();
-                }
-            }
+            crate::js_ext_net_socket_end3(
+                handle,
+                args.first().copied().unwrap_or_else(undefined),
+                args.get(1).copied().unwrap_or_else(undefined),
+                args.get(2).copied().unwrap_or_else(undefined),
+            );
             undefined()
         }
         "emit" if !args.is_empty() => {

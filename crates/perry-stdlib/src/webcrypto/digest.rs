@@ -52,14 +52,30 @@ pub unsafe extern "C" fn js_webcrypto_digest(algo_bits: f64, data_bits: f64) -> 
     if buf.is_null() {
         return reject_with_dom_exception("OperationError", "The operation failed");
     }
-    let value = f64::from_bits(JSValue::pointer(buf as *const u8).bits());
-    let promise = perry_runtime::promise::js_promise_new();
-    let promise_val = f64::from_bits(JSValue::pointer(promise as *const u8).bits());
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(buf as *const u8).bits()));
+    let promise = scope.root_raw_mut_ptr(perry_runtime::promise::js_promise_new());
+    let promise_val = promise.with_mut_ptr(|promise: *mut Promise| {
+        f64::from_bits(JSValue::pointer(promise as *const u8).bits())
+    });
     let cl = perry_runtime::closure::js_closure_alloc(webcrypto_digest_settle as *const u8, 3);
-    perry_runtime::closure::js_closure_set_capture_ptr(cl, 0, promise_val.to_bits() as i64);
-    perry_runtime::closure::js_closure_set_capture_ptr(cl, 1, value.to_bits() as i64);
+    let cl = scope.root_raw_mut_ptr(cl);
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        cl.get_raw_mut_ptr(),
+        0,
+        promise_val.to_bits() as i64,
+    );
+    perry_runtime::closure::js_closure_set_capture_ptr(
+        cl.get_raw_mut_ptr(),
+        1,
+        value.get_nanbox_f64().to_bits() as i64,
+    );
     // Remaining macrotask hops (Node's threadpool digest = 2 setImmediate ticks).
-    perry_runtime::closure::js_closure_set_capture_ptr(cl, 2, 2);
-    perry_runtime::timer::schedule_native_callback(cl as i64, &[], "HASHREQUEST");
-    promise
+    perry_runtime::closure::js_closure_set_capture_ptr(cl.get_raw_mut_ptr(), 2, 2);
+    perry_runtime::timer::schedule_native_callback(
+        cl.get_raw_mut_ptr::<perry_runtime::ClosureHeader>() as i64,
+        &[],
+        "HASHREQUEST",
+    );
+    promise.get_raw_mut_ptr()
 }
