@@ -71,6 +71,12 @@ crate::perry_thread_local! {
         RefCell<crate::fast_hash::PtrHashMap<usize, Option<TrustedDirectTarget>>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
+    /// Exact arrows with a compiler-private callback body whose cold arms
+    /// poison the caller's versioned loop before observable fallback code.
+    static CLOSURE_VERSIONED_LOOP_REGISTRY:
+        RefCell<crate::fast_hash::PtrHashMap<usize, TrustedDirectTarget>> =
+        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+
     /// Side-table marking closure body `func_ptr`s whose body is strict-mode
     /// code (file-level `"use strict"` or a body directive). Drives
     /// OrdinaryCallBindThis in `call`/`apply`/`bind`: a strict callee
@@ -572,12 +578,53 @@ pub(crate) fn lookup_closure_trusted_direct(func_ptr: *const u8) -> Option<Trust
         .with(|r| r.borrow().get(&(func_ptr as usize)).copied().flatten())
 }
 
+#[no_mangle]
+pub extern "C" fn js_register_closure_versioned_loop_direct(
+    public_func_ptr: *const u8,
+    versioned_func_ptr: *const u8,
+    capture_count: u32,
+    boxed_capture_mask: u64,
+) {
+    if public_func_ptr.is_null() || versioned_func_ptr.is_null() {
+        return;
+    }
+    if !is_registered_arrow_function(public_func_ptr) {
+        return;
+    }
+    CLOSURE_VERSIONED_LOOP_REGISTRY.with(|r| {
+        r.borrow_mut().insert(
+            public_func_ptr as usize,
+            TrustedDirectTarget {
+                func_ptr: versioned_func_ptr,
+                capture_count,
+                boxed_capture_mask,
+            },
+        );
+    });
+}
+
+#[inline(always)]
+pub(crate) fn lookup_closure_versioned_loop_direct(
+    func_ptr: *const u8,
+) -> Option<TrustedDirectTarget> {
+    CLOSURE_VERSIONED_LOOP_REGISTRY.with(|r| r.borrow().get(&(func_ptr as usize)).copied())
+}
+
 /// Keepalive anchor for the auto-optimize whole-program build — registration
 /// is referenced only by generated module-init code.
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_JS_REGISTER_CLOSURE_TRUSTED_DIRECT: extern "C" fn(*const u8, *const u8, u32, u64) =
     js_register_closure_trusted_direct;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_REGISTER_CLOSURE_VERSIONED_LOOP_DIRECT: extern "C" fn(
+    *const u8,
+    *const u8,
+    u32,
+    u64,
+) = js_register_closure_versioned_loop_direct;
 
 /// Register a compiled function address as strict-mode code. Emitted from
 /// module init alongside the arrow-function registration.

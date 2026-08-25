@@ -55,6 +55,7 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub closure_lengths: &'a HashMap<u32, u32>,
     pub closure_arrow_functions: &'a HashSet<u32>,
     pub trusted_box_closures: &'a HashMap<u32, super::closure_collect::TrustedBoxClosure>,
+    pub versioned_loop_callbacks: &'a HashSet<u32>,
     pub closures: &'a [(perry_hir::types::FuncId, perry_hir::Expr)],
     pub class_keys_init_data: &'a [(String, String, u32, Vec<u64>, Vec<u64>)],
     /// Keys global to `(class id, packed GcHeader word)` for inline `new`.

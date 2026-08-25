@@ -227,6 +227,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         VOID,
         &[PTR, PTR, I32, I64],
     );
+    module.declare_function(
+        "js_register_closure_versioned_loop_direct",
+        VOID,
+        &[PTR, PTR, I32, I64],
+    );
+    module.declare_function(
+        "js_closure_resolve_versioned_loop_direct_call",
+        PTR,
+        &[I64, I32],
+    );
     module.declare_function("js_register_closure_strict_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_async_function", VOID, &[PTR]);
     module.declare_function("js_register_closure_generator_function", VOID, &[PTR]);

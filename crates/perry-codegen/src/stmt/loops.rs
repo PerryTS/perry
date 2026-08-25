@@ -5643,6 +5643,12 @@ pub(crate) fn emit_gc_loop_safepoint(
     if !ctx.element_shape_loop_facts.is_empty()
         || !ctx.class_field_loop_facts.is_empty()
         || !ctx.stable_packed_loop_facts.is_empty()
+        || ctx.versioned_indexed_loop_facts.last().is_some_and(|fact| {
+            matches!(
+                fact.guard_mode,
+                crate::expr::VersionedIndexedGuardMode::CallbackDeopt { .. }
+            )
+        })
     {
         return;
     }

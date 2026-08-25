@@ -3,10 +3,10 @@
 
 use crate::{compile_module, CompileOptions};
 use perry_hir::types::{FunctionType, Type};
-use perry_hir::{Expr, Function, Module, ModuleInitKind, Param, Stmt, UpdateOp};
+use perry_hir::{BinaryOp, Expr, Function, Module, ModuleInitKind, Param, Stmt, UpdateOp};
 use std::collections::{HashMap, HashSet};
 
-use super::closure_collect::select_trusted_box_closures;
+use super::closure_collect::{select_trusted_box_closures, select_versioned_loop_callbacks};
 
 const COUNT: u32 = 10;
 const CALLBACK: u32 = 20;
@@ -126,6 +126,53 @@ fn callback_with(func_id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Expr {
     }
 }
 
+fn versioned_callback(func_id: u32) -> Expr {
+    const ENTITY: u32 = 29;
+    const POS: u32 = 30;
+    const VEL: u32 = 31;
+    let property = |id, name: &str| Expr::PropertyGet {
+        object: Box::new(Expr::LocalGet(id)),
+        property: name.to_string(),
+        byte_offset: 0,
+    };
+    callback_with(
+        func_id,
+        vec![
+            param(ENTITY, "entity", Type::Any),
+            param(POS, "pos", Type::Any),
+            param(VEL, "vel", Type::Any),
+        ],
+        vec![Stmt::Expr(Expr::LocalSet(
+            COUNT,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(COUNT)),
+                right: Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(property(POS, "x")),
+                    right: Box::new(property(VEL, "vx")),
+                }),
+            }),
+        ))],
+    )
+}
+
+fn versioned_update_callback(func_id: u32, op: UpdateOp, prefix: bool) -> Expr {
+    callback_with(
+        func_id,
+        vec![
+            param(29, "entity", Type::Any),
+            param(30, "pos", Type::Any),
+            param(31, "vel", Type::Any),
+        ],
+        vec![Stmt::Expr(Expr::Update {
+            id: COUNT,
+            op,
+            prefix,
+        })],
+    )
+}
+
 fn select(closures: Vec<(u32, Expr)>, direct: impl IntoIterator<Item = u32>) -> HashSet<u32> {
     select_trusted_box_closures(
         &closures,
@@ -158,6 +205,36 @@ fn emit(direct_literal: bool) -> String {
         .expect("LLVM IR is UTF-8")
 }
 
+fn emit_versioned_callback_with(callback: Expr) -> String {
+    let mut outer = outer_function(true);
+    let call = outer.body.last_mut().expect("outer call exists");
+    let Stmt::Expr(Expr::Call { args, .. }) = call else {
+        panic!("outer tail is a call");
+    };
+    args[0] = callback;
+
+    let mut module = Module::new("versioned_loop_callback.ts");
+    module.init_kind = ModuleInitKind::Eager;
+    module.functions = vec![consume_function(), outer];
+    module.init.push(Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::FuncRef(3)),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }));
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".to_string(),
+        ..Default::default()
+    };
+    String::from_utf8(compile_module(&module, opts).expect("fixture compiles"))
+        .expect("LLVM IR is UTF-8")
+}
+
+fn emit_versioned_callback() -> String {
+    emit_versioned_callback_with(versioned_callback(100))
+}
+
 fn function_body(ir: &str, symbol: &str) -> String {
     let start = ir
         .lines()
@@ -166,6 +243,19 @@ fn function_body(ir: &str, symbol: &str) -> String {
     ir.lines()
         .skip(start)
         .take_while(|line| *line != "}")
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn named_block_body<'a>(function: &'a str, prefix: &str) -> String {
+    let start = function
+        .lines()
+        .position(|line| line.starts_with(prefix) && line.ends_with(':'))
+        .unwrap_or_else(|| panic!("missing block {prefix}:\n{function}"));
+    function
+        .lines()
+        .skip(start + 1)
+        .take_while(|line| !line.ends_with(':'))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -214,6 +304,126 @@ fn direct_arrow_gets_a_private_body_but_keeps_the_public_validation_path() {
     assert!(ir.contains(
         "@js_register_closure_trusted_direct(ptr @perry_closure_trusted_box_callback_ts__99, ptr @perry_closure_trusted_box_callback_ts__99$trusted_boxes, i32 1, i64 1)"
     ));
+}
+
+#[test]
+fn additive_property_callback_gets_a_cold_deopting_private_body() {
+    let ir = emit_versioned_callback();
+    let special = function_body(
+        &ir,
+        "perry_closure_versioned_loop_callback_ts__100$trusted_boxes$versioned_loop",
+    );
+    assert!(
+        special.lines().next().is_some_and(|line| {
+            !line.contains("ptr %versioned_loop_deopt") && line.contains(" internal ")
+        }),
+        "the private ABI must reuse the unused first callback argument:\n{special}"
+    );
+    assert!(
+        special.contains("pic.miss.call")
+            && special.contains("js_object_get_field_ic_miss")
+            && special.contains("guarded_add.dynamic")
+            && special.contains("versioned_callback.deopt.mark"),
+        "both observable cold arms must poison the loop before fallback:\n{special}"
+    );
+    assert!(ir.contains(
+        "@js_register_closure_versioned_loop_direct(ptr @perry_closure_versioned_loop_callback_ts__100, ptr @perry_closure_versioned_loop_callback_ts__100$trusted_boxes$versioned_loop, i32 1, i64 1)"
+    ));
+}
+
+#[test]
+fn captured_update_callback_guards_number_and_deopts_before_tonumeric() {
+    let ir =
+        emit_versioned_callback_with(versioned_update_callback(100, UpdateOp::Increment, false));
+    let special = function_body(
+        &ir,
+        "perry_closure_versioned_loop_callback_ts__100$trusted_boxes$versioned_loop",
+    );
+    assert!(special.contains("versioned_update.number"), "{special}");
+    assert!(special.contains("versioned_update.tonumeric"), "{special}");
+    assert!(
+        special.contains("versioned_callback.deopt.mark")
+            && special.contains("@js_to_numeric(")
+            && special.contains("@js_numeric_step("),
+        "the cold arm must poison the loop before preserving full update semantics:\n{special}"
+    );
+    let fast = named_block_body(&special, "versioned_update.number");
+    assert!(fast.contains("fadd double"), "{fast}");
+    assert!(!fast.contains("@js_to_numeric("), "{fast}");
+    assert!(!fast.contains("@js_numeric_step("), "{fast}");
+    assert!(!fast.contains("@js_write_barrier("), "{fast}");
+}
+
+#[test]
+fn versioned_callback_selector_rejects_calls_and_heap_writes() {
+    const VERSIONED_FUNC: u32 = 100;
+    let eligible = versioned_callback(VERSIONED_FUNC);
+    let closures = vec![(VERSIONED_FUNC, eligible.clone())];
+    let direct = HashSet::from([VERSIONED_FUNC]);
+    let boxed = HashSet::from([COUNT]);
+    let globals = HashMap::new();
+    let trusted =
+        select_trusted_box_closures(&closures, &direct, &boxed, &globals, &HashSet::new());
+    assert!(
+        select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals)
+            .contains(&VERSIONED_FUNC)
+    );
+
+    for (op, prefix) in [
+        (UpdateOp::Increment, false),
+        (UpdateOp::Increment, true),
+        (UpdateOp::Decrement, false),
+        (UpdateOp::Decrement, true),
+    ] {
+        let update = versioned_update_callback(VERSIONED_FUNC, op, prefix);
+        let closures = vec![(VERSIONED_FUNC, update)];
+        let trusted =
+            select_trusted_box_closures(&closures, &direct, &boxed, &globals, &HashSet::new());
+        assert!(
+            select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals)
+                .contains(&VERSIONED_FUNC),
+            "unused-result {op:?} prefix={prefix} must be eligible"
+        );
+    }
+
+    for rejected_body in [
+        vec![Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::LocalGet(30)),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        })],
+        vec![Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::LocalGet(30)),
+            property: "x".to_string(),
+            value: Box::new(Expr::Integer(1)),
+        })],
+    ] {
+        let rejected = callback_with(
+            VERSIONED_FUNC,
+            vec![param(30, "value", Type::Any)],
+            rejected_body,
+        );
+        let closures = vec![(VERSIONED_FUNC, rejected)];
+        assert!(select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals).is_empty());
+    }
+
+    let used_first_param = callback_with(
+        VERSIONED_FUNC,
+        vec![param(30, "value", Type::Any)],
+        vec![Stmt::Expr(Expr::LocalSet(
+            COUNT,
+            Box::new(Expr::Binary {
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(COUNT)),
+                right: Box::new(Expr::LocalGet(30)),
+            }),
+        ))],
+    );
+    let closures = vec![(VERSIONED_FUNC, used_first_param)];
+    let trusted =
+        select_trusted_box_closures(&closures, &direct, &boxed, &globals, &HashSet::new());
+    assert!(select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals).is_empty());
 }
 
 #[test]

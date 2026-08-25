@@ -116,6 +116,40 @@ pub extern "C" fn js_closure_resolve_arrow_direct_call(
     trusted.func_ptr
 }
 
+/// Resolve only a compiler-private versioned-loop callback clone. A runtime
+/// closure must match the registered capture layout exactly; any other arrow,
+/// ordinary function, rest/padded call, or forged capture falls back.
+#[no_mangle]
+pub extern "C" fn js_closure_resolve_versioned_loop_direct_call(
+    closure: *const ClosureHeader,
+    arity: u32,
+) -> *const u8 {
+    let Some(func_ptr) = resolve_direct_func_ptr(closure, arity) else {
+        return std::ptr::null();
+    };
+    if !resolve_strategy(func_ptr).is_arrow() {
+        return std::ptr::null();
+    }
+    let Some(target) = super::super::registry::lookup_closure_versioned_loop_direct(func_ptr)
+    else {
+        return std::ptr::null();
+    };
+    let actual_capture_count = unsafe { real_capture_count((*closure).capture_count) };
+    if actual_capture_count != target.capture_count {
+        return std::ptr::null();
+    }
+    let mut mask = target.boxed_capture_mask;
+    while mask != 0 {
+        let index = mask.trailing_zeros();
+        let box_ptr = crate::closure::js_closure_get_capture_bits(closure, index);
+        if crate::r#box::box_slot_contents_bits(box_ptr).is_none() {
+            return std::ptr::null();
+        }
+        mask &= mask - 1;
+    }
+    target.func_ptr
+}
+
 macro_rules! define_direct_call_site {
     (
         $(#[$meta:meta])*
@@ -236,6 +270,14 @@ mod tests {
         value
     }
 
+    extern "C" fn versioned_source(_c: *const ClosureHeader, value: f64) -> f64 {
+        value
+    }
+
+    extern "C" fn versioned_boxed1(_c: *const ClosureHeader, value: f64, _deopt: *mut u64) -> f64 {
+        value
+    }
+
     fn closure_for(body: *const u8) -> *const ClosureHeader {
         crate::closure::js_closure_alloc(body, 0)
     }
@@ -316,6 +358,34 @@ mod tests {
             trusted_boxed1 as *const u8,
             "the exact compiler-installed layout must select the private body"
         );
+    }
+
+    #[test]
+    fn versioned_target_is_exact_and_fails_closed() {
+        crate::closure::js_register_closure_arity(versioned_source as *const u8, 1);
+        crate::closure::js_register_closure_arrow_function(versioned_source as *const u8);
+        super::super::registry::js_register_closure_versioned_loop_direct(
+            versioned_source as *const u8,
+            versioned_boxed1 as *const u8,
+            1,
+            1,
+        );
+
+        let wrong_count = closure_for(versioned_source as *const u8);
+        assert!(js_closure_resolve_versioned_loop_direct_call(wrong_count, 1).is_null());
+
+        let non_box = crate::closure::js_closure_alloc(versioned_source as *const u8, 1);
+        crate::closure::js_closure_set_capture_bits(non_box, 0, crate::value::TAG_UNDEFINED);
+        assert!(js_closure_resolve_versioned_loop_direct_call(non_box, 1).is_null());
+
+        let valid = crate::closure::js_closure_alloc(versioned_source as *const u8, 1);
+        let cell = crate::r#box::js_box_alloc_bits(crate::value::TAG_UNDEFINED as i64);
+        crate::closure::js_closure_set_box_capture_ptr(valid, 0, cell as i64);
+        assert_eq!(
+            js_closure_resolve_versioned_loop_direct_call(valid, 1),
+            versioned_boxed1 as *const u8
+        );
+        assert!(js_closure_resolve_versioned_loop_direct_call(valid, 0).is_null());
     }
 
     #[test]

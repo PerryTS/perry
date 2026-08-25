@@ -39,6 +39,119 @@ pub(crate) struct TrustedBoxClosure {
     pub boxed_capture_mask: u64,
 }
 
+fn versioned_loop_value_expr(
+    expr: &perry_hir::Expr,
+    param_ids: &std::collections::HashSet<u32>,
+    capture_ids: &std::collections::HashSet<u32>,
+) -> bool {
+    match expr {
+        perry_hir::Expr::Integer(_) | perry_hir::Expr::Number(_) => true,
+        perry_hir::Expr::LocalGet(id) => param_ids.contains(id) || capture_ids.contains(id),
+        perry_hir::Expr::PropertyGet { object, .. } => {
+            matches!(object.as_ref(), perry_hir::Expr::LocalGet(id) if param_ids.contains(id))
+        }
+        perry_hir::Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left,
+            right,
+        } => {
+            versioned_loop_value_expr(left, param_ids, capture_ids)
+                && versioned_loop_value_expr(right, param_ids, capture_ids)
+        }
+        _ => false,
+    }
+}
+
+fn versioned_loop_expr_uses_local(expr: &perry_hir::Expr, local_id: u32) -> bool {
+    match expr {
+        perry_hir::Expr::LocalGet(id) => *id == local_id,
+        perry_hir::Expr::PropertyGet { object, .. } => {
+            matches!(object.as_ref(), perry_hir::Expr::LocalGet(id) if *id == local_id)
+        }
+        perry_hir::Expr::Binary { left, right, .. } => {
+            versioned_loop_expr_uses_local(left, local_id)
+                || versioned_loop_expr_uses_local(right, local_id)
+        }
+        _ => false,
+    }
+}
+
+/// Select exact arrow callbacks whose only source-level effect is replacing a
+/// captured box with an additive expression over callback parameters, or an
+/// unused-result `++`/`--` on that box. The private clone forces parameter
+/// property reads through the descriptor-aware generic PIC and poisons its
+/// caller's fast loop before any PIC, dynamic-+, or ToNumeric fallback can run
+/// user code. Everything outside this deliberately small grammar keeps the
+/// ordinary guarded loop.
+pub(crate) fn select_versioned_loop_callbacks(
+    closures: &[(perry_hir::types::FuncId, perry_hir::Expr)],
+    trusted_box_closures: &std::collections::HashMap<u32, TrustedBoxClosure>,
+    module_boxed_vars: &std::collections::HashSet<u32>,
+    module_globals: &std::collections::HashMap<u32, String>,
+) -> std::collections::HashSet<u32> {
+    closures
+        .iter()
+        .filter_map(|(func_id, expr)| {
+            if !trusted_box_closures.contains_key(func_id) {
+                return None;
+            }
+            let perry_hir::Expr::Closure {
+                params,
+                body,
+                captures,
+                captures_this: false,
+                captures_new_target: false,
+                is_arrow: true,
+                is_async: false,
+                is_generator: false,
+                ..
+            } = expr
+            else {
+                return None;
+            };
+            let (target, value) = match body.as_slice() {
+                [perry_hir::Stmt::Expr(perry_hir::Expr::LocalSet(target, value))] => {
+                    (*target, Some(value.as_ref()))
+                }
+                // The result of a prefix/postfix update is unobservable when
+                // the update is the callback's complete expression statement.
+                // A private clone can therefore guard the captured value as a
+                // Number, perform the step inline, and deopt before ToNumeric
+                // for strings, objects, BigInts, TDZ, or any other cold case.
+                [perry_hir::Stmt::Expr(perry_hir::Expr::Update { id, .. })] => (*id, None),
+                _ => return None,
+            };
+            if !module_boxed_vars.contains(&target) {
+                return None;
+            }
+            // The private body carries the caller's stack context in the first
+            // otherwise-unused callback argument. Reusing the public ABI keeps
+            // the context out of an extra live argument on every iteration.
+            let scratch_param = params.first()?;
+            if let Some(value) = value {
+                if versioned_loop_expr_uses_local(value, scratch_param.id) {
+                    return None;
+                }
+            }
+            let param_ids: std::collections::HashSet<u32> =
+                params.iter().map(|param| param.id).collect();
+            let capture_ids: std::collections::HashSet<u32> =
+                crate::type_analysis::compute_auto_captures_with_globals(
+                    params,
+                    body,
+                    captures,
+                    module_globals,
+                )
+                .into_iter()
+                .collect();
+            (capture_ids.contains(&target)
+                && value
+                    .is_none_or(|value| versioned_loop_value_expr(value, &param_ids, &capture_ids)))
+            .then_some(*func_id)
+        })
+        .collect()
+}
+
 fn collect_direct_call_closures_in_stmts(
     stmts: &[perry_hir::Stmt],
     out: &mut std::collections::HashSet<u32>,
