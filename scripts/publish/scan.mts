@@ -1,16 +1,17 @@
 /**
- * @file Pre-approve Socket full-scan gate, modeled on a tiered registry-infra design
+ * @file Optional pre-publish Socket full-scan gate, modeled on a tiered registry-infra design
  *   CLI-free: everything runs through
  *   `@socketsecurity/sdk` against the Socket API directly. Each
  *   verified package tarball is submitted as a `tmp` full scan (hidden from
  *   the dashboard scan list — a promotion gate, not a tracked branch scan),
- *   and gated on the org's OWN security policy: any alert whose policy action
+ *   and gated on the org's OWN security policy when the release workflow opts
+ *   into Socket: any alert whose policy action
  *   is `error` fails the entry; `warn`-action alerts pass with counts in the
- *   receipt. Fail-closed by design.
+ *   receipt. Once enabled, scan/auth errors fail closed before npm publication.
  *
- *   Auth: `SOCKET_API_TOKEN` (the canonical env name). If absent, the gate
- *   fails with a pointer to the dashboard mint URL rather than silently
- *   passing.
+ *   Auth: `SOCKET_API_TOKEN` (the canonical env name), stored only in the
+ *   protected GitHub Environment. If the workflow enables the gate and the
+ *   token is absent, the scan fails rather than silently passing.
  */
 
 import { existsSync } from 'node:fs'
@@ -20,7 +21,7 @@ import { SocketSdk } from '@socketsecurity/sdk'
 
 import { SOCKET_ORG_SLUG, SOCKET_SCAN_REPO } from './constants.mts'
 import { logger } from './shared.mts'
-import { resolveStagedTarball } from './npm/staged.mts'
+import { resolvePackageTarball } from './npm/proof.mts'
 
 export const SOCKET_TOKEN_ENV_VAR = 'SOCKET_API_TOKEN'
 export const SOCKET_TOKEN_MINT_URL = 'https://socket.dev/dashboard'
@@ -158,11 +159,9 @@ export interface ScanResult {
 }
 
 /**
- * Scan one package's tarball. CI packs the materialized package; local approval
- * consumes the exact tarball proof retained by that CI run. When the caller
- * passes the staged shasum, verify the tarball's sha1 matches the staged bytes
- * BEFORE submitting, so a worktree change can never make Socket scan different
- * bytes from the artifact that promotion releases.
+ * Scan one package's tarball. CI packs the materialized package and passes its
+ * expected sha1. Verify that sha1 BEFORE submitting, so Socket always scans the
+ * exact bytes that the following npm publish step releases.
  * Submits as a tmp full scan, reads results + org security policy in parallel,
  * and buckets alerts. `error`-action alerts → failed; an unreachable/empty
  * scan → blocked (never a pass).
@@ -175,7 +174,7 @@ export async function scanTarball(
   proofRoot?: string,
 ): Promise<ScanResult> {
   const { orgSlug, sdk } = ctx
-  const packed = await resolveStagedTarball({ name }, proofRoot)
+  const packed = await resolvePackageTarball(name, proofRoot)
   if (!packed || !existsSync(packed.path)) {
     logger.fail(`scan: no local tarball for ${name}@${version} — run verify first.`)
     return { name, version, status: 'blocked', summary: { error: [], total: 0, warn: [] } }
@@ -185,7 +184,7 @@ export async function scanTarball(
       `scan: shasum mismatch for ${name}@${version} — the local tarball no longer matches the staged bytes.\n` +
         `    local pack:  ${packed.sha1}\n` +
         `    npm staging: ${stagedShasum}\n` +
-        `  Fix: the worktree changed between verify and scan; re-run publish:stage. Not scanning unverified bytes.`,
+          `  Fix: the package changed between pack and scan; rerun the CI publication job. Not scanning unverified bytes.`,
     )
     return { name, version, status: 'blocked', summary: { error: [], total: 0, warn: [] } }
   }

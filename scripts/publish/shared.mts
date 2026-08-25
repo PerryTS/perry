@@ -221,9 +221,8 @@ export async function checkNpmFloor(): Promise<string | undefined> {
   if (compareSemver(version, NPM_MIN_VERSION) < 0) {
     return (
       `npm ${version} is below the publish-flow floor of ${NPM_MIN_VERSION}.\n` +
-      `  Why: the flow needs npm staged publishing (\`npm stage\`, >= 11.15.0),\n` +
-      `  OIDC trusted publishing (>= 11.5.1), and \`min-release-age\` in DAYS\n` +
-      `  (>= 11.17) — ${NPM_MIN_VERSION} covers all three.\n` +
+      `  Why: the CI flow needs OIDC trusted publishing (>= 11.5.1) and\n` +
+      `  \`min-release-age\` in DAYS (>= 11.17) — ${NPM_MIN_VERSION} covers both.\n` +
       `  Fix: npm install -g npm@latest (or npm@${NPM_MIN_VERSION}).`
     )
   }
@@ -242,10 +241,9 @@ export async function gitShortSha(cwd: string): Promise<string> {
 
 /**
  * Extract the first balanced top-level JSON value (`{ … }` or `[ … ]`) from a
- * noisy stdout stream (npm stage list wraps JSON in progress lines). `npm stage
- * list --json` emits an ARRAY of staged entries, so `[` must be honored as a
- * start token — otherwise only the first object inside the array is extracted
- * and every staged entry after it disappears. Returns undefined if none found.
+ * noisy CLI stdout stream. JSON-producing commands may emit an array, so `[`
+ * must be honored as a start token rather than extracting only its first
+ * object. Returns undefined if none is found.
  */
 export function extractFirstJson(text: string): string | undefined {
   const objIdx = text.indexOf('{')

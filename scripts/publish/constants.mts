@@ -1,6 +1,6 @@
 /**
  * @file Perry publish-pipeline constants. The single place that names the
- *   packages, tap repos, and paths the staged-publish scripts touch, so a
+ *   packages, tap repos, and paths the publish scripts touch, so a
  *   future package or tap change is one edit. Hardcoded to Perry (Perry is
  *   not a fleet member — "generic" means portable structure, not cascade
  *   enrollment).
@@ -18,7 +18,7 @@ export const REPO_ROOT = path.resolve(
 /** Alias used across the publish modules (mirrors a shared `rootPath`). */
 export const rootPath = REPO_ROOT
 
-/** The 8 platform packages, staged BEFORE the wrapper (optionalDependencies). */
+/** The 8 platform packages, published BEFORE the wrapper (optionalDependencies). */
 export const PLATFORM_PACKAGES = [
   '@perryts/perry-darwin-arm64',
   '@perryts/perry-darwin-x64',
@@ -30,7 +30,7 @@ export const PLATFORM_PACKAGES = [
   '@perryts/perry-win32-arm64',
 ] as const
 
-/** The launcher wrapper — staged/approved LAST. */
+/** The launcher wrapper — published LAST. */
 export const WRAPPER_PACKAGE = '@perryts/perry'
 
 /** All 9, in publish order: platforms first, wrapper last. */
@@ -58,14 +58,14 @@ export const HOMEBREW_FORMULA = 'packaging/homebrew/perry.rb'
 /** Path to the changelog fragments folder (release notes source). */
 export const CHANGELOG_D = 'changelog.d'
 
-/** Shared pipeline state dir (verify/scan/approve receipts). */
+/** Shared pipeline state dir (CI proof/registry/release receipts). */
 export const PIPELINE_STATE_DIR = '.cache/perry/publish-pipeline'
 
 /** Socket org slug for tarball scans. */
 export const SOCKET_ORG_SLUG = 'perryts'
 
-/** The Socket scan "repo" label stamped on a staged-upload scan. */
-export const SOCKET_SCAN_REPO = 'perry-staged-publish-gate'
+/** The Socket scan "repo" label stamped on an npm publish-candidate scan. */
+export const SOCKET_SCAN_REPO = 'perry-npm-publish-gate'
 
 /**
  * npm package directories under npm/, in stage order. The launcher lives at
@@ -79,8 +79,8 @@ export function npmPackageDir(name: string): string {
 
 /**
  * Long-lived npm token env vars the auth-posture gate REFUSES on publish.
- * Publish is OIDC-in-CI + browser-2FA-locally; a long-lived token present
- * during a publish is a defect, not a convenience. Modeled on a tiered registry-infra design
+ * Publish is OIDC-in-CI only; a long-lived token present during a publish is a
+ * defect, not a convenience. Modeled on a tiered registry-infra design
  * auth-posture gate.
  */
 export const LONG_LIVED_NPM_TOKEN_ENV_VARS = [
@@ -89,17 +89,13 @@ export const LONG_LIVED_NPM_TOKEN_ENV_VARS = [
   'NPM_TOKEN',
 ] as const
 
-/** Read-only registry-read token (granular, read-only scope). Never publishes. */
-export const READONLY_TOKEN_ENV = 'PERRY_NPM_READONLY_TOKEN'
-
 /**
- * Minimum npm version for the publish flow. The binding floor is the newest of
- * the features the flow needs:
- *   - `npm stage` (staged publishing)          → npm >= 11.15.0
+ * Minimum npm version for the CI publish flow. The binding floor is the newest
+ * of the features the flow needs:
  *   - OIDC Trusted Publisher                    → npm >= 11.5.1
  *   - `min-release-age` in DAYS (the .npmrc soak) → npm >= 11.17
  *   - `--provenance`                            → npm >= 9.5
  * 11.17.0 covers them all; anything older gets a clear error instead of a
- * cryptic `npm stage` failure.
+ * cryptic Trusted Publisher failure.
  */
 export const NPM_MIN_VERSION = '11.17.0'

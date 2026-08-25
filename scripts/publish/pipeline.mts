@@ -1,18 +1,13 @@
 /**
- * @file Perry publish-pipeline orchestrator, modeled on a tiered registry-infra design
- *   Two invocations share one per-version state file at
- *   .cache/perry/publish-pipeline/<version>.json:
+ * Perry's registry-first release orchestrator.
  *
- *     npm run publish:stage      stage-publish (dispatch CI OIDC) → verify → scan
- *     npm run publish:approve     SEPARATE explicit promote (2FA) → release
- *     npm run publish:scan        re-scan the currently-staged entries
- *     npm run publish:status      print the receipt table and exit
- *     npm run publish:release     cut the tag + GH release (after a prior approve)
- *
- *   Canonical order: stage-publish → verify → scan → [HUMAN GATE: approve] →
- *   release. Publishing never waits on a GitHub release; the release waits on
- *   the publish (a staged package is not published — staging may never be
- *   approved — so a release cut earlier can mark a version that never shipped).
+ * npm run publish:release dispatches the exact candidate to GitHub Actions.
+ * The existing Release Packages workflow builds, optionally Socket-scans, and
+ * directly publishes the exact nine tarballs through npm Trusted Publisher /
+ * OIDC. It verifies their public registry shasums and only then creates the tag
+ * + GitHub Release. Back on the maintainer machine, this script independently
+ * verifies the retained proof and final release receipt. No npm account
+ * session, npm token, GitHub Environment, or local Socket token is used.
  */
 
 import {
@@ -25,45 +20,41 @@ import {
 } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 
+import {
+  CI_PACKAGE_MANIFEST,
+  type CiPackageManifest,
+} from './ci-package-manifest.mts'
 import {
   ALL_PACKAGES,
   npmPackageDir,
   PIPELINE_STATE_DIR,
   rootPath,
 } from './constants.mts'
-import { logger, runCapture, checkNpmFloor } from './shared.mts'
 import { checkVersionGate } from './npm/bump.mts'
-import { verifyStagedEntry } from './npm/staged.mts'
-import { listStagedEntries, type StagedEntry } from './npm/shared.mts'
-import { runApprove } from './npm/approve.mts'
-import {
-  preflightSocketScanAuth,
-  scanTarball,
-  type ScanResult,
-} from './scan.mts'
-import { ensureTagAndRelease, requireRegistryLive } from './release.mts'
-import { formatApproveGate } from './human-gate.mts'
+import { fetchPublishedShasum } from './npm/shared.mts'
+import { resolvePackageTarball } from './npm/proof.mts'
+import { requireRegistryLive } from './release.mts'
+import { logger, runCapture } from './shared.mts'
 
-/** The CI workflow that does the OIDC staged upload (build → stage-npm.sh → npm stage publish). */
-const STAGE_WORKFLOW = 'npm-stage-publish.yml'
+const PUBLISH_WORKFLOW = 'release-packages.yml'
+const PROOF_ARTIFACT = 'npm-publish-package-proofs'
+const PROOF_ARCHIVE = 'npm-publish-package-proofs.tar'
+
+type SocketStatus = 'not-run' | 'passed' | 'skipped'
 
 export interface PipelineState {
   version: string
-  /** Exact pushed commit and branch used by the staging workflow. */
   candidateSha?: string
   candidateRef?: string
-  stageRunId?: string
-  /** Cache-relative root containing CI's exact nine staged tarballs. */
-  stageProofDir?: string
-  staged: string[]
+  publishRunId?: string
+  proofDir?: string
+  published: string[]
   verified: string[]
-  scanResults: ScanResult[]
-  /** True when the scan gate could not run at all (e.g. bad/missing SOCKET_API_TOKEN) — distinct from "ran and found nothing". */
-  scanBlocked?: boolean
-  approved?: string[]
-  registryLive?: boolean
-  released?: boolean
+  socketScan: SocketStatus
+  registryLive: boolean
+  released: boolean
   updatedAt: string
 }
 
@@ -72,26 +63,44 @@ interface Candidate {
   ref: string
 }
 
-interface StageWorkflowReceipt extends Candidate {
+interface PublishWorkflowReceipt extends Candidate {
+  proofDir?: string
   runId: string
-  stageProofDir?: string
 }
 
-/** A successful real stage invalidates every receipt from an earlier attempt. */
-export function freshStageState(
+async function releaseCoreSucceeded(runId: string): Promise<boolean> {
+  const viewed = await runCapture(
+    'gh',
+    ['run', 'view', runId, '-R', 'PerryTS/perry', '--json', 'jobs'],
+    rootPath,
+  )
+  if (viewed.code !== 0) return false
+  try {
+    const data = JSON.parse(viewed.stdout) as {
+      jobs?: Array<{ conclusion?: unknown; name?: unknown }>
+    }
+    const jobs = data.jobs ?? []
+    return ['npm-publish', 'create-release'].every(name =>
+      jobs.some(job => job.name === name && job.conclusion === 'success'),
+    )
+  } catch {
+    return false
+  }
+}
+
+export function freshPublishState(
   version: string,
-  receipt: StageWorkflowReceipt,
+  receipt: PublishWorkflowReceipt,
 ): PipelineState {
   return {
     version,
     candidateSha: receipt.sha,
     candidateRef: receipt.ref,
-    stageRunId: receipt.runId,
-    stageProofDir: receipt.stageProofDir,
-    staged: [],
+    publishRunId: receipt.runId,
+    proofDir: receipt.proofDir,
+    published: [],
     verified: [],
-    scanResults: [],
-    approved: [],
+    socketScan: 'not-run',
     registryLive: false,
     released: false,
     updatedAt: new Date().toISOString(),
@@ -103,10 +112,24 @@ function statePath(version: string): string {
 }
 
 function readState(version: string): PipelineState | undefined {
-  const p = statePath(version)
-  if (!existsSync(p)) return undefined
+  const file = statePath(version)
+  if (!existsSync(file)) return undefined
   try {
-    return JSON.parse(readFileSync(p, 'utf8')) as PipelineState
+    const state = JSON.parse(readFileSync(file, 'utf8')) as Partial<PipelineState>
+    // Ignore receipts written by the retired staged/2FA pipeline. They have a
+    // different shape and must never be mistaken for direct-publish evidence.
+    if (
+      state.version !== version ||
+      !Array.isArray(state.published) ||
+      !Array.isArray(state.verified) ||
+      !['not-run', 'passed', 'skipped'].includes(state.socketScan ?? '') ||
+      typeof state.registryLive !== 'boolean' ||
+      typeof state.released !== 'boolean' ||
+      typeof state.updatedAt !== 'string'
+    ) {
+      return undefined
+    }
+    return state as PipelineState
   } catch {
     return undefined
   }
@@ -114,12 +137,11 @@ function readState(version: string): PipelineState | undefined {
 
 function writeState(state: PipelineState): void {
   const dir = path.join(rootPath, PIPELINE_STATE_DIR)
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(statePath(state.version), JSON.stringify(state, null, 2) + '\n')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(statePath(state.version), `${JSON.stringify(state, null, 2)}\n`)
 }
 
-/** Download and validate the exact tarballs retained by a successful stage run. */
-async function downloadStageProof(runId: string): Promise<string | undefined> {
+async function downloadPublishProof(runId: string): Promise<string | undefined> {
   const relativeDir = path.join(PIPELINE_STATE_DIR, 'artifacts', runId)
   const artifactDir = path.join(rootPath, relativeDir)
   rmSync(artifactDir, { recursive: true, force: true })
@@ -128,49 +150,39 @@ async function downloadStageProof(runId: string): Promise<string | undefined> {
     'gh',
     [
       'run', 'download', runId, '-R', 'PerryTS/perry',
-      '--name', 'npm-staged-package-proofs', '--dir', artifactDir,
+      '--name', PROOF_ARTIFACT, '--dir', artifactDir,
     ],
     rootPath,
   )
-  const archive = path.join(artifactDir, 'npm-staged-package-proofs.tar')
+  const archive = path.join(artifactDir, PROOF_ARCHIVE)
   if (download.code !== 0 || !existsSync(archive)) {
-    logger.fail(
-      `Could not download the exact staged-package proofs from run ${runId}. ` +
-        'Do not approve without those tarballs.',
-    )
+    logger.fail(`Could not download ${PROOF_ARTIFACT} from workflow run ${runId}.`)
     return undefined
   }
-  const extract = await runCapture(
-    'tar',
-    ['-xf', archive, '-C', artifactDir],
-    rootPath,
-  )
+  const extract = await runCapture('tar', ['-xf', archive, '-C', artifactDir], rootPath)
   rmSync(archive, { force: true })
   if (extract.code !== 0) {
-    logger.fail(`Could not extract the staged-package proofs from run ${runId}.`)
+    logger.fail(`Could not extract the npm publication proof from run ${runId}.`)
     return undefined
   }
   const missing = ALL_PACKAGES.filter(name => {
-    const packageDir = path.join(
-      artifactDir,
-      npmPackageDir(name),
-    )
-    return (
-      !existsSync(packageDir) ||
-      readdirSync(packageDir).filter(file => file.endsWith('.tgz')).length !== 1
-    )
+    const dir = path.join(artifactDir, npmPackageDir(name))
+    return !existsSync(dir) || readdirSync(dir).filter(file => file.endsWith('.tgz')).length !== 1
   })
-  if (missing.length > 0) {
+  if (
+    missing.length > 0 ||
+    !existsSync(path.join(artifactDir, CI_PACKAGE_MANIFEST))
+  ) {
     logger.fail(
-      `Stage run ${runId} did not retain one proof tarball for every package. ` +
-        `Missing/ambiguous: ${missing.join(', ')}.`,
+      `Workflow run ${runId} did not retain the exact nine-package proof. ` +
+        `Missing/ambiguous: ${missing.join(', ') || CI_PACKAGE_MANIFEST}.`,
     )
     return undefined
   }
   return relativeDir
 }
 
-/** Resolve a clean, pushed branch tip. workflow_dispatch accepts a branch/tag, not a raw SHA. */
+/** Resolve a clean, pushed, non-main candidate branch at an exact SHA. */
 async function resolveReleaseCandidate(
   config: { requireCurrentMain?: boolean } = {},
 ): Promise<Candidate | undefined> {
@@ -181,487 +193,361 @@ async function resolveReleaseCandidate(
     rootPath,
   )
   if (status.code !== 0 || status.stdout.trim()) {
-    logger.fail(
-      'Release candidate is not clean — commit or remove every tracked/untracked change before staging.',
-    )
+    logger.fail('Release candidate is not clean — commit every candidate change before publishing.')
     return undefined
   }
-  const branch = await runCapture(
-    'git',
-    ['symbolic-ref', '--quiet', '--short', 'HEAD'],
-    rootPath,
-  )
+  const branch = await runCapture('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], rootPath)
   const head = await runCapture('git', ['rev-parse', 'HEAD'], rootPath)
   const ref = branch.stdout.trim()
   const sha = head.stdout.trim()
   if (branch.code !== 0 || !ref || head.code !== 0 || !sha) {
-    logger.fail('Release staging requires a named branch, not a detached HEAD.')
+    logger.fail('Release publication requires a named branch, not a detached HEAD.')
     return undefined
   }
   if (ref === 'main') {
-    logger.fail(
-      'Release staging refuses the moving main branch — create and push a release/vX.Y.Z candidate branch.',
-    )
+    logger.fail('Release publication refuses moving main — use a release/vX.Y.Z candidate branch.')
     return undefined
   }
-  const remote = await runCapture(
-    'git',
-    ['ls-remote', '--heads', 'origin', `refs/heads/${ref}`],
-    rootPath,
-  )
+  const remote = await runCapture('git', ['ls-remote', '--heads', 'origin', `refs/heads/${ref}`], rootPath)
   const remoteSha = remote.stdout.trim().split(/\s+/)[0] ?? ''
   if (remote.code !== 0 || remoteSha !== sha) {
-    logger.fail(
-      `origin/${ref} is ${remoteSha || '<missing>'}, but local HEAD is ${sha}. ` +
-        'Push a release-candidate branch pinned to this commit before staging.',
-    )
+    logger.fail(`origin/${ref} is ${remoteSha || '<missing>'}, but local HEAD is ${sha}. Push the candidate first.`)
     return undefined
   }
   if (requireCurrentMain) {
-    const remoteMain = await runCapture(
-      'git',
-      ['ls-remote', '--heads', 'origin', 'refs/heads/main'],
-      rootPath,
-    )
-    const mainSha = remoteMain.stdout.trim().split(/\s+/)[0] ?? ''
-    if (remoteMain.code !== 0 || !mainSha) {
-      logger.fail('Could not resolve origin/main — refusing to stage an unverifiable candidate.')
+    const main = await runCapture('git', ['ls-remote', '--heads', 'origin', 'refs/heads/main'], rootPath)
+    const mainSha = main.stdout.trim().split(/\s+/)[0] ?? ''
+    if (main.code !== 0 || !mainSha) {
+      logger.fail('Could not resolve origin/main — refusing to publish an unverifiable candidate.')
       return undefined
     }
-    const containsMain = await runCapture(
-      'git',
-      ['merge-base', '--is-ancestor', mainSha, sha],
-      rootPath,
-    )
+    const containsMain = await runCapture('git', ['merge-base', '--is-ancestor', mainSha, sha], rootPath)
     if (containsMain.code !== 0) {
-      logger.fail(
-        `Candidate ${sha} does not contain current origin/main ${mainSha}. ` +
-          'Fetch/rebase the release branch before staging.',
-      )
+      logger.fail(`Candidate ${sha} does not contain current origin/main ${mainSha}. Refresh it before publishing.`)
       return undefined
     }
   }
   return { ref, sha }
 }
 
-/** Revalidate the staging receipt before approval or tag creation. */
-async function requirePinnedCandidate(
-  state: PipelineState,
-): Promise<Candidate | undefined> {
-  if (!state.candidateSha || !state.candidateRef || !state.stageRunId) {
-    logger.fail(
-      'The local receipt is not commit-pinned — re-run `npm run publish:stage` with the hardened pipeline.',
-    )
-    return undefined
-  }
-  // Main may advance while a staged candidate is being reviewed. Approval is
-  // tied to the already-tested receipt and must not chase that moving target.
-  const candidate = await resolveReleaseCandidate({ requireCurrentMain: false })
-  if (!candidate) return undefined
+async function requirePinnedCandidate(state: PipelineState): Promise<Candidate | undefined> {
+  const current = await resolveReleaseCandidate({ requireCurrentMain: false })
+  if (!current) return undefined
   if (
-    candidate.sha !== state.candidateSha ||
-    candidate.ref !== state.candidateRef
+    current.sha !== state.candidateSha ||
+    current.ref !== state.candidateRef
   ) {
     logger.fail(
-      `Staging run ${state.stageRunId} used ${state.candidateRef}@${state.candidateSha}, ` +
-        `but this checkout is ${candidate.ref}@${candidate.sha}. Re-stage this exact candidate.`,
+      `npm workflow run ${state.publishRunId ?? '<unknown>'} published ` +
+        `${state.candidateRef}@${state.candidateSha}, but this checkout is ${current.ref}@${current.sha}.`,
     )
     return undefined
   }
-  return candidate
+  return current
 }
 
-function isCompleteVersionSet(items: readonly string[], version: string): boolean {
-  return (
-    items.length === ALL_PACKAGES.length &&
-    ALL_PACKAGES.every(name => items.includes(`${name}@${version}`))
-  )
-}
-
-export function isCompleteScanReceipt(state: PipelineState): boolean {
-  return (
-    isCompleteVersionSet(state.staged, state.version) &&
-    isCompleteVersionSet(state.verified, state.version) &&
-    !state.scanBlocked &&
-    state.scanResults.length === ALL_PACKAGES.length &&
-    ALL_PACKAGES.every(name =>
-      state.scanResults.some(
-        result =>
-          result.name === name &&
-          result.version === state.version &&
-          result.status === 'passed',
-      ),
-    )
-  )
-}
-
-/** Dispatch the CI stage workflow and watch it to completion. */
-async function dispatchStageWorkflow(
-  version: string,
+async function dispatchPublishWorkflow(
   candidate: Candidate,
-  config: { dryRun?: boolean; tag?: string },
-): Promise<StageWorkflowReceipt | undefined> {
-  const { dryRun = false, tag = 'latest' } = config
+  config: { dryRun: boolean; socketScan: boolean; tag: string },
+): Promise<PublishWorkflowReceipt | undefined> {
   const dispatchedAt = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
   const args = [
-    'workflow',
-    'run',
-    STAGE_WORKFLOW,
-    '-R',
-    'PerryTS/perry',
-    '--ref',
-    candidate.ref,
-    '-f',
-    `publish=${dryRun ? 'false' : 'true'}`,
-    '-f',
-    `dist-tag=${tag}`,
-    '-f',
-    `candidate-sha=${candidate.sha}`,
+    'workflow', 'run', PUBLISH_WORKFLOW, '-R', 'PerryTS/perry',
+    '--ref', candidate.ref,
+    '-f', `cut_release=${config.dryRun ? 'false' : 'true'}`,
+    '-f', `candidate_sha=${candidate.sha}`,
+    '-f', `dist_tag=${config.tag}`,
+    '-f', `socket_scan=${config.socketScan ? 'true' : 'false'}`,
   ]
-  const run = await runCapture('gh', args, rootPath)
-  if (run.code !== 0) {
-    logger.fail(`gh workflow run ${STAGE_WORKFLOW} failed (${run.code}).`)
+  const dispatched = await runCapture('gh', args, rootPath)
+  if (dispatched.code !== 0) {
+    logger.fail(`gh workflow run ${PUBLISH_WORKFLOW} failed (${dispatched.code}).`)
     return undefined
   }
-  logger.log(`Dispatched ${STAGE_WORKFLOW} (publish=${!dryRun}, tag=${tag}). Waiting for the run to start…`)
+  logger.log(`Dispatched ${PUBLISH_WORKFLOW} at ${candidate.sha}; waiting for its run id…`)
   let runId = ''
   for (let attempt = 1; attempt <= 20 && !runId; attempt += 1) {
-    await new Promise(r => setTimeout(r, 3000))
-    const list = await runCapture(
+    await new Promise(resolve => setTimeout(resolve, 3000))
+    const listed = await runCapture(
       'gh',
       [
-        'run', 'list', '--workflow', STAGE_WORKFLOW, '-R', 'PerryTS/perry',
+        'run', 'list', '--workflow', PUBLISH_WORKFLOW, '-R', 'PerryTS/perry',
         '--event', 'workflow_dispatch', '--limit', '20', '--json',
-        'databaseId,createdAt,headBranch,headSha,status',
+        'databaseId,createdAt,headBranch,headSha',
       ],
       rootPath,
     )
     try {
-      const arr = JSON.parse(list.stdout) as Array<{
-        databaseId: number
+      const runs = JSON.parse(listed.stdout) as Array<{
         createdAt: string
+        databaseId: number
         headBranch: string
         headSha: string
       }>
-      const match = arr.find(r =>
-        r.createdAt >= dispatchedAt &&
-        r.headSha === candidate.sha &&
-        r.headBranch === candidate.ref,
+      const match = runs.find(run =>
+        run.createdAt >= dispatchedAt &&
+        run.headBranch === candidate.ref &&
+        run.headSha === candidate.sha,
       )
       if (match) runId = String(match.databaseId)
     } catch {
-      /* poll again */
+      // Poll again; gh may have returned transient/noisy output.
     }
   }
   if (!runId) {
-    logger.fail(
-      `Could not resolve the ${STAGE_WORKFLOW} run id to watch it. Check ` +
-        `https://github.com/PerryTS/perry/actions/workflows/${STAGE_WORKFLOW} manually.`,
+    logger.fail(`Could not resolve the ${PUBLISH_WORKFLOW} run id.`)
+    return undefined
+  }
+  logger.log(`Watching release run ${runId}…`)
+  const watched = await runCapture(
+    'gh',
+    ['run', 'watch', runId, '-R', 'PerryTS/perry', '--exit-status'],
+    rootPath,
+  )
+  if (watched.code !== 0 && !(await releaseCoreSucceeded(runId))) {
+    logger.fail(`release workflow run ${runId} failed (${watched.code}).`)
+    return undefined
+  }
+  if (watched.code !== 0) {
+    logger.warn(
+      `Release core succeeded in run ${runId}; one or more post-tag distribution jobs failed. ` +
+        'The release is valid, but inspect and rerun those jobs.',
     )
-    return undefined
   }
-  logger.log(`Watching run ${runId}…`)
-  const watch = await runCapture('gh', ['run', 'watch', runId, '-R', 'PerryTS/perry', '--exit-status'], rootPath)
-  if (watch.code !== 0) {
-    logger.fail(`CI stage workflow run ${runId} did not succeed (${watch.code}).`)
-    return undefined
-  }
-  const stageProofDir = dryRun ? undefined : await downloadStageProof(runId)
-  if (!dryRun && !stageProofDir) return undefined
-  logger.log(`CI stage workflow run ${runId} succeeded — staged @perryts/* v${version}.`)
-  return { ...candidate, runId, stageProofDir }
+  const proofDir = config.dryRun ? undefined : await downloadPublishProof(runId)
+  if (!config.dryRun && !proofDir) return undefined
+  return { ...candidate, proofDir, runId }
 }
 
-/** Verify + scan the currently-staged @perryts/* entries; update state. */
-async function verifyAndScan(
-  version: string,
-  state: PipelineState,
-): Promise<PipelineState> {
-  const proofRoot = state.stageProofDir
-    ? path.join(rootPath, state.stageProofDir)
-    : undefined
-  const staged = (await listStagedEntries(rootPath)).filter(
-    e =>
-      e.version === version &&
-      ALL_PACKAGES.includes(e.name as (typeof ALL_PACKAGES)[number]),
-  )
-  state.staged = staged.map(e => `${e.name}@${e.version}`)
-  // Surface a partial staged set immediately, not only when publish:approve
-  // later refuses it — the @perryts/* packages are a fixed release set and a
-  // partial stage ships a broken install if promoted.
-  const stagedNames = new Set(staged.map(e => e.name))
-  const missing = ALL_PACKAGES.filter(n => !stagedNames.has(n))
-  if (missing.length > 0) {
-    logger.fail(`Partial staged set — missing: ${missing.join(', ')}. Not all 9 @perryts/* packages are staged.`)
-  }
-  const verified: StagedEntry[] = []
-  for (const entry of staged) {
-    if (await verifyStagedEntry(entry, proofRoot)) verified.push(entry)
-  }
-  state.verified = verified.map(e => `${e.name}@${e.version}`)
-  // The scan gate is mandatory — there is no flag to skip it. A missing/invalid
-  // SOCKET_API_TOKEN fails closed (state.scanResults stays empty and the
-  // pipeline refuses to report a clean scan) rather than silently proceeding.
-  const ctx = await preflightSocketScanAuth()
-  if (ctx) {
-    const results: ScanResult[] = []
-    for (const entry of verified) {
-      results.push(
-        await scanTarball(
-          ctx,
-          entry.name,
-          entry.version,
-          entry.shasum,
-          proofRoot,
-        ),
-      )
-    }
-    state.scanResults = results
-    state.scanBlocked = false
-    const failed = results.filter(r => r.status !== 'passed')
-    if (failed.length > 0) {
-      logger.fail(`scan gate: ${failed.length} entry/entries did not pass — fix before approve.`)
-    }
-  } else {
-    state.scanBlocked = true
-    logger.fail(
-      'Socket scan auth failed — the scan did not run and cannot be skipped.\n' +
-        '  Fix: set SOCKET_API_TOKEN (ask a maintainer if it is not already provisioned) and re-run.',
+export function isCompletePublishReceipt(state: PipelineState): boolean {
+  return (
+    state.published.length === ALL_PACKAGES.length &&
+    state.verified.length === ALL_PACKAGES.length &&
+    ALL_PACKAGES.every(name =>
+      state.published.includes(`${name}@${state.version}`) &&
+      state.verified.includes(`${name}@${state.version}`),
     )
+  )
+}
+
+async function verifyPublishedProofs(state: PipelineState): Promise<boolean> {
+  if (!state.proofDir) return false
+  const proofRoot = path.join(rootPath, state.proofDir)
+  const manifest = JSON.parse(
+    readFileSync(path.join(proofRoot, CI_PACKAGE_MANIFEST), 'utf8'),
+  ) as CiPackageManifest
+  if (
+    manifest.version !== state.version ||
+    manifest.packages.length !== ALL_PACKAGES.length
+  ) {
+    logger.fail('The npm proof manifest does not match the release version/package count.')
+    return false
+  }
+
+  const published: string[] = []
+  const verified: string[] = []
+  for (const name of ALL_PACKAGES) {
+    const proof = manifest.packages.find(pkg => pkg.name === name)
+    if (!proof || proof.version !== state.version) continue
+    const local = await resolvePackageTarball(name, proofRoot)
+    if (!local || local.sha1 !== proof.sha1) {
+      logger.fail(`CI proof mismatch for ${name}@${state.version}.`)
+      continue
+    }
+    verified.push(`${name}@${state.version}`)
+    const publicSha = await fetchPublishedShasum(name, state.version)
+    if (publicSha !== proof.sha1) {
+      logger.fail(
+        `${name}@${state.version} registry sha1 is ${publicSha ?? '<not live>'}; expected CI proof ${proof.sha1}.`,
+      )
+      continue
+    }
+    published.push(`${name}@${state.version}`)
+  }
+  state.published = published
+  state.verified = verified
+
+  const socketReceipt = path.join(proofRoot, 'socket-scan-receipt.json')
+  if (existsSync(socketReceipt)) {
+    try {
+      const receipt = JSON.parse(readFileSync(socketReceipt, 'utf8')) as { status?: unknown }
+      if (receipt.status === 'passed' || receipt.status === 'skipped') {
+        state.socketScan = receipt.status
+      }
+    } catch {
+      // A malformed optional receipt is visible in status but does not forge a pass.
+    }
   }
   state.updatedAt = new Date().toISOString()
   writeState(state)
-  return state
+  return isCompletePublishReceipt(state)
+}
+
+/** Verify that CI created the final tag and a published GitHub Release at the candidate SHA. */
+async function verifyFinalRelease(
+  version: string,
+  expectedSha: string,
+): Promise<boolean> {
+  const tag = `v${version}`
+  const remote = await runCapture(
+    'git',
+    ['ls-remote', 'origin', `refs/tags/${tag}`, `refs/tags/${tag}^{}`],
+    rootPath,
+  )
+  if (remote.code !== 0) {
+    logger.fail(`Could not query origin for ${tag}.`)
+    return false
+  }
+  const refs = remote.stdout
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map(line => line.trim().split(/\s+/))
+  const peeled = refs.find(([, ref]) => ref === `refs/tags/${tag}^{}`)?.[0]
+  const direct = refs.find(([, ref]) => ref === `refs/tags/${tag}`)?.[0]
+  const tagSha = peeled ?? direct
+  if (tagSha !== expectedSha) {
+    logger.fail(`${tag} points to ${tagSha ?? '<missing>'}; expected candidate ${expectedSha}.`)
+    return false
+  }
+
+  const release = await runCapture(
+    'gh',
+    ['release', 'view', tag, '-R', 'PerryTS/perry', '--json', 'isDraft,url'],
+    rootPath,
+  )
+  if (release.code !== 0) {
+    logger.fail(`GitHub Release ${tag} does not exist.`)
+    return false
+  }
+  try {
+    const receipt = JSON.parse(release.stdout) as { isDraft?: unknown; url?: unknown }
+    if (receipt.isDraft !== false || typeof receipt.url !== 'string') {
+      logger.fail(`GitHub Release ${tag} is not published.`)
+      return false
+    }
+    logger.log(`Verified final tag and GitHub Release: ${receipt.url}`)
+    return true
+  } catch {
+    logger.fail(`Could not parse the GitHub Release receipt for ${tag}.`)
+    return false
+  }
 }
 
 function printStatus(state: PipelineState): void {
-  logger.log(`=== publish pipeline: v${state.version} ===`)
-  logger.log(
-    `  candidate: ${state.candidateSha ? `${state.candidateRef}@${state.candidateSha}` : '(not pinned)'}`,
-  )
-  logger.log(`  stage run: ${state.stageRunId ?? '(none)'}`)
-  logger.log(`  proof:     ${state.stageProofDir ?? '(none)'}`)
-  logger.log(`  staged:    ${state.staged.length ? state.staged.join(', ') : '(none)'}`)
+  logger.log(`=== npm-first release: v${state.version} ===`)
+  logger.log(`  candidate: ${state.candidateSha ? `${state.candidateRef}@${state.candidateSha}` : '(not pinned)'}`)
+  logger.log(`  workflow:  ${state.publishRunId ?? '(none)'}`)
+  logger.log(`  proof:     ${state.proofDir ?? '(none)'}`)
+  logger.log(`  published: ${state.published.length ? state.published.join(', ') : '(none)'}`)
   logger.log(`  verified:  ${state.verified.length ? state.verified.join(', ') : '(none)'}`)
-  logger.log(
-    state.scanBlocked
-      ? '  scan:      BLOCKED — did not run (SOCKET_API_TOKEN missing/invalid); re-run publish:scan once it is set'
-      : `  scan:      ${state.scanResults.length} scanned, ${state.scanResults.filter(r => r.status !== 'passed').length} not-passed`,
-  )
-  logger.log(`  approved:  ${state.approved?.length ? state.approved.join(', ') : '(not approved)'}`)
+  logger.log(`  Socket:    ${state.socketScan}`)
   logger.log(`  registry:  ${state.registryLive ? 'live' : 'not live'}`)
   logger.log(`  released:  ${state.released ? 'yes' : 'no'}`)
 }
 
 async function main(): Promise<void> {
-  // Parse argv into boolean flags + option values, so a value like `beta` (from
-  // `--tag beta`) does NOT pollute the flag set and break mode routing. A value
-  // that happens to equal a flag name (e.g. `--tag --approve`) can't mis-route
-  // either, because `--approve` is consumed as `--tag`'s value here.
-  const VALUE_OPTIONS = new Set(['--tag', '--otp'])
-  // A mode flag is required — there is no implicit default mode. Running the
-  // script with zero (or only --dry-run) arguments used to silently dispatch a
-  // REAL staged publish; now it falls through to the usage error below instead.
-  const MODE_FLAGS = new Set(['--stage-only', '--scan-only', '--approve', '--release-only', '--status'])
-  const MODIFIER_FLAGS = new Set(['--dry-run', '--yes'])
+  const argv = process.argv.slice(2)
+  const known = new Set(['--publish', '--status', '--dry-run', '--socket-scan', '--tag'])
   const flags = new Set<string>()
   let tag = 'latest'
-  let otp: string | undefined
-  for (let i = 2, { length } = process.argv; i < length; i += 1) {
-    const arg = process.argv[i]!
-    if (VALUE_OPTIONS.has(arg)) {
-      const val = process.argv[i + 1]
-      if (val !== undefined) {
-        if (arg === '--tag') tag = val
-        else otp = val
-        i += 1
+  const unknown: string[] = []
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]!
+    if (arg === '--tag') {
+      const value = argv[index + 1]
+      if (!value || value.startsWith('--')) unknown.push('--tag')
+      else {
+        tag = value
+        index += 1
       }
-    } else {
+    } else if (known.has(arg)) {
       flags.add(arg)
+    } else {
+      unknown.push(arg)
     }
   }
-  const dryRun = flags.has('--dry-run')
-  const modesGiven = [...flags].filter(f => MODE_FLAGS.has(f))
-  const unknown = [...flags].filter(f => !MODE_FLAGS.has(f) && !MODIFIER_FLAGS.has(f))
-
-  if (modesGiven.length !== 1 || unknown.length > 0) {
-    logger.fail(
-      (modesGiven.length === 0
-        ? 'No mode flag given — refusing to guess. '
-        : modesGiven.length > 1
-          ? `Conflicting mode flags: ${modesGiven.join(', ')} — refusing to guess which one wins. `
-          : `Unknown flag(s): ${unknown.join(', ')}. `) +
-        'Usage: publish:pipeline <--stage-only | --scan-only | --approve | --release-only | --status> ' +
-        '[--dry-run] [--yes] [--otp <code>] [--tag <tag>]',
-    )
+  const modes = ['--publish', '--status'].filter(mode => flags.has(mode))
+  if (modes.length !== 1 || unknown.length > 0) {
+    const reason = modes.length === 0
+      ? 'No mode flag given.'
+      : modes.length > 1
+        ? `Conflicting mode flags: ${modes.join(', ')}.`
+        : `Unknown flag(s): ${unknown.join(', ')}.`
+    logger.fail(`${reason} Usage: publish:pipeline <--publish | --status> [--dry-run] [--socket-scan] [--tag <tag>]`)
     process.exitCode = 1
     return
   }
-  const mode = modesGiven[0]!
 
-  // Resolve the version from the gate.
   const gate = await checkVersionGate(rootPath)
-  if (!gate.ok && !flags.has('--status')) {
-    process.exitCode = 1
-    return
-  }
-  let state = readState(gate.version) ?? {
+  const state = readState(gate.version) ?? {
     version: gate.version,
-    staged: [],
+    published: [],
     verified: [],
-    scanResults: [],
+    socketScan: 'not-run' as const,
+    registryLive: false,
+    released: false,
     updatedAt: new Date().toISOString(),
   }
-
-  if (flags.has('--status')) {
+  if (modes[0] === '--status') {
     printStatus(state)
     return
   }
-
-  // Enforce the npm floor before any stage/approve/release action (staged
-  // publishing + OIDC + min-release-age all need >= NPM_MIN_VERSION).
-  const floorReason = await checkNpmFloor()
-  if (floorReason) {
-    logger.fail(floorReason)
+  if (!gate.ok) {
     process.exitCode = 1
     return
   }
 
-  if (mode === '--stage-only') {
-    const candidate = await resolveReleaseCandidate()
-    if (!candidate) {
-      process.exitCode = 1
-      return
-    }
-    const receipt = await dispatchStageWorkflow(
-      gate.version,
-      candidate,
-      { dryRun, tag },
-    )
-    if (!receipt) {
-      process.exitCode = 1
-      return
-    }
-    if (dryRun) {
-      logger.log('Dry-run build succeeded; no registry stage was created or scanned.')
-      // A dry build is evidence about CI only. It must not replace the real
-      // staging receipt or carry old approval/liveness fields to a new SHA.
-      printStatus(freshStageState(gate.version, receipt))
-      return
-    }
-    state = freshStageState(gate.version, receipt)
-    writeState(state)
-    state = await verifyAndScan(gate.version, state)
-    printStatus(state)
-    if (!isCompleteScanReceipt(state)) {
-      logger.fail(
-        'The local exact-tarball verification/scan receipt is incomplete — fix npm login or Socket auth, then run `npm run publish:scan`.',
-      )
-      process.exitCode = 1
-      return
-    }
-    logger.log(formatApproveGate({ version: gate.version, repoPath: rootPath }))
+  // The candidate was cut from current main during the runbook preflight.
+  // Once its exact SHA is pushed and gated, later unrelated main merges must
+  // not invalidate it and force another multi-hour test cycle.
+  const candidate = await resolveReleaseCandidate({ requireCurrentMain: false })
+  if (!candidate) {
+    process.exitCode = 1
+    return
+  }
+  const dryRun = flags.has('--dry-run')
+  const receipt = await dispatchPublishWorkflow(candidate, {
+    dryRun,
+    socketScan: flags.has('--socket-scan'),
+    tag,
+  })
+  if (!receipt) {
+    process.exitCode = 1
+    return
+  }
+  if (dryRun) {
+    logger.log('CI build/package dry-run succeeded; npm, tag, and GitHub Release were untouched.')
     return
   }
 
-  if (mode === '--scan-only') {
-    state = await verifyAndScan(gate.version, state)
-    printStatus(state)
-    // Unlike --stage-only (where a human sees the printed status and
-    // publish:approve is the real enforcement point), --scan-only is what CI
-    // uses as a gate — a caller checking only the exit code must see a
-    // failure for a blocked/incomplete/not-passed scan, not just a log line.
-    if (!isCompleteScanReceipt(state)) {
-      process.exitCode = 1
-    }
+  const next = freshPublishState(gate.version, receipt)
+  writeState(next)
+  if (!(await verifyPublishedProofs(next))) {
+    logger.fail('Not all public npm bytes match the retained CI proof — refusing to tag.')
+    process.exitCode = 1
     return
   }
-
-  if (mode === '--approve') {
-    const candidate = await requirePinnedCandidate(state)
-    if (!candidate) {
-      process.exitCode = 1
-      return
-    }
-    const proofRoot = state.stageProofDir
-      ? path.join(rootPath, state.stageProofDir)
-      : undefined
-    if (!proofRoot || !existsSync(proofRoot)) {
-      logger.fail(
-        'The exact staged-package proof is missing — re-run `npm run publish:stage`; refusing to repack template directories.',
-      )
-      process.exitCode = 1
-      return
-    }
-    const receipt = await runApprove({
-      version: gate.version,
-      yes: flags.has('--yes'),
-      otp,
-      proofRoot,
-    })
-    state.approved = receipt.approved
-    state.registryLive = receipt.registryLive
-    state.scanResults = receipt.scanResults
-    state.updatedAt = new Date().toISOString()
-    writeState(state)
-    if (
-      !receipt.registryLive ||
-      !isCompleteVersionSet(receipt.approved, gate.version)
-    ) {
-      process.exitCode = 1
-      return
-    }
-    // Approve continues into release (registry-liveness already confirmed in
-    // runApprove, but re-gate here for the release cut).
-    const live = await requireRegistryLive(
-      receipt.approved.map(s => {
-        const at = s.lastIndexOf('@')
-        return { name: s.slice(0, at), version: s.slice(at + 1) }
-      }),
-    )
-    if (!live) {
-      process.exitCode = 1
-      return
-    }
-    const released = await ensureTagAndRelease(gate.version, candidate.sha)
-    state.released = released
-    state.updatedAt = new Date().toISOString()
-    writeState(state)
-    if (!released) process.exitCode = 1
+  next.registryLive = await requireRegistryLive(
+    ALL_PACKAGES.map(name => ({ name, version: gate.version })),
+  )
+  writeState(next)
+  if (!next.registryLive) {
+    process.exitCode = 1
     return
   }
-
-  if (mode === '--release-only') {
-    const candidate = await requirePinnedCandidate(state)
-    if (!candidate) {
-      process.exitCode = 1
-      return
-    }
-    if (
-      !state.registryLive ||
-      !isCompleteVersionSet(state.approved ?? [], gate.version)
-    ) {
-      logger.fail(`No complete approved+live receipt for v${gate.version} — run publish:approve first.`)
-      process.exitCode = 1
-      return
-    }
-    const packages = ALL_PACKAGES.map(name => ({ name, version: gate.version }))
-    if (!(await requireRegistryLive(packages))) {
-      process.exitCode = 1
-      return
-    }
-    const released = await ensureTagAndRelease(gate.version, candidate.sha)
-    state.released = released
-    state.updatedAt = new Date().toISOString()
-    writeState(state)
-    if (!released) process.exitCode = 1
+  const pinned = await requirePinnedCandidate(next)
+  if (!pinned) {
+    process.exitCode = 1
     return
   }
+  next.released = await verifyFinalRelease(gate.version, pinned.sha)
+  next.updatedAt = new Date().toISOString()
+  writeState(next)
+  printStatus(next)
+  if (!next.released) process.exitCode = 1
 }
 
-// Only run when invoked directly (node scripts/publish/pipeline.mts …), not
-// when imported for testing.
-import { fileURLToPath } from 'node:url'
 if (process.argv[1] === fileURLToPath(new URL(import.meta.url))) {
   await main()
 }

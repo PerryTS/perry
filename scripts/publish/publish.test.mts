@@ -1,7 +1,7 @@
 /**
  * @file Unit tests for the pure publish-pipeline surfaces. Run with
  *   `node --test scripts/publish/publish.test.mts`. Covers the brew formula
- *   renderer, the Socket policy-alert bucketing, the human-gate block shape,
+ *   renderer, the Socket policy-alert bucketing, the publication receipts,
  *   and the auth-posture refusal of long-lived tokens (sabotage-tested: the
  *   refusal is asserted with a token present, and the clean path with it
  *   absent — both halves of the gate).
@@ -25,20 +25,14 @@ import { fileURLToPath } from 'node:url'
 
 import { renderPerryFormula } from './brew/formula.mts'
 import { summarizePolicyAlerts, normalizeFullScanArtifacts } from './scan.mts'
-import { formatHumanGate } from './human-gate.mts'
 import { publishAuthPreflight } from './auth-posture.mts'
 import { compareSemver, extractFirstJson } from './shared.mts'
 import {
   normalizePublishedShasum,
-  parseStageListJson,
 } from './npm/shared.mts'
-import {
-  completeCandidatesWithPublished,
-  perryStagedEntries,
-} from './npm/approve.mts'
 import { tagExists } from './npm/bump.mts'
-import { verifyStagedEntry } from './npm/staged.mts'
-import { freshStageState, isCompleteScanReceipt } from './pipeline.mts'
+import { verifyPackageProof } from './npm/proof.mts'
+import { freshPublishState, isCompletePublishReceipt } from './pipeline.mts'
 import {
   INLINE_RELEASE_NOTES_MAX_BYTES,
   planReleaseNotes,
@@ -108,7 +102,7 @@ test('normalizeFullScanArtifacts: bare array and {artifacts: [...]} shapes', () 
 test('extractFirstJson: balanced object, array, and noisy-wrapped array', () => {
   // Object — the original supported shape.
   assert.equal(extractFirstJson('{"a":1}'), '{"a":1}')
-  // Array — npm stage list --json emits an array of entries.
+  // Array output must be preserved as a complete top-level value.
   assert.equal(extractFirstJson('[{"id":"a"},{"id":"b"}]'), '[{"id":"a"},{"id":"b"}]')
   // Noisy stdout wrapping a JSON array (progress lines before the array).
   const noisy = '⠹ downloading...\n[{"id":"a","packageName":"@perryts/perry","version":"1.0.0"}]\n'
@@ -116,21 +110,6 @@ test('extractFirstJson: balanced object, array, and noisy-wrapped array', () => 
   // Strings containing braces/brackets must not break the balance.
   assert.equal(extractFirstJson('[{"a":"}]"},{"b":"["}]'), '[{"a":"}]"},{"b":"["}]')
   assert.equal(extractFirstJson('no json here'), undefined)
-})
-
-test('parseStageListJson: array of entries parses to staged entries', () => {
-  const text = '[{"id":"stage-1","packageName":"@perryts/perry","version":"0.5.1","shasum":"abc"}]'
-  const entries = parseStageListJson(text)
-  assert.equal(entries.length, 1)
-  assert.equal(entries[0]!.name, '@perryts/perry')
-  assert.equal(entries[0]!.stageId, 'stage-1')
-  assert.equal(entries[0]!.version, '0.5.1')
-  assert.equal(entries[0]!.shasum, 'abc')
-  // Noisy wrapper around the array must not drop entries.
-  const noisy = 'progress...\n[{"id":"s2","name":"@perryts/perry-darwin-arm64","version":"0.5.1"}]'
-  const entries2 = parseStageListJson(noisy)
-  assert.equal(entries2.length, 1)
-  assert.equal(entries2[0]!.name, '@perryts/perry-darwin-arm64')
 })
 
 test('normalizePublishedShasum: accepts only a successful bare sha1', () => {
@@ -141,49 +120,6 @@ test('normalizePublishedShasum: accepts only a successful bare sha1', () => {
   assert.equal(normalizePublishedShasum('not found', 1), undefined)
   assert.equal(normalizePublishedShasum(`warning\n${'a'.repeat(40)}`, 0), undefined)
   assert.equal(normalizePublishedShasum('a'.repeat(39), 0), undefined)
-})
-
-test('perryStagedEntries: approval is restricted to the candidate version', () => {
-  const entries = [
-    {
-      name: '@perryts/perry-darwin-arm64',
-      version: '0.5.1519',
-      stageId: 'candidate',
-    },
-    {
-      name: '@perryts/perry-darwin-arm64',
-      version: '0.5.1518',
-      stageId: 'stale',
-    },
-    {
-      name: '@somewhere/else',
-      version: '0.5.1519',
-      stageId: 'foreign',
-    },
-  ]
-  assert.deepEqual(
-    perryStagedEntries(entries, '0.5.1519').map(e => e.stageId),
-    ['candidate'],
-  )
-})
-
-test('completeCandidatesWithPublished: safely resumes a partial promotion', async () => {
-  const version = '0.5.1519'
-  const first = ALL_PACKAGES[0]!
-  const lookedUp: string[] = []
-  const candidates = await completeCandidatesWithPublished(
-    [{ name: first, version, stageId: 'still-staged', shasum: '1'.repeat(40) }],
-    version,
-    async name => {
-      lookedUp.push(name)
-      return '2'.repeat(40)
-    },
-  )
-  assert.deepEqual(candidates.map(entry => entry.name), [...ALL_PACKAGES])
-  assert.deepEqual(lookedUp, ALL_PACKAGES.slice(1))
-  assert.equal(candidates[0]!.alreadyLive, undefined)
-  assert.equal(candidates[1]!.alreadyLive, true)
-  assert.equal(candidates[1]!.shasum, '2'.repeat(40))
 })
 
 test('tagExists: inability to query origin fails closed', async () => {
@@ -200,29 +136,28 @@ test('tagExists: inability to query origin fails closed', async () => {
   }
 })
 
-test('freshStageState: a new stage cannot inherit an old approval receipt', () => {
-  const state = freshStageState('0.5.1519', {
+test('freshPublishState: a new workflow run cannot inherit an old release receipt', () => {
+  const state = freshPublishState('0.5.1519', {
     sha: 'a'.repeat(40),
     ref: 'release/v0.5.1519',
     runId: '12345',
-    stageProofDir: '.cache/perry/publish-pipeline/artifacts/12345',
+    proofDir: '.cache/perry/publish-pipeline/artifacts/12345',
   })
-  assert.deepEqual(state.staged, [])
+  assert.deepEqual(state.published, [])
   assert.deepEqual(state.verified, [])
-  assert.deepEqual(state.scanResults, [])
-  assert.deepEqual(state.approved, [])
+  assert.equal(state.socketScan, 'not-run')
   assert.equal(state.registryLive, false)
   assert.equal(state.released, false)
   assert.equal(state.candidateSha, 'a'.repeat(40))
   assert.equal(state.candidateRef, 'release/v0.5.1519')
-  assert.equal(state.stageRunId, '12345')
+  assert.equal(state.publishRunId, '12345')
   assert.equal(
-    state.stageProofDir,
+    state.proofDir,
     '.cache/perry/publish-pipeline/artifacts/12345',
   )
 })
 
-test('verifyStagedEntry: local approval verifies the exact CI proof tarball', async () => {
+test('verifyPackageProof: exact CI proof tarballs are sha1 verified', async () => {
   const proofRoot = mkdtempSync(path.join(os.tmpdir(), 'perry-stage-proof-'))
   try {
     const packageDir = path.join(proofRoot, 'npm/perry-win32-arm64')
@@ -232,15 +167,10 @@ test('verifyStagedEntry: local approval verifies the exact CI proof tarball', as
     const shasum = createHash('sha1')
       .update(readFileSync(tarball))
       .digest('hex')
-    const entry = {
-      name: '@perryts/perry-win32-arm64',
-      version: '0.5.1519',
-      stageId: 'stage-proof',
-      shasum,
-    }
-    assert.equal(await verifyStagedEntry(entry, proofRoot), true)
+    const name = '@perryts/perry-win32-arm64'
+    assert.equal(await verifyPackageProof(name, shasum, proofRoot), true)
     assert.equal(
-      await verifyStagedEntry({ ...entry, shasum: '0'.repeat(40) }, proofRoot),
+      await verifyPackageProof(name, '0'.repeat(40), proofRoot),
       false,
     )
   } finally {
@@ -248,40 +178,21 @@ test('verifyStagedEntry: local approval verifies the exact CI proof tarball', as
   }
 })
 
-test('isCompleteScanReceipt: every exact package/version must pass', () => {
+test('isCompletePublishReceipt: every exact package/version must be public and verified', () => {
   const version = '0.5.1519'
   const packages = [...ALL_PACKAGES]
   const state = {
     version,
-    staged: packages.map(name => `${name}@${version}`),
+    published: packages.map(name => `${name}@${version}`),
     verified: packages.map(name => `${name}@${version}`),
-    scanResults: packages.map(name => ({
-      name,
-      version,
-      status: 'passed' as const,
-      summary: { error: [], total: 0, warn: [] },
-    })),
+    socketScan: 'skipped' as const,
+    registryLive: true,
+    released: false,
     updatedAt: new Date().toISOString(),
   }
-  assert.equal(isCompleteScanReceipt(state), true)
-  state.scanResults[0] = { ...state.scanResults[0]!, status: 'blocked' }
-  assert.equal(isCompleteScanReceipt(state), false)
-})
-
-test('formatHumanGate: the 🖐 block shape with both lanes', () => {
-  const block = formatHumanGate({
-    name: 'approve',
-    index: '1/1',
-    need: 'the staged upload is verified + scanned; 2FA promote is human.',
-    mind: 'npm stage approve requires browser web-OTP 2FA.',
-    you: 'npm run publish:approve',
-    me: 'I will run publish:approve so npm opens the browser for web-OTP.',
-    then: 'registry liveness + tag + immutable GitHub release.',
-  })
-  assert.match(block, /^🖐  HUMAN GATE — approve \[1\/1\]/)
-  assert.match(block, /A\) You: npm run publish:approve/)
-  assert.match(block, /B\) Me: I will run/)
-  assert.match(block, /Then: registry liveness/)
+  assert.equal(isCompletePublishReceipt(state), true)
+  state.published.pop()
+  assert.equal(isCompletePublishReceipt(state), false)
 })
 
 // Save + clear every long-lived token env var the gate checks, and restore
@@ -339,19 +250,19 @@ test('publishAuthPreflight: refuses a direct publish with a token for non-0.0.0'
   try {
     const reason = publishAuthPreflight({ ci: false, direct: true, dryRun: false, version: '1.2.3' })
     assert.ok(reason, 'must refuse a direct publish of a real version with a long-lived token')
-    assert.match(reason!, /0\.0\.0 name reservation/)
+    assert.match(reason!, /Local npm writes are not sanctioned/)
   } finally {
     restoreTokenVars(snap)
   }
 })
 
-test('publishAuthPreflight: allows the 0.0.0 reservation direct publish with a token', () => {
+test('publishAuthPreflight: refuses local 0.0.0 reservation publishes too', () => {
   const snap = snapshotTokenVars()
   clearTokenVars()
   process.env['NPM_TOKEN'] = 'npm_secret_live_token'
   try {
     const reason = publishAuthPreflight({ ci: false, direct: true, dryRun: false, version: '0.0.0' })
-    assert.equal(reason, undefined, 'the 0.0.0 reservation escape hatch must pass the posture gate')
+    assert.match(reason ?? '', /Local npm writes are not sanctioned/)
   } finally {
     restoreTokenVars(snap)
   }
@@ -426,10 +337,7 @@ for (const entry of MAIN_GUARDED_ENTRYPOINTS) {
 
 test('pipeline.mts: no mode flag is a usage error, not a default action', () => {
   const src = readFileSync(path.join(PUBLISH_DIR, 'pipeline.mts'), 'utf8')
-  // The zero-flag footgun this guards against: running the script with no
-  // arguments used to silently dispatch a REAL staged publish (flags.size
-  // === 0 fell into the --stage-only branch). There must be no code path
-  // that treats an empty/absent mode as --stage-only.
+  // Running this script with no arguments must never dispatch a real publish.
   assert.doesNotMatch(
     src,
     /flags\.size\s*===\s*0/,
@@ -442,48 +350,37 @@ test('pipeline.mts: no mode flag is a usage error, not a default action', () => 
   )
 })
 
-test('pipeline.mts: --scan-only sets a failing exit code on an incomplete/blocked/not-passed scan', () => {
-  // --scan-only is what CI's "Socket scan the staged tarballs" step relies on
-  // as a gate (npm-stage-publish.yml) — unlike --stage-only, where a human
-  // reads the printed status and publish:approve is the real enforcement
-  // point, a CI caller only sees the exit code. Assert the branch actually
-  // sets process.exitCode = 1 rather than always returning 0.
-  const src = readFileSync(path.join(PUBLISH_DIR, 'pipeline.mts'), 'utf8')
-  const scanOnlyBranch = src.slice(src.indexOf("mode === '--scan-only'"))
-  assert.match(
-    scanOnlyBranch,
-    /process\.exitCode = 1/,
-    '--scan-only must set a non-zero exit code when the scan did not fully pass',
-  )
-})
-
-test('pipeline.mts: stage dispatch and release receipt are pinned to one commit', () => {
+test('pipeline.mts: OIDC publication and release receipt are pinned to one commit', () => {
   const src = readFileSync(path.join(PUBLISH_DIR, 'pipeline.mts'), 'utf8')
   const workflow = readFileSync(
-    path.join(PUBLISH_DIR, '../../.github/workflows/npm-stage-publish.yml'),
+    path.join(PUBLISH_DIR, '../../.github/workflows/release-packages.yml'),
     'utf8',
   )
   assert.match(src, /'--ref',\s*candidate\.ref/)
-  assert.match(src, /`candidate-sha=\$\{candidate\.sha\}`/)
-  assert.match(src, /r\.headSha === candidate\.sha/)
-  assert.match(src, /npm-staged-package-proofs/)
-  assert.match(src, /downloadStageProof\(runId\)/)
-  assert.match(src, /requirePinnedCandidate\(state\)/)
-  assert.match(src, /ensureTagAndRelease\(gate\.version, candidate\.sha\)/)
+  assert.match(src, /`candidate_sha=\$\{candidate\.sha\}`/)
+  assert.match(src, /run\.headSha === candidate\.sha/)
+  assert.match(src, /npm-publish-package-proofs/)
+  assert.match(src, /downloadPublishProof\(runId\)/)
+  assert.match(src, /requirePinnedCandidate\(next\)/)
+  assert.match(src, /resolveReleaseCandidate\(\{ requireCurrentMain: false \}\)/)
+  assert.match(src, /verifyFinalRelease\(gate\.version, pinned\.sha\)/)
   assert.match(workflow, /\[ "\$REF_NAME" = "main" \]/)
   assert.match(workflow, /"\$REF" != refs\/heads\/\*/)
-  assert.match(workflow, /gh api --paginate --slurp/)
+  assert.match(workflow, /\[ "\$CANDIDATE_SHA" != "\$SHA" \]/)
+  assert.match(workflow, /needs: \[preflight, build, build-cross, npm-publish\]/)
+  assert.match(workflow, /needs\.npm-publish\.result == 'success'/)
 })
 
-test('release runbook pins the staged-publish OIDC identity and action', () => {
+test('release runbook pins the direct-publish OIDC identity and action', () => {
   const runbook = readFileSync(
     path.join(PUBLISH_DIR, '../../docs/src/contributing/releasing.md'),
     'utf8',
   )
-  assert.match(runbook, /workflow filename: `npm-stage-publish\.yml`/)
-  assert.match(runbook, /environment: `npm-publish`/)
-  assert.match(runbook, /allowed action: \*\*`npm stage publish`\*\*/)
+  assert.match(runbook, /workflow filename: `release-packages\.yml`/)
+  assert.match(runbook, /environment: none/)
+  assert.match(runbook, /allowed action: \*\*`npm publish`\*\*/)
   assert.match(runbook, /npm permits only one trusted publisher per package/)
+  assert.match(runbook, /There is no `npm login`/)
 })
 
 test('planReleaseNotes: oversized notes move to a stable release asset', () => {
@@ -501,15 +398,13 @@ test('planReleaseNotes: oversized notes move to a stable release asset', () => {
 })
 
 test('pipeline.mts: two conflicting mode flags fail closed instead of picking one by argument order', () => {
-  // Mode resolution used to be `flags.find(...)`, which silently picked
-  // whichever mode flag argv happened to list first — so `--stage-only
-  // --approve` ran --stage-only (or, with the args reversed, --approve)
-  // instead of refusing an ambiguous invocation. This spawns the real CLI:
+  // This spawns the real CLI: conflicting modes must be caught before any
+  // gh/network call.
   // the conflict must be caught before any gh/network call, so this is safe
   // to exercise directly rather than only asserting against the source text.
   const result = spawnSync(
     process.execPath,
-    [path.join(PUBLISH_DIR, 'pipeline.mts'), '--stage-only', '--approve'],
+    [path.join(PUBLISH_DIR, 'pipeline.mts'), '--publish', '--status'],
     { encoding: 'utf8' },
   )
   assert.equal(result.status, 1, 'conflicting mode flags must exit non-zero')
@@ -521,24 +416,28 @@ test('pipeline.mts: two conflicting mode flags fail closed instead of picking on
   )
 })
 
-test('pipeline.mts / approve.mts: the socket scan gate has no skip flag', () => {
-  for (const rel of ['pipeline.mts', 'npm/approve.mts']) {
-    const src = readFileSync(path.join(PUBLISH_DIR, rel), 'utf8')
-    assert.doesNotMatch(
-      src,
-      /no-scan|noScan/,
-      `${rel}: the Socket scan gate must not have a skip flag/option — it is mandatory`,
-    )
-  }
+test('workflow: Socket is explicit, optional, and runs before npm publication', () => {
+  const workflow = readFileSync(
+    path.join(PUBLISH_DIR, '../../.github/workflows/release-packages.yml'),
+    'utf8',
+  )
+  assert.match(workflow, /socket_scan:[\s\S]*default: false/)
+  const scanStep = workflow.slice(
+    workflow.indexOf('Socket full-scan the exact publication tarballs'),
+    workflow.indexOf('Record that Socket is intentionally skipped'),
+  )
+  assert.match(scanStep, /SOCKET_API_TOKEN: \$\{\{ secrets\.SOCKET_API_TOKEN \}\}/)
+  assert.doesNotMatch(workflow.slice(0, workflow.indexOf('steps:')), /SOCKET_API_TOKEN/)
+  assert.ok(
+    workflow.indexOf('Socket full-scan the exact publication tarballs') <
+      workflow.indexOf('npm publish exact tarballs (OIDC; platforms first, wrapper last)'),
+  )
+  assert.match(workflow, /Socket scan disabled for this dispatch/)
+  const npmJob = workflow.slice(workflow.indexOf('  npm-publish:'))
+  assert.doesNotMatch(npmJob.slice(0, npmJob.indexOf('    steps:')), /environment:/)
 })
 
-test('NPM_MIN_VERSION floor covers staged publishing + min-release-age', () => {
-  // `npm stage` landed in 11.15.0; min-release-age (DAYS) needs >= 11.17.
-  // The floor must be at least both (and OIDC's 11.5.1).
-  assert.ok(
-    compareSemver(NPM_MIN_VERSION, '11.15.0') >= 0,
-    `floor ${NPM_MIN_VERSION} must cover npm stage (>= 11.15.0)`,
-  )
+test('NPM_MIN_VERSION floor covers OIDC + min-release-age', () => {
   assert.ok(
     compareSemver(NPM_MIN_VERSION, '11.17.0') >= 0,
     `floor ${NPM_MIN_VERSION} must cover min-release-age in DAYS (>= 11.17)`,

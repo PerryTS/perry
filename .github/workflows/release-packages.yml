@@ -6,7 +6,19 @@ on:
   workflow_dispatch:
     inputs:
       cut_release:
-        description: "Legacy build-before-tag route: gates/builds, then tags before npm. Normal releases use npm run publish:stage/approve for registry-first tag-last ordering."
+        description: "Release the dispatched candidate: gates/builds, npm OIDC publish, registry verification, then tag + GitHub Release."
+        type: boolean
+        default: false
+      candidate_sha:
+        description: "Required with cut_release: exact pushed candidate SHA. Prevents a moved branch from publishing or being tagged."
+        type: string
+        default: ""
+      dist_tag:
+        description: "npm dist-tag for a cut release (normally latest)."
+        type: string
+        default: "latest"
+      socket_scan:
+        description: "Run the optional Socket tarball scan before npm publication."
         type: boolean
         default: false
       existing_tag:
@@ -35,7 +47,7 @@ permissions:
 # never blocked. `cancel-in-progress: false` — never cancel a release/publish
 # leg that's already running.
 concurrency:
-  group: release-packages-${{ github.event.release.tag_name || inputs.existing_tag || (inputs.cut_release && 'cut-release-in-flight') || github.run_id }}
+  group: release-packages-${{ github.event.release.tag_name || inputs.existing_tag || (inputs.cut_release && inputs.candidate_sha) || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -48,10 +60,9 @@ jobs:
   # Modes:
   #   release      release: published event (legacy tag-first path — a human
   #                created the tag + release; still fully supported)
-  #   cut-release  workflow_dispatch with cut_release=true — legacy route:
-  #                nothing is tagged until gate + build legs are green, but
-  #                the tag still precedes npm. The staged local pipeline is
-  #                canonical when registry-first/tag-last ordering is required.
+  #   cut-release  workflow_dispatch with cut_release=true — canonical route:
+  #                exact-SHA gates + builds, npm Trusted Publisher/OIDC publish,
+  #                public-registry byte verification, then tag + release LAST.
   #   republish    workflow_dispatch with existing_tag=vX.Y.Z — rebuild and
   #                re-run the publish legs for an already-published release
   #                (the old "bypass" lever, now with an explicit tag)
@@ -84,7 +95,11 @@ jobs:
           EVENT: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           CUT_RELEASE: ${{ inputs.cut_release }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
           EXISTING_TAG: ${{ inputs.existing_tag }}
+          SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           CHECKOUT_REF=""
@@ -96,6 +111,18 @@ jobs:
             exit 1
           elif [ "$CUT_RELEASE" = "true" ]; then
             MODE=cut-release
+            if [ -z "$CANDIDATE_SHA" ]; then
+              echo "::error::candidate_sha is required with cut_release=true. Use npm run publish:release."
+              exit 1
+            fi
+            if [ "$CANDIDATE_SHA" != "$SHA" ]; then
+              echo "::error::candidate_sha=$CANDIDATE_SHA, but this workflow runs at $SHA. The candidate branch moved or the wrong SHA was supplied."
+              exit 1
+            fi
+            if [[ "$REF" != refs/heads/* ]] || [ "$REF_NAME" = "main" ]; then
+              echo "::error::cut_release requires a named non-main release-candidate branch; got $REF."
+              exit 1
+            fi
             VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
             TAG="v$VERSION"
             # Same STOP conditions the /release skill enforces, checked here
@@ -1345,23 +1372,24 @@ jobs:
             perry-cross-${{ matrix.target }}.tar.gz.sha256
 
   # ---------------------------------------------------------------------------
-  # Tag-last core (cut-release mode only): every build leg is green, so NOW
-  # create the tag + GitHub Release. Release notes are cut from changelog.d/
+  # Tag-last core (cut-release mode only): every build leg is green and all
+  # nine exact npm tarballs are public + registry-verified, so NOW create the
+  # tag + GitHub Release. Release notes are cut from changelog.d/
   # fragments — same contract as scripts/cut_release_notes.sh, whose
   # --notes-only mode this job calls. The fragment-removal commit stays a
   # maintainer step afterwards (GITHUB_TOKEN can't push to protected main):
   #   ./scripts/cut_release_notes.sh --fold vX.Y.Z
   # ---------------------------------------------------------------------------
   create-release:
-    needs: [preflight, build, build-cross]
-    # Strict by design: in tag-last mode a red cross leg blocks the tag too
-    # (nothing is public yet, so "fix or rerun-to-green, then the skipped
-    # downstream jobs rerun via `gh run rerun <id> --failed`" is cheap).
+    needs: [preflight, build, build-cross, npm-publish]
+    # Strict by design: npm-publish succeeds only after every required build
+    # and exact registry-sha verification succeeds. Until then there is no tag.
     if: >
       !cancelled() &&
       needs.preflight.outputs.mode == 'cut-release' &&
       needs.build.result == 'success' &&
-      needs.build-cross.result == 'success'
+      needs.build-cross.result == 'success' &&
+      needs.npm-publish.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -1374,7 +1402,7 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          # Preflight checked this ~1-2 h ago; re-check so a concurrent manual
+          # Preflight checked this earlier; re-check so a concurrent manual
           # release of the same version fails here instead of clobbering.
           if gh api "repos/$REPO/git/ref/tags/$TAG" --silent 2>/dev/null; then
             echo "::error::tag $TAG appeared while the builds ran — aborting."
@@ -1971,36 +1999,31 @@ jobs:
   # ---------------------------------------------------------------------------
   # Publish npm packages (@perryts/perry + 8 per-platform packages)
   #
-  # Uses OIDC / Trusted Publishers (no long-lived NPM_TOKEN). This direct npm
-  # leg is legacy: npm permits only one trusted publisher per package, while
-  # Perry's canonical posture assigns that slot to npm-stage-publish.yml with
-  # the `npm stage publish` action. A normal registry-first release reaches
-  # this release-event job only after all versions are live, so its idempotency
-  # checks skip every direct publish. See the release runbook.
+  # Uses OIDC / Trusted Publishers (no npm login, long-lived NPM_TOKEN, or
+  # GitHub Environment). release-packages.yml is the one publisher identity
+  # shared by all nine @perryts/* packages.
   # ---------------------------------------------------------------------------
   npm-publish:
-    # The irreversible leg. build-cross is in `needs` (completed, not
-    # necessarily green — stage-npm.sh backfills libperry_ui_android.a from
-    # the perry-cross bundle, so waiting removes the old race where npm
-    # staged whatever cross artifacts happened to exist yet). In cut-release
-    # mode create-release success means the tag + release exist before
-    # anything hits the registry; npm publishes on both release paths, and on
-    # republish only when publish_npm is explicitly set (the already-published
-    # version check keeps re-runs idempotent either way).
-    needs: [preflight, build, build-cross, create-release]
+    # The irreversible leg. Every build must be green in canonical cut-release
+    # mode. It runs BEFORE create-release; only exact registry verification can
+    # unblock the tag. Release-event and explicit republish modes stay
+    # idempotent for already-existing releases.
+    needs: [preflight, build, build-cross]
     if: >
       !cancelled() &&
       needs.build.result == 'success' &&
-      contains(fromJSON('["success", "failure"]'), needs.build-cross.result) &&
       (
-        needs.preflight.outputs.mode == 'release' ||
-        (needs.preflight.outputs.mode == 'cut-release' && needs.create-release.result == 'success') ||
-        (needs.preflight.outputs.mode == 'republish' && inputs.publish_npm)
+        (needs.preflight.outputs.mode == 'cut-release' && needs.build-cross.result == 'success') ||
+        (needs.preflight.outputs.mode == 'release' && contains(fromJSON('["success", "failure"]'), needs.build-cross.result)) ||
+        (needs.preflight.outputs.mode == 'republish' && inputs.publish_npm && contains(fromJSON('["success", "failure"]'), needs.build-cross.result))
       )
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write          # REQUIRED for OIDC + npm --provenance
+    env:
+      DIST_TAG: ${{ inputs.dist_tag || 'latest' }}
+      SOCKET_SCAN: ${{ inputs.socket_scan || false }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -2040,67 +2063,144 @@ jobs:
         with:
           path: release-artifacts/
 
-      - name: Stage npm packages
+      - name: Materialize npm packages
         run: ./scripts/stage-npm.sh release-artifacts/
 
-      - name: Sanity-check staged packages
+      - name: Pack the exact publication tarballs
+        run: node scripts/publish/prepare-ci-packages.mts
+
+      - name: Install the Socket scan SDK
+        if: env.SOCKET_SCAN == 'true'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Socket full-scan the exact publication tarballs
+        if: env.SOCKET_SCAN == 'true'
+        env:
+          # Repository/org Actions secret, exposed only to this scan step.
+          SOCKET_API_TOKEN: ${{ secrets.SOCKET_API_TOKEN }}
+        run: node scripts/publish/scan-ci-packages.mts
+
+      - name: Record that Socket is intentionally skipped
+        if: env.SOCKET_SCAN != 'true'
         run: |
-          for dir in npm/perry npm/perry-*; do
-            echo "=== $dir ==="
-            ls -la "$dir"
-            if [ -f "$dir/package.json" ]; then
-              node -e "const p=require('./$dir/package.json'); console.log(p.name, p.version)"
-            else
-              echo "MISSING package.json in $dir" >&2
+          echo "::notice::Socket scan disabled for this dispatch."
+          node -e 'require("fs").writeFileSync("socket-scan-receipt.json", JSON.stringify({status:"skipped",reason:"workflow input socket_scan=false"}, null, 2) + "\n")'
+
+      - name: Bundle exact npm publication proofs
+        run: |
+          set -euo pipefail
+          mapfile -t proofs < <(find npm -mindepth 2 -maxdepth 2 -type f -name '*.tgz' | sort)
+          if [ "${#proofs[@]}" -ne 9 ]; then
+            echo "::error::Expected 9 exact npm tarballs; found ${#proofs[@]}." >&2
+            printf '  %s\n' "${proofs[@]}" >&2
+            exit 1
+          fi
+          tar -cf npm-publish-package-proofs.tar \
+            npm-publish-manifest.json socket-scan-receipt.json "${proofs[@]}"
+
+      - name: npm publish exact tarballs (OIDC; platforms first, wrapper last)
+        # No npm login and no NPM_TOKEN. npm exchanges this job's short-lived
+        # GitHub OIDC identity because id-token:write is set above. Reruns skip
+        # an already-public version only when its immutable registry sha1 is
+        # byte-for-byte identical to this run's packed tarball.
+        run: |
+          set -euo pipefail
+          for variable in NPM_TOKEN NODE_AUTH_TOKEN NPM_AUTH_TOKEN; do
+            if [ -n "$(printenv "$variable" 2>/dev/null || true)" ]; then
+              echo "::error::Refusing long-lived $variable; npm Trusted Publisher/OIDC is the only sanctioned authentication." >&2
               exit 1
             fi
           done
 
-      - name: Publish platform packages
-        # `./` prefix is required — `npm publish npm/foo` parses `npm/foo` as
-        # a GitHub shorthand (user/repo) and tries ssh://git@github.com/npm/foo.git.
-        # See run 24632227482 npm-publish job for the symptom.
-        #
-        # Skip versions already on the registry so the job is idempotent: at
-        # v0.5.1151 a transient artifact digest-mismatch killed the first run
-        # after the two darwin packages had published, and every re-run then
-        # died on the first package with "You cannot publish over the
-        # previously published versions" — the remaining six packages could
-        # never go out (run 27239815088).
-        # One platform's failure must not starve the packages after it in
-        # glob order (with `set -e` a single E413/transient registry error
-        # aborted the loop mid-way — exactly how linux/windows sat at a stale
-        # version for weeks while darwin kept updating). Record failures,
-        # keep publishing, fail the step at the end with the full list; the
-        # already-published skip above keeps re-runs idempotent.
-        run: |
-          set -e
           failed=""
-          for pkg in ./npm/perry-*; do
-            name=$(node -p "require('$pkg/package.json').name")
-            ver=$(node -p "require('$pkg/package.json').version")
-            if npm view "$name@$ver" version >/dev/null 2>&1; then
-              echo "=== $name@$ver already published — skipping ==="
+          while IFS=$'\t' read -r name version tarball expected_sha; do
+            if [ "$name" = "@perryts/perry" ] && [ -n "$failed" ]; then
+              echo "::error::Not publishing the wrapper because platform publication failed:$failed" >&2
+              failed="$failed $name@$version (blocked by platform failure)"
               continue
             fi
-            echo "=== publishing $pkg ==="
-            if ! npm publish "$pkg" --access public --provenance; then
-              echo "::error::npm publish failed for $name@$ver — continuing with remaining packages"
-              failed="$failed $name@$ver"
+
+            public_sha=$(npm view "$name@$version" dist.shasum 2>/dev/null | tr -d '[:space:]' || true)
+            if [ -n "$public_sha" ]; then
+              if [ "$public_sha" != "$expected_sha" ]; then
+                echo "::error::$name@$version is already public with sha1 $public_sha; this run packed $expected_sha." >&2
+                failed="$failed $name@$version (sha1 mismatch)"
+              else
+                echo "=== $name@$version already public with matching sha1 — skipping ==="
+              fi
+              continue
             fi
-          done
+
+            echo "=== publishing $name@$version from $tarball ==="
+            publish_log=$(mktemp)
+            set +e
+            npm publish "./$tarball" \
+              --access public --tag "$DIST_TAG" --ignore-scripts --provenance \
+              2>&1 | tee "$publish_log"
+            publish_code=${PIPESTATUS[0]}
+            set -e
+            if grep -Eq 'ERR_PNPM_AUTH_TOKEN_EXCHANGE|Skipped OIDC' "$publish_log"; then
+              echo "::error::npm reported a failed OIDC exchange for $name@$version." >&2
+              publish_code=1
+            fi
+            rm -f "$publish_log"
+            if [ "$publish_code" -ne 0 ]; then
+              echo "::error::npm publish failed for $name@$version — continuing with remaining platform packages." >&2
+              failed="$failed $name@$version"
+            fi
+          done < <(node -e '
+            const manifest = require("./npm-publish-manifest.json")
+            for (const pkg of manifest.packages) {
+              console.log([pkg.name, pkg.version, pkg.path, pkg.sha1].join("\t"))
+            }
+          ')
           if [ -n "$failed" ]; then
-            echo "::error::failed platform packages:$failed"
+            echo "::error::npm publication failures:$failed" >&2
             exit 1
           fi
 
-      - name: Publish wrapper (@perryts/perry) last
+      - name: Verify all nine public registry shasums
+        # npm's CDN can lag a successful PUT. Wait briefly, but a different
+        # sha1 fails immediately because published versions are immutable.
         run: |
-          set -e
-          name=$(node -p "require('./npm/perry/package.json').name")
-          ver=$(node -p "require('./npm/perry/package.json').version")
-          if npm view "$name@$ver" version >/dev/null 2>&1; then
-            echo "$name@$ver already published — skipping"
-          else
-            npm publish ./npm/perry --access public --provenance
-          fi
+          set -euo pipefail
+          deadline=$((SECONDS + 10 * 60))
+          while :; do
+            waiting=""
+            while IFS=$'\t' read -r name version expected_sha; do
+              public_sha=$(npm view "$name@$version" dist.shasum 2>/dev/null | tr -d '[:space:]' || true)
+              if [ -z "$public_sha" ]; then
+                waiting="$waiting $name@$version"
+              elif [ "$public_sha" != "$expected_sha" ]; then
+                echo "::error::$name@$version registry sha1 is $public_sha; expected $expected_sha." >&2
+                exit 1
+              else
+                echo "OK $name@$version $public_sha"
+              fi
+            done < <(node -e '
+              const manifest = require("./npm-publish-manifest.json")
+              for (const pkg of manifest.packages) {
+                console.log([pkg.name, pkg.version, pkg.sha1].join("\t"))
+              }
+            ')
+            if [ -z "$waiting" ]; then
+              echo "All nine exact npm tarballs are public and verified. The tag may now be created."
+              break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Timed out waiting for registry visibility:$waiting" >&2
+              exit 1
+            fi
+            echo "Waiting for npm registry visibility:$waiting"
+            sleep 10
+          done
+
+      - name: Retain exact npm publication proofs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: npm-publish-package-proofs
+          path: npm-publish-package-proofs.tar
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

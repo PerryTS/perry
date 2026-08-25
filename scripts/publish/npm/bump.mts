@@ -4,12 +4,12 @@
  *   the workspace version in Cargo.toml MUST agree with CLAUDE.md's Current
  *   Version line, the vX.Y.Z tag MUST NOT already exist, and changelog.d/ MUST
  *   have fragments. These are the same gates release-packages.yml's preflight
- *   enforces — surfaced here so a local `publish:stage` fails in seconds
+ *   enforces — surfaced here so a local `publish:release` fails in seconds
  *   instead of after 40 min of CI builds.
  *
  *   Perry froze CHANGELOG.md at v0.5.1264; the bump never edits it. The bump
  *   commit (Cargo.toml + CLAUDE.md version line + changelog.d fragment) is
- *   landed on main by the existing flow before `publish:stage` runs.
+ *   landed on main by the existing flow before `publish:release` runs.
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'

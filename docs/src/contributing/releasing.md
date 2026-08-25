@@ -8,9 +8,9 @@ release gate.
 ## 1. Pre-release checklist (every release)
 
 Start from a clean checkout that contains current `origin/main`. Do not release
-from a detached HEAD or from a moving `main` branch. The staged pipeline records
-the candidate branch, commit SHA, and build run, then refuses to approve or tag
-if any of them changes.
+from a detached HEAD or from a moving `main` branch. The npm-first pipeline
+pins the candidate branch and commit SHA, retains the exact npm tarballs, and
+refuses to tag if the branch moves or any public registry shasum differs.
 
 ```bash
 # Confirm the checkout is current and clean.
@@ -61,27 +61,31 @@ gh workflow run test.yml --ref "release/v$VERSION" -f tier=full
 gh workflow run simctl-tests.yml --ref "release/v$VERSION"
 ```
 
-Then use the staged pipeline:
+Freeze that candidate SHA. Unrelated merges to `main` after the branch is cut do
+not invalidate successful gates and do not require another test cycle. Refresh
+the candidate only for a release-blocking fix or a required version change.
 
-The local publish/approve process requires npm 11.17 or newer and a valid
-`SOCKET_API_TOKEN` for the mandatory tarball scan. CI uses OIDC for staging;
-do not set a long-lived npm publish token. The local npm account must be a
-maintainer of all nine packages because it lists and approves their staged
-entries.
+Then use the npm-first pipeline. npm publication happens only in GitHub Actions
+through Trusted Publisher/OIDC. There is no `npm login`, npm account session,
+2FA approval, or long-lived npm token in CI or on the maintainer machine. The
+local command uses GitHub authentication to dispatch/watch the workflow and
+anonymous registry reads to verify the published bytes.
+
+Socket is an optional pre-publish tarball scan, not an npm credential. When
+enabled, Actions submits each of the exact nine `.tgz` files as a temporary
+Socket full scan and evaluates the results against the `perryts` Socket
+organization's security policy. Policy actions configured as `error` block
+publication; `warn` findings are recorded but do not block. The same tarballs
+that pass are then sent to npm. For the current release, omit `--socket-scan`;
+the workflow records an explicit skipped receipt and continues.
+
+To enable the gate later, store `SOCKET_API_TOKEN` as a repository or
+organization Actions secret with permission to create/read full scans, read the
+organization policy, and read quota. No GitHub Environment is required. The
+value stays only in GitHub and must never be committed or exported locally:
 
 ```bash
-npm --version                 # must be >= 11.17.0
-# If needed: npm install -g npm@latest
-npm whoami                    # must succeed as an @perryts package maintainer
-```
-
-One-time GitHub setup: create the environment named in the OIDC identity and
-store the Socket credential at environment scope (the secret value is entered
-interactively and must never be committed):
-
-```bash
-gh api --method PUT repos/PerryTS/perry/environments/npm-publish
-gh secret set SOCKET_API_TOKEN --repo PerryTS/perry --env npm-publish
+gh secret set SOCKET_API_TOKEN --repo PerryTS/perry
 ```
 
 Before the first nine-package release, an npm organization owner must confirm
@@ -90,16 +94,15 @@ Trusted Publisher configuration:
 
 - provider: GitHub Actions
 - organization/repository: `PerryTS/perry`
-- workflow filename: `npm-stage-publish.yml`
-- environment: `npm-publish`
-- allowed action: **`npm stage publish`**
+- workflow filename: `release-packages.yml`
+- environment: none
+- allowed action: **`npm publish`**
 
-npm permits only one trusted publisher per package. Configurations created
-before May 20, 2026 were carried forward with only direct **`npm publish`**
-allowed, so edit every existing package and explicitly enable
-**`npm stage publish`**; merely seeing a trusted publisher entry is not enough.
-The old `release-packages.yml` direct-publish path cannot occupy a second
-trusted-publisher slot and is not part of the canonical release.
+npm permits only one trusted publisher per package. The canonical identity is
+the existing `release-packages.yml` workflow above, with direct **`npm
+publish`** enabled. Do not configure `npm-stage-publish.yml` as a second
+publisher and do not add an environment name that the other packages do not
+use.
 
 In particular, verify the ARM64 Windows package:
 
@@ -107,34 +110,35 @@ In particular, verify the ARM64 Windows package:
 npm view @perryts/perry-win32-arm64 name
 ```
 
-If that returns `E404`, an `@perryts` npm owner must make the initial public
-name-reservation publish (the repository permits version `0.0.0` only for this
-bootstrap), then configure the same Trusted Publisher fields above. The
-pipeline intentionally refuses a partial set.
+If that returns `E404`, stop: npm does not allow a Trusted Publisher to be
+configured for a package that does not exist, so OIDC cannot perform its first
+publish. An `@perryts` owner must provision that package name once before this
+nine-package OIDC-only flow can work, then configure the Trusted Publisher
+fields above. The release pipeline intentionally refuses a partial set.
 
 ```bash
-npm run publish:stage       # CI builds all platforms, stages 9 npm packages,
-                            # verifies sha1, runs the mandatory Socket scan,
-                            # and downloads the exact proof tarballs locally
-npm run publish:status      # inspect the commit/run/package receipt
-npm run publish:approve     # explicit 2FA promote; waits for registry liveness
-                            # and only then creates v0.x.y + the GitHub Release
+npm run publish:release     # one Release Packages run: exact-SHA gates/builds,
+                            # publish + verify all 9 via OIDC, then create
+                            # v0.x.y + the GitHub Release last
+# Later, once the repository/org Socket secret exists:
+npm run publish:release -- --socket-scan
+npm run publish:status      # inspect the commit/run/package/Socket receipt
 ```
 
-Approval promotes nine packages sequentially. If 2FA or the network interrupts
-that loop after some packages are already public, re-run `publish:approve` with
-the same retained CI proof. It resumes only when each already-public package's
-immutable registry shasum matches the exact CI tarball; otherwise use a new
-version. Do not discard the proof directory until the tag and release exist.
+Publication sends the eight platform packages first and the wrapper last. If a
+network or registry error interrupts it before the tag exists, rerun the failed
+jobs (or `publish:release`) on the same candidate. Actions skips an
+already-public package only when its immutable registry shasum matches the exact
+CI tarball; otherwise it stops and requires a new version.
 
 If the accumulated changelog fragments exceed the inline release-note budget,
 the publisher keeps the GitHub Release body concise and uploads the complete
 notes as the checksummed `release-notes-full.md` asset. No fragment is dropped.
 
-Do not run `git tag`, manually publish a GitHub Release, or use the legacy
-`release-packages.yml cut_release=true` route for a normal release. That older
-route creates the tag before npm publication; it does not satisfy the stricter
-registry-first/tag-last contract.
+Do not run `npm login`, `git tag`, or manually publish a GitHub Release. The
+local command dispatches `release-packages.yml` with `cut_release=true`; that
+workflow creates the tag only after all nine npm versions are public and their
+registry shasums match the exact CI tarballs.
 
 ## 2. Additional major-release verification
 
@@ -212,17 +216,17 @@ Artifacts are published to:
 4. **winget** — manifest auto-update
 5. **hub.perryts.com** — worker notification so cloud build workers refresh
 
-In the canonical staged flow, any failing host or cross build prevents all npm
-staging, so no partial package set is promoted. Once a version has become public,
-fix-forward with a new patch version rather than amending an existing tag.
+In the canonical npm-first flow, any failing host or cross build prevents npm
+publication. The wrapper is not published when a platform package fails. Once a
+version has become public, fix-forward with a new patch version rather than
+amending an existing tag.
 
 ## 4. Release gates (what blocks a release)
 
-`npm-stage-publish.yml` rejects a real stage unless `test.yml` has a successful
+`release-packages.yml` rejects a cut release unless `test.yml` has a successful
 **`full-suite-gate`** and `simctl-tests.yml` has a successful run on the exact
-candidate SHA. A green PR-tier or push-to-main sweep does *not* count. The same
-two gates are enforced by `release-packages.yml`'s legacy release path. See
-[CI tiers](../testing/ci-tiers.md). The full tier is:
+candidate SHA. A green PR-tier or push-to-main sweep does *not* count. See [CI
+tiers](../testing/ci-tiers.md). The full tier is:
 
 - everything the PR gate and the post-merge sweep run (`lint`, `check`, `warnings`,
   `cargo test --workspace`, the gap suite, `gc-stress`, Windows x64 + ARM64 builds,
@@ -247,11 +251,12 @@ candidate's fault, fix it on `main` first (or open an issue and consciously
 re-add a job-level `continue-on-error: true` with that issue number) — do not
 publish past it.
 
-The staging workflow then requires every host/cross package build, all nine npm
-stages, sha1 verification, and the Socket scan. `benchmark.yml`, docs, container
-tests, Homebrew, APT, winget, and worker refresh are tag riders or distribution
-steps: monitor them after the GitHub Release is created, but do not mistake them
-for pre-tag gates.
+The release workflow then requires every host/cross package build, all nine
+exact npm publishes, and public-registry sha1 verification. Socket is an
+optional pre-publish gate and is currently skipped. `benchmark.yml`, docs,
+container tests, Homebrew, APT, winget, and worker refresh are tag riders or
+distribution steps: monitor them after the GitHub Release is created, but do
+not mistake them for pre-tag gates.
 
 ## 4a. What tells you a release is overdue
 
@@ -290,9 +295,9 @@ a release has been cut is not something a PR author can fix.
 
 - **Wrong artifact published**: tag a new patch release with the fix; npm
   rejects re-publishes of the same version anyway.
-- **Broken build before approval**: fix it and stage the complete nine-package
-  set again; the canonical flow will not promote a partial set.
-- **Broken binary discovered after approval**: ship a follow-up patch version;
+- **Broken build before npm publication**: fix it and rebuild the complete
+  nine-package set; the canonical flow will not tag a partial set.
+- **Broken binary discovered after publication**: ship a follow-up patch version;
   neither npm versions nor release tags are mutable.
 - **A post-tag distribution hook failed**: re-run the failed workflow. To retry
   the legacy release-packages distribution legs, dispatch it with
