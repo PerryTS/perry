@@ -988,7 +988,7 @@ fn set_add_resolved(set: *mut SetHeader, value: f64) {
         let size = (*set).size;
         let elements = elements_ptr_mut(set);
         if grew && size > 0 {
-            crate::gc::runtime_dirty_external_slot_span(
+            crate::gc::runtime_write_barrier_external_slot_span(
                 set as usize,
                 elements as usize,
                 size as usize,
@@ -1045,7 +1045,7 @@ fn set_add_string_resolved(set: *mut SetHeader, value: *const StringHeader) {
         let size = (*set).size;
         let elements = elements_ptr_mut(set);
         if grew && size > 0 {
-            crate::gc::runtime_dirty_external_slot_span(
+            crate::gc::runtime_write_barrier_external_slot_span(
                 set as usize,
                 elements as usize,
                 size as usize,

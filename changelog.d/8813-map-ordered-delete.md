@@ -1,0 +1,1 @@
+Ordered `Map.delete` now compacts surviving entries with one overlap-safe move and repairs numeric, string, and pointer side-index offsets in place instead of barrier-storing and rehashing every survivor. Insertion order, SameValueZero lookup, delete-then-readd ordering, moving-GC pointer-index rebuilds, and old-to-young external-slot tracking are preserved.

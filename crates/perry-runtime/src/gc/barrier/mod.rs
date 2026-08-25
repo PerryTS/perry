@@ -1932,7 +1932,7 @@ pub(crate) fn runtime_store_external_jsvalue_slot_with_layout(
     runtime_write_barrier_external_slot(parent_user, slot_addr, value_bits);
 }
 
-pub(crate) fn runtime_dirty_external_slot_span(
+pub(crate) fn runtime_write_barrier_external_slot_span(
     parent_addr: usize,
     first_slot_addr: usize,
     slot_count: usize,

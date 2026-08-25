@@ -1365,7 +1365,7 @@ unsafe fn map_set_string_key_value(
     let size = (*map).size;
     let entries = entries_ptr_mut(map);
     if grew && size > 0 {
-        crate::gc::runtime_dirty_external_slot_span(
+        crate::gc::runtime_write_barrier_external_slot_span(
             map as usize,
             entries as usize,
             size as usize * 2,
@@ -1474,7 +1474,7 @@ fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
         let size = (*map).size;
         let entries = entries_ptr_mut(map);
         if grew && size > 0 {
-            crate::gc::runtime_dirty_external_slot_span(
+            crate::gc::runtime_write_barrier_external_slot_span(
                 map as usize,
                 entries as usize,
                 size as usize * 2,
@@ -1843,79 +1843,92 @@ unsafe fn delete_entry_at_index(map: *mut MapHeader, idx: i32) -> i32 {
         return 0;
     }
     let entries = entries_ptr_mut(map);
+    let deleted_key = ptr::read(entries.add(idx * 2));
 
     // #2831: preserve insertion order. JS Map iteration must keep the
     // relative order of surviving entries after a delete (and a
     // delete-then-re-add appends at the end). The previous swap-and-pop
-    // moved the last entry into the hole, reordering iteration. Shift
-    // every entry after `idx` down by one slot instead.
-    for i in idx..(size as usize - 1) {
-        let next_key = ptr::read(entries.add((i + 1) * 2));
-        let next_value = ptr::read(entries.add((i + 1) * 2 + 1));
-        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map compaction slots use the shared external-slot helper.
-        crate::gc::runtime_store_external_jsvalue_slot(
-            map as usize,
-            entries.add(i * 2) as usize,
-            next_key.to_bits(),
+    // moved the last entry into the hole, reordering iteration. Compact the
+    // already-owned key/value pairs with one overlap-safe move. This does not
+    // create a new parent -> child edge: every copied value was already in
+    // this Map. The span mark preserves the old -> young remembered-set
+    // contract for the slots' new addresses without paying two full runtime
+    // stores per entry.
+    let moved_entries = size as usize - idx - 1;
+    if moved_entries > 0 {
+        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): ordered compaction is followed by a dirty-span barrier for every moved slot.
+        ptr::copy(
+            entries.add((idx + 1) * 2),
+            entries.add(idx * 2),
+            moved_entries * 2,
         );
-        crate::gc::runtime_store_external_jsvalue_slot(
+        crate::gc::runtime_write_barrier_external_slot_span(
             map as usize,
-            entries.add(i * 2 + 1) as usize,
-            next_value.to_bits(),
+            entries.add(idx * 2) as usize,
+            moved_entries * 2,
         );
     }
 
     (*map).size = size - 1;
 
-    // The shift changes the entry index of every surviving key at or
-    // after `idx`, so the O(1) lookup side-tables can't be patched in
-    // place cheaply. Rebuild them from the compacted buffer.
-    rebuild_map_index(map);
+    // The old implementation rebuilt all three indexes from the entries
+    // buffer after every ordered delete. Repair their existing u32 offsets
+    // in place instead: removing one key and decrementing later offsets is a
+    // cache-linear pass over index values and does not re-hash surviving keys.
+    repair_map_indices_after_ordered_delete(map, deleted_key, idx as u32);
     1
 }
 
-/// Rebuild the numeric + string lookup side-tables for `map` from its
-/// current compacted entries buffer. Used after an order-preserving
-/// `delete` shifts entry indexes (#2831).
-unsafe fn rebuild_map_index(map: *mut MapHeader) {
-    if map.is_null() {
-        return;
-    }
-    let size = (*map).size as usize;
-    let capacity = (*map).capacity as usize;
-    if size > capacity || size > 16_000_000 || (*map).entries.is_null() {
-        return;
-    }
-    let entries = entries_ptr(map);
-    MAP_INDEX.with(|idx| {
-        let mut idx = idx.borrow_mut();
-        let slot = idx
-            .entry(map as usize)
-            .or_insert_with(crate::fast_hash::new_ptr_hash_map);
-        slot.clear();
-        for i in 0..size {
-            let key_bits = ptr::read(entries.add(i * 2)).to_bits();
-            if is_safe_numeric_key(key_bits) {
-                slot.insert(NumericKey(key_bits), i as u32);
+unsafe fn repair_map_indices_after_ordered_delete(
+    map: *mut MapHeader,
+    deleted_key: f64,
+    deleted_idx: u32,
+) {
+    let map_addr = map as usize;
+    let deleted_bits = deleted_key.to_bits();
+
+    MAP_INDEX.with(|indexes| {
+        let mut indexes = indexes.borrow_mut();
+        if let Some(index) = indexes.get_mut(&map_addr) {
+            if is_safe_numeric_key(deleted_bits) {
+                index.remove(&NumericKey(deleted_bits));
             }
-        }
-    });
-    MAP_STRING_INDEX.with(|idx| {
-        let mut idx = idx.borrow_mut();
-        let slot = idx
-            .entry(map as usize)
-            .or_insert_with(std::collections::HashMap::new);
-        slot.clear();
-        for i in 0..size {
-            let key_bits = ptr::read(entries.add(i * 2)).to_bits();
-            if is_string_like(key_bits) {
-                if let Some(h) = string_content_hash(key_bits) {
-                    slot.entry(h).or_insert_with(Vec::new).push(i as u32);
+            for entry_idx in index.values_mut() {
+                if *entry_idx > deleted_idx {
+                    *entry_idx -= 1;
                 }
             }
         }
     });
-    rebuild_map_ptr_index(map);
+
+    MAP_STRING_INDEX.with(|indexes| {
+        let mut indexes = indexes.borrow_mut();
+        if let Some(index) = indexes.get_mut(&map_addr) {
+            for bucket in index.values_mut() {
+                bucket.retain(|entry_idx| *entry_idx != deleted_idx);
+                for entry_idx in bucket {
+                    if *entry_idx > deleted_idx {
+                        *entry_idx -= 1;
+                    }
+                }
+            }
+            index.retain(|_, bucket| !bucket.is_empty());
+        }
+    });
+
+    MAP_PTR_INDEX.with(|indexes| {
+        let mut indexes = indexes.borrow_mut();
+        if let Some(index) = indexes.get_mut(&map_addr) {
+            if is_ptr_index_key(deleted_bits) {
+                index.remove(&MapPtrKey(deleted_key));
+            }
+            for entry_idx in index.values_mut() {
+                if *entry_idx > deleted_idx {
+                    *entry_idx -= 1;
+                }
+            }
+        }
+    });
 }
 
 /// Rebuild ONLY the pointer-key index for `map` from its current entries
@@ -2686,5 +2699,123 @@ mod tests {
         );
         assert_eq!(js_map_delete_number_key(map, boxed_string_key), 1);
         assert_eq!(js_map_has(map, boxed_string_key), 0);
+    }
+
+    #[test]
+    fn ordered_delete_repairs_mixed_side_indexes_and_preserves_order() {
+        let map = js_map_alloc(32);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let string_keys = (0..12)
+            .map(|i| {
+                let bytes = format!("key-{i:02}").into_bytes();
+                scope.root_nanbox_f64(boxed_heap_string_key(js_string_from_bytes(
+                    bytes.as_ptr(),
+                    bytes.len() as u32,
+                )))
+            })
+            .collect::<Vec<_>>();
+
+        let string_key_ptr = |i: usize| {
+            (string_keys[i].get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+                as *const StringHeader
+        };
+
+        for (i, string_key) in string_keys.iter().enumerate() {
+            js_map_set(map, i as f64, (i * 10) as f64);
+            let string_key = (string_key.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+                as *const StringHeader;
+            js_map_set_string_number(map, string_key, (i * 10 + 1) as f64);
+        }
+        // Keep the backing allocations alive while using their tagged
+        // addresses as identity keys. They deliberately are not GC objects:
+        // this exercises the pointer-key index without introducing an
+        // allocation/collection point into the ordered-delete fixture.
+        let pointer_owners = (0..4).map(Box::new).collect::<Vec<_>>();
+        let pointer_keys = pointer_owners
+            .iter()
+            .map(|owner| {
+                f64::from_bits(
+                    crate::value::POINTER_TAG
+                        | ((owner.as_ref() as *const i32 as u64) & crate::value::POINTER_MASK),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (i, key) in pointer_keys.iter().copied().enumerate() {
+            js_map_set(map, key, (1_000 + i) as f64);
+        }
+        assert_eq!(js_map_size(map), 28);
+
+        assert_eq!(js_map_delete_number_key(map, 2.0), 1);
+        assert_eq!(js_map_delete_string_key(map, string_key_ptr(4)), 1);
+        assert_eq!(js_map_delete(map, pointer_keys[1]), 1);
+        assert_eq!(js_map_size(map), 25);
+        assert_eq!(js_map_has_number_key(map, 2.0), 0);
+        assert_eq!(js_map_has_string_key(map, string_key_ptr(4)), 0);
+        assert_eq!(js_map_has(map, pointer_keys[1]), 0);
+
+        for (i, string_key) in string_keys.iter().enumerate() {
+            if i != 2 {
+                assert_eq!(js_map_get_number_key(map, i as f64), (i * 10) as f64);
+                assert!(test_map_numeric_index_contains(map, i as f64));
+            }
+            if i != 4 {
+                let string_key = (string_key.get_nanbox_f64().to_bits()
+                    & crate::value::POINTER_MASK)
+                    as *const StringHeader;
+                assert_eq!(js_map_get_string_key(map, string_key), (i * 10 + 1) as f64);
+                assert!(test_map_string_index_contains(
+                    map,
+                    boxed_heap_string_key(string_key)
+                ));
+            }
+        }
+        for (i, key) in pointer_keys.iter().copied().enumerate() {
+            if i != 1 {
+                assert_eq!(js_map_get(map, key), (1_000 + i) as f64);
+                assert!(test_map_ptr_index_contains(map, key));
+            }
+        }
+
+        let mut expected_keys = (0..12)
+            .flat_map(|i| {
+                let mut keys = Vec::new();
+                if i != 2 {
+                    keys.push((i as f64).to_bits());
+                }
+                if i != 4 {
+                    keys.push(string_keys[i].get_nanbox_f64().to_bits());
+                }
+                keys
+            })
+            .collect::<Vec<_>>();
+        expected_keys.extend(
+            pointer_keys
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != 1)
+                .map(|(_, key)| key.to_bits()),
+        );
+        let actual_keys = (0..js_map_size(map))
+            .map(|i| js_map_entry_key_at(map, i).to_bits())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual_keys, expected_keys,
+            "delete must preserve survivor order"
+        );
+
+        js_map_set_number_key(map, 2.0, 222.0);
+        js_map_set_string_number(map, string_key_ptr(4), 444.0);
+        js_map_set(map, pointer_keys[1], 1_111.0);
+        assert_eq!(js_map_size(map), 28);
+        assert_eq!(js_map_entry_key_at(map, 25).to_bits(), 2.0f64.to_bits());
+        assert_eq!(
+            js_map_entry_key_at(map, 26).to_bits(),
+            string_keys[4].get_nanbox_f64().to_bits(),
+            "delete-then-re-add must append at the end"
+        );
+        assert_eq!(
+            js_map_entry_key_at(map, 27).to_bits(),
+            pointer_keys[1].to_bits()
+        );
     }
 }
