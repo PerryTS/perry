@@ -639,6 +639,7 @@ const EXT_PREFIX_REGISTRY: &[(&str, &str)] = &[
     ("js_node_forge_", "node-forge"),
     // Native runtime TypeScript transpilation subset (#8511).
     ("js_typescript_", "typescript"),
+    ("js_qs_",         "qs"),
 ];
 
 /// Process-wide collector of provider keys observed during codegen.
@@ -1172,6 +1173,8 @@ mod tests {
             ("js_node_forge_create_certificate", "node-forge"),
             ("js_parcel_watcher_subscribe", "@parcel/watcher"),
             ("js_parcel_watcher_get_events_since", "@parcel/watcher"),
+            ("js_qs_stringify", "qs"),
+            ("js_qs_parse", "qs"),
         ] {
             assert_symbol_routes_to(symbol, OwnerKind::WellKnown(binding));
         }

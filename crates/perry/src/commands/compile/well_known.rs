@@ -473,7 +473,7 @@ mod tests {
     /// stay `Partial` and are never silently treated as complete drop-ins.
     #[test]
     fn shipped_subset_bindings_are_partial() {
-        for name in ["undici", "node-forge", "lru-cache"] {
+        for name in ["undici", "node-forge", "lru-cache", "qs"] {
             let b = lookup_well_known(name).unwrap_or_else(|| panic!("{name} registered"));
             assert_eq!(
                 b.compat,

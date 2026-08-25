@@ -91,6 +91,23 @@ repo = "https://github.com/uuidjs/uuid"
 ref = "70177807e9229dfacde2038dc1e722f1828f358a"
 ported-at = "14.0.1"
 date = "2026-07-30"
+[bindings.qs]
+crate = "perry-ext-qs"
+lib = "perry_ext_qs"
+tracking = "#8751"
+# Partial: stringify covers qs' ordinary scalar/object/array surface and the
+# callback/options used by Stripe. parse covers the safe nested-query subset.
+# Regex delimiters and the full decoder/filter extension-hook contracts remain
+# intentionally outside this shim.
+compat = "partial"
+
+[bindings.qs.upstream]
+version = "6.15.3"
+sha256 = "c0278b636e7a016d6e835cd8f194a63c276dff430620e4a04344a4ba8892c0f9"
+repo = "https://github.com/ljharb/qs.git"
+ref = "18d085e919dae70c8f1b200ab99323058edab2c2"
+ported-at = "6.15.3"
+date = "2026-08-25"
 [bindings.bcrypt]
 crate = "perry-ext-bcrypt"
 lib = "perry_ext_bcrypt"

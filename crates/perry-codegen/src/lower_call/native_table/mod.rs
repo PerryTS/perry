@@ -33,6 +33,7 @@ mod node_dns;
 mod node_domain;
 mod node_misc;
 mod parcel_watcher;
+mod qs;
 mod thread_lodash;
 mod tls_events;
 mod tui;
@@ -178,6 +179,7 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     v.extend_from_slice(media::MEDIA_ROWS);
     v.extend_from_slice(native_profile::NATIVE_PROFILE_ROWS);
     v.extend_from_slice(parcel_watcher::PARCEL_WATCHER_ROWS);
+    v.extend_from_slice(qs::QS_ROWS);
     v.extend_from_slice(tui::TUI_ROWS);
     v.extend_from_slice(typescript::TYPESCRIPT_ROWS);
     v.extend_from_slice(yoga::YOGA_ROWS);

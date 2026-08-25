@@ -1114,4 +1114,23 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     property("bun", "stdin"),
     property("bun", "stdout"),
     property("bun", "stderr"),
+    // --- qs (issue #8751) ---
+    // Native nested query-string codec. This keeps Stripe's request encoder
+    // off qs' legacy get-intrinsic/ES-shims dependency chain.
+    method_sig(
+        "qs",
+        "stringify",
+        false,
+        None,
+        &[p_any("value"), p_any("options")],
+        TypeSpec::String,
+    ),
+    method_sig(
+        "qs",
+        "parse",
+        false,
+        None,
+        &[p_str("input"), p_any("options")],
+        TypeSpec::Any,
+    ),
 ];
