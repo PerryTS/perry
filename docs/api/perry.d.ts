@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2065 entries across 135 modules
+// Coverage: 2067 entries across 136 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -3590,6 +3590,13 @@ declare module "punycode" {
   export function toASCII(...args: any[]): any;
   /** stdlib */
   export function toUnicode(...args: any[]): any;
+}
+
+declare module "qs" {
+  /** stdlib */
+  export function parse(input: string, options: any): any;
+  /** stdlib */
+  export function stringify(value: any, options: any): string;
 }
 
 declare module "querystring" {
