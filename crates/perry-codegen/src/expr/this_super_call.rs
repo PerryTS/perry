@@ -261,7 +261,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let async_parent = ctx
                 .classes
                 .get(&current_class_name)
-                .and_then(|class| class.extends_name.clone());
+                .filter(|class| class.extends_expr.is_none() && !class.heritage_lexically_shadowed)
+                .and_then(|class| class.extends_name.clone())
+                .filter(|parent| !ctx.classes.contains_key(parent.as_str()));
             if matches!(
                 async_parent.as_deref(),
                 Some("EventEmitterAsyncResource" | "AsyncLocalStorage" | "AsyncResource")
@@ -269,15 +271,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 let zero_idx = "0".to_string();
                 let one_idx = "1".to_string();
-                let first =
-                    ctx.block()
-                        .call(DOUBLE, "js_array_get_f64", &[(I64, &arr), (I32, &zero_idx)]);
-                let second =
-                    ctx.block()
-                        .call(DOUBLE, "js_array_get_f64", &[(I64, &arr), (I32, &one_idx)]);
-                rooting::with_rooted_group(ctx, 3, |ctx, group| {
+                rooting::with_rooted_group(ctx, 4, |ctx, group| {
                     let this_root = group.adopt_emitted(ctx, Repr::Boxed, &this_box, true);
+                    let arr_root = group.adopt_emitted(ctx, Repr::Ptr, &arr, true);
+                    let arr = group.reread_emitted(ctx, arr_root);
+                    let first = ctx.block().call(
+                        DOUBLE,
+                        "js_array_get_f64",
+                        &[(I64, &arr), (I32, &zero_idx)],
+                    );
                     let first_root = group.adopt_emitted(ctx, Repr::Boxed, &first, true);
+                    let arr = group.reread_emitted(ctx, arr_root);
+                    let second = ctx.block().call(
+                        DOUBLE,
+                        "js_array_get_f64",
+                        &[(I64, &arr), (I32, &one_idx)],
+                    );
                     let second_root = group.adopt_emitted(ctx, Repr::Boxed, &second, true);
                     let this_box = group.reread_emitted(ctx, this_root);
                     match async_parent.as_deref() {

@@ -24,7 +24,15 @@ pub use provider_ffi::{
     defer_destroy_after_check_turns, js_async_hooks_provider_defer_destroy,
     js_async_hooks_provider_destroy, js_async_hooks_provider_enter, js_async_hooks_provider_init,
     js_async_hooks_provider_init_with_trigger, js_async_hooks_provider_leave,
-    js_async_hooks_provider_run_catching, js_async_hooks_provider_run_catching_with_this,
+    js_async_hooks_provider_run_catching, js_async_hooks_provider_run_catching_deferred_destroy,
+    js_async_hooks_provider_run_catching_deferred_destroy_on_error,
+    js_async_hooks_provider_run_catching_with_this,
+};
+mod scopes;
+pub use scopes::{
+    enter_resource_scope, leave_resource_scope, run_provider_completion, run_resource_scope,
+    run_resource_scope_catching, try_enter_resource_scope, try_leave_resource_scope,
+    try_run_resource_scope,
 };
 
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
@@ -58,6 +66,8 @@ per_test_global! {
     pub static HOOKS_ACTIVE: AtomicUsize = AtomicUsize::new(0);
     static PROMISE_HOOKS_ACTIVE: AtomicUsize = AtomicUsize::new(0);
     static TOP_LEVEL_RESOURCE: AtomicU64 = AtomicU64::new(0);
+    #[cfg(test)]
+    static TEST_FORCE_RESOLVE_GC: AtomicUsize = AtomicUsize::new(0);
 }
 
 #[derive(Clone, Copy)]
@@ -211,16 +221,45 @@ pub(crate) fn resolve_async_resource_handle(receiver: i64) -> Option<i64> {
     if !crate::value::addr_class::is_plausible_heap_addr(raw) {
         return None;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_raw_mut_ptr(raw as *mut ObjectHeader);
+    #[cfg(test)]
+    if TEST_FORCE_RESOLVE_GC.swap(0, Ordering::Relaxed) != 0 {
+        let _ = crate::gc::gc_collect_minor();
+    }
     let key = js_string_from_bytes(
         ASYNC_RESOURCE_SUBCLASS_KEY.as_ptr(),
         ASYNC_RESOURCE_SUBCLASS_KEY.len() as u32,
     );
-    let value = js_object_get_field_by_name(raw as *const ObjectHeader, key);
+    let value = receiver
+        .with_mut_ptr::<ObjectHeader, _>(|receiver| js_object_get_field_by_name(receiver, key));
     if !value.is_pointer() {
         return None;
     }
     let backing = value.as_pointer::<u8>() as i64;
     is_async_resource_handle(backing).then_some(backing)
+}
+
+#[cfg(test)]
+pub(crate) fn test_force_next_async_resource_resolve_gc() {
+    TEST_FORCE_RESOLVE_GC.store(1, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn test_link_async_resource_subclass(receiver: *mut ObjectHeader, backing: i64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_raw_mut_ptr(receiver);
+    let key = js_string_from_bytes(
+        ASYNC_RESOURCE_SUBCLASS_KEY.as_ptr(),
+        ASYNC_RESOURCE_SUBCLASS_KEY.len() as u32,
+    );
+    receiver.with_mut_ptr::<ObjectHeader, _>(|receiver| {
+        crate::object::js_object_set_field_by_name(
+            receiver,
+            key,
+            crate::value::js_nanbox_pointer(backing),
+        );
+    });
 }
 
 #[inline(always)]
@@ -873,63 +912,6 @@ pub fn destroy_promise(async_id: u64) {
     destroy_with_kind(async_id, true);
 }
 
-/// Run a synchronous native completion as an observable async-hooks provider.
-/// The operation may already have done its blocking work eagerly, but its
-/// Promise settlement still needs the same provider execution/resource scope
-/// Node gives a libuv completion. The returned JS value is rooted across hook
-/// callbacks, which are arbitrary allocating user code.
-pub fn run_provider_completion(type_name: &'static str, completion: impl FnOnce() -> f64) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let resource = crate::object::js_object_alloc_null_proto(0, 0);
-    let resource_handle = scope.root_raw_mut_ptr(resource);
-    let ids = resource_handle.with_mut_ptr::<ObjectHeader, _>(|resource| {
-        init_resource(
-            type_name,
-            crate::value::js_nanbox_pointer(resource as i64),
-            true,
-        )
-    });
-    before(ids.async_id, ids.trigger_async_id);
-    let result = scope.root_nanbox_f64(completion());
-    after(ids.async_id);
-    destroy(ids.async_id);
-    result.get_nanbox_f64()
-}
-
-/// Enter an existing provider's captured AsyncLocalStorage and execution-id
-/// scope for one native callback phase.
-pub fn enter_resource_scope(ids: AsyncResourceIds) {
-    let context = RESOURCES
-        .lock()
-        .unwrap()
-        .get(&ids.async_id)
-        .map(|meta| meta.context.clone())
-        .unwrap_or_default();
-    let previous = crate::async_context::enter_context(&context);
-    crate::async_context::push_context_guard(
-        crate::async_context::ContextGuardAction::RestoreSnapshot(previous),
-    );
-    before(ids.async_id, ids.trigger_async_id);
-    crate::async_context::push_context_guard(
-        crate::async_context::ContextGuardAction::RestoreExecutionIds,
-    );
-}
-
-/// Leave a provider scope entered by [`enter_resource_scope`].
-pub fn leave_resource_scope(async_id: u64) {
-    let _ = crate::async_context::pop_context_guard();
-    after(async_id);
-    if let Some(action) = crate::async_context::pop_context_guard() {
-        crate::async_context::apply_context_guard(action);
-    }
-}
-
-pub fn run_resource_scope(ids: AsyncResourceIds, completion: impl FnOnce()) {
-    enter_resource_scope(ids);
-    completion();
-    leave_resource_scope(ids.async_id);
-}
-
 pub fn enqueue_gc_destroy(async_id: u64) {
     if async_id != 0 {
         GC_DESTROY_QUEUE.lock().unwrap().push_back(async_id);
@@ -1269,13 +1251,15 @@ pub extern "C" fn js_async_resource_subclass_init(
         options_handle.get_nanbox_f64(),
         Some(this_handle.get_nanbox_f64()),
     );
-    let current_this = this_handle.get_nanbox_f64();
-    let raw = crate::value::js_nanbox_get_pointer(current_this) as *mut ObjectHeader;
+    let raw =
+        crate::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64()) as *mut ObjectHeader;
     if !raw.is_null() && crate::value::addr_class::is_plausible_heap_addr(raw as usize) {
         let key = js_string_from_bytes(
             ASYNC_RESOURCE_SUBCLASS_KEY.as_ptr(),
             ASYNC_RESOURCE_SUBCLASS_KEY.len() as u32,
         );
+        let raw =
+            crate::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64()) as *mut ObjectHeader;
         crate::object::js_object_set_field_by_name(
             raw,
             key,
@@ -1341,23 +1325,31 @@ extern "C" fn async_resource_bind_method_trampoline(
         return TAG_UNDEFINED_F64;
     }
     let handle = js_closure_get_capture_ptr(closure, 0);
-    let args_array = crate::value::js_nanbox_get_pointer(rest) as *const ArrayHeader;
-    let args_len = if args_array.is_null() {
-        0
-    } else {
-        js_array_length(args_array)
-    };
-    let callback = if args_len == 0 {
-        TAG_UNDEFINED_F64
-    } else {
-        crate::array::js_array_get_f64(args_array, 0)
-    };
-    let this_arg = if args_len < 2 {
-        TAG_UNDEFINED_F64
-    } else {
-        crate::array::js_array_get_f64(args_array, 1)
-    };
-    let bound = js_async_resource_bind(handle, callback, this_arg);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let args_array =
+        scope.root_raw_const_ptr(crate::value::js_nanbox_get_pointer(rest) as *const ArrayHeader);
+    let (callback, this_arg) = args_array.with_const_ptr::<ArrayHeader, _>(|args_array| {
+        let args_len = if args_array.is_null() {
+            0
+        } else {
+            js_array_length(args_array)
+        };
+        let callback = if args_len == 0 {
+            TAG_UNDEFINED_F64
+        } else {
+            crate::array::js_array_get_f64(args_array, 0)
+        };
+        let this_arg = if args_len < 2 {
+            TAG_UNDEFINED_F64
+        } else {
+            crate::array::js_array_get_f64(args_array, 1)
+        };
+        (callback, this_arg)
+    });
+    let callback = scope.root_nanbox_f64(callback);
+    let this_arg = scope.root_nanbox_f64(this_arg);
+    let bound =
+        js_async_resource_bind(handle, callback.get_nanbox_f64(), this_arg.get_nanbox_f64());
     if bound == 0 {
         TAG_UNDEFINED_F64
     } else {
@@ -1443,25 +1435,33 @@ pub fn try_async_resource_method_dispatch(
         unsafe { std::slice::from_raw_parts(args_ptr, args_len).to_vec() }
     };
     let arg_handles = scope.root_nanbox_f64_slice(&raw_args);
-    let handle = resolve_async_resource_handle(receiver)?;
-    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+    let receiver = scope.root_raw_mut_ptr(receiver as *mut ObjectHeader);
+    let handle = receiver.with_mut_ptr::<ObjectHeader, _>(|receiver| {
+        resolve_async_resource_handle(receiver as i64)
+    })?;
     Some(match method_name {
         "asyncId" => js_async_resource_async_id(handle),
         "triggerAsyncId" => js_async_resource_trigger_async_id(handle),
         "emitDestroy" => {
-            js_async_resource_emit_destroy(handle);
-            crate::value::js_nanbox_pointer(receiver)
+            let (_, receiver) =
+                receiver.across_mut::<ObjectHeader, _>(|| js_async_resource_emit_destroy(handle));
+            crate::value::js_nanbox_pointer(receiver as i64)
         }
         "runInAsyncScope" => {
             // runInAsyncScope(fn[, thisArg, ...args])
-            let callback = args.first().copied().unwrap_or(TAG_UNDEFINED_F64);
-            let this_arg = args.get(1).copied().unwrap_or(TAG_UNDEFINED_F64);
+            let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
             let rest = if args.len() > 2 { &args[2..] } else { &[] };
             let args_array = pack_rest_args_array(rest);
+            // Packing the rest array may collect, so refresh callback and
+            // thisArg from their roots before dispatching the call.
+            let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+            let callback = args.first().copied().unwrap_or(TAG_UNDEFINED_F64);
+            let this_arg = args.get(1).copied().unwrap_or(TAG_UNDEFINED_F64);
             js_async_resource_run_in_async_scope(handle, callback, this_arg, args_array)
         }
         "bind" => {
             // bind(fn[, thisArg])
+            let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
             let callback = args.first().copied().unwrap_or(TAG_UNDEFINED_F64);
             let this_arg = args.get(1).copied().unwrap_or(TAG_UNDEFINED_F64);
             let bound = js_async_resource_bind(handle, callback, this_arg);
@@ -1527,83 +1527,56 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
     this_arg: f64,
     args_array: i64,
 ) -> f64 {
-    let Some(handle) = resolve_async_resource_handle(handle) else {
-        return TAG_UNDEFINED_F64;
-    };
-    if !is_callable_value(callback_value) {
-        throw_apply_not_function(callback_value);
-    }
     let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_handle = scope.root_raw_mut_ptr(handle as *mut ObjectHeader);
     let callback_handle = scope.root_nanbox_f64(callback_value);
     let this_arg_handle = scope.root_nanbox_f64(this_arg);
+    let args_array_handle = scope.root_raw_const_ptr(args_array as *const ArrayHeader);
+    let Some(handle) = receiver_handle
+        .with_mut_ptr::<ObjectHeader, _>(|receiver| resolve_async_resource_handle(receiver as i64))
+    else {
+        return TAG_UNDEFINED_F64;
+    };
+    if !is_callable_value(callback_handle.get_nanbox_f64()) {
+        throw_apply_not_function(callback_handle.get_nanbox_f64());
+    }
+    let ids = unsafe { (*(handle as *const AsyncResourceHandle)).ids };
     let rebound_bits = crate::closure::clone_closure_rebind_this(
         callback_handle.get_nanbox_f64().to_bits(),
         this_arg_handle.get_nanbox_f64(),
     );
     let rebound_handle = scope.root_nanbox_f64(f64::from_bits(rebound_bits));
-    let callback = crate::fs::extract_closure_ptr(rebound_handle.get_nanbox_f64());
-    if callback.is_null() {
+    if crate::fs::extract_closure_ptr(rebound_handle.get_nanbox_f64()).is_null() {
         throw_apply_not_function(callback_handle.get_nanbox_f64());
     }
-    let args_array_handle = scope.root_raw_const_ptr(args_array as *const ArrayHeader);
-    let resource = unsafe { &*(handle as *const AsyncResourceHandle) };
-    let resource_context = RESOURCES
-        .lock()
-        .unwrap()
-        .get(&resource.ids.async_id)
-        .map(|meta| meta.context.clone())
-        .unwrap_or_default();
-    let mut resource_context = resource_context;
-    let resource_context_roots = crate::async_context::root_snapshot(&scope, &resource_context);
-    let previous = crate::async_context::enter_context(&resource_context);
-    // The guard owns the previous snapshot: it is GC-scanned while held, and
-    // if the callback throws, `js_throw` restores it during unwind (#788).
-    crate::async_context::push_context_guard(
-        crate::async_context::ContextGuardAction::RestoreSnapshot(previous),
-    );
-    before(resource.ids.async_id, resource.ids.trigger_async_id);
-    crate::async_context::push_context_guard(
-        crate::async_context::ContextGuardAction::RestoreExecutionIds,
-    );
-    let prev_this = crate::object::js_implicit_this_set(this_arg_handle.get_nanbox_f64());
-    // Catch locally so a throwing scope still delivers `after` and restores
-    // the resource/context before the exception is rethrown to user code.
-    // The trap is installed after our guards, so throw-time unwinding leaves
-    // those guards for the normal cleanup below.
-    let outcome = crate::exception::js_call_catching(|| {
-        if args_array == 0 {
-            unsafe { js_closure_call_array(callback as i64, ptr::null(), 0) }
-        } else {
-            let arr = args_array_handle.get_raw_const_ptr::<ArrayHeader>();
-            let len = js_array_length(arr) as i64;
-            let data = if arr.is_null() {
-                ptr::null()
-            } else {
-                unsafe { (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 }
-            };
-            unsafe { js_closure_call_array(callback as i64, data, len) }
+    let outcome = try_run_resource_scope(ids, || {
+        let callback = crate::fs::extract_closure_ptr(rebound_handle.get_nanbox_f64());
+        let previous_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+            this_arg_handle.get_nanbox_f64(),
+        ));
+        let callback_outcome = crate::exception::js_call_catching(|| {
+            args_array_handle.with_const_ptr::<ArrayHeader, _>(|arr| {
+                if arr.is_null() {
+                    unsafe { js_closure_call_array(callback as i64, ptr::null(), 0) }
+                } else {
+                    let len = js_array_length(arr) as i64;
+                    let data = unsafe {
+                        (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+                    };
+                    unsafe { js_closure_call_array(callback as i64, data, len) }
+                }
+            })
+        });
+        crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
+        match callback_outcome {
+            Ok(value) => value,
+            Err(error) => crate::exception::js_throw(error),
         }
     });
-    crate::object::js_implicit_this_set(prev_this);
-    let threw = outcome.is_err();
-    let result_handle = scope.root_nanbox_f64(match outcome {
-        Ok(result) | Err(result) => result,
-    });
-    // Normal exit: `after` fires hooks and pops the execution scope itself,
-    // so discard the silent-unwind guard rather than applying it.
-    let _ = crate::async_context::pop_context_guard();
-    after(resource.ids.async_id);
-    crate::async_context::refresh_snapshot_from_roots(
-        &mut resource_context,
-        &resource_context_roots,
-    );
-    if let Some(action) = crate::async_context::pop_context_guard() {
-        crate::async_context::apply_context_guard(action);
+    match outcome {
+        Ok(value) => value,
+        Err(error) => crate::exception::js_throw(error),
     }
-    if threw {
-        crate::exception::js_throw(result_handle.get_nanbox_f64());
-    }
-    result_handle.get_nanbox_f64()
 }
 
 /// Trampoline body for `AsyncResource#bind`. Stored as the `func_ptr` of the
@@ -1645,14 +1618,17 @@ fn register_bind_trampoline_once() {
 
 #[no_mangle]
 pub extern "C" fn js_async_resource_bind(handle: i64, callback_value: f64, this_arg: f64) -> i64 {
-    validate_bind_callback(callback_value);
-    let Some(handle) = resolve_async_resource_handle(handle) else {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_handle = scope.root_raw_mut_ptr(handle as *mut ObjectHeader);
+    let callback_handle = scope.root_nanbox_f64(callback_value);
+    let this_arg_handle = scope.root_nanbox_f64(this_arg);
+    validate_bind_callback(callback_handle.get_nanbox_f64());
+    let Some(handle) = receiver_handle
+        .with_mut_ptr::<ObjectHeader, _>(|receiver| resolve_async_resource_handle(receiver as i64))
+    else {
         return 0;
     };
     register_bind_trampoline_once();
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let callback_handle = scope.root_nanbox_f64(callback_value);
-    let this_arg_handle = scope.root_nanbox_f64(this_arg);
     let closure = js_closure_alloc(async_resource_bind_trampoline as *const u8, 3);
     if closure.is_null() {
         return 0;
@@ -1669,9 +1645,9 @@ pub extern "C" fn js_async_resource_bind(handle: i64, callback_value: f64, this_
         2,
         this_arg_handle.get_nanbox_f64(),
     );
-    if let Some(length) =
-        crate::closure::closure_length(crate::fs::extract_closure_ptr(callback_value))
-    {
+    if let Some(length) = crate::closure::closure_length(crate::fs::extract_closure_ptr(
+        callback_handle.get_nanbox_f64(),
+    )) {
         crate::object::set_builtin_closure_length(
             closure_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
             length,

@@ -1,5 +1,43 @@
 use super::*;
 
+extern "C" fn test_current_async_id(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    crate::async_hooks::execution_async_id_u64() as f64
+}
+
+#[test]
+fn test_async_resource_subclass_run_in_scope_roots_inputs_during_key_alloc_gc() {
+    let _async_hook_guard = AsyncHookRuntimeTestGuard::new();
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    let _verify_evacuation = crate::gc::knob_overrides::VerifyEvacuationTestGuard::on();
+    register_runtime_handle_root_scanner_for_tests();
+
+    let resource_type = test_string_value(b"SubclassResource");
+    let backing = crate::async_hooks::js_async_resource_new(
+        resource_type,
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+    let expected_async_id = crate::async_hooks::js_async_resource_async_id(backing);
+    let receiver = crate::object::js_object_alloc(0, 1);
+    crate::async_hooks::test_link_async_resource_subclass(receiver, backing);
+    let callback = crate::closure::js_closure_alloc(test_current_async_id as *const u8, 0);
+
+    crate::async_hooks::test_force_next_async_resource_resolve_gc();
+    let before = crate::gc::copying_minor_cycles();
+    let result = crate::async_hooks::js_async_resource_run_in_async_scope(
+        receiver as i64,
+        f64::from_bits(ptr_bits(callback as usize)),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+        0,
+    );
+    let after = crate::gc::copying_minor_cycles();
+
+    assert!(after > before, "the resolver must complete a copying minor");
+    assert_eq!(result, expected_async_id);
+    assert_eq!(crate::async_hooks::execution_async_id_u64(), 0);
+}
+
 #[test]
 fn test_async_hook_option_lookup_roots_callbacks_across_copied_minor_gc() {
     let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();

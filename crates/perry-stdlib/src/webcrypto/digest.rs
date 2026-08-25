@@ -55,11 +55,11 @@ pub unsafe extern "C" fn js_webcrypto_digest(algo_bits: f64, data_bits: f64) -> 
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(buf as *const u8).bits()));
     let promise = scope.root_raw_mut_ptr(perry_runtime::promise::js_promise_new());
+    let cl = perry_runtime::closure::js_closure_alloc(webcrypto_digest_settle as *const u8, 3);
+    let cl = scope.root_raw_mut_ptr(cl);
     let promise_val = promise.with_mut_ptr(|promise: *mut Promise| {
         f64::from_bits(JSValue::pointer(promise as *const u8).bits())
     });
-    let cl = perry_runtime::closure::js_closure_alloc(webcrypto_digest_settle as *const u8, 3);
-    let cl = scope.root_raw_mut_ptr(cl);
     perry_runtime::closure::js_closure_set_capture_ptr(
         cl.get_raw_mut_ptr(),
         0,

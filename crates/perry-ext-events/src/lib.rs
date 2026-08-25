@@ -23,7 +23,8 @@ use perry_ffi::{
     error_value_with_code, js_array_alloc, js_array_get, js_array_length, js_array_push,
     js_array_set, js_object_alloc_with_shape, js_object_set_field, nanbox_string_bits, read_string,
     throw_with_code, ArrayHeader, ErrorKind, Handle, JsPromise, JsString, JsValue, ObjectHeader,
-    Promise, RawClosureHeader, StringHeader, TransientRootScope,
+    Promise, RawClosureHeader, StringHeader, TransientRootScope, TransientRootedAddr,
+    TransientRootedNanbox,
 };
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -31,6 +32,11 @@ use std::sync::{Mutex, MutexGuard, Once, OnceLock};
 
 mod error_monitor;
 use error_monitor::dispatch_error_monitor;
+mod emit_scope;
+use emit_scope::{
+    event_emitter_emit0_thunk, event_emitter_emit_thunk, EventEmitterEmit0Call,
+    EventEmitterEmitCall,
+};
 mod max_listeners;
 mod messages;
 mod module_helpers;
@@ -686,14 +692,27 @@ unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
     read_string(handle).map(String::from)
 }
 
+fn is_raw_string_header_bits(raw: u64) -> bool {
+    (0x10000..MAX_HEAP_POINTER).contains(&raw) && (raw & TAG_MASK) == 0
+}
+
 unsafe fn event_name_from_bits(event_bits: i64) -> Option<String> {
     let raw = event_bits as u64;
-    if (0x10000..MAX_HEAP_POINTER).contains(&raw) && (raw & TAG_MASK) == 0 {
+    if is_raw_string_header_bits(raw) {
         return string_from_header(raw as *const StringHeader);
     }
 
     let rendered = js_jsvalue_to_string(f64::from_bits(raw));
     string_from_header(rendered as *const StringHeader)
+}
+
+fn event_value_from_bits(event_bits: i64) -> f64 {
+    let raw = event_bits as u64;
+    if is_raw_string_header_bits(raw) {
+        f64::from_bits(nanbox_string_bits(raw as *mut StringHeader))
+    } else {
+        f64::from_bits(raw)
+    }
 }
 
 fn event_bits_from_string_ptr(ptr: *const StringHeader) -> i64 {
@@ -1296,16 +1315,19 @@ pub unsafe extern "C" fn js_event_emitter_emit(
     event_bits: i64,
     args_ptr: *mut ArrayHeader,
 ) -> f64 {
-    if event_name_from_bits(event_bits).is_none() {
-        return f64::from_bits(0x7FFC_0000_0000_0003);
-    }
+    let roots = TransientRootScope::enter();
+    let event_value = roots.root_nanbox(event_value_from_bits(event_bits));
+    let args_ptr = roots.root_addr(args_ptr as i64);
     let async_id = event_emitter_async_id(handle);
     if async_id == 0 {
-        return js_event_emitter_emit_impl(handle, event_bits, args_ptr);
+        let Some(event_name) = event_name_from_bits(event_value.get().to_bits() as i64) else {
+            return f64::from_bits(0x7FFC_0000_0000_0003);
+        };
+        return js_event_emitter_emit_impl(handle, &event_name, args_ptr.get() as *mut ArrayHeader);
     }
     let mut call = EventEmitterEmitCall {
         handle,
-        event_bits,
+        event_value,
         args_ptr,
     };
     js_async_hooks_provider_run_catching(
@@ -1315,42 +1337,28 @@ pub unsafe extern "C" fn js_event_emitter_emit(
     )
 }
 
-struct EventEmitterEmitCall {
-    handle: Handle,
-    event_bits: i64,
-    args_ptr: *mut ArrayHeader,
-}
-
-unsafe extern "C" fn event_emitter_emit_thunk(data: *mut std::ffi::c_void) -> f64 {
-    let call = &mut *(data as *mut EventEmitterEmitCall);
-    js_event_emitter_emit_impl(call.handle, call.event_bits, call.args_ptr)
-}
-
 unsafe fn js_event_emitter_emit_impl(
     handle: Handle,
-    event_bits: i64,
+    event_name: &str,
     args_ptr: *mut ArrayHeader,
 ) -> f64 {
     const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
     const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
-    let Some(event_name) = event_name_from_bits(event_bits) else {
-        return TAG_FALSE_F64;
-    };
     let mut had_listeners = false;
     let mut domain_error: Option<(Handle, f64)> = None;
     let mut throw_error: Option<f64> = None;
     if let Some(emitter) = get_event_emitter_mut(handle) {
-        let snapshot: Vec<Listener> = match emitter.events.get(&event_name) {
+        let snapshot: Vec<Listener> = match emitter.events.get(event_name) {
             Some(v) if !v.is_empty() => v.clone(),
             _ => Vec::new(),
         };
         if !snapshot.is_empty() {
             had_listeners = true;
             if snapshot.iter().any(|l| l.once) {
-                if let Some(v) = emitter.events.get_mut(&event_name) {
+                if let Some(v) = emitter.events.get_mut(event_name) {
                     v.retain(|l| !l.once);
                 }
-                emitter.prune_event_if_empty(&event_name);
+                emitter.prune_event_if_empty(event_name);
             }
         }
 
@@ -1374,7 +1382,7 @@ unsafe fn js_event_emitter_emit_impl(
         }
 
         if domain_error.is_none() && throw_error.is_none() {
-            drain_pending_once_promises(emitter, &event_name, args_ptr);
+            drain_pending_once_promises(emitter, event_name, args_ptr);
 
             let capture_rejections = emitter.capture_rejections && event_name != "error";
             for l in snapshot {
@@ -1412,14 +1420,19 @@ unsafe fn js_event_emitter_emit_impl(
 /// `event_name_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64) -> f64 {
-    if event_name_from_bits(event_bits).is_none() {
-        return f64::from_bits(0x7FFC_0000_0000_0003);
-    }
+    let roots = TransientRootScope::enter();
+    let event_value = roots.root_nanbox(event_value_from_bits(event_bits));
     let async_id = event_emitter_async_id(handle);
     if async_id == 0 {
-        return js_event_emitter_emit0_impl(handle, event_bits);
+        let Some(event_name) = event_name_from_bits(event_value.get().to_bits() as i64) else {
+            return f64::from_bits(0x7FFC_0000_0000_0003);
+        };
+        return js_event_emitter_emit0_impl(handle, &event_name);
     }
-    let mut call = EventEmitterEmit0Call { handle, event_bits };
+    let mut call = EventEmitterEmit0Call {
+        handle,
+        event_value,
+    };
     js_async_hooks_provider_run_catching(
         async_id,
         event_emitter_emit0_thunk,
@@ -1427,37 +1440,24 @@ pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64)
     )
 }
 
-struct EventEmitterEmit0Call {
-    handle: Handle,
-    event_bits: i64,
-}
-
-unsafe extern "C" fn event_emitter_emit0_thunk(data: *mut std::ffi::c_void) -> f64 {
-    let call = &mut *(data as *mut EventEmitterEmit0Call);
-    js_event_emitter_emit0_impl(call.handle, call.event_bits)
-}
-
-unsafe fn js_event_emitter_emit0_impl(handle: Handle, event_bits: i64) -> f64 {
+unsafe fn js_event_emitter_emit0_impl(handle: Handle, event_name: &str) -> f64 {
     const TAG_FALSE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0003);
     const TAG_TRUE_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0004);
-    let Some(event_name) = event_name_from_bits(event_bits) else {
-        return TAG_FALSE_F64;
-    };
     let mut had_listeners = false;
     let mut domain_error: Option<(Handle, f64)> = None;
     let mut throw_error: Option<f64> = None;
     if let Some(emitter) = get_event_emitter_mut(handle) {
-        let snapshot: Vec<Listener> = match emitter.events.get(&event_name) {
+        let snapshot: Vec<Listener> = match emitter.events.get(event_name) {
             Some(v) if !v.is_empty() => v.clone(),
             _ => Vec::new(),
         };
         if !snapshot.is_empty() {
             had_listeners = true;
             if snapshot.iter().any(|l| l.once) {
-                if let Some(v) = emitter.events.get_mut(&event_name) {
+                if let Some(v) = emitter.events.get_mut(event_name) {
                     v.retain(|l| !l.once);
                 }
-                emitter.prune_event_if_empty(&event_name);
+                emitter.prune_event_if_empty(event_name);
             }
         }
 
@@ -1480,7 +1480,7 @@ unsafe fn js_event_emitter_emit0_impl(handle: Handle, event_bits: i64) -> f64 {
             }
         }
         if domain_error.is_none() && throw_error.is_none() {
-            drain_pending_once_promises(emitter, &event_name, empty_args);
+            drain_pending_once_promises(emitter, event_name, empty_args);
 
             let capture_rejections = emitter.capture_rejections && event_name != "error";
             for l in snapshot {

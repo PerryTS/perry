@@ -261,51 +261,53 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
         "message" | "messageerror" => async_resources[2],
         _ => async_resources[0],
     };
-    perry_runtime::async_hooks::enter_resource_scope(resource);
-    let property_name = match event {
-        "message" => Some("onmessage"),
-        "error" => Some("onerror"),
-        "messageerror" => Some("onmessageerror"),
-        _ => None,
-    };
-    let property_handler = property_name
-        .and_then(|name| object_event_handler(object_h.get_nanbox_f64().to_bits(), name))
-        .map(|bits| scope.root_nanbox_f64(f64::from_bits(bits)));
-    let needs_event = property_handler.is_some() || callbacks.iter().any(|(_, web)| *web);
-    let event_handle = if needs_event {
-        let data = (event == "message")
-            .then(|| arg_handle.as_ref().map(|h| h.get_nanbox_f64()))
-            .flatten();
-        let ev = event_object(event, object_h.get_nanbox_f64().to_bits(), data);
-        Some(scope.root_nanbox_f64(ev))
-    } else {
-        None
-    };
-
-    if let (Some(callback_h), Some(event_h)) = (property_handler, event_handle.as_ref()) {
-        call_callback1(
-            callback_h.get_nanbox_f64().to_bits(),
-            object_h.get_nanbox_f64().to_bits(),
-            event_h.get_nanbox_f64(),
-        );
-    }
-
-    for (callback_h, web_event) in callbacks {
-        let closure_ptr = perry_runtime::value::js_nanbox_get_pointer(callback_h.get_nanbox_f64());
-        if closure_ptr == 0 {
-            continue;
-        }
-        let closure = closure_ptr as *const ClosureHeader;
-        let call_arg = if web_event {
-            event_handle.as_ref().map(|h| h.get_nanbox_f64())
-        } else {
-            arg_handle.as_ref().map(|h| h.get_nanbox_f64())
+    perry_runtime::async_hooks::run_resource_scope_catching(resource, || {
+        let property_name = match event {
+            "message" => Some("onmessage"),
+            "error" => Some("onerror"),
+            "messageerror" => Some("onmessageerror"),
+            _ => None,
         };
-        if let Some(arg) = call_arg {
-            perry_runtime::closure::js_closure_call1(closure, arg);
+        let property_handler = property_name
+            .and_then(|name| object_event_handler(object_h.get_nanbox_f64().to_bits(), name))
+            .map(|bits| scope.root_nanbox_f64(f64::from_bits(bits)));
+        let needs_event = property_handler.is_some() || callbacks.iter().any(|(_, web)| *web);
+        let event_handle = if needs_event {
+            let data = (event == "message")
+                .then(|| arg_handle.as_ref().map(|h| h.get_nanbox_f64()))
+                .flatten();
+            let ev = event_object(event, object_h.get_nanbox_f64().to_bits(), data);
+            Some(scope.root_nanbox_f64(ev))
         } else {
-            perry_runtime::closure::js_closure_call0(closure);
+            None
+        };
+
+        if let (Some(callback_h), Some(event_h)) = (property_handler, event_handle.as_ref()) {
+            call_callback1(
+                callback_h.get_nanbox_f64().to_bits(),
+                object_h.get_nanbox_f64().to_bits(),
+                event_h.get_nanbox_f64(),
+            );
         }
-    }
-    perry_runtime::async_hooks::leave_resource_scope(resource.async_id);
+
+        for (callback_h, web_event) in callbacks {
+            let closure_ptr =
+                perry_runtime::value::js_nanbox_get_pointer(callback_h.get_nanbox_f64());
+            if closure_ptr == 0 {
+                continue;
+            }
+            let closure = closure_ptr as *const ClosureHeader;
+            let call_arg = if web_event {
+                event_handle.as_ref().map(|h| h.get_nanbox_f64())
+            } else {
+                arg_handle.as_ref().map(|h| h.get_nanbox_f64())
+            };
+            if let Some(arg) = call_arg {
+                perry_runtime::closure::js_closure_call1(closure, arg);
+            } else {
+                perry_runtime::closure::js_closure_call0(closure);
+            }
+        }
+        js_undefined()
+    });
 }
