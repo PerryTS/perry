@@ -5,6 +5,21 @@
 
 use super::*;
 
+#[cfg(test)]
+thread_local! {
+    static TEST_TRANSITION_FAST_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_reset_transition_fast_hits() {
+    TEST_TRANSITION_FAST_HITS.with(|hits| hits.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn test_transition_fast_hits() -> u64 {
+    TEST_TRANSITION_FAST_HITS.with(std::cell::Cell::get)
+}
+
 /// Non-allocating-in-the-GC-heap overwrite for an existing own data field.
 ///
 /// This is the common assignment case for ordinary objects.  It is deliberately
@@ -132,15 +147,40 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
 ///
 /// This is intentionally narrower than `js_object_set_field_by_name`: it only
 /// handles plain object-shape transitions that have already been learned by
-/// the runtime transition cache. Accessors/descriptors, frozen/sealed objects,
-/// class/prototype receivers, closures, native handles, arrays, strings, and
-/// cache misses return 0 so callers preserve the full setter semantics by
+/// the runtime transition cache. In addition to class-id-zero objects, HIR's
+/// registered anonymous-shape classes qualify: they are the runtime backing
+/// for source-level object literals and have ordinary `Object.prototype`
+/// semantics. User class instances, accessors/descriptors, frozen/sealed
+/// objects, prototype overrides, closures, native handles, arrays, strings,
+/// and cache misses return 0 so callers preserve the full setter semantics by
 /// falling back to `js_object_set_field_by_name`.
 #[no_mangle]
 pub extern "C" fn js_object_set_field_by_name_transition_fast(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
     value: f64,
+) -> i32 {
+    object_set_field_by_name_transition_fast_impl(obj, key, value, true)
+}
+
+/// Transition-only form for callers that already own a complete semantic
+/// fallback. If `key` is an existing property, no append edge can exist for
+/// `(current_keys, key)`, so the lookup returns 0 and the caller performs the
+/// ordinary write. Skipping the up-front linear overwrite scan is important
+/// for repeated computed-key object construction.
+pub(crate) fn object_set_field_by_name_transition_only_fast(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> i32 {
+    object_set_field_by_name_transition_fast_impl(obj, key, value, false)
+}
+
+fn object_set_field_by_name_transition_fast_impl(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+    try_overwrite: bool,
 ) -> i32 {
     if key.is_null() || (key as usize) < 0x10000 {
         return 0;
@@ -174,7 +214,7 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         return 0;
     }
 
-    if unsafe { try_existing_own_data_overwrite(obj, key, value) } {
+    if try_overwrite && unsafe { try_existing_own_data_overwrite(obj, key, value) } {
         return 1;
     }
 
@@ -219,11 +259,16 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         let key_gc =
             (key as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
 
-        // The append-transition half below is intentionally restricted to
-        // class-id-zero plain objects. Existing own-data overwrites were
-        // already handled by `try_existing_own_data_overwrite` before the
-        // rooting scope.
-        if (*obj).class_id != 0 {
+        // Closed source-level object literals are represented as synthetic
+        // `__AnonShape_*` classes so their static fields can use the same
+        // ShapeId machinery as class instances. Semantically they are still
+        // plain objects: codegen registers their class ids at module init and
+        // prototype/constructor dispatch already treats them as having
+        // ordinary Object semantics. Admit exactly that registered population
+        // alongside genuinely class-id-zero objects; a real user class must
+        // retain the full inherited-setter/prototype walk.
+        let class_id = (*obj).class_id;
+        if class_id != 0 && !crate::object::is_anon_shape_class_id(class_id) {
             return 0;
         }
 
@@ -231,9 +276,9 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         // the top of the function — one `Object.freeze` anywhere in the process
         // (even on an unrelated object) permanently disabled this fast path for
         // every object. Vet the receiver's own flag (above) and its prototype
-        // chain (here) instead. `class_id` is 0 at this point, so the only
-        // inherited interceptor is `Object.prototype` (or a recorded
-        // `setPrototypeOf` target).
+        // chain (here) instead. Pass semantic class id zero for an anon shape:
+        // its nonzero runtime id is an implementation detail, not a JS class
+        // whose vtable/prototype chain can carry instance accessors.
         let key_f64 = f64::from_bits(JSValue::string_ptr(key as *mut _).bits());
         if super::plain_data_write_may_intercept(obj as usize, 0, key_f64) {
             return 0;
@@ -255,24 +300,36 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let value = value_handle.get_nanbox_f64();
 
-        let keys = crate::object::object_keys_array(obj);
-        let prev_keys = keys as usize;
-        if !keys.is_null() {
-            let keys_ptr = keys as usize;
-            if (keys_ptr as u64) >> 48 != 0 || keys_ptr < 0x10000 {
-                return 0;
-            }
-        }
-
-        let Some((next_keys, slot_idx)) = transition_cache_lookup(prev_keys, interned_key) else {
+        let prev_shape_id = super::shapes::object_shape_stamp(obj);
+        let Some((next_keys, slot_idx, target_shape_id)) =
+            transition_cache_lookup(prev_shape_id, interned_key)
+        else {
             return 0;
         };
         if next_keys == 0 {
             return 0;
         }
 
-        set_object_keys_array(obj, next_keys as *mut ArrayHeader);
-        super::mark_object_dynamic_shape_unknown(obj);
+        // `Object.prototype[<index>]` must reach the ordinary setter so it can
+        // invalidate array hole/OOB guards through
+        // `note_object_prototype_index_write`. A canonical index must start
+        // with an ASCII digit, so named transitions avoid the prototype TLS
+        // lookup entirely. Probe only after a cache hit; ordinary misses
+        // already take the semantic fallback.
+        let key_starts_with_digit =
+            (*key).byte_len != 0 && (*crate::string::string_data(key)).is_ascii_digit();
+        if key_starts_with_digit && crate::array::object_prototype_addr_matches(obj as usize) {
+            return 0;
+        }
+
+        if !super::shapes::install_cached_object_shape_transition(
+            obj,
+            prev_shape_id,
+            target_shape_id,
+            next_keys as *mut ArrayHeader,
+        ) {
+            set_object_keys_array(obj, next_keys as *mut ArrayHeader);
+        }
 
         // #8113: one bound probe, reused.
         let live_slots = crate::object::object_live_slot_count(obj);
@@ -294,7 +351,67 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
         } else {
             overflow_set(obj as usize, slot_usize, vbits);
         }
+
+        #[cfg(test)]
+        TEST_TRANSITION_FAST_HITS.with(|hits| hits.set(hits.get() + 1));
     }
 
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transition_fast_rejects_object_prototype_even_with_a_cached_edge() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let prototype = crate::array::object_prototype_addr() as *mut ObjectHeader;
+        assert!(!prototype.is_null(), "test premise: Object.prototype");
+        let prototype_handle = scope.root_raw_mut_ptr(prototype);
+
+        let raw_key = crate::string::js_string_from_bytes(b"879400001".as_ptr(), 9);
+        let raw_key_handle = scope.root_string_ptr(raw_key);
+        let raw_key = raw_key_handle.get_raw_const_ptr::<crate::StringHeader>();
+        let key = crate::string::js_string_intern(raw_key, key_content_hash(raw_key));
+        let key_handle = scope.root_string_ptr(key);
+
+        let prototype = prototype_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let predecessor = unsafe { super::super::shapes::object_shape_stamp(prototype) };
+        assert!(
+            super::super::shapes::is_shape_id(predecessor),
+            "test premise: Object.prototype has a resolvable ShapeId"
+        );
+        let old_keys = unsafe { super::super::object_keys_array(prototype) };
+        let next_keys = crate::array::js_array_clone(old_keys);
+        let slot = crate::array::js_array_length(next_keys);
+        let next_keys = crate::array::js_array_push(
+            next_keys,
+            crate::JSValue::string_ptr(key_handle.get_raw_mut_ptr()),
+        );
+        let next_keys_handle = scope.root_raw_mut_ptr(next_keys);
+        let next_keys = next_keys_handle.get_raw_mut_ptr::<ArrayHeader>();
+        let target = super::super::shapes::shape_descriptor_ensure(
+            next_keys,
+            slot + 1,
+            unsafe { super::super::object_live_slot_count(prototype) }.max(slot + 1),
+        )
+        .expect("shape range unexpectedly exhausted");
+        let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+        super::super::transition_cache_insert(predecessor, key, next_keys as usize, slot, target);
+        assert!(
+            super::super::transition_cache_lookup(predecessor, key).is_some(),
+            "test premise: the synthetic transition must be cache-resident"
+        );
+
+        test_reset_transition_fast_hits();
+        assert_eq!(
+            object_set_field_by_name_transition_only_fast(prototype, key, 42.0),
+            0,
+            "Object.prototype must use the setter that records indexed writes"
+        );
+        assert_eq!(test_transition_fast_hits(), 0);
+        super::super::test_clear_transition_cache_root();
+    }
 }

@@ -62,6 +62,13 @@ pub(crate) struct ShapeDescriptor {
     /// Raw ArrayHeader address in Perry's fixed-width heap-word ABI. Keeping
     /// this u64 preserves identical representation on ILP32/LP64.
     pub(crate) keys: u64,
+    /// The keys address currently represented in `ids_by_facts` and
+    /// `ids_by_keys`. The collector may rewrite `keys` directly through a raw
+    /// slot before the metadata scanner runs; retaining the indexed address
+    /// lets that scanner repair exactly this descriptor instead of rebuilding
+    /// and sorting both reverse maps for every shape in the agent.
+    /// Never part of shape identity.
+    indexed_keys: u64,
     /// Address of the BOXED record this value was lifted from, or 0 for a
     /// descriptor built outside the table (equality comparisons, tests).
     /// Never part of shape IDENTITY — see the hand-written `PartialEq` below.
@@ -196,10 +203,23 @@ fn descriptor_facts(descriptor: ShapeDescriptor) -> ShapeFacts {
     }
 }
 
-#[cfg(test)]
-fn remove_id_from_facts_index(inner: &mut ShapeTableInner, facts: ShapeFacts, id: u32) {
+fn descriptor_facts_with_keys(descriptor: ShapeDescriptor, keys: u64) -> ShapeFacts {
+    ShapeFacts {
+        keys,
+        logical_key_count: descriptor.logical_key_count,
+        live_inline_slot_count: descriptor.live_inline_slot_count,
+        semantic_generation: descriptor.semantic_generation,
+        object_kind: descriptor.object_kind,
+    }
+}
+
+fn remove_descriptor_id_from_facts_index(inner: &mut ShapeTableInner, facts: ShapeFacts, id: u32) {
     let remove_entry = if let Some(ids) = inner.ids_by_facts.get_mut(&facts) {
-        ids.retain(|&candidate| candidate != id);
+        if let Ok(index) = ids.binary_search(&id) {
+            ids.remove(index);
+        } else {
+            ids.retain(|&candidate| candidate != id);
+        }
         ids.is_empty()
     } else {
         false
@@ -209,36 +229,59 @@ fn remove_id_from_facts_index(inner: &mut ShapeTableInner, facts: ShapeFacts, id
     }
 }
 
-fn rebuild_descriptor_reverse_indices(inner: &mut ShapeTableInner) {
-    let mut ids_by_facts: HashMap<ShapeFacts, Vec<u32>> =
-        HashMap::with_capacity(inner.descriptors.len());
-    let mut ids_by_keys: crate::fast_hash::PtrHashMap<u64, Vec<u32>> =
-        crate::fast_hash::new_ptr_hash_map();
-    for (&id, descriptor) in &inner.descriptors {
-        ids_by_facts
-            .entry(descriptor_facts(**descriptor))
-            .or_default()
-            .push(id);
-        ids_by_keys.entry(descriptor.keys).or_default().push(id);
+fn remove_descriptor_id_from_keys_index(inner: &mut ShapeTableInner, keys: u64, id: u32) {
+    let remove_entry = if let Some(ids) = inner.ids_by_keys.get_mut(&keys) {
+        if let Ok(index) = ids.binary_search(&id) {
+            ids.remove(index);
+        } else {
+            ids.retain(|&candidate| candidate != id);
+        }
+        ids.is_empty()
+    } else {
+        false
+    };
+    if remove_entry {
+        inner.ids_by_keys.remove(&keys);
     }
-    // #8125: the rebuild walks `descriptors` in HASH order, and
-    // `shape_descriptor_ensure_with_generation` reuses `ids.first()` — so
-    // without this sort, WHICH id a facts key resolves to after a GC rewrite
-    // depends on the hasher. Two objects with identical facts, one born before
-    // a collection and one after, would then carry different ShapeIds, and
-    // every id-keyed consumer (the typed shape-layout install, the emitted
-    // PICs) splits its population. Ascending is the stable canonical choice:
-    // ids are minted monotonically, so the smallest is the oldest — the one
-    // already-published objects and already-installed layouts carry, and in
-    // practice the module-init id `install_external_shape_id` prefers.
-    for ids in ids_by_facts.values_mut() {
-        ids.sort_unstable();
+}
+
+#[inline]
+fn insert_descriptor_id_sorted(ids: &mut Vec<u32>, id: u32) {
+    if let Err(index) = ids.binary_search(&id) {
+        ids.insert(index, id);
     }
-    for ids in ids_by_keys.values_mut() {
-        ids.sort_unstable();
+}
+
+/// Repair one descriptor after its collector-owned `keys` slot moved.
+///
+/// `indexed_keys` records the address under which the id is still indexed, so
+/// this is O(population sharing the old/new facts) rather than O(all shapes).
+fn sync_descriptor_reverse_indices(inner: &mut ShapeTableInner, id: u32) {
+    let Some(descriptor) = inner.descriptors.get(&id).map(|record| **record) else {
+        return;
+    };
+    if descriptor.indexed_keys == descriptor.keys {
+        return;
     }
-    inner.ids_by_facts = ids_by_facts;
-    inner.ids_by_keys = ids_by_keys;
+
+    let old_facts = descriptor_facts_with_keys(descriptor, descriptor.indexed_keys);
+    let new_facts = descriptor_facts(descriptor);
+    remove_descriptor_id_from_facts_index(inner, old_facts, id);
+    remove_descriptor_id_from_keys_index(inner, descriptor.indexed_keys, id);
+    insert_descriptor_id_sorted(inner.ids_by_facts.entry(new_facts).or_default(), id);
+    insert_descriptor_id_sorted(inner.ids_by_keys.entry(descriptor.keys).or_default(), id);
+    if let Some(record) = inner.descriptors.get_mut(&id) {
+        record.indexed_keys = descriptor.keys;
+    }
+}
+
+fn remove_descriptor_and_reverse_indices(inner: &mut ShapeTableInner, id: u32) {
+    let Some(descriptor) = inner.descriptors.remove(&id) else {
+        return;
+    };
+    let facts = descriptor_facts_with_keys(*descriptor, descriptor.indexed_keys);
+    remove_descriptor_id_from_facts_index(inner, facts, id);
+    remove_descriptor_id_from_keys_index(inner, descriptor.indexed_keys, id);
 }
 
 /// #6759 C3c: ShapeIds live in their own u32 range, disjoint from every
@@ -347,6 +390,7 @@ fn shape_descriptor_ensure_with_generation(
     let id = alloc_shape_id().map_err(|_| ShapeDescriptorError::IdExhausted)?;
     let descriptor = ShapeDescriptor {
         keys: keys_id as u64,
+        indexed_keys: keys_id as u64,
         record: 0,
         old_carrier: false,
         old_carrier_seen: false,
@@ -547,6 +591,7 @@ fn install_external_shape_id(
     }
     let descriptor = ShapeDescriptor {
         keys: keys as usize as u64,
+        indexed_keys: keys as usize as u64,
         record: 0,
         old_carrier: false,
         old_carrier_seen: false,
@@ -569,11 +614,7 @@ fn install_external_shape_id(
     // both reverse-index entries and prefer the external id for subsequent
     // births in this agent; already-published local ids remain resolvable.
     inner.ids_by_facts.entry(facts).or_default().insert(0, id);
-    inner
-        .ids_by_keys
-        .entry(descriptor.keys)
-        .or_default()
-        .push(id);
+    insert_descriptor_id_sorted(inner.ids_by_keys.entry(descriptor.keys).or_default(), id);
     true
 }
 
@@ -609,6 +650,90 @@ pub(crate) unsafe fn object_shape_stamp(obj: *const crate::object::ObjectHeader)
     } else {
         0
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CACHED_TRANSITION_WATCH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TEST_CACHED_TRANSITION_STAMPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Install a transition cache's exact successor without re-hashing descriptor
+/// facts. The predecessor ShapeId is the complete semantic guard: it includes
+/// the ordered keys edge, live-slot bound, semantic generation, and object
+/// kind. A mismatch declines to the ordinary mint-or-find publication path.
+///
+/// The cache strongly roots `target_keys`, so copying GC rewrites both that
+/// edge and the descriptor named by `target_shape_id` while the stable IDs stay
+/// unchanged. Entries are learned only after the slow path has published the
+/// successor, and ShapeIds are never reused.
+#[inline]
+pub(crate) unsafe fn install_cached_object_shape_transition(
+    obj: *mut crate::object::ObjectHeader,
+    expected_predecessor_shape_id: u32,
+    target_shape_id: u32,
+    _target_keys: *mut ArrayHeader,
+) -> bool {
+    if obj.is_null()
+        || !shape_word_is_writable(obj)
+        || object_shape_stamp(obj) != expected_predecessor_shape_id
+        || !is_shape_id(target_shape_id)
+    {
+        return false;
+    }
+
+    // Debug/test builds verify the cache-to-table invariant before trusting
+    // the constant-time release publication. This lookup is compiled out of
+    // optimized release builds, where full-GC pruning validates both ShapeIds
+    // and the cache's rooted target edge keeps its descriptor live.
+    #[cfg(debug_assertions)]
+    {
+        let key_count = if _target_keys.is_null() {
+            0
+        } else {
+            crate::array::keys_array_len_capped_to_capacity(_target_keys) as u32
+        };
+        if !shape_descriptor_by_id(target_shape_id).is_some_and(|descriptor| {
+            descriptor.keys == _target_keys as u64 && descriptor.logical_key_count == key_count
+        }) {
+            return false;
+        }
+    }
+
+    // Match `set_object_keys_array_with_live`: representation feedback must be
+    // invalidated while the predecessor stamp is still authoritative.
+    super::mark_object_dynamic_shape_unknown(obj);
+    (*obj).parent_class_id = target_shape_id;
+    if !crate::arena::pointer_in_nursery(obj as usize) {
+        note_old_generation_carrier(shape_descriptor_by_id(target_shape_id));
+    }
+
+    #[cfg(debug_assertions)]
+    debug_assert_object_shape_parity_for_keys(obj, _target_keys);
+    #[cfg(test)]
+    TEST_CACHED_TRANSITION_WATCH.with(|watch| {
+        if watch.get() == obj as usize {
+            TEST_CACHED_TRANSITION_STAMPS.with(|hits| hits.set(hits.get() + 1));
+        }
+    });
+    true
+}
+
+#[cfg(test)]
+pub(crate) fn test_reset_cached_transition_stamps() {
+    TEST_CACHED_TRANSITION_WATCH.with(|watch| watch.set(0));
+    TEST_CACHED_TRANSITION_STAMPS.with(|hits| hits.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn test_watch_cached_transition_stamps(obj: usize) {
+    TEST_CACHED_TRANSITION_WATCH.with(|watch| watch.set(obj));
+    TEST_CACHED_TRANSITION_STAMPS.with(|hits| hits.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn test_cached_transition_stamps() -> u64 {
+    TEST_CACHED_TRANSITION_STAMPS.with(std::cell::Cell::get)
 }
 
 /// Stamp `obj` with the exact ShapeId of `keys`, minting the descriptor on
@@ -1288,13 +1413,8 @@ pub(crate) fn prune_dead_shape_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
         .collect();
     if !stale.is_empty() {
         for id in stale {
-            inner.descriptors.remove(&id);
+            remove_descriptor_and_reverse_indices(&mut inner, id);
         }
-        // Rebuild rather than removing by current facts one-at-a-time. A
-        // deferred live-object rewrite may have changed the by-id pointer
-        // before the metadata scanner repaired the reverse accelerators; a
-        // rebuild cannot retain either an old-facts or old-keys entry.
-        rebuild_descriptor_reverse_indices(&mut inner);
     }
 }
 
@@ -1304,7 +1424,7 @@ pub(crate) fn prune_dead_shape_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
 /// only forwarding records those live edges already created.
 pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    let mut descriptor_moved = false;
+    let mut descriptor_rekeys: Vec<u32> = Vec::new();
     let mut dead_descriptor_ids: Vec<u32> = Vec::new();
     for (id, descriptor) in inner.descriptors.iter_mut() {
         let mut addr = descriptor.keys as usize;
@@ -1327,21 +1447,22 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
             dead_descriptor_ids.push(*id);
         } else if moved {
             descriptor.keys = addr as u64;
-            descriptor_moved = true;
+        }
+        // A live-object edge can rewrite the boxed `keys` slot before this
+        // metadata pass. Comparing against the address represented in the
+        // reverse maps catches both that ordering and a move observed here.
+        if descriptor.keys != descriptor.indexed_keys {
+            descriptor_rekeys.push(*id);
         }
     }
     // Remove descriptors whose keys array was recycled.
     if !dead_descriptor_ids.is_empty() {
         for id in &dead_descriptor_ids {
-            inner.descriptors.remove(id);
+            remove_descriptor_and_reverse_indices(&mut inner, *id);
         }
-        descriptor_moved = true;
     }
-    // Rebuild throughout rewrite phase even when this pass itself observed no
-    // move: an immediate live-object header callback may already have rekeyed
-    // a shared descriptor, while a deferred callback relies on this pass.
-    if descriptor_moved || visitor.is_metadata_rewrite_phase() {
-        rebuild_descriptor_reverse_indices(&mut inner);
+    for id in descriptor_rekeys {
+        sync_descriptor_reverse_indices(&mut inner, id);
     }
 
     if !visitor.is_metadata_rewrite_phase() || inner.indices.is_empty() {
@@ -1374,12 +1495,8 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
         .filter(|&&keys_id| shape_keys_address_is_recycled(keys_id))
         .copied()
         .collect();
-    let recycled_count = recycled.len();
     for old in recycled {
         inner.indices.remove(&old);
-    }
-    if recycled_count > 0 {
-        rebuild_descriptor_reverse_indices(&mut inner);
     }
 }
 
@@ -1488,9 +1605,7 @@ pub(crate) fn test_drop_shape_descriptors(keys_id: usize) {
         .remove(&(keys_id as u64))
         .unwrap_or_default();
     for id in stale {
-        if let Some(descriptor) = inner.descriptors.remove(&id) {
-            remove_id_from_facts_index(&mut inner, descriptor_facts(*descriptor), id);
-        }
+        remove_descriptor_and_reverse_indices(&mut inner, id);
     }
 }
 

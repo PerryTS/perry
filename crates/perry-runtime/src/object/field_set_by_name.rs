@@ -26,7 +26,11 @@ pub use attr_variants::{
     js_object_set_field_by_name_nonconfigurable, js_object_set_field_by_name_nonenum,
 };
 pub use fast_paths::js_object_set_field_by_name_transition_fast;
-pub(crate) use fast_paths::try_existing_own_data_overwrite;
+pub(crate) use fast_paths::{
+    object_set_field_by_name_transition_only_fast, try_existing_own_data_overwrite,
+};
+#[cfg(test)]
+pub(crate) use fast_paths::{test_reset_transition_fast_hits, test_transition_fast_hits};
 pub(crate) use tail::set_field_by_name_object_tail;
 pub(crate) use write_helpers::nm_field_set_override;
 use write_helpers::string_key_eq;
@@ -162,13 +166,10 @@ pub extern "C" fn js_object_set_field_by_name(
                         && !super::prototype_chain::object_has_prototype_override(raw)
                         && super::prop_plan::store_plan_check(class_id, key as usize)
                     {
-                        let keys = crate::object::object_keys_array(o);
-                        let keys_ok = keys.is_null()
-                            || (((keys as u64) >> 48) == 0
-                                && crate::value::addr_class::is_above_handle_band(keys as usize));
-                        if keys_ok {
-                            if let Some((next_keys, slot_idx)) =
-                                transition_cache_lookup(keys as usize, key)
+                        let prev_shape_id = super::shapes::object_shape_stamp(o);
+                        if prev_shape_id != 0 {
+                            if let Some((next_keys, slot_idx, target_shape_id)) =
+                                transition_cache_lookup(prev_shape_id, key)
                             {
                                 // Same store semantics as the in-body fast
                                 // path: strip a raw-null POINTER_TAG value,
@@ -182,8 +183,14 @@ pub extern "C" fn js_object_set_field_by_name(
                                 } else {
                                     vbits
                                 };
-                                set_object_keys_array(o, next_keys as *mut ArrayHeader);
-                                super::mark_object_dynamic_shape_unknown(o);
+                                if !super::shapes::install_cached_object_shape_transition(
+                                    o,
+                                    prev_shape_id,
+                                    target_shape_id,
+                                    next_keys as *mut ArrayHeader,
+                                ) {
+                                    set_object_keys_array(o, next_keys as *mut ArrayHeader);
+                                }
                                 // #8113: one bound probe, reused.
                                 let live_slots = crate::object::object_live_slot_count(o);
                                 let alloc_limit = std::cmp::max(

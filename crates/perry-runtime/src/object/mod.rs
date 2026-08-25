@@ -465,9 +465,10 @@ impl ObjectHotTables {
             transition_cache: std::cell::UnsafeCell::new(
                 vec![
                     TransitionEntry {
-                        prev_keys: 0,
                         key_ptr: 0,
                         next_keys: 0,
+                        prev_shape_id: 0,
+                        target_shape_id: 0,
                         slot_idx: 0,
                         target_len: 0,
                     };
@@ -679,39 +680,40 @@ fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
 }
 
 /// Thread-local shape-transition cache for the dynamic-key write path
-/// (`obj[name] = value`). One entry per `(prev_keys_array, key_ptr)` edge
+/// (`obj[name] = value`). One entry per `(predecessor ShapeId, key_ptr)` edge
 /// in the shape lattice.
 ///
 /// When `js_object_set_field_by_name` would otherwise do a linear scan
 /// over `keys_array` to locate-or-append a key, it first looks up
-/// `(obj.keys_array, key)` here. A hit tells us directly which
-/// keys_array to transition the object to and which slot the field
-/// lives in — no scan, no clone, no `js_array_push`.
+/// `(predecessor ShapeId, key)` here. A hit tells us directly which
+/// keys_array and exact successor ShapeId to transition the object to and
+/// which slot the field lives in — no scan, clone, push, or descriptor hash.
 ///
 /// The cache is populated on the slow (append) path: after the scan
 /// confirms the key is new and a new keys_array is built, the
-/// transition `(prev_keys, key_ptr) → (new_keys, slot_idx)` is stored
+/// transition `(prev_shape_id, key_ptr) → (target_shape_id, new_keys,
+/// slot_idx)` is stored
 /// here and `new_keys` is stamped `GC_FLAG_SHAPE_SHARED` so any future
 /// extension clones before mutating (same invariant as the SHAPE_CACHE
 /// for compile-time object literals).
 ///
-/// Direct-mapped, 4096 entries, each a self-describing record (full
+/// Direct-mapped, 16384 entries, each a self-describing record (full
 /// key included) so a collision just misses instead of returning the
 /// wrong slot. The target pointers are GC-rooted via
 /// `scan_transition_cache_roots`.
 ///
-/// Two sentinel values: `prev_keys == 0` is the "keys_array is null"
-/// edge (first property on a fresh `{}`), which lets a second object
-/// building the same shape reuse the first's keys_array from the very
-/// first write — no per-row allocation of a 1-entry keys_array.
+/// ShapeIds are process-stable metadata rather than moving heap addresses.
+/// Keying on the full predecessor identity also keeps semantic generations,
+/// object kinds, and live-slot bounds from borrowing one another's target.
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub(crate) struct TransitionEntry {
-    prev_keys: usize, // offset 0
-    key_ptr: usize,   // offset 8 — interned string pointer (pointer identity)
-    next_keys: usize, // offset 16
-    slot_idx: u32,    // offset 24
-    target_len: u32,  // offset 28, nonzero when target was validated at insert
+    key_ptr: usize,       // offset 0 — interned string pointer (pointer identity)
+    next_keys: usize,     // offset 8 — strong root for target descriptor's edge
+    prev_shape_id: u32,   // offset 16
+    target_shape_id: u32, // offset 20 — exact successor learned on the slow path
+    slot_idx: u32,        // offset 24
+    target_len: u32,      // offset 28, nonzero when target was validated at insert
 }
 
 const TRANSITION_CACHE_SIZE: usize = 16384;
@@ -792,8 +794,8 @@ fn key_content_hash_impl(key: *const crate::StringHeader) -> u64 {
 }
 
 #[inline(always)]
-fn transition_cache_slot(prev_keys: usize, key_ptr: usize) -> usize {
-    let mixed = ((prev_keys >> 3) as u64).wrapping_mul(0x9E3779B97F4A7C15)
+fn transition_cache_slot(prev_shape_id: u32, key_ptr: usize) -> usize {
+    let mixed = (prev_shape_id as u64).wrapping_mul(0x9E3779B97F4A7C15)
         ^ ((key_ptr >> 3) as u64).wrapping_mul(0xC6BC279692B5C323);
     (mixed as usize) & (TRANSITION_CACHE_SIZE - 1)
 }
@@ -845,29 +847,23 @@ fn transition_edge_places_key(
 /// dictionaries and are validated on lookup.
 #[inline(always)]
 fn transition_cache_lookup(
-    prev_keys: usize,
+    prev_shape_id: u32,
     interned_key: *const crate::StringHeader,
-) -> Option<(usize, u32)> {
+) -> Option<(usize, u32, u32)> {
     let kp = interned_key as usize;
-    let slot = transition_cache_slot(prev_keys, kp);
+    let slot = transition_cache_slot(prev_shape_id, kp);
     let entry = with_transition_cache(|t| unsafe { (*t)[slot] });
-    if entry.next_keys != 0 && entry.prev_keys == prev_keys && entry.key_ptr == kp {
-        // #6006: `prev_keys` / `key_ptr` are raw addresses, NOT GC roots (only
-        // `next_keys` is scanned/relocated). After GC frees a keys_array and
-        // recycles its address into an unrelated array, a stale entry here can
-        // pointer-match falsely — the object would then adopt `next_keys` and
-        // store the value at `slot_idx`, which belongs to a *different* shape.
-        // At bundle scale (frequent GC address reuse) this silently mis-places
-        // property values (keys_array looks right, but reads return undefined
-        // for the mis-slotted keys). Content-validate that the cached
-        // transition actually places THIS key at `slot_idx` before trusting it;
-        // a genuine edge always does, a recycled-address false match never will.
+    if entry.next_keys != 0 && entry.prev_shape_id == prev_shape_id && entry.key_ptr == kp {
+        // `key_ptr` is weak address metadata and the target array may still
+        // have grown unexpectedly after insertion. Content-validate that the
+        // cached transition places THIS key at `slot_idx`; ShapeId identity
+        // handles predecessor semantics while this check handles target bytes.
         if !transition_edge_places_key(entry.next_keys, entry.slot_idx, interned_key) {
             return None;
         }
         let expected_len = entry.slot_idx.checked_add(1)?;
         if entry.target_len == expected_len {
-            return Some((entry.next_keys, entry.slot_idx));
+            return Some((entry.next_keys, entry.slot_idx, entry.target_shape_id));
         }
         // Stamp SHAPE_SHARED on the returned keys_array — this is the
         // moment we observe that a SECOND object is reusing the
@@ -883,7 +879,7 @@ fn transition_cache_lookup(
                 return None;
             }
         }
-        Some((entry.next_keys, entry.slot_idx))
+        Some((entry.next_keys, entry.slot_idx, entry.target_shape_id))
     } else {
         None
     }
@@ -906,16 +902,17 @@ unsafe fn transition_cache_stamp_shape_shared(next_keys: usize) -> bool {
 }
 
 fn transition_cache_insert(
-    prev_keys: usize,
+    prev_shape_id: u32,
     interned_key: *const crate::StringHeader,
     next_keys: usize,
     slot_idx: u32,
+    target_shape_id: u32,
 ) {
     if next_keys == 0 {
         return;
     }
     let kp = interned_key as usize;
-    let slot = transition_cache_slot(prev_keys, kp);
+    let slot = transition_cache_slot(prev_shape_id, kp);
     let mut target_len = 0;
     unsafe {
         if slot_idx < TRANSITION_CACHE_EAGER_SHARE_MAX_SLOT
@@ -931,9 +928,10 @@ fn transition_cache_insert(
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): TRANSITION_CACHE_GLOBAL entries are scanned by scan_transition_cache_roots_mut.
         let entry = &mut (*t)[slot];
-        entry.prev_keys = prev_keys;
         entry.key_ptr = kp;
         crate::gc::runtime_store_root_usize_slot(&mut entry.next_keys, next_keys);
+        entry.prev_shape_id = prev_shape_id;
+        entry.target_shape_id = target_shape_id;
         entry.slot_idx = slot_idx;
         entry.target_len = target_len;
     });
@@ -963,14 +961,14 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
             let entry = &mut (*table)[i];
             if entry.next_keys != 0 {
                 let mut invalidate = false;
-                invalidate |= visitor.visit_metadata_usize_slot(&mut entry.prev_keys);
                 invalidate |= visitor.visit_metadata_usize_slot(&mut entry.key_ptr);
                 visitor.visit_usize_slot(&mut entry.next_keys);
                 if invalidate {
                     *entry = TransitionEntry {
-                        prev_keys: 0,
                         key_ptr: 0,
                         next_keys: 0,
+                        prev_shape_id: 0,
+                        target_shape_id: 0,
                         slot_idx: 0,
                         target_len: 0,
                     };
@@ -982,17 +980,21 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
 
 /// #8192: death pruning for the transition cache.
 ///
-/// Two of an entry's three pointers are metadata-only and therefore weak:
-/// `prev_keys` (the pre-transition keys `ArrayHeader`) and `key_ptr` (the
-/// interned `StringHeader` of the property name). Only `next_keys` is a strong
-/// root. Both weak halves are **rekeyed** by `scan_transition_cache_roots_mut`
-/// when their object moves, which is what makes a dead one dangerous rather
-/// than merely stale: the arena recycles the address and the next rewrite pass
-/// reads the recycled bytes as a `GcHeader` (#8040, and see `gc::dead_owner`).
+/// The interned `key_ptr` is metadata-only and therefore weak; `next_keys` is
+/// a strong root. The predecessor and target ShapeIds are stable non-pointer
+/// metadata, so moving collection neither rewrites nor invalidates them.
 ///
 /// The entry is a pure cache, so the repair is to drop it. `next_keys == 0` is
-/// the empty-slot sentinel and `prev_keys == 0` is the "object had no keys
-/// array" sentinel; neither is an address, so neither is probed.
+/// the empty-slot sentinel.
+///
+/// `gc::dead_owner::DEAD_KEY_PRUNES` runs `prune_dead_shape_keys` before this
+/// function. A predecessor whose keys edge died therefore has no descriptor
+/// by the time we visit the cache. Both ShapeIds must still resolve: the
+/// predecessor is weak, while the strongly rooted target keys normally keep
+/// their descriptor live. Checking both here makes that target invariant a
+/// release-mode post-GC proof without adding a hash-table lookup to every hot
+/// transition stamp.
+#[cold]
 pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
     with_transition_cache(|table| unsafe {
         for i in 0..TRANSITION_CACHE_SIZE {
@@ -1000,13 +1002,16 @@ pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) 
             if entry.next_keys == 0 {
                 continue;
             }
-            let dead = (entry.prev_keys != 0 && is_dead_owner(entry.prev_keys))
-                || (entry.key_ptr != 0 && is_dead_owner(entry.key_ptr));
+            let dead = (entry.key_ptr != 0 && is_dead_owner(entry.key_ptr))
+                || shapes::shape_descriptor_by_id(entry.prev_shape_id).is_none()
+                || (entry.target_shape_id != 0
+                    && shapes::shape_descriptor_by_id(entry.target_shape_id).is_none());
             if dead {
                 *entry = TransitionEntry {
-                    prev_keys: 0,
                     key_ptr: 0,
                     next_keys: 0,
+                    prev_shape_id: 0,
+                    target_shape_id: 0,
                     slot_idx: 0,
                     target_len: 0,
                 };
@@ -1025,13 +1030,18 @@ pub(crate) fn test_transition_cache_occupancy() -> usize {
 }
 
 #[cfg(test)]
-pub(crate) fn test_seed_transition_cache_entry(prev_keys: usize, key_ptr: usize, next_keys: usize) {
-    let slot = transition_cache_slot(prev_keys, key_ptr);
+pub(crate) fn test_seed_transition_cache_entry(
+    prev_shape_id: u32,
+    key_ptr: usize,
+    next_keys: usize,
+) {
+    let slot = transition_cache_slot(prev_shape_id, key_ptr);
     with_transition_cache(|table| unsafe {
         (*table)[slot] = TransitionEntry {
-            prev_keys,
             key_ptr,
             next_keys,
+            prev_shape_id,
+            target_shape_id: 0,
             slot_idx: 0,
             target_len: 1,
         };
@@ -1267,9 +1277,10 @@ pub(crate) fn test_seed_transition_cache_root(next_keys: usize) {
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): test seed mirrors TRANSITION_CACHE_GLOBAL roots scanned by scan_transition_cache_roots_mut.
         let entry = &mut (*t)[0];
-        entry.prev_keys = 0;
         entry.key_ptr = 0;
         crate::gc::runtime_store_root_usize_slot(&mut entry.next_keys, next_keys);
+        entry.prev_shape_id = 0;
+        entry.target_shape_id = 0;
         entry.slot_idx = 0;
         entry.target_len = 0;
     });
@@ -1286,9 +1297,10 @@ pub(crate) fn test_clear_transition_cache_root() {
         for i in 0..TRANSITION_CACHE_SIZE {
             // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned TRANSITION_CACHE_GLOBAL roots.
             (*t)[i] = TransitionEntry {
-                prev_keys: 0,
                 key_ptr: 0,
                 next_keys: 0,
+                prev_shape_id: 0,
+                target_shape_id: 0,
                 slot_idx: 0,
                 target_len: 0,
             };
