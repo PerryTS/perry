@@ -428,6 +428,7 @@ pub(crate) fn set_field_by_name_object_tail(
         }
 
         let mut prev_keys_usize = keys as usize;
+        let prev_shape_id = super::shapes::object_shape_stamp(obj);
 
         // #7341: call after ANY allocating step, before the next use of
         // obj/key/value. Rationale in changelog.d/7381-*, 7383-*.
@@ -475,8 +476,8 @@ pub(crate) fn set_field_by_name_object_tail(
             if !plan_fast && record_plan_eligible {
                 super::prop_plan::store_plan_record(obj_class_id, interned_key as usize);
             }
-            if let Some((next_keys, slot_idx)) =
-                transition_cache_lookup(prev_keys_usize, interned_key)
+            if let Some((next_keys, slot_idx, target_shape_id)) =
+                transition_cache_lookup(prev_shape_id, interned_key)
             {
                 // Defensive: strip a raw-null POINTER_TAG value the same
                 // way the slow overflow path below does, so a bogus
@@ -488,8 +489,14 @@ pub(crate) fn set_field_by_name_object_tail(
                 } else {
                     vbits
                 };
-                set_object_keys_array(obj, next_keys as *mut ArrayHeader);
-                super::mark_object_dynamic_shape_unknown(obj);
+                if !super::shapes::install_cached_object_shape_transition(
+                    obj,
+                    prev_shape_id,
+                    target_shape_id,
+                    next_keys as *mut ArrayHeader,
+                ) {
+                    set_object_keys_array(obj, next_keys as *mut ArrayHeader);
+                }
                 // #8113: one bound probe, reused.
                 let live_slots = crate::object::object_live_slot_count(obj);
                 let alloc_limit =
@@ -569,7 +576,13 @@ pub(crate) fn set_field_by_name_object_tail(
             // that starts with `{}` and sets the same first key hits the
             // fast path above instead of allocating a fresh 4-elem
             // keys_array here.
-            transition_cache_insert(0, interned_key, new_keys as usize, 0);
+            transition_cache_insert(
+                prev_shape_id,
+                interned_key,
+                new_keys as usize,
+                0,
+                super::shapes::object_shape_stamp(obj),
+            );
             // #6804: birth-stamp the new dynamic shape (once per shape
             // birth — the transition edge above serves the siblings).
             // #6759 C3 rung 1: no `class_id == 0` gate — a keyless class
@@ -748,10 +761,11 @@ pub(crate) fn set_field_by_name_object_tail(
                 refresh_roots_after_alloc!();
                 mirror_class_object_static_write(obj, key, value);
                 transition_cache_insert(
-                    prev_keys_usize,
+                    prev_shape_id,
                     interned_key,
                     new_keys as usize,
                     new_index as u32,
+                    super::shapes::object_shape_stamp(obj),
                 );
                 keys_index_insert(
                     crate::object::object_keys_array(obj),
@@ -790,10 +804,11 @@ pub(crate) fn set_field_by_name_object_tail(
             refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
             transition_cache_insert(
-                prev_keys_usize,
+                prev_shape_id,
                 interned_key,
                 new_keys as usize,
                 new_index as u32,
+                super::shapes::object_shape_stamp(obj),
             );
             // #6759 C1 note: `keys_index_insert` delegates to the keys-keyed
             // shape records and takes the POST-append keys_array — with the
@@ -962,16 +977,17 @@ pub(crate) fn set_field_by_name_object_tail(
             overflow_set(obj as usize, new_index, vbits);
             refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
-            // Record the shape transition so the next object sharing
-            // `prev_keys` that adds the same key hits the fast path.
+            // Record the shape transition so the next object with this exact
+            // predecessor ShapeId that adds the same key hits the fast path.
             // The cached target is stamped `GC_FLAG_SHAPE_SHARED` by
             // `transition_cache_insert`, which triggers clone-on-extend
             // on either object if someone later appends past this key.
             transition_cache_insert(
-                prev_keys_usize,
+                prev_shape_id,
                 interned_key,
                 new_keys as usize,
                 new_index as u32,
+                super::shapes::object_shape_stamp(obj),
             );
             return;
         }
@@ -1008,10 +1024,11 @@ pub(crate) fn set_field_by_name_object_tail(
         mirror_class_object_static_write(obj, key, value);
         // Record the shape transition — see above for semantics.
         transition_cache_insert(
-            prev_keys_usize,
+            prev_shape_id,
             interned_key,
             new_keys as usize,
             new_index as u32,
+            super::shapes::object_shape_stamp(obj),
         );
     }
 }

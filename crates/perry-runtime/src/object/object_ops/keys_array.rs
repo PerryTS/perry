@@ -95,17 +95,24 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
         (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
     let keys_shared = (*keys_gc_header).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0;
     let owned_keys = if keys_shared {
-        let cloned = crate::array::js_array_alloc(key_count as u32 + 4);
+        // Every entry in an ordered object-keys array is a heap string
+        // pointer. Preserve that invariant explicitly while cloning instead
+        // of starting as a raw-f64 array and reconstructing a HashMap-backed
+        // per-object pointer mask from the finished slots. The clone is still
+        // unpublished here and no allocation occurs during the copy, so it is
+        // safe to expose the initialized prefix through `length` only after
+        // the last pointer has been written.
+        let cloned = crate::array::js_array_alloc_pointer_elements(key_count as u32 + 4);
         refresh_define_property_roots!();
         let keys = crate::object::object_keys_array(obj);
         let src_data = (keys as *const u8).add(8) as *const f64;
         let dst_data = (cloned as *mut u8).add(8) as *mut f64;
         for i in 0..key_count {
-            // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
+            // GC_STORE_AUDIT(INIT): cloned keys array is unpublished and its
+            // all-pointer layout covers only the prefix published by length.
             *dst_data.add(i) = *src_data.add(i);
         }
         (*cloned).length = key_count as u32;
-        super::super::rebuild_array_layout_from_slots(cloned);
         set_object_keys_array(obj, cloned);
         cloned
     } else {
@@ -203,6 +210,56 @@ mod tests {
             );
             assert_eq!(first_descriptor.logical_key_count, 1);
             assert_eq!(first_descriptor.live_inline_slot_count, 1);
+        }
+    }
+
+    #[test]
+    fn shared_shape_key_clone_stays_all_pointer_without_a_side_mask() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            const KEY_COUNT: usize = 32;
+            let mut packed = Vec::new();
+            for i in 0..KEY_COUNT {
+                packed.extend_from_slice(format!("field_{i:02}").as_bytes());
+                packed.push(0);
+            }
+            let first = crate::object::js_object_alloc_with_shape(
+                0x6B45_5902,
+                KEY_COUNT as u32,
+                packed.as_ptr(),
+                packed.len() as u32,
+            );
+            let sibling = crate::object::js_object_alloc_with_shape(
+                0x6B45_5902,
+                KEY_COUNT as u32,
+                packed.as_ptr(),
+                packed.len() as u32,
+            );
+            assert_eq!(
+                crate::object::object_keys_array(first),
+                crate::object::object_keys_array(sibling)
+            );
+
+            // The canonical shape array may already own a permanent mask;
+            // cloning it must not add another per-object layout record.
+            let tables_before = crate::gc::per_object_layout_table_sizes();
+            let extra = crate::string::js_string_from_bytes(b"extra".as_ptr(), 5);
+            ensure_key_in_keys_array(first, extra);
+
+            let cloned = crate::object::object_keys_array(first);
+            assert_ne!(cloned, crate::object::object_keys_array(sibling));
+            assert_eq!((*cloned).length, KEY_COUNT as u32 + 1);
+            assert!(own_key_present(first, extra));
+            assert!(!own_key_present(sibling, extra));
+            assert_eq!(crate::gc::per_object_layout_table_sizes(), tables_before);
+
+            let header =
+                (cloned as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            assert_ne!(
+                (*header)._reserved & crate::gc::GC_LAYOUT_ALL_POINTERS,
+                0,
+                "the cloned keys array must retain its compact all-pointer layout"
+            );
         }
     }
 }

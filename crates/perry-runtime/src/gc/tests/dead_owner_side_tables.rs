@@ -1499,28 +1499,28 @@ fn test_live_boxed_primitive_payload_owner_survives_full_gc() {
     js_shadow_slot_set(0, 0);
 }
 
-/// #8192. A transition-cache entry carries TWO metadata-only keys — the
-/// pre-transition `keys_array` and the interned property-name string — while
-/// only `next_keys` is a strong root. Either weak half dying is enough to make
-/// the entry's rekey read recycled bytes, so either is enough to drop it.
+/// #8192. A transition-cache entry carries one metadata-only key — the
+/// interned property-name string — while `next_keys` is a strong root and both
+/// ShapeIds are stable non-pointer metadata. A dead weak key drops the entry.
 #[test]
-fn test_dead_transition_cache_prev_keys_pruned_on_full_gc() {
+fn test_dead_transition_cache_key_pruned_on_full_gc() {
     let _guard = CopyingNurseryTestGuard::new(1);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
 
     // `next_keys` is a strong root of the entry and must stay live, or the test
     // would be measuring the wrong pointer. It goes in OLD-GEN on purpose:
     // arena block reset is all-or-nothing, so a reachable neighbour in
-    // `dead_prev`'s own nursery block would force-MARK it (#7975,
+    // `dead_key`'s own nursery block would force-MARK it (#7975,
     // `mark_block_persisting_arena_objects`) and the prune would correctly
     // decline — the test would then blame the prune for something it got right.
     let next_keys = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
     js_shadow_slot_set(0, ptr_bits(next_keys));
     crate::arena::arena_reset_all_blocks_to_zero();
-    let dead_prev = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY) as usize;
+    let dead_key = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_STRING) as usize;
+    let prev_shape_id = crate::object::shapes::shape_id_for_keys_ensure(std::ptr::null(), 0);
 
     let occupancy_before = crate::object::test_transition_cache_occupancy();
-    crate::object::test_seed_transition_cache_entry(dead_prev, 0, next_keys);
+    crate::object::test_seed_transition_cache_entry(prev_shape_id, dead_key, next_keys);
     assert_eq!(
         crate::object::test_transition_cache_occupancy(),
         occupancy_before + 1,
@@ -1532,32 +1532,65 @@ fn test_dead_transition_cache_prev_keys_pruned_on_full_gc() {
     assert_eq!(
         crate::object::test_transition_cache_occupancy(),
         occupancy_before,
-        "a transition entry whose prev_keys array died must be dropped, not \
+        "a transition entry whose interned key died must be dropped, not \
          rekeyed out of the bytes that replaced it"
     );
     js_shadow_slot_set(0, 0);
 }
 
 #[test]
+fn test_dead_transition_cache_predecessor_shape_pruned_on_full_gc() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+
+    let next_keys = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
+    js_shadow_slot_set(0, ptr_bits(next_keys));
+    crate::arena::arena_reset_all_blocks_to_zero();
+    let dead_predecessor_keys = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY) as usize;
+    let prev_shape_id = crate::object::shapes::shape_id_for_keys_ensure(
+        dead_predecessor_keys as *const crate::ArrayHeader,
+        0,
+    );
+
+    let occupancy_before = crate::object::test_transition_cache_occupancy();
+    crate::object::test_seed_transition_cache_entry(prev_shape_id, 0, next_keys);
+    assert_eq!(
+        crate::object::test_transition_cache_occupancy(),
+        occupancy_before + 1,
+        "test premise: the transition entry must be installed"
+    );
+
+    full_gc();
+
+    assert_eq!(
+        crate::object::test_transition_cache_occupancy(),
+        occupancy_before,
+        "a transition whose predecessor descriptor died must release its rooted target"
+    );
+    js_shadow_slot_set(0, 0);
+}
+
+#[test]
 fn test_live_transition_cache_entry_survives_full_gc() {
-    // Two shadow slots: both halves of the entry have to be rooted.
+    // Two shadow slots: the strong target and weak lookup key both stay live.
     let _guard = CopyingNurseryTestGuard::new(2);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
 
     let next_keys = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
-    let live_prev = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY) as usize;
+    let live_key = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_STRING) as usize;
+    let prev_shape_id = crate::object::shapes::shape_id_for_keys_ensure(std::ptr::null(), 0);
     js_shadow_slot_set(0, ptr_bits(next_keys));
-    js_shadow_slot_set(1, ptr_bits(live_prev));
+    js_shadow_slot_set(1, ptr_bits(live_key));
 
     let occupancy_before = crate::object::test_transition_cache_occupancy();
-    crate::object::test_seed_transition_cache_entry(live_prev, 0, next_keys);
+    crate::object::test_seed_transition_cache_entry(prev_shape_id, live_key, next_keys);
 
     full_gc();
 
     assert_eq!(
         crate::object::test_transition_cache_occupancy(),
         occupancy_before + 1,
-        "an entry whose prev_keys array is still ROOTED must survive"
+        "an entry whose interned key is still ROOTED must survive"
     );
     js_shadow_slot_set(0, 0);
     js_shadow_slot_set(1, 0);

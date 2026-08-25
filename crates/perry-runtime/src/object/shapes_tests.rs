@@ -474,25 +474,48 @@ mod descriptor_tests_8067 {
             "the lifted descriptor must name the boxed record's own keys word"
         );
         assert_eq!(unsafe { *slot }, keys as u64);
+        assert_eq!(
+            shape_descriptor_by_id(id).unwrap().indexed_keys,
+            keys as u64,
+            "newly minted descriptor must record its indexed keys address"
+        );
 
         // Writing THROUGH the slot is what an evacuating visitor does. The
         // table must observe it with no write-back callback of any kind.
         let moved_keys = keys as u64 + 0x3000;
         unsafe { *slot = moved_keys };
         assert_eq!(shape_descriptor_by_id(id).unwrap().keys, moved_keys);
+        assert_eq!(
+            shape_descriptor_by_id(id).unwrap().indexed_keys,
+            keys as u64,
+            "an object-edge rewrite must retain the old indexed address until metadata repair"
+        );
 
-        // The keys-address reverse index is repaired by the metadata pass, not
-        // by the store; force it the way `scan_shape_table_rekey_mut` does.
+        // The keys-address reverse index is repaired incrementally by the
+        // metadata pass, not by the store; force the same one-id repair here.
         {
             let mut inner = crate::state::state().shapes.inner.borrow_mut();
-            rebuild_descriptor_reverse_indices(&mut inner);
+            sync_descriptor_reverse_indices(&mut inner, id);
         }
+        assert_eq!(shape_descriptor_by_id(id).unwrap().indexed_keys, moved_keys);
+        assert_eq!(
+            shape_descriptor_ensure(moved_keys as *const ArrayHeader, 3, 2),
+            Ok(id),
+            "incremental repair must publish the moved facts under the original id"
+        );
+        let old_address_id = shape_descriptor_ensure(keys as *const ArrayHeader, 3, 2)
+            .expect("shape range unexpectedly exhausted");
+        assert_ne!(
+            old_address_id, id,
+            "incremental repair must remove the stale old-address facts entry"
+        );
         test_drop_shape_descriptors(moved_keys as usize);
         assert_eq!(
             shape_descriptor_by_id(id),
             None,
             "descriptor rekey did not update the keys-address index"
         );
+        test_drop_shape_descriptors(keys);
     }
 
     #[test]
