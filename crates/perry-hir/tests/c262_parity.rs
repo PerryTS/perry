@@ -59,6 +59,22 @@ fn closure_display_names(module: &perry_hir::Module) -> Vec<String> {
     names
 }
 
+fn class_display_names(module: &perry_hir::Module) -> Vec<String> {
+    let mut names: Vec<String> = module
+        .classes
+        .iter()
+        .map(|class| {
+            module
+                .class_display_names
+                .get(&class.id)
+                .cloned()
+                .unwrap_or_else(|| class.name.clone())
+        })
+        .collect();
+    names.sort();
+    names
+}
+
 fn is_number_literal(expr: &Expr, expected: f64) -> bool {
     match expr {
         Expr::Number(actual) => *actual == expected,
@@ -127,15 +143,20 @@ fn assignment_named_evaluation_names_anonymous_class_identifier_rhs_only() {
         "#,
     );
 
-    let class_names: Vec<&str> = module
-        .classes
-        .iter()
-        .map(|class| class.name.as_str())
-        .collect();
-    assert!(class_names.contains(&"x"), "{class_names:?}");
-    assert!(class_names.contains(&"cls"), "{class_names:?}");
-    assert!(!class_names.contains(&"xCls"), "{class_names:?}");
-    assert!(!class_names.contains(&"xCls2"), "{class_names:?}");
+    // Class-expression templates may use unique internal registry keys for
+    // per-evaluation identity. NamedEvaluation is observable through `.name`,
+    // so assert against the display-name metadata consumed by codegen.
+    let class_names = class_display_names(&module);
+    assert!(class_names.contains(&"x".to_string()), "{class_names:?}");
+    assert!(class_names.contains(&"cls".to_string()), "{class_names:?}");
+    assert!(
+        !class_names.contains(&"xCls".to_string()),
+        "{class_names:?}"
+    );
+    assert!(
+        !class_names.contains(&"xCls2".to_string()),
+        "{class_names:?}"
+    );
 }
 
 #[test]
