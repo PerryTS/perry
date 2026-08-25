@@ -1,3 +1,4 @@
+// parity-skip: benchmark fixture requires PERRY_WATCH_ROOT/PERRY_WATCH_READY and the dedicated Parcel watcher harness
 import { subscribe, unsubscribe } from "@parcel/watcher";
 import fs from "fs";
 import path from "path";
