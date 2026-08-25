@@ -78,6 +78,10 @@ on:
         description: 'Run only the focused Linux net.connect release diagnostic'
         type: boolean
         default: false
+      release_windows_llvm_diagnostic:
+        description: 'Run only the focused Windows LLVM setup diagnostic'
+        type: boolean
+        default: false
       candidate_sha:
         description: 'Exact candidate commit to check out for the focused diagnostic'
         type: string
@@ -104,6 +108,41 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "13.0"
 
 jobs:
+  release-windows-llvm-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_windows_llvm_diagnostic == true
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+
+      - name: Verify the exact candidate checkout
+        shell: pwsh
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          if ((git rev-parse HEAD) -ne $env:CANDIDATE_SHA) {
+            Write-Error "candidate checkout mismatch"
+            exit 1
+          }
+
+      - uses: ./.github/actions/setup-llvm22
+
+      - name: Verify the configured LLVM toolchain
+        shell: pwsh
+        run: |
+          if ($env:LLVM_SYS_221_PREFIX -ne "C:\llvm") {
+            Write-Error "LLVM_SYS_221_PREFIX was not exported"
+            exit 1
+          }
+          $version = & "C:\llvm\bin\llvm-config.exe" --version
+          if (-not $version.StartsWith("22.")) {
+            Write-Error "LLVM is not 22.x ($version)"
+            exit 1
+          }
+
   release-net-diagnostic:
     if: github.event_name == 'workflow_dispatch' && inputs.release_net_diagnostic == true
     runs-on: ubuntu-latest
