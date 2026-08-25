@@ -169,6 +169,8 @@ mod call_spread_short;
 mod call_spread_short_tests;
 #[cfg(test)]
 mod issue7628_rooting_tests;
+#[cfg(test)]
+mod readonly_collection_tests;
 pub(crate) mod shadow_slot;
 #[cfg(test)]
 mod slice7_rooting_tests;

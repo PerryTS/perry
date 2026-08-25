@@ -515,6 +515,14 @@
     },
     {
       "path": "crates/perry-codegen/src/type_analysis/strings.rs",
+      "function": "is_readonly_set_expr",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The declared ReadonlySet hint only nominates js_readonly_set_has; that helper admits direct layout access after an exact live Set brand check and otherwise performs the original method dispatch."
+    },
+    {
+      "path": "crates/perry-codegen/src/type_analysis/strings.rs",
       "function": "is_set_expr",
       "access": "stable_local_type_proof",
       "count": 1,

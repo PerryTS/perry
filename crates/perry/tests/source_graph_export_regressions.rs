@@ -474,6 +474,47 @@ fn whole_type_only_import_does_not_wrap_same_named_runtime_builtin() {
 }
 
 #[test]
+fn type_only_class_import_retains_guarded_readonly_set_field_metadata() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "archetype.ts",
+        "export class Archetype {\n\
+           readonly componentTypeSet: ReadonlySet<number>;\n\
+           constructor(values: number[]) { this.componentTypeSet = new Set(values); }\n\
+         }\n",
+    );
+    write(
+        dir.path(),
+        "factory.ts",
+        "import { Archetype } from './archetype';\n\
+         export function makeArchetype() { return new Archetype([3, 5]); }\n",
+    );
+    write(
+        dir.path(),
+        "main.ts",
+        "import type { Archetype } from './archetype';\n\
+         import { makeArchetype } from './factory';\n\
+         function contains(archetype: Archetype, value: number) {\n\
+           return archetype.componentTypeSet.has(value);\n\
+         }\n\
+         const archetype = makeArchetype();\n\
+         console.log(contains(archetype, 3), contains(archetype, 4));\n",
+    );
+
+    let (stdout, entry_ir) = compile_and_run_with_llvm_trace(dir.path(), "main.ts");
+    assert_eq!(stdout, "true false\n");
+    assert!(
+        entry_ir.contains("call double @js_readonly_set_has("),
+        "type-only class imports must retain field metadata for guarded collection dispatch:\n{entry_ir}"
+    );
+    assert!(
+        !entry_ir.contains("call double @js_typed_feedback_native_call_method_by_id("),
+        "the imported ReadonlySet field should not fall through generic native dispatch:\n{entry_ir}"
+    );
+}
+
+#[test]
 fn type_only_interface_dispatch_uses_runtime_class_registry() {
     let dir = tempfile::tempdir().expect("tempdir");
     write(

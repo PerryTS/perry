@@ -1011,18 +1011,40 @@ fn collect_module_one(
 
     // Process imports and update their resolved paths and module kinds
     for import in &mut hir_module.imports {
-        // Skip type-only imports — they were recorded for class-metadata flow
-        // (see lower.rs's #446 comment: a per-specifier `import { type Foo }`
-        // is preserved so Foo's class info reaches `imported_classes` for
-        // method dispatch) but they MUST NOT be loaded as runtime modules.
-        // Without this skip, `import type { StandardSchemaV1 } from
-        // "@standard-schema/spec"` (Effect's only `@standard-schema` use,
-        // a type-only reference) queued the package's V8 fallback. The
-        // spec ships an empty `src_exports = {}` at runtime, so any
-        // `something._tag` from the import binding then threw
-        // `TypeError: Cannot read properties of undefined (reading '_tag')`
-        // during Effect's module init. Refs #321, #684.
+        // Resolve TypeScript type-only imports for metadata, but never queue
+        // their target as a runtime module. The final graph may already
+        // contain the target through a value import elsewhere; retaining its
+        // canonical path here then lets run_pipeline attach that existing
+        // class's field/method metadata to this consumer. This is compile-time
+        // bookkeeping only: no init edge, binding, package capability, or V8
+        // fallback is created. In particular, the `@standard-schema/spec`
+        // case from #684 remains erased at runtime.
         if import.type_only {
+            if let Some(alias) = ctx.package_aliases.get(import.source.as_str()).cloned() {
+                import.source = alias;
+                import.is_native = perry_hir::is_native_module(&import.source);
+            }
+            if !import.is_native {
+                if let Some(resolved) = cached_resolve_import_with_lexical_base(
+                    &import.source,
+                    entry_path,
+                    &canonical,
+                    ctx,
+                ) {
+                    let resolved_path = resolved.canonical_path;
+                    let kind = if resolved.kind == ModuleKind::Interpreted
+                        && !is_in_perry_native_package(&resolved_path)
+                        && !is_declaration_file(&resolved_path)
+                        && aot_promotion_is_authorized(&resolved_path, ctx)
+                    {
+                        ModuleKind::NativeCompiled
+                    } else {
+                        resolved.kind
+                    };
+                    import.resolved_path = Some(resolved_path.to_string_lossy().to_string());
+                    import.module_kind = kind;
+                }
+            }
             continue;
         }
         let uses_file_loader = file_loader_sources.contains(&import.source);

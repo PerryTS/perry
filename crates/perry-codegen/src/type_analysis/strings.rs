@@ -38,6 +38,94 @@ pub(crate) fn is_set_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// True when the declared receiver type is TypeScript's structural
+/// `ReadonlySet<T>` interface.
+///
+/// This is deliberately separate from [`is_set_expr`]. A `ReadonlySet<T>`
+/// annotation does not prove that the value has Perry's native `SetHeader`
+/// layout: an ordinary object can implement the interface. Callers must use a
+/// runtime-branded operation with a normal method-dispatch fallback.
+pub(crate) fn is_readonly_set_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    match e {
+        // Unlike native-layout lowering, this is only a guarded candidate:
+        // the runtime helper preserves generic dispatch on a brand miss. A
+        // declared hint therefore remains useful even for reassigned locals.
+        Expr::LocalGet(id) => ctx.local_type_hint(id).is_some_and(type_is_readonly_set),
+        Expr::PropertyGet {
+            object, property, ..
+        } => static_type_of(ctx, object).is_some_and(|owner_ty| {
+            type_may_declare_readonly_set_field(ctx, &owner_ty, property, 0)
+        }),
+        _ => false,
+    }
+}
+
+#[inline]
+fn type_is_readonly_set(ty: &HirType) -> bool {
+    matches!(ty, HirType::Generic { base, .. } if base == "ReadonlySet")
+}
+
+/// Look through a nullable/union owner claim for a field declared as
+/// `ReadonlySet<T>`. This is a dispatch candidate, not a layout proof: a false
+/// positive only reaches `js_readonly_set_has`, whose brand miss performs the
+/// original method call. That lets `Archetype | undefined` retain the useful
+/// candidate without weakening nullish, proxy, subclass, or structural-object
+/// semantics.
+fn type_may_declare_readonly_set_field(
+    ctx: &FnCtx<'_>,
+    owner_ty: &HirType,
+    property: &str,
+    depth: usize,
+) -> bool {
+    if depth > 32 {
+        return false;
+    }
+    match owner_ty {
+        HirType::Union(variants) => variants.iter().any(|variant| {
+            !matches!(variant, HirType::Null | HirType::Void | HirType::Never)
+                && type_may_declare_readonly_set_field(ctx, variant, property, depth + 1)
+        }),
+        HirType::Named(name) | HirType::Generic { base: name, .. } => {
+            if let Some(class) = ctx.classes.get(name) {
+                if let Some(field) = class.fields.iter().find(|field| field.name == property) {
+                    return type_is_readonly_set(&field.ty);
+                }
+                if let Some(parent) = class.extends_name.as_deref() {
+                    return type_may_declare_readonly_set_field(
+                        ctx,
+                        &HirType::Named(parent.to_string()),
+                        property,
+                        depth + 1,
+                    );
+                }
+            }
+            if let Some(iface) = ctx.interfaces.get(name) {
+                if let Some(field) = iface.properties.iter().find(|field| field.name == property) {
+                    return type_is_readonly_set(&field.ty);
+                }
+                if iface.extends.iter().any(|parent| {
+                    type_may_declare_readonly_set_field(ctx, parent, property, depth + 1)
+                }) {
+                    return true;
+                }
+            }
+            matches!(
+                ctx.type_aliases.get(name),
+                Some(HirType::Object(object))
+                    if object
+                        .properties
+                        .get(property)
+                        .is_some_and(|field| type_is_readonly_set(&field.ty))
+            )
+        }
+        HirType::Object(object) => object
+            .properties
+            .get(property)
+            .is_some_and(|field| type_is_readonly_set(&field.ty)),
+        _ => false,
+    }
+}
+
 pub(crate) fn set_static_type_args<'a>(ctx: &'a FnCtx<'_>, e: &Expr) -> Option<&'a [HirType]> {
     match e {
         Expr::LocalGet(id)
