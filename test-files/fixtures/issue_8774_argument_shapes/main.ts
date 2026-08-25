@@ -54,7 +54,8 @@ class Registry {
 }
 
 class ForeignReader {
-  // Imported class metadata is intentionally not a local clone capability.
+  // The method body is local while its parameter layout crosses a re-export.
+  // The imported class id + ShapeId guard makes this a valid local clone.
   read(entity: Foreign): number {
     return entity.id + entity.components.length;
   }

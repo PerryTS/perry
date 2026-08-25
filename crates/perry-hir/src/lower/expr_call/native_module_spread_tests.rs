@@ -204,3 +204,22 @@ fn non_module_spread_intrinsics_are_untouched() {
         "Math.min spread lost its fast path: {h}"
     );
 }
+
+#[test]
+fn mixed_fixed_and_spread_math_calls_keep_the_spread_marker() {
+    for src in [
+        "const xs = [3, 1, 2]; console.log(Math.min(-1, ...xs));",
+        "const xs = [3, 1, 2]; console.log(Math.max(-1, ...xs));",
+        "const xs = [3, 1, 2]; console.log(Math['max'](-1, ...xs));",
+    ] {
+        let h = hir(src);
+        assert!(
+            h.contains("CallSpread"),
+            "a mixed Math call must retain its fixed/spread argument boundary: {h}"
+        );
+        assert!(
+            !h.contains("MathMin([") && !h.contains("MathMax(["),
+            "the spread tail must not be coerced as one scalar Math argument: {h}"
+        );
+    }
+}

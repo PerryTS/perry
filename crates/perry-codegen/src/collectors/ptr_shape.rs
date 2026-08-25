@@ -326,13 +326,86 @@ pub(crate) fn collect_shape_proven_ptr_locals_and_element_fields(
     element_facts: &ElementShapeFacts,
     numeric_param_seeds: &HashSet<u32>,
 ) -> (HashMap<u32, PtrShapeLocal>, HashMap<u32, HashSet<String>>) {
+    collect_shape_proven_ptr_locals_impl(
+        stmts,
+        boxed_vars,
+        module_globals,
+        classes,
+        module_dispatch,
+        not_bigint_locals,
+        element_facts,
+        numeric_param_seeds,
+        CollectionPurpose::UnguardedRepresentation,
+    )
+}
+
+/// Containment facts that may be consumed only by a `$pshape_args` call-site
+/// guard. Unlike a guard-free `Ptr<Shape>` representation, an unrelated
+/// module barrier cannot invalidate this fact: the fresh object has not
+/// escaped, and the route rechecks its live class and ShapeId immediately
+/// before entering the clone. These facts must never feed ordinary field or
+/// method lowering.
+pub(crate) fn collect_guarded_argument_route_locals(
+    stmts: &[Stmt],
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    classes: &HashMap<String, &Class>,
+    module_dispatch: &ModuleDispatchFacts,
+    not_bigint_locals: &HashSet<u32>,
+    element_facts: &ElementShapeFacts,
+    numeric_param_seeds: &HashSet<u32>,
+) -> HashMap<u32, PtrShapeLocal> {
+    // This second pass is a proof query, not a guard-free representation
+    // selection. Suppress Ptr<Shape> report rows so it cannot claim that a
+    // barrier-gated local received the broader optimization.
+    let _quiet = report::SuppressScope::new();
+    let (mut facts, _) = collect_shape_proven_ptr_locals_impl(
+        stmts,
+        boxed_vars,
+        module_globals,
+        classes,
+        module_dispatch,
+        not_bigint_locals,
+        element_facts,
+        numeric_param_seeds,
+        CollectionPurpose::GuardedArgumentRoute,
+    );
+    // The guarded route consumes class/containment only. Do not carry a raw
+    // numeric-field representation claim into this deliberately narrower map.
+    for fact in facts.values_mut() {
+        fact.numeric_fields.clear();
+        fact.report_name = None;
+    }
+    facts
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CollectionPurpose {
+    UnguardedRepresentation,
+    GuardedArgumentRoute,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_shape_proven_ptr_locals_impl(
+    stmts: &[Stmt],
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    classes: &HashMap<String, &Class>,
+    module_dispatch: &ModuleDispatchFacts,
+    not_bigint_locals: &HashSet<u32>,
+    element_facts: &ElementShapeFacts,
+    numeric_param_seeds: &HashSet<u32>,
+    purpose: CollectionPurpose,
+) -> (HashMap<u32, PtrShapeLocal>, HashMap<u32, HashSet<String>>) {
     // #7152: Perry's own `cjs_wrap` preamble, recognised once for this region.
     // One scan of the top-level statement list on anything else, then a
     // `Default` that suppresses nothing. See `cjs_scaffolding.rs`.
     let preamble = super::cjs_scaffolding::preamble_in_region(stmts);
     let bail = if !ptr_shape_locals_enabled() {
         Some(report::GATE_DISABLED)
-    } else if module_dispatch.has_shape_barrier_sites() {
+    } else if purpose == CollectionPurpose::UnguardedRepresentation
+        && module_dispatch.has_shape_barrier_sites()
+    {
         Some(report::MODULE_BARRIER)
     } else {
         None
@@ -459,6 +532,7 @@ pub(crate) fn collect_shape_proven_ptr_locals_and_element_fields(
         element_seeded: &element_seeded,
         element_facts,
         in_closure: false,
+        purpose,
     };
     walk.walk_stmts(stmts);
     let UseWalk {
@@ -881,6 +955,9 @@ struct UseWalk<'a> {
     /// doc, rule 2) does NOT apply — only the enclosing function's own
     /// returns are terminators for this local's lifetime.
     in_closure: bool,
+    /// Whether this walk is proving the broad guard-free representation or
+    /// only a fresh-object route protected by an exact argument guard.
+    purpose: CollectionPurpose,
 }
 
 impl<'a> UseWalk<'a> {
@@ -1226,12 +1303,13 @@ impl<'a> UseWalk<'a> {
                                         self.module_dispatch,
                                         self.candidates,
                                         self.roots,
-                                        root,
-                                        class_name,
+                                        Some(root),
+                                        Some(class_name),
                                         property,
                                         param_index,
                                         a,
                                         args,
+                                        self.purpose == CollectionPurpose::UnguardedRepresentation,
                                     )
                                 {
                                     continue;
@@ -1240,6 +1318,37 @@ impl<'a> UseWalk<'a> {
                             }
                             return;
                         }
+                    }
+
+                    // In the route-only proof, method lowering may establish
+                    // the receiver class after this analysis (notably for
+                    // `this.m(fresh)`). Preserve the fresh argument only when
+                    // all emitted clones with this method name and position
+                    // agree on its class. The fact is invisible to ordinary
+                    // field/method lowering and is consumed only beside the
+                    // live class+ShapeId guard.
+                    if self.purpose == CollectionPurpose::GuardedArgumentRoute
+                        && matches!(object.as_ref(), Expr::This | Expr::LocalGet(_))
+                    {
+                        self.walk_expr(object);
+                        for (param_index, arg) in args.iter().enumerate() {
+                            if super::proven_args::route_preserves_argument_containment(
+                                self.module_dispatch,
+                                self.candidates,
+                                self.roots,
+                                None,
+                                None,
+                                property,
+                                param_index,
+                                arg,
+                                args,
+                                false,
+                            ) {
+                                continue;
+                            }
+                            self.with_ctx(report::ESC_CALL_ARGUMENT, |walk| walk.walk_expr(arg));
+                        }
+                        return;
                     }
                 }
                 self.walk_expr(callee);

@@ -539,8 +539,8 @@ pub unsafe extern "C-unwind" fn js_native_call_method_apply_by_id(
 /// Materialize `fixed..., ...spread` for the generic branch of a short packed
 /// spread callsite. The fast branch has already evaluated all operands; doing
 /// the fallback assembly here preserves that source order without re-running
-/// an expression, and [`js_array_clone_for_spread`] preserves every observable
-/// iterator case (own/prototype overrides, proxies, accessors, and throws).
+/// an expression, and [`crate::object::js_array_like_to_array`] preserves the
+/// the full iterator protocol for every proof miss.
 ///
 /// The returned array is consumed immediately by
 /// [`js_native_call_method_apply_by_id`]. Every input and both arrays are held
@@ -562,7 +562,19 @@ pub unsafe extern "C-unwind" fn js_spread_tail_fallback_args(
     let spread_handle = scope.root_nanbox_f64(spread);
 
     let (_, rooted_spread) = spread_handle.across_nanbox(|| ());
-    let spread_array = crate::array::js_array_clone_for_spread(rooted_spread);
+    // Drive the real iterator protocol on a guard miss. The older
+    // `js_array_like_to_array` shortcut reinterprets an Array Proxy handle or
+    // object-backed Array-subclass instance as an `ArrayHeader`, making both
+    // appear empty. Nullish tails retain Perry's established optional-tail
+    // extension and contribute zero arguments, matching the admitted arm.
+    let spread_array = if matches!(
+        rooted_spread.to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        crate::array::js_array_alloc(0)
+    } else {
+        crate::array::array_from_spread_value(rooted_spread)
+    };
     let spread_array_handle = scope.root_raw_mut_ptr(spread_array);
     let spread_len = spread_array_handle.with_const_ptr(|arr: *const crate::array::ArrayHeader| {
         if arr.is_null() {

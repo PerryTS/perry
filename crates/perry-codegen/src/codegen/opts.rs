@@ -231,6 +231,21 @@ pub struct CompileOptions {
     /// carries the class HIR, the module prefix of its origin, and an
     /// optional local alias.
     pub imported_classes: Vec<ImportedClass>,
+    /// Whole-program concrete method implementations eligible for the short
+    /// trailing-spread direct-call lowering (#8772). Unlike `imported_classes`,
+    /// this capability also flows from a consumer module back to a generic
+    /// library module: perform-ecs owns the hot `component.reset(...args)`
+    /// call, while benchmark adapters define the concrete Position/Velocity
+    /// classes. The producer publishes the exact class id, immutable ShapeId
+    /// global and public method ABI; the caller still guards every arm and
+    /// retains the generic apply fallback.
+    pub short_spread_method_candidates:
+        std::sync::Arc<std::collections::HashMap<String, Vec<ShortSpreadMethodCandidate>>>,
+    /// Whole-program stable exported object-literal methods eligible for an
+    /// exact guarded call from an otherwise dynamic receiver (#8775). This is
+    /// reverse-flow metadata: the calling module need not import the producer.
+    pub object_literal_method_candidates:
+        std::sync::Arc<std::collections::HashMap<String, Vec<ObjectLiteralMethodCandidate>>>,
     /// Imported enum member lists, keyed by the local name under which
     /// the enum is visible in this module.
     pub imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)>,
@@ -615,13 +630,42 @@ pub struct ImportedClass {
     pub object_literal: Option<ImportedObjectLiteral>,
 }
 
+/// Producer-authored capability for one concrete class method that can be
+/// called by the guarded short trailing-spread lowering (#8772).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShortSpreadMethodCandidate {
+    pub class_id: u32,
+    pub method_name: String,
+    pub source_prefix: String,
+    pub target: String,
+    pub shape_id_global: String,
+    pub declared_count: usize,
+}
+
 /// One concise own method published by an exported object-literal capability.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportedObjectLiteralMethod {
     pub name: String,
     pub func_id: u32,
+    /// Exact closure-call ABI function stored in the live own slot. This is a
+    /// `perry_closure_*` body for a `this`-capturing method and a
+    /// `__perry_wrap_perry_fn_*` wrapper for HIR's lifted no-`this` method.
+    pub target: String,
     pub param_count: usize,
     pub field_index: u32,
+}
+
+/// One producer-authored exported object-literal method that may be selected
+/// from a dynamic receiver after exact identity, class, ShapeId, own-slot, and
+/// closure-function guards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectLiteralMethodCandidate {
+    pub class_id: u32,
+    pub source_prefix: String,
+    pub source_export_name: String,
+    pub source_global_id: u32,
+    pub shape_id_global: String,
+    pub method: ImportedObjectLiteralMethod,
 }
 
 /// Consumer-resolved capability for one imported object-literal binding.
@@ -647,6 +691,7 @@ pub struct ExportedObjectLiteralCapability {
     pub class_name: String,
     pub class_id: u32,
     pub global_id: u32,
+    pub shape_id_global: String,
     pub field_names: Vec<String>,
     pub methods: Vec<ImportedObjectLiteralMethod>,
 }
@@ -693,6 +738,10 @@ pub(crate) struct CrossModuleCtx {
     /// `CompileOptions::namespace_member_origin_names`.
     pub namespace_member_origin_names: std::collections::HashMap<(String, String), String>,
     pub imported_async_funcs: std::collections::HashSet<String>,
+    pub short_spread_method_candidates:
+        std::sync::Arc<std::collections::HashMap<String, Vec<ShortSpreadMethodCandidate>>>,
+    pub object_literal_method_candidates:
+        std::sync::Arc<std::collections::HashMap<String, Vec<ObjectLiteralMethodCandidate>>>,
     /// FuncIds of locally-defined async functions in this module. Populated
     /// from `hir.functions.is_async`. Used by `is_promise_expr` to refine
     /// `let p = asyncFn();` to `Promise(_)` so subsequent `p.then(cb)`
@@ -980,8 +1029,9 @@ pub(crate) struct CrossModuleCtx {
         std::collections::HashMap<(String, String), crate::collectors::PtrShapeLocal>,
     /// Module-local method bodies with a guarded exact-shape parameter clone.
     /// The plan names every formal that must pass its class+shape guard before
-    /// the tagged-ABI `$pshape_args` body may be entered.  These capabilities
-    /// are intentionally not exported in the first increment.
+    /// the tagged-ABI `$pshape_args` body may be entered. Parameter layouts may
+    /// come from imported class stubs, but clone symbols remain private to the
+    /// method's defining module and are never imported as capabilities.
     pub pshape_arg_methods:
         std::collections::HashMap<(String, String), crate::collectors::ProvenShapeArgPlan>,
     /// #7142: the subset of [`Self::pshape_methods`] whose clone the class-id

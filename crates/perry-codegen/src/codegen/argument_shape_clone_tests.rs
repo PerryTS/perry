@@ -187,12 +187,12 @@ fn guarded_call_routes_to_shadow_rooted_direct_field_clone() {
 
     assert!(
         ir.contains(&format!("call double @{clone_name}(")),
-        "the guarded call site must route to the argument clone:\n{ir}"
+        "the exact contained call site must route to the argument clone:\n{ir}"
     );
     assert!(
-        ir.contains("pshape_arg.fallback")
+        !ir.contains("pshape_arg.fallback")
             && ir.contains("call double @perry_method_argument_shape_clone_ts__Registry__read("),
-        "guard failure must retain the ordinary method body:\n{ir}"
+        "fresh provenance must elide the redundant argument guard while other receiver routes retain the ordinary body:\n{ir}"
     );
     assert!(
         clone.contains("@js_shadow_slot_bind(")
@@ -300,5 +300,131 @@ fn aliased_or_reassigned_parameter_does_not_get_a_clone() {
     assert!(
         !ir.contains("Registry__read$pshape_args"),
         "a reassigned parameter must keep only generic semantics:\n{ir}"
+    );
+}
+
+fn define_property(target: Expr) -> Stmt {
+    Stmt::Expr(Expr::ObjectDefineProperty(
+        Box::new(target),
+        Box::new(Expr::String("unrelated".to_string())),
+        Box::new(Expr::Object(vec![("value".to_string(), Expr::Number(1.0))])),
+    ))
+}
+
+#[test]
+fn unrelated_module_shape_barrier_keeps_guarded_argument_route() {
+    let mut module = fixture();
+    module.init.insert(0, define_property(Expr::Object(vec![])));
+    let ir = String::from_utf8(compile_module(&module, opts()).expect("module compiles"))
+        .expect("LLVM IR is UTF-8");
+    let clone_name = "perry_method_argument_shape_clone_ts__Registry__read$pshape_args";
+
+    assert!(
+        ir.contains(&format!("call double @{clone_name}(")),
+        "an unrelated barrier must not suppress the exact guarded route:\n{ir}"
+    );
+    assert!(
+        !ir.contains("pshape_arg.fallback")
+            && ir.contains("call double @perry_method_argument_shape_clone_ts__Registry__read("),
+        "an unrelated barrier must not reintroduce a redundant argument guard:\n{ir}"
+    );
+}
+
+#[test]
+fn barrier_targeting_argument_stays_on_generic_route() {
+    let mut module = fixture();
+    module.init.insert(2, define_property(Expr::LocalGet(11)));
+    let ir = String::from_utf8(compile_module(&module, opts()).expect("module compiles"))
+        .expect("LLVM IR is UTF-8");
+    let clone_name = "perry_method_argument_shape_clone_ts__Registry__read$pshape_args";
+
+    assert!(
+        !ir.contains(&format!("call double @{clone_name}(")),
+        "a value reshaped before the call must not receive a containment route:\n{ir}"
+    );
+}
+
+#[test]
+fn field_read_before_terminal_publication_gets_only_the_guarded_route() {
+    let mut module = fixture();
+    let param_id = module.classes[1].methods[0].params[0].id;
+    module.classes[1].methods[0]
+        .body
+        .push(Stmt::Return(Some(Expr::LocalGet(param_id))));
+
+    let session = crate::opt_report::test_support::Session::start();
+    let ir = String::from_utf8(compile_module(&module, opts()).expect("module compiles"))
+        .expect("LLVM IR is UTF-8");
+    let clone_name = "perry_method_argument_shape_clone_ts__Registry__read$pshape_args";
+    assert!(
+        ir.contains(&format!("call double @{clone_name}(")),
+        "a direct read performed before publication should use the guarded clone:\n{ir}"
+    );
+    let entries = session.entries();
+    assert!(
+        !entries.iter().any(|entry| {
+            entry.name == "entity"
+                && entry.local_id == Some(11)
+                && entry.outcome == crate::opt_report::Outcome::Selected
+        }),
+        "a publishing clone must not preserve the caller's broad Ptr<Shape> fact: {entries:#?}"
+    );
+}
+
+#[test]
+fn field_read_after_publication_does_not_get_a_clone() {
+    let mut module = fixture();
+    let method = &mut module.classes[1].methods[0];
+    method
+        .body
+        .insert(0, Stmt::Expr(Expr::LocalGet(method.params[0].id)));
+    let ir = String::from_utf8(compile_module(&module, opts()).expect("module compiles"))
+        .expect("LLVM IR is UTF-8");
+    assert!(
+        !ir.contains("Registry__read$pshape_args"),
+        "an entry shape proof cannot license a field read after publication:\n{ir}"
+    );
+}
+
+#[test]
+fn forwarded_clone_parameter_retains_runtime_guard_and_fallback() {
+    let mut module = fixture();
+    let entity_param = 21;
+    let forward = function(
+        201,
+        "forward",
+        vec![param(
+            entity_param,
+            "entity",
+            Type::Named("Entity".to_string()),
+        )],
+        vec![
+            Stmt::Expr(field_get(entity_param, "id")),
+            Stmt::Expr(Expr::Call {
+                callee: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::This),
+                    property: "read".to_string(),
+                    byte_offset: 0,
+                }),
+                args: vec![Expr::LocalGet(entity_param)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+        ],
+    );
+    module.classes[1].methods.push(forward);
+    let ir = String::from_utf8(compile_module(&module, opts()).expect("module compiles"))
+        .expect("LLVM IR is UTF-8");
+
+    assert!(
+        ir.contains("Registry__forward$pshape_args")
+            && ir.contains(
+                "call double @perry_method_argument_shape_clone_ts__Registry__read$pshape_args("
+            ),
+        "the forwarding clone must route its selected parameter onward:\n{ir}"
+    );
+    assert!(
+        ir.contains("pshape_arg.fallback"),
+        "a fact inherited from a dynamic clone boundary must retain an exact guard and generic fallback:\n{ir}"
     );
 }

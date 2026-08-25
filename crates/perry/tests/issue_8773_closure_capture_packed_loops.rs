@@ -10,6 +10,13 @@ fn perry_bin() -> PathBuf {
 }
 
 fn runtime_dir() -> PathBuf {
+    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
+        return PathBuf::from(target_dir).join(if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        });
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join("target")
@@ -94,8 +101,16 @@ fn named_blocks(ir: &str, prefixes: &[&str]) -> String {
 fn nested_closure_capture_uses_live_guards_and_direct_fast_reads() {
     let dir = tempfile::tempdir().expect("tempdir");
     let source = r#"
-class Query extends Array {}
-class Archetype extends Array {}
+class Query extends Array {
+  archetypes = this;
+  ecs = 1;
+}
+class Archetype extends Array {
+  sset = 1;
+  entities = this;
+  mask = 0;
+  change: any[] = [];
+}
 
 function setup(entityCount: number) {
   const query = new Query();
@@ -103,11 +118,16 @@ function setup(entityCount: number) {
   for (let i = 0; i < entityCount; i++) archetype.push(i);
   query.push(archetype);
   const values = new Uint32Array(entityCount);
+  const left = new Uint32Array(entityCount);
+  const right = new Uint32Array(entityCount);
 
   function system() {
     for (let i = 0, length = query.length; i < length; i++) {
       const current = query[i];
       for (let j = 0, length = current.length; j < length; j++) {
+        const temp = left[current[j]];
+        left[current[j]] = right[current[j]];
+        right[current[j]] = temp;
         values[current[j]] += 1;
       }
     }
@@ -332,6 +352,49 @@ make()();
         assert!(
             stderr.contains("capture-getter"),
             "uncaught exception lost getter identity with moving_gc={moving_gc}:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn nested_read_miss_does_not_replay_prior_effects() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = r#"
+function make() {
+  const query: any[] = [[5]];
+  const effects: any[] = [0];
+  let hits = 0;
+  Object.defineProperty(effects, "0", {
+    get() {
+      hits += 1;
+      delete query[0][0];
+      return 7;
+    }
+  });
+
+  return () => {
+    let text = "";
+    for (let i = 0, length = query.length; i < length; i++) {
+      const current = query[i];
+      for (let j = 0, length = current.length; j < length; j++) {
+        const first = current[j];
+        const trigger = effects[j];
+        const second = current[j];
+        text += first + "|" + trigger + "|" + second + "|" + hits;
+      }
+    }
+    return text;
+  };
+}
+
+console.log(make()());
+"#;
+    let (binary, _) = compile(dir.path(), source, false);
+    for moving_gc in [false, true] {
+        assert_output(
+            &run(&binary, dir.path(), moving_gc),
+            "5|7|undefined|1\n",
+            moving_gc,
         );
     }
 }

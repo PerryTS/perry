@@ -708,6 +708,14 @@ pub(crate) struct FnCtx<'a> {
     /// compiler-synthesized `arguments` binding and therefore receives every
     /// actual argument.
     pub method_has_synthetic_arguments: &'a std::collections::HashMap<(String, String), bool>,
+    /// Whole-program reverse capabilities for guarded short-spread method
+    /// calls. See `CompileOptions::short_spread_method_candidates`.
+    pub short_spread_method_candidates:
+        &'a std::collections::HashMap<String, Vec<crate::ShortSpreadMethodCandidate>>,
+    /// Whole-program exported object-literal candidates for dynamic receiver
+    /// calls. See `CompileOptions::object_literal_method_candidates`.
+    pub object_literal_method_candidates:
+        &'a std::collections::HashMap<String, Vec<crate::ObjectLiteralMethodCandidate>>,
     /// FFI manifest: `name -> (params, return)` from `package.json`
     /// `nativeLibrary.functions`. Descriptors use the shared native-library
     /// ABI vocabulary. `lower_call` consults
@@ -2211,12 +2219,27 @@ impl<'a> FnCtx<'a> {
     pub(crate) fn ptr_shape_argument_route_fact(
         &self,
         e: &perry_hir::Expr,
-    ) -> Option<&crate::collectors::PtrShapeLocal> {
+    ) -> Option<(&crate::collectors::PtrShapeLocal, bool)> {
         match e {
             // Ordinary native facts are containment proofs. A selected clone
-            // parameter inherits the same contract from the only routes that
-            // can call that clone.
-            perry_hir::Expr::LocalGet(id) => self.ptr_shape_local_fact(*id),
+            // parameter inherits the class fact from its caller's guard, but
+            // forwarded clone parameters retain an explicit guard/fallback at
+            // the next route. A fresh local's provenance+containment proof is
+            // already stronger than re-reading the same runtime header here.
+            perry_hir::Expr::LocalGet(id) => self
+                .proven_shape_params
+                .get(id)
+                .map(|fact| (fact, true))
+                .or_else(|| {
+                    self.native_facts
+                        .guarded_argument_route_local(*id)
+                        .map(|fact| (fact, false))
+                })
+                .or_else(|| {
+                    self.native_facts
+                        .shape_proven_ptr_local(*id)
+                        .map(|fact| (fact, false))
+                }),
             // `proven_this` may come from a runtime receiver guard rather than
             // containment, so it cannot justify an argument clone route.
             _ => None,

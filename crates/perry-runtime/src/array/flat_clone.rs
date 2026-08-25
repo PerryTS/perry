@@ -120,6 +120,18 @@ pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
 /// it, then uses the copied values only when the returned arity is nonnegative.
 #[no_mangle]
 pub unsafe extern "C" fn js_short_packed_spread_values(value: f64, out: *mut f64) -> i32 {
+    // Call/new spread lowering has historically routed nullish sources through
+    // `js_array_like_to_array`, where they contribute no arguments. Preserve
+    // that established Perry behaviour in the guarded path as well: otherwise
+    // taking the optimization would turn an accepted call into a TypeError in
+    // the fallback materializer. This also matches old TypeScript's emitted
+    // `[fixed].concat(optionalArgs)` shape used by perform-ecs@0.7.8.
+    if matches!(
+        value.to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        return 0;
+    }
     let Some(arr) = dense_spread_source(value) else {
         return -1;
     };

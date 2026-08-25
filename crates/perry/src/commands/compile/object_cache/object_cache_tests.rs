@@ -31,6 +31,8 @@ fn empty_opts() -> CompileOptions {
         namespace_imports: Vec::new(),
         namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
+        short_spread_method_candidates: std::sync::Arc::default(),
+        object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
         type_aliases: std::collections::HashMap::new(),
@@ -579,6 +581,7 @@ fn key_changes_with_imported_class_codegen_surface() {
         methods: vec![perry_codegen::ImportedObjectLiteralMethod {
             name: "run".into(),
             func_id: 9,
+            target: "perry_closure_adapter_js__9".into(),
             param_count: 1,
             field_index: 2,
         }],

@@ -291,7 +291,10 @@ fn stable_argument_clones_are_direct_reported_and_moving_gc_safe() {
         assert!(ir.contains(&format!("call double @{clone}(")));
         assert!(ir.contains(&format!("call double @{public}(")));
     }
-    assert!(ir.contains("pshape_arg.fallback"));
+    assert!(
+        !ir.contains("pshape_arg.fallback"),
+        "fresh contained locals should not repay their exact-shape proof at the call site"
+    );
 
     let records = read_native_records(temp.path());
     for method in ["add", "hash", "clear"] {
@@ -344,8 +347,8 @@ fn guard_failures_match_node_and_unsafe_parameters_stay_generic() {
         );
     }
     assert!(
-        !ir.contains("ForeignReader__read$pshape_args"),
-        "an imported argument class must stay on the generic route:\n{ir}"
+        ir.contains("ForeignReader__read$pshape_args"),
+        "a local method must be able to guard an imported argument layout:\n{ir}"
     );
     let alias_clone = "perry_method_main_ts__AliasReader__read$pshape_args";
     let _alias_clone_body = function_body(&ir, &format!("@{alias_clone}("));
@@ -353,5 +356,8 @@ fn guard_failures_match_node_and_unsafe_parameters_stay_generic() {
         !ir.contains(&format!("call double @{alias_clone}(")),
         "a receiver/argument alias must never enter the argument clone:\n{ir}"
     );
-    assert!(ir.contains("pshape_arg.fallback"));
+    assert!(
+        !ir.contains("pshape_arg.fallback"),
+        "all selected semantic-fixture routes originate at fresh contained locals"
+    );
 }

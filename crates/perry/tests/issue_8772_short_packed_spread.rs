@@ -42,6 +42,9 @@ fn perry_bin() -> PathBuf {
 }
 
 fn target_debug_dir() -> PathBuf {
+    if let Some(runtime) = std::env::var_os("PERRY_TEST_RUNTIME_DIR") {
+        return PathBuf::from(runtime);
+    }
     let target = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace_root().join("target"));
@@ -51,6 +54,12 @@ fn target_debug_dir() -> PathBuf {
 fn ensure_runtime_archive() {
     static BUILD_RUNTIME: Once = Once::new();
     BUILD_RUNTIME.call_once(|| {
+        let runtime_dir = target_debug_dir();
+        if runtime_dir.join("libperry_runtime.a").is_file()
+            && runtime_dir.join("libperry_stdlib.a").is_file()
+        {
+            return;
+        }
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         let mut command = Command::new(cargo);
         command
@@ -232,9 +241,9 @@ fn repro_has_direct_empty_and_one_arms_and_matches_node_under_moving_gc() {
         !direct.contains("js_native_call_method_apply")
             && !direct.contains("js_spread_tail_fallback_args")
     );
-    let fallback = named_blocks(invoke, &["short_spread.fallback"]);
-    assert!(fallback.contains("js_spread_tail_fallback_args"));
-    assert!(fallback.contains("js_native_call_method_apply_by_id"));
+    assert!(invoke.contains("short_spread.fallback"));
+    assert!(invoke.contains("js_spread_tail_fallback_args"));
+    assert!(invoke.contains("js_native_call_method_apply_by_id"));
 
     let artifacts = read_lowering_artifacts(temp.path());
     for required in [
@@ -249,6 +258,41 @@ fn repro_has_direct_empty_and_one_arms_and_matches_node_under_moving_gc() {
             "explain-lowering artifact must contain {required:?}\n{artifacts}"
         );
     }
+}
+
+#[test]
+fn reverse_dependency_has_direct_arms_and_matches_node_under_moving_gc() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    copy_fixture(temp.path(), "generic.ts");
+    copy_fixture(temp.path(), "reverse.ts");
+    let binary = compile(temp.path(), "reverse.ts");
+
+    let node = run_node(temp.path(), "reverse.ts");
+    assert_eq!(node, "90000900000\n");
+    assert_eq!(run(&binary, temp.path(), false), node);
+    assert_eq!(run(&binary, temp.path(), true), node);
+
+    let ir = std::fs::read_to_string(temp.path().join(".perry-trace/llvm/generic_ts.ll"))
+        .expect("read generic consumer LLVM IR");
+    let invoke = function_ir(&ir, "__invoke(");
+    assert!(invoke.contains("call i32 @js_short_packed_spread_values("));
+    assert!(invoke.contains("call i32 @js_method_direct_shape_class("));
+    assert!(invoke.contains("@perry_method_reverse_ts__Position__reset("));
+    assert!(invoke.contains("@perry_method_reverse_ts__Velocity__reset("));
+    assert!(ir.contains("@perry_class_shape_id_reverse_ts__Position = external global i32"));
+    assert!(ir.contains("@perry_class_shape_id_reverse_ts__Velocity = external global i32"));
+    let direct = named_blocks(
+        invoke,
+        &[
+            "short_spread.target0.arity0",
+            "short_spread.target0.arity1",
+            "short_spread.target1.arity0",
+            "short_spread.target1.arity1",
+        ],
+    );
+    assert!(!direct.contains("js_native_call_method_apply"));
+    assert!(invoke.contains("short_spread.fallback"));
+    assert!(invoke.contains("js_native_call_method_apply_by_id"));
 }
 
 #[test]
@@ -279,4 +323,38 @@ fn throwing_iterator_matches_node_under_moving_gc() {
             "Perry error must preserve iterator throw, got:\n{stderr}"
         );
     }
+}
+
+#[test]
+fn mixed_math_fixed_prefix_and_spread_tail_matches_node_under_moving_gc() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("math.ts"),
+        r#"
+const rows = [[], [0], [0, 1], [2, 3], [3, 4, 5]];
+for (const values of rows) {
+  console.log(JSON.stringify({
+    values,
+    max: Math.max(-1, ...values),
+    min: Math.min(99, ...values),
+  }));
+}
+"#,
+    )
+    .expect("write mixed Math spread fixture");
+    let binary = compile(temp.path(), "math.ts");
+    let node = run_node(temp.path(), "math.ts");
+    assert_eq!(run(&binary, temp.path(), false), node);
+    assert_eq!(run(&binary, temp.path(), true), node);
+
+    let ir = std::fs::read_to_string(temp.path().join(".perry-trace/llvm/math_ts.ll"))
+        .expect("read mixed Math spread LLVM IR");
+    assert!(
+        ir.contains("js_native_call_method_apply_by_id"),
+        "mixed fixed/spread Math calls must retain iterator-aware apply\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_math_max2") && !ir.contains("call double @js_math_min2"),
+        "the spread array must not be coerced as one scalar operand\n{ir}"
+    );
 }

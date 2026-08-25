@@ -203,11 +203,12 @@ pub(super) fn emit_pshape_argument_dispatch(
     let plan = ctx.pshape_arg_methods.get(&key)?.clone();
     let clone_fn = crate::collectors::pshape_args_method_name(direct_fn);
 
-    let mut guarded = Vec::with_capacity(plan.args.len());
+    let mut routed = Vec::with_capacity(plan.args.len());
     for arg in &plan.args {
         let direct_index = arg.param_index + 1;
         let source_arg = source_args.get(arg.param_index)?;
-        let caller_fact = ctx.ptr_shape_argument_route_fact(source_arg)?;
+        let (caller_fact, requires_runtime_guard) =
+            ctx.ptr_shape_argument_route_fact(source_arg)?;
         if caller_fact.class_name != arg.fact.class_name {
             return None;
         }
@@ -218,14 +219,64 @@ pub(super) fn emit_pshape_argument_dispatch(
             .filter(|(index, _)| *index != direct_index)
             .map(|(_, (_, other))| (*other).to_string())
             .collect();
+        routed.push((arg.clone(), value, non_alias_values, requires_runtime_guard));
+    }
+    if routed.is_empty() {
+        return None;
+    }
+
+    // A native fresh-local fact proves exact allocation class, unchanged
+    // shape, and non-aliasing up to this call. Re-reading tag/range/GC header,
+    // class, ShapeId, and every formal-alias comparison is redundant and was
+    // slower than the one field IC the clone removes in perform-ecs. Keep the
+    // guarded path below for forwarded clone parameters, whose fact originates
+    // at a dynamic caller boundary.
+    if routed.iter().all(|route| !route.3) {
+        let result = ctx.block().call(DOUBLE, &clone_fn, direct_arg_slices);
+        let mut notes = vec![
+            format!("argument_clone={clone_fn}"),
+            format!("generic_method={generic_fn}"),
+            format!("receiver_class={receiver_class_name}"),
+            format!("method={property}"),
+            "argument_abi=tagged_js_value_shadow_rooted".to_string(),
+            "argument_guard=elided_by_fresh_provenance_and_containment".to_string(),
+            "wrong_shape_route=generic_method_before_clone_selection".to_string(),
+        ];
+        for (arg, _, _, _) in &routed {
+            notes.push(format!("argument_index={}", arg.param_index));
+            notes.push(format!("argument_class={}", arg.fact.class_name));
+            notes.push("argument_alias_proof=caller_containment".to_string());
+            notes.push("argument_provenance=fresh_exact_class".to_string());
+        }
+        ctx.record_lowered_value(
+            "MethodCall",
+            None,
+            "proven_shape_argument_method_call",
+            &LoweredValue::js_value(result.clone()),
+            None,
+            None,
+            None,
+            false,
+            false,
+            notes,
+        );
+        return Some(result);
+    }
+
+    let mut guarded = Vec::with_capacity(routed.len());
+    for (arg, value, non_alias_values, requires_runtime_guard) in routed {
         let class_id = *ctx.class_ids.get(&arg.fact.class_name)?;
         let keys_global = ctx.class_keys_globals.get(&arg.fact.class_name)?.clone();
         let shape_id =
             crate::typed_shape::load_class_shape_id(ctx, &arg.fact.class_name, &keys_global);
-        guarded.push((arg.clone(), value, non_alias_values, class_id, shape_id));
-    }
-    if guarded.is_empty() {
-        return None;
+        guarded.push((
+            arg,
+            value,
+            non_alias_values,
+            class_id,
+            shape_id,
+            requires_runtime_guard,
+        ));
     }
 
     let fast_idx = ctx.new_block("pshape_arg.fast");
@@ -238,7 +289,7 @@ pub(super) fn emit_pshape_argument_dispatch(
     let fallback_label = ctx.block_label(fallback_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    for (index, (_, value, non_alias_values, class_id, shape_id)) in guarded.iter().enumerate() {
+    for (index, (_, value, non_alias_values, class_id, shape_id, _)) in guarded.iter().enumerate() {
         let pass_label = intermediate_idxs
             .get(index)
             .map(|block| ctx.block_label(*block))
@@ -283,7 +334,7 @@ pub(super) fn emit_pshape_argument_dispatch(
         "argument_abi=tagged_js_value_shadow_rooted".to_string(),
         "guard_failure_fallback=generic_method".to_string(),
     ];
-    for (arg, _, _, _, _) in &guarded {
+    for (arg, _, _, _, _, _) in &guarded {
         notes.push(format!("argument_index={}", arg.param_index));
         notes.push(format!("argument_class={}", arg.fact.class_name));
         notes.push("argument_guard=exact_class_and_shape".to_string());

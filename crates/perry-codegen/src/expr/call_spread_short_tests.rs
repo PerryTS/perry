@@ -113,6 +113,28 @@ fn emit() -> String {
         .expect("LLVM IR is UTF-8")
 }
 
+fn emit_reverse_dependency_consumer() -> String {
+    let producer = fixture();
+    let mut consumer = fixture();
+    consumer.name = "generic_ecs.ts".to_string();
+    consumer.classes.clear();
+    let mut by_method = std::collections::HashMap::new();
+    for candidate in crate::short_spread_method_capabilities(&producer) {
+        by_method
+            .entry(candidate.method_name.clone())
+            .or_insert_with(Vec::new)
+            .push(candidate);
+    }
+    let opts = crate::CompileOptions {
+        emit_ir_only: true,
+        short_spread_method_candidates: std::sync::Arc::new(by_method),
+        object_literal_method_candidates: std::sync::Arc::default(),
+        ..Default::default()
+    };
+    String::from_utf8(crate::compile_module(&consumer, opts).expect("consumer compiles"))
+        .expect("LLVM IR is UTF-8")
+}
+
 fn function_body<'a>(ir: &'a str, fragment: &str) -> &'a str {
     let name = ir
         .find(fragment)
@@ -145,6 +167,13 @@ fn every_short_packed_arity_calls_reset_directly_without_apply() {
     let invoke = function_body(&ir, "__invoke(");
     assert!(invoke.contains("call i32 @js_short_packed_spread_values("));
     assert!(invoke.contains("call i32 @js_method_direct_shape_class("));
+    let fast_prefix = &invoke[..invoke
+        .find("\nshort_spread.method_probe")
+        .expect("method-probe block")];
+    assert!(
+        !fast_prefix.contains("js_write_barrier_root_nanbox"),
+        "non-collecting operand suffixes must not install eager fast-path roots\n{fast_prefix}"
+    );
 
     for candidate in 0..2 {
         for arity in 0..=4 {
@@ -169,19 +198,40 @@ fn every_short_packed_arity_calls_reset_directly_without_apply() {
 fn guard_misses_retain_one_full_iterator_apply_fallback() {
     let ir = emit();
     let invoke = function_body(&ir, "__invoke(");
-    let fallback = named_block(invoke, "short_spread.fallback");
+    assert!(invoke.contains("short_spread.fallback"));
     assert_eq!(
-        fallback
+        invoke
             .matches("call i64 @js_spread_tail_fallback_args(")
             .count(),
         1,
-        "fallback must materialize fixed+spread exactly once\n{fallback}"
+        "fallback must materialize fixed+spread exactly once\n{invoke}"
     );
     assert_eq!(
-        fallback
+        invoke
             .matches("call double @js_native_call_method_apply_by_id(")
             .count(),
         1,
-        "fallback must retain dynamic method apply\n{fallback}"
+        "fallback must retain dynamic method apply\n{invoke}"
     );
+}
+
+#[test]
+fn reverse_dependency_capabilities_activate_in_a_generic_consumer() {
+    let ir = emit_reverse_dependency_consumer();
+    let invoke = function_body(&ir, "__invoke(");
+    assert!(
+        invoke.contains("call i32 @js_short_packed_spread_values("),
+        "the generic consumer has no local concrete class, so activation proves the producer-to-consumer capability flow\n{invoke}"
+    );
+    assert!(invoke.contains("call i32 @js_method_direct_shape_class("));
+    assert!(invoke.contains("@perry_method_issue_8772_short_spread_ts__Position__reset("));
+    assert!(invoke.contains("@perry_method_issue_8772_short_spread_ts__Velocity__reset("));
+    assert!(ir.contains(
+        "@perry_class_shape_id_issue_8772_short_spread_ts__Position = external global i32"
+    ));
+    assert!(ir.contains(
+        "@perry_class_shape_id_issue_8772_short_spread_ts__Velocity = external global i32"
+    ));
+    assert!(invoke.contains("short_spread.fallback"));
+    assert!(invoke.contains("call double @js_native_call_method_apply_by_id("));
 }

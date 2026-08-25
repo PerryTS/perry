@@ -103,7 +103,7 @@ pub struct ModuleDispatchFacts {
     /// known. The containment walk consults this table only for a statically
     /// resolved method call whose tracked argument class exactly matches the
     /// clone's guarded parameter.
-    argument_shape_routes: HashMap<(String, String, usize), String>,
+    argument_shape_routes: HashMap<(String, String, usize), ArgumentShapeRoute>,
     /// Representation-selection Phase 3b, #7170 R1: `LocalId` -> `FuncId` for
     /// every local that provably names one closure literal, module-wide.
     ///
@@ -118,6 +118,12 @@ pub struct ModuleDispatchFacts {
     /// (`single_binding_closure_locals`), beside the module-wide reassignment
     /// scan it rests on.
     closure_bindings: HashMap<u32, u32>,
+}
+
+#[derive(Debug, Clone)]
+struct ArgumentShapeRoute {
+    class_name: String,
+    preserves_containment: bool,
 }
 
 impl Default for ModuleDispatchFacts {
@@ -246,31 +252,67 @@ impl ModuleDispatchFacts {
     /// artifact emission.
     pub(crate) fn install_argument_shape_routes(
         &mut self,
-        routes: impl IntoIterator<Item = ((String, String), Vec<(usize, String)>)>,
+        routes: impl IntoIterator<Item = ((String, String), Vec<(usize, String, bool)>)>,
     ) {
         self.argument_shape_routes.clear();
         for ((owner, method), args) in routes {
-            for (index, class_name) in args {
-                self.argument_shape_routes
-                    .insert((owner.clone(), method.clone(), index), class_name);
+            for (index, class_name, preserves_containment) in args {
+                self.argument_shape_routes.insert(
+                    (owner.clone(), method.clone(), index),
+                    ArgumentShapeRoute {
+                        class_name,
+                        preserves_containment,
+                    },
+                );
             }
         }
     }
 
-    /// Expected exact argument class for one emitted `$pshape_args` route.
-    pub(crate) fn argument_shape_class(
+    /// Expected exact argument class and post-call containment contract for one
+    /// emitted `$pshape_args` route.
+    pub(crate) fn argument_shape_route(
         &self,
         owner_class: &str,
         method_name: &str,
         param_index: usize,
-    ) -> Option<&str> {
+    ) -> Option<(&str, bool)> {
         self.argument_shape_routes
             .get(&(
                 owner_class.to_string(),
                 method_name.to_string(),
                 param_index,
             ))
-            .map(String::as_str)
+            .map(|route| (route.class_name.as_str(), route.preserves_containment))
+    }
+
+    /// Expected argument class when every emitted clone for this method name
+    /// and position agrees.  This is used only by the guarded-route
+    /// containment query for a receiver such as `this`, whose concrete class
+    /// is selected later by method lowering.  A missing or conflicting route
+    /// stands down.
+    pub(crate) fn unique_argument_shape_class(
+        &self,
+        method_name: &str,
+        param_index: usize,
+    ) -> Option<(&str, bool)> {
+        let mut matches = self
+            .argument_shape_routes
+            .iter()
+            .filter(|((_, method, index), _)| method == method_name && *index == param_index)
+            .map(|(_, route)| (route.class_name.as_str(), route.preserves_containment));
+        let first = matches.next()?;
+        let mut all_preserve = first.1;
+        for route in matches {
+            if route.0 != first.0 {
+                return None;
+            }
+            all_preserve &= route.1;
+        }
+        Some((first.0, all_preserve))
+    }
+
+    pub(crate) fn has_argument_shape_routes(&self) -> bool {
+        !self.argument_shape_routes.is_empty()
     }
 
     /// Representation-selection Phase 3b, #7170 R1: the `FuncId` that

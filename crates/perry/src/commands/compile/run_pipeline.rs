@@ -2721,6 +2721,75 @@ pub fn run_with_parse_cache(
             )
         })
         .collect();
+    // #8772: harvest producer-authored concrete method capabilities across
+    // the final whole-program HIR before parallel codegen. This is a reverse
+    // flow as well as an import flow: a generic library can own
+    // `value.reset(...args)` while an adapter that imports that library owns
+    // every concrete `reset` implementation. Arc keeps the whole-program map
+    // shared rather than cloning it once per module job.
+    let mut short_spread_method_candidates: std::collections::HashMap<
+        String,
+        Vec<perry_codegen::ShortSpreadMethodCandidate>,
+    > = std::collections::HashMap::new();
+    for hir_module in ctx.native_modules.values() {
+        for candidate in perry_codegen::short_spread_method_capabilities(hir_module) {
+            short_spread_method_candidates
+                .entry(candidate.method_name.clone())
+                .or_default()
+                .push(candidate);
+        }
+    }
+    for candidates in short_spread_method_candidates.values_mut() {
+        candidates.sort_unstable_by(|a, b| {
+            a.class_id
+                .cmp(&b.class_id)
+                .then_with(|| a.target.cmp(&b.target))
+        });
+        candidates.dedup_by(|a, b| a.class_id == b.class_id && a.target == b.target);
+    }
+    let short_spread_method_candidates = std::sync::Arc::new(short_spread_method_candidates);
+    // #8775: a generic library module can receive an exported adapter object
+    // through a parameter without importing its defining module. Publish the
+    // producer's exact immutable object/method facts to every codegen job so a
+    // dynamic property call can select it with runtime identity + shape + live
+    // closure guards. This is the object-literal analogue of the reverse-flow
+    // short-spread registry above.
+    let mut object_literal_method_candidates: std::collections::HashMap<
+        String,
+        Vec<perry_codegen::ObjectLiteralMethodCandidate>,
+    > = std::collections::HashMap::new();
+    for ((source_path, source_export_name), capability) in &exported_object_literals {
+        let source_prefix = compute_module_prefix(source_path, &ctx.project_root);
+        for method in &capability.methods {
+            object_literal_method_candidates
+                .entry(method.name.clone())
+                .or_default()
+                .push(perry_codegen::ObjectLiteralMethodCandidate {
+                    class_id: capability.class_id,
+                    source_prefix: source_prefix.clone(),
+                    source_export_name: source_export_name.clone(),
+                    source_global_id: capability.global_id,
+                    shape_id_global: capability.shape_id_global.clone(),
+                    method: method.clone(),
+                });
+        }
+    }
+    for candidates in object_literal_method_candidates.values_mut() {
+        candidates.sort_unstable_by(|a, b| {
+            a.source_prefix
+                .cmp(&b.source_prefix)
+                .then_with(|| a.source_global_id.cmp(&b.source_global_id))
+                .then_with(|| a.method.field_index.cmp(&b.method.field_index))
+                .then_with(|| a.method.func_id.cmp(&b.method.func_id))
+        });
+        candidates.dedup_by(|a, b| {
+            a.source_prefix == b.source_prefix
+                && a.source_global_id == b.source_global_id
+                && a.method.field_index == b.method.field_index
+                && a.method.func_id == b.method.func_id
+        });
+    }
+    let object_literal_method_candidates = std::sync::Arc::new(object_literal_method_candidates);
     let module_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(module_jobs)
         .thread_name(|index| format!("perry-module-{index}"))
@@ -4904,6 +4973,12 @@ pub fn run_with_parse_cache(
                 namespace_imports,
                 namespace_member_nested: namespace_member_nested.into_iter().collect(),
                 imported_classes,
+                short_spread_method_candidates: std::sync::Arc::clone(
+                    &short_spread_method_candidates,
+                ),
+                object_literal_method_candidates: std::sync::Arc::clone(
+                    &object_literal_method_candidates,
+                ),
                 imported_enums,
                 imported_async_funcs: imported_async_set,
                 type_aliases: type_alias_map,
