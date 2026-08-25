@@ -240,7 +240,8 @@ pub(crate) use helpers::{
     module_callable_count, set_full_outline_ic, write_barriers_enabled,
 };
 pub use opts::{
-    AppMetadata, CompileOptions, FpContractMode, ImportedClass, NamespaceEntry, NamespaceEntryKind,
+    AppMetadata, CompileOptions, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
+    ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry, NamespaceEntryKind,
 };
 pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
 pub(crate) use param_guard::scalar_descriptor_rep;
@@ -2219,6 +2220,28 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             })
             .collect();
 
+    let imported_object_literals: std::collections::HashMap<String, ImportedObjectLiteral> = opts
+        .imported_classes
+        .iter()
+        .filter_map(|imported| {
+            imported
+                .object_literal
+                .as_ref()
+                .map(|object| (object.local_binding.clone(), object.clone()))
+        })
+        .collect();
+    let imported_object_producers: std::collections::BTreeSet<(String, u32)> =
+        imported_object_literals
+            .values()
+            .map(|object| (object.source_prefix.clone(), object.source_global_id))
+            .collect();
+    for (source_prefix, source_global_id) in imported_object_producers {
+        llmod.add_external_global(
+            &format!("perry_global_{source_prefix}__{source_global_id}"),
+            DOUBLE,
+        );
+    }
+
     let mut cross_module = CrossModuleCtx {
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
         namespace_member_nested: opts.namespace_member_nested.iter().cloned().collect(),
@@ -2295,6 +2318,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
         }),
         imported_vars: opts.imported_vars,
+        imported_object_literals,
         needs_stdlib: opts.needs_stdlib,
         needs_geisterhand: opts.needs_geisterhand,
         geisterhand_port: opts.geisterhand_port,

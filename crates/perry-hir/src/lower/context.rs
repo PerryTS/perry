@@ -199,6 +199,7 @@ impl LoweringContext {
             mixin_funcs: HashMap::new(),
             anon_shape_classes: HashMap::new(),
             anon_shape_fields: HashMap::new(),
+            prefer_exported_method_shape_seed: false,
             forward_class_names: std::collections::HashSet::new(),
             forward_class_decl_depth: std::collections::HashMap::new(),
             class_renames: std::collections::HashMap::new(),

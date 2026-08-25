@@ -373,6 +373,7 @@ fn key_stable_for_nested_type_hashmap_order() {
         static_field_names: vec![],
         source_class_id: Some(7),
         return_shape_imports: vec![],
+        object_literal: None,
     };
 
     a = empty_opts();
@@ -431,6 +432,7 @@ fn key_changes_with_imported_class_signature() {
         static_field_names: vec![],
         source_class_id: Some(42),
         return_shape_imports: vec![],
+        object_literal: None,
     });
     b.imported_classes.push(ImportedClass {
         name: "Foo".into(),
@@ -462,6 +464,7 @@ fn key_changes_with_imported_class_signature() {
         static_field_names: vec![],
         source_class_id: Some(42),
         return_shape_imports: vec![],
+        object_literal: None,
     });
     assert_ne!(
         compute_object_cache_key(&a, 1, "0.5.156"),
@@ -501,6 +504,7 @@ fn key_changes_with_imported_class_codegen_surface() {
         static_field_names: vec![],
         source_class_id: Some(42),
         return_shape_imports: vec![],
+        object_literal: None,
     };
     let key_for = |class: ImportedClass| {
         let mut opts = empty_opts();
@@ -563,6 +567,22 @@ fn key_changes_with_imported_class_codegen_surface() {
 
     let mut changed = base.clone();
     changed.return_shape_imports = vec!["makeRow".into()];
+    assert_ne!(base_key, key_for(changed));
+
+    let mut changed = base.clone();
+    changed.object_literal = Some(perry_codegen::ImportedObjectLiteral {
+        local_binding: "adapter".into(),
+        source_export_name: "default".into(),
+        source_prefix: "adapter_js".into(),
+        receiver_class_name: "__ImportedObject_adapter".into(),
+        source_global_id: 17,
+        methods: vec![perry_codegen::ImportedObjectLiteralMethod {
+            name: "run".into(),
+            func_id: 9,
+            param_count: 1,
+            field_index: 2,
+        }],
+    });
     assert_ne!(base_key, key_for(changed));
 
     let mut first_order = base.clone();

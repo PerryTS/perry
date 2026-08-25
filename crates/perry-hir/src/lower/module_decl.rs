@@ -22,6 +22,22 @@ use native_default_import::{
     node_submodule_default_export_key,
 };
 
+fn is_direct_object_literal(expr: &ast::Expr) -> bool {
+    let mut current = expr;
+    loop {
+        match current {
+            ast::Expr::TsAs(wrapper) => current = &wrapper.expr,
+            ast::Expr::TsNonNull(wrapper) => current = &wrapper.expr,
+            ast::Expr::TsSatisfies(wrapper) => current = &wrapper.expr,
+            ast::Expr::TsTypeAssertion(wrapper) => current = &wrapper.expr,
+            ast::Expr::TsConstAssertion(wrapper) => current = &wrapper.expr,
+            ast::Expr::Paren(wrapper) => current = &wrapper.expr,
+            ast::Expr::Object(_) => return true,
+            _ => return false,
+        }
+    }
+}
+
 pub(crate) fn lower_module_decl(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -1179,7 +1195,13 @@ pub(crate) fn lower_module_decl(
                                 }
                             }
 
-                            let expr = lower_expr(ctx, init)?;
+                            let previous_shape_seed = ctx.prefer_exported_method_shape_seed;
+                            ctx.prefer_exported_method_shape_seed = var_decl.kind
+                                == ast::VarDeclKind::Const
+                                && is_direct_object_literal(init);
+                            let expr = lower_expr(ctx, init);
+                            ctx.prefer_exported_method_shape_seed = previous_shape_seed;
+                            let expr = expr?;
                             let id = if ctx.pre_registered_module_vars.remove(&name) {
                                 ctx.pre_registered_module_var_decls.remove(&name);
                                 let id = ctx.lookup_local(&name).unwrap();
@@ -1904,7 +1926,12 @@ pub(crate) fn lower_module_decl(
         }
         ast::ModuleDecl::ExportDefaultExpr(export_default_expr) => {
             // export default <expr>
-            let lowered = lower_expr(ctx, &export_default_expr.expr)?;
+            let previous_shape_seed = ctx.prefer_exported_method_shape_seed;
+            ctx.prefer_exported_method_shape_seed =
+                is_direct_object_literal(&export_default_expr.expr);
+            let lowered = lower_expr(ctx, &export_default_expr.expr);
+            ctx.prefer_exported_method_shape_seed = previous_shape_seed;
+            let lowered = lowered?;
 
             // If the expression is a FuncRef, add to exported_functions for proper wrapper generation
             if let Expr::FuncRef(func_id) = &lowered {

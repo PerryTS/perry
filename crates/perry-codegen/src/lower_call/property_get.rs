@@ -24,6 +24,7 @@ use crate::types::{DOUBLE, I1, I64};
 mod dynamic_dispatch;
 mod fetch_chain;
 mod helpers;
+mod imported_object;
 mod map_set;
 mod number_string;
 mod promise_chain;
@@ -142,6 +143,19 @@ pub fn try_lower_property_get_method_call(
     if let Some(value) =
         super::web_storage::try_lower_web_storage_method_call(ctx, object, property, args)?
     {
+        return Ok(Some(value));
+    }
+
+    // Producer-proven immutable ESM object literals must run before the
+    // builtin-name routes below: an adapter is allowed to own a method named
+    // `set`, `toString`, `trim`, etc.
+    if let Some(value) = imported_object::try_lower_imported_object_method_call(
+        ctx,
+        object,
+        property,
+        args,
+        call_byte_offset,
+    )? {
         return Ok(Some(value));
     }
 
