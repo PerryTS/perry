@@ -61,6 +61,8 @@ use std::process::Command;
 const RUNTIME_BUILD_INPUTS: &[&str] = &[
     "Cargo.toml",
     "Cargo.lock",
+    "crates/perry-dispatch/Cargo.toml",
+    "crates/perry-dispatch/src",
     "crates/perry/Cargo.toml",
     "crates/perry/src",
     "crates/perry-codegen/Cargo.toml",
@@ -182,13 +184,13 @@ fn emit_runtime_build_id() {
     // files themselves are byte-identical (for example after a rebase).
     if workspace_layout {
         if let Some(git_head) = command_stdout(&root, &["rev-parse", "--git-path", "HEAD"]) {
-            println!("cargo:rerun-if-changed={git_head}");
+            println!("cargo:rerun-if-changed={}", root.join(git_head).display());
         }
         if let Some(symbolic_ref) = command_stdout(&root, &["symbolic-ref", "-q", "HEAD"]) {
             if let Some(git_ref) =
                 command_stdout(&root, &["rev-parse", "--git-path", &symbolic_ref])
             {
-                println!("cargo:rerun-if-changed={git_ref}");
+                println!("cargo:rerun-if-changed={}", root.join(git_ref).display());
             }
         }
     }
