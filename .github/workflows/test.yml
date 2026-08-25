@@ -235,8 +235,8 @@ jobs:
       - name: Build compiler + Windows UI backend + harness
         run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ui-windows -p perry-doc-tests -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-mysql2 -p perry-ext-pg -p perry-ext-nodemailer
 
-      - name: Run Windows non-gallery doc-example tests
-        run: ./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/http/snippets.ts --filter-exclude getting-started/npm_packages.ts --filter-exclude stdlib/http/fastify_json.ts --filter-exclude stdlib/overview/snippets.ts
+      - name: Run Windows gallery screenshot check
+        run: ./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter ui/gallery.ts
 
       - name: Upload doc-tests report
         if: always()
