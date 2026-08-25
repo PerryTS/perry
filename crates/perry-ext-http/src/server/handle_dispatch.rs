@@ -126,8 +126,6 @@ extern "C" {
     fn js_node_http_im_resume(handle: i64);
     fn js_node_http_im_destroy(handle: i64);
     fn js_node_http_im_on(handle: i64, event_name_ptr: *const StringHeader, callback: i64) -> f64;
-    fn js_node_http_im_once(handle: i64, event_name_ptr: *const StringHeader, callback: i64)
-        -> f64;
     fn js_node_http_im_set_encoding(handle: i64, encoding_ptr: *const StringHeader) -> i64;
     fn js_node_http_im_set_timeout(handle: i64, msecs: f64, callback: i64) -> i64;
     fn js_node_http_im_read(handle: i64) -> f64;
@@ -372,14 +370,6 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
             } else {
                 js_node_http_server_on(handle, event_ptr, cb);
             }
-            self_ref
-        }
-        "once" if args.len() >= 2 => {
-            let event_ptr = string_arg(args[0]);
-            if event_ptr.is_null() {
-                return self_ref;
-            }
-            js_node_http_im_once(handle, event_ptr, closure_arg(Some(args[1])));
             self_ref
         }
         "once" if args.len() >= 2 => {

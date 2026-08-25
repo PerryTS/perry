@@ -1802,8 +1802,10 @@ pub unsafe extern "C" fn js_http_once(
     if callback == 0 {
         return handle;
     }
+    let roots = perry_ffi::TransientRootScope::enter();
+    let callback = roots.root_addr(callback);
     let wrapper =
-        client_request_surface::create_client_once_wrapper(handle, &event, callback, false);
+        client_request_surface::create_client_once_wrapper(handle, &event, callback.get(), false);
     let mut matched = false;
     with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
         request
@@ -1811,7 +1813,7 @@ pub unsafe extern "C" fn js_http_once(
             .entry(event.clone())
             .or_default()
             .push(ClientEventListener {
-                callback,
+                callback: callback.get(),
                 raw_wrapper: wrapper,
                 once: true,
             });

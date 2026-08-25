@@ -352,9 +352,11 @@ enum PendingNetEvent {
     Data(i64, Bytes),
     /// Peer half-closed (FIN received); public readable-side `end` event.
     End(i64),
-    /// Writable-side shutdown requested by `socket.end()`, distinct from FIN;
-    /// fires the public `end` event.
+    /// A queued `socket.write` finished. `.1` is the completion token and
+    /// `.2` is the write error message when the write failed.
     WriteComplete(i64, u64, Option<String>),
+    /// Writable-side shutdown requested by `socket.end()`, distinct from FIN.
+    /// `.1` is the completion token and `.2` is the shutdown error message.
     ShutdownComplete(i64, u64, Option<String>),
     Close(i64),
     Error(i64, String),
