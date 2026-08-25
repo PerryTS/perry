@@ -11,8 +11,8 @@ use bson::{doc, Document};
 use mongodb::{Client, Collection, Database};
 use perry_runtime::json::js_json_stringify;
 use perry_runtime::{
-    js_object_alloc, js_object_set_field, js_promise_new_cross_thread, js_string_from_bytes, JSValue,
-    ObjectHeader, Promise, StringHeader,
+    js_object_alloc, js_object_set_field, js_promise_new_cross_thread, js_string_from_bytes,
+    JSValue, ObjectHeader, Promise, StringHeader,
 };
 
 /// JSON-stringify a NaN-boxed JSValue at the FFI boundary. Used by the

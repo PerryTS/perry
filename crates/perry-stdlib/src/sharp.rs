@@ -8,7 +8,9 @@ use crate::common::{
     string_from_header_lossy as string_from_header, Handle,
 };
 use image::{imageops::FilterType, DynamicImage, GenericImageView, ImageFormat};
-use perry_runtime::{js_promise_new_cross_thread, js_string_from_bytes, JSValue, Promise, StringHeader};
+use perry_runtime::{
+    js_promise_new_cross_thread, js_string_from_bytes, JSValue, Promise, StringHeader,
+};
 use std::io::Cursor;
 
 /// Sharp image handle with pending operations

@@ -366,15 +366,15 @@ fn async_from_sync_continue(iter: f64, step_result: f64, close_on_rejection: boo
     let done_key = crate::string::js_string_from_bytes_longlived(b"done".as_ptr(), 4);
     let value_key = crate::string::js_string_from_bytes_longlived(b"value".as_ptr(), 5);
     let done = {
-        let result_obj =
-            crate::value::js_nanbox_get_pointer(step_h.get_nanbox_f64()) as *const crate::object::ObjectHeader;
+        let result_obj = crate::value::js_nanbox_get_pointer(step_h.get_nanbox_f64())
+            as *const crate::object::ObjectHeader;
         let done_val = crate::object::js_object_get_field_by_name(result_obj, done_key);
         let done_f64 = f64::from_bits(done_val.bits());
         crate::value::js_is_truthy(done_f64) != 0
     };
     let value = {
-        let result_obj =
-            crate::value::js_nanbox_get_pointer(step_h.get_nanbox_f64()) as *const crate::object::ObjectHeader;
+        let result_obj = crate::value::js_nanbox_get_pointer(step_h.get_nanbox_f64())
+            as *const crate::object::ObjectHeader;
         let value_val = crate::object::js_object_get_field_by_name(result_obj, value_key);
         f64::from_bits(value_val.bits())
     };
@@ -715,7 +715,7 @@ fn install_async_from_sync_method(
         value,
     );
     crate::value::js_nanbox_pointer(
-        closure_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+        closure_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64
     )
 }
 
@@ -756,7 +756,7 @@ fn install_async_from_sync_next(
         value,
     );
     crate::value::js_nanbox_pointer(
-        closure_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+        closure_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64
     )
 }
 
@@ -796,8 +796,9 @@ pub(crate) fn async_from_sync_wrap_iterator(iter: f64) -> f64 {
     let async_iter =
         crate::closure::js_closure_alloc(async_from_sync_async_iterator as *const u8, 1);
     let async_iter_h = scope.root_raw_mut_ptr(async_iter);
-    let wrapper =
-        crate::value::js_nanbox_pointer(obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64);
+    let wrapper = crate::value::js_nanbox_pointer(
+        obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64,
+    );
     crate::closure::js_closure_set_capture_f64(
         async_iter_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
         0,
@@ -805,8 +806,9 @@ pub(crate) fn async_from_sync_wrap_iterator(iter: f64) -> f64 {
     );
     let sym = crate::symbol::well_known_symbol("asyncIterator");
     if !sym.is_null() {
-        let wrapper =
-            crate::value::js_nanbox_pointer(obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64);
+        let wrapper = crate::value::js_nanbox_pointer(
+            obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64,
+        );
         unsafe {
             crate::symbol::js_object_set_symbol_property(
                 wrapper,

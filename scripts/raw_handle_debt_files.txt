@@ -50,6 +50,7 @@
 5 crates/perry-runtime/src/array/header.rs
 6 crates/perry-runtime/src/array/indexing.rs
 2 crates/perry-runtime/src/array/iter_methods.rs
+31 crates/perry-runtime/src/array/iterator.rs
 4 crates/perry-runtime/src/array/push_pop.rs
 14 crates/perry-runtime/src/array/sort.rs
 13 crates/perry-runtime/src/async_hooks.rs

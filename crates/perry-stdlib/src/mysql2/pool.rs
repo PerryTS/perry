@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use perry_runtime::{js_array_get_jsvalue, js_array_length, js_promise_new_cross_thread, JSValue, Promise};
+use perry_runtime::{
+    js_array_get_jsvalue, js_array_length, js_promise_new_cross_thread, JSValue, Promise,
+};
 use sqlx::mysql::{MySqlPool, MySqlPoolOptions};
 use sqlx::pool::PoolConnection;
 use sqlx::MySql;

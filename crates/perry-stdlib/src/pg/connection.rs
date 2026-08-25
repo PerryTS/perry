@@ -1,6 +1,8 @@
 //! PostgreSQL connection implementation
 
-use perry_runtime::{js_array_get_jsvalue, js_array_length, js_promise_new_cross_thread, JSValue, Promise};
+use perry_runtime::{
+    js_array_get_jsvalue, js_array_length, js_promise_new_cross_thread, JSValue, Promise,
+};
 use sqlx::postgres::PgConnection;
 use sqlx::{Connection, Row};
 
