@@ -132,6 +132,16 @@ fn app_call(config: Vec<(&str, Expr)>) -> Stmt {
     })
 }
 
+fn text_call(second_arg: Expr) -> Stmt {
+    Stmt::Expr(Expr::NativeMethodCall {
+        module: "perry/ui".to_string(),
+        class_name: None,
+        object: None,
+        method: "Text".to_string(),
+        args: vec![Expr::String("hello".to_string()), second_arg],
+    })
+}
+
 fn compile_ir(name: &str, body: Vec<Stmt>) -> String {
     String::from_utf8(compile_module(&module(name, body), empty_opts()).unwrap()).unwrap()
 }
@@ -194,4 +204,45 @@ fn app_config_without_window_options_emits_no_setter_calls() {
             "omitted App() config key must not emit `{setter}`. IR:\n{ir}"
         );
     }
+}
+
+#[test]
+fn text_options_object_routes_to_inline_style_not_reactive_id() {
+    let ir = compile_ir(
+        "text_inline_style_overload",
+        vec![text_call(Expr::Object(vec![(
+            "borderRadius".to_string(),
+            Expr::Number(6.0),
+        )]))],
+    );
+
+    assert!(
+        ir.contains("call i64 @perry_ui_text_create("),
+        "styled Text must use the regular one-string constructor; IR:\n{ir}"
+    );
+    assert!(
+        ir.contains("call void @perry_ui_widget_set_corner_radius("),
+        "styled Text must apply its inline-style setters; IR:\n{ir}"
+    );
+    assert!(
+        !ir.contains("perry_ui_text_create_with_id"),
+        "a style object must never be decoded as a reactive string id; IR:\n{ir}"
+    );
+}
+
+#[test]
+fn text_string_id_keeps_reactive_constructor_route() {
+    let ir = compile_ir(
+        "text_reactive_id_overload",
+        vec![text_call(Expr::String("counter".to_string()))],
+    );
+
+    assert!(
+        ir.contains("call i64 @perry_ui_text_create_with_id("),
+        "Text(content, id) must keep registering its reactive id; IR:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call void @perry_ui_widget_set_corner_radius("),
+        "a reactive string id must not be treated as an inline style; IR:\n{ir}"
+    );
 }

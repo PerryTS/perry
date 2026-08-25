@@ -551,8 +551,8 @@ fn run_one(
                     kind: ex.kind,
                     status: Status::RunFail,
                     detail: format!(
-                        "exit={} {}",
-                        out.status.code().unwrap_or(-1),
+                        "{} {}",
+                        exit_description(&out.status),
                         combine_stdio(&out.stdout, &out.stderr),
                     ),
                     duration_ms: 0,
@@ -762,8 +762,8 @@ fn cross_compile_one(
             kind: ex.kind,
             status: Status::CrossCompileFail,
             detail: format!(
-                "target=`{target}`: perry exit {}: {}",
-                output.status.code().unwrap_or(-1),
+                "target=`{target}`: perry {}: {}",
+                exit_description(&output.status),
                 combine_stdio(&output.stdout, &output.stderr),
             ),
             duration_ms: 0,
@@ -816,12 +816,28 @@ fn compile(perry_bin: &Path, src: &Path, out: &Path) -> Result<()> {
         .with_context(|| format!("launching perry for {}", src.display()))?;
     if !out_status.status.success() {
         return Err(anyhow!(
-            "perry exit {}: {}",
-            out_status.status.code().unwrap_or(-1),
+            "perry {}: {}",
+            exit_description(&out_status.status),
             combine_stdio(&out_status.stdout, &out_status.stderr),
         ));
     }
     Ok(())
+}
+
+/// Preserve the actual termination reason on Unix instead of collapsing every
+/// signal to the indistinguishable sentinel `exit=-1`.
+fn exit_description(status: &std::process::ExitStatus) -> String {
+    if let Some(code) = status.code() {
+        return format!("exit={code}");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return format!("signal={signal}");
+        }
+    }
+    "exit=unknown".to_string()
 }
 
 /// Merge child stdout + stderr for error reporting. MSVC `link.exe` on
