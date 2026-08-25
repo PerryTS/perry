@@ -32,6 +32,11 @@ use std::sync::{Mutex, MutexGuard, Once, OnceLock};
 
 mod error_monitor;
 use error_monitor::dispatch_error_monitor;
+mod emit_scope;
+use emit_scope::{
+    event_emitter_emit0_thunk, event_emitter_emit_thunk, EventEmitterEmit0Call,
+    EventEmitterEmitCall,
+};
 mod max_listeners;
 mod messages;
 mod module_helpers;
@@ -687,9 +692,13 @@ unsafe fn string_from_header(ptr: *const StringHeader) -> Option<String> {
     read_string(handle).map(String::from)
 }
 
+fn is_raw_string_header_bits(raw: u64) -> bool {
+    (0x10000..MAX_HEAP_POINTER).contains(&raw) && (raw & TAG_MASK) == 0
+}
+
 unsafe fn event_name_from_bits(event_bits: i64) -> Option<String> {
     let raw = event_bits as u64;
-    if (0x10000..MAX_HEAP_POINTER).contains(&raw) && (raw & TAG_MASK) == 0 {
+    if is_raw_string_header_bits(raw) {
         return string_from_header(raw as *const StringHeader);
     }
 
@@ -699,7 +708,7 @@ unsafe fn event_name_from_bits(event_bits: i64) -> Option<String> {
 
 fn event_value_from_bits(event_bits: i64) -> f64 {
     let raw = event_bits as u64;
-    if (0x10000..MAX_HEAP_POINTER).contains(&raw) && (raw & TAG_MASK) == 0 {
+    if is_raw_string_header_bits(raw) {
         f64::from_bits(nanbox_string_bits(raw as *mut StringHeader))
     } else {
         f64::from_bits(raw)
@@ -1328,24 +1337,6 @@ pub unsafe extern "C" fn js_event_emitter_emit(
     )
 }
 
-struct EventEmitterEmitCall {
-    handle: Handle,
-    event_value: TransientRootedNanbox,
-    args_ptr: TransientRootedAddr,
-}
-
-unsafe extern "C" fn event_emitter_emit_thunk(data: *mut std::ffi::c_void) -> f64 {
-    let call = &mut *(data as *mut EventEmitterEmitCall);
-    let Some(event_name) = event_name_from_bits(call.event_value.get().to_bits() as i64) else {
-        return f64::from_bits(0x7FFC_0000_0000_0003);
-    };
-    js_event_emitter_emit_impl(
-        call.handle,
-        &event_name,
-        call.args_ptr.get() as *mut ArrayHeader,
-    )
-}
-
 unsafe fn js_event_emitter_emit_impl(
     handle: Handle,
     event_name: &str,
@@ -1447,19 +1438,6 @@ pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64)
         event_emitter_emit0_thunk,
         &mut call as *mut EventEmitterEmit0Call as *mut std::ffi::c_void,
     )
-}
-
-struct EventEmitterEmit0Call {
-    handle: Handle,
-    event_value: TransientRootedNanbox,
-}
-
-unsafe extern "C" fn event_emitter_emit0_thunk(data: *mut std::ffi::c_void) -> f64 {
-    let call = &mut *(data as *mut EventEmitterEmit0Call);
-    let Some(event_name) = event_name_from_bits(call.event_value.get().to_bits() as i64) else {
-        return f64::from_bits(0x7FFC_0000_0000_0003);
-    };
-    js_event_emitter_emit0_impl(call.handle, &event_name)
 }
 
 unsafe fn js_event_emitter_emit0_impl(handle: Handle, event_name: &str) -> f64 {
