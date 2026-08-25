@@ -1115,14 +1115,52 @@ pub extern "C" fn js_set_has(set: *const SetHeader, value: f64) -> i32 {
     if set.is_null() {
         return 0;
     }
+    set_has_resolved(set, value)
+}
+
+#[inline(always)]
+fn set_has_resolved(set: *const SetHeader, value: f64) -> i32 {
     let value = normalize_zero(value);
-    unsafe {
-        if find_value_index(set, value) >= 0 {
-            1
-        } else {
-            0
+    unsafe { i32::from(find_value_index(set, value) >= 0) }
+}
+
+/// Fast `ReadonlySet.has` that preserves TypeScript's structural semantics.
+///
+/// A `ReadonlySet<T>` annotation is not a native-layout guarantee: ordinary
+/// objects, proxies, and Set subclasses can all inhabit it. A genuine
+/// `GC_TYPE_SET` receiver takes the direct lookup without the generic method
+/// tower. Every other receiver retains normal JavaScript `receiver.has(value)`
+/// dispatch, including user overrides and the usual TypeError behavior.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_readonly_set_has(receiver: f64, value: f64) -> f64 {
+    let receiver_value = crate::value::JSValue::from_bits(receiver.to_bits());
+    if receiver_value.is_pointer() {
+        let raw = receiver_value.as_pointer::<SetHeader>();
+        if matches!(
+            crate::value::addr_class::try_read_gc_header(raw as usize),
+            Some(header) if header.obj_type == crate::gc::GC_TYPE_SET
+        ) {
+            return f64::from_bits(
+                crate::value::JSValue::bool(set_has_resolved(raw, value) != 0).bits(),
+            );
         }
     }
+
+    // The structural fallback can allocate and re-enter generated code. Root
+    // both operands before crossing that boundary, then pass refreshed values
+    // into the existing dispatcher (which establishes its own roots before
+    // the first collecting probe).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_handle = scope.root_nanbox_f64(receiver);
+    let value_handle = scope.root_nanbox_f64(value);
+    let refreshed_value = value_handle.get_nanbox_f64();
+    crate::object::js_native_call_method(
+        receiver_handle.get_nanbox_f64(),
+        b"has".as_ptr() as *const i8,
+        3,
+        &refreshed_value,
+        1,
+    )
 }
 
 #[no_mangle]

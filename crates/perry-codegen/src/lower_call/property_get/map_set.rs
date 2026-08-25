@@ -29,7 +29,9 @@ use perry_hir::Expr;
 use crate::expr::{lower_expr, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
 use crate::rooting;
-use crate::type_analysis::{is_map_expr, is_set_expr, is_url_search_params_expr};
+use crate::type_analysis::{
+    is_map_expr, is_readonly_set_expr, is_set_expr, is_url_search_params_expr,
+};
 use crate::types::{DOUBLE, I64};
 
 /// Map/Set methods on PropertyGet receivers. The HIR only folds
@@ -42,6 +44,21 @@ pub(crate) fn try_lower_map_set_methods(
     property: &str,
     args: &[Expr],
 ) -> Result<Option<String>> {
+    // `ReadonlySet<T>` is a structural interface, not a native-layout proof.
+    // The runtime helper brand-checks the overwhelmingly common genuine Set
+    // and otherwise preserves JavaScript dispatch (custom interface objects,
+    // proxies, and Set subclasses with overrides).
+    if is_readonly_set_expr(ctx, object) && property == "has" && args.len() == 1 {
+        return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
+            let receiver = vals[0].clone();
+            let value = vals[1].clone();
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_readonly_set_has",
+                &[(DOUBLE, &receiver), (DOUBLE, &value)],
+            )))
+        });
+    }
     if is_map_expr(ctx, object) {
         match property {
             "set" if args.len() == 2 => {

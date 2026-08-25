@@ -3095,34 +3095,6 @@ pub fn run_with_parse_cache(
                 if import.module_kind != perry_hir::ModuleKind::NativeCompiled {
                     continue;
                 }
-                // Issue #684: skip WHOLE-DECL type-only imports
-                // (`import type * as X`, `import type { Foo }`). They
-                // contribute zero runtime state — neither the namespace
-                // binding nor the named members ever appear in a
-                // value-position expression after type erasure. Pre-fix
-                // the loop below treated them like value imports and
-                // registered every export of the source module into
-                // `import_function_prefixes` / `namespace_member_prefixes`,
-                // which collided with later named-import registrations:
-                //   effect's `ParseResult.ts` has both
-                //     `import { TaggedError } from "./Data.js"`
-                //     `import type * as Schema from "./Schema.js"`
-                //   Schema.ts also exports `TaggedError`, so the type-only
-                //   loop iteration registered `TaggedError → Schema_ts`
-                //   into `import_function_prefixes`. If Schema.ts was
-                //   processed AFTER Data.ts (HashMap iteration order is
-                //   unstable), the Schema entry won — and top-level
-                //   `class ParseError extends TaggedError("ParseError")`
-                //   dispatched into Schema.ts's `TaggedError` instead of
-                //   Data.ts's. Worse, Schema.ts is type-only so it isn't
-                //   in `module_init_deps` either, meaning its backing
-                //   global was still 0.0 — `js_closure_call1(0.0, ...)`
-                //   threw `TypeError: value is not a function` during
-                //   `ParseResult.ts__init`. Closes #684 (companion to
-                //   #680's `module_init_deps` filter at L3234).
-                if import.type_only {
-                    continue;
-                }
                 let resolved_path = match &import.resolved_path {
                     Some(p) => p,
                     None => continue,
@@ -3137,6 +3109,63 @@ pub fn run_with_parse_cache(
                     Some(m) => sanitize_name(&m.name),
                     None => continue,
                 };
+                // A whole-declaration `import type` contributes no runtime
+                // binding or init edge (#684), but a named class annotation
+                // may still carry useful producer-authored field metadata.
+                // Attach only that exact class when its defining module is
+                // already present in the value-reachable graph. Do not touch
+                // function/namespace maps, imported vars, native libraries,
+                // or module-init dependencies: those were the collision and
+                // phantom-load hazards #684 removed.
+                if import.type_only {
+                    for spec in &import.specifiers {
+                        let perry_hir::ImportSpecifier::Named { imported, local } = spec else {
+                            continue;
+                        };
+                        let key = (resolved_path_str.clone(), imported.clone());
+                        let Some(class) = exported_classes.get(&key) else {
+                            continue;
+                        };
+                        let origin_path = all_module_exports
+                            .get(&resolved_path_str)
+                            .and_then(|exports| exports.get(imported))
+                            .cloned()
+                            .unwrap_or_else(|| resolved_path_str.clone());
+                        let effective_prefix = if origin_path != resolved_path_str {
+                            compute_module_prefix(&origin_path, &ctx.project_root)
+                        } else {
+                            source_prefix.clone()
+                        };
+                        let class_prefix = canonical_class_source_prefix(
+                            class,
+                            &class_canonical_path,
+                            &ctx.project_root,
+                            &effective_prefix,
+                        );
+                        let local_alias = (local != &class.name).then(|| local.clone());
+                        let duplicate = imported_classes.iter().any(|existing| {
+                            existing.name == class.name
+                                && existing.local_alias.as_ref() == local_alias.as_ref()
+                                && existing.source_prefix == class_prefix
+                        });
+                        if !duplicate {
+                            imported_classes.push(imported_class_from_hir(
+                                class,
+                                class_prefix,
+                                local_alias,
+                                proven_this_methods_for_import(
+                                    class,
+                                    &class_proven_this_methods,
+                                ),
+                                proven_this_methods_for_import(
+                                    class,
+                                    &class_proven_this_tower_methods,
+                                ),
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 // PerryTS/storekit#1: when the import source is a package that
                 // declares `perry.nativeLibrary` (e.g. `@perryts/storekit`),
                 // its `.ts` source is a wrapper holding ambient `export
