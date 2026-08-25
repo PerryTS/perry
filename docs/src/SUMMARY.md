@@ -186,6 +186,7 @@
 - [Local binding type evidence](internals/local-binding-type-evidence.md)
 - [Incremental GC step bounds](internals/gc-step-bounds.md)
 - [RFC: rooting by construction](internals/rfc-rooting-by-construction.md)
+- [Node-API host design](internals/node-api-host.md)
 
 # Contributing
 
