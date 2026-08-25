@@ -129,6 +129,10 @@ jobs:
           }
 
       - uses: ./.github/actions/setup-llvm22
+        env:
+          # Exercise the recovery path deterministically. Production runs leave
+          # this unset and try the native tar extractor first.
+          PERRY_FORCE_WINDOWS_LLVM_FALLBACK: "1"
 
       - name: Verify the configured LLVM toolchain
         shell: pwsh
@@ -268,7 +272,9 @@ jobs:
   plan:
     if: >-
       github.event_name != 'workflow_dispatch' ||
-      (inputs.release_doc_diagnostic != true && inputs.release_net_diagnostic != true)
+      (inputs.release_doc_diagnostic != true &&
+       inputs.release_net_diagnostic != true &&
+       inputs.release_windows_llvm_diagnostic != true)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
