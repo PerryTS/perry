@@ -310,13 +310,12 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "write",
         class_filter: Some("Socket"),
         runtime: "js_ext_net_socket_write3",
-        // Issue #1131 — pass the full NaN-boxed JS value (NA_JSV) so
-        // the runtime can probe Buffer-vs-string-vs-number and read
-        // through the correct header layout. NA_PTR pre-stripped the
-        // tag, so `sock.write("ping")` handed the runtime a bare
-        // StringHeader pointer that it reinterpreted as a
-        // BufferHeader → garbage on the wire.
-        args: &[NA_JSV, NA_JSV, NA_JSV],
+        // Issue #1131 — pass each full NaN-boxed JS value as an f64 so the
+        // runtime can probe Buffer-vs-string-vs-number and read through the
+        // correct header layout. This must be NA_F64, not NA_JSV: the Rust FFI
+        // receives f64 arguments, while NA_JSV uses the integer ABI for
+        // runtimes whose signatures explicitly take raw i64 bits.
+        args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_VOID,
     },
     NativeModSig {
@@ -325,11 +324,11 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         method: "end",
         class_filter: Some("Socket"),
         runtime: "js_ext_net_socket_end3",
-        // Issue #1852 — `socket.end([data])` writes the optional final
-        // chunk before half-closing. NA_JSV carries the full NaN-boxed
-        // value so the runtime can probe Buffer/string/number; the
-        // no-arg `socket.end()` form pads this slot with `undefined`.
-        args: &[NA_JSV, NA_JSV, NA_JSV],
+        // Issue #1852 — `socket.end([data])` writes the optional final chunk
+        // before half-closing. NA_F64 preserves the full NaN-boxed value in
+        // the floating-point ABI expected by `js_ext_net_socket_end3`; the
+        // no-arg form pads every missing slot with JS `undefined`.
+        args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_VOID,
     },
     NativeModSig {

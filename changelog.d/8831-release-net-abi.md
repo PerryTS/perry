@@ -1,0 +1,1 @@
+- Fix `net.Socket.write()`/`end()` overloads passing NaN-boxed arguments through the wrong native ABI, which made a no-argument `end()` write garbage and could hang loopback clients; also hard-bound Windows LLVM download and extraction processes so a wedged runner fails promptly instead of exhausting the doc-test job timeout.

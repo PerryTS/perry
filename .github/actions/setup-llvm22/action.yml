@@ -93,29 +93,25 @@ runs:
         $llvmArch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -eq "Arm64") { "aarch64" } else { "x86_64" }
         $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$ver/clang+llvm-$ver-$llvmArch-pc-windows-msvc.tar.xz"
         Write-Host "downloading $url"
-        # #8468: bound the transfer. `--retry` only re-runs a request that
-        # FINISHED and failed; a stalled connection with no timeout hangs
-        # forever, and a composite-action step cannot carry its own
-        # `timeout-minutes`, so the stall consumed this job's whole budget —
-        # doc-tests (windows) burned GitHub's 6 h default in this exact step
-        # and was cancelled having run zero tests, which fails
-        # `full-suite-gate` and blocked the release (run 32298711372).
-        # `--connect-timeout`/`--max-time` turn that into a fast, retryable
-        # failure; `--retry-all-errors` makes the retries actually cover
-        # transport stalls. Keep each attempt to five minutes and the retry
-        # window to twenty: `--max-time` resets for every retry, so the former
-        # 25-minute value could take 150+ minutes across six attempts and
-        # outlive this job's 120-minute cap without reaching any tests.
+        # #8468: bound the transfer. A composite-action step cannot carry its
+        # own timeout, and curl's retry timers have proven insufficient when a
+        # Windows runner wedges inside the native process. Run curl as a child
+        # and enforce a six-minute wall-clock ceiling around the whole retry
+        # sequence; healthy hosted-runner setup finishes in under 80 seconds.
         $archive = "$env:RUNNER_TEMP\llvm.tar.xz"
-        curl.exe -sSL --retry 5 --retry-all-errors --retry-delay 10 `
-          --connect-timeout 30 --max-time 300 --retry-max-time 1200 `
-          -o "$archive" $url
-        # A native command's non-zero exit does NOT trip
-        # $ErrorActionPreference, so check it explicitly — otherwise a failed
-        # download fell through to `tar` and surfaced as a confusing archive
-        # error instead of naming the real problem.
-        if ($LASTEXITCODE -ne 0) {
-          Write-Error "::error::LLVM download failed (curl exit $LASTEXITCODE): $url"
+        $curlArgs = @(
+          "-sSL", "--retry", "2", "--retry-all-errors", "--retry-delay", "10",
+          "--connect-timeout", "30", "--max-time", "120", "--retry-max-time", "300",
+          "-o", $archive, $url
+        )
+        $curl = Start-Process -FilePath "curl.exe" -ArgumentList $curlArgs -NoNewWindow -PassThru
+        if (-not $curl.WaitForExit(360000)) {
+          Stop-Process -Id $curl.Id -Force -ErrorAction SilentlyContinue
+          Write-Error "::error::LLVM download exceeded the 6-minute hard limit: $url"
+          exit 1
+        }
+        if ($curl.ExitCode -ne 0) {
+          Write-Error "::error::LLVM download failed (curl exit $($curl.ExitCode)): $url"
           exit 1
         }
         $bytes = (Get-Item $archive).Length
@@ -125,9 +121,15 @@ runs:
           exit 1
         }
         New-Item -ItemType Directory -Force -Path C:\llvm | Out-Null
-        tar -xf "$archive" -C C:\llvm --strip-components=1
-        if ($LASTEXITCODE -ne 0) {
-          Write-Error "::error::extracting the LLVM archive failed (tar exit $LASTEXITCODE)"
+        $tarArgs = @("-xf", $archive, "-C", "C:\llvm", "--strip-components=1")
+        $tar = Start-Process -FilePath "tar.exe" -ArgumentList $tarArgs -NoNewWindow -PassThru
+        if (-not $tar.WaitForExit(300000)) {
+          Stop-Process -Id $tar.Id -Force -ErrorAction SilentlyContinue
+          Write-Error "::error::extracting the LLVM archive exceeded the 5-minute hard limit"
+          exit 1
+        }
+        if ($tar.ExitCode -ne 0) {
+          Write-Error "::error::extracting the LLVM archive failed (tar exit $($tar.ExitCode))"
           exit 1
         }
         $v = & "C:\llvm\bin\llvm-config.exe" --version

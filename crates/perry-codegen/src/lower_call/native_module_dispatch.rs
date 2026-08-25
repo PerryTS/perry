@@ -429,4 +429,17 @@ mod ffi_return_type_tests {
             "request and reply `.header` must resolve to different runtime symbols"
         );
     }
+
+    #[test]
+    fn net_socket_write_and_end_match_their_float_ffi_abi() {
+        for method in ["write", "end"] {
+            let sig = super::native_module_lookup("net", true, method, Some("Socket"))
+                .unwrap_or_else(|| panic!("net.Socket.{method} must resolve"));
+            assert_eq!(
+                sig.args,
+                [super::NativeArgKind::F64; 3],
+                "net.Socket.{method} takes three NaN-boxed f64 arguments"
+            );
+        }
+    }
 }
