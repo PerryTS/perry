@@ -488,6 +488,10 @@ pub(crate) fn test_captured_singleton_closure_cache_entries(
 /// covers the per-batch fan-out shape (50 promises) found in
 /// `benchmarks/app-patterns/kernels/promise_all_chains.ts`.
 const MAX_CAPTURED_CLOSURE_SLOTS: usize = 64;
+const _: () = assert!(
+    MAX_CAPTURED_CLOSURE_SLOTS <= u8::MAX as usize,
+    "hint_indices_plus_one stores an entry index plus one in a u8"
+);
 
 /// Per-`func_ptr` cache miss-streak counter for the adaptive bypass.
 /// Closures whose captures change every call (per-call boxes for
@@ -581,9 +585,8 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
     }
     crate::promise::bump(&CLOSURE_CAP_SINGLETON_MISS);
 
-    // Slow path: allocate, populate captures, insert into cache as
-    // the most-recent entry. If the slot list is full, drop the
-    // least-recent (back of the Vec).
+    // Slow path: allocate, populate captures, and insert with a fresh usage
+    // timestamp. If the entry list is full, replace its oldest timestamp.
     let capture_scope = crate::gc::RuntimeHandleScope::new();
     let capture_handles: Vec<_> = captures_slice
         .iter()
