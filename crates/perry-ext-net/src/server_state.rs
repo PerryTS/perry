@@ -350,6 +350,7 @@ pub(crate) fn mark_socket_closed(socket_id: i64) {
         return;
     };
     socket.is_open = false;
+    socket.bytes_queued = 0;
     let Some(server_id) = socket.server_id.take() else {
         return;
     };
