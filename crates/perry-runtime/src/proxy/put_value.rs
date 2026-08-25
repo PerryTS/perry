@@ -634,6 +634,33 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_nanbox_f64(key);
     let value_handle = scope.root_nanbox_f64(value);
+
+    // A computed write site that constructs the same plain-object shape over
+    // and over changes receiver shape after every append, so the per-site
+    // overwrite IC above cannot hit. Reuse the runtime's global transition
+    // lattice before entering the full `[[Set]]` walk: the helper accepts
+    // only a previously learned transition on a class-id-zero ordinary object
+    // and rejects every receiver with exotic, descriptor, frozen/sealed, or
+    // prototype-interceptor semantics. It roots internally while interning
+    // the key, and these outer handles preserve all three operands across
+    // that nested allocation/collection point.
+    let target_now = target_handle.get_nanbox_f64();
+    let key_now = key_handle.get_nanbox_f64();
+    if (target_now.to_bits() & !POINTER_MASK) == POINTER_TAG
+        && (key_now.to_bits() & !POINTER_MASK) == crate::value::STRING_TAG
+    {
+        let obj = (target_now.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
+        let key_ptr = (key_now.to_bits() & POINTER_MASK) as *const crate::StringHeader;
+        if crate::object::object_set_field_by_name_transition_only_fast(
+            obj,
+            key_ptr,
+            value_handle.get_nanbox_f64(),
+        ) != 0
+        {
+            return value_handle.get_nanbox_f64();
+        }
+    }
+
     let result = js_put_value_set(
         target_handle.get_nanbox_f64(),
         key_handle.get_nanbox_f64(),
@@ -748,6 +775,116 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         c[0] = shape_token as i64;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_ic_miss_reuses_learned_anon_shape_transition_only() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        crate::object::test_reset_transition_fast_hits();
+        crate::object::shapes::test_reset_cached_transition_stamps();
+
+        // Longer than the SSO limit so this exercises the heap-string arm
+        // admitted above. A unique name prevents another test's transition
+        // edge from turning the first write into a hit.
+        let key_bytes = b"__dyn_ic_transition_fast_test_8783";
+        let key_ptr =
+            crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let key_handle = scope.root_nanbox_f64(crate::value::js_nanbox_string(key_ptr as i64));
+        const ANON_CLASS_ID: u32 = 0x8783_1001;
+        const USER_CLASS_ID: u32 = 0x8783_1002;
+        unsafe { crate::object::js_register_anon_shape_class_id(ANON_CLASS_ID) };
+        let first_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(ANON_CLASS_ID, 0));
+        let second_handle =
+            scope.root_raw_mut_ptr(crate::object::js_object_alloc(ANON_CLASS_ID, 0));
+        let user_class_handle =
+            scope.root_raw_mut_ptr(crate::object::js_object_alloc(USER_CLASS_ID, 0));
+        let mut cache = [0i64; 8];
+
+        let first = first_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+        let learned_predecessor = unsafe { crate::object::shapes::object_shape_stamp(first) };
+        assert_eq!(
+            js_put_value_set_dyn_ic_miss(
+                &mut cache,
+                crate::value::js_nanbox_pointer(first as i64),
+                key_handle.get_nanbox_f64(),
+                11.0,
+                1,
+            ),
+            11.0
+        );
+        assert_eq!(crate::object::test_transition_fast_hits(), 0);
+        let first = first_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+        let learned_target = unsafe { crate::object::shapes::object_shape_stamp(first) };
+        assert_ne!(learned_target, learned_predecessor);
+        let key_ptr =
+            (key_handle.get_nanbox_f64().to_bits() & POINTER_MASK) as *const crate::StringHeader;
+        assert_eq!(
+            crate::object::js_object_get_field_by_name(first, key_ptr).as_number(),
+            11.0
+        );
+        // The first lazy runtime operation can perform unrelated cached
+        // transitions while bootstrapping builtins. Isolate the sibling edge
+        // below rather than treating that process-wide activity as test state.
+        let second = second_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+        crate::object::shapes::test_watch_cached_transition_stamps(second as usize);
+        assert_eq!(
+            unsafe { crate::object::shapes::object_shape_stamp(second) },
+            learned_predecessor,
+            "the sibling must begin at the learned predecessor ShapeId"
+        );
+        assert_eq!(
+            js_put_value_set_dyn_ic_miss(
+                &mut cache,
+                crate::value::js_nanbox_pointer(second as i64),
+                key_handle.get_nanbox_f64(),
+                29.0,
+                1,
+            ),
+            29.0
+        );
+        assert_eq!(crate::object::test_transition_fast_hits(), 1);
+        assert_eq!(crate::object::shapes::test_cached_transition_stamps(), 1);
+        let second = second_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+        assert_eq!(
+            unsafe { crate::object::shapes::object_shape_stamp(second) },
+            learned_target,
+            "the hit must stamp the exact learned successor ShapeId"
+        );
+        let key_ptr =
+            (key_handle.get_nanbox_f64().to_bits() & POINTER_MASK) as *const crate::StringHeader;
+        assert_eq!(
+            crate::object::js_object_get_field_by_name(second, key_ptr).as_number(),
+            29.0
+        );
+
+        // A real user class can have inherited setters and must not borrow the
+        // anonymous shape's cached edge even though both receivers begin with
+        // the same null keys-array identity.
+        let user_class = user_class_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+        assert_eq!(
+            js_put_value_set_dyn_ic_miss(
+                &mut cache,
+                crate::value::js_nanbox_pointer(user_class as i64),
+                key_handle.get_nanbox_f64(),
+                47.0,
+                1,
+            ),
+            47.0
+        );
+        assert_eq!(crate::object::test_transition_fast_hits(), 1);
+        let user_class = user_class_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+        let key_ptr =
+            (key_handle.get_nanbox_f64().to_bits() & POINTER_MASK) as *const crate::StringHeader;
+        assert_eq!(
+            crate::object::js_object_get_field_by_name(user_class, key_ptr).as_number(),
+            47.0
+        );
+    }
 }
 
 #[cold]
