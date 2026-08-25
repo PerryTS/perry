@@ -2704,15 +2704,26 @@ mod tests {
     #[test]
     fn ordered_delete_repairs_mixed_side_indexes_and_preserves_order() {
         let map = js_map_alloc(32);
+        let scope = crate::gc::RuntimeHandleScope::new();
         let string_keys = (0..12)
             .map(|i| {
                 let bytes = format!("key-{i:02}").into_bytes();
-                js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+                scope.root_nanbox_f64(boxed_heap_string_key(js_string_from_bytes(
+                    bytes.as_ptr(),
+                    bytes.len() as u32,
+                )))
             })
             .collect::<Vec<_>>();
 
-        for (i, string_key) in string_keys.iter().copied().enumerate() {
+        let string_key_ptr = |i: usize| {
+            (string_keys[i].get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+                as *const StringHeader
+        };
+
+        for (i, string_key) in string_keys.iter().enumerate() {
             js_map_set(map, i as f64, (i * 10) as f64);
+            let string_key = (string_key.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+                as *const StringHeader;
             js_map_set_string_number(map, string_key, (i * 10 + 1) as f64);
         }
         // Keep the backing allocations alive while using their tagged
@@ -2735,19 +2746,22 @@ mod tests {
         assert_eq!(js_map_size(map), 28);
 
         assert_eq!(js_map_delete_number_key(map, 2.0), 1);
-        assert_eq!(js_map_delete_string_key(map, string_keys[4]), 1);
+        assert_eq!(js_map_delete_string_key(map, string_key_ptr(4)), 1);
         assert_eq!(js_map_delete(map, pointer_keys[1]), 1);
         assert_eq!(js_map_size(map), 25);
         assert_eq!(js_map_has_number_key(map, 2.0), 0);
-        assert_eq!(js_map_has_string_key(map, string_keys[4]), 0);
+        assert_eq!(js_map_has_string_key(map, string_key_ptr(4)), 0);
         assert_eq!(js_map_has(map, pointer_keys[1]), 0);
 
-        for (i, string_key) in string_keys.iter().copied().enumerate() {
+        for (i, string_key) in string_keys.iter().enumerate() {
             if i != 2 {
                 assert_eq!(js_map_get_number_key(map, i as f64), (i * 10) as f64);
                 assert!(test_map_numeric_index_contains(map, i as f64));
             }
             if i != 4 {
+                let string_key = (string_key.get_nanbox_f64().to_bits()
+                    & crate::value::POINTER_MASK)
+                    as *const StringHeader;
                 assert_eq!(js_map_get_string_key(map, string_key), (i * 10 + 1) as f64);
                 assert!(test_map_string_index_contains(
                     map,
@@ -2769,7 +2783,7 @@ mod tests {
                     keys.push((i as f64).to_bits());
                 }
                 if i != 4 {
-                    keys.push(boxed_heap_string_key(string_keys[i]).to_bits());
+                    keys.push(string_keys[i].get_nanbox_f64().to_bits());
                 }
                 keys
             })
@@ -2790,13 +2804,13 @@ mod tests {
         );
 
         js_map_set_number_key(map, 2.0, 222.0);
-        js_map_set_string_number(map, string_keys[4], 444.0);
+        js_map_set_string_number(map, string_key_ptr(4), 444.0);
         js_map_set(map, pointer_keys[1], 1_111.0);
         assert_eq!(js_map_size(map), 28);
         assert_eq!(js_map_entry_key_at(map, 25).to_bits(), 2.0f64.to_bits());
         assert_eq!(
             js_map_entry_key_at(map, 26).to_bits(),
-            boxed_heap_string_key(string_keys[4]).to_bits(),
+            string_keys[4].get_nanbox_f64().to_bits(),
             "delete-then-re-add must append at the end"
         );
         assert_eq!(
