@@ -41,8 +41,10 @@ unsafe fn validate_callback(callback: f64) -> *const ClosureHeader {
         }
     }
     let message = "callback is not a function";
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let msg = perry_runtime::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = perry_runtime::error::js_typeerror_new(msg);
+    let msg = scope.root_string_ptr(msg);
+    let err = msg.with_mut_ptr(|msg| perry_runtime::error::js_typeerror_new(msg));
     perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
 }
 
@@ -85,8 +87,10 @@ impl AsyncLocalStorageHandle {
 
 fn throw_invalid_receiver() -> ! {
     let message = b"Value of \"this\" must be of type AsyncLocalStorage";
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let msg = perry_runtime::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = perry_runtime::error::js_typeerror_new(msg);
+    let msg = scope.root_string_ptr(msg);
+    let err = msg.with_mut_ptr(|msg| perry_runtime::error::js_typeerror_new(msg));
     perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
 }
 
@@ -100,14 +104,17 @@ pub(crate) fn resolve_async_local_storage_handle(receiver: Handle) -> Option<Han
     {
         return None;
     }
-    let key = perry_runtime::string::js_string_from_bytes(
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_raw_mut_ptr(raw as *mut perry_runtime::object::ObjectHeader);
+    let key = scope.root_string_ptr(perry_runtime::string::js_string_from_bytes(
         SUBCLASS_BACKING_KEY.as_ptr(),
         SUBCLASS_BACKING_KEY.len() as u32,
-    );
-    let value = perry_runtime::object::js_object_get_field_by_name_f64(
-        raw as *const perry_runtime::object::ObjectHeader,
-        key,
-    );
+    ));
+    let value = receiver.with_mut_ptr(|receiver| {
+        key.with_mut_ptr(|key| {
+            perry_runtime::object::js_object_get_field_by_name_f64(receiver, key)
+        })
+    });
     if value.to_bits() >> 48 != 0x7FFD {
         return None;
     }
@@ -123,21 +130,23 @@ pub extern "C" fn js_async_local_storage_subclass_init(this_value: f64) -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let this_handle = scope.root_nanbox_f64(this_value);
     let backing = js_async_local_storage_new();
-    let current_this = this_handle.get_nanbox_f64();
-    let raw = perry_runtime::value::js_nanbox_get_pointer(current_this)
+    let backing_value = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(backing));
+    let raw = perry_runtime::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())
         as *mut perry_runtime::object::ObjectHeader;
     if !raw.is_null()
         && perry_runtime::value::addr_class::is_above_handle_band(raw as usize)
         && perry_runtime::value::addr_class::is_valid_obj_ptr(raw as *const u8)
     {
-        let key = perry_runtime::string::js_string_from_bytes(
+        let key = scope.root_string_ptr(perry_runtime::string::js_string_from_bytes(
             SUBCLASS_BACKING_KEY.as_ptr(),
             SUBCLASS_BACKING_KEY.len() as u32,
-        );
+        ));
+        let raw = perry_runtime::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())
+            as *mut perry_runtime::object::ObjectHeader;
         perry_runtime::object::js_object_set_field_by_name(
             raw,
-            key,
-            perry_runtime::value::js_nanbox_pointer(backing),
+            key.get_raw_mut_ptr(),
+            backing_value.get_nanbox_f64(),
         );
         for method in [
             b"run".as_slice(),
@@ -148,14 +157,16 @@ pub extern "C" fn js_async_local_storage_subclass_init(this_value: f64) -> f64 {
         ] {
             let value = crate::common::dispatch::unbound_async_local_storage_method(method);
             let value_handle = scope.root_nanbox_f64(value);
-            let key =
-                perry_runtime::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
+            let key = scope.root_string_ptr(perry_runtime::string::js_string_from_bytes(
+                method.as_ptr(),
+                method.len() as u32,
+            ));
             let current_raw =
                 perry_runtime::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())
                     as *mut perry_runtime::object::ObjectHeader;
             perry_runtime::object::js_object_set_field_by_name(
                 current_raw,
-                key,
+                key.get_raw_mut_ptr(),
                 value_handle.get_nanbox_f64(),
             );
         }
@@ -181,17 +192,24 @@ pub unsafe extern "C" fn js_async_local_storage_run(
     callback: f64,
     args_array: i64,
 ) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(receiver));
+    let store = scope.root_nanbox_f64(store);
+    let callback = scope.root_nanbox_f64(callback);
+    let args_array = scope.root_raw_const_ptr(args_array as *const ArrayHeader);
     // Validate before mutating the async context so an invalid callback throws
     // without leaving a pushed store behind (#3092).
-    let cb = validate_callback(callback);
+    let _ = validate_callback(callback.get_nanbox_f64());
+    let receiver = perry_runtime::value::js_nanbox_get_pointer(receiver.get_nanbox_f64());
     let handle =
         resolve_async_local_storage_handle(receiver).unwrap_or_else(|| throw_invalid_receiver());
 
     // A context guard mirrors the pop below: if the callback throws,
     // `js_throw` applies the guard while unwinding so the catch site still
     // observes the pre-`run` store (#788, Node restores via try/finally).
-    js_async_context_als_run_enter(handle, store);
-    let result = call_with_forwarded_args(cb, args_array);
+    js_async_context_als_run_enter(handle, store.get_nanbox_f64());
+    let cb = validate_callback(callback.get_nanbox_f64());
+    let result = call_with_forwarded_args(cb, args_array.get_raw_const_ptr::<ArrayHeader>() as i64);
     js_async_context_als_scope_leave();
 
     result
@@ -210,8 +228,12 @@ pub extern "C" fn js_async_local_storage_get_store(receiver: Handle) -> f64 {
 /// Push store onto stack (caller is responsible for cleanup)
 #[no_mangle]
 pub extern "C" fn js_async_local_storage_enter_with(receiver: Handle, store: f64) {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(receiver));
+    let store = scope.root_nanbox_f64(store);
+    let receiver = perry_runtime::value::js_nanbox_get_pointer(receiver.get_nanbox_f64());
     if let Some(handle) = resolve_async_local_storage_handle(receiver) {
-        unsafe { js_async_context_als_enter_with(handle, store) };
+        unsafe { js_async_context_als_enter_with(handle, store.get_nanbox_f64()) };
     }
 }
 
@@ -225,14 +247,20 @@ pub unsafe extern "C" fn js_async_local_storage_exit(
     callback: f64,
     args_array: i64,
 ) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(receiver));
+    let callback = scope.root_nanbox_f64(callback);
+    let args_array = scope.root_raw_const_ptr(args_array as *const ArrayHeader);
     // Validate before clearing the context so an invalid callback throws
     // without disturbing the saved store (#3092).
-    let cb = validate_callback(callback);
+    let _ = validate_callback(callback.get_nanbox_f64());
+    let receiver = perry_runtime::value::js_nanbox_get_pointer(receiver.get_nanbox_f64());
     let handle =
         resolve_async_local_storage_handle(receiver).unwrap_or_else(|| throw_invalid_receiver());
     js_async_context_als_exit_enter(handle);
 
-    let result = call_with_forwarded_args(cb, args_array);
+    let cb = validate_callback(callback.get_nanbox_f64());
+    let result = call_with_forwarded_args(cb, args_array.get_raw_const_ptr::<ArrayHeader>() as i64);
 
     js_async_context_als_scope_leave();
 

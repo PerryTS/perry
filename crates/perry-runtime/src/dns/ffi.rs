@@ -257,13 +257,13 @@ pub extern "C" fn js_dns_get_default_result_order(_args: i64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn js_dns_resolver_new(_args: i64) -> f64 {
-    boxed_pointer(resolver_object(stored_servers()) as *const u8)
+pub extern "C" fn js_dns_resolver_new(args: i64) -> f64 {
+    boxed_pointer(resolver_object(stored_servers(), first_arg(args)) as *const u8)
 }
 
 #[no_mangle]
-pub extern "C" fn js_dns_promises_resolver_new(_args: i64) -> f64 {
-    boxed_pointer(resolver_object(stored_promise_servers()) as *const u8)
+pub extern "C" fn js_dns_promises_resolver_new(args: i64) -> f64 {
+    boxed_pointer(resolver_object(stored_promise_servers(), first_arg(args)) as *const u8)
 }
 
 #[no_mangle]

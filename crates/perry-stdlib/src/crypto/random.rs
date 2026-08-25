@@ -919,6 +919,11 @@ mod tests {
         unsafe {
             js_crypto_native_dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
         }
+        assert!(
+            !CB_FIRED.with(|f| f.get()),
+            "pbkdf2 callback must not fire synchronously"
+        );
+        perry_runtime::timer::js_callback_timer_tick();
         assert!(CB_FIRED.with(|f| f.get()), "pbkdf2 callback must fire");
         assert!(
             CB_ERR_NULLISH.with(|f| f.get()),

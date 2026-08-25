@@ -141,11 +141,17 @@ const EVENTS_ON_DONE: u32 = 2;
 const EVENTS_ON_ABORT: u32 = 3;
 const EVENTS_ON_HANDLE: u32 = 4;
 const EVENTS_ON_LISTENER: u32 = 5;
+const EVENTS_ON_EVENT_NAME: u32 = 6;
+const EVENTS_ON_TARGET_KIND: u32 = 7;
+pub(super) const EVENTS_ON_EVENT_EMITTER: u32 = 0;
+pub(super) const EVENTS_ON_EVENT_TARGET: u32 = 1;
+pub(super) const EVENTS_ON_NET_HANDLE: u32 = 2;
+pub(super) const EVENTS_ON_STREAM: u32 = 3;
 const EVENTS_ON_ITER_SHAPE_ID: u32 = 0x7FFF_FF60;
 
 pub(super) unsafe fn events_on_state_new() -> *mut ArrayHeader {
     let scope = TransientRootScope::enter();
-    let state = js_array_alloc(6);
+    let state = js_array_alloc(8);
     let state_root = scope.root_nanbox(nanbox_pointer_bits(state as i64));
     let buffer = js_array_alloc(0);
     let buffer_root = scope.root_nanbox(nanbox_pointer_bits(buffer as i64));
@@ -155,6 +161,8 @@ pub(super) unsafe fn events_on_state_new() -> *mut ArrayHeader {
     let _ = js_array_push_f64(state_ptr(), buffer_root.get());
     let _ = js_array_push_f64(state_ptr(), pending_root.get());
     let _ = js_array_push_f64(state_ptr(), f64::from_bits(0x7FFC_0000_0000_0003));
+    let _ = js_array_push_f64(state_ptr(), undefined_value());
+    let _ = js_array_push_f64(state_ptr(), undefined_value());
     let _ = js_array_push_f64(state_ptr(), undefined_value());
     let _ = js_array_push_f64(state_ptr(), undefined_value());
     let _ = js_array_push_f64(state_ptr(), undefined_value());
@@ -172,15 +180,19 @@ unsafe fn events_on_state_set(state: *mut ArrayHeader, index: u32, value: f64) {
 
 pub(super) unsafe fn events_on_state_set_target(
     state: *mut ArrayHeader,
-    handle: Handle,
+    target: f64,
     listener: *mut RawClosureHeader,
+    event_name: f64,
+    target_kind: u32,
 ) {
-    events_on_state_set(state, EVENTS_ON_HANDLE, handle as f64);
+    events_on_state_set(state, EVENTS_ON_HANDLE, target);
     events_on_state_set(
         state,
         EVENTS_ON_LISTENER,
         nanbox_pointer_bits(listener as i64),
     );
+    events_on_state_set(state, EVENTS_ON_EVENT_NAME, event_name);
+    events_on_state_set(state, EVENTS_ON_TARGET_KIND, target_kind as f64);
 }
 
 fn events_on_iter_result(value: f64, done: bool) -> f64 {
@@ -246,6 +258,12 @@ pub(super) extern "C" fn events_on_queue_listener(
         if !state.is_null() {
             let scope = TransientRootScope::enter();
             let state_root = scope.root_nanbox(nanbox_pointer_bits(state as i64));
+            let current_state = (state_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader;
+            if f64::from_bits(js_array_get(current_state, EVENTS_ON_DONE).bits()).to_bits()
+                == TAG_TRUE_F64_BITS
+            {
+                return f64::from_bits(TAG_UNDEFINED_F64_BITS);
+            }
             let mut args = js_array_alloc(0);
             args = js_array_push_f64(args, arg0);
             let args_root = scope.root_nanbox(nanbox_pointer_bits(args as i64));
@@ -307,11 +325,40 @@ extern "C" fn events_on_return(closure: *const RawClosureHeader) -> f64 {
             return events_on_resolved(undefined_value(), true);
         }
         events_on_state_set(state, EVENTS_ON_DONE, f64::from_bits(TAG_TRUE_F64_BITS));
-        let handle = f64::from_bits(js_array_get(state, EVENTS_ON_HANDLE).bits());
+        let target = f64::from_bits(js_array_get(state, EVENTS_ON_HANDLE).bits());
         let listener = f64::from_bits(js_array_get(state, EVENTS_ON_LISTENER).bits());
-        if handle.is_finite() && listener.to_bits() != TAG_UNDEFINED_F64_BITS {
-            if let Some(emitter) = get_event_emitter_mut(handle as Handle) {
-                remove_listener_by_callback(emitter, (listener.to_bits() & POINTER_MASK) as i64);
+        let event_name = f64::from_bits(js_array_get(state, EVENTS_ON_EVENT_NAME).bits());
+        let target_kind = f64::from_bits(js_array_get(state, EVENTS_ON_TARGET_KIND).bits()) as u32;
+        if listener.to_bits() != TAG_UNDEFINED_F64_BITS {
+            let listener_ptr = (listener.to_bits() & POINTER_MASK) as i64;
+            match target_kind {
+                EVENTS_ON_EVENT_EMITTER => {
+                    if let Some(emitter) = get_event_emitter_mut(target as Handle) {
+                        remove_listener_by_callback(emitter, listener_ptr);
+                    }
+                }
+                EVENTS_ON_EVENT_TARGET => {
+                    let target_ptr = (target.to_bits() & POINTER_MASK) as *mut u8;
+                    let event_ptr = (event_name.to_bits() & POINTER_MASK) as *const StringHeader;
+                    if !target_ptr.is_null() && !event_ptr.is_null() {
+                        js_event_target_remove_event_listener(target_ptr, event_ptr, listener_ptr);
+                    }
+                }
+                EVENTS_ON_NET_HANDLE => {
+                    let _ = call_net_socket_method(
+                        target as Handle,
+                        "removeListener",
+                        &[event_name, listener],
+                    );
+                }
+                EVENTS_ON_STREAM => {
+                    let _ = js_node_stream_method_remove_listener(
+                        target as Handle,
+                        event_name,
+                        listener,
+                    );
+                }
+                _ => {}
             }
         }
         events_on_finish_pending(state, None);

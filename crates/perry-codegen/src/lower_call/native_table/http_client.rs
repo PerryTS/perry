@@ -141,7 +141,7 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "once",
         class_filter: Some("ClientRequest"),
-        runtime: "js_http_on",
+        runtime: "js_http_once",
         args: &[NA_STR, NA_PTR],
         ret: NR_PTR,
     },

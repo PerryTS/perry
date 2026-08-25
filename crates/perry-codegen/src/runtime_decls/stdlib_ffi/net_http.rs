@@ -112,6 +112,7 @@ pub(crate) fn declare_net_http(module: &mut LlModule) {
     module.declare_function("js_https_get_overload", I64, &[I64]);
     module.declare_function("js_https_request_overload", I64, &[I64]);
     module.declare_function("js_http_on", I64, &[I64, I64, I64]);
+    module.declare_function("js_http_once", I64, &[I64, I64, I64]);
     module.declare_function("js_http_request", I64, &[DOUBLE, I64]);
     module.declare_function("js_http_request_body", I64, &[I64]);
     module.declare_function("js_http_request_body_length", DOUBLE, &[I64]);
@@ -222,6 +223,7 @@ pub(crate) fn declare_net_http(module: &mut LlModule) {
     module.declare_function("js_node_http_im_resume", VOID, &[I64]);
     module.declare_function("js_node_http_im_destroy", VOID, &[I64]);
     module.declare_function("js_node_http_im_on", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_node_http_im_once", DOUBLE, &[I64, I64, I64]);
     module.declare_function("js_node_http_im_read", DOUBLE, &[I64]);
     module.declare_function("js_node_http_im_set_timeout", I64, &[I64, DOUBLE, I64]);
     // ServerResponse:

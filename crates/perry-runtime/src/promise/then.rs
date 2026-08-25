@@ -1759,16 +1759,25 @@ extern "C" fn finally_passthrough_fulfill(
         // () => value)`, whose then-return propagation costs one more tick
         // than this passthrough's old direct `js_promise_resolve(next, v)`.
         // Settle `next` via a propagation task instead.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let next_handle = scope.root_raw_mut_ptr(next);
+        let value_handle = scope.root_nanbox_f64(value);
+        let context = capture_context();
+        let ((async_id, trigger_async_id), next) = next_handle.across_mut::<Promise, _>(|| {
+            next_handle.with_mut_ptr::<Promise, _>(|next| unsafe {
+                ((*next).async_id, (*next).trigger_async_id)
+            })
+        });
         TASK_QUEUE.with(|q| {
             q.borrow_mut().push_back(Task::AsyncStep(
                 std::ptr::null(),
-                value,
+                value_handle.get_nanbox_f64(),
                 next,
                 false,
-                capture_context(),
+                context,
                 std::ptr::null_mut(),
-                unsafe { (*next).async_id },
-                unsafe { (*next).trigger_async_id },
+                async_id,
+                trigger_async_id,
             ));
         });
         crate::event_pump::js_notify_promise_progress();
@@ -1787,16 +1796,25 @@ extern "C" fn finally_passthrough_reject(
     let reason = js_closure_get_capture_f64(closure, 1);
     if !next.is_null() {
         // Same extra tick as the fulfilled passthrough (V8 hop parity).
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let next_handle = scope.root_raw_mut_ptr(next);
+        let reason_handle = scope.root_nanbox_f64(reason);
+        let context = capture_context();
+        let ((async_id, trigger_async_id), next) = next_handle.across_mut::<Promise, _>(|| {
+            next_handle.with_mut_ptr::<Promise, _>(|next| unsafe {
+                ((*next).async_id, (*next).trigger_async_id)
+            })
+        });
         TASK_QUEUE.with(|q| {
             q.borrow_mut().push_back(Task::AsyncStep(
                 std::ptr::null(),
-                reason,
+                reason_handle.get_nanbox_f64(),
                 next,
                 true,
-                capture_context(),
+                context,
                 std::ptr::null_mut(),
-                unsafe { (*next).async_id },
-                unsafe { (*next).trigger_async_id },
+                async_id,
+                trigger_async_id,
             ));
         });
         crate::event_pump::js_notify_promise_progress();

@@ -155,8 +155,13 @@ pub(crate) unsafe fn nm_dispatch_async_hooks(
         ("async_hooks", "AsyncLocalStorage") | ("async_hooks", "AsyncResource") => {
             let message =
                 format!("Class constructor {method_name} cannot be invoked without 'new'");
-            let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-            let err = crate::error::js_typeerror_new(msg);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let msg = scope.root_string_ptr(crate::string::js_string_from_bytes(
+                message.as_ptr(),
+                message.len() as u32,
+            ));
+            let err = msg
+                .with_mut_ptr::<crate::StringHeader, _>(|msg| crate::error::js_typeerror_new(msg));
             crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
         }
         ("async_hooks", "createHook") => {

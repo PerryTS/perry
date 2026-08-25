@@ -1265,10 +1265,15 @@ fn dynamic_import_javascript_data_url(specifier: &str) -> Option<f64> {
         .unwrap_or(expression.trim());
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(crate::node_vm::eval_dynamic_module_expression(expression));
-    let namespace = crate::object::js_object_alloc_null_proto(0, 1);
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_set_field_by_name(namespace, key, value.get_nanbox_f64());
-    Some(js_nanbox_pointer(namespace as i64))
+    let namespace = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(0, 1));
+    let key = scope.root_string_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32));
+    let namespace_value = namespace.with_mut_ptr::<crate::object::ObjectHeader, _>(|object| {
+        key.with_mut_ptr::<crate::StringHeader, _>(|key| {
+            crate::object::js_object_set_field_by_name(object, key, value.get_nanbox_f64());
+        });
+        js_nanbox_pointer(object as i64)
+    });
+    Some(namespace_value)
 }
 
 /// Codegen entry for the unresolved / no-match dynamic-`import()` fallthrough

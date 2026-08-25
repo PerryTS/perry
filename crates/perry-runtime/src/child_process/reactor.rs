@@ -201,7 +201,7 @@ static CP_LIVE: Mutex<Option<HashMap<u64, LiveChild>>> = Mutex::new(None);
 
 fn cp_init_async_resources(
     cp: f64,
-    stdin_obj: f64,
+    stdin_obj: Option<f64>,
     stdout_obj: f64,
     stderr_obj: f64,
 ) -> (
@@ -209,8 +209,14 @@ fn cp_init_async_resources(
     [crate::async_hooks::AsyncResourceIds; 3],
 ) {
     let process_ids = crate::async_hooks::init_resource("PROCESSWRAP", cp, true);
+    let stdin_ids = stdin_obj
+        .map(|object| crate::async_hooks::init_resource("PIPEWRAP", object, true))
+        .unwrap_or(crate::async_hooks::AsyncResourceIds {
+            async_id: 0,
+            trigger_async_id: 0,
+        });
     let pipe_ids = [
-        crate::async_hooks::init_resource("PIPEWRAP", stdin_obj, true),
+        stdin_ids,
         crate::async_hooks::init_resource("PIPEWRAP", stdout_obj, true),
         crate::async_hooks::init_resource("PIPEWRAP", stderr_obj, true),
     ];
@@ -507,7 +513,8 @@ fn cp_register_live_child_parts(
     for (_, stream, _) in &extra_pipes {
         cp_set_field(*stream, b"__cpHandle", handle_f);
     }
-    let (process_ids, pipe_ids) = cp_init_async_resources(cp, stdin_obj, stdout_obj, stderr_obj);
+    let (process_ids, pipe_ids) =
+        cp_init_async_resources(cp, Some(stdin_obj), stdout_obj, stderr_obj);
 
     // For fork, keep a clone of the IPC socket for send/disconnect; the reader
     // thread owns the original.
@@ -1120,8 +1127,7 @@ pub(super) fn cp_exec_async(
                 exceeded: false,
                 timed_out: false,
             });
-            let (process_ids, pipe_ids) =
-                cp_init_async_resources(cp, TAG_NULL_F64, stdout_obj, stderr_obj);
+            let (process_ids, pipe_ids) = cp_init_async_resources(cp, None, stdout_obj, stderr_obj);
 
             {
                 let mut guard = cp_live_lock();
@@ -1637,8 +1643,10 @@ pub(super) fn cp_async_scope_for_target(
     child
         .pipe_bits
         .iter()
-        .position(|bits| *bits == target_bits)
-        .map(|index| child.pipe_ids[index])
+        .enumerate()
+        .filter(|(index, bits)| *index != 0 || **bits != TAG_NULL_F64.to_bits())
+        .find(|(_, bits)| **bits == target_bits)
+        .map(|(index, _)| child.pipe_ids[index])
 }
 
 // ============================================================================

@@ -55,7 +55,10 @@ extern "C" fn async_local_storage_unbound_method_thunk(
         let name_len = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as usize;
         let name = std::slice::from_raw_parts(name_ptr as *const u8, name_len);
         let name_str = std::str::from_utf8(name).unwrap_or("");
-        let receiver = perry_runtime::object::js_implicit_this_get();
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let rest = scope.root_nanbox_f64(rest);
+        let receiver_handle = scope.root_nanbox_f64(perry_runtime::object::js_implicit_this_get());
+        let receiver = receiver_handle.get_nanbox_f64();
         let receiver_raw = if receiver.to_bits() >> 48 == 0x7FFD {
             (receiver.to_bits() & POINTER_MASK_BITS) as i64
         } else {
@@ -71,8 +74,8 @@ extern "C" fn async_local_storage_unbound_method_thunk(
             return TAG_UNDEFINED_F64;
         }
 
-        let args_array =
-            perry_runtime::value::js_nanbox_get_pointer(rest) as *const perry_runtime::ArrayHeader;
+        let args_array = perry_runtime::value::js_nanbox_get_pointer(rest.get_nanbox_f64())
+            as *const perry_runtime::ArrayHeader;
         let args = if args_array.is_null() {
             Vec::new()
         } else {
@@ -88,6 +91,12 @@ extern "C" fn async_local_storage_unbound_method_thunk(
         if let Some(value) = dispatch_async_local_storage_method(receiver_raw, name_str, &args) {
             return value;
         }
+        let receiver = receiver_handle.get_nanbox_f64();
+        let receiver_raw = if receiver.to_bits() >> 48 == 0x7FFD {
+            (receiver.to_bits() & POINTER_MASK_BITS) as i64
+        } else {
+            0
+        };
 
         // The remaining cases are invalid receivers. Brand-checked methods
         // throw; enterWith/disable already returned the deliberate no-op above.
@@ -142,7 +151,10 @@ pub(crate) unsafe fn dispatch_async_local_storage_method(
     ) {
         return None;
     }
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let arg_handles = scope.root_nanbox_f64_slice(args);
     let handle = crate::async_local_storage::resolve_async_local_storage_handle(handle)?;
+    let args = perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
     Some(match method {
         "getStore" => crate::async_local_storage::js_async_local_storage_get_store(handle),
         "run" if args.len() >= 2 => {
@@ -152,6 +164,8 @@ pub(crate) unsafe fn dispatch_async_local_storage_method(
             } else {
                 pack_args_array(rest) as i64
             };
+            let args =
+                perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
             crate::async_local_storage::js_async_local_storage_run(
                 handle, args[0], args[1], rest_array,
             )
@@ -168,6 +182,8 @@ pub(crate) unsafe fn dispatch_async_local_storage_method(
             } else {
                 pack_args_array(rest) as i64
             };
+            let args =
+                perry_runtime::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
             crate::async_local_storage::js_async_local_storage_exit(handle, args[0], rest_array)
         }
         "disable" => {

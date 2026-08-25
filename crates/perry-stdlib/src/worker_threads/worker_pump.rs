@@ -237,10 +237,6 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
         (worker.object_bits, callbacks, worker.async_resources)
     };
 
-    for resource in async_resources {
-        perry_runtime::async_hooks::enter_resource_scope(resource);
-    }
-
     // Web-style `addEventListener` listeners receive a `MessageEvent` wrapper
     // (with `.data`) for "message" events; Node-style `on` listeners receive the
     // raw payload. Lazily build the event object only if a web listener exists.
@@ -260,6 +256,12 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
         })
         .collect::<Vec<_>>();
     let arg_handle = arg.map(|a| scope.root_nanbox_f64(a));
+    let resource = match event {
+        "online" => async_resources[1],
+        "message" | "messageerror" => async_resources[2],
+        _ => async_resources[0],
+    };
+    perry_runtime::async_hooks::enter_resource_scope(resource);
     let property_name = match event {
         "message" => Some("onmessage"),
         "error" => Some("onerror"),
@@ -305,7 +307,5 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
             perry_runtime::closure::js_closure_call0(closure);
         }
     }
-    for resource in async_resources.into_iter().rev() {
-        perry_runtime::async_hooks::leave_resource_scope(resource.async_id);
-    }
+    perry_runtime::async_hooks::leave_resource_scope(resource.async_id);
 }

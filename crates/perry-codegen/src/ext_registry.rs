@@ -220,6 +220,7 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_https_request",                            OwnerKind::WellKnown("http")),
     ("js_https_get",                                OwnerKind::WellKnown("http")),
     ("js_http_on",                                  OwnerKind::WellKnown("http")),
+    ("js_http_once",                                OwnerKind::WellKnown("http")),
     ("js_http_set_header",                          OwnerKind::WellKnown("http")),
     ("js_http_set_timeout",                         OwnerKind::WellKnown("http")),
     ("js_http_set_timeout_full",                    OwnerKind::WellKnown("http")),
@@ -300,6 +301,7 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_node_http_server_ref",                     OwnerKind::WellKnown("http")),
     ("js_node_http_server_unref",                   OwnerKind::WellKnown("http")),
     ("js_node_http_im_on",                          OwnerKind::WellKnown("http")),
+    ("js_node_http_im_once",                        OwnerKind::WellKnown("http")),
     ("js_node_http_im_pause",                       OwnerKind::WellKnown("http")),
     ("js_node_http_im_resume",                      OwnerKind::WellKnown("http")),
     ("js_node_http_im_pause_self",                  OwnerKind::WellKnown("http")),
@@ -549,6 +551,8 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_event_emitter_new",                        OwnerKind::WellKnown("events")),
     ("js_event_emitter_new_with_options",           OwnerKind::WellKnown("events")),
     ("js_event_emitter_async_resource_new",         OwnerKind::WellKnown("events")),
+    ("js_event_emitter_async_resource_call",        OwnerKind::WellKnown("events")),
+    ("js_event_emitter_async_resource_subclass_init", OwnerKind::WellKnown("events")),
     ("js_event_emitter_async_resource_async_id",    OwnerKind::WellKnown("events")),
     ("js_event_emitter_async_resource_trigger_async_id", OwnerKind::WellKnown("events")),
     ("js_event_emitter_async_resource_async_resource", OwnerKind::WellKnown("events")),
@@ -1126,6 +1130,8 @@ mod tests {
             "js_event_emitter_set_max_listeners",
             "js_event_emitter_get_max_listeners",
             "js_event_emitter_domain_value",
+            "js_event_emitter_async_resource_call",
+            "js_event_emitter_async_resource_subclass_init",
         ] {
             assert_symbol_routes_to(symbol, OwnerKind::WellKnown("events"));
         }

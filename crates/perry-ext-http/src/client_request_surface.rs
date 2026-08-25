@@ -108,6 +108,30 @@ extern "C" fn client_once_wrapper(closure: *const RawClosureHeader, rest: f64) -
             listeners.remove(position);
             true
         })
+        .or_else(|| {
+            with_handle_mut::<IncomingMessageHandle, _, _>(handle, |response| {
+                let Some(listeners) = response.listeners.get_mut(&event) else {
+                    return false;
+                };
+                let Some(position) = listeners.iter().rposition(|entry| *entry == wrapper) else {
+                    return false;
+                };
+                listeners.remove(position);
+                true
+            })
+        })
+        .or_else(|| {
+            with_handle_mut::<crate::server::IncomingMessage, _, _>(handle, |request| {
+                let Some(listeners) = request.listeners.get_mut(&event) else {
+                    return false;
+                };
+                let Some(position) = listeners.iter().rposition(|entry| *entry == wrapper) else {
+                    return false;
+                };
+                listeners.remove(position);
+                true
+            })
+        })
         .unwrap_or(false);
         if !removed || callback == 0 {
             return undefined_value();

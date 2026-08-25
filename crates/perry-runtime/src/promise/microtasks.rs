@@ -415,11 +415,14 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                             CURRENT_MICROTASK_VALUE.with(|c| c.set(value));
                             CURRENT_MICROTASK_NEXT.with(|c| c.set((*promise).next));
                             crate::async_hooks::before_promise(async_id, trigger_async_id);
-                            if !(*promise).next.is_null() {
+                            let promise = rooted_promise(&task_promise_handle);
+                            let value = task_value_handle.get_nanbox_f64();
+                            let next = (*promise).next;
+                            if !next.is_null() {
                                 if is_fulfilled {
-                                    js_promise_resolve((*promise).next, value);
+                                    js_promise_resolve(next, value);
                                 } else {
-                                    js_promise_reject((*promise).next, value);
+                                    js_promise_reject(next, value);
                                 }
                             }
                             crate::async_hooks::after_promise(async_id);
@@ -611,6 +614,8 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     // source promise — now dispatch directly: invoke the
                     // stored callback, propagate the result to `next`.
                     if callback.is_null() {
+                        let next = rooted_promise(&next_handle);
+                        let value = value_handle.get_nanbox_f64();
                         if !next.is_null() {
                             if is_fulfilled {
                                 js_promise_resolve(next, value);
@@ -658,7 +663,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     } else {
                         None
                     };
-                    crate::v8::promise_hook_before(next);
+                    crate::v8::promise_hook_before(rooted_promise(&next_handle));
                     let callback = rooted_closure(&callback_handle);
                     let result =
                         crate::closure::js_closure_call1(callback, value_handle.get_nanbox_f64());
@@ -780,6 +785,9 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     // here with two fewer indirections (closure alloc +
                     // closure call).
                     if step_closure.is_null() {
+                        crate::async_hooks::before_promise(step_async_id, step_trigger_id);
+                        let next = rooted_promise(&next_handle);
+                        let value = value_handle.get_nanbox_f64();
                         if !next.is_null() {
                             if is_error {
                                 js_promise_reject(next, value);
@@ -787,6 +795,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                                 js_promise_resolve(next, value);
                             }
                         }
+                        crate::async_hooks::after_promise(step_async_id);
                         restore_microtask_context();
                         if !box_activation.is_null() {
                             pop_async_box_execution_ref(box_activation);

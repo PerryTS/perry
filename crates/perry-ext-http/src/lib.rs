@@ -756,6 +756,13 @@ extern "C" {
     fn js_async_hooks_provider_enter(async_id: u64);
     fn js_async_hooks_provider_leave(async_id: u64);
     fn js_async_hooks_provider_destroy(async_id: u64);
+    fn js_async_hooks_provider_run_catching_with_this(
+        async_id: u64,
+        this_value: f64,
+        destroy_after: i32,
+        callback: unsafe extern "C" fn(*mut std::ffi::c_void) -> f64,
+        data: *mut std::ffi::c_void,
+    ) -> f64;
 }
 
 fn pending_request_handle(event: &PendingHttpEvent) -> Handle {
@@ -1778,6 +1785,44 @@ pub unsafe extern "C" fn js_http_on(
     callback: i64,
 ) -> Handle {
     http_on_impl(handle, event_ptr, callback)
+}
+
+/// `req.once(event, cb)` / client `res.once(event, cb)` — register a wrapper
+/// that removes itself before invoking the original callback.
+#[no_mangle]
+pub unsafe extern "C" fn js_http_once(
+    handle: Handle,
+    event_ptr: *const StringHeader,
+    callback: i64,
+) -> Handle {
+    ensure_gc_scanner_registered();
+    let Some(event) = read_str(event_ptr) else {
+        return handle;
+    };
+    if callback == 0 {
+        return handle;
+    }
+    let wrapper =
+        client_request_surface::create_client_once_wrapper(handle, &event, callback, false);
+    let mut matched = false;
+    with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
+        request
+            .listeners
+            .entry(event.clone())
+            .or_default()
+            .push(ClientEventListener {
+                callback,
+                raw_wrapper: wrapper,
+                once: true,
+            });
+        matched = true;
+    });
+    if !matched {
+        with_handle_mut::<IncomingMessageHandle, _, _>(handle, |response| {
+            response.listeners.entry(event).or_default().push(wrapper);
+        });
+    }
+    handle
 }
 
 unsafe fn http_on_impl(handle: Handle, event_ptr: *const StringHeader, callback: i64) -> Handle {

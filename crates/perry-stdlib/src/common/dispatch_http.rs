@@ -163,6 +163,11 @@ pub(super) unsafe fn dispatch_client_incoming_method(
             event_ptr: *const perry_runtime::StringHeader,
             callback: i64,
         ) -> i64;
+        fn js_http_once(
+            handle: i64,
+            event_ptr: *const perry_runtime::StringHeader,
+            callback: i64,
+        ) -> i64;
         fn js_http_incoming_message_pipe(handle: i64, dest: f64) -> f64;
     }
 
@@ -179,11 +184,19 @@ pub(super) unsafe fn dispatch_client_incoming_method(
             }
             self_ref
         }
-        "on" | "once" | "addListener" if args.len() >= 2 => {
+        "on" | "addListener" if args.len() >= 2 => {
             let event = (args[0].to_bits() & PTR_MASK) as *const perry_runtime::StringHeader;
             let callback = (args[1].to_bits() & PTR_MASK) as i64;
             unsafe {
                 js_http_on(handle, event, callback);
+            }
+            self_ref
+        }
+        "once" if args.len() >= 2 => {
+            let event = (args[0].to_bits() & PTR_MASK) as *const perry_runtime::StringHeader;
+            let callback = (args[1].to_bits() & PTR_MASK) as i64;
+            unsafe {
+                js_http_once(handle, event, callback);
             }
             self_ref
         }

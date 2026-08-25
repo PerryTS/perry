@@ -704,6 +704,29 @@ pub unsafe extern "C" fn js_node_http_im_on(
     f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK))
 }
 
+/// `IncomingMessage#once` for both server requests and client responses.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_im_once(
+    handle: i64,
+    event_name_ptr: *const StringHeader,
+    callback: i64,
+) -> f64 {
+    if get_handle_mut::<IncomingMessage>(handle).is_none() {
+        extern "C" {
+            fn js_http_once(handle: i64, event_ptr: *const StringHeader, callback: i64) -> i64;
+        }
+        let _ = js_http_once(handle, event_name_ptr, callback);
+        return f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
+    }
+    let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
+    if event.is_empty() || callback == 0 {
+        return f64::from_bits(POINTER_TAG | (handle as u64 & PTR_MASK));
+    }
+    let wrapper =
+        crate::client_request_surface::create_client_once_wrapper(handle, &event, callback, false);
+    js_node_http_im_on(handle, event_name_ptr, wrapper)
+}
+
 /// `req.setEncoding(encoding)` — switch future `'data'` events from Buffer
 /// chunks to decoded string chunks. Returns the receiver for chaining.
 #[no_mangle]

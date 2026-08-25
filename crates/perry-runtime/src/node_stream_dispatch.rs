@@ -263,7 +263,9 @@ enum EventEmitterAsyncResourceBacking {
 }
 
 fn event_emitter_async_resource_backing(receiver: f64) -> Option<EventEmitterAsyncResourceBacking> {
-    let bits = receiver.to_bits();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let bits = receiver.get_nanbox_f64().to_bits();
     if bits >> 48 == 0x7FFD {
         let handle = (bits & crate::value::POINTER_MASK) as i64;
         if crate::object::event_emitter_async_resource_handle_probe()
@@ -273,8 +275,11 @@ fn event_emitter_async_resource_backing(receiver: f64) -> Option<EventEmitterAsy
         }
         let raw = handle as usize;
         if crate::value::addr_class::is_plausible_heap_addr(raw) {
-            let key = hidden_key(EVENT_EMITTER_ASYNC_RESOURCE_KEY);
-            let value = js_object_get_field_by_name_f64(raw as *const ObjectHeader, key);
+            let key = scope.root_string_ptr(hidden_key(EVENT_EMITTER_ASYNC_RESOURCE_KEY));
+            let raw = (receiver.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
+            let value = key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                js_object_get_field_by_name_f64(raw as *const ObjectHeader, key)
+            });
             if value.to_bits() >> 48 == 0x7FFD {
                 let resource = (value.to_bits() & crate::value::POINTER_MASK) as i64;
                 if crate::async_hooks::is_async_resource_handle(resource) {
@@ -353,6 +358,8 @@ extern "C" fn ns_ee_async_resource_getter(closure: *const ClosureHeader) -> f64 
 /// EventEmitter methods remain available, while `emit` and the resource
 /// accessors enforce Node's private-brand receiver validation.
 pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut ObjectHeader) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_raw_mut_ptr(proto);
     crate::closure::js_register_closure_rest(ns_ee_async_resource_emit_rest as *const u8, 1);
     crate::closure::js_register_closure_arity(ns_ee_async_resource_destroy as *const u8, 0);
     crate::closure::js_register_closure_arity(ns_ee_async_resource_getter as *const u8, 0);
@@ -360,16 +367,26 @@ pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut 
     let install_method = |name: &str, function: *const u8| {
         let closure = js_closure_alloc(function, 1);
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
-        js_object_set_field_by_name(
-            proto,
-            hidden_key(name.as_bytes()),
-            f64::from_bits(JSValue::pointer(closure as *const u8).bits()),
-        );
-        crate::object::set_builtin_property_attrs(
-            proto as usize,
-            name.to_string(),
-            crate::object::PropertyAttrs::new(true, false, true),
-        );
+        let closure = scope.root_raw_mut_ptr(closure);
+        let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
+        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                closure.with_const_ptr::<ClosureHeader, _>(|closure| {
+                    js_object_set_field_by_name(
+                        proto,
+                        key,
+                        f64::from_bits(JSValue::pointer(closure as *const u8).bits()),
+                    );
+                });
+            });
+        });
+        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+            crate::object::set_builtin_property_attrs(
+                proto as usize,
+                name.to_string(),
+                crate::object::PropertyAttrs::new(true, false, true),
+            );
+        });
     };
     install_method("emit", ns_ee_async_resource_emit_rest as *const u8);
     install_method("emitDestroy", ns_ee_async_resource_destroy as *const u8);
@@ -382,17 +399,30 @@ pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut 
         let closure = js_closure_alloc(ns_ee_async_resource_getter as *const u8, 2);
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
         crate::closure::js_closure_set_capture_ptr(closure, 1, operation);
-        let key = hidden_key(name.as_bytes());
-        js_object_set_field_by_name(proto, key, f64::from_bits(crate::value::TAG_UNDEFINED));
-        crate::object::set_builtin_accessor_descriptor(
-            proto as usize,
-            name.to_string(),
-            crate::object::AccessorDescriptor {
-                get: JSValue::pointer(closure as *const u8).bits(),
-                set: 0,
-            },
-            crate::object::PropertyAttrs::new(true, false, true),
-        );
+        let closure = scope.root_raw_mut_ptr(closure);
+        let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
+        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                js_object_set_field_by_name(
+                    proto,
+                    key,
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                );
+            });
+        });
+        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+            closure.with_const_ptr::<ClosureHeader, _>(|closure| {
+                crate::object::set_builtin_accessor_descriptor(
+                    proto as usize,
+                    name.to_string(),
+                    crate::object::AccessorDescriptor {
+                        get: JSValue::pointer(closure as *const u8).bits(),
+                        set: 0,
+                    },
+                    crate::object::PropertyAttrs::new(true, false, true),
+                );
+            });
+        });
     }
 }
 
@@ -400,6 +430,9 @@ pub(crate) unsafe fn install_event_emitter_async_resource_instance_methods(
     obj: *mut ObjectHeader,
     this_value: f64,
 ) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    let this_value = scope.root_nanbox_f64(this_value);
     crate::closure::js_register_closure_rest(ns_ee_async_resource_emit_rest as *const u8, 1);
     crate::closure::js_register_closure_arity(ns_ee_async_resource_destroy as *const u8, 0);
     crate::closure::js_register_closure_arity(ns_ee_async_resource_getter as *const u8, 0);
@@ -408,12 +441,24 @@ pub(crate) unsafe fn install_event_emitter_async_resource_instance_methods(
         ("emitDestroy", ns_ee_async_resource_destroy as *const u8),
     ] {
         let closure = js_closure_alloc(function, 1);
-        crate::closure::js_closure_set_capture_ptr(closure, 0, this_value.to_bits() as i64);
-        js_object_set_field_by_name(
-            obj,
-            hidden_key(name.as_bytes()),
-            f64::from_bits(JSValue::pointer(closure as *const u8).bits()),
+        crate::closure::js_closure_set_capture_ptr(
+            closure,
+            0,
+            this_value.get_nanbox_f64().to_bits() as i64,
         );
+        let closure = scope.root_raw_mut_ptr(closure);
+        let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                closure.with_const_ptr::<ClosureHeader, _>(|closure| {
+                    js_object_set_field_by_name(
+                        obj,
+                        key,
+                        f64::from_bits(JSValue::pointer(closure as *const u8).bits()),
+                    );
+                });
+            });
+        });
     }
 
     // Source-compiled subclasses are plain runtime objects rather than
@@ -426,19 +471,32 @@ pub(crate) unsafe fn install_event_emitter_async_resource_instance_methods(
         ("asyncResource", 2),
     ] {
         let closure = js_closure_alloc(ns_ee_async_resource_getter as *const u8, 2);
-        crate::closure::js_closure_set_capture_ptr(closure, 0, this_value.to_bits() as i64);
-        crate::closure::js_closure_set_capture_ptr(closure, 1, operation);
-        let key = hidden_key(name.as_bytes());
-        js_object_set_field_by_name(obj, key, f64::from_bits(crate::value::TAG_UNDEFINED));
-        crate::object::set_builtin_accessor_descriptor(
-            obj as usize,
-            name.to_string(),
-            crate::object::AccessorDescriptor {
-                get: JSValue::pointer(closure as *const u8).bits(),
-                set: 0,
-            },
-            crate::object::PropertyAttrs::new(true, false, true),
+        crate::closure::js_closure_set_capture_ptr(
+            closure,
+            0,
+            this_value.get_nanbox_f64().to_bits() as i64,
         );
+        crate::closure::js_closure_set_capture_ptr(closure, 1, operation);
+        let closure = scope.root_raw_mut_ptr(closure);
+        let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                js_object_set_field_by_name(obj, key, f64::from_bits(crate::value::TAG_UNDEFINED));
+            });
+        });
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            closure.with_const_ptr::<ClosureHeader, _>(|closure| {
+                crate::object::set_builtin_accessor_descriptor(
+                    obj as usize,
+                    name.to_string(),
+                    crate::object::AccessorDescriptor {
+                        get: JSValue::pointer(closure as *const u8).bits(),
+                        set: 0,
+                    },
+                    crate::object::PropertyAttrs::new(true, false, true),
+                );
+            });
+        });
     }
 }
 
