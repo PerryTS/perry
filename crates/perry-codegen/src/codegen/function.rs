@@ -1252,6 +1252,7 @@ pub(super) fn compile_function(
     super::arguments::materialize_arguments_object(
         &mut ctx,
         &f.params,
+        Some(&f.body),
         super::arguments::ArgumentsCallee::FunctionWrapper(&wrapper_name),
     );
 

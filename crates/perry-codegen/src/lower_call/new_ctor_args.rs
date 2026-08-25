@@ -106,6 +106,7 @@ pub(crate) fn bind_inline_constructor_params(
     crate::codegen::arguments::materialize_arguments_object(
         ctx,
         params,
+        None,
         crate::codegen::arguments::ArgumentsCallee::Undefined,
     );
 

@@ -644,6 +644,7 @@ pub(super) fn compile_method(
     super::arguments::materialize_arguments_object(
         &mut ctx,
         &method.params,
+        Some(&method.body),
         super::arguments::ArgumentsCallee::Undefined,
     );
 
@@ -1870,6 +1871,7 @@ pub(super) fn compile_static_method(
     super::arguments::materialize_arguments_object(
         &mut ctx,
         &f.params,
+        Some(&f.body),
         super::arguments::ArgumentsCallee::Undefined,
     );
     if f.is_async {
