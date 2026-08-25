@@ -106,15 +106,6 @@
       "linux"
     ]
   },
-  "test_harness_class_mixins": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_hono_bundle": {
     "issue": "8271",
     "added": "2026-08-17",
@@ -471,15 +462,6 @@
     "added": "2026-08-17",
     "category": "ci-env",
     "reason": "Compile fails on the Linux CI host (libperry_ui_gtk4.a family — same class as #8224 item 3). 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_issue_562_stream_subclass": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
     "platforms": [
       "linux"
     ]

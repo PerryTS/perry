@@ -1630,8 +1630,10 @@ pub extern "C" fn js_error_get_kind(error: *mut ErrorHeader) -> u32 {
 /// `receiver_is_null` distinguishes "Cannot read properties of null"
 /// from "Cannot read properties of undefined" (matches V8's wording).
 /// `prop_name_ptr` / `prop_name_len` carry the static property name.
+/// `C-unwind` is required because `js_throw` may use the system-unwinder
+/// fallback to reach generated code's landing pad.
 #[no_mangle]
-pub extern "C" fn js_throw_type_error_property_access(
+pub extern "C-unwind" fn js_throw_type_error_property_access(
     receiver_is_null: u32,
     prop_name_ptr: *const u8,
     prop_name_len: usize,

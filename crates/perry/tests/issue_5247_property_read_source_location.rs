@@ -53,12 +53,12 @@ fn ensure_runtime_archive() {
             .current_dir(workspace_root())
             .arg("build")
             .arg("-p")
-            .arg("perry-runtime")
+            .arg("perry-runtime-static")
             .output()
-            .expect("run cargo build -p perry-runtime");
+            .expect("run cargo build -p perry-runtime-static");
         assert!(
             build.status.success(),
-            "cargo build -p perry-runtime failed\nstdout:\n{}\nstderr:\n{}",
+            "cargo build -p perry-runtime-static failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&build.stdout),
             String::from_utf8_lossy(&build.stderr)
         );
