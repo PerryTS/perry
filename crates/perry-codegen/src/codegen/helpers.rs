@@ -968,7 +968,7 @@ pub(super) fn scoped_method_name(
 /// changing it desyncs cross-module symbol references (a module's prefix is
 /// `sanitize(module_name)` at the definition site and must match the prefix the
 /// importing module re-derives).
-pub(super) fn sanitize(name: &str) -> String {
+pub(crate) fn sanitize(name: &str) -> String {
     let mut s: String = name
         .chars()
         .map(|c| {

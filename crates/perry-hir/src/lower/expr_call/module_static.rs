@@ -699,18 +699,29 @@ pub(super) fn try_module_static_methods(
                             return Ok(Ok(Expr::MathPow(Box::new(base), Box::new(exp))));
                         }
                         "min" => {
-                            if has_spread && args.len() == 1 {
-                                return Ok(Ok(Expr::MathMinSpread(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
+                            if has_spread {
+                                if args.len() == 1 {
+                                    return Ok(Ok(Expr::MathMinSpread(Box::new(
+                                        args.into_iter().next().unwrap(),
+                                    ))));
+                                }
+                                // The compact HIR form records one spread
+                                // operand and no fixed prefix. Keep mixed
+                                // calls on the generic CallSpread path; folding
+                                // `Math.min(fixed, ...tail)` into MathMin would
+                                // coerce `tail` as one scalar argument.
+                                return Ok(Err(args));
                             }
                             return Ok(Ok(Expr::MathMin(args)));
                         }
                         "max" => {
-                            if has_spread && args.len() == 1 {
-                                return Ok(Ok(Expr::MathMaxSpread(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
+                            if has_spread {
+                                if args.len() == 1 {
+                                    return Ok(Ok(Expr::MathMaxSpread(Box::new(
+                                        args.into_iter().next().unwrap(),
+                                    ))));
+                                }
+                                return Ok(Err(args));
                             }
                             return Ok(Ok(Expr::MathMax(args)));
                         }

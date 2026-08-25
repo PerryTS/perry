@@ -54,6 +54,9 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_typed_feedback_numeric_array_index_set_guard"
         | "js_typed_feedback_numeric_array_push_guard"
         | "js_array_numeric_value_to_raw_f64"
+        // `array/subclass.rs`: scalar descriptor/header comparison only. It
+        // neither allocates nor enters user code; a miss returns zero.
+        | "js_packed_arraylike_loop_revalidate_live"
         // `gc/roots/temp_roots.rs`: TLS vector operations and an incremental
         // marking barrier only. They never run a Perry collection.
         | "js_gc_temp_root_push"
@@ -130,6 +133,14 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // two observe guards above; unlike the excluded get/set wrappers it does
         // NOT perform an object get/set. In `NONCOLLECTING` (the audit authority).
         | "js_typed_feedback_closure_direct_call_guard"
+        // #8775: speculation-safe closure header/function-pointer reads only.
+        // Whole-program object-literal calls use this after arity/rest were
+        // proven statically, so it has no registry or feedback side effects.
+        | "js_closure_exact_func_guard"
+        // #8775: cold own-method IC prime. Validated object/shape/key/slot and
+        // closure reads plus one compiler-private cache store; no allocation,
+        // JS re-entry, throw, or Perry-GC trigger.
+        | "js_object_own_method_cache_miss"
         // Same family, audited 2026-08-04: under `diagnostics` it reads an env
         // var, serialises the counters with serde_json and writes a file;
         // without the feature the body is empty. No Perry allocation, no
@@ -757,6 +768,10 @@ mod tests {
     ///   - `js_typed_feedback_closure_direct_call_guard` — header/registry
     ///     reads + a `guard_observe` whose only allocation is a Rust `Vec::push`
     ///     (cannot arm a Perry-GC trigger); no re-entry, no throw.
+    ///   - `js_closure_exact_func_guard` — the same safe header reads without
+    ///     registry access or feedback recording (#8775).
+    ///   - `js_object_own_method_cache_miss` — cold shape/key/closure
+    ///     validation plus a compiler-private token store (#8775).
     ///   - `js_implicit_this_get` — a bare `IMPLICIT_THIS` `Cell` read, the
     ///     shape of the already-admitted `js_implicit_this_set`.
     ///   - `js_tdz_suppress_begin`/`_end` — a thread-local `Cell<u32>` inc/dec.
@@ -764,6 +779,8 @@ mod tests {
     fn issue_8596_tls_and_feedback_guards_cannot_collect() {
         for name in [
             "js_typed_feedback_closure_direct_call_guard",
+            "js_closure_exact_func_guard",
+            "js_object_own_method_cache_miss",
             "js_implicit_this_get",
             "js_tdz_suppress_begin",
             "js_tdz_suppress_end",

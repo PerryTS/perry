@@ -24,6 +24,8 @@ fn options(target: Option<&str>) -> CompileOptions {
         namespace_imports: Vec::new(),
         namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
+        short_spread_method_candidates: std::sync::Arc::default(),
+        object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: Default::default(),
         type_aliases: Default::default(),

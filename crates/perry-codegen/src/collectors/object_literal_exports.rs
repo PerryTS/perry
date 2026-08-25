@@ -16,6 +16,95 @@ fn local_get_is(expr: &Expr, expected: u32) -> bool {
     matches!(expr, Expr::LocalGet(id) if *id == expected)
 }
 
+fn eligible_method(
+    hir: &Module,
+    class: &perry_hir::Class,
+    key: &str,
+    value: &Expr,
+) -> Option<ImportedObjectLiteralMethod> {
+    let source_prefix = crate::codegen::helpers::sanitize(&hir.name);
+    let (func_id, params, target) = match value {
+        Expr::Closure {
+            func_id,
+            params,
+            is_arrow: false,
+            is_async: false,
+            is_generator: false,
+            ..
+        } => (
+            *func_id,
+            params,
+            format!("perry_closure_{source_prefix}__{func_id}"),
+        ),
+        // HIR lifts a concise method that does not read `this` into a normal
+        // private function and stores its closure wrapper through IndexSet.
+        // The live-slot identity guard must compare/call that wrapper, not a
+        // nonexistent `perry_closure_*` symbol.
+        Expr::FuncRef(func_id) => {
+            let function = hir
+                .functions
+                .iter()
+                .find(|function| function.id == *func_id)?;
+            if function.is_async || function.is_generator {
+                return None;
+            }
+            let target = format!(
+                "__perry_wrap_perry_fn_{}__{}",
+                source_prefix,
+                crate::codegen::helpers::sanitize(&function.name)
+            );
+            (*func_id, &function.params, target)
+        }
+        _ => return None,
+    };
+    // The first slice uses the existing exact-arity closure guard. Rest and
+    // synthesized `arguments` slots remain generic.
+    if params
+        .iter()
+        .any(|param| param.is_rest || param.arguments_object.is_some())
+    {
+        return None;
+    }
+    let field_index = class.fields.iter().position(|field| field.name == key)? as u32;
+    Some(ImportedObjectLiteralMethod {
+        name: key.to_string(),
+        func_id,
+        target,
+        param_count: params.len(),
+        field_index,
+    })
+}
+
+fn class_shape_id_global(hir: &Module, class_name: &str) -> Option<String> {
+    let source_prefix = crate::codegen::helpers::sanitize(&hir.name);
+    let mut used = HashSet::new();
+    for class in &hir.classes {
+        let base = format!(
+            "perry_class_keys_{}__{}",
+            source_prefix,
+            crate::codegen::helpers::sanitize(&class.name)
+        );
+        let keys_global = if used.insert(base.clone()) {
+            base
+        } else {
+            let mut suffix = 1u32;
+            loop {
+                let candidate = format!("{base}_{suffix}");
+                if used.insert(candidate.clone()) {
+                    break candidate;
+                }
+                suffix += 1;
+            }
+        };
+        if class.name == class_name {
+            return Some(crate::typed_shape::shape_id_global_name_from_keys_global(
+                &keys_global,
+            ));
+        }
+    }
+    None
+}
+
 fn capability_from_init(
     hir: &Module,
     global_id: u32,
@@ -59,17 +148,26 @@ fn capability_from_init(
         return None;
     }
 
-    // Last source write wins. A later data/function-valued write to the same
-    // key deliberately erases an earlier concise-method capability.
+    let shape_id_global = class_shape_id_global(hir, &class.name)?;
+
+    // Last source write wins. A non-arrow closure stored through the ordinary
+    // data-property path is eligible too: HIR uses that path for a concise
+    // method whose body does not read `this` (the public suite's `perform(ctx)`
+    // shape), as well as for stable function-valued properties. The exact live
+    // closure guard makes both cases safe. Other values erase the capability.
     let mut final_methods: HashMap<String, Option<ImportedObjectLiteralMethod>> = HashMap::new();
     let mut saw_return = false;
     for stmt in body {
         match stmt {
-            Stmt::Expr(Expr::IndexSet { object, index, .. }) if local_get_is(object, param.id) => {
+            Stmt::Expr(Expr::IndexSet {
+                object,
+                index,
+                value,
+            }) if local_get_is(object, param.id) => {
                 let Expr::String(key) = index.as_ref() else {
                     return None;
                 };
-                final_methods.insert(key.clone(), None);
+                final_methods.insert(key.clone(), eligible_method(hir, class, key, value));
             }
             Stmt::Expr(Expr::Call { callee, args, .. }) => {
                 let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
@@ -84,38 +182,7 @@ fn capability_from_init(
                 if !local_get_is(receiver, param.id) {
                     return None;
                 }
-                let Expr::Closure {
-                    func_id,
-                    params,
-                    captures_this: true,
-                    is_arrow: false,
-                    is_async: false,
-                    is_generator: false,
-                    ..
-                } = value
-                else {
-                    final_methods.insert(key.clone(), None);
-                    continue;
-                };
-                // The first slice uses the existing exact-arity closure guard.
-                // Rest and synthesized `arguments` slots remain generic.
-                if params
-                    .iter()
-                    .any(|param| param.is_rest || param.arguments_object.is_some())
-                {
-                    final_methods.insert(key.clone(), None);
-                    continue;
-                }
-                let field_index = class.fields.iter().position(|field| field.name == *key)? as u32;
-                final_methods.insert(
-                    key.clone(),
-                    Some(ImportedObjectLiteralMethod {
-                        name: key.clone(),
-                        func_id: *func_id,
-                        param_count: params.len(),
-                        field_index,
-                    }),
-                );
+                final_methods.insert(key.clone(), eligible_method(hir, class, key, value));
             }
             Stmt::Return(Some(value)) if local_get_is(value, param.id) && !saw_return => {
                 saw_return = true;
@@ -150,6 +217,7 @@ fn capability_from_init(
         class_name: class.name.clone(),
         class_id: class.id,
         global_id,
+        shape_id_global,
         field_names,
         methods,
     })

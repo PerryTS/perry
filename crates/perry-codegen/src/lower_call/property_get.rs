@@ -231,5 +231,15 @@ pub fn try_lower_property_get_method_call(
         return Ok(Some(value));
     }
 
+    if let Some(value) = imported_object::try_lower_dynamic_object_method_call(
+        ctx,
+        object,
+        property,
+        args,
+        call_byte_offset,
+    )? {
+        return Ok(Some(value));
+    }
+
     Ok(None)
 }

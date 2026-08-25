@@ -216,6 +216,8 @@ const NON_COLLECTING: &[&str] = &[
     "js_nanbox_get_pointer",
     // inline-cache guards: pure reads
     "js_typed_feedback_closure_direct_call_guard",
+    "js_closure_exact_func_guard",
+    "js_object_own_method_cache_miss",
     // verified non-allocating bookkeeping stores/reads
     "js_closure_set_capture_bits",
     "js_closure_set_box_capture_ptr",

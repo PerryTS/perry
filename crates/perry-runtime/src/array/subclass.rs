@@ -680,7 +680,11 @@ fn packed_arraylike_loop_guard(
     let Some((object, layout)) = dense_layout_for_value(live_receiver) else {
         return None;
     };
-    if !crate::object::object_spill_enabled() || layout.length_slot >= layout.live_inline_slots {
+    // Stable-loop codegen already handles both inline and object-owned spill
+    // element slots. `layout_length_value` below has the same split for the
+    // semantic length slot, so classes with enough declared fields to spill
+    // `length` (the real wolf-ecs Query/Archetype shape) are equally safe.
+    if !crate::object::object_spill_enabled() {
         return None;
     }
     let Some(length) = nonnegative_u32_length(layout_length_value(object, layout)) else {
@@ -728,6 +732,7 @@ pub extern "C" fn js_packed_arraylike_loop_guard(
 /// consumes it before the next safepoint and reloads/revalidates on the next
 /// iteration; the returned address is never stored as a GC root.
 #[no_mangle]
+#[inline(never)]
 pub extern "C" fn js_packed_arraylike_loop_guard_live(
     receiver: f64,
     bound: f64,
@@ -739,6 +744,220 @@ pub extern "C" fn js_packed_arraylike_loop_guard_live(
         .unwrap_or(0)
 }
 
+/// Revalidate a receiver against facts published by a successful complete
+/// loop admission. Unlike the admitting guard, this path never rediscovers or
+/// republishes the dense layout: exact class/ShapeId and header checks make the
+/// seven scalar words an O(1) semantic version token. It is used between
+/// observable indexed effects in a nested fast loop.
+///
+/// The receiver is live and rooted at the generated call site. One retained
+/// Array-growth forwarding edge is accepted, while every brand, shape,
+/// prototype, descriptor, length, packedness, or numeric-proof mismatch
+/// returns zero to the exact-source generic read.
+#[no_mangle]
+pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
+    receiver: f64,
+    bound: f64,
+    require_numeric: i32,
+    facts: *const u64,
+) -> i64 {
+    if facts.is_null() {
+        return 0;
+    }
+    // The public Wolf hot path is an admitted Array-subclass. Its descriptor
+    // is already the authority for the exact class/ShapeId and dense layout;
+    // do not repeat generic pointer classification, forwarding triage, cache
+    // lookup, or bound parsing before checking those words. A genuine JS heap
+    // pointer is the only value that can pass `is_pointer`, so its prepended
+    // GcHeader is safe to inspect directly. Plain Arrays retain the complete
+    // defensive path below because their growth forwarding stubs are valid.
+    if unsafe { facts.read() } == 2 {
+        return revalidate_admitted_subclass_live(receiver, bound, require_numeric, facts);
+    }
+    let live_length_bound = bound == -1.0;
+    let js = JSValue::from_bits(receiver.to_bits());
+    if !js.is_pointer() {
+        return 0;
+    }
+    let source = js.as_pointer::<u8>();
+    let Some(source_header) =
+        (unsafe { crate::value::addr_class::try_read_gc_header(source as usize) })
+    else {
+        return 0;
+    };
+    let raw = if source_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        if source_header.obj_type != crate::gc::GC_TYPE_ARRAY {
+            return 0;
+        }
+        let target = unsafe { crate::gc::forwarding_address(source_header) };
+        let Some(target_header) =
+            (unsafe { crate::value::addr_class::try_read_gc_header(target as usize) })
+        else {
+            return 0;
+        };
+        if target_header.obj_type != crate::gc::GC_TYPE_ARRAY
+            || target_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return 0;
+        }
+        target
+    } else {
+        source
+    };
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) })
+    else {
+        return 0;
+    };
+    let (kind, receiver_word, length_slot, element_base, packed_bounds, admitted_bound) = unsafe {
+        (
+            facts.add(0).read(),
+            facts.add(2).read(),
+            facts.add(3).read() as u32,
+            facts.add(4).read() as u32,
+            facts.add(5).read(),
+            facts.add(6).read() as u32,
+        )
+    };
+    if admitted_bound > 16_000_000 {
+        return 0;
+    }
+    if !live_length_bound
+        && (!bound.is_finite()
+            || bound < 0.0
+            || bound.fract() != 0.0
+            || bound != f64::from(admitted_bound))
+    {
+        return 0;
+    }
+
+    if kind == 1 {
+        if header.obj_type != crate::gc::GC_TYPE_ARRAY
+            || header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+            || super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0
+        {
+            return 0;
+        }
+        let array = raw.cast::<ArrayHeader>();
+        let (length, capacity) = unsafe { ((*array).length, (*array).capacity) };
+        if (live_length_bound && length != admitted_bound)
+            || (!live_length_bound && length < admitted_bound)
+            || length > capacity
+            || capacity > 16_000_000
+            || (require_numeric != 0 && header._reserved & crate::gc::GC_ARRAY_RAW_F64_LAYOUT == 0)
+        {
+            return 0;
+        }
+        return raw as i64;
+    }
+
+    if kind != 2
+        || header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return 0;
+    }
+    let object = raw.cast::<ObjectHeader>();
+    let current_receiver_word = unsafe { ptr::read_unaligned(raw.cast::<u64>()) };
+    if current_receiver_word != receiver_word
+        || crate::object::prototype_chain::object_has_prototype_override(raw as usize)
+    {
+        return 0;
+    }
+    let dense_prefix_len = packed_bounds as u32;
+    let live_inline_slots = (packed_bounds >> 32) as u32;
+    if admitted_bound > dense_prefix_len {
+        return 0;
+    }
+    let layout = DenseSubclassLayout {
+        length_slot,
+        element_base,
+        dense_prefix_len,
+        live_inline_slots,
+    };
+    let Some(length) = nonnegative_u32_length(layout_length_value(object, layout)) else {
+        return 0;
+    };
+    if (live_length_bound && length != admitted_bound)
+        || (!live_length_bound && length < admitted_bound)
+        || (require_numeric != 0
+            && !unsafe {
+                subclass_numeric_prefix_is_proven(object, (*object).parent_class_id, admitted_bound)
+            })
+    {
+        return 0;
+    }
+    raw as i64
+}
+
+#[inline(always)]
+fn revalidate_admitted_subclass_live(
+    receiver: f64,
+    bound: f64,
+    require_numeric: i32,
+    facts: *const u64,
+) -> i64 {
+    let js = JSValue::from_bits(receiver.to_bits());
+    if !js.is_pointer() {
+        return 0;
+    }
+    let raw = js.as_pointer::<u8>();
+    let header = unsafe {
+        &*raw
+            .sub(crate::gc::GC_HEADER_SIZE)
+            .cast::<crate::gc::GcHeader>()
+    };
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return 0;
+    }
+    let object = raw.cast::<ObjectHeader>();
+    let (receiver_word, length_slot, element_base, packed_bounds, admitted_bound) = unsafe {
+        (
+            facts.add(2).read(),
+            facts.add(3).read() as u32,
+            facts.add(4).read() as u32,
+            facts.add(5).read(),
+            facts.add(6).read() as u32,
+        )
+    };
+    if admitted_bound > 16_000_000
+        || unsafe { ptr::read_unaligned(raw.cast::<u64>()) } != receiver_word
+    {
+        return 0;
+    }
+    let meta = unsafe { (*object).meta };
+    if !meta.is_null()
+        && unsafe { (*meta).flags } & crate::object::OBJECT_META_FLAG_PROTO_OVERRIDE != 0
+    {
+        return 0;
+    }
+    let dense_prefix_len = packed_bounds as u32;
+    let live_inline_slots = (packed_bounds >> 32) as u32;
+    if admitted_bound > dense_prefix_len {
+        return 0;
+    }
+    let layout = DenseSubclassLayout {
+        length_slot,
+        element_base,
+        dense_prefix_len,
+        live_inline_slots,
+    };
+    let Some(length) = nonnegative_u32_length(layout_length_value(object, layout)) else {
+        return 0;
+    };
+    if (bound == -1.0 && length != admitted_bound)
+        || (bound != -1.0 && length < admitted_bound)
+        || (require_numeric != 0
+            && !unsafe {
+                subclass_numeric_prefix_is_proven(object, (*object).parent_class_id, admitted_bound)
+            })
+    {
+        return 0;
+    }
+    raw as i64
+}
+
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_JS_PACKED_ARRAYLIKE_LOOP_GUARD: extern "C" fn(f64, f64, i32, *mut u64) -> i32 =
@@ -748,6 +967,15 @@ static KEEP_JS_PACKED_ARRAYLIKE_LOOP_GUARD: extern "C" fn(f64, f64, i32, *mut u6
 #[used]
 static KEEP_JS_PACKED_ARRAYLIKE_LOOP_GUARD_LIVE: extern "C" fn(f64, f64, i32, *mut u64) -> i64 =
     js_packed_arraylike_loop_guard_live;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_PACKED_ARRAYLIKE_LOOP_REVALIDATE_LIVE: extern "C" fn(
+    f64,
+    f64,
+    i32,
+    *const u64,
+) -> i64 = js_packed_arraylike_loop_revalidate_live;
 
 #[cfg(feature = "keepalive-anchors")]
 #[used]

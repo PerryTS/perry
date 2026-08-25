@@ -219,11 +219,13 @@ pub(super) const ESC_CLOSURE_CAPTURE: ShapeDenial = ShapeDenial {
 
 pub(super) const ESC_CALL_ARGUMENT: ShapeDenial = ShapeDenial {
     rule: RULE2,
-    reason: "passed as a call argument. There is no mechanism yet by which a \
-             shape fact at a call site becomes a fact about the callee's \
-             parameter, so any argument position disqualifies.",
+    reason: "passed to a call that does not preserve whole-lifetime \
+             containment. A guarded `$pshape_args` route may still specialize \
+             field reads performed before the callee publishes the argument, \
+             but the caller cannot retain an unguarded `Ptr<Shape>` fact after \
+             that call.",
     tier: Tier::CompilerLimitation,
-    issue: Some("#7034 §1 (argument positions via clone-and-route)"),
+    issue: Some("#8774 (guarded argument clone-and-route)"),
 };
 
 pub(super) const ESC_RETURN: ShapeDenial = ShapeDenial {

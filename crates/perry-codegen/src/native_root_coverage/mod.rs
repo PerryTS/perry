@@ -133,6 +133,8 @@ pub(crate) fn ir_opts(target: &str, is_entry: bool) -> CompileOptions {
         namespace_imports: Vec::new(),
         namespace_member_nested: Vec::new(),
         imported_classes: Vec::new(),
+        short_spread_method_candidates: std::sync::Arc::default(),
+        object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
         type_aliases: std::collections::HashMap::new(),

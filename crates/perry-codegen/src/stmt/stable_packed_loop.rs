@@ -114,14 +114,20 @@ fn stmt_flags(stmt: &Stmt, array_id: u32, counter_id: u32) -> (bool, bool) {
 /// The direct read must be in the first straight-line statement and before any
 /// explicit user call. Later statements may allocate or invoke callbacks: the
 /// next iteration reloads the root and validates before using it again.
-fn body_has_safe_leading_read(body: &[Stmt], array_id: u32, counter_id: u32) -> bool {
+fn body_has_safe_leading_read(
+    body: &[Stmt],
+    array_id: u32,
+    counter_id: u32,
+    allow_revalidated_later_reads: bool,
+) -> bool {
     for (index, stmt) in body.iter().enumerate() {
         let (has_target, has_call) = stmt_flags(stmt, array_id, counter_id);
         if has_target {
             return !has_call
-                && !body[index + 1..]
-                    .iter()
-                    .any(|later| stmt_flags(later, array_id, counter_id).0);
+                && (allow_revalidated_later_reads
+                    || !body[index + 1..]
+                        .iter()
+                        .any(|later| stmt_flags(later, array_id, counter_id).0));
         }
         // Compound indexed assignments are lowered into pure receiver/key
         // temporaries before the source indexed read. Replaying these local
@@ -304,7 +310,12 @@ fn match_candidate(
     // replaying the current iteration would duplicate preceding effects.
     } else if body.iter().any(stmt_contains_break) {
         Some("break_replays_current_iteration")
-    } else if !body_has_safe_leading_read(body, array_id, counter_id) {
+    } else if !body_has_safe_leading_read(
+        body,
+        array_id,
+        counter_id,
+        nested_requires_access_revalidation,
+    ) {
         Some("indexed_read_not_safe_and_leading")
     // LocalGet prefixes are replay-safe for a nested derived receiver, whose
     // guard is emitted at the indexed read. A capture is guarded at iteration
@@ -500,6 +511,10 @@ fn record_artifacts(ctx: &mut FnCtx<'_>, candidate: &Candidate, receiver: &str) 
     }
     if candidate.nested_derived {
         selected_facts.push("candidate_origin=guarded_outer_index_read".to_string());
+        if candidate.nested_requires_access_revalidation {
+            selected_facts
+                .push("nested_read_miss=generic_read_without_iteration_replay".to_string());
+        }
     }
     ctx.record_lowered_value_with_access_mode_and_facts(
         "StablePackedArraylikeLoop",
@@ -560,12 +575,18 @@ pub(crate) fn try_lower_index_get(
         .rev()
         .find(|fact| fact.array_local_id == *array_id && fact.counter_local_id == *counter_id)?
         .clone();
+    // Load the scalar loop index before a nested-derived guard branches. Both
+    // the direct arm and its exact-source generic fallback consume this value,
+    // so it must dominate both successors.
+    let counter_slot = ctx.i32_counter_slots.get(counter_id)?.clone();
+    let idx_i32 = ctx.block().load(I32, &counter_slot);
+    let mut per_read_fallback = None;
     if fact.revalidate_before_indexed_read {
         let receiver_slot = ctx.locals.get(array_id)?.clone();
         let receiver = ctx.block().load(DOUBLE, &receiver_slot);
         let live_raw = ctx.block().call(
             I64,
-            "js_packed_arraylike_loop_guard_live",
+            "js_packed_arraylike_loop_revalidate_live",
             &[
                 (DOUBLE, &receiver),
                 (DOUBLE, &fact.bound),
@@ -582,9 +603,16 @@ pub(crate) fn try_lower_index_get(
             pass = ctx.block().and(I1, &pass, &length_unchanged);
         }
         let continue_idx = ctx.new_block("stable_packed.indexed_read.derived_valid");
+        // A later occurrence of `array[counter]` may follow an observable
+        // getter, proxy trap, or store in the same source iteration. A failed
+        // revalidation therefore cannot side-exit to the generic loop at the
+        // current counter: that would replay the earlier effects. Fall back
+        // for this one indexed read and merge back at the exact source point.
+        let fallback_idx = ctx.new_block("packed_index.generic_fallback");
+        let read_merge_idx = ctx.new_block("packed_index.revalidated_merge");
         let continue_label = ctx.block_label(continue_idx);
-        ctx.block()
-            .cond_br(&pass, &continue_label, &fact.side_exit_label);
+        let fallback_label = ctx.block_label(fallback_idx);
+        ctx.block().cond_br(&pass, &continue_label, &fallback_label);
         ctx.current_block = continue_idx;
         let numeric_access = fact
             .numeric_elements
@@ -598,6 +626,7 @@ pub(crate) fn try_lower_index_get(
             })?;
         active.live_receiver_handle = Some(live_raw);
         active.numeric_access = numeric_access;
+        per_read_fallback = Some((fallback_idx, read_merge_idx, fallback_label, receiver));
     }
     let fact = ctx
         .stable_packed_loop_facts
@@ -606,8 +635,6 @@ pub(crate) fn try_lower_index_get(
         .find(|fact| fact.array_local_id == *array_id && fact.counter_local_id == *counter_id)?
         .clone();
     let raw = fact.live_receiver_handle?;
-    let counter_slot = ctx.i32_counter_slots.get(counter_id)?.clone();
-    let idx_i32 = ctx.block().load(I32, &counter_slot);
     let idx_i64 = ctx.block().zext(I32, &idx_i32, I64);
     if let Some(access) = fact.numeric_access {
         let byte_offset = ctx.block().shl(I64, &idx_i64, "3");
@@ -628,7 +655,13 @@ pub(crate) fn try_lower_index_get(
             .block()
             .select(I1, &access.is_plain, I64, &plain_addr, &object_addr);
         let element_ptr = ctx.block().inttoptr(I64, &element_addr);
-        return Some(ctx.block().load(DOUBLE, &element_ptr));
+        let direct = ctx.block().load(DOUBLE, &element_ptr);
+        return Some(finish_revalidated_read(
+            ctx,
+            direct,
+            idx_i32,
+            per_read_fallback,
+        ));
     }
     let kind = descriptor_word(ctx, &fact.descriptor, 0);
 
@@ -705,9 +738,13 @@ pub(crate) fn try_lower_index_get(
     } else {
         meta_native
     };
+    let read_miss_label = per_read_fallback
+        .as_ref()
+        .map(|(_, _, label, _)| label.as_str())
+        .unwrap_or(fact.side_exit_label.as_str());
     let has_meta = ctx.block().icmp_ne(I64, &meta, "0");
     ctx.block()
-        .cond_br(&has_meta, &object_spill_ptr_label, &fact.side_exit_label);
+        .cond_br(&has_meta, &object_spill_ptr_label, read_miss_label);
 
     ctx.current_block = object_spill_ptr_idx;
     let meta_ptr = ctx.block().inttoptr(I64, &meta);
@@ -717,7 +754,7 @@ pub(crate) fn try_lower_index_get(
     let spill_deref_idx = ctx.new_block("stable_packed.load.object.spill_deref");
     let spill_deref_label = ctx.block_label(spill_deref_idx);
     ctx.block()
-        .cond_br(&has_spill, &spill_deref_label, &fact.side_exit_label);
+        .cond_br(&has_spill, &spill_deref_label, read_miss_label);
 
     ctx.current_block = spill_deref_idx;
     let spill_ptr = ctx.block().inttoptr(I64, &spill);
@@ -727,7 +764,7 @@ pub(crate) fn try_lower_index_get(
     let spill_load_idx = ctx.new_block("stable_packed.load.object.spill_load");
     let spill_load_label = ctx.block_label(spill_load_idx);
     ctx.block()
-        .cond_br(&in_bounds, &spill_load_label, &fact.side_exit_label);
+        .cond_br(&in_bounds, &spill_load_label, read_miss_label);
 
     ctx.current_block = spill_load_idx;
     let spill_word = ctx.block().add(I64, &slot, "1");
@@ -739,14 +776,54 @@ pub(crate) fn try_lower_index_get(
     ctx.block().br(&merge_label);
 
     ctx.current_block = merge_idx;
-    Some(ctx.block().phi(
+    let direct = ctx.block().phi(
         DOUBLE,
         &[
             (&plain_value, &plain_end),
             (&inline_value, &inline_end),
             (&spill_value, &spill_end),
         ],
+    );
+    Some(finish_revalidated_read(
+        ctx,
+        direct,
+        idx_i32,
+        per_read_fallback,
     ))
+}
+
+type PerReadFallback = (usize, usize, String, String);
+
+/// Complete a nested-derived indexed read. The direct arm has already
+/// consumed the live raw address with no intervening safepoint. On a guard or
+/// defensive-layout miss, the ordinary arraylike helper performs exactly this
+/// source read and rejoins without replaying any preceding statement effects.
+fn finish_revalidated_read(
+    ctx: &mut FnCtx<'_>,
+    direct: String,
+    idx_i32: String,
+    fallback: Option<PerReadFallback>,
+) -> String {
+    let Some((fallback_idx, merge_idx, _, receiver)) = fallback else {
+        return direct;
+    };
+    let direct_end = ctx.block().label.clone();
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = fallback_idx;
+    let index = ctx.block().sitofp(I32, &idx_i32, DOUBLE);
+    let generic = ctx.block().call(
+        DOUBLE,
+        "js_packed_arraylike_index_get",
+        &[(DOUBLE, &receiver), (DOUBLE, &index), (PTR, "null")],
+    );
+    let fallback_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(&direct, &direct_end), (&generic, &fallback_end)])
 }
 
 pub(crate) fn has_numeric_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
@@ -783,7 +860,7 @@ pub(super) fn emit_iteration_guard(
     let receiver = crate::expr::lower_expr(ctx, &Expr::LocalGet(fact.array_local_id))?;
     let live_raw = ctx.block().call(
         I64,
-        "js_packed_arraylike_loop_guard_live",
+        "js_packed_arraylike_loop_revalidate_live",
         &[
             (DOUBLE, &receiver),
             (DOUBLE, &fact.bound),

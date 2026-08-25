@@ -1276,6 +1276,18 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         ),
         (
             guards,
+            "static G3B",
+            "static G3B: extern \"C\" fn(f64, *const u8) -> i32",
+            "js_closure_exact_func_guard",
+        ),
+        (
+            guards,
+            "static G3C",
+            "static G3C: unsafe extern \"C\" fn(f64, u32, u32, *const i8, usize, *const u8, *mut u64) -> u64",
+            "js_object_own_method_cache_miss",
+        ),
+        (
+            guards,
             "static G4",
             "static G4: unsafe extern \"C\" fn(f64, u32, u32, u32) -> i32",
             "js_method_direct_shape_guard",
@@ -2315,6 +2327,134 @@ fn typed_feedback_closure_direct_guard_passes_and_rejects_bound_sentinel() {
     let site = &typed_feedback_snapshot().sites[0];
     assert_eq!(site.guard_passes, 1);
     assert_eq!(site.guard_failures, 1);
+}
+
+#[test]
+fn exact_closure_func_guard_is_safe_and_identity_exact() {
+    let fn_ptr = test_direct_closure_ptr();
+    let closure = crate::closure::js_closure_alloc_singleton(fn_ptr);
+    let closure_value = crate::value::js_nanbox_pointer(closure as i64);
+    assert_eq!(js_closure_exact_func_guard(closure_value, fn_ptr), 1);
+    assert_eq!(
+        js_closure_exact_func_guard(closure_value, test_direct_method_ptr()),
+        0
+    );
+
+    let bound = crate::closure::js_closure_alloc(crate::closure::BOUND_METHOD_FUNC_PTR, 0);
+    let bound_value = crate::value::js_nanbox_pointer(bound as i64);
+    assert_eq!(js_closure_exact_func_guard(bound_value, fn_ptr), 0);
+    assert_eq!(js_closure_exact_func_guard(42.0, fn_ptr), 0);
+    assert_eq!(
+        js_closure_exact_func_guard(f64::from_bits(crate::value::POINTER_TAG | 0x10000), fn_ptr),
+        0
+    );
+    assert_eq!(
+        js_closure_exact_func_guard(closure_value, std::ptr::null()),
+        0
+    );
+}
+
+#[test]
+fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
+    const CLASS_ID: u32 = 0x7fff_fe75;
+    let object = crate::object::js_object_alloc(CLASS_ID, 0);
+    let method_key = crate::string::js_string_from_bytes(b"method".as_ptr(), 6);
+    let extra_key = crate::string::js_string_from_bytes(b"state".as_ptr(), 5);
+    let spilled_key = crate::string::js_string_from_bytes(b"spilled".as_ptr(), 7);
+    let fn_ptr = test_direct_closure_ptr();
+    let closure = crate::closure::js_closure_alloc_singleton(fn_ptr);
+    let closure_value = crate::value::js_nanbox_pointer(closure as i64);
+    crate::object::js_object_set_field_by_name(object, method_key, closure_value);
+    let receiver = crate::value::js_nanbox_pointer(object as i64);
+    let mut cache = 0;
+
+    let first = unsafe {
+        js_object_own_method_cache_miss(
+            receiver,
+            CLASS_ID,
+            0,
+            b"method".as_ptr() as *const i8,
+            6,
+            fn_ptr,
+            &mut cache,
+        )
+    };
+    assert_eq!(first, closure as u64);
+    assert_ne!(cache, 0);
+    let initial_shape_token = cache;
+
+    crate::object::js_object_set_field_by_name(object, extra_key, 42.0);
+    let after_append = unsafe {
+        js_object_own_method_cache_miss(
+            receiver,
+            CLASS_ID,
+            0,
+            b"method".as_ptr() as *const i8,
+            6,
+            fn_ptr,
+            &mut cache,
+        )
+    };
+    assert_eq!(after_append, closure as u64);
+    assert_ne!(
+        cache, initial_shape_token,
+        "append must publish the live successor shape"
+    );
+
+    // The third property is beyond this zero-field object's two-slot inline
+    // floor. It creates ObjectMeta solely to own spill storage; that metadata
+    // is not a semantic mutation of the original own method.
+    crate::object::js_object_set_field_by_name(object, spilled_key, 84.0);
+    assert!(unsafe { !(*object).meta.is_null() });
+    let after_spilled_append = unsafe {
+        js_object_own_method_cache_miss(
+            receiver,
+            CLASS_ID,
+            0,
+            b"method".as_ptr() as *const i8,
+            6,
+            fn_ptr,
+            &mut cache,
+        )
+    };
+    assert_eq!(after_spilled_append, closure as u64);
+    assert_ne!(cache, 0);
+
+    let replacement = crate::closure::js_closure_alloc_singleton(test_direct_method_ptr());
+    crate::object::js_object_set_field_by_name(
+        object,
+        method_key,
+        crate::value::js_nanbox_pointer(replacement as i64),
+    );
+    let replaced = unsafe {
+        js_object_own_method_cache_miss(
+            receiver,
+            CLASS_ID,
+            0,
+            b"method".as_ptr() as *const i8,
+            6,
+            fn_ptr,
+            &mut cache,
+        )
+    };
+    assert_eq!(replaced, 0);
+    assert_eq!(cache, 0);
+
+    crate::object::js_object_set_field_by_name(object, method_key, closure_value);
+    crate::object::js_object_delete_field(object, method_key);
+    let deleted = unsafe {
+        js_object_own_method_cache_miss(
+            receiver,
+            CLASS_ID,
+            0,
+            b"method".as_ptr() as *const i8,
+            6,
+            fn_ptr,
+            &mut cache,
+        )
+    };
+    assert_eq!(deleted, 0);
+    assert_eq!(cache, 0);
 }
 
 #[test]

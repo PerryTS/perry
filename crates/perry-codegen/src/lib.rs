@@ -71,9 +71,10 @@ pub(crate) mod typed_shape;
 pub mod types;
 
 pub use codegen::{
-    compile_module, resolve_target_triple, AppMetadata, CompileOptions,
-    ExportedObjectLiteralCapability, FpContractMode, ImportedClass, ImportedObjectLiteral,
-    ImportedObjectLiteralMethod, NamespaceEntry, NamespaceEntryKind,
+    compile_module, resolve_target_triple, short_spread_method_capabilities, AppMetadata,
+    CompileOptions, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
+    ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry, NamespaceEntryKind,
+    ObjectLiteralMethodCandidate, ShortSpreadMethodCandidate,
 };
 pub use collectors::CjsPreambleCensus;
 

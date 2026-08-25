@@ -182,6 +182,10 @@ pub(crate) struct ShapeStabilityFacts {
     /// and unguarded direct method dispatch
     /// (`lower_call/property_get/dynamic_dispatch.rs`).
     pub shape_proven_ptr_locals: HashMap<u32, super::PtrShapeLocal>,
+    /// Fresh-object containment facts consumed exclusively by guarded
+    /// `$pshape_args` routes. This map remains available in modules with
+    /// shape barriers, but it must never license guard-free field access.
+    pub guarded_argument_route_locals: HashMap<u32, super::PtrShapeLocal>,
     /// Representation-selection Phase 4a.3: function-locals proven to satisfy
     /// the `Ptr<NumArray>` invariants (raw-f64-or-hole slots, never-shrinking
     /// length, no stale-binding path) for their entire lifetime
@@ -404,6 +408,15 @@ impl TypeFacts {
     /// when it is a proven `Ptr<Shape>` local (`collectors/ptr_shape.rs`).
     pub(crate) fn shape_proven_ptr_local(&self, local_id: u32) -> Option<&super::PtrShapeLocal> {
         self.shape_stability.shape_proven_ptr_locals.get(&local_id)
+    }
+
+    pub(crate) fn guarded_argument_route_local(
+        &self,
+        local_id: u32,
+    ) -> Option<&super::PtrShapeLocal> {
+        self.shape_stability
+            .guarded_argument_route_locals
+            .get(&local_id)
     }
 
     /// Representation-selection Phase 4a.3: the numeric-array proof for a
@@ -662,6 +675,20 @@ pub(crate) fn collect_type_facts(
             spec_numeric_params,
         );
     array_facts.exact_numeric_element_fields = exact_numeric_element_fields;
+    let guarded_argument_route_locals = if module_dispatch.has_argument_shape_routes() {
+        super::ptr_shape::collect_guarded_argument_route_locals(
+            stmts,
+            boxed_vars,
+            module_globals,
+            classes,
+            module_dispatch,
+            &not_bigint_locals,
+            &element_shape_facts,
+            spec_numeric_params,
+        )
+    } else {
+        HashMap::new()
+    };
     // Representation-selection Phase 4a.3: `Ptr<NumArray>` locals. Gated on
     // `PERRY_PTR_NUMARRAY_LOCALS`, the module-wide §5.2 barrier scan, and the
     // array-specific prototype-indexed-write kill inside the collector.
@@ -719,6 +746,7 @@ pub(crate) fn collect_type_facts(
         shape_stability: ShapeStabilityFacts {
             scalar_replaceable_object_locals,
             shape_proven_ptr_locals,
+            guarded_argument_route_locals,
             num_array_locals,
         },
         materialization_hazards,

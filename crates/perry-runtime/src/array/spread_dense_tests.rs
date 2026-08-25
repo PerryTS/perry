@@ -10,7 +10,7 @@
 //! protocol must still run.
 
 use super::*;
-use crate::value::{JSValue, TAG_HOLE, TAG_UNDEFINED};
+use crate::value::{JSValue, TAG_HOLE, TAG_NULL, TAG_UNDEFINED};
 
 fn boxed(arr: *mut ArrayHeader) -> f64 {
     crate::value::js_nanbox_pointer(arr as i64)
@@ -250,6 +250,19 @@ fn short_packed_call_guard_copies_empty_and_one_element_arrays() {
         1
     );
     assert_eq!(out[0], 37.0);
+}
+
+#[test]
+fn short_packed_call_guard_preserves_nullish_call_spread_as_empty() {
+    let mut out = [f64::NAN; 4];
+    assert_eq!(
+        unsafe { js_short_packed_spread_values(f64::from_bits(TAG_UNDEFINED), out.as_mut_ptr()) },
+        0
+    );
+    assert_eq!(
+        unsafe { js_short_packed_spread_values(f64::from_bits(TAG_NULL), out.as_mut_ptr()) },
+        0
+    );
 }
 
 #[test]

@@ -12,6 +12,7 @@ use perry_hir::{CallArg, Expr};
 
 use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
+use crate::rooting::Repr;
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 use super::FnCtx;
@@ -22,9 +23,22 @@ const MAX_METHOD_ARMS: usize = 8;
 #[derive(Clone)]
 struct DirectCandidate {
     class_id: u32,
-    class_name: String,
     target: String,
     declared_count: usize,
+    shape: CandidateShape,
+    needs_declare: bool,
+}
+
+#[derive(Clone)]
+enum CandidateShape {
+    Local {
+        class_name: String,
+        keys_global: String,
+    },
+    Foreign {
+        cache_key: String,
+        shape_id_global: String,
+    },
 }
 
 /// Collect concrete class implementations in deterministic class-id order.
@@ -39,9 +53,9 @@ fn direct_candidates(ctx: &FnCtx<'_>, property: &str) -> Vec<DirectCandidate> {
     roots.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
 
     let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen_class_ids = std::collections::HashSet::new();
     for (class_name, class_id) in roots {
-        let Some(_keys_global) = ctx.class_keys_globals.get(class_name) else {
+        let Some(keys_global) = ctx.class_keys_globals.get(class_name) else {
             continue;
         };
         let mut current = Some(class_name.clone());
@@ -51,7 +65,7 @@ fn direct_candidates(ctx: &FnCtx<'_>, property: &str) -> Vec<DirectCandidate> {
                 let unsupported_abi = public_target.starts_with("perry_static_")
                     || matches!(ctx.method_has_rest.get(&key), Some(true))
                     || matches!(ctx.method_has_synthetic_arguments.get(&key), Some(true));
-                if !unsupported_abi && seen.insert((class_id, public_target.clone())) {
+                if !unsupported_abi && seen_class_ids.insert(class_id) {
                     let target = if owner == *class_name
                         && ctx
                             .pshape_methods
@@ -61,11 +75,32 @@ fn direct_candidates(ctx: &FnCtx<'_>, property: &str) -> Vec<DirectCandidate> {
                     } else {
                         public_target.clone()
                     };
+                    // Imported class stubs mint caller-local layout metadata;
+                    // that ShapeId cannot match instances allocated by the
+                    // producer. Prefer the producer's published slot whenever
+                    // an own-method capability identifies this class id.
+                    let shape = ctx
+                        .short_spread_method_candidates
+                        .get(property)
+                        .and_then(|candidates| {
+                            candidates
+                                .iter()
+                                .find(|candidate| candidate.class_id == class_id)
+                        })
+                        .map(|candidate| CandidateShape::Foreign {
+                            cache_key: format!("#short-spread:{}", candidate.target),
+                            shape_id_global: candidate.shape_id_global.clone(),
+                        })
+                        .unwrap_or_else(|| CandidateShape::Local {
+                            class_name: class_name.clone(),
+                            keys_global: keys_global.clone(),
+                        });
                     out.push(DirectCandidate {
                         class_id,
-                        class_name: class_name.clone(),
                         target,
                         declared_count: ctx.method_param_counts.get(&key).copied().unwrap_or(0),
+                        shape,
+                        needs_declare: false,
                     });
                     if out.len() == MAX_METHOD_ARMS {
                         return out;
@@ -79,7 +114,52 @@ fn direct_candidates(ctx: &FnCtx<'_>, property: &str) -> Vec<DirectCandidate> {
                 .and_then(|class| class.extends_name.clone());
         }
     }
+    if let Some(reverse_candidates) = ctx.short_spread_method_candidates.get(property) {
+        for candidate in reverse_candidates {
+            if !seen_class_ids.insert(candidate.class_id) {
+                continue;
+            }
+            out.push(DirectCandidate {
+                class_id: candidate.class_id,
+                target: candidate.target.clone(),
+                declared_count: candidate.declared_count,
+                shape: CandidateShape::Foreign {
+                    cache_key: format!("#short-spread:{}", candidate.target),
+                    shape_id_global: candidate.shape_id_global.clone(),
+                },
+                needs_declare: true,
+            });
+            if out.len() == MAX_METHOD_ARMS {
+                break;
+            }
+        }
+    }
     out
+}
+
+fn load_candidate_shape(ctx: &mut FnCtx<'_>, candidate: &DirectCandidate) -> String {
+    match &candidate.shape {
+        CandidateShape::Local {
+            class_name,
+            keys_global,
+        } => crate::typed_shape::load_class_shape_id(ctx, class_name, keys_global),
+        CandidateShape::Foreign {
+            cache_key,
+            shape_id_global,
+        } => {
+            let slot = if let Some(slot) = ctx.class_shape_slots.get(cache_key) {
+                slot.clone()
+            } else {
+                let slot = ctx
+                    .func
+                    .entry_init_load_global(shape_id_global, crate::types::I32);
+                ctx.class_shape_slots
+                    .insert(cache_key.clone(), slot.clone());
+                slot
+            };
+            ctx.block().load(I32, &slot)
+        }
+    }
 }
 
 fn first_element_ptr(ctx: &mut FnCtx<'_>, alloca: &str, count: usize) -> String {
@@ -111,21 +191,44 @@ pub(crate) fn try_lower<'f, 'e>(
     if candidates.is_empty() {
         return Ok(None);
     }
+    for candidate in &candidates {
+        if candidate.needs_declare {
+            ctx.pending_declares.push((
+                candidate.target.clone(),
+                DOUBLE,
+                vec![DOUBLE; candidate.declared_count + 1],
+            ));
+        }
+    }
 
     // Receiver, fixed arguments, then the final spread expression: exactly the
-    // ECMAScript evaluation order and exactly once each. One open group keeps
-    // every pointer-bearing value current through both CFG diamonds and the
-    // allocating generic fallback.
-    let mut roots = crate::rooting::open_rooted_group(args.len() + 1);
-    let recv_root = roots.lower(ctx, object, true)?;
-    let mut fixed_roots = Vec::with_capacity(args.len().saturating_sub(1));
+    // ECMAScript evaluation order and exactly once each. Root an evaluated
+    // operand only across a *later operand evaluation* that can collect. Both
+    // guards below are non-allocating and a successful direct call consumes
+    // the values, so eagerly retaining every operand through the dispatch
+    // diamond put three root barriers in perform-ecs's reset loop for no
+    // safety gain. A miss installs its own cold, branch-local roots below.
+    let mut operand_exprs = Vec::with_capacity(args.len() + 1);
+    operand_exprs.push(object);
     for arg in &args[..args.len() - 1] {
         let CallArg::Expr(expr) = arg else {
             unreachable!()
         };
-        fixed_roots.push(roots.lower(ctx, expr, true)?);
+        operand_exprs.push(expr);
     }
-    let spread_root = roots.lower(ctx, spread_expr, true)?;
+    operand_exprs.push(spread_expr);
+    let mut roots = crate::rooting::open_rooted_group(operand_exprs.len());
+    let mut operand_roots = Vec::with_capacity(operand_exprs.len());
+    for (index, expr) in operand_exprs.iter().enumerate() {
+        let collects = crate::rooting::any_operand_may_collect(
+            ctx,
+            operand_exprs[index + 1..].iter().copied(),
+        );
+        operand_roots.push(roots.lower(ctx, expr, collects)?);
+    }
+    let recv_root = operand_roots[0];
+    let fixed_roots = &operand_roots[1..operand_roots.len() - 1];
+    let spread_root = operand_roots[operand_roots.len() - 1];
 
     // Re-read once below all operand evaluation. The two guards from here to a
     // direct call are non-allocating; fallback re-reads again after its
@@ -160,14 +263,7 @@ pub(crate) fn try_lower<'f, 'e>(
     ctx.current_block = method_probe_idx;
     let expected_shapes: Vec<String> = candidates
         .iter()
-        .map(|candidate| {
-            let keys = ctx
-                .class_keys_globals
-                .get(&candidate.class_name)
-                .expect("candidate required a keys global")
-                .clone();
-            crate::typed_shape::load_class_shape_id(ctx, &candidate.class_name, &keys)
-        })
+        .map(|candidate| load_candidate_shape(ctx, candidate))
         .collect();
     let key_idx = ctx.strings.intern(property);
     let entry = ctx.strings.entry(key_idx);
@@ -270,23 +366,36 @@ pub(crate) fn try_lower<'f, 'e>(
     // js_native_call_method_apply_by_id so overrides and wrong receivers retain
     // the generic semantics.
     ctx.current_block = fallback_idx;
-    let (fixed_ptr, fixed_len) = if fixed_roots.is_empty() {
+    // No allocation has run since the fast operands were re-read. Publish all
+    // of them only on this cold branch, immediately before the materializer's
+    // first collection point. This group nests above `roots` and is released
+    // before the merge, preserving temp-root stack order on both branches.
+    let mut fallback_roots = crate::rooting::open_rooted_group(args.len() + 1);
+    let fallback_recv_root = fallback_roots.adopt_emitted(ctx, Repr::Boxed, &fast_recv, true);
+    let fallback_fixed_roots: Vec<_> = fast_fixed
+        .iter()
+        .map(|value| fallback_roots.adopt_emitted(ctx, Repr::Boxed, value, true))
+        .collect();
+    let fallback_spread_root = fallback_roots.adopt_emitted(ctx, Repr::Boxed, &fast_spread, true);
+    let (fixed_ptr, fixed_len) = if fallback_fixed_roots.is_empty() {
         ("null".to_string(), "0".to_string())
     } else {
-        let fixed_alloca = ctx.func.alloca_entry_array(DOUBLE, fixed_roots.len());
-        for (index, &root) in fixed_roots.iter().enumerate() {
-            let value = roots.reread(ctx, root)?;
+        let fixed_alloca = ctx
+            .func
+            .alloca_entry_array(DOUBLE, fallback_fixed_roots.len());
+        for (index, &root) in fallback_fixed_roots.iter().enumerate() {
+            let value = fallback_roots.reread_emitted(ctx, root);
             let slot = ctx
                 .block()
                 .gep(DOUBLE, &fixed_alloca, &[(I64, &index.to_string())]);
             ctx.block().store(DOUBLE, &value, &slot);
         }
         (
-            first_element_ptr(ctx, &fixed_alloca, fixed_roots.len()),
-            fixed_roots.len().to_string(),
+            first_element_ptr(ctx, &fixed_alloca, fallback_fixed_roots.len()),
+            fallback_fixed_roots.len().to_string(),
         )
     };
-    let fallback_spread = roots.reread(ctx, spread_root)?;
+    let fallback_spread = fallback_roots.reread_emitted(ctx, fallback_spread_root);
     let args_array = ctx.block().call(
         I64,
         "js_spread_tail_fallback_args",
@@ -296,7 +405,7 @@ pub(crate) fn try_lower<'f, 'e>(
             (DOUBLE, &fallback_spread),
         ],
     );
-    let fallback_recv = roots.reread(ctx, recv_root)?;
+    let fallback_recv = fallback_roots.reread_emitted(ctx, fallback_recv_root);
     let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
     let fallback_value = ctx.block().call(
@@ -308,6 +417,7 @@ pub(crate) fn try_lower<'f, 'e>(
             (I64, &args_array),
         ],
     );
+    fallback_roots.release(ctx);
     let fallback_after = ctx.block().label.clone();
     ctx.block().br(&merge_label);
     phi_inputs.push((fallback_value, fallback_after));
@@ -343,6 +453,9 @@ pub(crate) fn try_lower<'f, 'e>(
             "iterator_guard=builtin_array_iterator,no_own_iterator,no_custom_prototype"
                 .to_string(),
             "method_identity_guard=js_method_direct_shape_class(class_id,shape_id,invalidation_slot)"
+                .to_string(),
+            "candidate_scope=whole_program_producer_capabilities".to_string(),
+            "operand_roots=collecting_evaluation_suffix_only;fallback_roots=guard_miss_only"
                 .to_string(),
             "generic_fallback=js_spread_tail_fallback_args+js_native_call_method_apply_by_id"
                 .to_string(),

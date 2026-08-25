@@ -78,6 +78,7 @@ fn copy_fixture(dir: &Path) {
         "package.json",
         "adapter.js",
         "barrel.js",
+        "runner.js",
         "main.js",
         "semantics.js",
     ] {
@@ -194,16 +195,21 @@ fn stable_imported_object_methods_use_guarded_direct_closure_bodies() {
         .expect("read main LLVM IR");
     let adapter_ir = std::fs::read_to_string(temp.path().join(".perry-trace/llvm/adapter_js.ll"))
         .expect("read adapter LLVM IR");
+    let runner_ir = std::fs::read_to_string(temp.path().join(".perry-trace/llvm/runner_js.ll"))
+        .expect("read runner LLVM IR");
     for func_id in [6, 7, 8, 9] {
         let symbol = format!("perry_closure_adapter_js__{func_id}");
         assert!(
             adapter_ir.contains(&format!("define double @{symbol}(")),
             "producer closure must have external linkage: {symbol}"
         );
-        let fast_block = main_ir
+    }
+    for func_id in [7, 8, 9] {
+        let symbol = format!("perry_closure_adapter_js__{func_id}");
+        let fast_block = runner_ir
             .split("\n\n")
-            .find(|block| block.contains("imported_object.direct.") && block.contains(&symbol))
-            .unwrap_or_else(|| panic!("no imported-object direct block for {symbol}:\n{main_ir}"));
+            .find(|block| block.contains("object_method_cache.direct.") && block.contains(&symbol))
+            .unwrap_or_else(|| panic!("no dynamic-object direct block for {symbol}:\n{runner_ir}"));
         assert!(
             !fast_block.contains("js_native_call_method_by_id")
                 && !fast_block.contains("js_typed_feedback_native_call_method_by_id")
@@ -212,6 +218,18 @@ fn stable_imported_object_methods_use_guarded_direct_closure_bodies() {
         );
     }
     assert!(main_ir.contains("call double @js_native_call_method_by_id"));
+    assert!(runner_ir.contains("call double @js_native_call_method_by_id"));
+    assert!(main_ir.contains("call i32 @js_closure_exact_func_guard"));
+    assert!(runner_ir.contains("call i32 @js_closure_exact_func_guard"));
+    assert!(main_ir.contains("call i64 @js_object_own_method_cache_miss"));
+    assert!(runner_ir.contains("call i64 @js_object_own_method_cache_miss"));
+    assert!(!main_ir.contains("call i32 @js_typed_feedback_closure_direct_call_guard"));
+    assert!(!runner_ir.contains("call i32 @js_typed_feedback_closure_direct_call_guard"));
+    assert!(
+        main_ir.contains("object_method_cache.direct.")
+            && main_ir.contains("call double @__perry_wrap_perry_fn_runner_js__"),
+        "the no-this concise wrapper method must be published and selected:\n{main_ir}"
+    );
     assert!(
         main_ir
             .lines()
@@ -226,16 +244,32 @@ fn stable_imported_object_methods_use_guarded_direct_closure_bodies() {
         .filter(|record| record["consumer"] == "imported_object_literal_method_direct_call")
         .collect();
     assert!(
-        selected.len() >= 5,
+        !selected.is_empty(),
         "missing selected records: {records:#?}"
     );
     for record in selected {
         let notes = record_notes(record);
         assert!(notes.contains(&"receiver_provenance=imported_object_literal_metadata"));
         assert!(notes.contains(&"generic_dispatch_fallback=js_native_call_method_by_id"));
-        assert!(
-            notes.contains(&"guards=receiver_identity,exact_shape,own_data_slot,function_identity")
-        );
+        assert!(notes
+            .contains(&"guards=receiver_identity,live_shape_cache,own_key_slot,function_identity"));
+        assert!(notes.contains(&"append_only_shape_successors=revalidated_and_cached"));
+    }
+    let dynamic: Vec<_> = records
+        .iter()
+        .filter(|record| record["consumer"] == "whole_program_object_literal_method_direct_call")
+        .collect();
+    assert!(
+        dynamic.len() >= 4,
+        "wrapper-parameter calls were not selected: {records:#?}"
+    );
+    for record in dynamic {
+        let notes = record_notes(record);
+        assert!(notes.contains(&"receiver_provenance=dynamic_local_with_producer_candidates"));
+        assert!(notes.contains(&"generic_dispatch_fallback=js_native_call_method_by_id"));
+        assert!(notes
+            .contains(&"guards=receiver_identity,live_shape_cache,own_key_slot,function_identity"));
+        assert!(notes.contains(&"append_only_shape_successors=revalidated_and_cached"));
     }
 }
 

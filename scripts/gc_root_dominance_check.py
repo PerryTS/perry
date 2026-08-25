@@ -473,7 +473,8 @@ NONCOLLECTING = {
     # pure value predicates / bit twiddling
     "js_is_truthy", "js_nanbox_get_pointer",
     # inline-cache guards: pure reads
-    "js_typed_feedback_closure_direct_call_guard",
+    "js_typed_feedback_closure_direct_call_guard", "js_closure_exact_func_guard",
+    "js_object_own_method_cache_miss",
     # ctor identity selection
     "js_ctor_return_override",
     "llvm.lifetime.start.p0", "llvm.lifetime.end.p0",
