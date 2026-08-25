@@ -183,8 +183,10 @@ pub(crate) struct ShapeStabilityFacts {
     /// (`lower_call/property_get/dynamic_dispatch.rs`).
     pub shape_proven_ptr_locals: HashMap<u32, super::PtrShapeLocal>,
     /// Fresh-object containment facts consumed exclusively by guarded
-    /// `$pshape_args` routes. This map remains available in modules with
-    /// shape barriers, but it must never license guard-free field access.
+    /// argument-shape clone routes. This map remains available in modules
+    /// with shape barriers, so it must never license guard-free field access:
+    /// its consumer (`FnCtx::ptr_shape_argument_route_fact`) pairs it with a
+    /// mandatory runtime class+ShapeId guard.
     pub guarded_argument_route_locals: HashMap<u32, super::PtrShapeLocal>,
     /// Representation-selection Phase 4a.3: function-locals proven to satisfy
     /// the `Ptr<NumArray>` invariants (raw-f64-or-hole slots, never-shrinking

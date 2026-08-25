@@ -311,6 +311,15 @@ fn define_property(target: Expr) -> Stmt {
     ))
 }
 
+/// An unrelated §5.2 barrier does not suppress the route, but it DOES make the
+/// runtime guard load-bearing.
+///
+/// The route-only proof reaches this module by bypassing rule 5's module-wide
+/// barrier kill. That kill is the belt-and-braces backstop against blind spots
+/// in the containment walk (`ptr_shape.rs` rule 5), so with it bypassed the
+/// entry guard is the only thing left that can observe a reshaped argument.
+/// Eliding it here would leave the clone's fixed-offset reads with no check at
+/// all in exactly the modules whose barriers the analysis refuses to attribute.
 #[test]
 fn unrelated_module_shape_barrier_keeps_guarded_argument_route() {
     let mut module = fixture();
@@ -324,9 +333,10 @@ fn unrelated_module_shape_barrier_keeps_guarded_argument_route() {
         "an unrelated barrier must not suppress the exact guarded route:\n{ir}"
     );
     assert!(
-        !ir.contains("pshape_arg.fallback")
+        ir.contains("pshape_arg.fallback")
             && ir.contains("call double @perry_method_argument_shape_clone_ts__Registry__read("),
-        "an unrelated barrier must not reintroduce a redundant argument guard:\n{ir}"
+        "a route that bypassed the module-wide barrier kill must keep its \
+         runtime guard and its generic fallback:\n{ir}"
     );
 }
 
@@ -344,8 +354,18 @@ fn barrier_targeting_argument_stays_on_generic_route() {
     );
 }
 
+/// A clone that publishes its parameter gets NO caller-side route.
+///
+/// `PrefixContainedParamUse` proves a temporal property — the licensed field
+/// reads happen before the body's first bare use of the parameter. The fact
+/// map that would carry a caller-side route is keyed by local id and is
+/// therefore flow-INSENSITIVE: a fact kept past a publishing call is consulted
+/// again at every later route site for the same local, including sites that
+/// run once the alias exists. A per-local map cannot express "before", so the
+/// only sound reading is that no caller-side containment fact survives such a
+/// call at all.
 #[test]
-fn field_read_before_terminal_publication_gets_only_the_guarded_route() {
+fn publishing_clone_gets_no_caller_side_route() {
     let mut module = fixture();
     let param_id = module.classes[1].methods[0].params[0].id;
     module.classes[1].methods[0]
@@ -357,8 +377,9 @@ fn field_read_before_terminal_publication_gets_only_the_guarded_route() {
         .expect("LLVM IR is UTF-8");
     let clone_name = "perry_method_argument_shape_clone_ts__Registry__read$pshape_args";
     assert!(
-        ir.contains(&format!("call double @{clone_name}(")),
-        "a direct read performed before publication should use the guarded clone:\n{ir}"
+        !ir.contains(&format!("call double @{clone_name}(")),
+        "a clone that publishes its parameter must not be routed from a \
+         caller-side containment fact:\n{ir}"
     );
     let entries = session.entries();
     assert!(
@@ -368,6 +389,50 @@ fn field_read_before_terminal_publication_gets_only_the_guarded_route() {
                 && entry.outcome == crate::opt_report::Outcome::Selected
         }),
         "a publishing clone must not preserve the caller's broad Ptr<Shape> fact: {entries:#?}"
+    );
+}
+
+/// #8833 regression: the three widenings must not compose into an unguarded
+/// fixed-offset read of a published object.
+///
+/// Fixture: a §5.2 barrier the analysis cannot attribute, a callee that
+/// publishes its parameter after its licensed read, and TWO route sites on the
+/// same caller local — so the second one executes after the alias exists. Every
+/// safety net that could catch a reshape here had been removed at once: rule
+/// 5's module kill (bypassed by the route-only proof), the caller's post-call
+/// containment requirement, and the runtime class+ShapeId guard.
+#[test]
+fn published_argument_in_a_barrier_module_never_reaches_an_unguarded_clone() {
+    let mut module = fixture();
+    let param_id = module.classes[1].methods[0].params[0].id;
+    // The callee reads the declared field, then publishes the parameter.
+    module.classes[1].methods[0]
+        .body
+        .push(Stmt::Return(Some(Expr::LocalGet(param_id))));
+    // A module-wide §5.2 barrier whose target the containment walk cannot
+    // attribute to any tracked local.
+    module.init.insert(0, define_property(Expr::Object(vec![])));
+    // A second route site on the same local, after the first published it.
+    let second_call = module.init.last().expect("fixture call").clone();
+    module.init.push(second_call);
+
+    let ir = String::from_utf8(compile_module(&module, opts()).expect("module compiles"))
+        .expect("LLVM IR is UTF-8");
+    let clone_name = "perry_method_argument_shape_clone_ts__Registry__read$pshape_args";
+    // Subject-liveness: the argument-clone machinery must actually be engaged
+    // by this fixture, or the assertion below would pass for the wrong reason.
+    assert!(
+        ir.contains(&format!("@{clone_name}(")),
+        "fixture must still emit the argument clone, or this test is vacuous:\n{ir}"
+    );
+    let unguarded_calls = ir.matches(&format!("call double @{clone_name}(")).count();
+    let guard_blocks = ir.matches("pshape_arg.fallback").count();
+
+    assert!(
+        unguarded_calls == 0 || guard_blocks > 0,
+        "a published argument in a barrier-carrying module reached the \
+         argument clone with no runtime class+ShapeId guard \
+         ({unguarded_calls} clone calls, {guard_blocks} guard blocks):\n{ir}"
     );
 }
 

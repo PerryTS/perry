@@ -146,8 +146,17 @@ fn class_fields_cover(
 }
 
 /// Check the caller-side provenance and alias terms for one guarded route.
-/// `require_post_call_containment` additionally rejects clones that publish the
-/// parameter after their specialized prefix.
+///
+/// A route may only be admitted when the clone preserves containment for the
+/// parameter's whole lifetime. That is not a stylistic preference: the fact
+/// map this feeds is keyed by local id and therefore flow-INSENSITIVE, so a
+/// fact kept past a publishing call is consulted again at every later route
+/// site for the same local — including sites that execute after the alias
+/// exists. `PrefixContainedParamUse` proves a temporal property ("the reads
+/// happen before the publication"), which a per-local map cannot express, so
+/// the only sound reading of a publishing clone is that no caller-side
+/// containment fact survives it at all.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn route_preserves_argument_containment(
     module_dispatch: &ModuleDispatchFacts,
     candidates: &HashMap<u32, String>,
@@ -158,7 +167,6 @@ pub(super) fn route_preserves_argument_containment(
     param_index: usize,
     arg: &Expr,
     call_args: &[Expr],
-    require_post_call_containment: bool,
 ) -> bool {
     let Expr::LocalGet(id) = arg else {
         return false;
@@ -188,8 +196,7 @@ pub(super) fn route_preserves_argument_containment(
     let Some((expected, preserves_containment)) = route else {
         return false;
     };
-    (!require_post_call_containment || preserves_containment)
-        && candidates.get(root).is_some_and(|got| got == expected)
+    preserves_containment && candidates.get(root).is_some_and(|got| got == expected)
 }
 
 /// Direct declared-field reads are safe until the first bare use publishes the

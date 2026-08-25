@@ -1193,7 +1193,6 @@ impl<'a> UseWalk<'a> {
                                         param_index,
                                         a,
                                         args,
-                                        self.purpose == CollectionPurpose::UnguardedRepresentation,
                                     )
                                 {
                                     continue;
@@ -1208,9 +1207,9 @@ impl<'a> UseWalk<'a> {
                     // the receiver class after this analysis (notably for
                     // `this.m(fresh)`). Preserve the fresh argument only when
                     // all emitted clones with this method name and position
-                    // agree on its class. The fact is invisible to ordinary
-                    // field/method lowering and is consumed only beside the
-                    // live class+ShapeId guard.
+                    // agree on its class AND preserve containment. The fact is
+                    // invisible to ordinary field/method lowering and is
+                    // consumed only beside the live class+ShapeId guard.
                     if self.purpose == CollectionPurpose::GuardedArgumentRoute
                         && matches!(object.as_ref(), Expr::This | Expr::LocalGet(_))
                     {
@@ -1226,7 +1225,6 @@ impl<'a> UseWalk<'a> {
                                 param_index,
                                 arg,
                                 args,
-                                false,
                             ) {
                                 continue;
                             }

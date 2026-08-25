@@ -83,7 +83,13 @@ pub(crate) fn collect_shape_proven_ptr_locals_and_element_fields(
     )
 }
 
-/// Containment facts consumable only beside a `$pshape_args` live guard.
+/// Containment facts consumable only beside a live argument-shape guard.
+///
+/// This differs from the representation proof above in exactly one respect:
+/// rule 5's module-wide barrier kill is bypassed. Rules 1-4 still bound every
+/// path to the object, and the emitted route still revalidates the live class
+/// and ShapeId, so the belt-and-braces module kill is redundant here — but the
+/// runtime guard is NOT, and the consumer must keep it.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_guarded_argument_route_locals(
     stmts: &[Stmt],
