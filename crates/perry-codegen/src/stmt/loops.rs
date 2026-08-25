@@ -5412,6 +5412,11 @@ pub(super) fn lower_for_after_init_with_i32_bound(
     // Body block.
     ctx.current_block = body_idx;
     super::versioned_indexed_loop::emit_iteration_guard(ctx);
+    let loop_counter_id = match init {
+        Some(Stmt::Let { id, .. }) => Some(*id),
+        _ => None,
+    };
+    super::stable_packed_loop::emit_iteration_guard(ctx, loop_counter_id)?;
     if let Some(cond) = condition {
         let mut guarded =
             crate::expr::guarded_buffer_indices_for_condition(ctx, cond, loop_proof_scope_id);

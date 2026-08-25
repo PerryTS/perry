@@ -1630,6 +1630,22 @@ pub(crate) struct StablePackedLoopFact {
     pub array_local_id: u32,
     pub side_exit_label: String,
     pub descriptor: String,
+    /// Boxed bound passed to the runtime guard (`-1` requests live length).
+    pub bound: String,
+    /// Live-length versions must observe growth as well as shrink. The
+    /// iteration guard compares its refreshed bound with this admitted value
+    /// and side-exits when they differ.
+    pub admitted_bound: String,
+    pub live_length_bound: bool,
+    /// Captured receivers cannot keep a raw address across calls in the loop
+    /// body. They reload the closure slot and revalidate before the first
+    /// indexed effect of every iteration.
+    pub revalidate_each_iteration: bool,
+    /// A nested receiver derived from an outer guarded read may have pure
+    /// compiler temporaries before its first indexed use. Revalidate at that
+    /// use, after those temporaries, so none of their runtime loads can leave a
+    /// stale raw address.
+    pub revalidate_before_indexed_read: bool,
     pub live_receiver_handle: Option<String>,
     /// Admission scanned the complete indexed range and proved every value is
     /// an untagged IEEE Number. This is requested only when the indexed value
@@ -1638,6 +1654,10 @@ pub(crate) struct StablePackedLoopFact {
     /// Preheader-derived numeric storage bases. Admission proved the complete
     /// range is raw f64 and the call-free clone keeps these addresses stable.
     pub numeric_access: Option<StablePackedNumericAccess>,
+    /// Immutable locals initialized from this loop's guarded direct indexed
+    /// read. They may seed a nested candidate only while this fast-loop fact
+    /// is active.
+    pub derived_locals: std::collections::HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -591,13 +591,12 @@ pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64, cache
 /// dense_prefix|inline_bound<<32, bound)`. Kind 1 is an ArrayHeader and kind 2
 /// is an ObjectHeader Array subclass. A zero return leaves every semantic case
 /// to the unchanged generic loop.
-#[no_mangle]
-pub extern "C" fn js_packed_arraylike_loop_guard(
+fn packed_arraylike_loop_guard(
     receiver: f64,
     bound: f64,
     require_numeric: i32,
     out: *mut u64,
-) -> i32 {
+) -> Option<(i32, *const u8)> {
     let live_length_bound = bound == -1.0;
     if out.is_null()
         || !bound.is_finite()
@@ -605,33 +604,54 @@ pub extern "C" fn js_packed_arraylike_loop_guard(
         || (!live_length_bound && bound.fract() != 0.0)
         || bound > 16_000_000.0
     {
-        return 0;
+        return None;
     }
     let requested_bound = (!live_length_bound).then_some(bound as u32);
     let js = JSValue::from_bits(receiver.to_bits());
     if !js.is_pointer() {
-        return 0;
+        return None;
     }
-    let raw = js.as_pointer::<u8>();
-    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) })
+    let source = js.as_pointer::<u8>();
+    let Some(source_header) =
+        (unsafe { crate::value::addr_class::try_read_gc_header(source as usize) })
     else {
-        return 0;
+        return None;
     };
-    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
-        return 0;
-    }
+    // Array growth preserves identity with a forwarding stub. Captured const
+    // slots cannot be canonicalized like compiler-private locals, so admit one
+    // validated edge and return the live address to codegen. A longer chain,
+    // a cross-brand target, or an unreadable target remains a generic-loop
+    // side exit. Moving GC normally rewrites closure slots, but accepting the
+    // same representation here also makes forced-evacuation entry fail-safe.
+    let raw = if source_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        if source_header.obj_type != crate::gc::GC_TYPE_ARRAY {
+            return None;
+        }
+        let target = unsafe { crate::gc::forwarding_address(source_header) };
+        let target_header =
+            unsafe { crate::value::addr_class::try_read_gc_header(target as usize) }?;
+        if target_header.obj_type != crate::gc::GC_TYPE_ARRAY
+            || target_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return None;
+        }
+        target
+    } else {
+        source
+    };
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) }?;
 
     if header.obj_type == crate::gc::GC_TYPE_ARRAY {
         if header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
             || super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0
         {
-            return 0;
+            return None;
         }
         let array = raw.cast::<ArrayHeader>();
         let (length, capacity) = unsafe { ((*array).length, (*array).capacity) };
         let bound = requested_bound.unwrap_or(length);
         if bound > length || length > capacity || capacity > 16_000_000 {
-            return 0;
+            return None;
         }
         if require_numeric != 0 {
             // The raw-f64 invariant is an O(1) GcHeader bit after its first
@@ -639,7 +659,7 @@ pub extern "C" fn js_packed_arraylike_loop_guard(
             // clears it. Reuse that representation proof instead of walking
             // the full range on every invocation of the surrounding scan().
             if !unsafe { super::header::ensure_array_numeric_raw_f64(array as *mut ArrayHeader) } {
-                return 0;
+                return None;
             }
         }
         let gc_word = unsafe { ptr::read_unaligned((raw as *const u8).sub(8).cast::<u64>()) };
@@ -653,28 +673,29 @@ pub extern "C" fn js_packed_arraylike_loop_guard(
             out.add(5).write(0);
             out.add(6).write(u64::from(bound));
         }
-        return 1;
+        return Some((1, raw));
     }
 
     if header.obj_type != crate::gc::GC_TYPE_OBJECT {
-        return 0;
+        return None;
     }
-    let Some((object, layout)) = dense_layout_for_value(receiver) else {
-        return 0;
+    let live_receiver = f64::from_bits(crate::value::js_nanbox_pointer(raw as i64).to_bits());
+    let Some((object, layout)) = dense_layout_for_value(live_receiver) else {
+        return None;
     };
     if !crate::object::object_spill_enabled() || layout.length_slot >= layout.live_inline_slots {
-        return 0;
+        return None;
     }
     let Some(length) = nonnegative_u32_length(layout_length_value(object, layout)) else {
-        return 0;
+        return None;
     };
     let bound = requested_bound.unwrap_or(length);
     if bound > length || bound > layout.dense_prefix_len || length > 16_000_000 {
-        return 0;
+        return None;
     }
     if require_numeric != 0 {
         if !unsafe { ensure_subclass_numeric_prefix(object, layout, bound) } {
-            return 0;
+            return None;
         }
     }
     let gc_word = unsafe { ptr::read_unaligned((raw as *const u8).sub(8).cast::<u64>()) };
@@ -690,13 +711,46 @@ pub extern "C" fn js_packed_arraylike_loop_guard(
         );
         out.add(6).write(u64::from(bound));
     }
-    2
+    Some((2, raw))
+}
+
+#[no_mangle]
+pub extern "C" fn js_packed_arraylike_loop_guard(
+    receiver: f64,
+    bound: f64,
+    require_numeric: i32,
+    out: *mut u64,
+) -> i32 {
+    packed_arraylike_loop_guard(receiver, bound, require_numeric, out)
+        .map(|(kind, _)| kind)
+        .unwrap_or(0)
+}
+
+/// #8773 capture-safe packed-loop admission. In addition to filling the seven
+/// scalar descriptor words, return the live receiver user address. The caller
+/// consumes it before the next safepoint and reloads/revalidates on the next
+/// iteration; the returned address is never stored as a GC root.
+#[no_mangle]
+pub extern "C" fn js_packed_arraylike_loop_guard_live(
+    receiver: f64,
+    bound: f64,
+    require_numeric: i32,
+    out: *mut u64,
+) -> i64 {
+    packed_arraylike_loop_guard(receiver, bound, require_numeric, out)
+        .map(|(_, raw)| raw as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_JS_PACKED_ARRAYLIKE_LOOP_GUARD: extern "C" fn(f64, f64, i32, *mut u64) -> i32 =
     js_packed_arraylike_loop_guard;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_PACKED_ARRAYLIKE_LOOP_GUARD_LIVE: extern "C" fn(f64, f64, i32, *mut u64) -> i64 =
+    js_packed_arraylike_loop_guard_live;
 
 #[cfg(feature = "keepalive-anchors")]
 #[used]

@@ -104,6 +104,7 @@ pub(crate) fn lower_let(
         }
     }
     if let Some(init_expr) = init {
+        super::stable_packed_loop::record_derived_local(ctx, id, init_expr, mutable);
         crate::expr::record_local_value_alias_for_write(ctx, id, init_expr);
         record_array_length_snapshot(ctx, id, init_expr);
         ctx.guarded_discriminant_aliases.remove(&id);
