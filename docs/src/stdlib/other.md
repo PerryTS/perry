@@ -20,6 +20,17 @@ const buf = await sharp("input.jpg")
 await sharp("input.png")
   .resize(300, 200)
   .toFile("output.png");
+
+const placeholder = await sharp({
+  create: {
+    width: 300,
+    height: 200,
+    channels: 4,
+    background: { r: 30, g: 41, b: 59, alpha: 1 },
+  },
+})
+  .png()
+  .toBuffer();
 ```
 
 ## cheerio (HTML Parsing)

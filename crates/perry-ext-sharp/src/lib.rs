@@ -9,7 +9,7 @@ use perry_ffi::{
     alloc_buffer, alloc_string, build_object_shape, get_handle, js_array_get, js_array_length,
     js_object_alloc_with_shape, js_object_set_field, read_buffer_bytes, read_bytes, read_string,
     register_handle, spawn_blocking, ArrayHeader, BufferHeader, Handle, JsPromise, JsString,
-    JsValue, ObjectHeader, Promise, StringHeader,
+    JsValue, Promise, StringHeader, TransientRootScope,
 };
 use std::io::Cursor;
 
@@ -23,7 +23,7 @@ mod test_async_shims;
 extern "C" {
     fn js_get_string_pointer_unified(value: f64) -> i64;
     fn js_buffer_is_buffer(ptr: i64) -> i32;
-    fn js_object_get_field_by_name_f64(obj: *const ObjectHeader, key: *const StringHeader) -> f64;
+    fn js_object_get_field_by_name_boxed(receiver: f64, key: *const StringHeader) -> f64;
     fn js_string_from_bytes(data: *const u8, len: u32) -> *mut StringHeader;
 }
 
@@ -31,16 +31,11 @@ extern "C" {
 /// `None` if `opts` isn't an object or the field isn't a number. Handles both
 /// int32- and f64-boxed numbers.
 unsafe fn opts_number_field(opts: f64, name: &str) -> Option<f64> {
-    let jv = JsValue::from_bits(opts.to_bits());
-    if !jv.is_pointer() {
-        return None;
-    }
-    let obj = jv.as_pointer::<ObjectHeader>();
-    if obj.is_null() {
-        return None;
-    }
+    let scope = TransientRootScope::enter();
+    let rooted_opts = scope.root_nanbox(opts);
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let field = JsValue::from_bits(js_object_get_field_by_name_f64(obj, key).to_bits());
+    let field =
+        JsValue::from_bits(js_object_get_field_by_name_boxed(rooted_opts.get(), key).to_bits());
     if field.is_int32() {
         Some(((field.bits() & 0xFFFF_FFFF) as u32 as i32) as f64)
     } else if field.is_number() {
@@ -54,16 +49,12 @@ unsafe fn opts_number_field(opts: f64, name: &str) -> Option<f64> {
 /// object field (e.g. `extend({ background })`). `None` if `obj` isn't an
 /// object.
 unsafe fn opts_field_bits(opts: f64, name: &str) -> Option<f64> {
-    let jv = JsValue::from_bits(opts.to_bits());
-    if !jv.is_pointer() {
-        return None;
-    }
-    let obj = jv.as_pointer::<ObjectHeader>();
-    if obj.is_null() {
-        return None;
-    }
+    let scope = TransientRootScope::enter();
+    let rooted_opts = scope.root_nanbox(opts);
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    Some(js_object_get_field_by_name_f64(obj, key))
+    let field =
+        JsValue::from_bits(js_object_get_field_by_name_boxed(rooted_opts.get(), key).to_bits());
+    (!field.is_undefined()).then(|| f64::from_bits(field.bits()))
 }
 
 /// Read a `{ r, g, b, alpha }` background colour from `opts.background`.
@@ -74,8 +65,14 @@ unsafe fn read_background(opts: f64) -> image::Rgba<u8> {
         Some(b) => b,
         None => return image::Rgba([0, 0, 0, 255]),
     };
-    let chan = |n: &str, d: f64| opts_number_field(bg, n).unwrap_or(d).clamp(0.0, 255.0) as u8;
-    let alpha = (opts_number_field(bg, "alpha")
+    let scope = TransientRootScope::enter();
+    let rooted_bg = scope.root_nanbox(bg);
+    let chan = |n: &str, d: f64| {
+        opts_number_field(rooted_bg.get(), n)
+            .unwrap_or(d)
+            .clamp(0.0, 255.0) as u8
+    };
+    let alpha = (opts_number_field(rooted_bg.get(), "alpha")
         .unwrap_or(1.0)
         .clamp(0.0, 1.0)
         * 255.0)
@@ -224,13 +221,82 @@ fn decode_image_bytes(bytes: &[u8]) -> Handle {
     }
 }
 
-/// `sharp(input)` factory — `input` is a file path string OR a Buffer /
-/// Uint8Array of encoded image bytes. The arg arrives as raw NaN-box bits
-/// (NA_JSV); recover the underlying pointer and branch on the Buffer registry
-/// probe.
+const MAX_CREATE_DIMENSION: f64 = 100_000_000.0;
+const MAX_CREATE_PIXELS: usize = 0x3FFF * 0x3FFF;
+
+fn valid_create_dimension(value: f64) -> Option<u32> {
+    (value.is_finite() && value.fract() == 0.0 && (1.0..=MAX_CREATE_DIMENSION).contains(&value))
+        .then_some(value as u32)
+}
+
+fn create_solid_image(
+    width: u32,
+    height: u32,
+    channels: u8,
+    background: image::Rgba<u8>,
+) -> Option<DynamicImage> {
+    let pixel_count = (width as usize).checked_mul(height as usize)?;
+    if pixel_count > MAX_CREATE_PIXELS {
+        return None;
+    }
+    let byte_len = pixel_count.checked_mul(channels as usize)?;
+    let mut pixels = Vec::new();
+    pixels.try_reserve_exact(byte_len).ok()?;
+    pixels.resize(byte_len, 0);
+
+    match channels {
+        3 => {
+            for pixel in pixels.as_chunks_mut::<3>().0 {
+                pixel.copy_from_slice(&background.0[..3]);
+            }
+            image::RgbImage::from_raw(width, height, pixels).map(DynamicImage::ImageRgb8)
+        }
+        4 => {
+            for pixel in pixels.as_chunks_mut::<4>().0 {
+                pixel.copy_from_slice(&background.0);
+            }
+            image::RgbaImage::from_raw(width, height, pixels).map(DynamicImage::ImageRgba8)
+        }
+        _ => None,
+    }
+}
+
+/// Decode sharp's object-form input descriptor:
+/// `{ create: { width, height, channels, background: { r, g, b, alpha? } } }`.
+///
+/// Sharp accepts only 3-channel RGB or 4-channel RGBA solid backgrounds. The
+/// dimension bounds and default pixel limit mirror its constructor checks.
+unsafe fn create_image_from_input(input: f64) -> Option<DynamicImage> {
+    let scope = TransientRootScope::enter();
+    let rooted_input = scope.root_nanbox(input);
+    let create = opts_field_bits(rooted_input.get(), "create")?;
+    if !JsValue::from_bits(create.to_bits()).is_pointer() {
+        return None;
+    }
+    let rooted_create = scope.root_nanbox(create);
+
+    let width = valid_create_dimension(opts_number_field(rooted_create.get(), "width")?)?;
+    let height = valid_create_dimension(opts_number_field(rooted_create.get(), "height")?)?;
+    let channels = opts_number_field(rooted_create.get(), "channels")?;
+    if !channels.is_finite() || channels.fract() != 0.0 || !matches!(channels as u8, 3 | 4) {
+        return None;
+    }
+
+    let background = opts_field_bits(rooted_create.get(), "background")?;
+    if !JsValue::from_bits(background.to_bits()).is_pointer() {
+        return None;
+    }
+    let rgba = read_background(rooted_create.get());
+    create_solid_image(width, height, channels as u8, rgba)
+}
+
+/// `sharp(input)` factory — `input` is a file path string, a Buffer /
+/// Uint8Array of encoded image bytes, or a `{ create: { ... } }` descriptor.
+/// The arg arrives as raw NaN-box bits (NA_JSV); recover the underlying pointer
+/// and branch on the input representation.
 ///
 /// # Safety
-/// `input_bits` must be the raw NaN-box bits of a JS string or Buffer value.
+/// `input_bits` must be the raw NaN-box bits of a supported JS input value.
 #[no_mangle]
 pub unsafe extern "C" fn js_sharp_from_input(input_bits: i64) -> Handle {
     let ptr = js_get_string_pointer_unified(f64::from_bits(input_bits as u64));
@@ -243,14 +309,17 @@ pub unsafe extern "C" fn js_sharp_from_input(input_bits: i64) -> Handle {
             None => -1,
         };
     }
-    // A POINTER_TAG value that isn't a registered Buffer is a plain object /
-    // array — not a valid sharp input. `js_get_string_pointer_unified` hands
-    // back its heap pointer, which must NOT be read as a `StringHeader` (that
-    // would read arbitrary memory). Reject it the way sharp rejects an
-    // unsupported input. (Strings — long or short — and number-coerced keys
-    // are not `POINTER_TAG`, so the path-string case still flows through.)
-    if JsValue::from_bits(input_bits as u64).is_pointer() {
-        return -1;
+    let input = JsValue::from_bits(input_bits as u64);
+    if input.is_pointer() {
+        return match create_image_from_input(f64::from_bits(input.bits())) {
+            Some(image) => register_handle(SharpHandle {
+                image,
+                format: ImageFormat::Png,
+                quality: 80,
+                orientation: 1,
+            }),
+            None => -1,
+        };
     }
     match read_string(JsString::from_raw(ptr as *mut StringHeader)) {
         Some(path) => open_image_path(path),
@@ -839,6 +908,35 @@ mod tests {
     use super::*;
     use image::{ImageBuffer, Rgba};
 
+    unsafe fn object(fields: &[(&str, JsValue)]) -> JsValue {
+        let keys: Vec<&str> = fields.iter().map(|(key, _)| *key).collect();
+        let (packed, shape_id) = build_object_shape(&keys);
+        let obj = js_object_alloc_with_shape(
+            shape_id,
+            fields.len() as u32,
+            packed.as_ptr(),
+            packed.len() as u32,
+        );
+        for (index, (_, value)) in fields.iter().enumerate() {
+            js_object_set_field(obj, index as u32, *value);
+        }
+        JsValue::from_object_ptr(obj)
+    }
+
+    unsafe fn create_input(
+        width: JsValue,
+        height: JsValue,
+        channels: JsValue,
+        background: Option<JsValue>,
+    ) -> JsValue {
+        let mut fields = vec![("width", width), ("height", height), ("channels", channels)];
+        if let Some(background) = background {
+            fields.push(("background", background));
+        }
+        let create = object(&fields);
+        object(&[("create", create)])
+    }
+
     fn make_handle(w: u32, h: u32) -> Handle {
         let buf: ImageBuffer<Rgba<u8>, Vec<u8>> =
             ImageBuffer::from_pixel(w, h, Rgba([255, 0, 0, 255]));
@@ -894,6 +992,86 @@ mod tests {
     fn invalid_handle_returns_zero_dims() {
         assert_eq!(js_sharp_width(-1), 0.0);
         assert_eq!(js_sharp_height(-1), 0.0);
+    }
+
+    #[test]
+    fn create_input_builds_rgb_canvas() {
+        unsafe {
+            let background = object(&[
+                ("r", JsValue::from_int32(1)),
+                ("g", JsValue::from_number(2.0)),
+                ("b", JsValue::from_int32(3)),
+            ]);
+            let input = create_input(
+                JsValue::from_int32(4),
+                JsValue::from_number(3.0),
+                JsValue::from_int32(3),
+                Some(background),
+            );
+
+            let handle = js_sharp_from_input(input.bits() as i64);
+            let sharp = get_handle::<SharpHandle>(handle).expect("valid create handle");
+            assert_eq!(sharp.image.dimensions(), (4, 3));
+            assert_eq!(sharp.image.color().channel_count(), 3);
+            assert_eq!(sharp.image.to_rgb8().get_pixel(3, 2).0, [1, 2, 3]);
+        }
+    }
+
+    #[test]
+    fn create_input_preserves_rgba_alpha() {
+        unsafe {
+            let background = object(&[
+                ("r", JsValue::from_int32(10)),
+                ("g", JsValue::from_int32(20)),
+                ("b", JsValue::from_int32(30)),
+                ("alpha", JsValue::from_number(0.5)),
+            ]);
+            let input = create_input(
+                JsValue::from_int32(2),
+                JsValue::from_int32(1),
+                JsValue::from_int32(4),
+                Some(background),
+            );
+
+            let handle = js_sharp_from_input(input.bits() as i64);
+            let sharp = get_handle::<SharpHandle>(handle).expect("valid create handle");
+            assert_eq!(sharp.image.color().channel_count(), 4);
+            assert_eq!(sharp.image.to_rgba8().get_pixel(1, 0).0, [10, 20, 30, 128]);
+        }
+    }
+
+    #[test]
+    fn create_input_rejects_invalid_descriptors() {
+        unsafe {
+            let background = object(&[
+                ("r", JsValue::from_int32(1)),
+                ("g", JsValue::from_int32(2)),
+                ("b", JsValue::from_int32(3)),
+            ]);
+            let invalid_width = create_input(
+                JsValue::from_number(1.5),
+                JsValue::from_int32(4),
+                JsValue::from_int32(3),
+                Some(background),
+            );
+            assert_eq!(js_sharp_from_input(invalid_width.bits() as i64), -1);
+
+            let invalid_channels = create_input(
+                JsValue::from_int32(4),
+                JsValue::from_int32(4),
+                JsValue::from_int32(2),
+                Some(background),
+            );
+            assert_eq!(js_sharp_from_input(invalid_channels.bits() as i64), -1);
+
+            let missing_background = create_input(
+                JsValue::from_int32(4),
+                JsValue::from_int32(4),
+                JsValue::from_int32(3),
+                None,
+            );
+            assert_eq!(js_sharp_from_input(missing_background.bits() as i64), -1);
+        }
     }
 
     #[test]

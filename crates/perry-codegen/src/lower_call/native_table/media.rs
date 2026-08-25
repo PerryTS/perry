@@ -4,9 +4,10 @@ pub(super) const MEDIA_ROWS: &[NativeModSig] = &[
     // ========== sharp ==========
     // Factory: sharp(path) → js_sharp_from_file. Instance methods take
     // Handle (i64), compatible with the has_receiver:true dispatch path.
-    // `sharp(input)` accepts a file-path string OR a Buffer/Uint8Array of
-    // encoded image bytes. Pass the raw NaN-boxed value (NA_JSV) so
-    // `js_sharp_from_input` can branch on the Buffer registry probe.
+    // `sharp(input)` accepts a file-path string, a Buffer/Uint8Array of encoded
+    // image bytes, or a `{ create: { ... } }` descriptor. Pass the raw
+    // NaN-boxed value (NA_JSV) so `js_sharp_from_input` can branch on its
+    // representation.
     NativeModSig {
         module: "sharp",
         has_receiver: false,
