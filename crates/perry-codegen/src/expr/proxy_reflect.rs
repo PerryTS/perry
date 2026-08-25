@@ -1260,7 +1260,15 @@ fn is_numeric_string_key(key: &str) -> bool {
 }
 
 fn put_value_index_fast_path(ctx: &FnCtx<'_>, target: &Expr, key: &Expr, receiver: &Expr) -> bool {
-    if !same_side_effect_free_receiver(target, receiver) {
+    // `PutValueSet` stores the assignment base in both `target` and `receiver`;
+    // those two HIR trees describe one source evaluation, not two evaluations
+    // that may be coalesced only when pure. Use the same structural-identity
+    // check as the generic same-receiver PutValue lowering below so expressions
+    // such as `this.getData()[index] = value` can retain the statically known
+    // Array type. `IndexSet::lower` evaluates that base once. A genuinely
+    // distinct receiver (including a call with different arguments) still
+    // fails closed to the explicit-receiver runtime path.
+    if !same_put_value_receiver_expr(target, receiver) {
         return false;
     }
     if is_array_expr(ctx, target) {
