@@ -232,7 +232,12 @@ jobs:
           shared-key: "${{ runner.os }}-perry"
           save-if: false
 
+      - name: Build the static runtime expected by the integration test
+        run: cargo build -p perry-runtime-static
+
       - name: Run the failing cargo-test target
+        env:
+          RUST_BACKTRACE: "1"
         run: cargo test -p perry --test issue_5247_property_read_source_location -- --test-threads=1
 
   release-doc-diagnostic:
