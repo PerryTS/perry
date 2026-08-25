@@ -102,7 +102,7 @@ runs:
         $curlArgs = @(
           "-sSL", "--retry", "2", "--retry-all-errors", "--retry-delay", "10",
           "--connect-timeout", "30", "--max-time", "120", "--retry-max-time", "300",
-          "-o", $archive, $url
+          "-o", "`"$archive`"", $url
         )
         $curl = Start-Process -FilePath "curl.exe" -ArgumentList $curlArgs -NoNewWindow -PassThru
         if (-not $curl.WaitForExit(360000)) {
@@ -130,7 +130,7 @@ runs:
           # 47-74 seconds, so two minutes leaves margin without sacrificing five
           # runner-minutes every time the native extractor wedges.
           Write-Host "extracting LLVM with tar.exe (2-minute hard limit)"
-          $tarArgs = @("-xf", $archive, "-C", "C:\llvm", "--strip-components=1")
+          $tarArgs = @("-xf", "`"$archive`"", "-C", "C:\llvm", "--strip-components=1")
           $tar = Start-Process -FilePath "tar.exe" -ArgumentList $tarArgs -NoNewWindow -PassThru
           if (-not $tar.WaitForExit(120000)) {
             Stop-Process -Id $tar.Id -Force -ErrorAction SilentlyContinue
