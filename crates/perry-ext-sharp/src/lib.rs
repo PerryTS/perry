@@ -909,6 +909,11 @@ mod tests {
     use image::{ImageBuffer, Rgba};
 
     unsafe fn object(fields: &[(&str, JsValue)]) -> JsValue {
+        let scope = TransientRootScope::enter();
+        let rooted_fields: Vec<_> = fields
+            .iter()
+            .map(|(_, value)| scope.root_nanbox(f64::from_bits(value.bits())))
+            .collect();
         let keys: Vec<&str> = fields.iter().map(|(key, _)| *key).collect();
         let (packed, shape_id) = build_object_shape(&keys);
         let obj = js_object_alloc_with_shape(
@@ -917,10 +922,16 @@ mod tests {
             packed.as_ptr(),
             packed.len() as u32,
         );
-        for (index, (_, value)) in fields.iter().enumerate() {
-            js_object_set_field(obj, index as u32, *value);
+        let rooted_obj = scope.root_nanbox(f64::from_bits(JsValue::from_object_ptr(obj).bits()));
+        for (index, value) in rooted_fields.iter().enumerate() {
+            let current_obj = JsValue::from_bits(rooted_obj.get().to_bits()).as_pointer();
+            js_object_set_field(
+                current_obj,
+                index as u32,
+                JsValue::from_bits(value.get().to_bits()),
+            );
         }
-        JsValue::from_object_ptr(obj)
+        JsValue::from_bits(rooted_obj.get().to_bits())
     }
 
     unsafe fn create_input(
