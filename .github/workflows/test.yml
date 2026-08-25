@@ -140,7 +140,9 @@ jobs:
             echo "${label}: direct exit=${rc}"
 
             if [ "$rc" -ne 0 ]; then
-              lldb --batch -o run -o 'thread backtrace all' -- "$binary" || true
+              lldb --batch \
+                -o 'breakpoint set --name malloc_error_break' \
+                -o run -k 'thread backtrace all' -- "$binary" || true
             fi
 
             set +e
@@ -151,7 +153,9 @@ jobs:
 
             if [ "$guard_rc" -ne 0 ]; then
               DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib \
-                lldb --batch -o run -o 'thread backtrace all' -- "$binary" || true
+                lldb --batch \
+                  -o 'breakpoint set --name malloc_error_break' \
+                  -o run -k 'thread backtrace all' -- "$binary" || true
             fi
           }
 
