@@ -161,6 +161,8 @@ mod write_pic_barrier_tests;
 // temp alloca through the same shadow-slot emission every named local uses,
 // and it now lives outside `crate::expr`.
 #[cfg(test)]
+mod call_return_array_index_tests;
+#[cfg(test)]
 mod call_spread_rooting_tests;
 mod call_spread_short;
 #[cfg(test)]

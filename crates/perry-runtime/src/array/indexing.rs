@@ -1084,10 +1084,11 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
 /// (`index_set` / `index` / `field_set_by_name`) routes here.
 /// test262 built-ins/Array element/add on frozen|sealed|non-extensible.
 /// Strict-mode guard for a would-be `arr[index] = v` element write: throws the
-/// spec `Set`-with-`Throw` TypeError when `arr` is frozen (existing index →
-/// read-only) or non-extensible and the index is new (→ not-extensible). No-op
-/// for writable slots, buffers, and typed arrays (which own their store
-/// semantics). Shared by the strict element-write entry points.
+/// spec `Set`-with-`Throw` TypeError when an own data descriptor is read-only,
+/// an accessor has no setter, `length` is read-only and would grow, the array
+/// is frozen, or a non-extensible array would gain a new element. No-op for
+/// writable slots, buffers, and typed arrays (which own their store semantics).
+/// Shared by the strict element-write entry points.
 #[inline]
 pub(crate) fn array_strict_index_write_guard(arr: *mut ArrayHeader, index: u32) {
     let clean = clean_arr_ptr_mut(arr);
@@ -1099,11 +1100,48 @@ pub(crate) fn array_strict_index_write_guard(arr: *mut ArrayHeader, index: u32) 
     }
     let flags = array_object_flags(clean);
     let length = unsafe { (*clean).length };
+
+    // A descriptor-bearing array is rare, so keep all key construction and
+    // side-table probes off the ordinary dense-array path. An accessor with a
+    // setter remains writable even when the object is frozen; return early and
+    // let `js_array_set_f64_extend` invoke it. Every other rejected descriptor
+    // must throw here because that lower-level helper deliberately retains a
+    // silent contract for internal DefineOwnProperty callers.
+    if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+        let key = index.to_string();
+        if let Some(accessor) = crate::object::get_accessor_descriptor(clean as usize, &key) {
+            if accessor.set == 0 {
+                throw_frozen_array_index_write(index);
+            }
+            return;
+        }
+        if crate::object::get_property_attrs(clean as usize, &key)
+            .is_some_and(|attrs| !attrs.writable())
+        {
+            throw_frozen_array_index_write(index);
+        }
+        if index >= length
+            && crate::object::get_property_attrs(clean as usize, "length")
+                .is_some_and(|attrs| !attrs.writable())
+        {
+            crate::collection_iter::throw_type_error(
+                "Cannot assign to read only property 'length' of object '[object Array]'",
+            );
+        }
+    }
+
     if index < length {
-        // Existing index: only a *frozen* array's data is non-writable; a
-        // sealed / non-extensible array still permits overwriting it.
         if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
             throw_frozen_array_index_write(index);
+        }
+        // `length` includes holes. Filling one creates a new own property, so
+        // sealed/preventExtensions arrays must reject it even though the index
+        // is numerically in bounds. This probe is confined to the already-cold
+        // restricted-object branch.
+        if flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0
+            && !unsafe { array_has_own_index(clean, index) }
+        {
+            throw_array_not_extensible_add(index);
         }
     } else if flags
         & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND)
