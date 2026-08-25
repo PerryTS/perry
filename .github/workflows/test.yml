@@ -71,7 +71,7 @@ on:
         type: boolean
         default: false
       release_doc_diagnostic:
-        description: 'Run only the focused macOS release doc-test diagnostic'
+        description: 'Run only the focused Windows release doc-test diagnostic'
         type: boolean
         default: false
       release_net_diagnostic:
@@ -199,69 +199,51 @@ jobs:
 
   release-doc-diagnostic:
     if: github.event_name == 'workflow_dispatch' && inputs.release_doc_diagnostic == true
-    runs-on: macos-14
-    timeout-minutes: 90
+    runs-on: windows-2022
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
 
-      - name: Free up disk space
+      - name: Verify the exact candidate checkout
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
-          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes/*Simulator* || true
-          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/* || true
+          if ((git rev-parse HEAD) -ne $env:CANDIDATE_SHA) {
+            Write-Error "candidate checkout mismatch"
+            exit 1
+          }
 
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
 
       - uses: ./.github/actions/setup-llvm22
 
-      - name: Build the exact doc-test surface
-        run: >-
-          cargo build --release
-          -p perry -p perry-runtime -p perry-stdlib
-          -p perry-runtime-static -p perry-stdlib-static
-          -p perry-ui-macos -p perry-doc-tests
-          -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-mysql2
-          -p perry-ext-pg -p perry-ext-nodemailer
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
 
-      - name: Compare -Os and -O3 and capture abort backtraces
-        run: |
-          SOURCE=docs/examples/stdlib/utilities/snippets.ts
-          mkdir -p target/release-doc-diagnostic
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "Windows-perry"
+          save-if: false
 
-          diagnose() {
-            label="$1"
-            shift
-            binary="target/release-doc-diagnostic/utilities-${label}"
-            env PERRY_NO_AUTO_OPTIMIZE=1 "$@" target/release/perry "$SOURCE" -o "$binary"
+      - name: Build compiler + Windows UI backend + harness
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ui-windows -p perry-doc-tests -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-mysql2 -p perry-ext-pg -p perry-ext-nodemailer
 
-            set +e
-            "$binary"
-            rc=$?
-            set -e
-            echo "${label}: direct exit=${rc}"
+      - name: Run Windows non-gallery doc-example tests
+        run: ./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/http/snippets.ts --filter-exclude getting-started/npm_packages.ts --filter-exclude stdlib/http/fastify_json.ts --filter-exclude stdlib/overview/snippets.ts
 
-            if [ "$rc" -ne 0 ]; then
-              lldb --batch \
-                -o 'breakpoint set --name malloc_error_break' \
-                -o run -k 'thread backtrace all' -- "$binary" || true
-            fi
-
-            set +e
-            DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib "$binary"
-            guard_rc=$?
-            set -e
-            echo "${label}: Guard Malloc exit=${guard_rc}"
-
-            if [ "$guard_rc" -ne 0 ]; then
-              DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib \
-                lldb --batch \
-                  -o 'breakpoint set --name malloc_error_break' \
-                  -o run -k 'thread backtrace all' -- "$binary" || true
-            fi
-          }
-
-          diagnose os
-          diagnose o3 PERRY_LL_SIZE_OPT=0
+      - name: Upload doc-tests report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-windows-doc-tests-report
+          path: docs/examples/_reports/latest.json
 
   # ---------------------------------------------------------------------------
   # plan: the one job that decides what this run does. ~20 s, no toolchain.
