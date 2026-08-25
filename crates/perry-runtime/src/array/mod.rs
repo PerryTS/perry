@@ -95,17 +95,17 @@ pub(crate) use self::generic_object::{
     object_pop as generic_object_pop, object_shift as generic_object_shift, object_sort,
     object_splice,
 };
+pub use self::header::{
+    ArrayHeader, js_array_clear_numeric_layout, js_array_declare_all_pointer_elements,
+    js_array_is_numeric_f64_layout, js_array_mark_arguments_object,
+    js_array_mark_numeric_f64_layout, js_array_note_numeric_write, js_tagged_template_get_or_init,
+    js_tagged_template_register_raw, js_template_raw, scan_template_raw_roots,
+    scan_template_raw_roots_mut,
+};
 pub(crate) use self::header::{
     array_has_arguments_object_flag, mark_array_as_arguments_object,
     prune_dead_array_named_property_owners, rebuild_array_numeric_raw_f64_allow_holes,
     rebuild_array_numeric_raw_f64_dense_window, rebuild_array_numeric_raw_f64_dense_window_i32,
-};
-pub use self::header::{
-    js_array_clear_numeric_layout, js_array_declare_all_pointer_elements,
-    js_array_is_numeric_f64_layout, js_array_mark_arguments_object,
-    js_array_mark_numeric_f64_layout, js_array_note_numeric_write, js_tagged_template_get_or_init,
-    js_tagged_template_register_raw, js_template_raw, scan_template_raw_roots,
-    scan_template_raw_roots_mut, ArrayHeader,
 };
 #[cfg(test)]
 pub(crate) use self::header::{
@@ -119,11 +119,11 @@ pub use self::immutable::{
 #[cfg(test)]
 pub(crate) use self::indexing::test_keys_array_slot_fallbacks;
 pub(crate) use self::indexing::{
-    array_has_own_index, array_iteration_is_exotic, array_proto_iterator_modified,
-    array_prototype_has_index_flag, array_spec_get, array_spec_has_index,
-    invalidate_array_index_fast_path, keys_array_len_capped_to_capacity, keys_array_slot,
-    note_array_proto_iterator_write, note_object_prototype_index_write,
-    object_prototype_has_index_flag, PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
+    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED, array_has_own_index, array_iteration_is_exotic,
+    array_proto_iterator_modified, array_prototype_has_index_flag, array_spec_get,
+    array_spec_has_index, invalidate_array_index_fast_path, keys_array_len_capped_to_capacity,
+    keys_array_slot, note_array_proto_iterator_write, note_object_prototype_index_write,
+    object_prototype_has_index_flag,
 };
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
@@ -136,15 +136,15 @@ pub use self::indexing::{
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
 pub use self::iter_methods::{
-    js_array_at, js_array_every, js_array_filter, js_array_find, js_array_findIndex,
-    js_array_find_last, js_array_find_last_index, js_array_flatMap, js_array_forEach, js_array_map,
+    js_array_at, js_array_every, js_array_filter, js_array_find, js_array_find_last,
+    js_array_find_last_index, js_array_findIndex, js_array_flatMap, js_array_forEach, js_array_map,
     js_array_map_discard, js_array_reduce, js_array_some, js_array_to_locale_string,
     js_validate_array_callback, js_validate_array_map_callback,
 };
 pub use self::iter_object::{
-    arguments_values_iter, array_entries_iter, array_keys_iter, array_values_iter,
-    array_values_iter_null_done, dispatch_array_iterator_method, js_array_entries_iter_obj,
-    js_array_keys_iter_obj, js_array_values_iter_obj, ARRAY_ITERATOR_CLASS_ID,
+    ARRAY_ITERATOR_CLASS_ID, arguments_values_iter, array_entries_iter, array_keys_iter,
+    array_values_iter, array_values_iter_null_done, dispatch_array_iterator_method,
+    js_array_entries_iter_obj, js_array_keys_iter_obj, js_array_values_iter_obj,
 };
 pub(crate) use self::iterator::is_builtin_iterator_class_id;
 pub(crate) use self::iterator::iter_bt_dump;
@@ -212,20 +212,20 @@ pub(crate) use self::alloc::array_length_from_property_value_or_throw;
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
 pub(crate) use self::flat_clone::{dense_spread_copy, dense_spread_source, flattenable_array_ptr};
 pub(crate) use self::header::{
-    array_byte_size, array_is_frozen, array_is_sealed_or_no_extend, array_named_property_delete,
-    array_named_property_delete_by_name, array_named_property_get,
-    array_named_property_get_by_name, array_named_property_has, array_named_property_names,
-    array_named_property_set, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
-    array_numeric_raw_f64_set_inbounds, array_object_flags, array_object_flags_from_tag,
-    array_object_flags_resolved, array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
-    buffer_receiver_as_uint8_typed_array, canonicalize_array_numeric_store_value,
-    canonicalize_array_numeric_store_value_from_flags, clean_arr_ptr, clean_arr_ptr_mut,
-    clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
-    mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
-    note_array_slot, note_array_slot_layout_only, rebuild_array_layout, rebuild_array_layout_exact,
-    refresh_array_numeric_layout, replay_array_growth_write_barriers, set_array_numeric_layout,
-    store_array_slot, transfer_array_numeric_layout, typed_array_receiver, value_bits_to_number,
-    NumericArrayLayout, MIN_ARRAY_CAPACITY,
+    MIN_ARRAY_CAPACITY, NumericArrayLayout, array_byte_size, array_is_frozen,
+    array_is_sealed_or_no_extend, array_named_property_delete, array_named_property_delete_by_name,
+    array_named_property_get, array_named_property_get_by_name, array_named_property_has,
+    array_named_property_names, array_named_property_set, array_numeric_raw_f64_get,
+    array_numeric_raw_f64_push_inbounds, array_numeric_raw_f64_set_inbounds, array_object_flags,
+    array_object_flags_from_tag, array_object_flags_resolved, array_ptr_as_proxy,
+    array_receiver_addr, array_receiver_gc_tag, buffer_receiver_as_uint8_typed_array,
+    canonicalize_array_numeric_store_value, canonicalize_array_numeric_store_value_from_flags,
+    clean_arr_ptr, clean_arr_ptr_mut, clear_array_numeric_layout, clear_array_numeric_layout_ptr,
+    gc_element_slot_range, mark_array_layout_unknown, mark_array_raw_f64_holes_fresh,
+    normalize_array_receiver, note_array_slot, note_array_slot_layout_only, rebuild_array_layout,
+    rebuild_array_layout_exact, refresh_array_numeric_layout, replay_array_growth_write_barriers,
+    set_array_numeric_layout, store_array_slot, transfer_array_numeric_layout,
+    typed_array_receiver, value_bits_to_number,
 };
 
 // Sole caller is the regex-engine-gated `regex::exec_array`, so the helper and

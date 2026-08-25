@@ -604,14 +604,15 @@ pub extern "C" fn js_array_entries_iter_obj(arr: *const ArrayHeader) -> i64 {
 use crate::iter_result::{make_iter_result, make_sqlite_iter_result};
 
 unsafe fn make_pair_array(idx: u32, value: f64) -> f64 {
-    let pair = crate::array::js_array_alloc(2);
-    (*pair).length = 2;
-    let elems = (pair as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-    *elems.add(0) = idx as f64;
-    *elems.add(1) = value;
-    crate::array::note_array_slot(pair, 0, (idx as f64).to_bits());
-    crate::array::note_array_slot(pair, 1, value.to_bits());
-    js_nanbox_pointer(pair as i64)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_h = scope.root_nanbox_f64(value);
+    let pair_h = scope.root_raw_mut_ptr(crate::array::js_array_alloc(2));
+    pair_h.with_mut_ptr(|pair: *mut ArrayHeader| {
+        (*pair).length = 2;
+        crate::array::store_array_slot(pair, 0, (idx as f64).to_bits());
+        crate::array::store_array_slot(pair, 1, value_h.get_nanbox_u64());
+    });
+    pair_h.with_mut_ptr(|pair: *mut ArrayHeader| js_nanbox_pointer(pair as i64))
 }
 
 /// Dispatch `.next()` / `[Symbol.iterator]()` on an array iterator object.
@@ -719,22 +720,27 @@ pub unsafe fn dispatch_array_iterator_method(
             } else {
                 crate::array::js_array_get_f64(backing_ptr as *const ArrayHeader, idx)
             };
+            // A Proxy get trap can return a young heap value. Root it before
+            // either pair or iterator-result construction allocates, then
+            // reload through the handle at each constructor boundary.
+            let elem_h = scope.root_nanbox_f64(elem);
 
             let value = match kind {
                 KIND_VALUES | KIND_VALUES_NULL_DONE | KIND_ARGUMENTS_VALUES | KIND_PROXY_VALUES => {
-                    JSValue::from_bits(elem.to_bits())
+                    JSValue::from_bits(elem_h.get_nanbox_u64())
                 }
                 KIND_KEYS => JSValue::number(idx as f64),
                 KIND_ENTRIES => {
-                    let pair = make_pair_array(idx, elem);
+                    let pair = make_pair_array(idx, elem_h.get_nanbox_f64());
                     JSValue::from_bits(pair.to_bits())
                 }
                 _ => JSValue::undefined(),
             };
+            let value_h = scope.root_nanbox_u64(value.bits());
             if kind == KIND_VALUES_NULL_DONE {
-                make_sqlite_iter_result(value, false)
+                make_sqlite_iter_result(JSValue::from_bits(value_h.get_nanbox_u64()), false)
             } else {
-                make_iter_result(value, false)
+                make_iter_result(JSValue::from_bits(value_h.get_nanbox_u64()), false)
             }
         }
         // Iterators are themselves iterable — `[Symbol.iterator]()` on one

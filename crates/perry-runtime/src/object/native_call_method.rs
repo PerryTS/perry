@@ -561,7 +561,8 @@ pub unsafe extern "C-unwind" fn js_spread_tail_fallback_args(
     let fixed_handles = scope.root_nanbox_f64_slice(fixed);
     let spread_handle = scope.root_nanbox_f64(spread);
 
-    let spread_array = crate::array::js_array_clone_for_spread(spread_handle.get_nanbox_f64());
+    let (_, rooted_spread) = spread_handle.across_nanbox(|| ());
+    let spread_array = crate::array::js_array_clone_for_spread(rooted_spread);
     let spread_array_handle = scope.root_raw_mut_ptr(spread_array);
     let spread_len = spread_array_handle.with_const_ptr(|arr: *const crate::array::ArrayHeader| {
         if arr.is_null() {
@@ -574,10 +575,9 @@ pub unsafe extern "C-unwind" fn js_spread_tail_fallback_args(
     let result_handle = scope.root_raw_mut_ptr(crate::array::js_array_alloc(capacity));
 
     for value in &fixed_handles {
-        let next = crate::array::js_array_push_f64(
-            result_handle.get_raw_mut_ptr(),
-            value.get_nanbox_f64(),
-        );
+        let (_, rooted_value) = value.across_nanbox(|| ());
+        let next = result_handle
+            .with_mut_ptr(|result| crate::array::js_array_push_f64(result, rooted_value));
         result_handle.set_raw_mut_ptr(next);
     }
     for index in 0..spread_len {
@@ -586,13 +586,12 @@ pub unsafe extern "C-unwind" fn js_spread_tail_fallback_args(
         // The push can collect while `value` is otherwise only a Rust local.
         let value_scope = crate::gc::RuntimeHandleScope::new();
         let value_handle = value_scope.root_nanbox_f64(value);
-        let next = crate::array::js_array_push_f64(
-            result_handle.get_raw_mut_ptr(),
-            value_handle.get_nanbox_f64(),
-        );
+        let (_, rooted_value) = value_handle.across_nanbox(|| ());
+        let next = result_handle
+            .with_mut_ptr(|result| crate::array::js_array_push_f64(result, rooted_value));
         result_handle.set_raw_mut_ptr(next);
     }
-    result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
+    result_handle.with_mut_ptr(|result: *mut crate::array::ArrayHeader| result as i64)
 }
 
 /// The numeric property key of an `obj[key](...)` call, as the raw `f64` index

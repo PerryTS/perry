@@ -140,14 +140,14 @@ fn named_block<'a>(function: &'a str, label: &str) -> &'a str {
 }
 
 #[test]
-fn empty_and_one_element_arms_call_reset_directly_without_apply() {
+fn every_short_packed_arity_calls_reset_directly_without_apply() {
     let ir = emit();
     let invoke = function_body(&ir, "__invoke(");
     assert!(invoke.contains("call i32 @js_short_packed_spread_values("));
     assert!(invoke.contains("call i32 @js_method_direct_shape_class("));
 
     for candidate in 0..2 {
-        for arity in 0..=1 {
+        for arity in 0..=4 {
             let block = named_block(
                 invoke,
                 &format!("short_spread.target{candidate}.arity{arity}"),

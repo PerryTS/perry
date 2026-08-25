@@ -45,7 +45,7 @@ use crate::rooting::{self, Arg, Repr};
 use crate::type_analysis::receiver_class_name;
 use crate::types::{DOUBLE, I32, I64};
 
-use super::{downgrade_buffer_aliases_in_expr, lower_expr, nanbox_pointer_inline, FnCtx};
+use super::{FnCtx, downgrade_buffer_aliases_in_expr, lower_expr, nanbox_pointer_inline};
 
 /// The expression a call argument carries, whatever its spread-ness.
 fn call_arg_expr(a: &CallArg) -> &Expr {

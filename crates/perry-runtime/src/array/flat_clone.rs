@@ -133,6 +133,8 @@ pub unsafe extern "C" fn js_short_packed_spread_values(value: f64, out: *mut f64
         if bits == crate::value::TAG_HOLE {
             return -1;
         }
+        // GC_STORE_AUDIT(STACK): caller-owned generated stack storage; the
+        // rooted spread operand keeps copied heap values live during the guard.
         std::ptr::write(out.add(index), f64::from_bits(bits));
     }
     len as i32
