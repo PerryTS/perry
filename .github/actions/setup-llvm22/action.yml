@@ -121,16 +121,77 @@ runs:
           exit 1
         }
         New-Item -ItemType Directory -Force -Path C:\llvm | Out-Null
-        $tarArgs = @("-xf", $archive, "-C", "C:\llvm", "--strip-components=1")
-        $tar = Start-Process -FilePath "tar.exe" -ArgumentList $tarArgs -NoNewWindow -PassThru
-        if (-not $tar.WaitForExit(300000)) {
-          Stop-Process -Id $tar.Id -Force -ErrorAction SilentlyContinue
-          Write-Error "::error::extracting the LLVM archive exceeded the 5-minute hard limit"
-          exit 1
+        $tarOk = $false
+        if ($env:PERRY_FORCE_WINDOWS_LLVM_FALLBACK -eq "1") {
+          Write-Host "diagnostic override: skipping tar.exe and exercising the 7-Zip fallback"
+        } else {
+          # A hosted Windows runner has twice left tar.exe alive indefinitely
+          # after this 800 MiB download completed. Healthy extractions take
+          # 47-74 seconds, so two minutes leaves margin without sacrificing five
+          # runner-minutes every time the native extractor wedges.
+          Write-Host "extracting LLVM with tar.exe (2-minute hard limit)"
+          $tarArgs = @("-xf", $archive, "-C", "C:\llvm", "--strip-components=1")
+          $tar = Start-Process -FilePath "tar.exe" -ArgumentList $tarArgs -NoNewWindow -PassThru
+          if (-not $tar.WaitForExit(120000)) {
+            Stop-Process -Id $tar.Id -Force -ErrorAction SilentlyContinue
+            $tar.WaitForExit()
+            Write-Warning "tar.exe exceeded the 2-minute hard limit; falling back to 7-Zip"
+          } elseif ($tar.ExitCode -ne 0) {
+            Write-Warning "tar.exe failed with exit $($tar.ExitCode); falling back to 7-Zip"
+          } else {
+            $tarOk = $true
+          }
         }
-        if ($tar.ExitCode -ne 0) {
-          Write-Error "::error::extracting the LLVM archive failed (tar exit $($tar.ExitCode))"
-          exit 1
+
+        if (-not $tarOk) {
+          # Windows 2022 hosted runners ship 7-Zip. Stream the xz payload into a
+          # second 7z process so fallback does not require a multi-gigabyte
+          # intermediate .tar file. Run the pipeline through a bounded child
+          # cmd process: PowerShell's object pipeline is not binary-safe.
+          $sevenZipCommand = Get-Command 7z.exe -ErrorAction SilentlyContinue
+          $sevenZip = if ($sevenZipCommand) {
+            $sevenZipCommand.Path
+          } else {
+            Join-Path $env:ProgramFiles "7-Zip\7z.exe"
+          }
+          if (-not (Test-Path -LiteralPath $sevenZip)) {
+            Write-Error "::error::tar.exe failed and 7z.exe is unavailable at $sevenZip"
+            exit 1
+          }
+
+          Remove-Item -LiteralPath C:\llvm -Recurse -Force
+          New-Item -ItemType Directory -Force -Path C:\llvm | Out-Null
+          $stage = Join-Path $env:RUNNER_TEMP "llvm-7zip-stage"
+          Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          $extractScript = Join-Path $env:RUNNER_TEMP "extract-llvm.cmd"
+          $extractLines = @(
+            "@echo off",
+            "`"$sevenZip`" x `"$archive`" -so | `"$sevenZip`" x -si -ttar `"-o$stage`" -y",
+            "exit /b %errorlevel%"
+          )
+          Set-Content -LiteralPath $extractScript -Encoding ascii -Value $extractLines
+          Write-Host "extracting LLVM with 7-Zip (5-minute hard limit)"
+          $extractArgs = @("/d", "/c", "`"$extractScript`"")
+          $extract = Start-Process -FilePath "cmd.exe" -ArgumentList $extractArgs -NoNewWindow -PassThru
+          if (-not $extract.WaitForExit(300000)) {
+            & taskkill.exe /PID $extract.Id /T /F 2>$null | Out-Null
+            Write-Error "::error::7-Zip LLVM extraction exceeded the 5-minute hard limit"
+            exit 1
+          }
+          if ($extract.ExitCode -ne 0) {
+            Write-Error "::error::7-Zip LLVM extraction failed (exit $($extract.ExitCode))"
+            exit 1
+          }
+
+          $root = Join-Path $stage "clang+llvm-$ver-$llvmArch-pc-windows-msvc"
+          if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+            Write-Error "::error::7-Zip extraction did not produce the expected LLVM root: $root"
+            exit 1
+          }
+          Get-ChildItem -LiteralPath $root -Force | Move-Item -Destination C:\llvm -Force
+          Remove-Item -LiteralPath $stage -Recurse -Force
         }
         $v = & "C:\llvm\bin\llvm-config.exe" --version
         if (-not $v.StartsWith("22.")) { Write-Error "LLVM is not 22.x ($v)"; exit 1 }
