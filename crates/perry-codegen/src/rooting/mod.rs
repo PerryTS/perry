@@ -1185,7 +1185,14 @@ pub(crate) struct RootedAcc {
 
 impl RootedAcc {
     /// The accumulator as a call argument.
-    fn as_arg(&self) -> Arg<'_> {
+    ///
+    /// `pub(crate)` for the one shape that needs it: a call whose argument 0 is
+    /// one accumulator and whose later argument is *another* (an object-literal
+    /// method closure being installed into the half-built object it belongs to,
+    /// #8809). It hands out an [`Arg`], never a register — `materialize` still
+    /// performs the re-read at the instant the call is emitted — so the "load
+    /// early, use late" sequence stays unwritable through this door too.
+    pub(crate) fn as_arg(&self) -> Arg<'_> {
         match &self.slot {
             Some(slot) => Arg::Root(slot),
             None => Arg::Plain(self.repr.llvm_ty(), &self.value),

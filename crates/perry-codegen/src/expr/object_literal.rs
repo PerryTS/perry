@@ -20,10 +20,17 @@
 //! loop". Reorder those two statements and the leak is silent.
 //!
 //! Nesting one `with_rooted_accumulator` per such property expresses the same
-//! lifetime as a scope: each value's root spans exactly the suffix of the
-//! literal that follows it, the release is owned on every path out (including a
-//! `?` from a later initializer, which the flat form leaked), and the value can
-//! only be read in `finish` — below the last initializer, above the release.
+//! lifetime as a scope: each value's root spans its own installing
+//! `js_object_set_field_by_name` and the whole suffix of the literal that
+//! follows it, the release is owned on every path out (including a `?` from a
+//! later initializer, which the flat form leaked), and the value can only be
+//! read in `finish` — below the last initializer, above the release.
+//!
+//! The install is INSIDE the scope, not above it (#8809). Rooting after it is
+//! the #7192 shape: the setter can run a user setter or a Proxy trap, and the
+//! closure it just installed is reachable from the object, so an evacuating
+//! minor moves it and the register queued above names from-space.
+//!
 //! No fourth combinator: the three existing `with_operands_rooted*` forms all
 //! lower their own operand list up front, which would evaluate every property
 //! before storing any of them and reorder observable side effects, and
@@ -255,12 +262,6 @@ fn lower_by_name_props<'f>(
             let this_idx = auto_caps.len() as u32;
 
             let v = lower_expr(ctx, value_expr)?;
-            let key_raw = emit_interned_key_raw(ctx, &key_handle_global);
-            obj.call_void(
-                ctx,
-                "js_object_set_field_by_name",
-                &[Arg::Plain(I64, &key_raw), Arg::Plain(DOUBLE, &v)],
-            );
 
             // The closure value is deferred: the patch loop reads it after every
             // remaining property has been lowered, so it must survive their
@@ -268,13 +269,37 @@ fn lower_by_name_props<'f>(
             // the slot; the register queued above is stale). `build` owns the
             // rest of the literal, `finish` is the one place the value escapes,
             // and the release happens on both paths out.
+            //
+            // #8809: the root is pushed BEFORE the installing
+            // `js_object_set_field_by_name`, and that call re-reads it like any
+            // other rooted argument. It used to be pushed after, which is #7192
+            // exactly — `js_object_set_field_by_name` is a collection point
+            // (`POLL_CAPABLE_RUNTIME`: it can run a user setter or a Proxy trap,
+            // and the closure it just installed is reachable from the object, so
+            // an evacuating minor MOVES it). The register queued above was then
+            // stale, and pushing a stale pointer into a slot the collector scans
+            // is strictly worse than not rooting at all: the patch loop below
+            // read it back and wrote the receiver into abandoned from-space, so
+            // the surviving copy's method ran with `this` unset.
+            //
+            // This arm was unreachable from TypeScript between #809 and #8793 —
+            // every source-level literal with a method went through the IIFE
+            // builder — which is why the ordering survived the #7192 sweep. See
+            // `by_name_method_closure_tests` below, whose HIR-level fixture is
+            // the only coverage it had.
             let mut rest: Vec<(String, u32)> = Vec::new();
             let closure_value = rooting::with_rooted_accumulator(
                 ctx,
                 Repr::Boxed,
                 &v,
                 protect,
-                |ctx, _| {
+                |ctx, closure| {
+                    let key_raw = emit_interned_key_raw(ctx, &key_handle_global);
+                    obj.call_void(
+                        ctx,
+                        "js_object_set_field_by_name",
+                        &[Arg::Plain(I64, &key_raw), closure.as_arg()],
+                    );
                     rest = lower_by_name_props(ctx, obj, props, i + 1, protect)?;
                     Ok(())
                 },
@@ -529,14 +554,22 @@ mod by_name_method_closure_tests {
     /// `lower_object_literal`'s BY-NAME path and with it the deferred
     /// `this`-patch machinery this module's nested accumulators root.
     ///
-    /// Built from HIR rather than from TypeScript on purpose. Since #809 every
-    /// source-level object literal containing a `Prop::Method` is lowered to a
-    /// source-ordered IIFE over `{}` (`js_object_set_method_by_name`), so the
-    /// by-name path with a non-empty prop list is not reachable from
-    /// TypeScript: over the whole `gc_root_dominance_corpus.sh` corpus (129
-    /// sources, 149 modules) every emitted `js_object_alloc` is
-    /// `(i32 0, i32 0)`. A branch no corpus reaches is a branch no IR A/B can
-    /// speak for, so it gets a test of its own rather than an assumption.
+    /// Built from HIR rather than from TypeScript on purpose — originally
+    /// because the branch was unreachable from source, and now because this is
+    /// the only place its *shape* is asserted rather than sampled.
+    ///
+    /// **That unreachability lapsed, and it cost a shipped rooting bug.** From
+    /// #809 to #8793 every source-level object literal containing a
+    /// `Prop::Method` lowered to a source-ordered IIFE over `{}`
+    /// (`js_object_set_method_by_name`), so this path never ran on real code:
+    /// over the whole `gc_root_dominance_corpus.sh` corpus every emitted
+    /// `js_object_alloc` was `(i32 0, i32 0)`. #8793 routes a static-key method
+    /// literal straight to `Expr::Object`, which lands here — and the late root
+    /// this arm had carried unexercised since #6951 became seven live
+    /// `--moving-only` violations the next morning (#8809). A branch no corpus
+    /// reaches is a branch that keeps whatever bug it has until something
+    /// reaches it, so treat "not reachable from TypeScript" as a note about
+    /// today's front end, never as a reason a hazard here is theoretical.
     ///
     /// The two closures deliberately reserve DIFFERENT `this` slots — `add`
     /// captures nothing so its slot index is 0, `scale` captures `base` so its
@@ -711,6 +744,59 @@ mod by_name_method_closure_tests {
             "`add` (slot 0) must be patched before `scale` (slot 1) — reverse order \
              means the nested accumulators' list was not re-reversed:\n{tail}"
         );
+    }
+
+    /// #8809: each method closure's root store must DOMINATE the
+    /// `js_object_set_field_by_name` that installs it, not follow it.
+    ///
+    /// The installer is a collection point — it can run a user setter or a
+    /// Proxy trap, and by the time it returns the closure is reachable from the
+    /// object, so an evacuating minor MOVES it. Rooting afterwards publishes
+    /// the pre-move register into a slot the collector scans, and the deferred
+    /// patch loop then writes the receiver into abandoned from-space: the
+    /// surviving copy's method runs with `this` unset. That was the shipped
+    /// state until this test existed.
+    ///
+    /// Asserted positionally over the emitted lines rather than by counting
+    /// calls: the count is identical in both orderings, which is exactly why
+    /// #7192's sweep did not catch this one.
+    #[test]
+    fn a_method_closure_is_rooted_before_it_is_installed() {
+        let ir = build_fn(&method_literal_ir());
+        let lines: Vec<&str> = ir.lines().collect();
+        let closure_allocs: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.contains("@js_closure_alloc"))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            closure_allocs.len(),
+            2,
+            "the fixture's two method closures must each be allocated here:\n{ir}"
+        );
+        for alloc in closure_allocs {
+            let root = lines[alloc..]
+                .iter()
+                .position(|l| {
+                    l.starts_with("store ptr addrspace(1) %") || l.starts_with("store i64 %")
+                })
+                .unwrap_or_else(|| {
+                    panic!("no root store below the closure allocation on line {alloc}:\n{ir}")
+                });
+            let install = lines[alloc..]
+                .iter()
+                .position(|l| l.contains("@js_object_set_field_by_name("))
+                .unwrap_or_else(|| {
+                    panic!("no by-name install below the closure allocation on line {alloc}:\n{ir}")
+                });
+            assert!(
+                root < install,
+                "the closure allocated on line {alloc} is installed before its root store \
+                 (root +{root}, install +{install}) — that is #7192's shape and it publishes \
+                 a moved-from address:\n{ir}"
+            );
+        }
     }
 
     /// The rooting shape, read off the IR. Three GC values are live across the

@@ -58,6 +58,26 @@ fn construction_runs_user_code(ctx: &FnCtx<'_>, class_name: &str) -> bool {
     ctx.classes.get(class_name).is_some_and(|class| {
         class.constructor.is_some()
             || !class.fields.is_empty()
+            // #8809: a class whose only private elements are METHODS or
+            // ACCESSORS declares no fields, no constructor and no heritage, and
+            // answered `false` here — while `emit_field_inits` still emits
+            // `js_private_brand_add` for it (#8643 added that call, keyed on
+            // `has_private_instance_elements`, and its `continue` guard lets a
+            // fieldless class through precisely so the brand can be installed).
+            // That helper allocates the marker key and calls
+            // `js_object_set_field_by_name`; its own body says "the marker-key
+            // allocation can evacuate both the receiver and any live value" and
+            // opens a `RuntimeHandleScope` for exactly that reason. So the
+            // window this predicate claims cannot collect does, and the
+            // instance was crossing it in a bare register: `new
+            // WithPrivateMethod()` fed a stale handle to
+            // `js_gc_init_typed_shape_layout` and then published it into the
+            // caller's root slot.
+            //
+            // One predicate, one place — the temp root, the `this`-slot bind
+            // and `reload_instance` all read this, which is what stops them
+            // disagreeing the way #7114's pair did.
+            || class.has_private_instance_elements()
             || class.extends.is_some()
             || class.extends_name.is_some()
             || class.native_extends.is_some()
