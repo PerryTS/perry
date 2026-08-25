@@ -268,12 +268,26 @@ fn undefined_value() -> f64 {
 }
 
 fn async_from_sync_iter_result(value: f64, done: bool) -> f64 {
+    // The result value and the freshly-allocated object are live young objects
+    // held across sibling allocations (the object alloc, and each
+    // `set_field_by_name`, which can grow the shape). The default-on moving
+    // scavenge evacuates young survivors, so cache them in a handle scope and
+    // re-read through the (GC-updated) handles instead of stale raw copies.
+    // Property-name keys use the long-lived allocator so they never move and
+    // need no rooting.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_h = scope.root_nanbox_f64(value);
     let obj = crate::object::js_object_alloc(0, 2);
-    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
-    crate::object::js_object_set_field_by_name(obj, value_key, value);
+    let obj_h = scope.root_raw_mut_ptr(obj);
+    let value_key = crate::string::js_string_from_bytes_longlived(b"value".as_ptr(), 5);
+    let done_key = crate::string::js_string_from_bytes_longlived(b"done".as_ptr(), 4);
     crate::object::js_object_set_field_by_name(
-        obj,
+        obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        value_key,
+        value_h.get_nanbox_f64(),
+    );
+    crate::object::js_object_set_field_by_name(
+        obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
         done_key,
         if done {
             f64::from_bits(crate::value::TAG_TRUE)
@@ -281,18 +295,26 @@ fn async_from_sync_iter_result(value: f64, done: bool) -> f64 {
             f64::from_bits(crate::value::TAG_FALSE)
         },
     );
-    crate::value::js_nanbox_pointer(obj as i64)
+    crate::value::js_nanbox_pointer(obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64)
 }
 
 extern "C" fn async_from_sync_fulfilled(
     closure: *const crate::closure::ClosureHeader,
     value: f64,
 ) -> f64 {
+    // `async_from_sync_iter_result` allocates and can move the nursery `outer`
+    // promise stored in capture slot 0 — and the closure itself. Root the
+    // closure, build the result FIRST, then re-read the (GC-updated) capture so
+    // we resolve through the live promise pointer, not a pre-move copy.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure_h = scope.root_raw_const_ptr(closure);
+    let done = crate::closure::js_closure_get_capture_f64(closure, 1) != 0.0;
+    let result = async_from_sync_iter_result(value, done);
+    let closure = closure_h.get_raw_const_ptr::<crate::closure::ClosureHeader>();
     let promise =
         crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
-    let done = crate::closure::js_closure_get_capture_f64(closure, 1) != 0.0;
     if !promise.is_null() {
-        crate::promise::js_promise_resolve(promise, async_from_sync_iter_result(value, done));
+        crate::promise::js_promise_resolve(promise, result);
     }
     0.0
 }
@@ -301,15 +323,24 @@ extern "C" fn async_from_sync_rejected_value(
     closure: *const crate::closure::ClosureHeader,
     reason: f64,
 ) -> f64 {
-    let promise =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    // `async_from_sync_close` calls back into JS and allocates, which can move
+    // the nursery `outer` promise in capture slot 0 and the closure itself.
+    // Root the closure + reason and re-read the capture after the close so the
+    // rejection targets the live promise pointer.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure_h = scope.root_raw_const_ptr(closure);
+    let reason_h = scope.root_nanbox_f64(reason);
     let iter = crate::closure::js_closure_get_capture_f64(closure, 1);
+    let iter_h = scope.root_nanbox_f64(iter);
     let close_on_rejection = crate::closure::js_closure_get_capture_f64(closure, 2) != 0.0;
     if close_on_rejection {
-        async_from_sync_close(iter);
+        async_from_sync_close(iter_h.get_nanbox_f64());
     }
+    let closure = closure_h.get_raw_const_ptr::<crate::closure::ClosureHeader>();
+    let promise =
+        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
     if !promise.is_null() {
-        crate::promise::js_promise_reject(promise, reason);
+        crate::promise::js_promise_reject(promise, reason_h.get_nanbox_f64());
     }
     0.0
 }
@@ -321,45 +352,78 @@ fn async_from_sync_continue(iter: f64, step_result: f64, close_on_rejection: boo
         return async_from_sync_rejected(b"Iterator result is not an object");
     }
 
-    let result_obj = ptr as *const crate::object::ObjectHeader;
-    let done_key = crate::string::js_string_from_bytes(b"done".as_ptr(), 4);
-    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+    // Everything below allocates repeatedly (closure allocs, the resolved
+    // value promise, `js_promise_then`), and the default-on moving scavenge
+    // evacuates young survivors on any of those safepoints. Cache every live
+    // young value (the iterator, the step-result object, the extracted value,
+    // the freshly-built `outer` promise and its two reaction closures) in a
+    // handle scope and re-read each through its handle right before use, so no
+    // raw pre-move pointer survives across an allocation. Property-name keys use
+    // the long-lived allocator so they never move.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter_h = scope.root_nanbox_f64(iter);
+    let step_h = scope.root_nanbox_f64(step_result);
+    let done_key = crate::string::js_string_from_bytes_longlived(b"done".as_ptr(), 4);
+    let value_key = crate::string::js_string_from_bytes_longlived(b"value".as_ptr(), 5);
     let done = {
+        let result_obj =
+            crate::value::js_nanbox_get_pointer(step_h.get_nanbox_f64()) as *const crate::object::ObjectHeader;
         let done_val = crate::object::js_object_get_field_by_name(result_obj, done_key);
         let done_f64 = f64::from_bits(done_val.bits());
         crate::value::js_is_truthy(done_f64) != 0
     };
     let value = {
+        let result_obj =
+            crate::value::js_nanbox_get_pointer(step_h.get_nanbox_f64()) as *const crate::object::ObjectHeader;
         let value_val = crate::object::js_object_get_field_by_name(result_obj, value_key);
         f64::from_bits(value_val.bits())
     };
+    let value_h = scope.root_nanbox_f64(value);
 
     let outer = crate::promise::js_promise_new();
+    let outer_h = scope.root_raw_mut_ptr(outer);
     let on_fulfilled = crate::closure::js_closure_alloc(async_from_sync_fulfilled as *const u8, 2);
+    let on_fulfilled_h = scope.root_raw_mut_ptr(on_fulfilled);
     let on_rejected =
         crate::closure::js_closure_alloc(async_from_sync_rejected_value as *const u8, 3);
-    crate::closure::js_closure_set_capture_ptr(on_fulfilled, 0, outer as i64);
-    crate::closure::js_closure_set_capture_f64(on_fulfilled, 1, if done { 1.0 } else { 0.0 });
-    crate::closure::js_closure_set_capture_ptr(on_rejected, 0, outer as i64);
-    crate::closure::js_closure_set_capture_f64(on_rejected, 1, iter);
-    crate::closure::js_closure_set_capture_f64(
-        on_rejected,
-        2,
-        if close_on_rejection { 1.0 } else { 0.0 },
-    );
+    let on_rejected_h = scope.root_raw_mut_ptr(on_rejected);
+    // All three allocations are done; re-read each through its handle before
+    // wiring captures (no allocation happens between these stores).
+    {
+        let outer = outer_h.get_raw_mut_ptr::<crate::promise::Promise>();
+        let on_fulfilled = on_fulfilled_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
+        let on_rejected = on_rejected_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
+        crate::closure::js_closure_set_capture_ptr(on_fulfilled, 0, outer as i64);
+        crate::closure::js_closure_set_capture_f64(on_fulfilled, 1, if done { 1.0 } else { 0.0 });
+        crate::closure::js_closure_set_capture_ptr(on_rejected, 0, outer as i64);
+        crate::closure::js_closure_set_capture_f64(on_rejected, 1, iter_h.get_nanbox_f64());
+        crate::closure::js_closure_set_capture_f64(
+            on_rejected,
+            2,
+            if close_on_rejection { 1.0 } else { 0.0 },
+        );
+    }
 
-    let value_promise = match crate::promise::js_promise_resolved_catching(value) {
+    let value_promise = match crate::promise::js_promise_resolved_catching(value_h.get_nanbox_f64())
+    {
         Ok(promise) => promise,
         Err(reason) => {
+            let reason_h = scope.root_nanbox_f64(reason);
             if close_on_rejection {
-                async_from_sync_close(iter);
+                async_from_sync_close(iter_h.get_nanbox_f64());
             }
-            crate::promise::js_promise_reject(outer, reason);
-            return boxed_promise_value(outer);
+            let outer = outer_h.get_raw_mut_ptr::<crate::promise::Promise>();
+            crate::promise::js_promise_reject(outer, reason_h.get_nanbox_f64());
+            return boxed_promise_value(outer_h.get_raw_mut_ptr::<crate::promise::Promise>());
         }
     };
-    crate::promise::js_promise_then(value_promise, on_fulfilled, on_rejected);
-    boxed_promise_value(outer)
+    let value_promise_h = scope.root_raw_mut_ptr(value_promise);
+    crate::promise::js_promise_then(
+        value_promise_h.get_raw_mut_ptr::<crate::promise::Promise>(),
+        on_fulfilled_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
+        on_rejected_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
+    );
+    boxed_promise_value(outer_h.get_raw_mut_ptr::<crate::promise::Promise>())
 }
 
 fn async_from_sync_rest_args(rest: f64) -> (usize, f64) {
@@ -377,7 +441,18 @@ fn async_from_sync_rest_args(rest: f64) -> (usize, f64) {
 }
 
 fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Option<f64>, f64> {
-    let method_value = named_field(iter, method);
+    // `named_field` allocates the method-name key and the invoked method runs
+    // arbitrary JS — both are moving-scavenge safepoints that evacuate the young
+    // sync iterator. Root `iter` and the fetched method value and re-read them
+    // through handles so no stale copy is dereferenced (e.g. `named_field` /
+    // `js_native_call_method` doing a property access on a moved `iter`, which
+    // is where `shape_is_url_search_params` faulted on a poison receiver).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter_h = scope.root_nanbox_f64(iter);
+    let method_value = named_field(iter_h.get_nanbox_f64(), method);
+    let method_value_h = scope.root_nanbox_f64(method_value);
+    let iter = iter_h.get_nanbox_f64();
+    let method_value = method_value_h.get_nanbox_f64();
     // Spec `%AsyncFromSyncIteratorPrototype%.{return,throw}` (and the sync
     // `yield *` close) do `GetMethod(syncIterator, name)` ONCE and then
     // `Call(method, syncIterator, args)` on that captured value. Re-dispatching
@@ -420,11 +495,17 @@ fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Op
             args.as_ptr()
         };
         let value = if callable {
-            unsafe { crate::closure::js_native_call_value(method_value, args_ptr, args.len()) }
+            unsafe {
+                crate::closure::js_native_call_value(
+                    method_value_h.get_nanbox_f64(),
+                    args_ptr,
+                    args.len(),
+                )
+            }
         } else {
             unsafe {
                 crate::object::js_native_call_method(
-                    iter,
+                    iter_h.get_nanbox_f64(),
                     method.as_ptr() as *const i8,
                     method.len(),
                     args_ptr,
@@ -489,8 +570,14 @@ fn async_from_sync_close(iter: f64) {
 }
 
 fn async_from_sync_call(iter: f64, method: &[u8], args: &[f64], close_on_rejection: bool) -> f64 {
-    match async_from_sync_call_raw(iter, method, args) {
-        Ok(Some(step)) => async_from_sync_continue(iter, step, close_on_rejection),
+    // `async_from_sync_call_raw` runs JS (a moving-scavenge safepoint); re-read
+    // `iter` from a handle before handing it to `async_from_sync_continue`.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter_h = scope.root_nanbox_f64(iter);
+    match async_from_sync_call_raw(iter_h.get_nanbox_f64(), method, args) {
+        Ok(Some(step)) => {
+            async_from_sync_continue(iter_h.get_nanbox_f64(), step, close_on_rejection)
+        }
         Ok(None) => async_from_sync_rejected(b"Async-from-sync iterator method is not callable"),
         Err(reason) => boxed_promise_value(crate::promise::js_promise_rejected(reason)),
     }
@@ -500,8 +587,16 @@ extern "C" fn async_from_sync_next(
     closure: *const crate::closure::ClosureHeader,
     rest: f64,
 ) -> f64 {
+    // Root the captured sync iterator + its `[[NextMethod]]` across the sync
+    // `next()` call (which runs JS and triggers the moving scavenge). Passing
+    // the pre-move raw `iter` on to `async_from_sync_continue` /
+    // `async_from_sync_call` was the layer-2 bug: a later `named_field(iter,…)`
+    // property access dereferenced a poison (freed/moved) receiver.
+    let scope = crate::gc::RuntimeHandleScope::new();
     let iter = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let iter_h = scope.root_nanbox_f64(iter);
     let cached_next = crate::closure::js_closure_get_capture_f64(closure, 1);
+    let cached_next_h = scope.root_nanbox_f64(cached_next);
     let (argc, first) = async_from_sync_rest_args(rest);
     let single = [first];
     let args: &[f64] = if argc == 0 { &[] } else { &single };
@@ -509,28 +604,39 @@ extern "C" fn async_from_sync_next(
     // observable-getter case). Builtin iterators (array/map/set/string) expose
     // no readable own `next` and dispatch through the class-id method tower, so
     // fall back to the by-name call for them.
-    if is_callable_value(cached_next) {
-        return match async_from_sync_call_cached_raw(iter, cached_next, args) {
-            Ok(Some(step)) => async_from_sync_continue(iter, step, true),
-            Ok(None) => async_from_sync_call(iter, b"next", args, true),
+    if is_callable_value(cached_next_h.get_nanbox_f64()) {
+        return match async_from_sync_call_cached_raw(
+            iter_h.get_nanbox_f64(),
+            cached_next_h.get_nanbox_f64(),
+            args,
+        ) {
+            Ok(Some(step)) => async_from_sync_continue(iter_h.get_nanbox_f64(), step, true),
+            Ok(None) => async_from_sync_call(iter_h.get_nanbox_f64(), b"next", args, true),
             Err(reason) => boxed_promise_value(crate::promise::js_promise_rejected(reason)),
         };
     }
-    async_from_sync_call(iter, b"next", args, true)
+    async_from_sync_call(iter_h.get_nanbox_f64(), b"next", args, true)
 }
 
 extern "C" fn async_from_sync_return(
     closure: *const crate::closure::ClosureHeader,
     rest: f64,
 ) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
     let iter = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let iter_h = scope.root_nanbox_f64(iter);
     let (argc, first) = async_from_sync_rest_args(rest);
+    let first_h = scope.root_nanbox_f64(first);
     let single = [first];
     let args: &[f64] = if argc == 0 { &[] } else { &single };
-    match async_from_sync_call_raw(iter, b"return", args) {
-        Ok(Some(step)) => async_from_sync_continue(iter, step, false),
+    match async_from_sync_call_raw(iter_h.get_nanbox_f64(), b"return", args) {
+        Ok(Some(step)) => async_from_sync_continue(iter_h.get_nanbox_f64(), step, false),
         Ok(None) => {
-            let value = if argc == 0 { undefined_value() } else { first };
+            let value = if argc == 0 {
+                undefined_value()
+            } else {
+                first_h.get_nanbox_f64()
+            };
             let done = async_from_sync_iter_result(value, true);
             boxed_promise_value(crate::promise::js_promise_resolved(done))
         }
@@ -542,14 +648,16 @@ extern "C" fn async_from_sync_throw(
     closure: *const crate::closure::ClosureHeader,
     rest: f64,
 ) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
     let iter = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let iter_h = scope.root_nanbox_f64(iter);
     let (argc, first) = async_from_sync_rest_args(rest);
     let single = [first];
     let args: &[f64] = if argc == 0 { &[] } else { &single };
-    match async_from_sync_call_raw(iter, b"throw", args) {
-        Ok(Some(step)) => async_from_sync_continue(iter, step, true),
+    match async_from_sync_call_raw(iter_h.get_nanbox_f64(), b"throw", args) {
+        Ok(Some(step)) => async_from_sync_continue(iter_h.get_nanbox_f64(), step, true),
         Ok(None) => {
-            async_from_sync_close(iter);
+            async_from_sync_close(iter_h.get_nanbox_f64());
             async_from_sync_rejected(b"The iterator does not provide a 'throw' method.")
         }
         Err(reason) => boxed_promise_value(crate::promise::js_promise_rejected(reason)),
@@ -582,12 +690,33 @@ fn install_async_from_sync_method(
     func: extern "C" fn(*const crate::closure::ClosureHeader, f64) -> f64,
     iter: f64,
 ) -> f64 {
+    // `obj`, `iter` and the freshly-allocated closure are live young objects
+    // held across sibling allocations (the key string and the shape-growing
+    // `set_field`). Root them so the moving scavenge cannot leave a stale
+    // wrapper/closure behind. The key uses the long-lived allocator (immortal,
+    // never moves).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_mut_ptr(obj);
+    let iter_h = scope.root_nanbox_f64(iter);
     let closure = crate::closure::js_closure_alloc(func as *const u8, 1);
-    crate::closure::js_closure_set_capture_f64(closure, 0, iter);
-    let value = crate::value::js_nanbox_pointer(closure as i64);
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_set_field_by_name(obj, key, value);
-    value
+    let closure_h = scope.root_raw_mut_ptr(closure);
+    let key = crate::string::js_string_from_bytes_longlived(name.as_ptr(), name.len() as u32);
+    crate::closure::js_closure_set_capture_f64(
+        closure_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
+        0,
+        iter_h.get_nanbox_f64(),
+    );
+    let value = crate::value::js_nanbox_pointer(
+        closure_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+    );
+    crate::object::js_object_set_field_by_name(
+        obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        key,
+        value,
+    );
+    crate::value::js_nanbox_pointer(
+        closure_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+    )
 }
 
 /// Install the wrapper's `next` method with TWO captures: the sync iterator
@@ -598,39 +727,97 @@ fn install_async_from_sync_next(
     iter: f64,
     cached_next: f64,
 ) -> f64 {
+    // Same rooting discipline as `install_async_from_sync_method`: obj, iter,
+    // the cached next-method and the fresh closure are young values held across
+    // the key allocation and the shape-growing `set_field`.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_mut_ptr(obj);
+    let iter_h = scope.root_nanbox_f64(iter);
+    let cached_next_h = scope.root_nanbox_f64(cached_next);
     let closure = crate::closure::js_closure_alloc(async_from_sync_next as *const u8, 2);
-    crate::closure::js_closure_set_capture_f64(closure, 0, iter);
-    crate::closure::js_closure_set_capture_f64(closure, 1, cached_next);
-    let value = crate::value::js_nanbox_pointer(closure as i64);
-    let key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
-    crate::object::js_object_set_field_by_name(obj, key, value);
-    value
+    let closure_h = scope.root_raw_mut_ptr(closure);
+    let key = crate::string::js_string_from_bytes_longlived(b"next".as_ptr(), 4);
+    crate::closure::js_closure_set_capture_f64(
+        closure_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
+        0,
+        iter_h.get_nanbox_f64(),
+    );
+    crate::closure::js_closure_set_capture_f64(
+        closure_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
+        1,
+        cached_next_h.get_nanbox_f64(),
+    );
+    let value = crate::value::js_nanbox_pointer(
+        closure_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+    );
+    crate::object::js_object_set_field_by_name(
+        obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        key,
+        value,
+    );
+    crate::value::js_nanbox_pointer(
+        closure_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+    )
 }
 
 pub(crate) fn async_from_sync_wrap_iterator(iter: f64) -> f64 {
     register_async_from_sync_thunks_once();
+    // The wrapper object and the sync iterator are live young values held
+    // across a long series of allocations (three method installs plus the
+    // async-iterator closure and the symbol-property store). Root them and
+    // re-read through their handles before each use so the moving scavenge
+    // cannot leave a stale wrapper/iter behind — otherwise every later `next()`
+    // reads a stale captured iterator.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter_h = scope.root_nanbox_f64(iter);
     let obj = crate::object::js_object_alloc(0, 0);
-    let wrapper = crate::value::js_nanbox_pointer(obj as i64);
+    let obj_h = scope.root_raw_mut_ptr(obj);
     // Spec (CreateAsyncFromSyncIterator): the sync iterator record's
     // `[[NextMethod]]` is read once, here, and reused for every `next()` step.
-    let cached_next = named_field(iter, b"next");
-    install_async_from_sync_next(obj, iter, cached_next);
-    install_async_from_sync_method(obj, b"return", async_from_sync_return, iter);
-    install_async_from_sync_method(obj, b"throw", async_from_sync_throw, iter);
+    let cached_next = named_field(iter_h.get_nanbox_f64(), b"next");
+    let cached_next_h = scope.root_nanbox_f64(cached_next);
+    install_async_from_sync_next(
+        obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        iter_h.get_nanbox_f64(),
+        cached_next_h.get_nanbox_f64(),
+    );
+    install_async_from_sync_method(
+        obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        b"return",
+        async_from_sync_return,
+        iter_h.get_nanbox_f64(),
+    );
+    install_async_from_sync_method(
+        obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
+        b"throw",
+        async_from_sync_throw,
+        iter_h.get_nanbox_f64(),
+    );
     let async_iter =
         crate::closure::js_closure_alloc(async_from_sync_async_iterator as *const u8, 1);
-    crate::closure::js_closure_set_capture_f64(async_iter, 0, wrapper);
+    let async_iter_h = scope.root_raw_mut_ptr(async_iter);
+    let wrapper =
+        crate::value::js_nanbox_pointer(obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64);
+    crate::closure::js_closure_set_capture_f64(
+        async_iter_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
+        0,
+        wrapper,
+    );
     let sym = crate::symbol::well_known_symbol("asyncIterator");
     if !sym.is_null() {
+        let wrapper =
+            crate::value::js_nanbox_pointer(obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64);
         unsafe {
             crate::symbol::js_object_set_symbol_property(
                 wrapper,
                 f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits()),
-                crate::value::js_nanbox_pointer(async_iter as i64),
+                crate::value::js_nanbox_pointer(
+                    async_iter_h.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+                ),
             );
         }
     }
-    wrapper
+    crate::value::js_nanbox_pointer(obj_h.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64)
 }
 
 #[no_mangle]
