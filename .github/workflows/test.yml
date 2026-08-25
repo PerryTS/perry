@@ -74,6 +74,14 @@ on:
         description: 'Run only the focused macOS release doc-test diagnostic'
         type: boolean
         default: false
+      release_net_diagnostic:
+        description: 'Run only the focused Linux net.connect release diagnostic'
+        type: boolean
+        default: false
+      candidate_sha:
+        description: 'Exact candidate commit to check out for the focused diagnostic'
+        type: string
+        default: ''
 
 concurrency:
   # pull_request: superseded pushes cancel their in-flight run (per PR).
@@ -96,6 +104,56 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "13.0"
 
 jobs:
+  release-net-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_net_diagnostic == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+
+      - name: Verify the exact candidate checkout
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+
+      - uses: ./.github/actions/setup-llvm22
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .node-version
+
+      - name: Install oracle dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Run the failing fixture five times
+        run: |
+          set -euo pipefail
+          failures=0
+          for attempt in 1 2 3 4 5; do
+            echo "==> attempt ${attempt}/5"
+            set +e
+            ./run_parity_tests.sh --filter test_gap_net_connect_bound_value
+            rc=$?
+            set -e
+            if [ "$rc" -ne 0 ]; then
+              failures=$((failures + 1))
+            fi
+          done
+          echo "failures=${failures}/5"
+          test "$failures" -eq 0
+
   release-doc-diagnostic:
     if: github.event_name == 'workflow_dispatch' && inputs.release_doc_diagnostic == true
     runs-on: macos-14
@@ -169,7 +227,9 @@ jobs:
   # `needs.plan.result != 'success'` -- a broken plan cannot silently pass.
   # ---------------------------------------------------------------------------
   plan:
-    if: github.event_name != 'workflow_dispatch' || inputs.release_doc_diagnostic != true
+    if: >-
+      github.event_name != 'workflow_dispatch' ||
+      (inputs.release_doc_diagnostic != true && inputs.release_net_diagnostic != true)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
