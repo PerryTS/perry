@@ -114,6 +114,7 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-parcel-watcher` | `@parcel/watcher`<br>`@parcel/watcher-darwin-arm64`<br>`@parcel/watcher-darwin-x64`<br>`@parcel/watcher-linux-arm64-glibc`<br>`@parcel/watcher-linux-arm64-musl`<br>`@parcel/watcher-linux-x64-glibc`<br>`@parcel/watcher-linux-x64-musl`<br>`@parcel/watcher-win32-arm64`<br>`@parcel/watcher-win32-x64` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-pdf` | `@perryts/pdf` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-pg` | `pg` | Source package | Compile the upstream package source | Bundled; migration pending |
+| `perry-ext-qs` | `qs` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-ratelimit` | `rate-limiter-flexible` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-sharp` | `sharp` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-streams` | `streams` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |

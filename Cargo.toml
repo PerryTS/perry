@@ -25,6 +25,7 @@ members = [
     "crates/perry-ext-events",
     "crates/perry-ext-decimal",
     "crates/perry-ext-dayjs",
+    "crates/perry-ext-qs",
     "crates/perry-ext-moment",
     "crates/perry-ext-cheerio",
     "crates/perry-ext-sharp",
@@ -491,6 +492,7 @@ perry-ext-axios = { path = "crates/perry-ext-axios" }
 perry-ext-events = { path = "crates/perry-ext-events" }
 perry-ext-decimal = { path = "crates/perry-ext-decimal" }
 perry-ext-dayjs = { path = "crates/perry-ext-dayjs" }
+perry-ext-qs = { path = "crates/perry-ext-qs" }
 perry-ext-moment = { path = "crates/perry-ext-moment" }
 perry-ext-cheerio = { path = "crates/perry-ext-cheerio" }
 perry-ext-sharp = { path = "crates/perry-ext-sharp" }

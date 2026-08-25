@@ -1,0 +1,20 @@
+[package]
+name = "perry-ext-qs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native qs compatibility binding for nested query-string parsing and serialization"
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+perry-ffi.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+perry-ffi = { workspace = true, features = ["runtime-link"] }
+perry-runtime = { workspace = true, features = ["default", "stdlib"] }

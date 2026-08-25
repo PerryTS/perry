@@ -6165,6 +6165,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "perry-ext-qs"
+version = "0.5.1519"
+dependencies = [
+ "perry-ffi",
+ "perry-runtime",
+ "serde_json",
+]
+
+[[package]]
 name = "perry-ext-ratelimit"
 version = "0.5.1519"
 dependencies = [
