@@ -163,7 +163,7 @@ pub fn is_stream_id_band(id: usize) -> bool {
 /// `test_gap_proxy_reflect` on Linux. Those dependents must be migrated to an
 /// explicit band check FIRST; only then can this floor be raised.
 #[inline(always)]
-pub fn is_valid_obj_ptr(ptr: *const u8) -> bool {
+pub(crate) fn is_valid_obj_ptr(ptr: *const u8) -> bool {
     let addr = ptr as u64;
     #[cfg(any(
         target_os = "android",

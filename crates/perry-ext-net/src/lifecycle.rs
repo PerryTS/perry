@@ -20,10 +20,7 @@
 //! `NativeModSig` rows live in
 //! `perry-codegen/src/lower_call/native_table/net_events.rs`.
 
-use perry_ffi::{
-    alloc_string, nanbox_string_bits, ArrayHeader, JsClosure, JsValue, RawClosureHeader,
-    StringHeader,
-};
+use perry_ffi::{alloc_string, nanbox_string_bits, ArrayHeader, JsValue, StringHeader};
 use std::collections::HashSet;
 
 use crate::statics;
@@ -318,34 +315,6 @@ pub unsafe extern "C" fn js_net_socket_write(handle: i64, chunk_bits: i64) {
     js_ext_net_socket_write(handle, chunk_bits);
 }
 
-unsafe fn call_socket_completion(values: [f64; 3]) {
-    extern "C" {
-        fn js_value_is_closure(value_bits: i64) -> i32;
-    }
-    if let Some(callback) = values
-        .into_iter()
-        .find(|value| js_value_is_closure(value.to_bits() as i64) != 0)
-    {
-        const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-        let raw = (callback.to_bits() & POINTER_MASK) as *const RawClosureHeader;
-        if !raw.is_null() {
-            let _ = JsClosure::from_raw(raw).call0();
-        }
-    }
-}
-
-/// Full Node overload for `socket.write(chunk[, encoding][, callback])`.
-#[no_mangle]
-pub unsafe extern "C" fn js_ext_net_socket_write3(
-    handle: i64,
-    chunk: f64,
-    encoding_or_callback: f64,
-    callback: f64,
-) {
-    js_ext_net_socket_write(handle, chunk.to_bits() as i64);
-    call_socket_completion([chunk, encoding_or_callback, callback]);
-}
-
 /// `socket.end([data])` — optionally write a final chunk, then half-close the
 /// write side (#1852). `undefined`/`null` (the no-arg form, padded with
 /// `TAG_UNDEFINED`) yields `None` and we just send FIN.
@@ -361,17 +330,6 @@ pub unsafe extern "C" fn js_ext_net_socket_write3(
 /// must reference live runtime allocations.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_net_socket_end(handle: i64, chunk_bits: i64) {
-    let trigger = statics::sockets().lock().ok().and_then(|sockets| {
-        sockets
-            .get(&handle)
-            .and_then(|socket| (socket.shutdown_async_id == 0).then_some(socket.tcp_async_id))
-    });
-    if let Some(trigger) = trigger {
-        let async_id = crate::init_provider_with_trigger(b"SHUTDOWNWRAP", trigger);
-        if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
-            socket.shutdown_async_id = async_id;
-        }
-    }
     let mut sockets = statics::sockets().lock().unwrap();
     if let Some(s) = sockets.get_mut(&handle) {
         if let Some(bytes) = crate::jsvalue_to_socket_bytes(f64::from_bits(chunk_bits as u64)) {
@@ -393,18 +351,6 @@ pub unsafe extern "C" fn js_ext_net_socket_end(handle: i64, chunk_bits: i64) {
 #[no_mangle]
 pub unsafe extern "C" fn js_net_socket_end(handle: i64, chunk_bits: i64) {
     js_ext_net_socket_end(handle, chunk_bits);
-}
-
-/// Full Node overload for `socket.end([data][, encoding][, callback])`.
-#[no_mangle]
-pub unsafe extern "C" fn js_ext_net_socket_end3(
-    handle: i64,
-    chunk_or_callback: f64,
-    encoding_or_callback: f64,
-    callback: f64,
-) {
-    js_ext_net_socket_end(handle, chunk_or_callback.to_bits() as i64);
-    call_socket_completion([chunk_or_callback, encoding_or_callback, callback]);
 }
 
 /// `socket.destroy()` — hard close. Flags the handle destroyed (so
@@ -497,7 +443,6 @@ fn register_listener_with_flag(handle: i64, event: String, cb: i64, once: bool) 
     if cb == 0 {
         return;
     }
-    let releases_pending_data = event == "data";
     {
         let mut listeners = statics::listeners().lock().unwrap();
         listeners
@@ -515,9 +460,6 @@ fn register_listener_with_flag(handle: i64, event: String, cb: i64, once: bool) 
             .entry(event)
             .or_default()
             .insert(cb);
-    }
-    if releases_pending_data {
-        crate::server_state::release_pending_server_data(handle);
     }
 }
 

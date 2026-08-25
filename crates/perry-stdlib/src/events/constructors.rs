@@ -76,12 +76,7 @@ pub unsafe extern "C" fn js_event_emitter_async_resource_new(options: f64) -> Ha
     let mut emitter = EventEmitterHandle::new();
     emitter.capture_rejections = event_emitter_options_capture_rejections(options);
     emitter.async_resource_handle = async_resource_handle;
-    let emitter_handle = register_handle(emitter);
-    perry_runtime::async_hooks::set_async_resource_event_emitter(
-        async_resource_handle,
-        emitter_handle,
-    );
-    emitter_handle
+    register_handle(emitter)
 }
 
 #[no_mangle]
@@ -161,15 +156,3 @@ static KEEP_JS_EVENT_EMITTER_NEW_WITH_OPTIONS: unsafe extern "C" fn(f64) -> Hand
 #[used]
 static KEEP_JS_EVENT_EMITTER_ASYNC_RESOURCE_NEW: unsafe extern "C" fn(f64) -> Handle =
     js_event_emitter_async_resource_new;
-#[used]
-static KEEP_JS_EVENT_EMITTER_ASYNC_RESOURCE_ASYNC_ID: unsafe extern "C" fn(Handle) -> f64 =
-    js_event_emitter_async_resource_async_id;
-#[used]
-static KEEP_JS_EVENT_EMITTER_ASYNC_RESOURCE_TRIGGER_ASYNC_ID: unsafe extern "C" fn(Handle) -> f64 =
-    js_event_emitter_async_resource_trigger_async_id;
-#[used]
-static KEEP_JS_EVENT_EMITTER_ASYNC_RESOURCE_ASYNC_RESOURCE: unsafe extern "C" fn(Handle) -> f64 =
-    js_event_emitter_async_resource_async_resource;
-#[used]
-static KEEP_JS_EVENT_EMITTER_ASYNC_RESOURCE_EMIT_DESTROY: unsafe extern "C" fn(Handle) -> f64 =
-    js_event_emitter_async_resource_emit_destroy;

@@ -926,12 +926,3 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
     }
     handle
 }
-
-/// Collision-proof entry point for AOT calls. Both bundled stdlib net and
-/// perry-ext-net export `js_tls_connect`; auto-optimized binaries may bind the
-/// shared name to the bundled registry while their event pump owns ext-net
-/// sockets. Keep generated TLS clients in the same backend as the pump.
-#[no_mangle]
-pub unsafe extern "C" fn js_ext_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f64) -> i64 {
-    js_tls_connect(arg1, arg2, arg3, arg4)
-}

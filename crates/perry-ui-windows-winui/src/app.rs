@@ -33,7 +33,6 @@ thread_local! {
     static APPS: RefCell<Vec<AppState>> = const { RefCell::new(Vec::new()) };
     static ON_ACTIVATE: RefCell<Option<usize>> = const { RefCell::new(None) };
     static ON_TERMINATE: RefCell<Option<usize>> = const { RefCell::new(None) };
-    static TIMER_CALLBACKS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
     static PENDING_TIMERS: RefCell<Vec<(Duration, usize)>> = const { RefCell::new(Vec::new()) };
     static ACTIVE_TIMERS: RefCell<Vec<DispatcherTimer>> = const { RefCell::new(Vec::new()) };
     static RUNTIME_PUMP_STARTED: RefCell<bool> = const { RefCell::new(false) };
@@ -46,11 +45,14 @@ thread_local! {
 /// `widgets::NODES`, not an address), two optional size pairs and a
 /// `PresenterKind` — no JS value, so it is not a GC root.
 ///
-/// The lifecycle slots and `TIMER_CALLBACKS` are the sole owners of raw
-/// callback pointers. Reactor closures capture stable keys and re-read these
-/// scanned slots at invocation time, so an evacuating collection's rewritten
-/// address is always observed. `PENDING_TIMERS` holds only durations and
-/// indices into `TIMER_CALLBACKS`.
+/// KNOWN RESIDUAL (not fixable by scanning): `start_runtime_pump` drains
+/// `PENDING_TIMERS` into `DispatcherTimer` closures that own a COPY of the raw
+/// pointer, and `app_run` moves `ON_TERMINATE` into an `on_exit` closure the
+/// same way. Those copies live inside boxed Rust closures owned by Windows
+/// Reactor, where no scanner can reach or rewrite them, so an evacuating
+/// collection would leave them stale. Making the closures re-read a scanned
+/// slot (the indirection `perry-ui-macos` gets from its handle-keyed callback
+/// maps) is the real fix and is a follow-up, not a relocation.
 pub(crate) fn scan_winui_app_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
     for slot in [&ON_ACTIVATE, &ON_TERMINATE] {
         slot.with(|slot| {
@@ -61,8 +63,8 @@ pub(crate) fn scan_winui_app_gc_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>
             }
         });
     }
-    TIMER_CALLBACKS.with(|callbacks| {
-        for callback in callbacks.borrow_mut().iter_mut() {
+    PENDING_TIMERS.with(|timers| {
+        for (_, callback) in timers.borrow_mut().iter_mut() {
             if *callback != 0 {
                 visitor.visit_usize_slot(callback);
             }
@@ -76,32 +78,6 @@ fn is_fluent() -> bool {
 
 fn closure_ptr(value: f64) -> usize {
     unsafe { js_nanbox_get_pointer(value) as usize }
-}
-
-fn app_callback(slot: &'static std::thread::LocalKey<RefCell<Option<usize>>>) -> usize {
-    slot.with(|slot| slot.borrow().unwrap_or(0))
-}
-
-fn invoke_app_callback(slot: &'static std::thread::LocalKey<RefCell<Option<usize>>>) {
-    let callback = app_callback(slot);
-    if callback != 0 {
-        unsafe {
-            js_closure_call0(callback as *const u8);
-        }
-    }
-}
-
-fn timer_callback(key: usize) -> usize {
-    TIMER_CALLBACKS.with(|callbacks| callbacks.borrow().get(key).copied().unwrap_or(0))
-}
-
-fn invoke_timer_callback(key: usize) {
-    let callback = timer_callback(key);
-    if callback != 0 {
-        unsafe {
-            js_closure_call0(callback as *const u8);
-        }
-    }
 }
 
 fn with_app_mut(handle: i64, f: impl FnOnce(&mut AppState)) {
@@ -154,7 +130,11 @@ pub fn app_run(app_handle: i64) {
     };
     crate::widgets::set_root(state.root);
 
-    invoke_app_callback(&ON_ACTIVATE);
+    if let Some(callback) = ON_ACTIVATE.with(|slot| *slot.borrow()) {
+        unsafe {
+            js_closure_call0(callback as *const u8);
+        }
+    }
 
     let constraints = InnerConstraints {
         min_width: state.min_size.map(|v| v.0),
@@ -168,8 +148,10 @@ pub fn app_run(app_handle: i64) {
         .inner_constraints(constraints)
         .presenter(state.presenter)
         .backdrop(Backdrop::Mica);
-    if app_callback(&ON_TERMINATE) != 0 {
-        app = app.on_exit(move || invoke_app_callback(&ON_TERMINATE));
+    if let Some(callback) = ON_TERMINATE.with(|slot| slot.borrow_mut().take()) {
+        app = app.on_exit(move || unsafe {
+            js_closure_call0(callback as *const u8);
+        });
     }
     if let Err(error) = app.render(crate::widgets::render_root) {
         eprintln!("[perry-winui] application failed: {error}");
@@ -238,15 +220,10 @@ pub fn set_timer(interval_ms: f64, callback: f64) {
         perry_ui_windows::app::set_timer(interval_ms, callback);
         return;
     }
-    let callback_key = TIMER_CALLBACKS.with(|callbacks| {
-        let mut callbacks = callbacks.borrow_mut();
-        callbacks.push(closure_ptr(callback));
-        callbacks.len() - 1
-    });
     PENDING_TIMERS.with(|timers| {
         timers.borrow_mut().push((
             Duration::from_secs_f64((interval_ms.max(1.0)) / 1000.0),
-            callback_key,
+            closure_ptr(callback),
         ));
     });
 }
@@ -274,14 +251,15 @@ pub(crate) fn start_runtime_pump() {
         }) {
             active.push(timer);
         }
-        let pending = PENDING_TIMERS.with(|pending| std::mem::take(&mut *pending.borrow_mut()));
-        for (interval, callback_key) in pending {
-            if let Ok(timer) =
-                DispatcherTimer::new(interval, move || invoke_timer_callback(callback_key))
-            {
-                active.push(timer);
+        PENDING_TIMERS.with(|pending| {
+            for (interval, callback) in pending.borrow_mut().drain(..) {
+                if let Ok(timer) = DispatcherTimer::new(interval, move || unsafe {
+                    js_closure_call0(callback as *const u8);
+                }) {
+                    active.push(timer);
+                }
             }
-        }
+        });
     });
 }
 
@@ -348,31 +326,5 @@ pub fn app_set_vibrancy(app_handle: i64, value_ptr: *const u8) {
 pub fn app_set_activation_policy(app_handle: i64, value_ptr: *const u8) {
     if !is_fluent() {
         perry_ui_windows::app::app_set_activation_policy(app_handle, value_ptr);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reactor_callback_keys_observe_rewritten_app_slots() {
-        ON_ACTIVATE.with(|slot| *slot.borrow_mut() = Some(0x101));
-        ON_TERMINATE.with(|slot| *slot.borrow_mut() = Some(0x111));
-        assert_eq!(app_callback(&ON_ACTIVATE), 0x101);
-        assert_eq!(app_callback(&ON_TERMINATE), 0x111);
-        ON_ACTIVATE.with(|slot| *slot.borrow_mut() = Some(0x202));
-        ON_TERMINATE.with(|slot| *slot.borrow_mut() = Some(0x222));
-        assert_eq!(app_callback(&ON_ACTIVATE), 0x202);
-        assert_eq!(app_callback(&ON_TERMINATE), 0x222);
-
-        let key = TIMER_CALLBACKS.with(|callbacks| {
-            let mut callbacks = callbacks.borrow_mut();
-            callbacks.push(0x333);
-            callbacks.len() - 1
-        });
-        assert_eq!(timer_callback(key), 0x333);
-        TIMER_CALLBACKS.with(|callbacks| callbacks.borrow_mut()[key] = 0x444);
-        assert_eq!(timer_callback(key), 0x444);
     }
 }

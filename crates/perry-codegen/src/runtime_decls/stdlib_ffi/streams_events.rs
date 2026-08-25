@@ -8,11 +8,6 @@ use crate::types::{DOUBLE, I32, I64, PTR, VOID};
 pub(crate) fn declare_streams_events(module: &mut LlModule) {
     // ========== node:stream stubs (issue #631) ==========
     module.declare_function("js_event_emitter_subclass_init", DOUBLE, &[DOUBLE]); // #5137 EE subclass init
-    module.declare_function(
-        "js_event_emitter_async_resource_subclass_init",
-        DOUBLE,
-        &[DOUBLE, DOUBLE],
-    );
     module.declare_function("js_array_subclass_init", DOUBLE, &[DOUBLE, DOUBLE]); // class extends Array
     module.declare_function("js_array_subclass_init_args", DOUBLE, &[DOUBLE, PTR, I64]);
     module.declare_function("js_map_set_subclass_init", DOUBLE, &[DOUBLE, I32, DOUBLE]); // class extends Map/Set

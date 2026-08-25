@@ -1,3 +1,4 @@
+use super::super::handle::*;
 use super::*;
 
 /// `js_class_method_bind` retains the name pointer in the closure, so make a
@@ -46,88 +47,6 @@ fn async_local_storage_method_name_static(property: &str) -> Option<&'static [u8
     }
 }
 
-extern "C" fn async_local_storage_unbound_method_thunk(
-    closure: *const perry_runtime::closure::ClosureHeader,
-    rest: f64,
-) -> f64 {
-    unsafe {
-        let name_ptr = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as *const i8;
-        let name_len = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-        let name = std::slice::from_raw_parts(name_ptr as *const u8, name_len);
-        let name_str = std::str::from_utf8(name).unwrap_or("");
-        let receiver = perry_runtime::object::js_implicit_this_get();
-        let receiver_raw = if receiver.to_bits() >> 48 == 0x7FFD {
-            (receiver.to_bits() & POINTER_MASK_BITS) as i64
-        } else {
-            0
-        };
-
-        // Node deliberately makes these two operations harmless when their
-        // method value is invoked without an ALS receiver.
-        if matches!(name, b"enterWith" | b"disable")
-            && crate::async_local_storage::resolve_async_local_storage_handle(receiver_raw)
-                .is_none()
-        {
-            return TAG_UNDEFINED_F64;
-        }
-
-        let args_array =
-            perry_runtime::value::js_nanbox_get_pointer(rest) as *const perry_runtime::ArrayHeader;
-        let args = if args_array.is_null() {
-            Vec::new()
-        } else {
-            let len = perry_runtime::array::js_array_length(args_array) as usize;
-            (0..len)
-                .map(|index| {
-                    f64::from_bits(
-                        perry_runtime::array::js_array_get(args_array, index as u32).bits(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        if let Some(value) = dispatch_async_local_storage_method(receiver_raw, name_str, &args) {
-            return value;
-        }
-
-        // The remaining cases are invalid receivers. Brand-checked methods
-        // throw; enterWith/disable already returned the deliberate no-op above.
-        match name {
-            b"getStore" => {
-                crate::async_local_storage::js_async_local_storage_get_store(receiver_raw)
-            }
-            b"run" => crate::async_local_storage::js_async_local_storage_run(
-                receiver_raw,
-                args.first().copied().unwrap_or(TAG_UNDEFINED_F64),
-                args.get(1).copied().unwrap_or(TAG_UNDEFINED_F64),
-                0,
-            ),
-            b"exit" => crate::async_local_storage::js_async_local_storage_exit(
-                receiver_raw,
-                args.first().copied().unwrap_or(TAG_UNDEFINED_F64),
-                0,
-            ),
-            _ => TAG_UNDEFINED_F64,
-        }
-    }
-}
-
-pub(crate) fn unbound_async_local_storage_method(method: &'static [u8]) -> f64 {
-    perry_runtime::closure::js_register_closure_rest(
-        async_local_storage_unbound_method_thunk as *const u8,
-        0,
-    );
-    let closure = perry_runtime::closure::js_closure_alloc(
-        async_local_storage_unbound_method_thunk as *const u8,
-        2,
-    );
-    if closure.is_null() {
-        return TAG_UNDEFINED_F64;
-    }
-    perry_runtime::closure::js_closure_set_capture_ptr(closure, 0, method.as_ptr() as i64);
-    perry_runtime::closure::js_closure_set_capture_ptr(closure, 1, method.len() as i64);
-    perry_runtime::value::js_nanbox_pointer(closure as i64)
-}
-
 /// Dynamic dispatch for `AsyncLocalStorage` receivers whose static type the
 /// codegen lost (`any`-typed bindings, closure captures). Gated on registry
 /// type membership so no other subsystem's handle is claimed (#788).
@@ -142,7 +61,9 @@ pub(crate) unsafe fn dispatch_async_local_storage_method(
     ) {
         return None;
     }
-    let handle = crate::async_local_storage::resolve_async_local_storage_handle(handle)?;
+    if get_handle_mut::<crate::async_local_storage::AsyncLocalStorageHandle>(handle).is_none() {
+        return None;
+    }
     Some(match method {
         "getStore" => crate::async_local_storage::js_async_local_storage_get_store(handle),
         "run" if args.len() >= 2 => {
@@ -198,21 +119,31 @@ pub(crate) unsafe fn dispatch_event_emitter_method(
         f64::from_bits(POINTER_TAG_BITS | (ptr as u64 & POINTER_MASK_BITS))
     };
 
-    if perry_runtime::object::event_emitter_async_resource_handle_probe()
-        .is_some_and(|probe| probe(handle))
-    {
-        let operation = match method {
-            "asyncId" => Some(0),
-            "triggerAsyncId" => Some(1),
-            "asyncResource" => Some(2),
-            "emitDestroy" => Some(3),
-            _ => None,
-        };
-        if let (Some(operation), Some(dispatch)) = (
-            operation,
-            perry_runtime::object::event_emitter_async_resource_dispatch(),
-        ) {
-            return Some(dispatch(handle, operation));
+    // EventEmitterAsyncResource extras exist only in the bundled impl;
+    // perry-ext-events has no async-resource constructor, so its handles
+    // never satisfy this probe.
+    #[cfg(feature = "bundled-events")]
+    if crate::events::is_event_emitter_async_resource_handle(handle) {
+        match method {
+            "asyncId" => {
+                return Some(crate::events::js_event_emitter_async_resource_async_id(
+                    handle,
+                ));
+            }
+            "triggerAsyncId" => {
+                return Some(
+                    crate::events::js_event_emitter_async_resource_trigger_async_id(handle),
+                );
+            }
+            "asyncResource" => {
+                return Some(crate::events::js_event_emitter_async_resource_async_resource(handle));
+            }
+            "emitDestroy" => {
+                return Some(crate::events::js_event_emitter_async_resource_emit_destroy(
+                    handle,
+                ));
+            }
+            _ => {}
         }
     }
 
@@ -277,23 +208,24 @@ pub(crate) unsafe fn dispatch_event_emitter_property(handle: i64, property: &str
         return None;
     }
 
-    if perry_runtime::object::event_emitter_async_resource_handle_probe()
-        .is_some_and(|probe| probe(handle))
-    {
-        if property == "emitDestroy" {
-            return Some(bind_static_handle_method(handle, b"emitDestroy"));
-        }
-        let operation = match property {
-            "asyncId" => Some(0),
-            "triggerAsyncId" => Some(1),
-            "asyncResource" => Some(2),
-            _ => None,
-        };
-        if let (Some(operation), Some(dispatch)) = (
-            operation,
-            perry_runtime::object::event_emitter_async_resource_dispatch(),
-        ) {
-            return Some(dispatch(handle, operation));
+    #[cfg(feature = "bundled-events")]
+    if crate::events::is_event_emitter_async_resource_handle(handle) {
+        match property {
+            "asyncId" => {
+                return Some(crate::events::js_event_emitter_async_resource_async_id(
+                    handle,
+                ));
+            }
+            "triggerAsyncId" => {
+                return Some(
+                    crate::events::js_event_emitter_async_resource_trigger_async_id(handle),
+                );
+            }
+            "asyncResource" => {
+                return Some(crate::events::js_event_emitter_async_resource_async_resource(handle));
+            }
+            "emitDestroy" => return Some(bind_static_handle_method(handle, b"emitDestroy")),
+            _ => {}
         }
     }
 
@@ -317,8 +249,10 @@ pub(crate) unsafe fn dispatch_async_local_storage_property(
     property: &str,
 ) -> Option<f64> {
     let method = async_local_storage_method_name_static(property)?;
-    crate::async_local_storage::resolve_async_local_storage_handle(handle)?;
-    Some(unbound_async_local_storage_method(method))
+    if get_handle_mut::<crate::async_local_storage::AsyncLocalStorageHandle>(handle).is_none() {
+        return None;
+    }
+    Some(bind_static_handle_method(handle, method))
 }
 
 #[cfg(test)]

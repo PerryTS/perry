@@ -12,11 +12,10 @@ mod async_lifecycle;
 use crate::promise::{js_promise_new, js_promise_resolve, Promise};
 use async_lifecycle::{enqueue_destroy_ids, IntervalCallback};
 use std::any::Any;
-use std::collections::HashMap;
 use std::os::raw::c_int;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
-    LazyLock, Mutex,
+    Mutex,
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -420,8 +419,6 @@ pub(crate) use gc_scan::{new_timer_root_scan_state, scan_timer_roots_mut_step};
 use ref_states::{TimerRefStates, TIMER_REF_STATES_CAP};
 
 static TIMER_REF_STATES: Mutex<Option<TimerRefStates>> = Mutex::new(None);
-static TIMER_HANDLE_KINDS: LazyLock<Mutex<HashMap<i64, CallbackTimerKind>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 static WARNED_NEGATIVE_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 static WARNED_NAN_TIMER_DELAY: AtomicBool = AtomicBool::new(false);
 
@@ -601,42 +598,6 @@ fn set_timer_ref_state(id: i64, has_ref: bool) {
         .insert_bounded(id, has_ref, TIMER_REF_STATES_CAP);
 }
 
-fn record_timer_handle_kind(id: i64, kind: CallbackTimerKind) {
-    TIMER_HANDLE_KINDS.lock().unwrap().insert(id, kind);
-}
-
-/// Synthetic constructor object for `Timeout`/`Immediate` native handles.
-/// Timer ids outlive queue removal, so the kind table intentionally retains
-/// the entry after clear/fire just as Node retains the wrapper's prototype.
-pub(crate) fn timer_constructor_value(id: i64) -> Option<f64> {
-    let kind = TIMER_HANDLE_KINDS.lock().unwrap().get(&id).copied()?;
-    let name = match kind {
-        CallbackTimerKind::Timeout => b"Timeout".as_slice(),
-        CallbackTimerKind::Immediate => b"Immediate".as_slice(),
-    };
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc_null_proto(0, 0));
-    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"name".as_ptr(), 4));
-    let value = scope.root_string_ptr(crate::string::js_string_from_bytes(
-        name.as_ptr(),
-        name.len() as u32,
-    ));
-    let (_, obj_ptr) = obj.across_mut::<crate::object::ObjectHeader, _>(|| {
-        obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj_ptr| {
-            key.with_mut_ptr::<crate::StringHeader, _>(|key_ptr| {
-                value.with_mut_ptr::<crate::StringHeader, _>(|value_ptr| {
-                    crate::object::js_object_set_field_by_name(
-                        obj_ptr,
-                        key_ptr,
-                        f64::from_bits(crate::value::JSValue::string_ptr(value_ptr).bits()),
-                    );
-                });
-            });
-        });
-    });
-    Some(crate::value::js_nanbox_pointer(obj_ptr as i64))
-}
-
 pub use ref_states::is_known_timer_id;
 
 fn throw_mock_timer_invalid_state(message: &str) -> ! {
@@ -744,7 +705,6 @@ fn schedule_mock_callback_timer(
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let delay = normalize_timer_delay(delay_ms);
     let id = next_timer_id();
-    record_timer_handle_kind(id, kind);
     let due_ms = state.current_ms + delay as f64;
     state.callbacks.push(MockCallbackTimer {
         id,
@@ -770,7 +730,6 @@ fn schedule_mock_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>)
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let interval = normalize_timer_delay(interval_ms);
     let id = next_timer_id();
-    record_timer_handle_kind(id, CallbackTimerKind::Timeout);
     let next_ms = state.current_ms + interval as f64;
     state.intervals.push(MockIntervalTimer {
         id,
@@ -1029,7 +988,6 @@ pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
         Vec::new(),
         "Timeout",
         CallbackTimerKind::Timeout,
-        None,
     )
 }
 
@@ -1041,7 +999,6 @@ pub extern "C" fn js_set_immediate_callback(callback: i64) -> i64 {
         Vec::new(),
         "Immediate",
         CallbackTimerKind::Immediate,
-        None,
     )
 }
 
@@ -1051,7 +1008,6 @@ fn schedule_callback_timer(
     args: Vec<f64>,
     type_name: &str,
     kind: CallbackTimerKind,
-    trigger_async_id: Option<u64>,
 ) -> i64 {
     crate::promise::bump(&PROFILE_CALLBACK_TIMER_REGISTRATIONS);
     if let Some(id) = schedule_mock_callback_timer(callback, delay_ms, args.clone(), kind) {
@@ -1067,22 +1023,12 @@ fn schedule_callback_timer(
     let deadline = Instant::now() + Duration::from_millis(delay_ms);
 
     let id = next_timer_id();
-    record_timer_handle_kind(id, kind);
 
     let mut context = crate::async_context::capture_context();
     let context_roots = crate::async_context::root_snapshot(&scope, &context);
-    let (ids, callback) =
-        callback_handle.across_const::<crate::closure::ClosureHeader, _>(
-            || match trigger_async_id {
-                Some(trigger_async_id) => crate::async_hooks::init_resource_with_trigger(
-                    type_name,
-                    timer_handle_value(id),
-                    true,
-                    trigger_async_id,
-                ),
-                None => crate::async_hooks::init_resource(type_name, timer_handle_value(id), true),
-            },
-        );
+    let (ids, callback) = callback_handle.across_const::<crate::closure::ClosureHeader, _>(|| {
+        crate::async_hooks::init_resource(type_name, timer_handle_value(id), true)
+    });
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
 
     CALLBACK_TIMERS.lock().unwrap().push(CallbackTimer {
@@ -1132,7 +1078,6 @@ pub unsafe extern "C" fn js_set_timeout_callback_args(
         args,
         "Timeout",
         CallbackTimerKind::Timeout,
-        None,
     )
 }
 
@@ -1153,58 +1098,6 @@ pub unsafe extern "C" fn js_set_immediate_callback_args(
         args,
         "Immediate",
         CallbackTimerKind::Immediate,
-        None,
-    )
-}
-
-/// Schedule a native Node-style completion callback as its own async-hooks
-/// provider. Native stdlib operations use the ordinary immediate queue for
-/// deferred delivery, but must expose their actual provider name (for example
-/// `PBKDF2REQUEST`) and execute with that provider's async id/resource rather
-/// than masquerading as an `Immediate`.
-pub fn schedule_native_callback(callback: i64, args: &[f64], provider_type: &'static str) -> i64 {
-    schedule_callback_timer(
-        callback,
-        0.0,
-        args.to_vec(),
-        provider_type,
-        CallbackTimerKind::Immediate,
-        None,
-    )
-}
-
-/// Schedule the final callback in a provider chain while emitting the eager
-/// native preparation stages ahead of it. Node's `fs.readFile` is implemented
-/// as four chained FSREQCALLBACK operations (open, stat, read, close); Perry
-/// performs those syscalls eagerly, but the observable hook graph must retain
-/// the same four-resource ancestry.
-pub fn schedule_native_callback_chain(
-    callback: i64,
-    args: &[f64],
-    provider_type: &'static str,
-    resource_count: usize,
-) -> i64 {
-    let mut trigger = crate::async_hooks::execution_async_id_u64();
-    for _ in 1..resource_count {
-        let resource = crate::object::js_object_alloc_null_proto(0, 0);
-        let ids = crate::async_hooks::init_resource_with_trigger(
-            provider_type,
-            crate::value::js_nanbox_pointer(resource as i64),
-            true,
-            trigger,
-        );
-        crate::async_hooks::before(ids.async_id, ids.trigger_async_id);
-        crate::async_hooks::after(ids.async_id);
-        crate::async_hooks::destroy(ids.async_id);
-        trigger = ids.async_id;
-    }
-    schedule_callback_timer(
-        callback,
-        0.0,
-        args.to_vec(),
-        provider_type,
-        CallbackTimerKind::Immediate,
-        Some(trigger),
     )
 }
 
@@ -1582,7 +1475,6 @@ fn schedule_interval_timer(callback: i64, interval_ms: f64, args: Vec<f64>) -> i
     let next_deadline = Instant::now() + Duration::from_millis(interval);
 
     let id = next_timer_id();
-    record_timer_handle_kind(id, CallbackTimerKind::Timeout);
 
     let mut context = crate::async_context::capture_context();
     let context_roots = crate::async_context::root_snapshot(&scope, &context);

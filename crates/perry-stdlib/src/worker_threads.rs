@@ -208,8 +208,6 @@ struct WorkerRecord {
     alive: bool,
     refed: bool,
     terminate_promise: Option<usize>,
-    async_resources: [perry_runtime::async_hooks::AsyncResourceIds; 3],
-    async_resource_bits: [u64; 3],
 }
 
 struct WorkerListener {
@@ -302,9 +300,6 @@ fn scan_worker_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>
             }
             if let Some(promise) = worker.terminate_promise.as_mut() {
                 visitor.visit_usize_slot(promise);
-            }
-            for resource in &mut worker.async_resource_bits {
-                visitor.visit_nanbox_u64_slot(resource);
             }
         }
     }
@@ -1198,31 +1193,6 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     };
     let (tx, rx) = mpsc::channel::<WorkerCommand>();
     let worker_obj = worker_object(worker_id, &options_state);
-    let resource_scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let mut async_resources = [perry_runtime::async_hooks::AsyncResourceIds {
-        async_id: 0,
-        trigger_async_id: 0,
-    }; 3];
-    let mut resource_handles = Vec::with_capacity(3);
-    for (index, type_name) in ["WORKER", "MESSAGEPORT", "MESSAGEPORT"]
-        .into_iter()
-        .enumerate()
-    {
-        let resource = perry_runtime::object::js_object_alloc_null_proto(0, 0);
-        let resource_handle = resource_scope
-            .root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(resource as i64));
-        async_resources[index] = perry_runtime::async_hooks::init_resource(
-            type_name,
-            resource_handle.get_nanbox_f64(),
-            true,
-        );
-        resource_handles.push(resource_handle);
-    }
-    let async_resource_bits = [
-        resource_handles[0].get_nanbox_f64().to_bits(),
-        resource_handles[1].get_nanbox_f64().to_bits(),
-        resource_handles[2].get_nanbox_f64().to_bits(),
-    ];
     WORKERS.lock().unwrap().insert(
         worker_id,
         WorkerRecord {
@@ -1232,8 +1202,6 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             alive: true,
             refed: true,
             terminate_promise: None,
-            async_resources,
-            async_resource_bits,
         },
     );
 

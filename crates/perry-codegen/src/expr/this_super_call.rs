@@ -12,9 +12,8 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 use super::{
-    lower_array_super_init, lower_event_emitter_async_resource_subclass_init,
-    lower_event_emitter_subclass_init, lower_expr, lower_node_stream_super_init,
-    lower_stream_super_init, nanbox_pointer_inline, FnCtx,
+    lower_array_super_init, lower_event_emitter_subclass_init, lower_expr,
+    lower_node_stream_super_init, lower_stream_super_init, nanbox_pointer_inline, FnCtx,
 };
 
 /// Enter one derived constructor's `super()` binding scope.
@@ -817,83 +816,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
                         };
                         lower_event_emitter_subclass_init(ctx, &this_box);
-                        bind_derived_this_after_super(ctx);
-                        let current_class_name =
-                            ctx.class_stack.last().cloned().unwrap_or_default();
-                        crate::lower_call::apply_field_initializers_recursive(
-                            ctx,
-                            &current_class_name,
-                            crate::lower_call::FieldInitMode::SelfOnly,
-                        )?;
-                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                    }
-                    if parent_name.as_str() == "EventEmitterAsyncResource" {
-                        let mut lowered = Vec::with_capacity(super_args.len());
-                        for arg in super_args {
-                            lowered.push(lower_expr(ctx, arg)?);
-                        }
-                        let options = lowered.first().cloned().unwrap_or_else(|| {
-                            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-                        });
-                        let this_box = match ctx.this_stack.last().cloned() {
-                            Some(slot) => ctx.block().load(DOUBLE, &slot),
-                            None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
-                        };
-                        lower_event_emitter_async_resource_subclass_init(ctx, &this_box, &options);
-                        bind_derived_this_after_super(ctx);
-                        let current_class_name =
-                            ctx.class_stack.last().cloned().unwrap_or_default();
-                        crate::lower_call::apply_field_initializers_recursive(
-                            ctx,
-                            &current_class_name,
-                            crate::lower_call::FieldInitMode::SelfOnly,
-                        )?;
-                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                    }
-                    if parent_name.as_str() == "AsyncLocalStorage" {
-                        for arg in super_args {
-                            let _ = lower_expr(ctx, arg)?;
-                        }
-                        let this_box = match ctx.this_stack.last().cloned() {
-                            Some(slot) => ctx.block().load(DOUBLE, &slot),
-                            None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
-                        };
-                        ctx.block().call(
-                            DOUBLE,
-                            "js_async_local_storage_subclass_init",
-                            &[(DOUBLE, &this_box)],
-                        );
-                        bind_derived_this_after_super(ctx);
-                        let current_class_name =
-                            ctx.class_stack.last().cloned().unwrap_or_default();
-                        crate::lower_call::apply_field_initializers_recursive(
-                            ctx,
-                            &current_class_name,
-                            crate::lower_call::FieldInitMode::SelfOnly,
-                        )?;
-                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                    }
-                    if parent_name.as_str() == "AsyncResource" {
-                        let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                        let mut lowered = Vec::with_capacity(super_args.len());
-                        for arg in super_args {
-                            lowered.push(lower_expr(ctx, arg)?);
-                        }
-                        let type_value = lowered.first().cloned().unwrap_or_else(|| undef.clone());
-                        let options = lowered.get(1).cloned().unwrap_or_else(|| undef.clone());
-                        let this_box = match ctx.this_stack.last().cloned() {
-                            Some(slot) => ctx.block().load(DOUBLE, &slot),
-                            None => undef,
-                        };
-                        ctx.block().call(
-                            DOUBLE,
-                            "js_async_resource_subclass_init",
-                            &[
-                                (DOUBLE, &this_box),
-                                (DOUBLE, &type_value),
-                                (DOUBLE, &options),
-                            ],
-                        );
                         bind_derived_this_after_super(ctx);
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();

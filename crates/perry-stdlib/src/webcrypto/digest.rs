@@ -60,6 +60,6 @@ pub unsafe extern "C" fn js_webcrypto_digest(algo_bits: f64, data_bits: f64) -> 
     perry_runtime::closure::js_closure_set_capture_ptr(cl, 1, value.to_bits() as i64);
     // Remaining macrotask hops (Node's threadpool digest = 2 setImmediate ticks).
     perry_runtime::closure::js_closure_set_capture_ptr(cl, 2, 2);
-    perry_runtime::timer::schedule_native_callback(cl as i64, &[], "HASHREQUEST");
+    perry_runtime::timer::js_set_immediate_callback(cl as i64);
     promise
 }

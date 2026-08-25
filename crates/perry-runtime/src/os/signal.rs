@@ -1,15 +1,10 @@
 use crate::fs::validate::{describe_received, is_numeric, throw_type_error_with_code};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::{JSValue, TAG_TRUE};
-use std::collections::HashMap;
 #[cfg(unix)]
 use std::sync::atomic::AtomicI32;
 #[cfg(any(unix, windows))]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{LazyLock, Mutex};
-
-static SIGNAL_ASYNC_IDS: LazyLock<Mutex<HashMap<String, u64>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn signal_number_by_name(name: &str) -> Option<i32> {
     #[cfg(unix)]
@@ -97,18 +92,6 @@ static SIGQUIT_LISTENERS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(unix)]
 static SIGQUIT_INSTALLED: AtomicBool = AtomicBool::new(false);
 #[cfg(unix)]
-static SIGUSR1_PENDING: AtomicUsize = AtomicUsize::new(0);
-#[cfg(unix)]
-static SIGUSR1_LISTENERS: AtomicUsize = AtomicUsize::new(0);
-#[cfg(unix)]
-static SIGUSR1_INSTALLED: AtomicBool = AtomicBool::new(false);
-#[cfg(unix)]
-static SIGUSR2_PENDING: AtomicUsize = AtomicUsize::new(0);
-#[cfg(unix)]
-static SIGUSR2_LISTENERS: AtomicUsize = AtomicUsize::new(0);
-#[cfg(unix)]
-static SIGUSR2_INSTALLED: AtomicBool = AtomicBool::new(false);
-#[cfg(unix)]
 static SIGABRT_PENDING: AtomicUsize = AtomicUsize::new(0);
 #[cfg(unix)]
 static SIGABRT_LISTENERS: AtomicUsize = AtomicUsize::new(0);
@@ -164,20 +147,6 @@ static PROCESS_SIGNAL_SLOTS: &[ProcessSignalSlot] = &[
         pending: &SIGQUIT_PENDING,
         listeners: &SIGQUIT_LISTENERS,
         installed: &SIGQUIT_INSTALLED,
-    },
-    ProcessSignalSlot {
-        name: "SIGUSR1",
-        number: libc::SIGUSR1,
-        pending: &SIGUSR1_PENDING,
-        listeners: &SIGUSR1_LISTENERS,
-        installed: &SIGUSR1_INSTALLED,
-    },
-    ProcessSignalSlot {
-        name: "SIGUSR2",
-        number: libc::SIGUSR2,
-        pending: &SIGUSR2_PENDING,
-        listeners: &SIGUSR2_LISTENERS,
-        installed: &SIGUSR2_INSTALLED,
     },
     ProcessSignalSlot {
         name: "SIGABRT",
@@ -524,29 +493,6 @@ pub(crate) fn set_process_signal_listener_count(name: &str, count: usize) {
     #[cfg(not(any(unix, windows)))]
     {
         let _ = (name, count);
-    }
-
-    if count > 0 {
-        let needs_resource = !SIGNAL_ASYNC_IDS.lock().unwrap().contains_key(name);
-        if needs_resource {
-            let resource = crate::object::js_object_alloc_null_proto(0, 0);
-            let async_id = crate::async_hooks::init_resource(
-                "SIGNALWRAP",
-                crate::value::js_nanbox_pointer(resource as i64),
-                true,
-            )
-            .async_id;
-            SIGNAL_ASYNC_IDS
-                .lock()
-                .unwrap()
-                .entry(name.to_string())
-                .or_insert(async_id);
-        }
-    } else {
-        let async_id = SIGNAL_ASYNC_IDS.lock().unwrap().remove(name);
-        if let Some(async_id) = async_id {
-            crate::async_hooks::destroy(async_id);
-        }
     }
 }
 

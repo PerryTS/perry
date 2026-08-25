@@ -838,7 +838,6 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("http", "ref", true, Some("HttpServer")),
     method("http", "unref", true, Some("HttpServer")),
     method("http", "on", true, Some("IncomingMessage")),
-    method("http", "once", true, Some("IncomingMessage")),
     method("http", "addListener", true, Some("IncomingMessage")),
     method("http", "pause", true, Some("IncomingMessage")),
     method("http", "resume", true, Some("IncomingMessage")),
@@ -857,7 +856,6 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     // method, so the manifest-consistency drift guard requires a row
     // here even though the test collapses class_filter variants.
     method("http", "setTimeout", true, Some("ClientRequest")),
-    method("http", "once", true, Some("ClientRequest")),
     method("http", "listenerCount", true, Some("ClientRequest")),
     method("http", "setHeader", true, Some("ClientRequest")),
     method("http", "getHeader", true, Some("ClientRequest")),

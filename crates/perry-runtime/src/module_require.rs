@@ -1213,11 +1213,6 @@ fn dynamic_import_fallback_promise(spec: f64, deferred_note: Option<String>) -> 
         let promise = crate::promise::js_promise_resolved(ns_handle.get_nanbox_f64());
         return js_nanbox_pointer(promise as i64);
     }
-    #[cfg(feature = "dyn-eval")]
-    if let Some(namespace) = dynamic_import_javascript_data_url(&spec_str) {
-        let promise = crate::promise::js_promise_resolved(namespace);
-        return js_nanbox_pointer(promise as i64);
-    }
     let message = deferred_note.unwrap_or_else(|| format!("Cannot find module '{spec_str}'"));
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_MODULE_NOT_FOUND");
@@ -1226,49 +1221,6 @@ fn dynamic_import_fallback_promise(spec: f64, deferred_note: Option<String>) -> 
     let err_handle = scope.root_nanbox_f64(js_nanbox_pointer(err as i64));
     let promise = crate::promise::js_promise_rejected(err_handle.get_nanbox_f64());
     js_nanbox_pointer(promise as i64)
-}
-
-#[cfg(feature = "dyn-eval")]
-fn dynamic_import_javascript_data_url(specifier: &str) -> Option<f64> {
-    let encoded = specifier.strip_prefix("data:text/javascript,")?;
-    let mut decoded = Vec::with_capacity(encoded.len());
-    let bytes = encoded.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            let hi = (bytes[index + 1] as char).to_digit(16)?;
-            let lo = (bytes[index + 2] as char).to_digit(16)?;
-            decoded.push(((hi << 4) | lo) as u8);
-            index += 3;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
-    }
-    let source = std::str::from_utf8(&decoded).ok()?.trim();
-    let declaration = source.strip_prefix("export const ")?;
-    let (name, expression) = declaration.split_once('=')?;
-    let name = name.trim();
-    if name.is_empty()
-        || !name.chars().enumerate().all(|(index, ch)| {
-            ch == '_'
-                || ch == '$'
-                || (index == 0 && ch.is_ascii_alphabetic())
-                || (index > 0 && ch.is_ascii_alphanumeric())
-        })
-    {
-        return None;
-    }
-    let expression = expression
-        .trim()
-        .strip_suffix(';')
-        .unwrap_or(expression.trim());
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(crate::node_vm::eval_dynamic_module_expression(expression));
-    let namespace = crate::object::js_object_alloc_null_proto(0, 1);
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_set_field_by_name(namespace, key, value.get_nanbox_f64());
-    Some(js_nanbox_pointer(namespace as i64))
 }
 
 /// Codegen entry for the unresolved / no-match dynamic-`import()` fallthrough

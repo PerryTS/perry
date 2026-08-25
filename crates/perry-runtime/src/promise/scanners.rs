@@ -41,7 +41,7 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
                     visitor.visit_raw_const_ptr_slot(callback);
                     scan_snapshot_roots_mut(context, visitor);
                 }
-                Task::AsyncStep(cb, value, next, _, context, _, _, _) => {
+                Task::AsyncStep(cb, value, next, _, context, _) => {
                     visitor.visit_raw_const_ptr_slot(cb);
                     visitor.visit_raw_mut_ptr_slot(next);
                     visitor.visit_nanbox_f64_slot(value);
@@ -265,7 +265,7 @@ fn scan_task_step(
             scan_task_slot_promise_all(promise_state, value, context, visitor, state, remaining)
         }
         Task::Inline(cb, value, next, _, context)
-        | Task::AsyncStep(cb, value, next, _, context, _, _, _) => {
+        | Task::AsyncStep(cb, value, next, _, context, _) => {
             scan_task_slot_inline(cb, value, next, context, visitor, state, remaining)
         }
         Task::Microtask {
@@ -770,8 +770,6 @@ pub(crate) fn test_seed_promise_scanner_roots(
             false,
             context.clone(),
             std::ptr::null_mut(),
-            0,
-            0,
         ));
     });
     PROMISE_CONTEXTS.with(|contexts| {
@@ -856,7 +854,7 @@ pub(crate) fn test_promise_scanner_snapshot() -> TestPromiseScannerSnapshot {
             snapshot.inline_next_ptr = *next_ptr as usize;
             snapshot.inline_value_bits = value.to_bits();
         }
-        if let Some(Task::AsyncStep(callback_ptr, value, next_ptr, _, _, _, _, _)) = q.get(2) {
+        if let Some(Task::AsyncStep(callback_ptr, value, next_ptr, _, _, _)) = q.get(2) {
             snapshot.async_step_callback_ptr = *callback_ptr as usize;
             snapshot.async_step_next_ptr = *next_ptr as usize;
             snapshot.async_step_value_bits = value.to_bits();

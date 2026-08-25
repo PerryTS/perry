@@ -99,9 +99,6 @@ static CP_EVENT_QUEUE: Mutex<Vec<CpEvent>> = Mutex::new(Vec::new());
 struct LiveChild {
     /// NaN-boxed ChildProcess object — a GC root (see `cp_reactor_scan_roots_mut`).
     cp_bits: u64,
-    process_ids: crate::async_hooks::AsyncResourceIds,
-    pipe_ids: [crate::async_hooks::AsyncResourceIds; 3],
-    pipe_bits: [u64; 3],
     pid: i32,
     stdin: Option<CpWriter>,
     stdout_open: bool,
@@ -198,24 +195,6 @@ pub(super) struct CpExecPending {
 }
 
 static CP_LIVE: Mutex<Option<HashMap<u64, LiveChild>>> = Mutex::new(None);
-
-fn cp_init_async_resources(
-    cp: f64,
-    stdin_obj: f64,
-    stdout_obj: f64,
-    stderr_obj: f64,
-) -> (
-    crate::async_hooks::AsyncResourceIds,
-    [crate::async_hooks::AsyncResourceIds; 3],
-) {
-    let process_ids = crate::async_hooks::init_resource("PROCESSWRAP", cp, true);
-    let pipe_ids = [
-        crate::async_hooks::init_resource("PIPEWRAP", stdin_obj, true),
-        crate::async_hooks::init_resource("PIPEWRAP", stdout_obj, true),
-        crate::async_hooks::init_resource("PIPEWRAP", stderr_obj, true),
-    ];
-    (process_ids, pipe_ids)
-}
 
 thread_local! {
     /// Re-entrancy guard — an emitted handler may itself drive the event loop
@@ -507,7 +486,6 @@ fn cp_register_live_child_parts(
     for (_, stream, _) in &extra_pipes {
         cp_set_field(*stream, b"__cpHandle", handle_f);
     }
-    let (process_ids, pipe_ids) = cp_init_async_resources(cp, stdin_obj, stdout_obj, stderr_obj);
 
     // For fork, keep a clone of the IPC socket for send/disconnect; the reader
     // thread owns the original.
@@ -526,13 +504,6 @@ fn cp_register_live_child_parts(
             handle,
             LiveChild {
                 cp_bits: cp.to_bits(),
-                process_ids,
-                pipe_ids,
-                pipe_bits: [
-                    stdin_obj.to_bits(),
-                    stdout_obj.to_bits(),
-                    stderr_obj.to_bits(),
-                ],
                 pid: pid as i32,
                 stdin: stdin_pipe,
                 stdout_open,
@@ -1120,8 +1091,6 @@ pub(super) fn cp_exec_async(
                 exceeded: false,
                 timed_out: false,
             });
-            let (process_ids, pipe_ids) =
-                cp_init_async_resources(cp, TAG_NULL_F64, stdout_obj, stderr_obj);
 
             {
                 let mut guard = cp_live_lock();
@@ -1130,13 +1099,6 @@ pub(super) fn cp_exec_async(
                     handle,
                     LiveChild {
                         cp_bits: cp.to_bits(),
-                        process_ids,
-                        pipe_ids,
-                        pipe_bits: [
-                            TAG_NULL_F64.to_bits(),
-                            stdout_obj.to_bits(),
-                            stderr_obj.to_bits(),
-                        ],
                         pid: pid as i32,
                         stdin: None,
                         stdout_open,
@@ -1541,8 +1503,6 @@ fn cp_reactor_pump_inner() {
                             abort_signal_bits: lc.abort_signal_bits,
                             abort_listener_bits: lc.abort_listener_bits,
                             exec: lc.exec.take(),
-                            process_ids: lc.process_ids,
-                            pipe_ids: lc.pipe_ids,
                         });
                         lc.abort_signal_bits = 0;
                         lc.abort_listener_bits = 0;
@@ -1564,9 +1524,7 @@ fn cp_reactor_pump_inner() {
             cp_set_field(cp, b"exitCode", code_f);
             cp_set_field(cp, b"signalCode", signal_f);
             cp_emit(cp, "exit", &[code_f, signal_f]);
-            crate::async_hooks::enter_resource_scope(item.process_ids);
             cp_exec_fire_close(exec, item.code, item.signal, item.pid);
-            crate::async_hooks::leave_resource_scope(item.process_ids.async_id);
             cp_emit(cp, "close", &[code_f, signal_f]);
         } else {
             let cp = f64::from_bits(item.cp_bits);
@@ -1584,10 +1542,6 @@ fn cp_reactor_pump_inner() {
         if let Some(map) = cp_live_lock().as_mut() {
             map.remove(&item.handle);
         }
-        crate::async_hooks::destroy(item.process_ids.async_id);
-        for pipe in item.pipe_ids {
-            crate::async_hooks::destroy(pipe.async_id);
-        }
         CP_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
     }
 }
@@ -1603,8 +1557,6 @@ struct CpCloseItem {
     abort_signal_bits: u64,
     abort_listener_bits: u64,
     exec: Option<Box<CpExecPending>>,
-    process_ids: crate::async_hooks::AsyncResourceIds,
-    pipe_ids: [crate::async_hooks::AsyncResourceIds; 3],
 }
 
 #[inline]
@@ -1622,23 +1574,6 @@ fn cp_lookup_cp_bits(handle: u64) -> Option<u64> {
     cp_live_lock()
         .as_ref()
         .and_then(|map| map.get(&handle).map(|lc| lc.cp_bits))
-}
-
-pub(super) fn cp_async_scope_for_target(
-    handle: u64,
-    target: f64,
-) -> Option<crate::async_hooks::AsyncResourceIds> {
-    let target_bits = target.to_bits();
-    let guard = cp_live_lock();
-    let child = guard.as_ref()?.get(&handle)?;
-    if target_bits == child.cp_bits {
-        return Some(child.process_ids);
-    }
-    child
-        .pipe_bits
-        .iter()
-        .position(|bits| *bits == target_bits)
-        .map(|index| child.pipe_ids[index])
 }
 
 // ============================================================================
@@ -1920,6 +1855,133 @@ pub(crate) fn cp_reactor_scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
     }
 }
 
+// ============================================================================
+// Tests
+// ============================================================================
+
+/// Windows termination tests. `child.kill()`, spawn `{ timeout }`,
+/// `AbortSignal`, and the exec `maxBuffer` breach all funnel through
+/// `cp_live_kill_signum` / `cp_live_kill_signal` → `cp_win_kill`, so
+/// terminating one live child through the shared path exercises the machinery
+/// all of them rely on.
 #[cfg(all(test, windows))]
-#[path = "reactor/windows_kill_tests.rs"]
-mod windows_kill_tests;
+mod windows_kill_tests {
+    use super::*;
+
+    /// Raw `cp_win_dup_proc_handle` + `cp_win_kill`: sig-0 existence probe on
+    /// a live child, terminate through the duplicated handle, probe + kill
+    /// failure after death. The held duplicate keeps naming the original
+    /// process object even once the child is reaped — exactly the property
+    /// that closes the pid-reuse race.
+    #[test]
+    fn win_kill_probe_and_terminate() {
+        let mut child = std::process::Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn ping");
+        let proc_handle = cp_win_dup_proc_handle(&child);
+        assert_ne!(proc_handle, 0, "DuplicateHandle should succeed");
+
+        // POSIX `kill(pid, 0)` analogue: existence probe, no side effect.
+        assert!(
+            cp_win_kill(proc_handle, 0),
+            "probe should see the live child"
+        );
+
+        // Any terminating signal degrades to `TerminateProcess(handle, 1)`.
+        assert!(cp_win_kill(proc_handle, 15), "terminate should succeed");
+        let status = child.wait().expect("wait after TerminateProcess");
+        assert_eq!(status.code(), Some(1), "TerminateProcess exit code");
+
+        // The duplicate still names the original (now-dead) process after the
+        // reap, so both the probe and a second kill deterministically fail —
+        // no pid-recycling flake window exists for a handle.
+        assert!(!cp_win_kill(proc_handle, 0), "probe should fail once dead");
+        assert!(
+            !cp_win_kill(proc_handle, 15),
+            "kill after death reports undelivered"
+        );
+
+        // The test owns this duplicate (no LiveChild registry entry) — close
+        // it by hand.
+        unsafe {
+            let _ = windows_sys::Win32::Foundation::CloseHandle(
+                proc_handle as windows_sys::Win32::Foundation::HANDLE,
+            );
+        }
+    }
+
+    /// Registry-level liveness: the pump removes the entry once the child has
+    /// fully closed (exit reported + both streams at EOF).
+    fn handle_is_live(handle: u64) -> bool {
+        cp_live_lock()
+            .as_ref()
+            .is_some_and(|map| map.contains_key(&handle))
+    }
+
+    /// End-to-end through the reactor: spawn a long-running child via the
+    /// spawn FFI, terminate it through the same shared path `child.kill()` /
+    /// `{ timeout }` / `AbortSignal` use, and drive the pump until the exit
+    /// machinery completes. Asserts the Node-shaped exit for a Windows kill:
+    /// `exitCode: null`, `signalCode: 'SIGTERM'`.
+    #[test]
+    fn reactor_kill_terminates_live_child() {
+        // `ping -n 30 127.0.0.1` runs ~29s if not killed — long enough that a
+        // pass can only come from the kill path, short enough to bound a
+        // failure without hanging the suite.
+        let cmd = "ping";
+        let cmd_ptr = crate::string::js_string_from_bytes(cmd.as_ptr(), cmd.len() as u32);
+        let mut args = crate::array::js_array_alloc(3);
+        for a in ["-n", "30", "127.0.0.1"] {
+            let s = crate::string::js_string_from_bytes(a.as_ptr(), a.len() as u32);
+            args = crate::array::js_array_push_f64(args, crate::value::js_nanbox_string(s as i64));
+        }
+        let start = std::time::Instant::now();
+        let cp = js_child_process_spawn_streams(cmd_ptr as i64, args as i64, 0);
+
+        let pid = cp_get_field(cp, b"pid");
+        assert!(pid > 0.0, "spawn should set a real pid, got {pid}");
+        let handle = cp_get_field(cp, b"__cpHandle") as u64;
+        assert!(handle_is_live(handle));
+
+        // Phase 0 marks `spawned` — Phase B refuses to close before that.
+        cp_reactor_pump();
+
+        // Kill through the shared path (undefined signal → SIGTERM).
+        assert!(
+            cp_live_kill(handle, cp_undefined()),
+            "kill should be delivered"
+        );
+
+        // Drive the pump until the exit machinery completes: waiter reaps →
+        // `Exited` event → exit/close emitted → registry entry removed.
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while handle_is_live(handle) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child did not close within 15s of kill()"
+            );
+            cp_reactor_pump();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Well under ping's ~29s natural runtime — it died from the kill.
+        assert!(start.elapsed() < Duration::from_secs(20));
+
+        // Node's Windows kill shape: exitCode null, signalCode 'SIGTERM'
+        // (the requested signal, not TerminateProcess's synthetic exit code).
+        assert_eq!(
+            cp_get_field(cp, b"exitCode").to_bits(),
+            TAG_NULL_F64.to_bits(),
+            "exitCode should be null after a signal kill"
+        );
+        assert_eq!(
+            cp_value_to_string(cp_get_field(cp, b"signalCode")).as_deref(),
+            Some("SIGTERM")
+        );
+
+        // The child is reaped and deregistered — a second kill reports false.
+        assert!(!cp_live_kill(handle, cp_undefined()));
+    }
+}

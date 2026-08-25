@@ -218,19 +218,6 @@ tls-runtime = [
     "dep:x509-cert",
 ]
 
-# Retains the TLS module/server and TLSSocket dispatch surface when `node:tls`
-# is routed to perry-ext-net. Unlike `tls`, this must not pull bundled-net back
-# in because the wrapper owns client sockets and their event pump.
-external-tls-server = [
-    "async-runtime",
-    "dep:tokio-rustls",
-    "dep:rustls",
-    "dep:rustls-native-certs",
-    "dep:rustls-pemfile",
-    "dep:base64",
-    "dep:x509-cert",
-]
-
 # Databases
 database = ["database-postgres", "database-mysql", "database-sqlite", "database-redis", "database-mongodb"]
 # `database-postgres` umbrella retained for backwards-compat;

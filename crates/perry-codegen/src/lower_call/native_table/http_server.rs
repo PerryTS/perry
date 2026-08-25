@@ -382,19 +382,6 @@ pub(super) const HTTP_SERVER_ROWS: &[NativeModSig] = &[
         args: &[NA_STR, NA_PTR],
         ret: NR_F64,
     },
-    // IncomingMessage events in the async-hooks provider probes are terminal
-    // (`end`/`error`), so the shared registration path also provides the
-    // observable one-shot behaviour while ensuring client responses are
-    // cross-routed into perry-ext-http's listener registry.
-    NativeModSig {
-        module: "http",
-        has_receiver: true,
-        method: "once",
-        class_filter: Some("IncomingMessage"),
-        runtime: "js_node_http_im_on",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_F64,
-    },
     NativeModSig {
         module: "http",
         has_receiver: true,

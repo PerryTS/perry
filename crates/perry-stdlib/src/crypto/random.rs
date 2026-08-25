@@ -103,7 +103,7 @@ pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: 
     if perry_runtime::closure::is_closure_ptr(cb_ptr as usize) {
         let err = f64::from_bits(JSValue::null().bits());
         let args = [err, value];
-        perry_runtime::timer::schedule_native_callback(cb_ptr, &args, "RANDOMBYTESREQUEST");
+        perry_runtime::timer::js_set_immediate_callback_args(cb_ptr, args.as_ptr(), 2);
     }
     f64::from_bits(JSValue::undefined().bits())
 }
@@ -373,24 +373,8 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
             f64::from_bits(JSValue::string_ptr(js_crypto_create_public_key_value(arg(0))).bits())
         }
         "generatePrime" if args_len >= 3 => js_crypto_generate_prime_async(arg(0), arg(1), arg(2)),
-        "generatePrime"
-            if args_len == 2
-                && perry_runtime::closure::is_closure_ptr(
-                    perry_runtime::value::js_nanbox_get_pointer(arg(1)) as usize,
-                ) =>
-        {
-            js_crypto_generate_prime_async(arg(0), undefined, arg(1))
-        }
         "generatePrime" | "generatePrimeSync" => js_crypto_generate_prime_sync(arg(0), arg(1)),
         "checkPrime" if args_len >= 3 => js_crypto_check_prime_async(arg(0), arg(1), arg(2)),
-        "checkPrime"
-            if args_len == 2
-                && perry_runtime::closure::is_closure_ptr(
-                    perry_runtime::value::js_nanbox_get_pointer(arg(1)) as usize,
-                ) =>
-        {
-            js_crypto_check_prime_async(arg(0), undefined, arg(1))
-        }
         "checkPrime" | "checkPrimeSync" => js_crypto_check_prime_sync(arg(0), arg(1)),
         "getFips" => 0.0,
         "setFips" => undefined,
@@ -443,17 +427,6 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
                 js_crypto_scrypt_bytes(bytes_ptr(0), bytes_ptr(1), arg(2), options_ptr) as *mut u8,
             )
         }
-        // Node callback forms are randomInt(max, callback) and
-        // randomInt(min, max, callback); both complete asynchronously.
-        "randomInt" if args_len >= 3 => js_crypto_random_int_async(arg(0), arg(1), arg(2)),
-        "randomInt"
-            if args_len == 2
-                && perry_runtime::closure::is_closure_ptr(
-                    perry_runtime::value::js_nanbox_get_pointer(arg(1)) as usize,
-                ) =>
-        {
-            js_crypto_random_int_async(0.0, arg(0), arg(1))
-        }
         // Node: randomInt(max) → [0,max); randomInt(min,max) → [min,max).
         "randomInt" if args_len >= 2 => js_crypto_random_int(arg(0), arg(1)),
         "randomInt" => js_crypto_random_int(0.0, arg(0)),
@@ -474,12 +447,7 @@ pub unsafe extern "C" fn js_crypto_random_int_async(
     callback_bits: f64,
 ) -> f64 {
     let n = js_crypto_random_int(min_bits, max_bits);
-    schedule_node_style_callback2(
-        callback_bits,
-        f64::from_bits(JSValue::null().bits()),
-        n,
-        "RANDOMBYTESREQUEST",
-    );
+    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), n);
     f64::from_bits(JSValue::undefined().bits())
 }
 
@@ -627,12 +595,7 @@ pub unsafe extern "C" fn js_crypto_random_fill_async(
     callback_bits: f64,
 ) -> f64 {
     let value = js_crypto_random_fill_sync(buf_bits, offset_bits, size_bits);
-    schedule_node_style_callback2(
-        callback_bits,
-        f64::from_bits(JSValue::null().bits()),
-        value,
-        "RANDOMBYTESREQUEST",
-    );
+    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), value);
     f64::from_bits(JSValue::undefined().bits())
 }
 

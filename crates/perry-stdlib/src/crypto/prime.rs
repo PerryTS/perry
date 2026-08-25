@@ -40,11 +40,10 @@ pub unsafe extern "C" fn js_crypto_generate_prime_async(
     callback_bits: f64,
 ) -> f64 {
     let value = js_crypto_generate_prime_sync(size_bits, options_bits);
-    schedule_node_style_callback2(
+    call_node_style_callback2(
         callback_bits,
         f64::from_bits(JSValue::undefined().bits()),
         value,
-        "RANDOMPRIMEREQUEST",
     );
     f64::from_bits(JSValue::undefined().bits())
 }
@@ -56,11 +55,10 @@ pub unsafe extern "C" fn js_crypto_check_prime_async(
     callback_bits: f64,
 ) -> f64 {
     let result = js_crypto_check_prime_sync(candidate_bits, options_bits);
-    schedule_node_style_callback2(
+    call_node_style_callback2(
         callback_bits,
         f64::from_bits(JSValue::null().bits()),
         result,
-        "CHECKPRIMEREQUEST",
     );
     f64::from_bits(JSValue::undefined().bits())
 }

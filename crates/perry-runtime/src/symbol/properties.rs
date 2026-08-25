@@ -335,14 +335,6 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     if obj_key == 0 || sym_key == 0 {
         return value_f64;
     }
-    // A base AsyncResource's public identity is a process-stable Box pointer,
-    // registered separately from Perry's moving GC heap.  It intentionally
-    // uses POINTER_TAG so it behaves as an object, but bytes before/inside the
-    // Box are allocator state and AsyncResource ids, not GcHeader/ObjectHeader
-    // fields.  Never use those bytes for frozen/extensible or class-setter
-    // decisions; symbol values for the handle live entirely in this side
-    // table.
-    let native_async_resource = crate::async_hooks::is_async_resource_handle(obj_key as i64);
     super::note_symbol_key_installed(sym_key);
     // #5437 (Next.js): a native HANDLE (small-id NaN-boxed POINTER, e.g. the
     // node:http IncomingMessage) carries per-request metadata in the symbol
@@ -392,8 +384,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     // like string-keyed ones: an existing prop is non-writable when frozen
     // (or its per-symbol attrs say so), a new prop is forbidden when
     // non-extensible. Only heap receivers carry the GC flag word.
-    if !native_async_resource
-        && (obj_f64.to_bits() >> 48) == 0x7FFD
+    if (obj_f64.to_bits() >> 48) == 0x7FFD
         && obj_key >= 0x10000
         && crate::object::is_valid_obj_ptr(obj_key as *const u8)
     {
@@ -420,7 +411,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
             {
                 return value_f64;
             }
-        } else if !native_async_resource {
+        } else {
             let jsval = crate::value::JSValue::from_bits(bits);
             if jsval.is_pointer() {
                 let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();

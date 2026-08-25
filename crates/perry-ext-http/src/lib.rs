@@ -100,9 +100,7 @@ use response_headers::build_response_headers_object;
 mod request_headers;
 use request_headers::headers_from_options;
 
-mod pending_dispatch;
 mod root_scanner;
-pub use pending_dispatch::js_http_process_pending;
 use root_scanner::scan_http_roots;
 
 use bytes::Bytes;
@@ -425,7 +423,6 @@ fn map_to_js_object(map: &HashMap<String, String>) -> f64 {
 // ------------------------------------------------------------------
 
 pub struct ClientRequestHandle {
-    async_id: u64,
     method: String,
     url: String,
     headers: HashMap<String, String>,
@@ -670,11 +667,7 @@ fn make_request_handle(
     agent_handle: Handle,
     agent_key: String,
 ) -> Handle {
-    let async_id = unsafe {
-        js_async_hooks_provider_init(b"HTTPCLIENTREQUEST".as_ptr(), b"HTTPCLIENTREQUEST".len())
-    };
     let handle = register_handle(ClientRequestHandle {
-        async_id,
         method,
         url,
         headers,
@@ -749,44 +742,6 @@ fn make_request_handle(
         }
     }
     handle
-}
-
-extern "C" {
-    fn js_async_hooks_provider_init(type_ptr: *const u8, type_len: usize) -> u64;
-    fn js_async_hooks_provider_enter(async_id: u64);
-    fn js_async_hooks_provider_leave(async_id: u64);
-    fn js_async_hooks_provider_destroy(async_id: u64);
-}
-
-fn pending_request_handle(event: &PendingHttpEvent) -> Handle {
-    match event {
-        PendingHttpEvent::Socket { request_handle }
-        | PendingHttpEvent::SignalAbort { request_handle }
-        | PendingHttpEvent::Response { request_handle, .. }
-        | PendingHttpEvent::ResponseHead { request_handle, .. }
-        | PendingHttpEvent::ResponseChunk { request_handle, .. }
-        | PendingHttpEvent::ResponseEnd { request_handle }
-        | PendingHttpEvent::Error { request_handle, .. }
-        | PendingHttpEvent::TransportError { request_handle, .. }
-        | PendingHttpEvent::Timeout { request_handle }
-        | PendingHttpEvent::Abort { request_handle }
-        | PendingHttpEvent::Flushed { request_handle }
-        | PendingHttpEvent::Continue { request_handle }
-        | PendingHttpEvent::DeferredArmContinue { request_handle } => *request_handle,
-        PendingHttpEvent::AgentIdleExpire { .. } => 0,
-    }
-}
-
-fn terminal_http_event(event: &PendingHttpEvent) -> bool {
-    matches!(
-        event,
-        PendingHttpEvent::SignalAbort { .. }
-            | PendingHttpEvent::Response { .. }
-            | PendingHttpEvent::ResponseEnd { .. }
-            | PendingHttpEvent::Error { .. }
-            | PendingHttpEvent::TransportError { .. }
-            | PendingHttpEvent::Abort { .. }
-    )
 }
 
 /// Parse the client-side TLS options (#4906) off a request options value
@@ -1876,6 +1831,142 @@ pub extern "C" fn js_http_has_pending() -> i32 {
         .lock()
         .map(|q| if q.is_empty() { 0 } else { 1 })
         .unwrap_or(0)
+}
+
+/// Drain the pending HTTP-event queue and fire user callbacks. Called
+/// from codegen's event-loop tick. Returns count of events drained.
+#[no_mangle]
+pub unsafe extern "C" fn js_http_process_pending() -> i32 {
+    // Process events ONE AT A TIME, re-reading the shared queue each iteration
+    // rather than draining the whole batch into a local Vec up front.
+    //
+    // Why (#5783 follow-up): a response handler may RE-ENTER the event loop —
+    // e.g. a `ResponseHead` invokes an async response callback that drives a
+    // `for await` / `.toArray()` over a `res.pipe(PassThrough())` body. That
+    // consumer's `await` block-waits, pumping the loop (which re-enters this
+    // function), and its resolution depends on the body arriving via the LATER
+    // `ResponseChunk`/`ResponseEnd` events of this same batch. If those were
+    // already drained into a local Vec, the re-entrant pump would find an empty
+    // `HTTP_PENDING_EVENTS` and the consumer would deadlock (empty body / hang).
+    // Keeping unprocessed events in the shared queue lets the re-entrant drain
+    // deliver them. FIFO `remove(0)` preserves event order; each event is taken
+    // by exactly one (outer or re-entrant) frame, so there is no double-dispatch.
+    let mut count = 0i32;
+    loop {
+        let ev = match HTTP_PENDING_EVENTS.lock() {
+            Ok(mut q) => {
+                if q.is_empty() {
+                    None
+                } else {
+                    Some(q.remove(0))
+                }
+            }
+            Err(_) => return count,
+        };
+        let Some(ev) = ev else {
+            break;
+        };
+        count += 1;
+        match ev {
+            PendingHttpEvent::Socket { request_handle } => {
+                client_events::fire_request_socket_event(request_handle);
+            }
+            PendingHttpEvent::SignalAbort { request_handle } => {
+                client_abort::handle_request_signal_abort(request_handle);
+            }
+            PendingHttpEvent::AgentIdleExpire {
+                agent_handle,
+                key,
+                socket,
+                generation,
+            } => {
+                agent::expire_free_socket(agent_handle, &key, socket, generation);
+            }
+            PendingHttpEvent::Response {
+                request_handle,
+                status,
+                status_message,
+                headers,
+                trailers,
+                body,
+            } => {
+                client_events::handle_response_event(
+                    request_handle,
+                    status,
+                    status_message,
+                    headers,
+                    trailers,
+                    body,
+                );
+            }
+            PendingHttpEvent::ResponseHead {
+                request_handle,
+                status,
+                status_message,
+                headers,
+            } => {
+                client_events::handle_response_head_event(
+                    request_handle,
+                    status,
+                    status_message,
+                    headers,
+                );
+            }
+            PendingHttpEvent::ResponseChunk {
+                request_handle,
+                chunk,
+            } => {
+                client_events::handle_response_chunk_event(request_handle, chunk);
+            }
+            PendingHttpEvent::ResponseEnd { request_handle } => {
+                client_events::handle_response_end_event(request_handle);
+            }
+            PendingHttpEvent::Error {
+                request_handle,
+                error_message,
+            } => {
+                client_events::handle_error_event(request_handle, &error_message);
+            }
+            PendingHttpEvent::TransportError {
+                request_handle,
+                message,
+                code,
+                syscall,
+                errno,
+            } => {
+                client_events::handle_transport_error_event(
+                    request_handle,
+                    &message,
+                    &code,
+                    &syscall,
+                    errno,
+                );
+            }
+            PendingHttpEvent::Timeout { request_handle } => {
+                client_events::handle_timeout_event(request_handle);
+            }
+            PendingHttpEvent::Abort { request_handle } => {
+                client_events::fire_request_event_listeners(request_handle, "abort");
+                client_events::fire_request_close_once(request_handle);
+                finish_agent_request(request_handle, false);
+            }
+            PendingHttpEvent::Flushed { request_handle } => {
+                client_events::handle_flushed_event(request_handle);
+            }
+            PendingHttpEvent::Continue { request_handle } => {
+                // #5080 — the server sent an interim `100 Continue`; fire the
+                // request's `'continue'` listeners (the canonical handler then
+                // sends the withheld body via `req.end(...)`).
+                client_events::fire_request_event_listeners(request_handle, "continue");
+            }
+            PendingHttpEvent::DeferredArmContinue { request_handle } => {
+                // #5080 — next-tick arming (see the enum variant docs).
+                continue_client::arm_expect_continue(request_handle);
+            }
+        }
+    }
+
+    count
 }
 
 // ------------------------------------------------------------------

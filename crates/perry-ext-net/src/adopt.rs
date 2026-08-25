@@ -41,9 +41,6 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
-            tcp_async_id: 0,
-            connect_async_id: 0,
-            shutdown_async_id: 0,
             cmd_tx: tx,
             pending_rx: None,
             is_open: true,

@@ -145,10 +145,7 @@ pub(super) unsafe fn dispatch_client_incoming_method(
     method_name: &str,
     args: &[f64],
 ) -> Option<f64> {
-    if !matches!(
-        method_name,
-        "setEncoding" | "on" | "once" | "addListener" | "pipe"
-    ) {
+    if !matches!(method_name, "setEncoding" | "on" | "addListener" | "pipe") {
         return None;
     }
 
@@ -179,7 +176,7 @@ pub(super) unsafe fn dispatch_client_incoming_method(
             }
             self_ref
         }
-        "on" | "once" | "addListener" if args.len() >= 2 => {
+        "on" | "addListener" if args.len() >= 2 => {
             let event = (args[0].to_bits() & PTR_MASK) as *const perry_runtime::StringHeader;
             let callback = (args[1].to_bits() & PTR_MASK) as i64;
             unsafe {

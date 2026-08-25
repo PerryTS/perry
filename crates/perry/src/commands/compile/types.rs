@@ -739,10 +739,6 @@ pub struct CompilationContext {
     /// (e.g. "mysql2", "fastify", "ws"). Used by `--minimal-stdlib` to
     /// compute the smallest perry-stdlib feature set that satisfies them.
     pub native_module_imports: BTreeSet<String>,
-    /// Whether a dynamic import can resolve to a JavaScript `data:` URL.
-    /// The runtime evaluates these modules through the dyn-eval interpreter,
-    /// so auto-optimized archives must retain that otherwise optional feature.
-    pub uses_data_url_dynamic_import: bool,
     /// Whether any TS module calls global `fetch()` (which routes to
     /// reqwest in perry-stdlib's http-client feature).
     pub uses_fetch: bool,
@@ -1186,7 +1182,6 @@ impl CompilationContext {
             needs_geisterhand: false,
             geisterhand_port: 7676,
             native_module_imports: BTreeSet::new(),
-            uses_data_url_dynamic_import: false,
             uses_fetch: false,
             uses_crypto_builtins: false,
             uses_zlib_brotli: false,

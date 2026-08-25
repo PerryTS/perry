@@ -802,10 +802,7 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                 let tag_f64 =
                     f64::from_bits(crate::value::JSValue::pointer(tag_wk as *const u8).bits());
                 if sym_key_from_f64(sym_f64) == sym_key_from_f64(tag_f64)
-                    && matches!(
-                        crate::object::read_native_module_name(obj).as_deref(),
-                        Some("module" | "async_hooks")
-                    )
+                    && crate::object::read_native_module_name(obj).as_deref() == Some("module")
                 {
                     let tag = b"Module";
                     let value = js_string_from_bytes(tag.as_ptr(), tag.len() as u32);

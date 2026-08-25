@@ -254,6 +254,9 @@ fn dense_layout_for_value(value: f64) -> Option<(*const ObjectHeader, DenseSubcl
         return None;
     }
     let obj = js.as_pointer::<ObjectHeader>();
+    if obj.is_null() || !crate::object::is_valid_obj_ptr(obj.cast::<u8>()) {
+        return None;
+    }
     let header = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize)? };
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0

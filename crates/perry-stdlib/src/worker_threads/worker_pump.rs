@@ -127,22 +127,14 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
                 processed += 1;
             }
             WorkerEvent::Exit(worker_id, code) => {
-                let (terminate_promise, async_resources) =
+                let terminate_promise =
                     if let Some(worker) = WORKERS.lock().unwrap().get_mut(&worker_id) {
                         worker.alive = false;
-                        (
-                            worker.terminate_promise.take(),
-                            Some(worker.async_resources),
-                        )
+                        worker.terminate_promise.take()
                     } else {
-                        (None, None)
+                        None
                     };
                 dispatch_worker_event(worker_id, "exit", Some(code as f64));
-                if let Some(async_resources) = async_resources {
-                    for resource in async_resources {
-                        perry_runtime::async_hooks::destroy(resource.async_id);
-                    }
-                }
                 if let Some(promise) = terminate_promise {
                     super::async_shim::queue_promise_resolution(
                         promise,
@@ -213,11 +205,7 @@ pub extern "C" fn js_worker_threads_has_pending() -> i32 {
 fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
     // Collect (callback, web_event) pairs, then invoke OUTSIDE the WORKERS lock —
     // a listener may re-enter postMessage / terminate, which needs the lock again.
-    let (object_bits, callbacks, async_resources): (
-        u64,
-        Vec<(u64, bool)>,
-        [perry_runtime::async_hooks::AsyncResourceIds; 3],
-    ) = {
+    let (object_bits, callbacks): (u64, Vec<(u64, bool)>) = {
         let mut workers = WORKERS.lock().unwrap();
         let Some(worker) = workers.get_mut(&worker_id) else {
             return;
@@ -234,12 +222,8 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
                 callbacks
             })
             .unwrap_or_default();
-        (worker.object_bits, callbacks, worker.async_resources)
+        (worker.object_bits, callbacks)
     };
-
-    for resource in async_resources {
-        perry_runtime::async_hooks::enter_resource_scope(resource);
-    }
 
     // Web-style `addEventListener` listeners receive a `MessageEvent` wrapper
     // (with `.data`) for "message" events; Node-style `on` listeners receive the
@@ -304,8 +288,5 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
         } else {
             perry_runtime::closure::js_closure_call0(closure);
         }
-    }
-    for resource in async_resources.into_iter().rev() {
-        perry_runtime::async_hooks::leave_resource_scope(resource.async_id);
     }
 }

@@ -139,15 +139,6 @@ pub(super) const HTTP_CLIENT_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "http",
         has_receiver: true,
-        method: "once",
-        class_filter: Some("ClientRequest"),
-        runtime: "js_http_on",
-        args: &[NA_STR, NA_PTR],
-        ret: NR_PTR,
-    },
-    NativeModSig {
-        module: "http",
-        has_receiver: true,
         method: "end",
         class_filter: Some("ClientRequest"),
         // #4909: route to the callback-aware end so `req.end(chunk, cb)` /

@@ -204,7 +204,7 @@ pub unsafe extern "C" fn js_webcrypto_sign(
     } else {
         return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name");
     };
-    resolve_with_bytes_provider(&sig, "SIGNREQUEST")
+    resolve_with_bytes(&sig)
 }
 
 /// `crypto.subtle.verify(algorithm, key, signature, data)` → Promise<boolean>
@@ -431,7 +431,7 @@ pub unsafe extern "C" fn js_webcrypto_verify(
     } else {
         return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name");
     };
-    resolve_with_bool_provider(ok, "SIGNREQUEST")
+    resolve_with_bool(ok)
 }
 
 /// Algorithm-arg coercion shared by sign / verify: accepts a string

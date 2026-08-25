@@ -102,31 +102,12 @@ pub(super) unsafe fn call_node_style_callback2(callback_bits: f64, err: f64, val
     );
 }
 
-pub(super) unsafe fn schedule_node_style_callback2(
-    callback_bits: f64,
-    err: f64,
-    value: f64,
-    provider_type: &'static str,
-) {
+pub(super) unsafe fn call_node_style_callback3(callback_bits: f64, err: f64, a: f64, b: f64) {
     let raw = callback_bits.to_bits() & 0x0000_FFFF_FFFF_FFFF;
-    if !perry_runtime::closure::is_closure_ptr(raw as usize) {
+    if raw < 0x1000 {
         return;
     }
-    perry_runtime::timer::schedule_native_callback(raw as i64, &[err, value], provider_type);
-}
-
-pub(super) unsafe fn schedule_node_style_callback3(
-    callback_bits: f64,
-    err: f64,
-    a: f64,
-    b: f64,
-    provider_type: &'static str,
-) {
-    let raw = callback_bits.to_bits() & 0x0000_FFFF_FFFF_FFFF;
-    if !perry_runtime::closure::is_closure_ptr(raw as usize) {
-        return;
-    }
-    perry_runtime::timer::schedule_native_callback(raw as i64, &[err, a, b], provider_type);
+    perry_runtime::closure::js_closure_call3(raw as *const perry_runtime::ClosureHeader, err, a, b);
 }
 
 #[no_mangle]
@@ -141,12 +122,7 @@ pub unsafe extern "C" fn js_crypto_generate_key_async(
     } else {
         f64::from_bits(JSValue::pointer(key as *const u8).bits())
     };
-    schedule_node_style_callback2(
-        callback_bits,
-        f64::from_bits(JSValue::null().bits()),
-        value,
-        "KEYGENREQUEST",
-    );
+    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), value);
     f64::from_bits(JSValue::undefined().bits())
 }
 
@@ -166,25 +142,18 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_async(
     let null = f64::from_bits(JSValue::null().bits());
     let undefined = f64::from_bits(JSValue::undefined().bits());
     if pair.is_null() {
-        schedule_node_style_callback3(
-            callback_bits,
-            null,
-            undefined,
-            undefined,
-            "KEYPAIRGENREQUEST",
-        );
+        call_node_style_callback3(callback_bits, null, undefined, undefined);
         return undefined;
     }
     let public_key =
         js_object_get_field_by_name(pair, js_string_from_bytes(b"publicKey".as_ptr(), 9));
     let private_key =
         js_object_get_field_by_name(pair, js_string_from_bytes(b"privateKey".as_ptr(), 10));
-    schedule_node_style_callback3(
+    call_node_style_callback3(
         callback_bits,
         null,
         f64::from_bits(public_key.bits()),
         f64::from_bits(private_key.bits()),
-        "KEYPAIRGENREQUEST",
     );
     undefined
 }

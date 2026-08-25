@@ -69,12 +69,6 @@ fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> 
     bump(&MT_PROMISE_NEW_COUNT);
     let async_hooks_active = crate::async_hooks::promise_hooks_active();
     let lifecycle_hooks_active = async_hooks_active || crate::v8::promise_hooks_active();
-    // Root the parent before allocating the child. The allocation itself may
-    // move an arena-resident Promise that predates hook enablement; rooting it
-    // afterwards records the retired address and gives the child a stale
-    // parent/trigger id.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let parent_handle = scope.root_raw_mut_ptr(parent);
     let raw = if lifecycle_hooks_active || force_malloc {
         crate::gc::gc_malloc(std::mem::size_of::<Promise>(), crate::gc::GC_TYPE_PROMISE)
     } else {
@@ -85,57 +79,30 @@ fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> 
         )
     };
     let promise = raw as *mut Promise;
+    let scope = crate::gc::RuntimeHandleScope::new();
     let promise_handle = scope.root_raw_mut_ptr(promise);
+    let parent_handle = scope.root_raw_mut_ptr(parent);
     unsafe {
         // GC_STORE_AUDIT(INIT): initializes freshly allocated Promise storage before the promise is published.
         ptr::write(promise, Promise::new());
-        let trigger_async_id = parent_handle.with_mut_ptr::<Promise, _>(|parent| {
-            if parent.is_null() {
-                crate::async_hooks::execution_async_id_u64()
-            } else {
-                (*parent).async_id
-            }
-        });
         if async_hooks_active {
-            let ids = promise_handle.with_mut_ptr::<Promise, _>(|promise| {
-                let resource = f64::from_bits(
-                    0x7FFD_0000_0000_0000 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF),
-                );
-                crate::async_hooks::init_resource_with_trigger(
-                    "PROMISE",
-                    resource,
-                    false,
-                    trigger_async_id,
-                )
-            });
-            promise_handle.with_mut_ptr::<Promise, _>(|promise| {
-                (*promise).async_id = ids.async_id;
-                (*promise).trigger_async_id = ids.trigger_async_id;
-            });
-        } else {
-            // Node assigns every Promise an id, not only promises created
-            // while an observer is enabled. Keep this reservation out of the
-            // resource table so an unobserved promise is not made immortal by
-            // a strong resource root.
-            let ids = crate::async_hooks::reserve_resource_ids(trigger_async_id);
-            promise_handle.with_mut_ptr::<Promise, _>(|promise| {
-                (*promise).async_id = ids.async_id;
-                (*promise).trigger_async_id = ids.trigger_async_id;
-            });
+            let promise = promise_handle.get_raw_mut_ptr::<Promise>();
+            let resource =
+                f64::from_bits(0x7FFD_0000_0000_0000 | (promise as u64 & 0x0000_FFFF_FFFF_FFFF));
+            let ids = crate::async_hooks::init_resource("PROMISE", resource, false);
+            let promise = promise_handle.get_raw_mut_ptr::<Promise>();
+            (*promise).async_id = ids.async_id;
+            (*promise).trigger_async_id = ids.trigger_async_id;
         }
     }
-    promise_handle.with_mut_ptr::<Promise, _>(|promise| {
-        parent_handle.with_mut_ptr::<Promise, _>(|parent| {
-            crate::v8::promise_hook_init(promise, parent);
-        });
-    });
-    let (_, promise) = promise_handle.across_mut::<Promise, _>(|| {
-        promise_handle.with_mut_ptr::<Promise, _>(|promise| {
-            // #5142: a recycled address may carry expando properties (`p.status = …`)
-            // left by a previously-collected promise; a fresh promise must start clean.
-            crate::object::exotic_expando::expando_clear_on_alloc(promise as usize);
-        });
-    });
+    crate::v8::promise_hook_init(
+        promise_handle.get_raw_mut_ptr::<Promise>(),
+        parent_handle.get_raw_mut_ptr::<Promise>(),
+    );
+    let promise = promise_handle.get_raw_mut_ptr::<Promise>();
+    // #5142: a recycled address may carry expando properties (`p.status = …`)
+    // left by a previously-collected promise; a fresh promise must start clean.
+    crate::object::exotic_expando::expando_clear_on_alloc(promise as usize);
     promise
 }
 
@@ -275,6 +242,9 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
     // 1 s idle cap before the loop re-checks promise state. The notify
     // sets the flag so the immediately-following wait returns at once.
     crate::event_pump::js_notify_promise_progress();
+    unsafe {
+        crate::async_hooks::destroy_promise((*promise).async_id);
+    }
 }
 
 /// Resolve a promise with another promise (Promise chaining/unwrapping)
@@ -491,6 +461,9 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
     }
     // Issue #84: see js_promise_resolve — same wake reasoning.
     crate::event_pump::js_notify_promise_progress();
+    unsafe {
+        crate::async_hooks::destroy_promise((*promise).async_id);
+    }
 }
 
 /// Register fulfillment callback, returns a new promise for chaining
@@ -1767,8 +1740,6 @@ extern "C" fn finally_passthrough_fulfill(
                 false,
                 capture_context(),
                 std::ptr::null_mut(),
-                unsafe { (*next).async_id },
-                unsafe { (*next).trigger_async_id },
             ));
         });
         crate::event_pump::js_notify_promise_progress();
@@ -1795,8 +1766,6 @@ extern "C" fn finally_passthrough_reject(
                 true,
                 capture_context(),
                 std::ptr::null_mut(),
-                unsafe { (*next).async_id },
-                unsafe { (*next).trigger_async_id },
             ));
         });
         crate::event_pump::js_notify_promise_progress();

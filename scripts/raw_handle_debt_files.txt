@@ -123,7 +123,7 @@
 9 crates/perry-runtime/src/promise/microtasks.rs
 1 crates/perry-runtime/src/promise/native_async.rs
 3 crates/perry-runtime/src/promise/rejection.rs
-3 crates/perry-runtime/src/promise/then.rs
+8 crates/perry-runtime/src/promise/then.rs
 8 crates/perry-runtime/src/proxy.rs
 6 crates/perry-runtime/src/regex.rs
 19 crates/perry-runtime/src/regex/exec_array.rs

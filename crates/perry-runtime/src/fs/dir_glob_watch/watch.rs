@@ -60,7 +60,6 @@ struct FsWatchState {
     listeners: HashMap<String, Vec<WatchListener>>,
     signal: f64,
     abort_listener: f64,
-    async_ids: crate::async_hooks::AsyncResourceIds,
 }
 
 #[derive(Clone, PartialEq)]
@@ -590,7 +589,6 @@ fn close_fs_watcher(id: usize) {
         return;
     };
     crate::timer::clearInterval(state.timer_id);
-    crate::async_hooks::destroy(state.async_ids.async_id);
     remove_abort_listener(state.signal, state.abort_listener);
     let close_listeners = take_event_listeners(&mut state.listeners, "close");
     for listener in close_listeners {
@@ -1463,7 +1461,6 @@ pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
     };
     let id = next_watch_id();
     let object_value = build_fs_watcher_object(id);
-    let async_ids = crate::async_hooks::init_resource("FSEVENTWRAP", object_value, true);
     let timer_callback = poll_closure_value(fs_watcher_poll_impl as *const u8, id);
     let timer_id = crate::timer::setInterval(timer_callback as i64, FS_WATCH_POLL_INTERVAL_MS);
     if !persistent {
@@ -1490,7 +1487,6 @@ pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
                 listeners,
                 signal: signal_value,
                 abort_listener,
-                async_ids,
             },
         );
     });
@@ -1530,7 +1526,6 @@ pub extern "C" fn js_fs_watch_file(path_value: f64, arg1: f64, arg2: f64) -> f64
     }
     let id = next_watch_id();
     let object_value = build_stat_watcher_object(id);
-    let _ = crate::async_hooks::init_resource("STATWATCHER", object_value, true);
     let interval = option_interval_ms(options_value);
     let persistent = option_bool_default_local(options_value, b"persistent", true);
     let bigint = unsafe { options_bool_field(options_value, b"bigint") };
@@ -1688,12 +1683,8 @@ pub(crate) fn scan_fs_watcher_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
 }
 
 pub(crate) fn promise_value_fs(value: f64) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(value);
-    crate::async_hooks::run_provider_completion("FSREQPROMISE", || {
-        let promise = crate::promise::js_promise_resolved(value.get_nanbox_f64());
-        f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
-    })
+    let promise = crate::promise::js_promise_resolved(value);
+    f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
 }
 
 pub(crate) fn promise_undefined_fs() -> f64 {
@@ -1701,11 +1692,7 @@ pub(crate) fn promise_undefined_fs() -> f64 {
 }
 
 pub(crate) fn promise_rejected_fs(reason: f64) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let reason = scope.root_nanbox_f64(reason);
-    crate::async_hooks::run_provider_completion("FSREQPROMISE", || {
-        let promise = crate::promise::js_promise_new();
-        crate::promise::js_promise_reject(promise, reason.get_nanbox_f64());
-        f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
-    })
+    let promise = crate::promise::js_promise_new();
+    crate::promise::js_promise_reject(promise, reason);
+    f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
 }

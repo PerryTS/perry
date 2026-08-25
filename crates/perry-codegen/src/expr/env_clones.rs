@@ -193,7 +193,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             let raw = blk.call(
                 I64,
-                "js_ext_net_create_server",
+                "js_net_create_server",
                 &[(I64, &options_i64), (I64, &listener_i64)],
             );
             Ok(nanbox_pointer_inline(blk, &raw))

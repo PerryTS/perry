@@ -1050,22 +1050,14 @@ pub(crate) extern "C" fn filehandle_writer_impl(
     self_value
 }
 
-fn filehandle_close_promise() -> f64 {
-    crate::async_hooks::run_provider_completion("FILEHANDLECLOSEREQ", || {
-        let promise =
-            crate::promise::js_promise_resolved(f64::from_bits(crate::value::TAG_UNDEFINED));
-        f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
-    })
-}
-
 pub(crate) extern "C" fn filehandle_close_impl(closure: *const ClosureHeader) -> f64 {
     let fd = filehandle_fd(closure);
     if let Some(handle) = filehandle_object(closure) {
         close_filehandle_fd(filehandle_field_fd(handle).unwrap_or(fd), handle);
-        return filehandle_close_promise();
+        return promise_undefined_fs();
     }
     let _ = js_fs_close_sync(fd as f64);
-    filehandle_close_promise()
+    promise_undefined_fs()
 }
 
 pub(crate) extern "C" fn filehandle_sync_impl(closure: *const ClosureHeader) -> f64 {

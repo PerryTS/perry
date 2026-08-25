@@ -1391,13 +1391,6 @@ pub unsafe extern "C" fn js_blob_type(handle: f64) -> *mut StringHeader {
 /// property dispatch in `value.rs`. Resolved synchronously.
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
-    let result = perry_runtime::async_hooks::run_provider_completion("BLOBREADER", || {
-        perry_runtime::value::js_nanbox_pointer(blob_array_buffer_impl(handle) as i64)
-    });
-    perry_runtime::value::js_nanbox_get_pointer(result) as *mut perry_runtime::Promise
-}
-
-unsafe fn blob_array_buffer_impl(handle: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
     let id = handle_id(handle);
     let body: Vec<u8> = BLOB_REGISTRY
@@ -1425,10 +1418,7 @@ unsafe fn blob_array_buffer_impl(handle: f64) -> *mut perry_runtime::Promise {
 /// hits the `is_registered_buffer` path from #227).
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_bytes(handle: f64) -> *mut perry_runtime::Promise {
-    let result = perry_runtime::async_hooks::run_provider_completion("BLOBREADER", || {
-        perry_runtime::value::js_nanbox_pointer(blob_array_buffer_impl(handle) as i64)
-    });
-    perry_runtime::value::js_nanbox_get_pointer(result) as *mut perry_runtime::Promise
+    js_blob_array_buffer(handle)
 }
 
 /// blob.text() — UTF-8-decodes the body bytes into a `StringHeader` and
@@ -1437,13 +1427,6 @@ pub unsafe extern "C" fn js_blob_bytes(handle: f64) -> *mut perry_runtime::Promi
 /// characters; lossy_utf8 produces U+FFFD identically).
 #[no_mangle]
 pub unsafe extern "C" fn js_blob_text(handle: f64) -> *mut perry_runtime::Promise {
-    let result = perry_runtime::async_hooks::run_provider_completion("BLOBREADER", || {
-        perry_runtime::value::js_nanbox_pointer(blob_text_impl(handle) as i64)
-    });
-    perry_runtime::value::js_nanbox_get_pointer(result) as *mut perry_runtime::Promise
-}
-
-unsafe fn blob_text_impl(handle: f64) -> *mut perry_runtime::Promise {
     let promise = perry_runtime::js_promise_new();
     let id = handle_id(handle);
     let body: Vec<u8> = BLOB_REGISTRY

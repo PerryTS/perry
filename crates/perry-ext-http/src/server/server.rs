@@ -72,7 +72,6 @@ pub(crate) fn apply_accept_no_delay(stream: &tokio::net::TcpStream, no_delay: bo
 
 /// Backing struct for an `http.Server` JS-side handle.
 pub struct HttpServer {
-    pub async_id: u64,
     /// User's `(req, res) => ...` handler. Stored as raw `i64`; the
     /// GC root scanner pins it across malloc-triggered sweeps.
     pub handler: i64,
@@ -169,7 +168,6 @@ impl HttpServer {
     /// (https / http2 / test fixtures).
     pub fn with_handler(handler: i64) -> Self {
         Self {
-            async_id: 0,
             handler,
             listeners: HashMap::new(),
             once_listeners: HashMap::new(),
@@ -776,8 +774,6 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
         .host
         .unwrap_or_else(|| extract_host(opts_f64, "0.0.0.0"));
     let callback = parsed.callback;
-    let server_async_id =
-        crate::js_async_hooks_provider_init(b"TCPSERVERWRAP".as_ptr(), b"TCPSERVERWRAP".len());
 
     let (request_tx, request_rx) = mpsc::channel::<HttpPendingRequest>(1024);
     let (upgrade_tx, upgrade_rx) = mpsc::channel::<HttpPendingUpgrade>(256);
@@ -942,7 +938,6 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
     // "Cannot read properties of undefined". The pump fires both with
     // `this` bound to the server (#2132), via `drain_deferred_listen_events`.
     if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
-        s.async_id = server_async_id;
         queue_deferred_listening_emit(s, callback);
     }
 
@@ -1484,6 +1479,7 @@ pub extern "C" fn js_node_http_server_has_active() -> i32 {
 /// `(req, res) => res.end(...)` shape that the load-bearing #604
 /// fixture uses works without this — the response oneshot fires
 /// synchronously from inside `js_node_http_res_end`.
+
 #[no_mangle]
 pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     let mut count = 0i32;
@@ -1671,15 +1667,6 @@ pub(crate) fn try_recv_pending_nonblocking(server_handle: i64) -> Option<HttpPen
 /// expected to call `res.end(...)` itself; the response oneshot
 /// fires from inside `js_node_http_res_end`.
 fn process_pending(pending: HttpPendingRequest) {
-    let incoming_async_id = unsafe {
-        crate::js_async_hooks_provider_init(
-            b"HTTPINCOMINGMESSAGE".as_ptr(),
-            b"HTTPINCOMINGMESSAGE".len(),
-        )
-    };
-    if incoming_async_id != 0 {
-        unsafe { crate::js_async_hooks_provider_enter(incoming_async_id) };
-    }
     let req_f64 = handle_to_pointer_f64(pending.request_handle);
     let res_f64 = handle_to_pointer_f64(pending.response_handle);
 
@@ -1760,12 +1747,6 @@ fn process_pending(pending: HttpPendingRequest) {
             }
         }
         finalize_or_park_request(&pending);
-        if incoming_async_id != 0 {
-            unsafe {
-                crate::js_async_hooks_provider_leave(incoming_async_id);
-                crate::js_async_hooks_provider_destroy(incoming_async_id);
-            }
-        }
         return;
     }
 
@@ -1821,12 +1802,6 @@ fn process_pending(pending: HttpPendingRequest) {
     // finalizes it once `res.end()` flushes the real response (or the
     // grace deadline elapses for a handler that never responds).
     finalize_or_park_request(&pending);
-    if incoming_async_id != 0 {
-        unsafe {
-            crate::js_async_hooks_provider_leave(incoming_async_id);
-            crate::js_async_hooks_provider_destroy(incoming_async_id);
-        }
-    }
 }
 
 /// If the handler didn't call `res.end()`, finish the response

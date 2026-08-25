@@ -52,30 +52,6 @@ extern "C" fn async_hooks_prototype_method_thunk(
         }
 
         let args_array = crate::value::js_nanbox_get_pointer(rest);
-        let receiver_raw = if receiver.to_bits() >> 48 == 0x7FFD {
-            (receiver.to_bits() & crate::value::POINTER_MASK) as i64
-        } else {
-            0
-        };
-        let args = if args_array == 0 {
-            Vec::new()
-        } else {
-            let array = args_array as *const crate::array::ArrayHeader;
-            let len = crate::array::js_array_length(array) as usize;
-            (0..len)
-                .map(|index| f64::from_bits(crate::array::js_array_get(array, index as u32).bits()))
-                .collect::<Vec<_>>()
-        };
-        if let Ok(name) = std::str::from_utf8(name) {
-            if let Some(result) = crate::async_hooks::try_async_resource_method_dispatch(
-                receiver_raw,
-                name,
-                args.as_ptr(),
-                args.len(),
-            ) {
-                return result;
-            }
-        }
         crate::object::js_native_call_method_apply(receiver, name_ptr, name_len, args_array)
     }
 }
@@ -186,23 +162,6 @@ fn attach_prototype(constructor_value: f64, methods: &[(&str, u32)]) -> f64 {
     crate::value::js_nanbox_pointer(
         constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
     )
-}
-
-/// Materialize an unbound `AsyncResource.prototype` method for native-handle
-/// property reads whose static type was erased. Invocation observes the
-/// call-site receiver through `IMPLICIT_THIS`, just like the real prototype.
-pub(crate) fn async_resource_prototype_method_value(name: &'static str, length: u32) -> f64 {
-    let thunk = async_hooks_prototype_method_thunk as *const u8;
-    crate::closure::js_register_closure_rest(thunk, 0);
-    let closure = crate::closure::js_closure_alloc(thunk, 2);
-    if closure.is_null() {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    crate::closure::js_closure_set_capture_ptr(closure, 0, name.as_ptr() as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, name.len() as i64);
-    super::callable_exports::set_builtin_closure_length(closure as usize, length);
-    super::callable_exports::set_bound_native_closure_name(closure, name);
-    crate::value::js_nanbox_pointer(closure as i64)
 }
 
 pub(super) fn attach_async_local_storage_prototype(constructor_value: f64) -> f64 {

@@ -8,8 +8,6 @@ use super::*;
 // Keep in sync with perry-codegen/src/expr/instance_misc1.rs.
 const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
 const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
-const CLASS_ID_ASYNC_LOCAL_STORAGE: u32 = 0xFFFF0078;
-const CLASS_ID_ASYNC_RESOURCE: u32 = 0xFFFF0079;
 const CLASS_ID_PROMISE: u32 = 0xFFFF0027;
 const CLASS_ID_NET_SOCKET: u32 = 0xFFFF00B4;
 const CLASS_ID_CRYPTO: u32 = 0xFFFF00C0;
@@ -337,34 +335,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             && is_event_emitter_async_resource_instance_value(value)
         {
             return f64::from_bits(crate::value::TAG_TRUE);
-        }
-        if module == "async_hooks"
-            && matches!(method.as_str(), "AsyncLocalStorage" | "AsyncResource")
-        {
-            let raw = value_addr(value);
-            let matched = if method == "AsyncResource" {
-                crate::async_hooks::resolve_async_resource_handle(raw as i64).is_some()
-                    || (raw >= crate::value::addr_class::HANDLE_BAND_MAX
-                        && ordinary_has_instance_prototype_walk(value, type_ref))
-            } else {
-                let candidate = small_native_handle_id(value).unwrap_or(raw as i64);
-                let native = (candidate != 0) && {
-                    super::class_handles::handle_property_dispatch().is_some_and(|dispatch| {
-                        let property = b"getStore";
-                        let result =
-                            unsafe { dispatch(candidate, property.as_ptr(), property.len()) };
-                        value_is_callable(result)
-                    })
-                };
-                native
-                    || (raw >= crate::value::addr_class::HANDLE_BAND_MAX
-                        && ordinary_has_instance_prototype_walk(value, type_ref))
-            };
-            return f64::from_bits(if matched {
-                crate::value::TAG_TRUE
-            } else {
-                TAG_FALSE
-            });
         }
         if module == "tty"
             && matches!(method.as_str(), "ReadStream" | "WriteStream")
@@ -1169,26 +1139,6 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         } else {
             false_val
         };
-    }
-    if class_id == CLASS_ID_ASYNC_RESOURCE {
-        return if crate::async_hooks::resolve_async_resource_handle(value_addr(value) as i64)
-            .is_some()
-        {
-            true_val
-        } else {
-            false_val
-        };
-    }
-    if class_id == CLASS_ID_ASYNC_LOCAL_STORAGE {
-        let candidate = small_native_handle_id(value).unwrap_or(value_addr(value) as i64);
-        let matched = candidate != 0 && {
-            super::class_handles::handle_property_dispatch().is_some_and(|dispatch| {
-                let property = b"getStore";
-                let result = unsafe { dispatch(candidate, property.as_ptr(), property.len()) };
-                value_is_callable(result)
-            })
-        };
-        return if matched { true_val } else { false_val };
     }
     if class_id == CLASS_ID_NET_SOCKET {
         return if let Some(handle) = small_native_handle_id(value) {

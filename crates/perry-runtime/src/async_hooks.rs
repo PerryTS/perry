@@ -49,7 +49,6 @@ per_test_global! {
     static NEXT_ASYNC_ID: AtomicU64 = AtomicU64::new(2);
     pub static HOOKS_ACTIVE: AtomicUsize = AtomicUsize::new(0);
     static PROMISE_HOOKS_ACTIVE: AtomicUsize = AtomicUsize::new(0);
-    static TOP_LEVEL_RESOURCE: AtomicU64 = AtomicU64::new(0);
 }
 
 #[derive(Clone, Copy)]
@@ -156,7 +155,6 @@ per_test_global! {
 static ASYNC_RESOURCE_HANDLES: LazyLock<Mutex<HashSet<i64>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 static ASYNC_RESOURCE_HANDLE_COUNT: AtomicUsize = AtomicUsize::new(0);
-const ASYNC_RESOURCE_SUBCLASS_KEY: &[u8] = b"__perryAsyncResourceBacking";
 
 /// Live `AsyncHook` handles, for the same dynamic-receiver reason as
 /// `ASYNC_RESOURCE_HANDLES`. A helper that returns
@@ -170,14 +168,7 @@ thread_local! {
     static EXECUTION_STACK: RefCell<Vec<(u64, u64)>> = const { RefCell::new(Vec::new()) };
     static CURRENT_EXECUTION_ID: Cell<u64> = const { Cell::new(0) };
     static CURRENT_TRIGGER_ID: Cell<u64> = const { Cell::new(0) };
-    // Node defers hook-list mutations made by a hook callback until the
-    // outermost hook-delivery cascade has finished.  In particular, an init
-    // callback can synchronously create another resource; that nested init
-    // must still see the hook set that was active at the start of the outer
-    // init.  Keep the last requested state for each hook while any lifecycle
-    // callback is on the stack, then commit the batch at depth zero.
-    static HOOK_CALLBACK_DEPTH: Cell<usize> = const { Cell::new(0) };
-    static PENDING_HOOK_STATES: RefCell<HashMap<usize, bool>> = RefCell::new(HashMap::new());
+    static IN_HOOK_CALLBACK: Cell<bool> = const { Cell::new(false) };
 }
 
 pub struct AsyncHookHandle {
@@ -186,33 +177,6 @@ pub struct AsyncHookHandle {
 
 pub struct AsyncResourceHandle {
     ids: AsyncResourceIds,
-    event_emitter: i64,
-}
-
-pub(crate) fn is_async_resource_handle(handle: i64) -> bool {
-    handle != 0 && ASYNC_RESOURCE_HANDLES.lock().unwrap().contains(&handle)
-}
-
-/// Resolve either a native `AsyncResource` handle or the ordinary object used
-/// for a source-compiled subclass to its native backing allocation.
-pub(crate) fn resolve_async_resource_handle(receiver: i64) -> Option<i64> {
-    if is_async_resource_handle(receiver) {
-        return Some(receiver);
-    }
-    let raw = receiver as usize;
-    if !crate::value::addr_class::is_plausible_heap_addr(raw) {
-        return None;
-    }
-    let key = js_string_from_bytes(
-        ASYNC_RESOURCE_SUBCLASS_KEY.as_ptr(),
-        ASYNC_RESOURCE_SUBCLASS_KEY.len() as u32,
-    );
-    let value = js_object_get_field_by_name(raw as *const ObjectHeader, key);
-    if !value.is_pointer() {
-        return None;
-    }
-    let backing = value.as_pointer::<u8>() as i64;
-    is_async_resource_handle(backing).then_some(backing)
 }
 
 #[inline(always)]
@@ -262,20 +226,8 @@ pub extern "C" fn js_async_hooks_execution_async_resource() -> f64 {
         }
     }
 
-    let cached = TOP_LEVEL_RESOURCE.load(Ordering::Acquire);
-    if cached != 0 {
-        return f64::from_bits(cached);
-    }
-
-    // Node exposes one stable bootstrap resource for the top-level execution
-    // scope. Returning a fresh object here made restoration checks fail after
-    // every nested AsyncResource scope and also broke metadata inheritance in
-    // init hooks.
     let obj = crate::object::js_object_alloc(0, 0);
-    let value = crate::value::js_nanbox_pointer(obj as i64);
-    TOP_LEVEL_RESOURCE.store(value.to_bits(), Ordering::Release);
-    crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
-    value
+    crate::value::js_nanbox_pointer(obj as i64)
 }
 
 const ASYNC_WRAP_PROVIDER_CONSTANTS: &[(&str, f64)] = &[
@@ -356,8 +308,7 @@ pub fn js_async_hooks_async_wrap_providers() -> f64 {
         return f64::from_bits(cached);
     }
 
-    let obj =
-        crate::object::js_object_alloc_null_proto(0, ASYNC_WRAP_PROVIDER_CONSTANTS.len() as u32);
+    let obj = crate::object::js_object_alloc(0, ASYNC_WRAP_PROVIDER_CONSTANTS.len() as u32);
     for (name, value) in ASYNC_WRAP_PROVIDER_CONSTANTS {
         let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
         crate::object::js_object_set_field_by_name(obj, key, *value);
@@ -532,38 +483,17 @@ pub extern "C" fn js_async_hook_enable(handle: i64) -> i64 {
         return handle;
     }
     let hook = unsafe { &*(handle as *const AsyncHookHandle) };
-    if HOOK_CALLBACK_DEPTH.with(Cell::get) != 0 {
-        PENDING_HOOK_STATES.with(|pending| {
-            pending.borrow_mut().insert(hook.index, true);
-        });
-        return handle;
-    }
-    set_hook_enabled(hook.index, true);
-    handle
-}
-
-fn set_hook_enabled(index: usize, enabled: bool) {
     let mut hooks = HOOKS.lock().unwrap();
-    if let Some(record) = hooks.get_mut(index) {
-        if record.enabled == enabled {
-            return;
-        }
-        let delta_is_visible = record.callbacks.has_any();
-        if delta_is_visible {
-            if enabled {
-                HOOKS_ACTIVE.fetch_add(1, Ordering::Relaxed);
-                if record.track_promises {
-                    PROMISE_HOOKS_ACTIVE.fetch_add(1, Ordering::Relaxed);
-                }
-            } else {
-                HOOKS_ACTIVE.fetch_sub(1, Ordering::Relaxed);
-                if record.track_promises {
-                    PROMISE_HOOKS_ACTIVE.fetch_sub(1, Ordering::Relaxed);
-                }
+    if let Some(record) = hooks.get_mut(hook.index) {
+        if !record.enabled && record.callbacks.has_any() {
+            HOOKS_ACTIVE.fetch_add(1, Ordering::Relaxed);
+            if record.track_promises {
+                PROMISE_HOOKS_ACTIVE.fetch_add(1, Ordering::Relaxed);
             }
         }
-        record.enabled = enabled;
+        record.enabled = true;
     }
+    handle
 }
 
 #[no_mangle]
@@ -572,13 +502,16 @@ pub extern "C" fn js_async_hook_disable(handle: i64) -> i64 {
         return handle;
     }
     let hook = unsafe { &*(handle as *const AsyncHookHandle) };
-    if HOOK_CALLBACK_DEPTH.with(Cell::get) != 0 {
-        PENDING_HOOK_STATES.with(|pending| {
-            pending.borrow_mut().insert(hook.index, false);
-        });
-        return handle;
+    let mut hooks = HOOKS.lock().unwrap();
+    if let Some(record) = hooks.get_mut(hook.index) {
+        if record.enabled && record.callbacks.has_any() {
+            HOOKS_ACTIVE.fetch_sub(1, Ordering::Relaxed);
+            if record.track_promises {
+                PROMISE_HOOKS_ACTIVE.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+        record.enabled = false;
     }
-    set_hook_enabled(hook.index, false);
     handle
 }
 
@@ -603,69 +536,35 @@ fn with_hook_callbacks(
     if !hooks_active() {
         return;
     }
-    let callbacks = enabled_callbacks(is_promise);
-    HOOK_CALLBACK_DEPTH.with(|depth| depth.set(depth.get() + 1));
-
-    // Hook membership is snapshotted once per lifecycle phase: disabling a
-    // hook from another hook callback must not remove it from the phase already
-    // in progress, and enabling one must not add it. Re-entrant lifecycle
-    // delivery is nevertheless required: an async operation started by an
-    // init/destroy callback is a new phase with a fresh membership snapshot.
-    // A process-wide "inside a hook" guard used to suppress those nested
-    // phases entirely.
-    //
-    // The callback pointers in this snapshot still have to remain moving-GC
-    // roots. A callback can allocate arbitrary JS objects; without the handles
-    // the first hook could evacuate the remaining hooks while their copied raw
-    // pointers stayed stale in this Rust Vec.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let rooted: Vec<_> = callbacks
-        .iter()
-        .map(|callbacks| scope.root_raw_const_ptr(callbacks.for_phase(phase)))
-        .collect();
-    for callback in rooted {
-        callback.with_const_ptr::<ClosureHeader, _>(|callback| {
-            if !callback.is_null() {
-                f(callback);
-            }
-        });
-    }
-    let outermost = HOOK_CALLBACK_DEPTH.with(|depth| {
-        let next = depth.get().saturating_sub(1);
-        depth.set(next);
-        next == 0
-    });
-    if outermost {
-        let pending = PENDING_HOOK_STATES.with(|states| std::mem::take(&mut *states.borrow_mut()));
-        for (index, enabled) in pending {
-            set_hook_enabled(index, enabled);
+    IN_HOOK_CALLBACK.with(|guard| {
+        if guard.get() {
+            return;
         }
-    }
-}
+        guard.set(true);
+        let callbacks = enabled_callbacks(is_promise);
 
-/// Model the Promise that Node uses to evaluate an ESM entry module. Perry's
-/// compiled entry does not allocate that wrapper Promise, but its init event
-/// is observable by hooks enabled during module evaluation.
-pub(crate) fn init_esm_evaluation_promise() {
-    if !promise_hooks_active() {
-        return;
-    }
-    let resource = crate::object::js_object_alloc_null_proto(0, 0);
-    let value = crate::value::js_nanbox_pointer(resource as i64);
-    let _ = init_resource("PROMISE", value, false);
-}
-
-/// Reserve an async id for a resource whose lifecycle is not observable yet.
-///
-/// Promises created before the first hook is enabled still need a stable id so
-/// a later child reaction can name that promise as its trigger. They must not
-/// be inserted into `RESOURCES`, because doing so would turn the resource value
-/// into a strong GC root before any observer exists.
-pub fn reserve_resource_ids(trigger_async_id: u64) -> AsyncResourceIds {
-    AsyncResourceIds {
-        async_id: NEXT_ASYNC_ID.fetch_add(1, Ordering::Relaxed),
-        trigger_async_id,
-    }
+        // Hook membership is snapshotted once per lifecycle phase: disabling
+        // a hook from another hook callback must not remove it from the phase
+        // already in progress, and enabling one must not add it. The callback
+        // pointers in that snapshot still have to remain moving-GC roots,
+        // though. A callback can allocate arbitrary JS objects; previously the
+        // first hook could therefore evacuate the remaining hooks while their
+        // copied raw pointers stayed in this Rust Vec. Dispatching the next
+        // stale pointer caused the multi-hook #6764 fixtures to segfault.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted: Vec<_> = callbacks
+            .iter()
+            .map(|callbacks| scope.root_raw_const_ptr(callbacks.for_phase(phase)))
+            .collect();
+        for callback in rooted {
+            callback.with_const_ptr::<ClosureHeader, _>(|callback| {
+                if !callback.is_null() {
+                    f(callback);
+                }
+            });
+        }
+        guard.set(false);
+    });
 }
 
 pub fn init_resource(type_name: &str, resource: f64, force_allocate: bool) -> AsyncResourceIds {
@@ -691,29 +590,13 @@ pub fn init_resource_with_trigger(
     }
 
     let async_id = NEXT_ASYNC_ID.fetch_add(1, Ordering::Relaxed);
-    // Native resources such as an accepted TCP socket can be materialized by
-    // the main-thread pump after the originating callback has returned.  At
-    // that point Perry's current execution id is the bootstrap scope even
-    // though the provider has an explicit trigger.  Inherit the trigger's
-    // captured store in that narrow case so AsyncLocalStorage crosses the
-    // native hand-off just as it does in Node.
-    let context = if execution_async_id_u64() == 0 && trigger_async_id != 0 {
-        RESOURCES
-            .lock()
-            .unwrap()
-            .get(&trigger_async_id)
-            .map(|meta| meta.context.clone())
-            .unwrap_or_else(crate::async_context::capture_context)
-    } else {
-        crate::async_context::capture_context()
-    };
     RESOURCES.lock().unwrap().insert(
         async_id,
         ResourceMeta {
             type_name: type_name.to_string(),
             trigger_async_id,
             resource,
-            context,
+            context: crate::async_context::capture_context(),
             destroyed: false,
         },
     );
@@ -819,7 +702,8 @@ fn destroy_with_kind(async_id: u64, is_promise: bool) {
                 meta.destroyed = true;
                 true
             }
-            Some(_) | None => false,
+            Some(_) => false,
+            None => true,
         }
     };
     if !should_emit {
@@ -835,139 +719,8 @@ pub fn destroy(async_id: u64) {
     destroy_with_kind(async_id, false);
 }
 
-/// Explicit `AsyncResource.emitDestroy()` notification. Unlike native
-/// provider teardown, Node does not make this API idempotent: every call emits
-/// a destroy hook for the resource id. Remove the tracked metadata after the
-/// first notification, but continue delivering later explicit notifications.
-fn emit_explicit_destroy(async_id: u64) {
-    if async_id == 0 {
-        return;
-    }
-    with_hook_callbacks(HookPhase::Destroy, false, |callback| {
-        js_closure_call1(callback, async_id as f64);
-    });
-    RESOURCES.lock().unwrap().remove(&async_id);
-}
-
 pub fn destroy_promise(async_id: u64) {
     destroy_with_kind(async_id, true);
-}
-
-/// Run a synchronous native completion as an observable async-hooks provider.
-/// The operation may already have done its blocking work eagerly, but its
-/// Promise settlement still needs the same provider execution/resource scope
-/// Node gives a libuv completion. The returned JS value is rooted across hook
-/// callbacks, which are arbitrary allocating user code.
-pub fn run_provider_completion(type_name: &'static str, completion: impl FnOnce() -> f64) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let resource = crate::object::js_object_alloc_null_proto(0, 0);
-    let resource_handle = scope.root_raw_mut_ptr(resource);
-    let ids = resource_handle.with_mut_ptr::<ObjectHeader, _>(|resource| {
-        init_resource(
-            type_name,
-            crate::value::js_nanbox_pointer(resource as i64),
-            true,
-        )
-    });
-    before(ids.async_id, ids.trigger_async_id);
-    let result = scope.root_nanbox_f64(completion());
-    after(ids.async_id);
-    destroy(ids.async_id);
-    result.get_nanbox_f64()
-}
-
-/// Enter an existing provider's captured AsyncLocalStorage and execution-id
-/// scope for one native callback phase.
-pub fn enter_resource_scope(ids: AsyncResourceIds) {
-    let context = RESOURCES
-        .lock()
-        .unwrap()
-        .get(&ids.async_id)
-        .map(|meta| meta.context.clone())
-        .unwrap_or_default();
-    let previous = crate::async_context::enter_context(&context);
-    crate::async_context::push_context_guard(
-        crate::async_context::ContextGuardAction::RestoreSnapshot(previous),
-    );
-    before(ids.async_id, ids.trigger_async_id);
-    crate::async_context::push_context_guard(
-        crate::async_context::ContextGuardAction::RestoreExecutionIds,
-    );
-}
-
-/// Leave a provider scope entered by [`enter_resource_scope`].
-pub fn leave_resource_scope(async_id: u64) {
-    let _ = crate::async_context::pop_context_guard();
-    after(async_id);
-    if let Some(action) = crate::async_context::pop_context_guard() {
-        crate::async_context::apply_context_guard(action);
-    }
-}
-
-pub fn run_resource_scope(ids: AsyncResourceIds, completion: impl FnOnce()) {
-    enter_resource_scope(ids);
-    completion();
-    leave_resource_scope(ids.async_id);
-}
-
-/// C ABI used by separately-linked native providers such as perry-ext-zlib.
-#[no_mangle]
-pub unsafe extern "C" fn js_async_hooks_provider_init(type_ptr: *const u8, type_len: usize) -> u64 {
-    if type_ptr.is_null() {
-        return 0;
-    }
-    let type_name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(type_ptr, type_len));
-    let resource = crate::object::js_object_alloc_null_proto(0, 0);
-    init_resource(
-        type_name,
-        crate::value::js_nanbox_pointer(resource as i64),
-        true,
-    )
-    .async_id
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_async_hooks_provider_init_with_trigger(
-    type_ptr: *const u8,
-    type_len: usize,
-    trigger_async_id: u64,
-) -> u64 {
-    if type_ptr.is_null() {
-        return 0;
-    }
-    let type_name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(type_ptr, type_len));
-    let resource = crate::object::js_object_alloc_null_proto(0, 0);
-    init_resource_with_trigger(
-        type_name,
-        crate::value::js_nanbox_pointer(resource as i64),
-        true,
-        trigger_async_id,
-    )
-    .async_id
-}
-
-#[no_mangle]
-pub extern "C" fn js_async_hooks_provider_enter(async_id: u64) {
-    let trigger_async_id = RESOURCES
-        .lock()
-        .unwrap()
-        .get(&async_id)
-        .map(|meta| meta.trigger_async_id)
-        .unwrap_or(0);
-    enter_resource_scope(AsyncResourceIds {
-        async_id,
-        trigger_async_id,
-    });
-}
-
-#[no_mangle]
-pub extern "C" fn js_async_hooks_provider_leave(async_id: u64) {
-    leave_resource_scope(async_id);
-}
-
-#[no_mangle]
-pub extern "C" fn js_async_hooks_provider_destroy(async_id: u64) {
-    destroy(async_id);
 }
 
 pub fn enqueue_gc_destroy(async_id: u64) {
@@ -1003,7 +756,7 @@ fn string_header_to_string(ptr: *const StringHeader) -> String {
     }
     unsafe {
         let len = (*ptr).byte_len as usize;
-        let data = crate::string::string_data(ptr);
+        let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
     }
 }
@@ -1161,22 +914,12 @@ fn trigger_id_from_options(options: f64) -> u64 {
         throw_null_trigger_async_id_options();
     }
 
-    // Node's constructor first validates the option and then consumes it,
-    // making an accessor observable twice. Preserve that exact ordering; the
-    // `requireManualDestroy` option is read after both trigger-id reads.
-    let first_trigger_value = object_field(options, b"triggerAsyncId");
-    if !JSValue::from_bits(first_trigger_value.to_bits()).is_undefined() {
-        let _ = trigger_async_id_or_throw(first_trigger_value);
-    }
     let trigger_value = object_field(options, b"triggerAsyncId");
     let trigger_value_kind = JSValue::from_bits(trigger_value.to_bits());
-    let trigger_id = if trigger_value_kind.is_undefined() {
-        execution_async_id_u64()
-    } else {
-        trigger_async_id_or_throw(trigger_value)
-    };
-    let _ = object_field(options, b"requireManualDestroy");
-    trigger_id
+    if trigger_value_kind.is_undefined() {
+        return execution_async_id_u64();
+    }
+    trigger_async_id_or_throw(trigger_value)
 }
 
 fn render_apply_value(value: f64) -> String {
@@ -1254,206 +997,20 @@ fn validate_bind_callback(value: f64) {
 
 #[no_mangle]
 pub extern "C" fn js_async_resource_new(type_value: f64, options: f64) -> i64 {
-    new_async_resource_with_public_value(type_value, options, None)
-}
-
-fn new_async_resource_with_public_value(
-    type_value: f64,
-    options: f64,
-    public_resource: Option<f64>,
-) -> i64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let type_handle = scope.root_nanbox_f64(type_value);
     let options_handle = scope.root_nanbox_f64(options);
     let type_name = require_string_arg("type", type_handle.get_nanbox_f64());
-    if type_name.is_empty() && hooks_active() {
-        crate::fs::validate::throw_type_error_with_code(
-            "The \"type\" argument must be a non-empty string",
-            "ERR_ASYNC_TYPE",
-        );
-    }
     let trigger_async_id = trigger_id_from_options(options_handle.get_nanbox_f64());
-    // The public resource object is the constructor handle itself. Allocate it
-    // before firing init so the fourth callback argument is already the exact
-    // object returned by `new AsyncResource(...)`, as it is in Node.
-    let handle = Box::into_raw(Box::new(AsyncResourceHandle {
-        ids: AsyncResourceIds {
-            async_id: 0,
-            trigger_async_id,
-        },
-        event_emitter: 0,
-    })) as i64;
+    let ids = init_resource_with_trigger(&type_name, TAG_UNDEFINED_F64, true, trigger_async_id);
+    let handle = Box::into_raw(Box::new(AsyncResourceHandle { ids })) as i64;
     ASYNC_RESOURCE_HANDLES.lock().unwrap().insert(handle);
     ASYNC_RESOURCE_HANDLE_COUNT.fetch_add(1, Ordering::Relaxed);
-    let resource_value = public_resource.unwrap_or_else(|| crate::value::js_nanbox_pointer(handle));
-    let ids = init_resource_with_trigger(&type_name, resource_value, true, trigger_async_id);
-    unsafe { (*(handle as *mut AsyncResourceHandle)).ids = ids };
+    let resource_value = crate::value::js_nanbox_pointer(handle);
+    if let Some(meta) = RESOURCES.lock().unwrap().get_mut(&ids.async_id) {
+        meta.resource = resource_value;
+    }
     handle
-}
-
-/// Initialize the native backing for a source-compiled
-/// `class X extends AsyncResource` while keeping the public subclass object as
-/// the resource passed to hooks and returned by `executionAsyncResource()`.
-#[no_mangle]
-pub extern "C" fn js_async_resource_subclass_init(
-    this_value: f64,
-    type_value: f64,
-    options: f64,
-) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let this_handle = scope.root_nanbox_f64(this_value);
-    let type_handle = scope.root_nanbox_f64(type_value);
-    let options_handle = scope.root_nanbox_f64(options);
-    let backing = new_async_resource_with_public_value(
-        type_handle.get_nanbox_f64(),
-        options_handle.get_nanbox_f64(),
-        Some(this_handle.get_nanbox_f64()),
-    );
-    let current_this = this_handle.get_nanbox_f64();
-    let raw = crate::value::js_nanbox_get_pointer(current_this) as *mut ObjectHeader;
-    if !raw.is_null() && crate::value::addr_class::is_plausible_heap_addr(raw as usize) {
-        let key = js_string_from_bytes(
-            ASYNC_RESOURCE_SUBCLASS_KEY.as_ptr(),
-            ASYNC_RESOURCE_SUBCLASS_KEY.len() as u32,
-        );
-        crate::object::js_object_set_field_by_name(
-            raw,
-            key,
-            crate::value::js_nanbox_pointer(backing),
-        );
-        for (name, length) in [
-            ("asyncId", 0),
-            ("triggerAsyncId", 0),
-            ("emitDestroy", 0),
-            ("runInAsyncScope", 2),
-            ("bind", 2),
-        ] {
-            let method = if name == "bind" {
-                async_resource_bind_method_value(backing)
-            } else {
-                crate::object::async_resource_prototype_method_value(name, length)
-            };
-            let method_handle = scope.root_nanbox_f64(method);
-            let method_key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            let current_this = this_handle.get_nanbox_f64();
-            let current_raw =
-                crate::value::js_nanbox_get_pointer(current_this) as *mut ObjectHeader;
-            crate::object::js_object_set_field_by_name(
-                current_raw,
-                method_key,
-                method_handle.get_nanbox_f64(),
-            );
-            crate::object::set_builtin_property_attrs(
-                current_raw as usize,
-                name.to_string(),
-                crate::object::PropertyAttrs::new(true, false, true),
-            );
-        }
-    }
-    this_handle.get_nanbox_f64()
-}
-
-/// Link the backing AsyncResource owned by EventEmitterAsyncResource to its
-/// public emitter. Node exposes this as `emitter.asyncResource.eventEmitter`.
-/// Both sides are stable native handles, so the link does not need GC rooting.
-pub fn set_async_resource_event_emitter(handle: i64, event_emitter: i64) {
-    if handle == 0 || !ASYNC_RESOURCE_HANDLES.lock().unwrap().contains(&handle) {
-        return;
-    }
-    unsafe { (*(handle as *mut AsyncResourceHandle)).event_emitter = event_emitter };
-}
-
-#[no_mangle]
-pub extern "C" fn js_async_resource_set_event_emitter(handle: i64, event_emitter: i64) {
-    set_async_resource_event_emitter(handle, event_emitter);
-}
-
-/// Node exposes `AsyncResource#bind` as an instance-bound function: unlike
-/// the other prototype methods, extracting it and calling it later keeps the
-/// originating resource as its receiver.  Use a dedicated rest trampoline
-/// instead of the generic class-method reifier, whose ordinary semantics use
-/// the call-site `this` for a detached function.
-extern "C" fn async_resource_bind_method_trampoline(
-    closure: *const ClosureHeader,
-    rest: f64,
-) -> f64 {
-    if closure.is_null() {
-        return TAG_UNDEFINED_F64;
-    }
-    let handle = js_closure_get_capture_ptr(closure, 0);
-    let args_array = crate::value::js_nanbox_get_pointer(rest) as *const ArrayHeader;
-    let args_len = if args_array.is_null() {
-        0
-    } else {
-        js_array_length(args_array)
-    };
-    let callback = if args_len == 0 {
-        TAG_UNDEFINED_F64
-    } else {
-        crate::array::js_array_get_f64(args_array, 0)
-    };
-    let this_arg = if args_len < 2 {
-        TAG_UNDEFINED_F64
-    } else {
-        crate::array::js_array_get_f64(args_array, 1)
-    };
-    let bound = js_async_resource_bind(handle, callback, this_arg);
-    if bound == 0 {
-        TAG_UNDEFINED_F64
-    } else {
-        crate::value::js_nanbox_pointer(bound)
-    }
-}
-
-fn async_resource_bind_method_value(handle: i64) -> f64 {
-    let trampoline = async_resource_bind_method_trampoline as *const u8;
-    js_register_closure_rest(trampoline, 0);
-    let closure = js_closure_alloc(trampoline, 1);
-    if closure.is_null() {
-        return TAG_UNDEFINED_F64;
-    }
-    js_closure_set_capture_ptr(closure, 0, handle);
-    crate::object::set_builtin_closure_length(closure as usize, 2);
-    crate::object::set_bound_native_closure_name(closure, "bind");
-    crate::value::js_nanbox_pointer(closure as i64)
-}
-
-pub fn try_async_resource_property_dispatch(handle: i64, property: &str) -> Option<f64> {
-    if ASYNC_RESOURCE_HANDLE_COUNT.load(Ordering::Relaxed) == 0
-        || !ASYNC_RESOURCE_HANDLES.lock().unwrap().contains(&handle)
-    {
-        return None;
-    }
-    // User-defined own properties shadow AsyncResource.prototype just as they
-    // do on Node's ordinary public resource object.  The backing allocation is
-    // a native Box, so keep expandos in the same traced side table used by
-    // small native handles rather than ever treating it as an ObjectHeader.
-    if let Some(value) = crate::object::handle_expando::handle_expando_get(handle, property) {
-        return Some(value);
-    }
-    if property == "bind" {
-        return Some(async_resource_bind_method_value(handle));
-    }
-    if let Some((name, length)) = match property {
-        "asyncId" => Some(("asyncId", 0)),
-        "triggerAsyncId" => Some(("triggerAsyncId", 0)),
-        "emitDestroy" => Some(("emitDestroy", 0)),
-        "runInAsyncScope" => Some(("runInAsyncScope", 2)),
-        _ => None,
-    } {
-        return Some(crate::object::async_resource_prototype_method_value(
-            name, length,
-        ));
-    }
-    if property != "eventEmitter" {
-        return None;
-    }
-    let emitter = unsafe { (*(handle as *const AsyncResourceHandle)).event_emitter };
-    Some(if emitter == 0 {
-        TAG_UNDEFINED_F64
-    } else {
-        crate::value::js_nanbox_pointer(emitter)
-    })
 }
 
 /// Dynamic method dispatch for `AsyncResource` receivers whose static type
@@ -1462,7 +1019,7 @@ pub fn try_async_resource_property_dispatch(handle: i64, property: &str) -> Opti
 /// can never be claimed. Returns `None` when the receiver is not a live
 /// AsyncResource handle or the method name is not part of its vocabulary.
 pub fn try_async_resource_method_dispatch(
-    receiver: i64,
+    handle: i64,
     method_name: &str,
     args_ptr: *const f64,
     args_len: usize,
@@ -1476,7 +1033,9 @@ pub fn try_async_resource_method_dispatch(
     ) {
         return None;
     }
-    let handle = resolve_async_resource_handle(receiver)?;
+    if !ASYNC_RESOURCE_HANDLES.lock().unwrap().contains(&handle) {
+        return None;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let raw_args: Vec<f64> = if args_ptr.is_null() || args_len == 0 {
         Vec::new()
@@ -1490,7 +1049,7 @@ pub fn try_async_resource_method_dispatch(
         "triggerAsyncId" => js_async_resource_trigger_async_id(handle),
         "emitDestroy" => {
             js_async_resource_emit_destroy(handle);
-            crate::value::js_nanbox_pointer(receiver)
+            crate::value::js_nanbox_pointer(handle)
         }
         "runInAsyncScope" => {
             // runInAsyncScope(fn[, thisArg, ...args])
@@ -1535,27 +1094,27 @@ fn pack_rest_args_array(rest: &[f64]) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn js_async_resource_async_id(handle: i64) -> f64 {
-    let Some(handle) = resolve_async_resource_handle(handle) else {
+    if handle == 0 {
         return 0.0;
-    };
+    }
     let resource = unsafe { &*(handle as *const AsyncResourceHandle) };
     resource.ids.async_id as f64
 }
 
 #[no_mangle]
 pub extern "C" fn js_async_resource_trigger_async_id(handle: i64) -> f64 {
-    let Some(handle) = resolve_async_resource_handle(handle) else {
+    if handle == 0 {
         return 0.0;
-    };
+    }
     let resource = unsafe { &*(handle as *const AsyncResourceHandle) };
     async_id_to_js_number(resource.ids.trigger_async_id)
 }
 
 #[no_mangle]
 pub extern "C" fn js_async_resource_emit_destroy(handle: i64) -> i64 {
-    if let Some(backing) = resolve_async_resource_handle(handle) {
-        let resource = unsafe { &*(backing as *const AsyncResourceHandle) };
-        emit_explicit_destroy(resource.ids.async_id);
+    if handle != 0 {
+        let resource = unsafe { &*(handle as *const AsyncResourceHandle) };
+        destroy(resource.ids.async_id);
     }
     handle
 }
@@ -1567,9 +1126,9 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
     this_arg: f64,
     args_array: i64,
 ) -> f64 {
-    let Some(handle) = resolve_async_resource_handle(handle) else {
+    if handle == 0 {
         return TAG_UNDEFINED_F64;
-    };
+    }
     if !is_callable_value(callback_value) {
         throw_apply_not_function(callback_value);
     }
@@ -1606,29 +1165,20 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
         crate::async_context::ContextGuardAction::RestoreExecutionIds,
     );
     let prev_this = crate::object::js_implicit_this_set(this_arg_handle.get_nanbox_f64());
-    // Catch locally so a throwing scope still delivers `after` and restores
-    // the resource/context before the exception is rethrown to user code.
-    // The trap is installed after our guards, so throw-time unwinding leaves
-    // those guards for the normal cleanup below.
-    let outcome = crate::exception::js_call_catching(|| {
-        if args_array == 0 {
-            unsafe { js_closure_call_array(callback as i64, ptr::null(), 0) }
+    let result = if args_array == 0 {
+        unsafe { js_closure_call_array(callback as i64, ptr::null(), 0) }
+    } else {
+        let arr = args_array_handle.get_raw_const_ptr::<ArrayHeader>();
+        let len = js_array_length(arr) as i64;
+        let data = if arr.is_null() {
+            ptr::null()
         } else {
-            let arr = args_array_handle.get_raw_const_ptr::<ArrayHeader>();
-            let len = js_array_length(arr) as i64;
-            let data = if arr.is_null() {
-                ptr::null()
-            } else {
-                unsafe { (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 }
-            };
-            unsafe { js_closure_call_array(callback as i64, data, len) }
-        }
-    });
+            unsafe { (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 }
+        };
+        unsafe { js_closure_call_array(callback as i64, data, len) }
+    };
     crate::object::js_implicit_this_set(prev_this);
-    let threw = outcome.is_err();
-    let result_handle = scope.root_nanbox_f64(match outcome {
-        Ok(result) | Err(result) => result,
-    });
+    let result_handle = scope.root_nanbox_f64(result);
     // Normal exit: `after` fires hooks and pops the execution scope itself,
     // so discard the silent-unwind guard rather than applying it.
     let _ = crate::async_context::pop_context_guard();
@@ -1639,9 +1189,6 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
     );
     if let Some(action) = crate::async_context::pop_context_guard() {
         crate::async_context::apply_context_guard(action);
-    }
-    if threw {
-        crate::exception::js_throw(result_handle.get_nanbox_f64());
     }
     result_handle.get_nanbox_f64()
 }
@@ -1686,9 +1233,9 @@ fn register_bind_trampoline_once() {
 #[no_mangle]
 pub extern "C" fn js_async_resource_bind(handle: i64, callback_value: f64, this_arg: f64) -> i64 {
     validate_bind_callback(callback_value);
-    let Some(handle) = resolve_async_resource_handle(handle) else {
+    if handle == 0 {
         return 0;
-    };
+    }
     register_bind_trampoline_once();
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback_handle = scope.root_nanbox_f64(callback_value);
@@ -1755,21 +1302,7 @@ pub extern "C" fn js_async_resource_static_bind_value(
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback_handle = scope.root_nanbox_f64(callback_value);
     let type_value = if JSValue::from_bits(type_value.to_bits()).is_undefined() {
-        let callback = crate::fs::extract_closure_ptr(callback_handle.get_nanbox_f64());
-        let inferred = if callback.is_null() {
-            None
-        } else {
-            let own_name = crate::closure::closure_get_dynamic_prop(callback as usize, "name");
-            let own_name = JSValue::from_bits(own_name.to_bits());
-            if own_name.is_any_string() {
-                let name = js_string_value_to_string(f64::from_bits(own_name.bits()));
-                (!name.is_empty()).then_some(name)
-            } else {
-                unsafe { crate::builtins::function_name_for_ptr((*callback).func_ptr as usize) }
-                    .filter(|name| !name.is_empty())
-            }
-        };
-        let default_type = inferred.as_deref().unwrap_or("bound-anonymous-fn");
+        let default_type = b"AsyncResource";
         box_string(
             js_string_from_bytes(default_type.as_ptr(), default_type.len() as u32) as *const u8,
         )
@@ -1898,11 +1431,9 @@ extern "C" fn async_local_storage_snapshot_trampoline(
     rest: f64,
 ) -> f64 {
     let snapshot_id = js_closure_get_capture_ptr(closure, 0) as usize;
+    let this_arg = crate::object::js_implicit_this_get();
     run_with_context_snapshot(snapshot_id, || {
-        // AsyncLocalStorage.snapshot() intentionally invokes the supplied
-        // callback as a plain function. The receiver used to call the snapshot
-        // wrapper itself is not forwarded.
-        call_callback_with_rest(callback_value, TAG_UNDEFINED_F64, rest)
+        call_callback_with_rest(callback_value, this_arg, rest)
     })
 }
 
@@ -1960,11 +1491,7 @@ pub fn scan_async_hooks_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
     drop(hooks);
     let mut resources = RESOURCES.lock().unwrap();
     for meta in resources.values_mut() {
-        // Resource identity is weak: the resource's owning scheduler/promise
-        // keeps it alive, while its finalizer enqueues the destroy event and
-        // removes this metadata. Marking the value here made PROMISE entries
-        // immortal and forced the runtime to fake destroy-at-settlement.
-        visitor.visit_metadata_nanbox_f64_slot(&mut meta.resource);
+        visitor.visit_nanbox_f64_slot(&mut meta.resource);
         crate::async_context::scan_snapshot_roots_mut(&mut meta.context, visitor);
     }
     drop(resources);
@@ -1980,19 +1507,171 @@ pub fn scan_async_hooks_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
         visitor.visit_nanbox_u64_slot(&mut providers_bits);
         ASYNC_WRAP_PROVIDERS.store(providers_bits, Ordering::Relaxed);
     }
-
-    let mut top_level_bits = TOP_LEVEL_RESOURCE.load(Ordering::Relaxed);
-    if top_level_bits != 0 {
-        visitor.visit_nanbox_u64_slot(&mut top_level_bits);
-        TOP_LEVEL_RESOURCE.store(top_level_bits, Ordering::Relaxed);
-    }
 }
 
 #[cfg(test)]
-mod test_support;
+pub fn reset_for_tests() {
+    HOOKS.lock().unwrap().clear();
+    RESOURCES.lock().unwrap().clear();
+    GC_DESTROY_QUEUE.lock().unwrap().clear();
+    CONTEXT_SNAPSHOTS.lock().unwrap().clear();
+    ASYNC_WRAP_PROVIDERS.store(0, Ordering::Relaxed);
+    HOOKS_ACTIVE.store(0, Ordering::Relaxed);
+    PROMISE_HOOKS_ACTIVE.store(0, Ordering::Relaxed);
+    NEXT_ASYNC_ID.store(2, Ordering::Relaxed);
+    NEXT_CONTEXT_SNAPSHOT_ID.store(1, Ordering::Relaxed);
+    CURRENT_EXECUTION_ID.with(|c| c.set(0));
+    CURRENT_TRIGGER_ID.with(|c| c.set(0));
+    IN_HOOK_CALLBACK.with(|c| c.set(false));
+    EXECUTION_STACK.with(|s| s.borrow_mut().clear());
+}
+
 #[cfg(test)]
-pub use test_support::reset_for_tests;
+pub(crate) fn test_seed_async_hooks_scanner_roots(callback: *const ClosureHeader, resource: f64) {
+    reset_for_tests();
+    HOOKS.lock().unwrap().push(HookRecord {
+        callbacks: HookCallbacks {
+            init: callback,
+            before: callback,
+            after: callback,
+            destroy: callback,
+            promise_resolve: callback,
+        },
+        enabled: true,
+        track_promises: true,
+    });
+    HOOKS_ACTIVE.store(1, Ordering::Relaxed);
+    PROMISE_HOOKS_ACTIVE.store(1, Ordering::Relaxed);
+    RESOURCES.lock().unwrap().insert(
+        1,
+        ResourceMeta {
+            type_name: "test".to_string(),
+            trigger_async_id: 0,
+            resource,
+            context: crate::async_context::AsyncContextSnapshot::default(),
+            destroyed: false,
+        },
+    );
+}
+
 #[cfg(test)]
-pub(crate) use test_support::{
-    test_async_hooks_scanner_snapshot, test_seed_async_hooks_scanner_roots,
-};
+pub(crate) fn test_async_hooks_scanner_snapshot() -> (usize, u64) {
+    let callback = HOOKS
+        .lock()
+        .unwrap()
+        .first()
+        .map(|hook| hook.callbacks.init as usize)
+        .unwrap_or(0);
+    let resource_bits = RESOURCES
+        .lock()
+        .unwrap()
+        .get(&1)
+        .map(|meta| meta.resource.to_bits())
+        .unwrap_or(0);
+    (callback, resource_bits)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // #7680: no lock needed here anymore. `NEXT_ASYNC_ID` / `HOOKS` /
+    // `RESOURCES` / etc. are `per_test_global!`, so this thread's
+    // `reset_for_tests()` and `init_resource` calls touch only this thread's
+    // own instances — a concurrent test on another thread cannot land a
+    // `+2` between the two `init_resource` calls below, which is exactly
+    // the #7672 shape this test's own docstring warns about (a wrong VALUE,
+    // not a hang).
+
+    #[test]
+    fn resource_ids_are_monotonic_even_without_hooks() {
+        reset_for_tests();
+        let a = init_resource("A", TAG_UNDEFINED_F64, true);
+        let b = init_resource("B", TAG_UNDEFINED_F64, true);
+        // Ids start above 1 (Node reserves 1 for the root context) and are
+        // monotonic.
+        assert!(a.async_id > 1);
+        assert_eq!(b.async_id, a.async_id + 1);
+    }
+
+    #[test]
+    fn before_after_restore_execution_ids() {
+        reset_for_tests();
+        let ids = init_resource("A", TAG_UNDEFINED_F64, true);
+        before(ids.async_id, ids.trigger_async_id);
+        assert_eq!(execution_async_id_u64(), ids.async_id);
+        after(ids.async_id);
+        assert_eq!(execution_async_id_u64(), 0);
+    }
+
+    #[test]
+    fn track_promises_filters_hooks_and_activity() {
+        reset_for_tests();
+        let mut callbacks = HookCallbacks::empty();
+        callbacks.init = std::ptr::NonNull::<ClosureHeader>::dangling().as_ptr();
+        HOOKS.lock().unwrap().extend([
+            HookRecord {
+                callbacks,
+                enabled: false,
+                track_promises: false,
+            },
+            HookRecord {
+                callbacks,
+                enabled: false,
+                track_promises: true,
+            },
+        ]);
+        let suppressed = AsyncHookHandle { index: 0 };
+        let tracked = AsyncHookHandle { index: 1 };
+
+        js_async_hook_enable(&suppressed as *const AsyncHookHandle as i64);
+        assert!(hooks_active());
+        assert!(!promise_hooks_active());
+
+        js_async_hook_enable(&tracked as *const AsyncHookHandle as i64);
+        assert!(promise_hooks_active());
+        assert_eq!(enabled_callbacks(false).len(), 2);
+        assert_eq!(enabled_callbacks(true).len(), 1);
+
+        js_async_hook_disable(&tracked as *const AsyncHookHandle as i64);
+        assert!(hooks_active());
+        assert!(!promise_hooks_active());
+        js_async_hook_disable(&suppressed as *const AsyncHookHandle as i64);
+        assert!(!hooks_active());
+        reset_for_tests();
+    }
+
+    /// #7680: plants the #7672 shape directly rather than relying on a
+    /// scheduling accident — install a resource on THIS thread, run
+    /// `reset_for_tests()` (what all four of the pre-fix lock domains
+    /// eventually call) on ANOTHER thread, and assert the resource survived.
+    /// Revert the `per_test_global!` conversion above (back to bare
+    /// `static`s) and this fails with the resource gone — a foreign
+    /// thread's `reset_for_tests()` wiped `NEXT_ASYNC_ID` out from under a
+    /// resource this thread had already allocated, id and all.
+    #[test]
+    fn async_hooks_state_survives_a_foreign_reset_for_tests() {
+        reset_for_tests();
+        let ids = init_resource("survivor", TAG_UNDEFINED_F64, true);
+        assert!(
+            RESOURCES.lock().unwrap().contains_key(&ids.async_id),
+            "the probe installed nothing, so survived-vs-wiped would be vacuous"
+        );
+
+        std::thread::spawn(reset_for_tests)
+            .join()
+            .expect("the clearing thread panicked");
+
+        assert!(
+            RESOURCES.lock().unwrap().contains_key(&ids.async_id),
+            "a resource installed on this thread was destroyed by a GC test guard's \
+             async_hooks reset running on another thread (#7680). Per-thread storage \
+             (`per_test_global!`) is what prevents this."
+        );
+        assert!(
+            NEXT_ASYNC_ID.load(Ordering::Relaxed) > ids.async_id,
+            "NEXT_ASYNC_ID must not have been rewound by the foreign reset either"
+        );
+        reset_for_tests();
+    }
+}

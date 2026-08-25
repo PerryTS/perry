@@ -652,34 +652,6 @@ fn symbol_keys_keep_creation_order_across_accessor_redefine() {
     }
 }
 
-#[test]
-fn undefined_symbol_value_still_counts_as_an_own_property() {
-    let _global = crate::gc::global_side_table_test_lock();
-    crate::symbol::test_clear_symbol_side_table_roots();
-    unsafe {
-        let obj = js_object_alloc(0, 0);
-        assert!(!obj.is_null());
-        let obj_value = crate::value::js_nanbox_pointer(obj as i64);
-        let symbol = crate::symbol::js_symbol_new_empty();
-        crate::symbol::js_object_set_symbol_property(
-            obj_value,
-            symbol,
-            f64::from_bits(crate::value::TAG_UNDEFINED),
-        );
-
-        assert!(crate::symbol::has_own_symbol_property(obj_value, symbol));
-        assert!(super::reflect_support::obj_value_has_own_key(
-            obj_value, symbol
-        ));
-        crate::proxy::js_put_value_set(obj_value, symbol, 42.0, obj_value, 1);
-        assert_eq!(
-            crate::symbol::js_object_get_symbol_property(obj_value, symbol).to_bits(),
-            42.0f64.to_bits(),
-            "OrdinarySet must overwrite an own Symbol property whose old value is undefined"
-        );
-    }
-}
-
 /// #7916 / #8047: the per-object footprint accounting this issue is about,
 /// pinned as an executable fact rather than a comment.
 ///

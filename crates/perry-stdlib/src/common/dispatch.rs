@@ -26,7 +26,6 @@ pub use property_dispatch::js_handle_property_dispatch;
 
 pub(crate) use emitter_als::{
     dispatch_async_local_storage_method, dispatch_async_local_storage_property,
-    unbound_async_local_storage_method,
 };
 #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
 pub(crate) use emitter_als::{dispatch_event_emitter_method, dispatch_event_emitter_property};

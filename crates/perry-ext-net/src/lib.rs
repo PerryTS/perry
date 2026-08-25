@@ -40,6 +40,7 @@ use perry_ffi::{
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -55,7 +56,7 @@ mod ip;
 // `BytesMut` per read. See `buffer_pool.rs` for the rationale.
 mod buffer_pool;
 mod tls;
-pub use tls::{js_ext_tls_connect, js_tls_connect};
+pub use tls::js_tls_connect;
 // #2131 — lifecycle / EventEmitter surface for `net.Socket` + `net.Server`
 // (once / off / removeAllListeners / listenerCount / eventNames /
 // resetAndDestroy, plus `socket.address()`). Re-exports keep the
@@ -70,24 +71,15 @@ mod handle_ids;
 pub(crate) use handle_ids::{next_id, next_id_or_throw};
 mod dispatch;
 mod dispatch_custody;
-mod gc_roots;
 mod ipc;
-pub(crate) use gc_roots::ensure_gc_scanner_registered;
 mod socket_emit;
 pub use socket_emit::{
     js_ext_net_register_http_agent_socket_event_hook, js_ext_net_set_http_agent_phase,
     js_ext_net_socket_emit, js_ext_net_socket_emit_abort_error,
 };
-mod task_spawn;
-use task_spawn::spawn_socket_runner;
 // #2154 — raw-consumer bridge so perry-ext-http can drive an HTTP exchange
 // over a socket produced by `agent.createConnection` (split out for the gate).
-mod provider_lifecycle;
 mod raw_bridge;
-use provider_lifecycle::{
-    event_provider_id, init_provider, init_provider_with_trigger, prepare_event_provider,
-    ProviderScope,
-};
 use raw_bridge::RawReadState;
 // #2013 — chainable option-setter no-ops + Node arg-validation bridge to
 // perry-runtime (split out to keep lib.rs under the 2000-line gate). The
@@ -230,7 +222,6 @@ pub(crate) mod statics {
 /// reusing the socket listener map keeps the GC scanner walk single-
 /// pass instead of needing a second per-server scanner.
 pub(crate) struct ServerState {
-    pub async_id: u64,
     /// Set by `.listen()`, dropped by `.close()`. Send on this channel
     /// to break the accept loop's `tokio::select!`.
     pub shutdown_tx: Option<oneshot::Sender<()>>,
@@ -247,10 +238,70 @@ pub(crate) struct ServerState {
     pub drop_max_connection: Option<bool>,
 }
 
+static NET_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
+
+extern "C" {
+    fn js_register_net_socket_handle_probe(f: unsafe extern "C" fn(i64) -> bool);
+}
+
+unsafe extern "C" fn ext_net_socket_handle_probe(handle: i64) -> bool {
+    is_net_socket_handle(handle)
+}
+
+/// Register the net GC root scanner exactly once. Safe to call from any
+/// `js_net_*` entry point on the main thread.
+pub(crate) fn ensure_gc_scanner_registered() {
+    NET_GC_REGISTERED.call_once(|| {
+        gc_register_mutable_root_scanner_named("perry-ext-net", scan_net_roots);
+        unsafe {
+            js_register_net_socket_handle_probe(ext_net_socket_handle_probe);
+        }
+        // #2154 — publish the raw-consumer vtable for perry-ext-http (runs on
+        // the first net FFI entry, before http could reference a socket).
+        raw_bridge::register();
+    });
+}
+
+/// GC root scanner for net.Socket event listener closures.
+///
+/// Without this, any GC cycle between `.on()` and the next dispatch would
+/// sweep the closure; the next `closure.call*()` would dereference freed
+/// memory. Same pattern as perry-stdlib's net mod and perry-ext-events.
+fn scan_net_roots(visitor: &mut GcRootVisitor<'_>) {
+    if let Ok(mut listeners) = statics::listeners().lock() {
+        for per_socket in listeners.values_mut() {
+            for cb_vec in per_socket.values_mut() {
+                for cb in cb_vec.iter_mut() {
+                    visitor.visit_i64_slot(cb);
+                }
+            }
+        }
+    }
+    // `once_flags()` keys membership by the closure's ADDRESS BITS. The
+    // canonical copy in `listeners()` above keeps the closure alive and is
+    // rewritten when the copying GC moves it — but a `HashSet<i64>` element
+    // cannot be rewritten in place, so without this rebuild the set still
+    // holds the OLD address after evacuation: the once-membership test in
+    // `lifecycle.rs` then misses, the listener is never auto-removed, and a
+    // "once" callback fires on every subsequent event. Drain, forward each
+    // element through the visitor, and reinsert under the new identity.
+    if let Ok(mut once) = statics::once_flags().lock() {
+        for per_handle in once.values_mut() {
+            for set in per_handle.values_mut() {
+                let old: Vec<i64> = set.drain().collect();
+                for mut cb in old {
+                    visitor.visit_i64_slot(&mut cb);
+                    set.insert(cb);
+                }
+            }
+        }
+    }
+    // #8259 — the pump's in-flight dispatch frames (snapshotted callbacks +
+    // parked payloads), which the table walks above cannot see.
+    dispatch_custody::scan(visitor);
+}
+
 pub(crate) struct SocketState {
-    pub(crate) tcp_async_id: u64,
-    pub(crate) connect_async_id: u64,
-    pub(crate) shutdown_async_id: u64,
     pub(crate) cmd_tx: mpsc::UnboundedSender<SocketCommand>,
     /// `Some` only between `js_net_socket_alloc` and the first
     /// `js_net_socket_method_connect`. Held here so the deferred-connect
@@ -289,9 +340,6 @@ impl SocketState {
     /// command-path test, which only needs `cmd_tx` to reach `run_socket_task`.
     pub(crate) fn for_test(cmd_tx: mpsc::UnboundedSender<SocketCommand>) -> Self {
         SocketState {
-            tcp_async_id: 0,
-            connect_async_id: 0,
-            shutdown_async_id: 0,
             cmd_tx,
             pending_rx: None,
             is_open: true,
@@ -322,10 +370,6 @@ pub(crate) enum SocketCommand {
     /// the task starts — after the connect site has set the Node default ON,
     /// so an explicit opt-out wins.
     SetNoDelay(bool),
-    /// The main thread finished dispatching the accepted socket's
-    /// `connection` callback. Commands queued by that callback precede this
-    /// marker, so a peer FIN may now auto-close without dropping its response.
-    ServerConnectionReady,
     /// Test-only: report the live socket's `TCP_NODELAY` state back over a
     /// oneshot, so the command-path test can observe `setNoDelay` taking
     /// effect on the stream the task owns.
@@ -356,10 +400,6 @@ enum PendingNetEvent {
     /// so without this the connection lifecycle never completes and the
     /// test hangs.
     End(i64),
-    /// Completion of the writable-side shutdown requested by `socket.end()`.
-    /// This is distinct from `End`, which is the peer's readable-side FIN and
-    /// fires the public `end` event.
-    ShutdownComplete(i64),
     Close(i64),
     Error(i64, String),
     AbortError(i64),
@@ -395,15 +435,6 @@ enum PendingNetEvent {
 extern "C" {
     fn js_net_callback_ptr(value: f64) -> i64;
     fn js_get_string_pointer_unified(value: f64) -> i64;
-    fn js_async_hooks_provider_init(type_ptr: *const u8, type_len: usize) -> u64;
-    fn js_async_hooks_provider_init_with_trigger(
-        type_ptr: *const u8,
-        type_len: usize,
-        trigger_async_id: u64,
-    ) -> u64;
-    fn js_async_hooks_provider_enter(async_id: u64);
-    fn js_async_hooks_provider_leave(async_id: u64);
-    fn js_async_hooks_provider_destroy(async_id: u64);
     fn perry_cluster_worker_listening(
         addr_ptr: *const u8,
         addr_len: u32,
@@ -428,6 +459,34 @@ fn push_event(ev: PendingNetEvent) {
 
 fn mark_closed(id: i64) {
     server_state::mark_socket_closed(id);
+}
+
+// ─── Spawning helper ─────────────────────────────────────────────────────────
+//
+// perry-ffi v0.5.x's only async-runtime entry point is `spawn_blocking`,
+// which boxes a `FnOnce()` to run on tokio's blocking pool. We bridge to
+// async-Rust by calling `tokio::runtime::Handle::current().block_on(...)`
+// inside the closure — same pattern axios / better-sqlite3 / iroh use.
+// One thread per socket for its lifetime; the perry-stdlib version uses
+// the same shared tokio runtime via `crate::common::async_bridge::spawn`,
+// which is a regular `tokio::spawn` (cooperative). Neither approach is
+// "wrong" — the cooperative version is denser, the blocking-pool version
+// is simpler. Wrapper-side simplicity wins for a v0 port.
+fn spawn_socket_runner<F>(fut_factory: F)
+where
+    F: FnOnce() -> Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + 'static,
+{
+    // Run each socket future cooperatively on Perry's shared multi-thread
+    // runtime via `spawn_async`, instead of tying up one blocking-pool thread
+    // plus a throwaway current-thread runtime for the socket's whole lifetime.
+    // The shared runtime carries the I/O reactor, so `TcpStream` / TLS work
+    // without relying on the FFI callback's ambient `Handle` (the brittleness
+    // under release/LTO that the per-socket runtime worked around). The socket
+    // is registered in `sockets()` synchronously before this spawn, so
+    // `js_ext_net_has_active_handles` keeps the event loop alive for its life.
+    perry_ffi::spawn_async(async move {
+        fut_factory().await;
+    });
 }
 
 // ─── FFI: net.createConnection / net.connect ─────────────────────────────────
@@ -544,13 +603,9 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
     dispatch::ensure_runtime_dispatch_registered();
     let id = next_id_or_throw();
     let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
-    let tcp_async_id = init_provider(b"TCPWRAP");
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
-            tcp_async_id,
-            connect_async_id: 0,
-            shutdown_async_id: 0,
             cmd_tx: tx,
             pending_rx: Some(rx),
             is_open: false,
@@ -597,7 +652,6 @@ pub unsafe extern "C" fn js_net_create_server(
     statics::servers().lock().unwrap().insert(
         id,
         ServerState {
-            async_id: 0,
             shutdown_tx: None,
             bound_port: 0,
             bound_host: String::new(),
@@ -621,17 +675,6 @@ pub unsafe extern "C" fn js_net_create_server(
         }
     }
     id
-}
-
-/// Collision-proof server factory for generated code. Pulling this distinct
-/// symbol from perry-ext-net also ensures the server/socket symbols in this
-/// archive win over bundled-stdlib twins with separate handle registries.
-#[no_mangle]
-pub unsafe extern "C" fn js_ext_net_create_server(
-    options_i64: i64,
-    connection_listener_i64: i64,
-) -> i64 {
-    js_net_create_server(options_i64, connection_listener_i64)
 }
 
 // ─── FFI: net.Server.listen / .close / .address / .on ────────────────────────
@@ -680,7 +723,6 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
             .unwrap_or_else(|| "0.0.0.0".to_string());
         (port as u16, host)
     };
-    let server_async_id = init_provider(b"TCPSERVERWRAP");
 
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
@@ -695,7 +737,6 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
             Some(s) => s,
             None => return,
         };
-        s.async_id = server_async_id;
         s.shutdown_tx = Some(shutdown_tx);
         s.bound_port = port_u16;
         s.bound_host = host.clone();
@@ -901,6 +942,28 @@ pub unsafe extern "C" fn js_net_server_address(handle: i64) -> *mut StringHeader
     alloc_string(&json).as_raw()
 }
 
+/// `server.on(event, cb)` — register a server-level listener for
+/// `'connection'`, `'listening'`, `'close'`, or `'error'`. Reuses
+/// the shared listener map keyed on the server id (server ids and
+/// socket ids are drawn from the same monotonic counter so they
+/// never collide).
+///
+/// # Safety
+///
+/// `event_ptr` must be null or a Perry-runtime `StringHeader`. `cb`
+/// is a raw `*const ClosureHeader` cast to `i64`.
+#[no_mangle]
+pub unsafe extern "C" fn js_net_server_on(handle: i64, event_ptr: i64, cb: i64) {
+    ensure_gc_scanner_registered();
+    let event = match string_from_header_i64(event_ptr) {
+        Some(e) => e,
+        None => return,
+    };
+    let mut listeners = statics::listeners().lock().unwrap();
+    let entry = listeners.entry(handle).or_default();
+    entry.entry(event).or_default().push(cb);
+}
+
 // ─── FFI: socket.connect(port, host) (instance method on existing handle) ─────
 
 /// `socket.connect(port, host)` / `socket.connect(path)` — initiates a TCP or
@@ -971,19 +1034,10 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
     let port = port as u16;
     ipc::register_connect_cb(handle, callback);
 
-    let (rx, tcp_async_id) = {
+    let rx = {
         let mut guard = statics::sockets().lock().unwrap();
-        match guard.get_mut(&handle) {
-            Some(socket) => match socket.pending_rx.take() {
-                Some(rx) => (rx, socket.tcp_async_id),
-                None => {
-                    push_event(PendingNetEvent::Error(
-                        handle,
-                        "socket already connected (or unknown handle)".to_string(),
-                    ));
-                    return;
-                }
-            },
+        match guard.get_mut(&handle).and_then(|s| s.pending_rx.take()) {
+            Some(rx) => rx,
             None => {
                 push_event(PendingNetEvent::Error(
                     handle,
@@ -993,10 +1047,6 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
             }
         }
     };
-    let connect_async_id = init_provider_with_trigger(b"TCPCONNECTWRAP", tcp_async_id);
-    if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&handle) {
-        socket.connect_async_id = connect_async_id;
-    }
 
     let local_server = server_state::begin_local_connect(&host, port);
     spawn_socket_runner(move || {
@@ -1066,15 +1116,10 @@ where
         .is_none()
         .then(|| server_state::begin_local_connect(&host, port))
         .flatten();
-    let tcp_async_id = unsafe { init_provider(b"TCPWRAP") };
-    let connect_async_id = unsafe { init_provider_with_trigger(b"TCPCONNECTWRAP", tcp_async_id) };
 
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
-            tcp_async_id,
-            connect_async_id,
-            shutdown_async_id: 0,
             cmd_tx: tx,
             pending_rx: None,
             is_open: false,
@@ -1160,13 +1205,6 @@ pub(crate) async fn run_socket_task(
     rx: &mut mpsc::UnboundedReceiver<SocketCommand>,
 ) {
     let mut transport: Option<Transport> = Some(initial_transport);
-    let mut writable_ended = false;
-    let accepted_socket = statics::sockets()
-        .lock()
-        .ok()
-        .and_then(|sockets| sockets.get(&id).map(|socket| socket.server_id.is_some()))
-        .unwrap_or(false);
-    let mut server_connection_ready = !accepted_socket;
 
     loop {
         let t = match transport.as_mut() {
@@ -1208,72 +1246,18 @@ pub(crate) async fn run_socket_task(
                         // breaking, so a peer FIN doesn't leak its pooled
                         // capacity (the success path checks in below).
                         buffer_pool::checkin(buf);
-                        // #2154 raw mode owns its own terminal state. Accepted
-                        // sockets may receive a request plus FIN before their
-                        // delayed `connection` callback runs. Wait for the
-                        // callback-complete marker so its queued writes/end
-                        // commands are honored. Outgoing sockets start ready
-                        // and therefore retain Node's default auto-close after
-                        // readable EOF (#6764).
-                        if raw_bridge::mark_terminal(id, None) {
-                            // Complete the writable half before dropping a TLS
-                            // transport so the peer observes close_notify rather
-                            // than an unclean EOF (#8688).
-                            let _ = t.shutdown().await;
-                            mark_closed(id);
-                            break;
+                        // #2154 raw mode: signal EOF on the buffer, suppress
+                        // JS events. Else (#1852) fire 'end' then 'close' per
+                        // Node's default `allowHalfOpen: false` teardown order.
+                        // Complete the writable half before dropping the
+                        // transport. For TLS this sends close_notify; without
+                        // it the peer observes an unclean EOF and emits only
+                        // 'close', skipping its 'end' event.
+                        let _ = t.shutdown().await;
+                        if !raw_bridge::mark_terminal(id, None) {
+                            push_event(PendingNetEvent::End(id));
+                            push_event(PendingNetEvent::Close(id));
                         }
-                        push_event(PendingNetEvent::End(id));
-
-                        while accepted_socket && !writable_ended {
-                            let command = if server_connection_ready {
-                                match tokio::time::timeout(
-                                    std::time::Duration::from_millis(25),
-                                    rx.recv(),
-                                )
-                                .await
-                                {
-                                    Ok(command) => command,
-                                    Err(_) => break,
-                                }
-                            } else {
-                                rx.recv().await
-                            };
-                            match command {
-                                Some(SocketCommand::Write(bytes)) => {
-                                    if let Err(e) = t.write_all(&bytes).await {
-                                        push_event(PendingNetEvent::Error(id, format!("{}", e)));
-                                        break;
-                                    }
-                                }
-                                Some(SocketCommand::End) => {
-                                    let _ = t.shutdown().await;
-                                    writable_ended = true;
-                                    push_event(PendingNetEvent::ShutdownComplete(id));
-                                }
-                                Some(SocketCommand::SetNoDelay(enable)) => {
-                                    let _ = t.set_nodelay(enable);
-                                }
-                                Some(SocketCommand::ServerConnectionReady) => {
-                                    server_connection_ready = true;
-                                }
-                                #[cfg(test)]
-                                Some(SocketCommand::QueryNoDelay(reply)) => {
-                                    let _ = reply.send(t.nodelay().unwrap_or(false));
-                                }
-                                Some(SocketCommand::UpgradeTls { reply, .. }) => {
-                                    let _ = reply.send(Err(
-                                        "cannot upgrade a half-closed socket".to_string(),
-                                    ));
-                                }
-                                Some(SocketCommand::Destroy) | None => break,
-                            }
-                        }
-                        if !writable_ended {
-                            let _ = t.shutdown().await;
-                            push_event(PendingNetEvent::ShutdownComplete(id));
-                        }
-                        push_event(PendingNetEvent::Close(id));
                         mark_closed(id);
                         break;
                     }
@@ -1300,16 +1284,7 @@ pub(crate) async fn run_socket_task(
                         buffer_pool::checkin(buf);
                         let msg = format!("{}", e);
                         if !raw_bridge::mark_terminal(id, Some(msg.clone())) {
-                            // rustls reports a peer that closes TCP without a
-                            // close_notify alert as UnexpectedEof. Node's TLS
-                            // socket treats that terminal read as the readable
-                            // side ending, so preserve the normal end→close
-                            // event order instead of silently losing `end`.
-                            if msg.contains("close_notify") || msg.contains("unexpected end of file") {
-                                push_event(PendingNetEvent::End(id));
-                            } else {
-                                push_event(PendingNetEvent::Error(id, msg));
-                            }
+                            push_event(PendingNetEvent::Error(id, msg));
                             push_event(PendingNetEvent::Close(id));
                         }
                         mark_closed(id);
@@ -1337,16 +1312,11 @@ pub(crate) async fn run_socket_task(
                     }
                     Some(SocketCommand::End) => {
                         let _ = t.shutdown().await;
-                        writable_ended = true;
-                        push_event(PendingNetEvent::ShutdownComplete(id));
                     }
                     Some(SocketCommand::SetNoDelay(enable)) => {
                         // Best-effort, matching Node: a failed setsockopt (e.g.
                         // the peer already closed) does not error the socket.
                         let _ = t.set_nodelay(enable);
-                    }
-                    Some(SocketCommand::ServerConnectionReady) => {
-                        server_connection_ready = true;
                     }
                     #[cfg(test)]
                     Some(SocketCommand::QueryNoDelay(reply)) => {
@@ -1610,40 +1580,6 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
     let count = events.len() as i32;
 
     for ev in events.drain(..) {
-        prepare_event_provider(&ev);
-        let provider_id = event_provider_id(&ev);
-        let destroy_ids: Vec<u64> = match &ev {
-            PendingNetEvent::Connect(id, _) => statics::sockets()
-                .lock()
-                .ok()
-                .and_then(|sockets| sockets.get(id).map(|socket| vec![socket.connect_async_id]))
-                .unwrap_or_default(),
-            PendingNetEvent::ShutdownComplete(id) => statics::sockets()
-                .lock()
-                .ok()
-                .and_then(|sockets| sockets.get(id).map(|socket| vec![socket.shutdown_async_id]))
-                .unwrap_or_default(),
-            PendingNetEvent::Close(id) => statics::sockets()
-                .lock()
-                .ok()
-                .and_then(|sockets| {
-                    sockets.get(id).map(|socket| {
-                        vec![
-                            socket.connect_async_id,
-                            socket.shutdown_async_id,
-                            socket.tcp_async_id,
-                        ]
-                    })
-                })
-                .unwrap_or_default(),
-            PendingNetEvent::ServerClose(id) => statics::servers()
-                .lock()
-                .ok()
-                .and_then(|servers| servers.get(id).map(|server| vec![server.async_id]))
-                .unwrap_or_default(),
-            _ => Vec::new(),
-        };
-        let provider_scope = ProviderScope::enter(provider_id);
         match ev {
             PendingNetEvent::Connect(id, local_server) => {
                 server_state::finish_local_connect(local_server);
@@ -1765,7 +1701,6 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 drop(frame);
                 lifecycle::drain_once_listeners(id, "end");
             }
-            PendingNetEvent::ShutdownComplete(_) => {}
             PendingNetEvent::Close(id) => {
                 extern "C" {
                     fn js_tls_client_record_closed(handle: i64);
@@ -1804,7 +1739,6 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                     // once-set may still be holding stale entries.
                     lifecycle::drain_once_listeners(server_id, "connection");
                     server_state::release_pending_server_data(socket_id);
-                    server_state::release_connection_callback(socket_id);
                     continue;
                 }
                 // Sockets returned by the codegen's `net.connect`
@@ -1833,7 +1767,6 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 drop(frame);
                 lifecycle::drain_once_listeners(server_id, "connection");
                 server_state::release_pending_server_data(socket_id);
-                server_state::release_connection_callback(socket_id);
             }
             PendingNetEvent::ServerListening(server_id) => {
                 // Take + drain the 'listening' listeners so the
@@ -1936,12 +1869,6 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 lifecycle::drain_once_listeners(server_id, "drop");
             }
         }
-        drop(provider_scope);
-        for async_id in destroy_ids {
-            if async_id != 0 {
-                js_async_hooks_provider_destroy(async_id);
-            }
-        }
     }
 
     // Restore the (capacity-retaining) buffer to the thread-local so the
@@ -1957,14 +1884,106 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
     count
 }
 
-mod handle_exports;
-use handle_exports::listeners_for;
-pub use handle_exports::{
-    is_net_server_handle, is_net_socket_handle, js_ext_net_is_server_handle, js_ext_net_socket_on,
-    js_ext_net_socket_once, js_ext_net_socket_remove_all_listeners,
-    js_ext_net_socket_remove_listener, js_net_has_pending, js_net_server_listening,
-    js_net_server_on,
-};
+fn listeners_for(id: i64, event: &str) -> Vec<i64> {
+    statics::listeners()
+        .lock()
+        .unwrap()
+        .get(&id)
+        .and_then(|m| m.get(event).cloned())
+        .unwrap_or_default()
+}
+
+// `drain_once_listeners` lives in `lifecycle::drain_once_listeners` so
+// the file-size gate keeps a single owner for the EventEmitter surface.
+
+/// Returns 1 if queued events or live net handles keep the loop alive.
+#[no_mangle]
+pub extern "C" fn js_net_has_pending() -> i32 {
+    server_state::has_active_handles() as i32
+}
+
+/// True iff `handle` is a currently-registered net socket id. Mirrors the
+/// perry-stdlib export so codegen's `HANDLE_METHOD_DISPATCH` keeps working.
+pub fn is_net_socket_handle(handle: i64) -> bool {
+    statics::sockets().lock().unwrap().contains_key(&handle)
+}
+
+/// True iff `handle` is a currently-registered net server id.
+pub fn is_net_server_handle(handle: i64) -> bool {
+    statics::servers().lock().unwrap().contains_key(&handle)
+}
+
+/// `server.listening` — boolean state exposed through handle property dispatch.
+#[no_mangle]
+pub extern "C" fn js_net_server_listening(handle: i64) -> i32 {
+    match statics::servers().lock() {
+        Ok(servers) => servers
+            .get(&handle)
+            .map(|server| if server.listening { 1 } else { 0 })
+            .unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+/// `extern "C"` form of `is_net_socket_handle` — used by
+/// perry-stdlib's `common::dispatch::dispatch_handle_method`
+/// (HANDLE_METHOD_DISPATCH) when bundled-net is stripped and
+/// the well-known flip routes 'net' to perry-ext-net. Returns
+/// 1 for a registered socket handle, 0 otherwise.
+///
+/// Closes the issue #91 regression: Map.get'd / struct-field /
+/// wrapper-function receivers where codegen lost the static type
+/// fall through to `js_native_call_method` →
+/// `dispatch_handle_method` → this query → `dispatch_net_socket`.
+/// Without the extern, the dispatch tower's `is_net_socket_handle`
+/// reference resolved to perry-stdlib's no-op stub (compiled-out
+/// when bundled-net is off) and Map-retrieved sockets silently
+/// dispatched to undefined.
+/// Distinct-symbol aliases for the socket EVENT-LISTENER surface (#5021's
+/// twin-symbol disease). perry-stdlib exports same-named `js_net_socket_on` /
+/// `_once` / `_remove_listener` twins, so in a build that links BOTH archives
+/// the shared names bind to the bundled twin's EMPTY socket registry and the
+/// listener registration is silently dropped: the socket connects, the reader
+/// task delivers bytes, and the pump finds ZERO 'data' listeners — mysql2's
+/// handshake then hangs to ETIMEDOUT. `write`/`end`/`destroy` were split out
+/// for exactly this reason (#5010/#5021); the listener calls were not.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_socket_on(handle: i64, event_ptr: i64, cb: i64) {
+    js_net_socket_on(handle, event_ptr, cb)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_socket_once(handle: i64, event_ptr: i64, cb: i64) -> i64 {
+    js_net_socket_once(handle, event_ptr, cb)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_socket_remove_listener(
+    handle: i64,
+    event_ptr: i64,
+    cb: i64,
+) -> i64 {
+    js_net_socket_remove_listener(handle, event_ptr, cb)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_net_socket_remove_all_listeners(
+    handle: i64,
+    event_ptr: i64,
+) -> i64 {
+    js_net_socket_remove_all_listeners(handle, event_ptr)
+}
+
+/// `extern "C"` form of `is_net_server_handle` for method-value/property
+/// dispatch on `net.Server` handles.
+#[no_mangle]
+pub extern "C" fn js_ext_net_is_server_handle(handle: i64) -> i32 {
+    if is_net_server_handle(handle) {
+        1
+    } else {
+        0
+    }
+}
 
 #[cfg(test)]
 mod tests;

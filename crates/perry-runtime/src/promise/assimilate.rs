@@ -278,8 +278,6 @@ extern "C" fn native_promise_adoption_job(closure: *const crate::closure::Closur
                     is_error,
                     capture_context(),
                     std::ptr::null_mut(),
-                    unsafe { (*outer).async_id },
-                    unsafe { (*outer).trigger_async_id },
                 ));
             });
             crate::event_pump::js_notify_promise_progress();
