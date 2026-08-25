@@ -99,3 +99,31 @@ fn genuinely_unresolved_new_still_throws() {
          ReferenceError throw:\n{debug}"
     );
 }
+
+#[test]
+fn global_web_stream_constructors_do_not_lower_to_unresolved_throw() {
+    // These constructors are handled by codegen's built-in `new` dispatch,
+    // just like ReadableStream itself. The unresolved-constructor guard must
+    // therefore recognize both the bare globals and their globalThis forms.
+    for name in [
+        "ReadableStreamBYOBReader",
+        "ByteLengthQueuingStrategy",
+        "CountQueuingStrategy",
+    ] {
+        let bare = lower_debug(&format!(
+            "const value = new {name}({{ highWaterMark: 1 }});"
+        ));
+        assert!(
+            !bare.contains(THROW_HELPER),
+            "global Web Streams constructor `{name}` must reach built-in lowering:\n{bare}"
+        );
+
+        let qualified = lower_debug(&format!(
+            "const value = new globalThis.{name}({{ highWaterMark: 1 }});"
+        ));
+        assert!(
+            !qualified.contains(THROW_HELPER),
+            "globalThis Web Streams constructor `{name}` must reach built-in lowering:\n{qualified}"
+        );
+    }
+}
