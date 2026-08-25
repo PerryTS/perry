@@ -19,7 +19,8 @@ use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use crate::analysis::{
-    closure_uses_this, collect_assigned_locals_stmt, collect_local_refs_stmt, uses_this_stmt,
+    closure_uses_this, collect_assigned_locals_stmt, collect_local_refs_expr,
+    collect_local_refs_stmt, uses_this_stmt,
 };
 use crate::ir::{EnumValue, Expr, Function, Param, Stmt};
 use crate::lower_decl::{
@@ -1053,6 +1054,55 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     _ => {}
                 },
             }
+        }
+
+        // A static-key, no-spread method literal does not need the synthetic
+        // IIFE once all of its lowered values are independent of the hidden
+        // home-object parameter. Emit a normal `Expr::Object` instead: codegen
+        // allocates its final shape once and fills slots by index, preserving
+        // source evaluation order without allocating/calling a closure merely
+        // to mutate `{}` one property at a time.
+        //
+        // Methods containing `super` capture `param_id` as their home object.
+        // Those fail closed and retain the IIFE, as do computed keys, spreads,
+        // accessors, prototype setters, and any other source-ordered op. A
+        // method that only observes dynamic `this` is safe here: the ordinary
+        // object-literal lowering already patches its reserved receiver slot.
+        let value_is_home_independent = |value: &Expr| {
+            let mut refs = Vec::new();
+            let mut visited_closures = std::collections::HashSet::new();
+            collect_local_refs_expr(value, &mut refs, &mut visited_closures);
+            !refs.contains(&param_id)
+        };
+        let can_emit_static_object = has_method
+            && !has_spread
+            && !has_accessor
+            && !has_computed
+            && !has_proto_setter
+            && ops.iter().all(|op| match op {
+                SpreadOp::Set {
+                    key: Expr::String(_),
+                    value,
+                    infer_name: false,
+                } => value_is_home_independent(value),
+                SpreadOp::MethodByName { closure, .. } => value_is_home_independent(closure),
+                _ => false,
+            });
+        if can_emit_static_object {
+            let props = ops
+                .into_iter()
+                .map(|op| match op {
+                    SpreadOp::Set {
+                        key: Expr::String(key),
+                        value,
+                        infer_name: false,
+                    } => (key, value),
+                    SpreadOp::MethodByName { key, closure } => (key, closure),
+                    _ => unreachable!("static object admission checked every op"),
+                })
+                .collect();
+            ctx.exit_scope(scope_mark);
+            return Ok(Expr::Object(props));
         }
 
         // Pass 2: build the IIFE wrapper. `__o` starts as an empty object
