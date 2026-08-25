@@ -86,6 +86,10 @@ on:
         description: 'Exact candidate commit to check out for the focused diagnostic'
         type: string
         default: ''
+      parity_filter:
+        description: 'Exact parity-test basename substring for the focused Linux diagnostic'
+        type: string
+        default: 'test_stress_promises'
 
 concurrency:
   # pull_request: superseded pushes cancel their in-flight run (per PR).
@@ -180,14 +184,16 @@ jobs:
       - name: Install oracle dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
-      - name: Run the promise stress fixture five times
+      - name: Run the focused parity fixture five times
+        env:
+          PARITY_FILTER: ${{ inputs.parity_filter }}
         run: |
           set -euo pipefail
           failures=0
           for attempt in 1 2 3 4 5; do
-            echo "==> attempt ${attempt}/5"
+            echo "==> ${PARITY_FILTER}: attempt ${attempt}/5"
             set +e
-            ./run_parity_tests.sh --filter test_stress_promises
+            ./run_parity_tests.sh --filter "$PARITY_FILTER"
             rc=$?
             set -e
             if [ "$rc" -ne 0 ]; then
