@@ -48,8 +48,170 @@
 //! line — see `src/stub_diag.rs` for the env-var policy.
 
 use perry_dispatch::{ArgKind, MethodRow, ReturnKind};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fmt::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// Source trees that define the compiler <-> runtime contract. A clean git
+/// checkout uses the commit as its build id; dirty/source-only builds hash
+/// these inputs so rebuilding the compiler without rebuilding the archive is
+/// still detected even though the package version did not change.
+const RUNTIME_BUILD_INPUTS: &[&str] = &[
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates/perry/Cargo.toml",
+    "crates/perry/src",
+    "crates/perry-codegen/Cargo.toml",
+    "crates/perry-codegen/src",
+    "crates/perry-hir/Cargo.toml",
+    "crates/perry-hir/src",
+    "crates/perry-transform/Cargo.toml",
+    "crates/perry-transform/src",
+    "crates/perry-runtime/Cargo.toml",
+    "crates/perry-runtime/build.rs",
+    "crates/perry-runtime/src",
+];
+
+/// `cargo package` builds the crate from an isolated directory without the
+/// workspace siblings above. Hash the packaged runtime itself in that layout;
+/// the compiler and static wrapper both consume this same crate artifact.
+const PACKAGED_RUNTIME_BUILD_INPUTS: &[&str] = &["Cargo.toml", "build.rs", "src"];
+
+fn command_stdout(root: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8(output.stdout).ok()?.trim().to_string())
+}
+
+fn sanitize_build_id(value: &str) -> String {
+    value
+        .chars()
+        .take(128)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn collect_source_files(root: &Path, path: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    if metadata.is_file() {
+        out.push(path.to_path_buf());
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let child = entry.path();
+        if child.strip_prefix(root).ok().is_some_and(|relative| {
+            relative
+                .components()
+                .any(|part| part.as_os_str() == "target" || part.as_os_str() == ".git")
+        }) {
+            continue;
+        }
+        collect_source_files(root, &child, out);
+    }
+}
+
+fn source_build_id(root: &Path, inputs: &[&str]) -> String {
+    let mut files = Vec::new();
+    for relative in inputs {
+        collect_source_files(root, &root.join(relative), &mut files);
+    }
+    files.sort();
+    files.dedup();
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"perry-runtime-build-inputs-v1\0");
+    for path in files {
+        println!("cargo:rerun-if-changed={}", path.display());
+        let relative = path.strip_prefix(root).unwrap_or(&path);
+        hasher.update(relative.to_string_lossy().replace('\\', "/").as_bytes());
+        hasher.update(b"\0");
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                hasher.update((bytes.len() as u64).to_le_bytes());
+                hasher.update(bytes);
+            }
+            Err(_) => hasher.update(b"unreadable"),
+        }
+        hasher.update(b"\0");
+    }
+    let mut hex = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        write!(hex, "{byte:02x}").expect("write source fingerprint");
+    }
+    format!("src:{hex}")
+}
+
+fn emit_runtime_build_id() {
+    println!("cargo:rerun-if-env-changed=PERRY_BUILD_COMMIT");
+    let manifest_dir =
+        PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
+    let workspace_candidate = manifest_dir.join("../..");
+    let workspace_layout = workspace_candidate
+        .join("crates/perry-runtime/Cargo.toml")
+        .is_file();
+    let (root, inputs) = if workspace_layout {
+        (workspace_candidate, RUNTIME_BUILD_INPUTS)
+    } else {
+        (manifest_dir, PACKAGED_RUNTIME_BUILD_INPUTS)
+    };
+    let root = root.canonicalize().unwrap_or(root);
+
+    // Make branch/commit changes rerun this build script even when the source
+    // files themselves are byte-identical (for example after a rebase).
+    if workspace_layout {
+        if let Some(git_head) = command_stdout(&root, &["rev-parse", "--git-path", "HEAD"]) {
+            println!("cargo:rerun-if-changed={git_head}");
+        }
+        if let Some(symbolic_ref) = command_stdout(&root, &["symbolic-ref", "-q", "HEAD"]) {
+            if let Some(git_ref) =
+                command_stdout(&root, &["rev-parse", "--git-path", &symbolic_ref])
+            {
+                println!("cargo:rerun-if-changed={git_ref}");
+            }
+        }
+    }
+
+    let explicit = std::env::var("PERRY_BUILD_COMMIT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("git:{}", sanitize_build_id(value.trim())));
+
+    let source_id = source_build_id(&root, inputs);
+    let clean_commit = workspace_layout
+        .then(|| command_stdout(&root, &["rev-parse", "--verify", "HEAD"]))
+        .flatten()
+        .filter(|_| {
+            let mut args = vec!["status", "--porcelain", "--untracked-files=normal", "--"];
+            args.extend_from_slice(inputs);
+            command_stdout(&root, &args).is_some_and(|status| status.is_empty())
+        })
+        .map(|commit| format!("git:{}", sanitize_build_id(&commit)));
+
+    let build_id = explicit.or(clean_commit).unwrap_or(source_id);
+    println!("cargo:rustc-env=PERRY_RUNTIME_BUILD_ID={build_id}");
+}
 
 fn arg_kind_rust_type(k: ArgKind) -> &'static str {
     match k {
@@ -372,6 +534,7 @@ fn generate_single_byte_encodings(out_dir: &str) {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../perry-dispatch/src/lib.rs");
+    emit_runtime_build_id();
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
     generate_single_byte_encodings(&out_dir);
