@@ -2230,12 +2230,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 .map(|object| (object.local_binding.clone(), object.clone()))
         })
         .collect();
-    for object in imported_object_literals.values() {
+    let imported_object_producers: std::collections::BTreeSet<(String, u32)> =
+        imported_object_literals
+            .values()
+            .map(|object| (object.source_prefix.clone(), object.source_global_id))
+            .collect();
+    for (source_prefix, source_global_id) in imported_object_producers {
         llmod.add_external_global(
-            &format!(
-                "perry_global_{}__{}",
-                object.source_prefix, object.source_global_id
-            ),
+            &format!("perry_global_{source_prefix}__{source_global_id}"),
             DOUBLE,
         );
     }

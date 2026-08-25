@@ -60,6 +60,14 @@ out.rebound = rebound.call({ tag: 30 }, 2);
 
 const extracted = adapter.createEntity;
 out.extracted = extracted.call(adapter, 9).id;
+const foreignReceiver = {
+  store: {
+    create(id) {
+      return { id: id + 700, components: 44 };
+    },
+  },
+};
+out.foreignReceiver = extracted.call(foreignReceiver, 10).id;
 
 const proxy = new Proxy(adapter, {
   get(target, key) {
