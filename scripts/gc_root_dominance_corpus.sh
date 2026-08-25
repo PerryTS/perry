@@ -49,6 +49,40 @@
 # (`STATEPOINT_REWRITE_PASSES`) and checked, not copied: a reproduction of a
 # pipeline that has silently drifted is a corpus about nothing. See
 # `rs4gc_pass_string`.
+#
+# THE CORPUS DOES NOT LINK, and that is load-bearing (#8810)
+# ---------------------------------------------------------
+# `--trace llvm` dumps what CODEGEN emitted, and codegen finishes long before
+# the link line is assembled. Linking anyway made this corpus depend on the
+# whole ext-wrapper/link stack -- and that dependency silently DELETED two of
+# its subjects:
+#
+#   `PERRY_NO_AUTO_OPTIMIZE=1` (set in the loop below, deliberately) forbids
+#   the specialized runtime/stdlib rebuild. The only two corpus sources that
+#   import a node builtin -- `test_gap_gc_net_once_flags_rekey` (`node:net`)
+#   and `test_gap_gc_http2_pending_event_callback_rooting` (`node:http2`) --
+#   therefore need a prebuilt `libperry_ext_{net,http}.a`, which the build
+#   command above does NOT produce. perry auto-built each wrapper in its own
+#   cargo invocation, cargo unified features per invocation, and the wrapper
+#   ended up bundling a different tokio compilation than the prebuilt
+#   `libperry_stdlib.a`. `compile/shared_tokio.rs` refuses that pair at link
+#   time (#507/#7629) -- correctly. perry then exited non-zero AFTER writing
+#   perfectly good IR, the loop counted a skip, and the two sources whose
+#   names say they cover GC CALLBACK ROOTING contributed nothing to a gate
+#   that exists to check exactly that.
+#
+# Not linking removes the failure mode rather than tolerating it: there is no
+# link line to be wrong, no ext archive to be missing, and no stale
+# `libperry_runtime.a` that could decide what this corpus contains. It is also
+# what the compiler-output census does, for the same reason
+# (`scripts/compiler_output_harness/repsel_census.py`), and it stops this
+# script writing 152 executables of ~11 MB each that nothing ever reads.
+#
+# A source that stops LINKING is still a finding -- just not THIS gate's.
+# `./run_parity_tests.sh` compiles AND RUNS every `test_gap_*.ts` under the
+# shipping (auto-optimize) configuration, which is where a broken link line
+# belongs. Codegen failures are unaffected: perry still exits non-zero, and
+# the skip ratchet below still fails the run.
 
 set -euo pipefail
 
@@ -136,14 +170,20 @@ PATTERNS=(
 #                 to compile". Two different failures, two different messages.
 #   MAX_SKIPPED   how many discovered sources may fail to compile. It is 0, and
 #                 0 is the measured truth on both lowerings, not an aspiration:
-#                 shadow and native each report 131/131, 0 skipped as of
-#                 v0.5.1402. A skip is a finding, not a tolerance.
+#                 shadow reports 152/152, 0 skipped as of v0.5.1519 (it was
+#                 131/131 at v0.5.1402, before 21 sources were added). A skip
+#                 is a finding, not a tolerance.
+#
+# MIN_SOURCES had drifted the same way the MIN_COMPILED=90 floor did, just less
+# far: PATTERNS discovered 152 files against a floor of 131, so 21 sources
+# could vanish before the "corpus shrank" arm could fire. Raised to the
+# measured count (#8810).
 #
 # Raise MIN_SOURCES when you add a prefix; there is nothing else to keep in
 # sync, because the compile floor is now DERIVED (MIN_SOURCES - MAX_SKIPPED)
 # rather than restated. Lowering either to make a run pass is the thing this
 # comment exists to stop.
-MIN_SOURCES="${MIN_SOURCES:-131}"
+MIN_SOURCES="${MIN_SOURCES:-152}"
 MAX_SKIPPED="${MAX_SKIPPED:-0}"
 
 if [ ! -x "$PERRY_BIN" ]; then
@@ -247,6 +287,22 @@ fi
 rm -rf "$OUTDIR"
 mkdir -p "$OUTDIR"
 
+# The first line of a failed compile that looks like an error, for the skip
+# report. A skip that names only the source is a finding you have to reproduce
+# locally before you can read it at all -- which is how #8810's two skips went
+# a release without anyone learning they were a link-line refusal.
+first_error_line() {
+  local log="$1"
+  local line=""
+  if [ -f "$log" ]; then
+    line="$(grep -m1 -E '^[[:space:]]*(Error|error)[:[:space:]]' "$log" || true)"
+    if [ -z "$line" ]; then
+      line="$(grep -v '^[[:space:]]*$' "$log" | tail -1 || true)"
+    fi
+  fi
+  printf '%.180s' "${line:-<no output>}"
+}
+
 compiled=0
 skipped=0
 skipped_names=()
@@ -275,15 +331,19 @@ for src in "${sources[@]}"; do
   #                `rewrite-statepoints-for-gc` turns into `gc.statepoint`
   #                relocation bundles below. Zero binds by construction, which
   #                is why `--statepoints` has its own floors.
+  #
+  # `--no-link` stops after codegen, which is where `--trace llvm` writes. See
+  # the header: linking made this corpus depend on the ext-wrapper/link stack,
+  # and that dependency deleted two subjects from it (#8810).
   if [ "$LOWERING" = "native" ]; then rs4gc=1; else rs4gc=0; fi
   if ! env PERRY_RS4GC="$rs4gc" \
            PERRY_GC_MOVING_LOOP_POLLS=1 \
            PERRY_INLINE_SHADOW_SLOT=0 \
            PERRY_NO_AUTO_OPTIMIZE=1 \
-       "$PERRY_BIN" compile "$src" -o "$scratch/$name" --trace llvm \
-       >/dev/null 2>&1; then
+       "$PERRY_BIN" compile "$src" -o "$scratch/$name.o" --no-link --trace llvm \
+       >"$scratch/compile.log" 2>&1; then
     skipped=$((skipped + 1))
-    skipped_names+=("$name")
+    skipped_names+=("$name -- $(first_error_line "$scratch/compile.log")")
     continue
   fi
   emitted=0
@@ -319,7 +379,7 @@ done
 files="$(find "$OUTDIR" -name '*.ll' | wc -l | tr -d ' ')"
 echo "corpus ($LOWERING): $compiled/${#sources[@]} sources compiled, $skipped skipped, $files .ll files"
 if [ "$skipped" -gt 0 ]; then
-  printf '  skipped: %s\n' "${skipped_names[*]}"
+  printf '  skipped: %s\n' "${skipped_names[@]}"
 fi
 if [ "$opt_failed" -gt 0 ]; then
   printf '  rewrite failed: %s\n' "${opt_failed_names[*]}"
@@ -370,7 +430,7 @@ fi
 # raises it, which is precisely how MIN_COMPILED=90 came to tolerate 41.
 if [ "$skipped" -gt "$MAX_SKIPPED" ]; then
   echo "::error::$skipped of ${#sources[@]} sources failed to compile (budget: $MAX_SKIPPED)." >&2
-  echo "  ${skipped_names[*]}" >&2
+  printf '  %s\n' "${skipped_names[@]}" >&2
   echo "Fix them. Raising MAX_SKIPPED hides a compiler regression from every" >&2
   echo "downstream floor in this script -- IR that was never emitted reads as" >&2
   echo "clean to the checker." >&2
