@@ -632,6 +632,11 @@ fn accessor_key_expr(key: MethodKeyKind) -> Expr {
 }
 
 pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> Result<Expr> {
+    // A directly exported object is the producer boundary for #8775. Consume
+    // the marker here so nested literals continue through their ordinary
+    // lowering paths.
+    let prefer_exported_method_shape_seed =
+        std::mem::take(&mut ctx.prefer_exported_method_shape_seed);
     // Phase 3: closed-shape object literals lower to `new __AnonShape_N()`
     // so downstream field access hits the direct-GEP fast path. The
     // anon class is synthesized as a shape-only class with constructor
@@ -1074,7 +1079,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             collect_local_refs_expr(value, &mut refs, &mut visited_closures);
             !refs.contains(&param_id)
         };
-        let can_emit_static_object = has_method
+        let can_emit_static_object = !prefer_exported_method_shape_seed
+            && has_method
             && !has_spread
             && !has_accessor
             && !has_computed
@@ -1105,8 +1111,58 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             return Ok(Expr::Object(props));
         }
 
-        // Pass 2: build the IIFE wrapper. `__o` starts as an empty object
-        // and each op mutates it in source order.
+        // Imported-object capabilities need a producer-authoritative non-zero
+        // class and stable slot order. Keep directly exported, static-key
+        // method literals in the source-ordered IIFE, but seed it with a
+        // shape-only anonymous class instead of `{}`. This composes with the
+        // direct-object optimization above: non-exported literals still skip
+        // the IIFE, while exported literals retain the metadata required by a
+        // consumer's guarded direct call.
+        let static_shape_seed = if prefer_exported_method_shape_seed
+            && !has_spread
+            && !has_accessor
+            && !has_computed
+            && !has_proto_setter
+        {
+            let mut names = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            let mut eligible = true;
+            for op in &ops {
+                let name = match op {
+                    SpreadOp::Set {
+                        key: Expr::String(name),
+                        infer_name: false,
+                        ..
+                    }
+                    | SpreadOp::MethodByName { key: name, .. } => name,
+                    _ => {
+                        eligible = false;
+                        break;
+                    }
+                };
+                if seen.insert(name.clone()) {
+                    names.push(name.clone());
+                }
+            }
+            eligible.then(|| {
+                let fields: Vec<(String, Type)> =
+                    names.iter().map(|name| (name.clone(), Type::Any)).collect();
+                let class_name = ctx.synthesize_anon_shape_class(&fields);
+                Expr::New {
+                    class_name,
+                    args: names.iter().map(|_| Expr::Undefined).collect(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }
+            })
+        } else {
+            None
+        };
+
+        // Pass 2: build the IIFE wrapper. `__o` starts as the exported stable
+        // shape seed when eligible, otherwise as an empty object, and each op
+        // mutates it in source order.
         let extern_call = |name: &str, args: Vec<Expr>| Expr::Call {
             callee: Box::new(Expr::ExternFuncRef {
                 name: name.to_string(),
@@ -1250,7 +1306,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         };
         return Ok(Expr::Call {
             callee: Box::new(closure),
-            args: vec![Expr::Object(Vec::new())],
+            args: vec![static_shape_seed.unwrap_or_else(|| Expr::Object(Vec::new()))],
             type_args: vec![],
             byte_offset: 0,
         });

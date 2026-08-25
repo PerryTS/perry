@@ -767,6 +767,11 @@ pub struct LoweringContext {
     /// (e.g. recognizing a bundled mysql2 `createPool(config)` by its option
     /// names) recovers them here.
     pub(crate) anon_shape_fields: HashMap<String, Vec<String>>,
+    /// Set while lowering a directly exported binding/default expression.
+    /// Eligible method literals consume this flag and retain the seeded IIFE
+    /// representation needed to publish an exact cross-module own-method
+    /// capability. Ordinary local method literals keep the direct-object path.
+    pub(crate) prefer_exported_method_shape_seed: bool,
     /// Class DECLARATION names at the top level of the function body
     /// currently being lowered. JS resolves a method-body reference to a
     /// sibling class declared LATER in the same function at call time

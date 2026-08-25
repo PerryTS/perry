@@ -156,6 +156,55 @@ const computed = { [key]() { return 1; } };
 }
 
 #[test]
+fn exported_static_method_literals_keep_a_stable_shape_seed() {
+    let source = r#"
+export const named = {
+  value: 1,
+  read() { return this.value; },
+};
+export default {
+  value: 2,
+  read() { return this.value; },
+};
+"#;
+    let module =
+        perry_parser::parse_typescript(source, "exported-method-object.ts").expect("source parses");
+    let hir = super::lower_module(
+        &module,
+        "exported-method-object",
+        "exported-method-object.ts",
+    )
+    .expect("source lowers");
+
+    for name in ["named", "default"] {
+        let init = hir
+            .init
+            .iter()
+            .find_map(|stmt| match stmt {
+                Stmt::Let {
+                    name: local_name,
+                    init: Some(init),
+                    ..
+                } if local_name == name => Some(init),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing init for {name}"));
+        let Expr::Call { callee, args, .. } = init else {
+            panic!("exported method object must retain its seeded IIFE: {init:#?}");
+        };
+        assert!(matches!(
+            callee.as_ref(),
+            Expr::Closure { params, .. }
+                if params.first().is_some_and(|param| param.name == "__perry_obj_iife")
+        ));
+        assert!(matches!(
+            args.as_slice(),
+            [Expr::New { class_name, .. }] if class_name.starts_with("__AnonShape_")
+        ));
+    }
+}
+
+#[test]
 fn test_lower_function_registration() {
     let mut ctx = make_ctx();
     let func_id = ctx.fresh_func();
