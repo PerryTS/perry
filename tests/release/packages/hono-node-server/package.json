@@ -1,0 +1,17 @@
+{
+  "name": "perry-release-fixture-hono-node-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tier-3 fixture for @hono/node-server's compiled-package Node builtin imports.",
+  "dependencies": {
+    "@hono/node-server": "1.19.17",
+    "hono": "4.13.4"
+  },
+  "perry": {
+    "compilePackages": ["@hono/node-server", "hono"],
+    "allow": {
+      "compilePackages": ["@hono/node-server", "hono"]
+    }
+  }
+}
