@@ -183,6 +183,29 @@ console.log(checksum);
     );
     assert!(ir.contains("stable_packed.iteration.capture_valid"));
     assert!(ir.contains("call i64 @js_packed_arraylike_loop_guard_live("));
+    let clean_read_blocks = named_blocks(&ir, &["stable_packed.indexed_read.proof_clean"]);
+    let dirty_read_blocks = named_blocks(&ir, &["stable_packed.indexed_read.proof_dirty"]);
+    assert!(
+        !clean_read_blocks.is_empty()
+            && !clean_read_blocks.contains("js_packed_arraylike_loop_revalidate_live"),
+        "the clean nested-read path must retain its proof without a runtime call\n{clean_read_blocks}"
+    );
+    assert!(
+        dirty_read_blocks.contains("js_packed_arraylike_loop_revalidate_live"),
+        "a path dirtied by a preceding call must retain exact revalidation\n{dirty_read_blocks}"
+    );
+    let cache_hit_blocks = named_blocks(&ir, &["stable_packed.indexed_read.cache_hit"]);
+    assert!(
+        !cache_hit_blocks.is_empty()
+            && !cache_hit_blocks.contains("js_packed_arraylike_loop_revalidate_live")
+            && !cache_hit_blocks.contains("js_packed_arraylike_index_get"),
+        "a same-counter cache hit must be a call-free exact-value load\n{cache_hit_blocks}"
+    );
+    assert!(
+        ir.contains("packed_index.generic_fallback")
+            && ir.contains("packed_index.revalidated_merge"),
+        "a failed nested proof must branch to the exact-source generic read and rejoin"
+    );
 
     let fast_blocks = named_blocks(&ir, &["stable_packed", "for.stable_packed_fast"]);
     assert!(
@@ -203,6 +226,8 @@ console.log(checksum);
         "candidate_storage=closure_capture_slot",
         "revalidation=each_iteration_capture_reload",
         "candidate_origin=guarded_outer_index_read",
+        "nested_read_miss=generic_read_without_iteration_replay",
+        "same_counter_read_cache=call_invalidated",
         "guard_identity=stable_packed_arraylike:",
         "fallback_identity=stable_packed_arraylike:",
     ] {
