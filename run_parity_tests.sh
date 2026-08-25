@@ -1526,6 +1526,7 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
         echo -e "${RED}CRASH${NC} $test_id (${perry_crash})"
         echo "       Perry died after printing $(printf '%s' "$perry_output" | grep -c '' || true) line(s); Node exited $node_exit."
         echo "       Last Perry line: $(printf '%s' "$perry_output" | tail -1)"
+        printf '%s\n' "----- full Perry output -----" "$perry_output" "----- end Perry output -----"
         ((CRASH_FAIL++))
         CRASH_FAILURES+=("$test_id")
         record_result "$test_id" "crash"

@@ -335,6 +335,10 @@ pub unsafe extern "C" fn js_ext_net_socket_write(handle: i64, chunk_bits: i64) {
 }
 
 fn enqueue_socket_write(handle: i64, bytes: Vec<u8>, completion: u64) {
+    eprintln!(
+        "[net-trace] enqueue write id={handle} len={} completion={completion}",
+        bytes.len()
+    );
     let mut sockets = statics::sockets().lock().unwrap();
     if let Some(s) = sockets.get_mut(&handle) {
         s.bytes_written = s.bytes_written.saturating_add(bytes.len() as u64);
@@ -483,6 +487,10 @@ pub unsafe extern "C" fn js_ext_net_socket_end3(
     ]);
     let completion = register_socket_completion(handle, completion);
     let final_bytes = crate::jsvalue_to_socket_bytes(chunk_or_callback.get());
+    eprintln!(
+        "[net-trace] enqueue end id={handle} final_len={} completion={completion}",
+        final_bytes.as_ref().map_or(0, Vec::len)
+    );
     let trigger = statics::sockets().lock().ok().and_then(|sockets| {
         sockets
             .get(&handle)

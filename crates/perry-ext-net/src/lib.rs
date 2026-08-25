@@ -1164,6 +1164,9 @@ pub(crate) async fn run_socket_task(
         .and_then(|sockets| sockets.get(&id).map(|socket| socket.server_id.is_some()))
         .unwrap_or(false);
     let mut server_connection_ready = !accepted_socket;
+    eprintln!(
+        "[net-trace] task start id={id} accepted={accepted_socket} ready={server_connection_ready}"
+    );
 
     loop {
         let t = match transport.as_mut() {
@@ -1201,6 +1204,9 @@ pub(crate) async fn run_socket_task(
                 drop(window);
                 match read_result {
                     Ok(0) => {
+                        eprintln!(
+                            "[net-trace] read eof id={id} accepted={accepted_socket} writable_ended={writable_ended} ready={server_connection_ready}"
+                        );
                         // Return the untouched buffer to the freelist before
                         // breaking, so a peer FIN doesn't leak its pooled
                         // capacity (the success path checks in below).
@@ -1238,7 +1244,12 @@ pub(crate) async fn run_socket_task(
                             };
                             match command {
                                 Some(SocketCommand::Write(bytes, completion)) => {
+                                    eprintln!(
+                                        "[net-trace] eof-drain write id={id} len={} completion={completion}",
+                                        bytes.len()
+                                    );
                                     if let Err(e) = t.write_all(&bytes).await {
+                                        eprintln!("[net-trace] eof-drain write error id={id}: {e}");
                                         let msg = format!("{}", e);
                                         if completion != 0 {
                                             push_event(PendingNetEvent::WriteComplete(
@@ -1250,6 +1261,7 @@ pub(crate) async fn run_socket_task(
                                         push_event(PendingNetEvent::Error(id, msg));
                                         break;
                                     }
+                                    eprintln!("[net-trace] eof-drain write ok id={id}");
                                     if completion != 0 {
                                         push_event(PendingNetEvent::WriteComplete(
                                             id,
@@ -1259,6 +1271,7 @@ pub(crate) async fn run_socket_task(
                                     }
                                 }
                                 Some(SocketCommand::End(completion)) => {
+                                    eprintln!("[net-trace] eof-drain end id={id} completion={completion}");
                                     let error = t.shutdown().await.err().map(|e| e.to_string());
                                     writable_ended = true;
                                     push_event(PendingNetEvent::ShutdownComplete(
@@ -1271,6 +1284,7 @@ pub(crate) async fn run_socket_task(
                                     let _ = t.set_nodelay(enable);
                                 }
                                 Some(SocketCommand::ServerConnectionReady) => {
+                                    eprintln!("[net-trace] eof-drain ready id={id}");
                                     server_connection_ready = true;
                                 }
                                 #[cfg(test)]
@@ -1290,10 +1304,12 @@ pub(crate) async fn run_socket_task(
                             push_event(PendingNetEvent::ShutdownComplete(id, 0, None));
                         }
                         push_event(PendingNetEvent::Close(id));
+                        eprintln!("[net-trace] eof close id={id}");
                         mark_closed(id);
                         break;
                     }
                     Ok(n) => {
+                        eprintln!("[net-trace] read data id={id} len={n}");
                         // #2154 raw mode buffers for `poll_read`; else 'data'.
                         // `split_to(n)` hands out a zero-copy `Bytes` view of
                         // the bytes just read and leaves `buf` empty (still
@@ -1310,6 +1326,7 @@ pub(crate) async fn run_socket_task(
                         buffer_pool::checkin(buf);
                     }
                     Err(e) => {
+                        eprintln!("[net-trace] read error id={id}: {e}");
                         // Return the buffer before breaking on a read error,
                         // mirroring the EOF and success paths — a failed read
                         // wrote nothing, so its pooled capacity is reusable.
@@ -1341,7 +1358,12 @@ pub(crate) async fn run_socket_task(
                 buffer_pool::checkin(buf);
                 match cmd {
                     Some(SocketCommand::Write(bytes, completion)) => {
+                        eprintln!(
+                            "[net-trace] select write id={id} len={} completion={completion} writable_ended={writable_ended}",
+                            bytes.len()
+                        );
                         if let Err(e) = t.write_all(&bytes).await {
+                            eprintln!("[net-trace] select write error id={id}: {e}");
                             let msg = format!("{}", e);
                             if completion != 0 {
                                 push_event(PendingNetEvent::WriteComplete(
@@ -1357,11 +1379,13 @@ pub(crate) async fn run_socket_task(
                             mark_closed(id);
                             break;
                         }
+                        eprintln!("[net-trace] select write ok id={id}");
                         if completion != 0 {
                             push_event(PendingNetEvent::WriteComplete(id, completion, None));
                         }
                     }
                     Some(SocketCommand::End(completion)) => {
+                        eprintln!("[net-trace] select end id={id} completion={completion}");
                         let error = t.shutdown().await.err().map(|e| e.to_string());
                         writable_ended = true;
                         push_event(PendingNetEvent::ShutdownComplete(id, completion, error));
@@ -1372,6 +1396,7 @@ pub(crate) async fn run_socket_task(
                         let _ = t.set_nodelay(enable);
                     }
                     Some(SocketCommand::ServerConnectionReady) => {
+                        eprintln!("[net-trace] select ready id={id}");
                         server_connection_ready = true;
                     }
                     #[cfg(test)]
@@ -1379,6 +1404,7 @@ pub(crate) async fn run_socket_task(
                         let _ = reply.send(t.nodelay().unwrap_or(false));
                     }
                     Some(SocketCommand::Destroy) | None => {
+                        eprintln!("[net-trace] select destroy/closed id={id}");
                         if !raw_bridge::mark_terminal(id, None) {
                             push_event(PendingNetEvent::Close(id));
                         }
@@ -1734,6 +1760,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 lifecycle::drain_once_listeners(id, "data");
             }
             PendingNetEvent::Error(id, msg) => {
+                eprintln!("[net-trace] dispatch error id={id}: {msg}");
                 let cbs = listeners_for(id, "error");
                 if cbs.is_empty() {
                     continue;
@@ -1796,6 +1823,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 lifecycle::dispatch_socket_completion(completion, error);
             }
             PendingNetEvent::Close(id) => {
+                eprintln!("[net-trace] dispatch close id={id}");
                 lifecycle::drop_socket_completions(id);
                 extern "C" {
                     fn js_tls_client_record_closed(handle: i64);
