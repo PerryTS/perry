@@ -234,3 +234,38 @@ fn a_sparse_array_whose_length_outruns_its_storage_is_not_eligible() {
     unsafe { (*src).length = (*src).capacity + 1 };
     assert!(dense_spread_source(boxed(src)).is_none());
 }
+
+#[test]
+fn short_packed_call_guard_copies_empty_and_one_element_arrays() {
+    let mut out = [f64::NAN; 4];
+    let empty = js_array_alloc(0);
+    assert_eq!(
+        unsafe { js_short_packed_spread_values(boxed(empty), out.as_mut_ptr()) },
+        0
+    );
+
+    let one = dense(&[37.0]);
+    assert_eq!(
+        unsafe { js_short_packed_spread_values(boxed(one), out.as_mut_ptr()) },
+        1
+    );
+    assert_eq!(out[0], 37.0);
+}
+
+#[test]
+fn short_packed_call_guard_rejects_holes_and_oversized_arrays() {
+    let mut out = [0.0; 4];
+    let holey = js_array_push_hole(js_array_push_f64(js_array_alloc(2), 1.0));
+    assert_eq!(
+        unsafe { js_short_packed_spread_values(boxed(holey), out.as_mut_ptr()) },
+        -1,
+        "a hole must take the iterator/apply fallback"
+    );
+
+    let oversized = dense(&[1.0, 2.0, 3.0, 4.0, 5.0]);
+    assert_eq!(
+        unsafe { js_short_packed_spread_values(boxed(oversized), out.as_mut_ptr()) },
+        -1,
+        "only arities 0 through 4 are specialized"
+    );
+}

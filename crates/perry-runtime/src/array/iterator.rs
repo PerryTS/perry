@@ -34,9 +34,9 @@ use crate::value::nanbox_string_key;
 #[no_mangle]
 pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
     use crate::gc::{
-        GcHeader, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_LAZY_ARRAY, GC_TYPE_MAP, GC_TYPE_SET,
+        GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_LAZY_ARRAY, GC_TYPE_MAP, GC_TYPE_SET, GcHeader,
     };
-    use crate::value::{js_nanbox_pointer, JSValue};
+    use crate::value::{JSValue, js_nanbox_pointer};
 
     let jsv = JSValue::from_bits(val_f64.to_bits());
     if let Some(entries) = entries_array_for_small_handle_value(val_f64) {
@@ -192,9 +192,9 @@ fn is_callable_value(value: f64) -> bool {
 }
 
 fn named_field(value: f64, name: &[u8]) -> f64 {
-    use crate::object::{js_object_get_field_by_name, ObjectHeader};
+    use crate::object::{ObjectHeader, js_object_get_field_by_name};
     use crate::string::js_string_from_bytes;
-    use crate::value::{js_nanbox_get_pointer, TAG_UNDEFINED};
+    use crate::value::{TAG_UNDEFINED, js_nanbox_get_pointer};
 
     let ptr = js_nanbox_get_pointer(value);
     if ptr == 0 {
@@ -729,7 +729,7 @@ fn array_has_own_iterator(value: f64) -> bool {
 }
 
 pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
-    use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, POINTER_MASK};
+    use crate::value::{JSValue, POINTER_MASK, js_nanbox_get_pointer, js_nanbox_pointer};
 
     // #7498: the spread receiver is a GC-managed value, and this function
     // carries it across a dozen classification probes AND the whole
@@ -782,6 +782,15 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
 
     if raw_ptr() == 0 {
         throw_not_iterable(value());
+    }
+
+    // An Array Proxy is a small registry id, not an `ArrayHeader`. Route it
+    // through the full GetIterator path before any raw-address classifiers.
+    // `array_values_iter` stores the proxy value as a dedicated live backing,
+    // so the default Array iterator performs `Get(length)` / `Get(index)`
+    // through traps instead of dereferencing the id or unwrapping the target.
+    if crate::proxy::js_proxy_is_proxy(value()) != 0 {
+        return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
     }
 
     // #7533: the overwhelmingly common spread — an ordinary dense array — is a
@@ -1160,9 +1169,9 @@ pub(crate) fn has_iterator_next(value: f64) -> bool {
 
 pub(crate) fn sync_iterator_to_array_if_not_async(iter_f64: f64) -> Option<*mut ArrayHeader> {
     use crate::closure;
-    use crate::object::{js_object_get_field_by_name, ObjectHeader};
+    use crate::object::{ObjectHeader, js_object_get_field_by_name};
     use crate::string::js_string_from_bytes;
-    use crate::value::{js_nanbox_get_pointer, TAG_UNDEFINED};
+    use crate::value::{TAG_UNDEFINED, js_nanbox_get_pointer};
 
     let arr = js_array_alloc(8);
     let iter_ptr = js_nanbox_get_pointer(iter_f64);
@@ -1279,9 +1288,9 @@ fn settled_promise_value(value: f64) -> Option<f64> {
 #[no_mangle]
 pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     use crate::closure;
-    use crate::object::{js_object_get_field_by_name, ObjectHeader};
+    use crate::object::{ObjectHeader, js_object_get_field_by_name};
     use crate::string::js_string_from_bytes;
-    use crate::value::{js_nanbox_get_pointer, TAG_UNDEFINED};
+    use crate::value::{TAG_UNDEFINED, js_nanbox_get_pointer};
 
     // #7475: EVERY value this loop carries across a `.next()` call is a
     // GC-managed object, and `.next()` allocates the `{ value, done }` result
@@ -1456,9 +1465,9 @@ pub extern "C" fn js_iterator_rest_to_array(iter_f64: f64, done_f64: f64) -> f64
 
 fn js_async_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     use crate::closure;
-    use crate::object::{js_object_get_field_by_name, ObjectHeader};
+    use crate::object::{ObjectHeader, js_object_get_field_by_name};
     use crate::string::js_string_from_bytes;
-    use crate::value::{js_nanbox_get_pointer, TAG_TRUE, TAG_UNDEFINED};
+    use crate::value::{TAG_TRUE, TAG_UNDEFINED, js_nanbox_get_pointer};
 
     let arr = js_array_alloc(8);
     let iter_ptr = js_nanbox_get_pointer(iter_f64);

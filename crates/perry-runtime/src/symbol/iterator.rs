@@ -3,7 +3,7 @@
 //! `ToPrimitive` (`[Symbol.toPrimitive]`) dispatch.
 
 use super::*;
-use crate::string::{js_string_from_bytes, StringHeader};
+use crate::string::{StringHeader, js_string_from_bytes};
 
 /// `Object.getOwnPropertySymbols(obj)` — returns an array of symbol keys on
 /// the object. Looks up the side table populated by
@@ -37,11 +37,7 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
             }
             keys.sort_by_key(|sym_key| {
                 let ptr = *sym_key as *const SymbolHeader;
-                if ptr.is_null() {
-                    u64::MAX
-                } else {
-                    (*ptr).id
-                }
+                if ptr.is_null() { u64::MAX } else { (*ptr).id }
             });
             keys
         };
@@ -107,11 +103,7 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
     }
     entries[data_len..].sort_by_key(|(sym_ptr_usize, _)| {
         let ptr = *sym_ptr_usize as *const SymbolHeader;
-        if ptr.is_null() {
-            u64::MAX
-        } else {
-            (*ptr).id
-        }
+        if ptr.is_null() { u64::MAX } else { (*ptr).id }
     });
     let mut arr = crate::array::js_array_alloc(entries.len() as u32);
     for (sym_ptr_usize, _val_bits) in entries.iter() {
@@ -204,6 +196,12 @@ pub extern "C" fn js_iterator_result_validate(result: f64) -> f64 {
 /// array-memcpy / index-loop arms) so they don't reach this helper.
 #[no_mangle]
 pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
+    // Array proxies satisfy IsArray but are small registry ids rather than
+    // dense `ArrayHeader` pointers. They must reach the ordinary symbol lookup
+    // below (so a get trap / custom @@iterator remains observable); the
+    // forwarded builtin iterator now uses KIND_PROXY_VALUES for live trapped
+    // length/index reads.
+    let is_proxy = crate::proxy::js_proxy_is_proxy(val_f64) != 0;
     // `class X extends Array` — the instance is object-backed (a plain
     // `ObjectHeader` with indexed fields + `length`), but `array_values_iter`
     // reads a dense `ArrayHeader`. `js_array_is_array` now reports true for such
@@ -217,7 +215,9 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
             let snapshot = crate::array::array_subclass_dense_snapshot(val_f64);
             return crate::array::array_values_iter(snapshot);
         }
-    } else if crate::array::js_array_is_array(val_f64).to_bits() == crate::value::TAG_TRUE {
+    } else if !is_proxy
+        && crate::array::js_array_is_array(val_f64).to_bits() == crate::value::TAG_TRUE
+    {
         if !crate::array::array_proto_iterator_modified() {
             return crate::array::array_values_iter(val_f64);
         }

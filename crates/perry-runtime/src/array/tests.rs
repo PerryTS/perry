@@ -74,6 +74,37 @@ fn flattenable_array_ptr_accepts_only_arrays_and_array_proxies() {
     assert_eq!(flattenable_array_ptr(nested_proxy), array);
 }
 
+#[test]
+fn array_proxy_values_iterator_uses_live_trapped_reads() {
+    let array = js_array_alloc(4);
+    js_array_push_f64(array, 7.0);
+    js_array_push_f64(array, 8.0);
+    let array_value = boxed_pointer(array as *mut u8);
+    let handler = crate::object::js_object_alloc(0, 0);
+    let proxy = crate::proxy::js_proxy_new(array_value, boxed_pointer(handler as *mut u8));
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter_h = scope.root_nanbox_f64(array_values_iter(proxy));
+    let next = || unsafe {
+        let iter = crate::value::js_nanbox_get_pointer(iter_h.get_nanbox_f64())
+            as *mut crate::object::ObjectHeader;
+        let result = dispatch_array_iterator_method(iter, "next");
+        let result =
+            crate::value::js_nanbox_get_pointer(result) as *const crate::object::ObjectHeader;
+        (
+            f64::from_bits(crate::object::js_object_get_field(result, 0).bits()),
+            crate::object::js_object_get_field(result, 1).bits() == crate::value::TAG_TRUE,
+        )
+    };
+
+    assert_eq!(next(), (7.0, false));
+    js_array_set_f64(array, 1, 9.0);
+    assert_eq!(next(), (9.0, false), "indexed Get must stay live");
+    js_array_push_f64(array, 10.0);
+    assert_eq!(next(), (10.0, false), "length Get must stay live");
+    assert!(next().1);
+}
+
 fn array_keys_contain(keys: *mut ArrayHeader, name: &[u8]) -> bool {
     let key = string_key(name);
     for i in 0..js_array_length(keys) {
@@ -1353,7 +1384,7 @@ fn test_array_last_index_of() {
     assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, -10.0, 1), -1); // < -length
     assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 100.0, 1), 3); // clamp to len-1
     assert_eq!(js_array_last_index_of_jsvalue(arr, 2.0, 0.0, 1), -1); // only index 0
-                                                                      // Empty array.
+    // Empty array.
     let empty = js_array_alloc(1);
     assert_eq!(js_array_last_index_of_jsvalue(empty, 1.0, 0.0, 0), -1);
 }

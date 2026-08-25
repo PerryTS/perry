@@ -4,7 +4,7 @@
 //! used by the rest of the runtime. Manifest lowering calls them before handing
 //! raw scalars, pointers, buffer spans, strings, or promises to native code.
 
-use crate::buffer::{is_registered_buffer, resolve_span_data_ptr, BufferHeader};
+use crate::buffer::{BufferHeader, is_registered_buffer, resolve_span_data_ptr};
 use crate::object::ObjectHeader;
 use crate::promise::Promise;
 use crate::value::{JSValue, POINTER_MASK, TAG_FALSE, TAG_TRUE};
@@ -255,6 +255,17 @@ static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern "C-unwind" fn(
 #[used]
 static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern "C-unwind" fn(f64, i64, i64) -> f64 =
     crate::object::js_native_call_method_apply_by_id;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_SPREAD_TAIL_FALLBACK_ARGS: unsafe extern "C-unwind" fn(
+    *const f64,
+    usize,
+    f64,
+) -> i64 = crate::object::js_spread_tail_fallback_args;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_SHORT_PACKED_SPREAD_VALUES: unsafe extern "C" fn(f64, *mut f64) -> i32 =
+    crate::array::js_short_packed_spread_values;
 
 /// Validate and lower a manifest `f32` parameter.
 #[no_mangle]
