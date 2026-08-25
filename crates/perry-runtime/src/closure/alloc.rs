@@ -12,20 +12,7 @@ crate::perry_thread_local! {
     static SINGLETON_CLOSURES: RefCell<crate::fast_hash::PtrHashMap<usize, *mut ClosureHeader>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
-    /// Per-`func_ptr` single-slot cache for closures with captures.
-    /// Each value is `(last_captures, last_closure)` — when the same
-    /// closure literal is created again with the SAME capture bits,
-    /// we return the cached closure; otherwise we allocate a fresh
-    /// one and replace the slot.
-    ///
-    /// One entry per closure literal (bounded by the number of
-    /// `Expr::Closure` sites in the program), not per
-    /// `(func_ptr, capture-tuple)` pair — this prevents a closure
-    /// whose captures vary per call (e.g.
-    /// `getOrCompute(map, key, () => new Foo(sortedTypes))` capturing
-    /// a fresh array per call) from filling the cache and crowding
-    /// out closures with stable captures.
-    /// Per-`func_ptr` small-LRU cache. Each entry holds up to
+    /// Per-`func_ptr` small-LRU cache. Each value holds up to
     /// `MAX_CAPTURED_CLOSURE_SLOTS` (captures-bits, ClosureHeader)
     /// pairs. Multiple slots are critical for the parallel-instance
     /// async-await pattern (e.g. `Promise.all` of N async closures
@@ -34,8 +21,205 @@ crate::perry_thread_local! {
     /// `PtrHasher`-keyed for the same reason as the other registries
     /// here — on `promise_all_chains` this is hit on every closure
     /// alloc (150 k/run).
-    static SINGLETON_CAPTURED_CLOSURES: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<(Vec<u64>, *mut ClosureHeader)>>> =
+    static SINGLETON_CAPTURED_CLOSURES: RefCell<crate::fast_hash::PtrHashMap<usize, CapturedClosureCache>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
+}
+
+#[derive(Clone)]
+struct CapturedClosureEntry {
+    /// Non-semantic prefilter for `captures`. Hash collisions always fall
+    /// through to the exact bitwise tuple comparison below.
+    fingerprint: u64,
+    captures: Vec<u64>,
+    closure: *mut ClosureHeader,
+    last_used: u64,
+}
+
+/// Direct-mapped index into the exact entry vector. A collision only falls
+/// back to the bounded scan; neither the fingerprint nor this hint is ever
+/// trusted without exact capture-bit equality.
+const CAPTURED_HINT_SLOTS: usize = 128;
+
+struct CapturedClosureCache {
+    entries: Vec<CapturedClosureEntry>,
+    hint_fingerprints: [u64; CAPTURED_HINT_SLOTS],
+    hint_indices_plus_one: [u8; CAPTURED_HINT_SLOTS],
+    clock: u64,
+}
+
+impl CapturedClosureCache {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            hint_fingerprints: [0; CAPTURED_HINT_SLOTS],
+            hint_indices_plus_one: [0; CAPTURED_HINT_SLOTS],
+            clock: 0,
+        }
+    }
+
+    #[inline]
+    fn hint_slot(fingerprint: u64) -> usize {
+        // Fold high bits before masking: capture pointers are aligned and FNV's
+        // low bits alone otherwise make avoidable direct-map collisions.
+        (fingerprint ^ (fingerprint >> 32)) as usize & (CAPTURED_HINT_SLOTS - 1)
+    }
+
+    #[inline]
+    fn touch(&mut self, index: usize) -> *mut ClosureHeader {
+        self.clock = self.clock.wrapping_add(1);
+        self.entries[index].last_used = self.clock;
+        self.entries[index].closure
+    }
+
+    fn lookup(&mut self, fingerprint: u64, captures: &[u64]) -> Option<*mut ClosureHeader> {
+        let hint_slot = Self::hint_slot(fingerprint);
+        let hinted = self.hint_indices_plus_one[hint_slot];
+        if hinted != 0 && self.hint_fingerprints[hint_slot] == fingerprint {
+            let index = (hinted - 1) as usize;
+            if self
+                .entries
+                .get(index)
+                .is_some_and(|entry| entry.captures.as_slice() == captures)
+            {
+                return Some(self.touch(index));
+            }
+        }
+
+        let index = self.entries.iter().position(|entry| {
+            entry.fingerprint == fingerprint && entry.captures.as_slice() == captures
+        })?;
+        self.hint_fingerprints[hint_slot] = fingerprint;
+        self.hint_indices_plus_one[hint_slot] = (index + 1) as u8;
+        Some(self.touch(index))
+    }
+
+    fn insert(&mut self, fingerprint: u64, captures: Vec<u64>, closure: *mut ClosureHeader) {
+        self.clock = self.clock.wrapping_add(1);
+        let entry = CapturedClosureEntry {
+            fingerprint,
+            captures,
+            closure,
+            last_used: self.clock,
+        };
+        let index = if self.entries.len() < MAX_CAPTURED_CLOSURE_SLOTS {
+            let index = self.entries.len();
+            self.entries.push(entry);
+            index
+        } else {
+            let (index, _) = self
+                .entries
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .expect("full captured-closure cache must have an LRU entry");
+            self.entries[index] = entry;
+            index
+        };
+        let hint_slot = Self::hint_slot(fingerprint);
+        self.hint_fingerprints[hint_slot] = fingerprint;
+        self.hint_indices_plus_one[hint_slot] = (index + 1) as u8;
+    }
+
+    fn clear_hints(&mut self) {
+        self.hint_indices_plus_one.fill(0);
+    }
+}
+
+#[cfg(test)]
+mod captured_closure_cache_tests {
+    use super::*;
+
+    fn fake_closure(id: usize) -> *mut ClosureHeader {
+        // The cache treats these as opaque values. No test dereferences them.
+        (0x1000 + id * std::mem::align_of::<ClosureHeader>()) as *mut ClosureHeader
+    }
+
+    #[test]
+    fn direct_hint_collision_falls_back_to_exact_capture_match() {
+        let first = [0u64];
+        let first_fingerprint = capture_fingerprint(&first);
+        let first_slot = CapturedClosureCache::hint_slot(first_fingerprint);
+        let second_word = (1..10_000u64)
+            .find(|&word| {
+                let fingerprint = capture_fingerprint(&[word]);
+                fingerprint != first_fingerprint
+                    && CapturedClosureCache::hint_slot(fingerprint) == first_slot
+            })
+            .expect("the bounded search must find a direct-hint collision");
+        let second = [second_word];
+        let second_fingerprint = capture_fingerprint(&second);
+
+        let mut cache = CapturedClosureCache::new();
+        cache.insert(first_fingerprint, first.to_vec(), fake_closure(1));
+        cache.insert(second_fingerprint, second.to_vec(), fake_closure(2));
+
+        // Inserting `second` displaced `first` from their shared hint slot.
+        // Both lookups must still find their exact tuple via fallback, and
+        // each fallback must repair the hint for the next lookup.
+        assert_eq!(
+            cache.lookup(first_fingerprint, &first),
+            Some(fake_closure(1))
+        );
+        assert_eq!(
+            cache.lookup(first_fingerprint, &first),
+            Some(fake_closure(1))
+        );
+        assert_eq!(
+            cache.lookup(second_fingerprint, &second),
+            Some(fake_closure(2))
+        );
+        assert_eq!(cache.lookup(first_fingerprint, &second), None);
+    }
+
+    #[test]
+    fn full_cache_evicts_least_recently_used_entry() {
+        let mut cache = CapturedClosureCache::new();
+        for word in 0..MAX_CAPTURED_CLOSURE_SLOTS as u64 {
+            let captures = vec![word];
+            cache.insert(
+                capture_fingerprint(&captures),
+                captures,
+                fake_closure(word as usize + 1),
+            );
+        }
+
+        let retained = [0u64];
+        assert_eq!(
+            cache.lookup(capture_fingerprint(&retained), &retained),
+            Some(fake_closure(1))
+        );
+
+        let replacement = [MAX_CAPTURED_CLOSURE_SLOTS as u64];
+        cache.insert(
+            capture_fingerprint(&replacement),
+            replacement.to_vec(),
+            fake_closure(MAX_CAPTURED_CLOSURE_SLOTS + 1),
+        );
+
+        let evicted = [1u64];
+        assert_eq!(cache.lookup(capture_fingerprint(&evicted), &evicted), None);
+        assert_eq!(
+            cache.lookup(capture_fingerprint(&retained), &retained),
+            Some(fake_closure(1))
+        );
+        assert_eq!(
+            cache.lookup(capture_fingerprint(&replacement), &replacement),
+            Some(fake_closure(MAX_CAPTURED_CLOSURE_SLOTS + 1))
+        );
+    }
+}
+
+#[inline]
+fn capture_fingerprint(captures: &[u64]) -> u64 {
+    // FNV-1a over fixed-width capture words. The cache never trusts this as an
+    // identity: it only avoids calling slice equality (and its outlined
+    // `memcmp`) for entries that cannot possibly match.
+    let mut hash = 0xcbf2_9ce4_8422_2325u64 ^ captures.len() as u64;
+    for &word in captures {
+        hash ^= word;
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash
 }
 
 /// Header for heap-allocated closures
@@ -222,13 +406,21 @@ pub fn scan_singleton_closure_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
     });
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
         let mut captured = s.borrow_mut();
-        for slots in captured.values_mut() {
-            for (capture_key, closure) in slots.iter_mut() {
-                visitor.visit_raw_mut_ptr_slot(closure);
-                for word in capture_key.iter_mut() {
+        for cache in captured.values_mut() {
+            for entry in cache.entries.iter_mut() {
+                visitor.visit_raw_mut_ptr_slot(&mut entry.closure);
+                for word in entry.captures.iter_mut() {
                     visitor.visit_heap_word_u64_slot(word);
                 }
+                // A copying collection may have rewritten pointer-bearing
+                // capture words. Keep the non-semantic prefilter synchronized
+                // with the exact tuple that remains authoritative.
+                entry.fingerprint = capture_fingerprint(&entry.captures);
             }
+            // Fingerprints and exact tuples were just rewritten in place. A
+            // hint is disposable acceleration state; clearing avoids an
+            // address-derived pre-GC fingerprint/index ever being consulted.
+            cache.clear_hints();
         }
     });
 }
@@ -256,8 +448,8 @@ pub(crate) fn test_seed_captured_singleton_closure_cache(
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
         s.borrow_mut()
             .entry(func_ptr as usize)
-            .or_insert_with(Vec::new)
-            .insert(0, (capture_key, closure));
+            .or_insert_with(CapturedClosureCache::new)
+            .insert(capture_fingerprint(&capture_key), capture_key, closure);
     });
 }
 
@@ -275,7 +467,13 @@ pub(crate) fn test_captured_singleton_closure_cache_entries(
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
         s.borrow()
             .get(&(func_ptr as usize))
-            .cloned()
+            .map(|cache| {
+                cache
+                    .entries
+                    .iter()
+                    .map(|entry| (entry.captures.clone(), entry.closure))
+                    .collect()
+            })
             .unwrap_or_default()
     })
 }
@@ -331,6 +529,7 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
     } else {
         unsafe { std::slice::from_raw_parts(captures_ptr, n) }
     };
+    let fingerprint = capture_fingerprint(captures_slice);
 
     // Adaptive bypass: if this func_ptr has missed the cache N times in
     // a row, skip the cache entirely. Async-step closures (`__step` /
@@ -362,25 +561,15 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
         return allocated;
     }
 
-    // Fast path: scan the per-`func_ptr` slot list looking for a
-    // matching capture-tuple. We touch only the cached `Vec` (small,
-    // bounded by MAX_CAPTURED_CLOSURE_SLOTS). The match check is
-    // bit-equality of u64 capture slots — same as a plain primitive
-    // value comparison. Move the matched entry to the front to keep
-    // recency information for the LRU eviction policy below.
+    // Fast path: use the tuple fingerprint's direct-mapped hint, then exact
+    // bit-equality of every capture slot. Hint collisions fall back to the
+    // bounded entry scan and repair the hint. Entries carry a monotonic
+    // last-use timestamp, so lookups no longer memmove the Vec yet full-cache
+    // eviction preserves the same least-recently-used policy.
     if let Some(cached) = SINGLETON_CAPTURED_CLOSURES.with(|s| {
         let mut s = s.borrow_mut();
-        if let Some(slots) = s.get_mut(&(func_ptr as usize)) {
-            for i in 0..slots.len() {
-                if slots[i].0.as_slice() == captures_slice {
-                    let entry = slots.remove(i);
-                    let ptr = entry.1;
-                    slots.insert(0, entry);
-                    return Some(ptr);
-                }
-            }
-        }
-        None
+        s.get_mut(&(func_ptr as usize))
+            .and_then(|cache| cache.lookup(fingerprint, captures_slice))
     }) {
         crate::promise::bump(&CLOSURE_CAP_SINGLETON_HIT);
         // Cache hit — reset the streak so a workload that briefly
@@ -419,11 +608,13 @@ pub extern "C" fn js_closure_alloc_with_captures_singleton(
     }
     SINGLETON_CAPTURED_CLOSURES.with(|s| {
         let mut s = s.borrow_mut();
-        let slots = s.entry(func_ptr as usize).or_insert_with(Vec::new);
-        slots.insert(0, (rewritten_captures, allocated));
-        if slots.len() > MAX_CAPTURED_CLOSURE_SLOTS {
-            slots.truncate(MAX_CAPTURED_CLOSURE_SLOTS);
-        }
+        s.entry(func_ptr as usize)
+            .or_insert_with(CapturedClosureCache::new)
+            .insert(
+                capture_fingerprint(&rewritten_captures),
+                rewritten_captures,
+                allocated,
+            );
     });
     // Bump the miss-streak counter; flip to disabled sentinel when we
     // hit the threshold.

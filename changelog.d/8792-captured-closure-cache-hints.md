@@ -1,0 +1,1 @@
+Captured-closure singleton reuse now fingerprints each exact capture tuple and maintains a direct-mapped, collision-safe hint into its bounded LRU. Hits no longer move vector entries, hash or hint collisions still require bit-exact capture equality, and copying GC recomputes fingerprints while discarding stale hints after rewriting pointer-bearing captures.

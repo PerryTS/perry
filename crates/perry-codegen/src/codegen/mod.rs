@@ -192,8 +192,11 @@ mod hoisted_callback_method_tests;
 #[cfg(test)]
 mod index_method_clone_tests;
 mod indexed_method_artifacts;
+mod ordinary_method_artifacts;
 // `pub(crate)` so `crate::linker` can read the inline-hot-small policy
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
+#[cfg(test)]
+mod argument_shape_clone_tests;
 #[cfg(test)]
 mod clone_suffix_tests;
 #[cfg(test)]
@@ -2016,11 +2019,65 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             && !nonnegative_index_methods.contains_key(key)
     });
     guarded_undefined_method_candidates.sort_unstable_by(|left, right| left.cmp(right));
-    let guarded_undefined_method_params = guarded_undefined_method_candidates
-        .into_iter()
-        .take(16)
-        .map(|(_, key, param_index)| (key, param_index))
+    let guarded_undefined_method_params: std::collections::HashMap<(String, String), usize> =
+        guarded_undefined_method_candidates
+            .into_iter()
+            .take(16)
+            .map(|(_, key, param_index)| (key, param_index))
+            .collect();
+    // #8774: one non-combinatorial tagged-ABI clone per local method. Source
+    // annotations or a unique unannotated field signature only nominate a
+    // class; every routed call emits an exact runtime class+shape guard. Keep
+    // this disjoint from typed/index/undefined clone families, whose
+    // trampolines have separate routing conventions.
+    let local_class_names: std::collections::HashSet<&str> = hir
+        .classes
+        .iter()
+        .map(|class| class.name.as_str())
         .collect();
+    let mut pshape_arg_methods = std::collections::HashMap::new();
+    for class in &hir.classes {
+        for method in &class.methods {
+            let key = (class.name.clone(), method.name.clone());
+            if typed_f64_methods.contains(&key)
+                || typed_i32_methods.contains(&key)
+                || typed_i1_methods.contains(&key)
+                || typed_string_methods.contains(&key)
+                || typed_f64_receiver_methods.contains_key(&key)
+                || nonnegative_index_methods.contains_key(&key)
+                || guarded_undefined_method_params.contains_key(&key)
+            {
+                continue;
+            }
+            let Some(mut plan) = crate::collectors::method_proven_shape_args(
+                method,
+                receiver_class_table,
+                &local_class_names,
+                &module_dispatch_facts,
+            ) else {
+                continue;
+            };
+            // Imported argument classes need producer-authored shape metadata
+            // and clone publication.  Until that capability is explicit, keep
+            // imports/re-exports on the generic path.
+            plan.args
+                .retain(|arg| local_class_names.contains(arg.fact.class_name.as_str()));
+            if !plan.args.is_empty() {
+                pshape_arg_methods.insert(key, plan);
+            }
+        }
+    }
+    module_dispatch_facts.install_argument_shape_routes(pshape_arg_methods.iter().map(
+        |(key, plan)| {
+            (
+                key.clone(),
+                plan.args
+                    .iter()
+                    .map(|arg| (arg.param_index, arg.fact.class_name.clone()))
+                    .collect(),
+            )
+        },
+    ));
     let mut compiler_private_async_i32_control_locals = std::collections::HashSet::new();
     let mut compiler_private_async_i1_control_locals = std::collections::HashSet::new();
     crate::boxed_vars::collect_compiler_private_async_control_locals_in_stmts(
@@ -2301,6 +2358,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         nonnegative_index_methods,
         guarded_undefined_method_params,
         pshape_methods,
+        pshape_arg_methods,
         pshape_tower_routable,
         typed_f64_closures: std::collections::HashSet::new(),
         typed_i32_closures: std::collections::HashSet::new(),

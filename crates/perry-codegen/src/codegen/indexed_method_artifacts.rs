@@ -83,6 +83,7 @@ pub(super) fn compile_indexed_method_clones(
         false,
         false,
         false,
+        false,
     )
     .with_context(|| {
         format!(
@@ -120,6 +121,7 @@ pub(super) fn compile_indexed_method_clones(
         None,
         Some(nonnegative_index_params),
         true,
+        false,
         false,
         false,
     )

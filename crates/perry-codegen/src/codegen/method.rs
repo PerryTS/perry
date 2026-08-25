@@ -56,6 +56,7 @@ pub(super) fn compile_method(
     fast_array_handle_clone: bool,
     ptr_array_cache_clone: bool,
     guarded_undefined_clone: bool,
+    pshape_arg_clone: bool,
 ) -> Result<()> {
     let public_llvm_name = methods
         .get(&(class.name.clone(), method.name.clone()))
@@ -72,9 +73,16 @@ pub(super) fn compile_method(
     // lowerer. It never replaces the public symbol and never participates in
     // the typed-trampoline / generic-body split — those are emitted by the
     // primary (`proven_this: None`) invocation for this same method.
-    let is_pshape_clone = proven_this.is_some();
+    let is_pshape_clone = proven_this.is_some() && !pshape_arg_clone;
     let is_index_clone = nonnegative_index_params.is_some();
-    let guarded_undefined_param = (!is_index_clone && !ptr_array_cache_clone)
+    let pshape_arg_plan = pshape_arg_clone
+        .then(|| {
+            cross_module
+                .pshape_arg_methods
+                .get(&(class.name.clone(), method.name.clone()))
+        })
+        .flatten();
+    let guarded_undefined_param = (!is_index_clone && !ptr_array_cache_clone && !pshape_arg_clone)
         .then(|| {
             cross_module
                 .guarded_undefined_method_params
@@ -97,7 +105,12 @@ pub(super) fn compile_method(
     debug_assert!(!guarded_undefined_clone || guarded_undefined_param.is_some());
     debug_assert!(!guarded_undefined_clone || !is_index_clone);
     debug_assert!(!guarded_undefined_clone || !ptr_array_cache_clone);
-    let family_name = if ptr_array_cache_clone {
+    debug_assert!(!pshape_arg_clone || pshape_arg_plan.is_some());
+    debug_assert!(!pshape_arg_clone || !is_index_clone);
+    debug_assert!(!pshape_arg_clone || !ptr_array_cache_clone);
+    let family_name = if pshape_arg_clone {
+        crate::collectors::pshape_args_method_name(&public_llvm_name)
+    } else if ptr_array_cache_clone {
         crate::collectors::ptr_array_cache_method_name(&public_llvm_name)
     } else if is_pshape_clone {
         crate::collectors::pshape_method_name(&public_llvm_name)
@@ -118,7 +131,7 @@ pub(super) fn compile_method(
         )
     } else if guarded_undefined_param.is_some() {
         generic_method_body_name(&family_name)
-    } else if ptr_array_cache_clone || is_pshape_clone {
+    } else if ptr_array_cache_clone || is_pshape_clone || pshape_arg_clone {
         family_name.clone()
     } else if typed_public_trampoline.is_some() || force_generic_body {
         generic_method_body_name(&public_llvm_name)
@@ -151,10 +164,11 @@ pub(super) fn compile_method(
         || typed_public_trampoline.is_some()
         || force_generic_body
         || guarded_undefined_param.is_some()
+        || pshape_arg_clone
     {
         lf.linkage = "internal".to_string();
     }
-    super::helpers::apply_pshape_inline_policy(lf, method, is_pshape_clone);
+    super::helpers::apply_pshape_inline_policy(lf, method, is_pshape_clone || pshape_arg_clone);
     if is_index_clone {
         lf.pre_statepoint_inline = true;
     }
@@ -308,6 +322,19 @@ pub(super) fn compile_method(
     let mut guarded_param_proofs = index_param_proofs;
     if let Some(index) = guarded_undefined_param.filter(|_| guarded_undefined_clone) {
         guarded_param_proofs.insert(method.params[index].id, perry_hir::types::Type::Void);
+    }
+    if let Some(plan) = pshape_arg_plan {
+        // Unlike a source annotation, this overlay is backed by the exact
+        // class+shape guard that exclusively routes into `$pshape_args`.
+        // Supplying it to property dispatch lets an unannotated (`Any`) JS
+        // parameter resolve the declared field before the Ptr<Shape> overlay
+        // removes that field access's ordinary IC diamond.
+        guarded_param_proofs.extend(plan.args.iter().map(|arg| {
+            (
+                arg.param_id,
+                perry_hir::types::Type::Named(arg.fact.class_name.clone()),
+            )
+        }));
     }
     let mut reassigned_locals = crate::collectors::reassigned_locals(&method.body);
     if let Some(index) = guarded_undefined_param.filter(|_| guarded_undefined_clone) {
@@ -507,6 +534,7 @@ pub(super) fn compile_method(
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
         pshape_methods: &cross_module.pshape_methods,
+        pshape_arg_methods: &cross_module.pshape_arg_methods,
         nonnegative_index_methods: &cross_module.nonnegative_index_methods,
         trusted_array_param_handles: fast_array_param_ids
             .iter()
@@ -517,6 +545,14 @@ pub(super) fn compile_method(
         stable_packed_loop_facts: Vec::new(),
         pshape_tower_routable: &cross_module.pshape_tower_routable,
         proven_this,
+        proven_shape_params: pshape_arg_plan
+            .map(|plan| {
+                plan.args
+                    .iter()
+                    .map(|arg| (arg.param_id, arg.fact.clone()))
+                    .collect()
+            })
+            .unwrap_or_default(),
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,
         typed_string_methods: &cross_module.typed_string_methods,
@@ -1770,12 +1806,14 @@ pub(super) fn compile_static_method(
         typed_i1_function_param_reps: &cross_module.typed_i1_function_param_reps,
         typed_f64_methods: &cross_module.typed_f64_methods,
         pshape_methods: &cross_module.pshape_methods,
+        pshape_arg_methods: &cross_module.pshape_arg_methods,
         nonnegative_index_methods: &cross_module.nonnegative_index_methods,
         trusted_array_param_handles: HashMap::new(),
         versioned_indexed_loop_facts: Vec::new(),
         stable_packed_loop_facts: Vec::new(),
         pshape_tower_routable: &cross_module.pshape_tower_routable,
         proven_this: None,
+        proven_shape_params: std::collections::HashMap::new(),
         typed_i32_methods: &cross_module.typed_i32_methods,
         typed_i1_methods: &cross_module.typed_i1_methods,
         typed_string_methods: &cross_module.typed_string_methods,

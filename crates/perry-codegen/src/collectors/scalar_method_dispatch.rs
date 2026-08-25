@@ -99,6 +99,11 @@ pub struct ModuleDispatchFacts {
     /// Populated by the compile driver from a whole-program pre-pass over
     /// final HIR, after this module's own barrier/producer facts are collected.
     imported_return_shapes: HashMap<String, String>,
+    /// #8774: exact-shape argument clones installed after clone eligibility is
+    /// known. The containment walk consults this table only for a statically
+    /// resolved method call whose tracked argument class exactly matches the
+    /// clone's guarded parameter.
+    argument_shape_routes: HashMap<(String, String, usize), String>,
     /// Representation-selection Phase 3b, #7170 R1: `LocalId` -> `FuncId` for
     /// every local that provably names one closure literal, module-wide.
     ///
@@ -128,6 +133,7 @@ impl Default for ModuleDispatchFacts {
             return_shape_functions: HashMap::new(),
             return_shape_methods: HashMap::new(),
             imported_return_shapes: HashMap::new(),
+            argument_shape_routes: HashMap::new(),
             closure_bindings: HashMap::new(),
         }
     }
@@ -234,6 +240,39 @@ impl ModuleDispatchFacts {
         self.imported_return_shapes = shapes;
     }
 
+    /// Install the guarded argument-clone capabilities emitted by this
+    /// module. Clone admission depends on typed-ABI family selection performed
+    /// by codegen, while ordinary region facts are collected later during
+    /// artifact emission.
+    pub(crate) fn install_argument_shape_routes(
+        &mut self,
+        routes: impl IntoIterator<Item = ((String, String), Vec<(usize, String)>)>,
+    ) {
+        self.argument_shape_routes.clear();
+        for ((owner, method), args) in routes {
+            for (index, class_name) in args {
+                self.argument_shape_routes
+                    .insert((owner.clone(), method.clone(), index), class_name);
+            }
+        }
+    }
+
+    /// Expected exact argument class for one emitted `$pshape_args` route.
+    pub(crate) fn argument_shape_class(
+        &self,
+        owner_class: &str,
+        method_name: &str,
+        param_index: usize,
+    ) -> Option<&str> {
+        self.argument_shape_routes
+            .get(&(
+                owner_class.to_string(),
+                method_name.to_string(),
+                param_index,
+            ))
+            .map(String::as_str)
+    }
+
     /// Representation-selection Phase 3b, #7170 R1: the `FuncId` that
     /// `LocalGet(local_id)` in callee position provably names, or `None`.
     ///
@@ -257,6 +296,7 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         return_shape_functions: HashMap::new(),
         return_shape_methods: HashMap::new(),
         imported_return_shapes: HashMap::new(),
+        argument_shape_routes: HashMap::new(),
         // #7170 R1. Purely structural — no barrier flag feeds it, and it is
         // read only through `closure_binding_func`, whose every consumer treats
         // `None` as "take no seed". Computed here rather than lazily so the one
@@ -730,6 +770,7 @@ mod tests {
             return_shape_functions: HashMap::new(),
             return_shape_methods: HashMap::new(),
             imported_return_shapes: HashMap::new(),
+            argument_shape_routes: HashMap::new(),
             closure_bindings: HashMap::new(),
         }
     }
