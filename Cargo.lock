@@ -6180,6 +6180,7 @@ dependencies = [
  "image",
  "kamadak-exif",
  "perry-ffi",
+ "perry-runtime",
 ]
 
 [[package]]

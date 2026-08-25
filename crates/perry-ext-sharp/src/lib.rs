@@ -13,6 +13,9 @@ use perry_ffi::{
 };
 use std::io::Cursor;
 
+#[cfg(test)]
+mod test_async_shims;
+
 // perry-runtime `#[no_mangle]` symbols (always linked) used to inspect raw
 // NaN-boxed JS values at the ext-crate boundary: the unified pointer mask
 // (works for strings AND buffers/objects), the Buffer-registry probe, and
@@ -891,6 +894,28 @@ mod tests {
     fn invalid_handle_returns_zero_dims() {
         assert_eq!(js_sharp_width(-1), 0.0);
         assert_eq!(js_sharp_height(-1), 0.0);
+    }
+
+    #[test]
+    fn invalid_handle_async_failure_is_an_error_object() {
+        let promise = js_sharp_metadata(perry_ffi::INVALID_HANDLE);
+        assert_eq!(perry_runtime::promise::js_promise_state(promise.cast()), 2);
+
+        let reason = perry_runtime::promise::js_promise_reason(promise.cast());
+        assert_eq!(
+            perry_runtime::error::js_error_is_error(reason).to_bits(),
+            JsValue::from_bool(true).bits()
+        );
+        let error =
+            JsValue::from_bits(reason.to_bits()).as_pointer::<perry_runtime::error::ErrorHeader>();
+        unsafe {
+            let message = (*error).message;
+            assert_eq!(
+                perry_ffi::copy_string_from_raw(message),
+                "Invalid sharp handle"
+            );
+            assert!(!(*error).stack.is_null());
+        }
     }
 
     #[test]

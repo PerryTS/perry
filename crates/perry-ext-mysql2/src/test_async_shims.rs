@@ -36,6 +36,15 @@ pub extern "C" fn perry_ffi_promise_resolve_deferred(
 }
 
 #[no_mangle]
+pub extern "C" fn perry_ffi_promise_reject_deferred(
+    promise: *mut Promise,
+    ctx: *mut c_void,
+    invoke: extern "C" fn(*mut c_void) -> u64,
+) {
+    perry_ffi_promise_reject_bits(promise, invoke(ctx));
+}
+
+#[no_mangle]
 pub extern "C" fn perry_ffi_spawn_blocking(ctx: *mut c_void, invoke: extern "C" fn(*mut c_void)) {
     invoke(ctx);
 }
