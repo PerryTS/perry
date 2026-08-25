@@ -42,6 +42,11 @@ fn load_trusted_box_capture_bits(ctx: &mut FnCtx<'_>, capture: &TrustedBoxCaptur
     ctx.block().cond_br(&is_tdz, &slow_label, &merge_label);
 
     ctx.current_block = slow_idx;
+    // The trusted accessor throws for a real TDZ read (and can allocate while
+    // constructing the error). A versioned-loop clone must poison its caller
+    // before entering that observable cold arm, just like a PIC miss or
+    // dynamic `+` fallback.
+    crate::expr::emit_versioned_loop_callback_deopt(ctx);
     let slow_bits = ctx
         .block()
         .call(I64, "js_box_get_bits_trusted", &[(I64, &capture.bits)]);
@@ -904,6 +909,50 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     if let Some(capture) = ctx.trusted_box_capture_ptrs.get(id).cloned() {
                         let old_bits = load_trusted_box_capture_bits(ctx, &capture);
                         let old = ctx.block().bitcast_i64_to_double(&old_bits);
+                        if needs_numeric_coerce && ctx.versioned_loop_deopt_context.is_some() {
+                            let is_number = crate::stmt::emit_js_value_is_number(ctx, &old);
+                            let fast_idx = ctx.new_block("versioned_update.number");
+                            let slow_idx = ctx.new_block("versioned_update.tonumeric");
+                            let merge_idx = ctx.new_block("versioned_update.merge");
+                            let fast_label = ctx.block_label(fast_idx);
+                            let slow_label = ctx.block_label(slow_idx);
+                            let merge_label = ctx.block_label(merge_idx);
+                            ctx.block().cond_br(&is_number, &fast_label, &slow_label);
+
+                            ctx.current_block = fast_idx;
+                            let fast_new = match op {
+                                UpdateOp::Increment => ctx.block().fadd(&old, "1.0"),
+                                UpdateOp::Decrement => ctx.block().fsub(&old, "1.0"),
+                            };
+                            let fast_new_bits = ctx.block().bitcast_double_to_i64(&fast_new);
+                            ctx.block().store(I64, &fast_new_bits, &capture.ptr);
+                            let fast_end = ctx.block().label.clone();
+                            ctx.block().br(&merge_label);
+
+                            ctx.current_block = slow_idx;
+                            // ToNumeric can invoke user code and collect. Mark
+                            // the exact resume index before it becomes
+                            // observable; the caller exits after this update
+                            // and resumes the guarded loop at the next entity.
+                            crate::expr::emit_versioned_loop_callback_deopt(ctx);
+                            let slow_old = coerce_old(ctx.block(), &old);
+                            let slow_new = step_new(ctx.block(), &slow_old);
+                            let slow_new_bits = ctx.block().bitcast_double_to_i64(&slow_new);
+                            ctx.block().store(I64, &slow_new_bits, &capture.ptr);
+                            // Only the cold arm can produce a BigInt pointer.
+                            emit_write_barrier(ctx, &capture.bits, &slow_new_bits);
+                            let slow_end = ctx.block().label.clone();
+                            ctx.block().br(&merge_label);
+
+                            ctx.current_block = merge_idx;
+                            return Ok(ctx.block().phi(
+                                DOUBLE,
+                                &[
+                                    (if *prefix { &fast_new } else { &old }, &fast_end),
+                                    (if *prefix { &slow_new } else { &slow_old }, &slow_end),
+                                ],
+                            ));
+                        }
                         let old = coerce_old(ctx.block(), &old);
                         let new = step_new(ctx.block(), &old);
                         let new_bits = ctx.block().bitcast_double_to_i64(&new);

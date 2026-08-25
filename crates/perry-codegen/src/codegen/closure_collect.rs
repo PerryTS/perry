@@ -77,11 +77,12 @@ fn versioned_loop_expr_uses_local(expr: &perry_hir::Expr, local_id: u32) -> bool
 }
 
 /// Select exact arrow callbacks whose only source-level effect is replacing a
-/// captured box with an additive expression over callback parameters. The
-/// private clone forces parameter property reads through the descriptor-aware
-/// generic PIC and poisons its caller's fast loop before any PIC or dynamic-+
-/// fallback can run user code. Everything outside this deliberately small
-/// grammar keeps the ordinary guarded loop.
+/// captured box with an additive expression over callback parameters, or an
+/// unused-result `++`/`--` on that box. The private clone forces parameter
+/// property reads through the descriptor-aware generic PIC and poisons its
+/// caller's fast loop before any PIC, dynamic-+, or ToNumeric fallback can run
+/// user code. Everything outside this deliberately small grammar keeps the
+/// ordinary guarded loop.
 pub(crate) fn select_versioned_loop_callbacks(
     closures: &[(perry_hir::types::FuncId, perry_hir::Expr)],
     trusted_box_closures: &std::collections::HashMap<u32, TrustedBoxClosure>,
@@ -108,19 +109,29 @@ pub(crate) fn select_versioned_loop_callbacks(
             else {
                 return None;
             };
-            let [perry_hir::Stmt::Expr(perry_hir::Expr::LocalSet(target, value))] = body.as_slice()
-            else {
-                return None;
+            let (target, value) = match body.as_slice() {
+                [perry_hir::Stmt::Expr(perry_hir::Expr::LocalSet(target, value))] => {
+                    (*target, Some(value.as_ref()))
+                }
+                // The result of a prefix/postfix update is unobservable when
+                // the update is the callback's complete expression statement.
+                // A private clone can therefore guard the captured value as a
+                // Number, perform the step inline, and deopt before ToNumeric
+                // for strings, objects, BigInts, TDZ, or any other cold case.
+                [perry_hir::Stmt::Expr(perry_hir::Expr::Update { id, .. })] => (*id, None),
+                _ => return None,
             };
-            if !module_boxed_vars.contains(target) {
+            if !module_boxed_vars.contains(&target) {
                 return None;
             }
             // The private body carries the caller's stack context in the first
             // otherwise-unused callback argument. Reusing the public ABI keeps
             // the context out of an extra live argument on every iteration.
             let scratch_param = params.first()?;
-            if versioned_loop_expr_uses_local(value, scratch_param.id) {
-                return None;
+            if let Some(value) = value {
+                if versioned_loop_expr_uses_local(value, scratch_param.id) {
+                    return None;
+                }
             }
             let param_ids: std::collections::HashSet<u32> =
                 params.iter().map(|param| param.id).collect();
@@ -133,8 +144,9 @@ pub(crate) fn select_versioned_loop_callbacks(
                 )
                 .into_iter()
                 .collect();
-            (capture_ids.contains(target)
-                && versioned_loop_value_expr(value, &param_ids, &capture_ids))
+            (capture_ids.contains(&target)
+                && value
+                    .is_none_or(|value| versioned_loop_value_expr(value, &param_ids, &capture_ids)))
             .then_some(*func_id)
         })
         .collect()
