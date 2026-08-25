@@ -367,6 +367,8 @@ test('pipeline.mts: OIDC publication and release receipt are pinned to one commi
   assert.match(workflow, /\[ "\$REF_NAME" = "main" \]/)
   assert.match(workflow, /"\$REF" != refs\/heads\/\*/)
   assert.match(workflow, /\[ "\$CANDIDATE_SHA" != "\$SHA" \]/)
+  assert.match(workflow, /find changelog\.d[^\n]+-print -quit/)
+  assert.doesNotMatch(workflow, /find changelog\.d[^\n]+\|\s*grep -q/)
   assert.match(workflow, /needs: \[preflight, build, build-cross, npm-publish\]/)
   assert.match(workflow, /needs\.npm-publish\.result == 'success'/)
 })

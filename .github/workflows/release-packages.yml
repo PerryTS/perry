@@ -136,7 +136,7 @@ jobs:
               echo "::error::tag $TAG already exists — the version in Cargo.toml was already released. Land a version bump or use existing_tag to re-publish."
               exit 1
             fi
-            if ! find changelog.d -maxdepth 1 -type f -name '[0-9]*.md' | grep -q .; then
+            if [ -z "$(find changelog.d -maxdepth 1 -type f -name '[0-9]*.md' -print -quit)" ]; then
               echo "::error::no fragments in changelog.d/ — the release notes are cut from them; nothing to release."
               exit 1
             fi
