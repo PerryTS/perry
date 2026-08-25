@@ -20,6 +20,7 @@ try {
           client!.write("payload", () => {
             console.log("net write callback store:", storage.getStore());
           });
+          console.log("net write queued bytes:", client!.bytesWritten);
           client!.end(() => {
             console.log("net end callback store:", storage.getStore());
           });

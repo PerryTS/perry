@@ -12,20 +12,10 @@
 //!
 //! # Differences from the perry-stdlib version
 //!
-//! - Uses `perry_ffi::spawn_async` to drive each socket reader / server accept
-//!   loop cooperatively on Perry's shared multi-thread runtime (the same
-//!   reactor `crate::common::async_bridge` drives), rather than spinning a
-//!   throwaway current-thread runtime on a blocking-pool thread per socket.
-//!   Keepalive comes from `js_ext_net_has_active_handles` (the socket/server is
-//!   registered synchronously before the spawn), not the blocking-pool
-//!   active-handle counter.
-//! - Uses `perry_ffi::JsClosure` instead of raw `js_closure_call*` extern fns.
-//! - Uses `perry_ffi::alloc_buffer` / `BufferHeader` instead of
-//!   `perry-runtime::buffer::*` directly.
-//! - GC root scanner registered via `perry_ffi::gc_register_mutable_root_scanner`.
-//!   Listeners stored inside the `NET_LISTENERS` map need this — issue #35
-//!   pattern — and the mutable visitor lets copied-minor GC rewrite moved
-//!   closure pointers in place.
+//! - Uses `perry_ffi::spawn_async` on Perry's shared runtime, with keepalive
+//!   provided by `js_ext_net_has_active_handles`.
+//! - Uses perry-ffi closures, buffers, and mutable GC root scanning; the latter
+//!   rewrites listener pointers after a copying minor collection.
 //!
 //! TLS is unconditionally compiled in (no `#[cfg(feature = "tls")]` gates
 //! like perry-stdlib has) — keeping the wrapper crate simple, the deps are
@@ -276,6 +266,7 @@ pub(crate) struct SocketState {
     pub(crate) destroyed: bool,
     pub(crate) bytes_read: u64,
     pub(crate) bytes_written: u64,
+    pub(crate) bytes_queued: u64,
     pub(crate) timeout: Option<u64>,
     pub(crate) type_of_service: u8,
     pub(crate) server_id: Option<i64>,
@@ -301,6 +292,7 @@ impl SocketState {
             destroyed: false,
             bytes_read: 0,
             bytes_written: 0,
+            bytes_queued: 0,
             timeout: None,
             type_of_service: 0,
             server_id: None,
@@ -554,6 +546,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             destroyed: false,
             bytes_read: 0,
             bytes_written: 0,
+            bytes_queued: 0,
             timeout: None,
             type_of_service: 0,
             server_id: None,
@@ -1081,6 +1074,7 @@ where
             destroyed: false,
             bytes_read: 0,
             bytes_written: 0,
+            bytes_queued: 0,
             timeout: None,
             type_of_service: 0,
             server_id: None,
@@ -1238,7 +1232,9 @@ pub(crate) async fn run_socket_task(
                             };
                             match command {
                                 Some(SocketCommand::Write(bytes, completion)) => {
-                                    if let Err(e) = t.write_all(&bytes).await {
+                                    if let Err(e) =
+                                        lifecycle::write_socket_bytes(t, id, &bytes).await
+                                    {
                                         let msg = format!("{}", e);
                                         if completion != 0 {
                                             push_event(PendingNetEvent::WriteComplete(
@@ -1341,7 +1337,9 @@ pub(crate) async fn run_socket_task(
                 buffer_pool::checkin(buf);
                 match cmd {
                     Some(SocketCommand::Write(bytes, completion)) => {
-                        if let Err(e) = t.write_all(&bytes).await {
+                        if let Err(e) =
+                            lifecycle::write_socket_bytes(t, id, &bytes).await
+                        {
                             let msg = format!("{}", e);
                             if completion != 0 {
                                 push_event(PendingNetEvent::WriteComplete(
