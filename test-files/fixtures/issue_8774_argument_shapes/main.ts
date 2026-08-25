@@ -3,6 +3,7 @@ import {
   installIdAccessor,
   makeProxy,
   reshape,
+  reshapeAliasedId,
 } from "./barrel.ts";
 
 class Entity {
@@ -59,6 +60,21 @@ class ForeignReader {
   }
 }
 
+class AliasReader {
+  id: number;
+  components: number[];
+
+  constructor(id: number) {
+    this.id = id;
+    this.components = [1];
+  }
+
+  read(other: AliasReader): number {
+    reshapeAliasedId(this);
+    return other.id + other.components.length;
+  }
+}
+
 const registry = new Registry();
 const results: any[] = [];
 
@@ -93,11 +109,16 @@ results.push(registry.alias(new Entity(9)));
 results.push(registry.reassign(new Entity(10)));
 results.push(new ForeignReader().read(new Foreign(11)));
 
-const reshaped = new Entity(12);
+// The selected argument aliases `this`; the imported call changes its shape
+// before the declared-field read. This call must stay out of `$pshape_args`.
+const aliased = new AliasReader(12);
+results.push(aliased.read(aliased));
+
+const reshaped = new Entity(13);
 reshape(reshaped);
 results.push(registry.read(reshaped));
 
-const descriptor = new Entity(14);
+const descriptor = new Entity(15);
 installIdAccessor(descriptor);
 results.push(registry.read(descriptor));
 
@@ -105,7 +126,7 @@ results.push(registry.read(descriptor));
 (registry as any).read = function (entity: any): number {
   return entity.id * 10;
 };
-results.push(registry.read(new Entity(16)));
+results.push(registry.read(new Entity(17)));
 
 console.log(
   JSON.stringify({ results, accessorHits, proxyHits: proxyCounter.hits }),

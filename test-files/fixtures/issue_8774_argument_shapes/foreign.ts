@@ -17,6 +17,15 @@ export function reshape(value: any): void {
   value.id = id + 1;
 }
 
+// If `value` aliases an argument being read by an exact-shape clone, the
+// inserted field changes its offset after the clone's entry guard.
+export function reshapeAliasedId(value: any): void {
+  const id = value.id;
+  delete value.id;
+  value.aliasPadding = 40;
+  value.id = id + 1;
+}
+
 export function installIdAccessor(value: any): void {
   const id = value.id;
   Object.defineProperty(value, "id", {

@@ -144,10 +144,12 @@ pub(super) fn route_preserves_argument_containment(
     module_dispatch: &ModuleDispatchFacts,
     candidates: &HashMap<u32, String>,
     roots: &HashMap<u32, u32>,
+    receiver_root: u32,
     owner_class: &str,
     method: &str,
     param_index: usize,
     arg: &Expr,
+    call_args: &[Expr],
 ) -> bool {
     let Expr::LocalGet(id) = arg else {
         return false;
@@ -155,6 +157,21 @@ pub(super) fn route_preserves_argument_containment(
     let Some(root) = roots.get(id) else {
         return false;
     };
+    // The clone assumes that nothing reachable through `this` or another
+    // formal can reshape a selected argument between its entry guard and a
+    // fixed-offset read. Preserve containment only when this tracked object is
+    // unique across every value supplied to the call.
+    if *root == receiver_root
+        || call_args.iter().enumerate().any(|(other_index, other)| {
+            other_index != param_index
+                && matches!(
+                    other,
+                    Expr::LocalGet(other_id) if roots.get(other_id) == Some(root)
+                )
+        })
+    {
+        return false;
+    }
     let Some(expected) = module_dispatch.argument_shape_class(owner_class, method, param_index)
     else {
         return false;

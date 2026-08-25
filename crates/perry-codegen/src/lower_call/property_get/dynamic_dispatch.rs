@@ -1469,6 +1469,7 @@ pub(crate) fn try_lower_instance_method_call(
                         &fallback_fn,
                         generic_target,
                         &arg_slices,
+                        args,
                     ) {
                         return Ok(Some(argument_specialized));
                     }
@@ -1551,6 +1552,7 @@ pub(crate) fn try_lower_instance_method_call(
                     property,
                     &fallback_fn,
                     &arg_slices,
+                    args,
                     &fallback_user_args,
                     nonnegative_index_direct_name.as_deref(),
                     typed_direct,

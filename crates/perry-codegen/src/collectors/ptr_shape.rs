@@ -1217,17 +1217,21 @@ impl<'a> UseWalk<'a> {
                                     .push(args.as_slice());
                             }
                             for (param_index, a) in args.iter().enumerate() {
-                                // `o.m(o)` escapes unless the audited exact-class
-                                // argument clone makes this position contained.
+                                // An audited exact-class argument clone may
+                                // preserve this position only when the tracked
+                                // argument is distinct from the receiver and
+                                // every other source argument.
                                 if resolvable
                                     && super::proven_args::route_preserves_argument_containment(
                                         self.module_dispatch,
                                         self.candidates,
                                         self.roots,
+                                        root,
                                         class_name,
                                         property,
                                         param_index,
                                         a,
+                                        args,
                                     )
                                 {
                                     continue;

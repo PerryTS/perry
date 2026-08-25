@@ -115,13 +115,13 @@ fn compile(dir: &Path, entry: &str, explain: bool) -> (PathBuf, Output) {
         // The clone contract under test is the portable tagged shadow slot;
         // this also avoids Windows' unsupported RS4GC + funclet-EH pairing in
         // the exception fixture.
-        .env("PERRY_RS4GC", "0")
-        // Compile-time half of the precise-root moving-loop-poll route.
-        .env("PERRY_GC_MOVING_LOOP_POLLS", "1");
+        .env("PERRY_RS4GC", "0");
     if explain {
         command.arg("--opt-report=json").arg("--explain-lowering");
     }
     remove_gc_env_overrides(&mut command);
+    // Compile-time half of the precise-root moving-loop-poll route. Set after
+    // the override scrub so it survives.
     command.env("PERRY_GC_MOVING_LOOP_POLLS", "1");
     let result = command.output().expect("run perry compile");
     assert_success("perry compile", &result);
@@ -346,6 +346,12 @@ fn guard_failures_match_node_and_unsafe_parameters_stay_generic() {
     assert!(
         !ir.contains("ForeignReader__read$pshape_args"),
         "an imported argument class must stay on the generic route:\n{ir}"
+    );
+    let alias_clone = "perry_method_main_ts__AliasReader__read$pshape_args";
+    let _alias_clone_body = function_body(&ir, &format!("@{alias_clone}("));
+    assert!(
+        !ir.contains(&format!("call double @{alias_clone}(")),
+        "a receiver/argument alias must never enter the argument clone:\n{ir}"
     );
     assert!(ir.contains("pshape_arg.fallback"));
 }

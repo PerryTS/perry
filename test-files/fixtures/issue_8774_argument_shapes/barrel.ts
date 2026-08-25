@@ -1,1 +1,7 @@
-export { Foreign, installIdAccessor, makeProxy, reshape } from "./foreign.ts";
+export {
+  Foreign,
+  installIdAccessor,
+  makeProxy,
+  reshape,
+  reshapeAliasedId,
+} from "./foreign.ts";

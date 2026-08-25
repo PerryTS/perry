@@ -2099,11 +2099,37 @@ impl<'a> FnCtx<'a> {
             return None;
         }
         match e {
-            perry_hir::Expr::LocalGet(id) => self
-                .proven_shape_params
-                .get(id)
-                .or_else(|| self.native_facts.shape_proven_ptr_local(*id)),
+            perry_hir::Expr::LocalGet(id) => self.ptr_shape_local_fact(*id),
             perry_hir::Expr::This => self.proven_this.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Shared exact-shape lookup for a local, with clone-parameter overlays
+    /// taking precedence over ordinary native facts.
+    fn ptr_shape_local_fact(&self, id: u32) -> Option<&crate::collectors::PtrShapeLocal> {
+        self.proven_shape_params
+            .get(&id)
+            .or_else(|| self.native_facts.shape_proven_ptr_local(id))
+    }
+
+    /// Caller-side containment proof used to admit a `$pshape_args` route.
+    ///
+    /// This deliberately ignores the raw-pointer representation context gate:
+    /// the caller keeps a tagged value, the route rechecks its live class and
+    /// shape, and the clone binds its own tagged shadow slot. Only the proof
+    /// that no external alias can reshape the argument is consumed here.
+    pub(crate) fn ptr_shape_argument_route_fact(
+        &self,
+        e: &perry_hir::Expr,
+    ) -> Option<&crate::collectors::PtrShapeLocal> {
+        match e {
+            // Ordinary native facts are containment proofs. A selected clone
+            // parameter inherits the same contract from the only routes that
+            // can call that clone.
+            perry_hir::Expr::LocalGet(id) => self.ptr_shape_local_fact(*id),
+            // `proven_this` may come from a runtime receiver guard rather than
+            // containment, so it cannot justify an argument clone route.
             _ => None,
         }
     }
@@ -2116,10 +2142,7 @@ impl<'a> FnCtx<'a> {
         e: &perry_hir::Expr,
     ) -> Option<&crate::collectors::PtrShapeLocal> {
         match e {
-            perry_hir::Expr::LocalGet(id) => self
-                .proven_shape_params
-                .get(id)
-                .or_else(|| self.native_facts.shape_proven_ptr_local(*id)),
+            perry_hir::Expr::LocalGet(id) => self.ptr_shape_local_fact(*id),
             perry_hir::Expr::This => self.proven_this.as_ref(),
             _ => None,
         }

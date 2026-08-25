@@ -108,6 +108,8 @@ pub(super) fn compile_method(
     debug_assert!(!pshape_arg_clone || pshape_arg_plan.is_some());
     debug_assert!(!pshape_arg_clone || !is_index_clone);
     debug_assert!(!pshape_arg_clone || !ptr_array_cache_clone);
+    debug_assert!(!pshape_arg_clone || typed_public_trampoline.is_none());
+    debug_assert!(!pshape_arg_clone || !force_generic_body);
     let family_name = if pshape_arg_clone {
         crate::collectors::pshape_args_method_name(&public_llvm_name)
     } else if ptr_array_cache_clone {

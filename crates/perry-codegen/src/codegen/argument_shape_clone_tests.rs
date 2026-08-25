@@ -197,9 +197,13 @@ fn guarded_call_routes_to_shadow_rooted_direct_field_clone() {
     assert!(
         clone.contains("@js_shadow_slot_bind(")
             && clone.find("@js_shadow_slot_bind(")
-                < clone
-                    .find("getelementptr double")
-                    .or_else(|| clone.find("inttoptr i64")),
+                < [
+                    clone.find("getelementptr double"),
+                    clone.find("inttoptr i64"),
+                ]
+                .into_iter()
+                .flatten()
+                .min(),
         "the tagged parameter slot must be bound before fixed-offset access:\n{clone}"
     );
     assert!(

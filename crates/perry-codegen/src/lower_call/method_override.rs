@@ -132,6 +132,7 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
 fn emit_inline_exact_argument_shape_guard(
     ctx: &mut FnCtx<'_>,
     value: &str,
+    non_alias_values: &[String],
     expected_class_id: u32,
     expected_shape_id: &str,
     fast_label: &str,
@@ -153,7 +154,12 @@ fn emit_inline_exact_argument_shape_guard(
         let above_floor = blk.icmp_uge(I64, &handle, &heap_floor);
         let below_ceiling = blk.icmp_ult(I64, &handle, &heap_ceiling);
         let in_heap = blk.and(I1, &above_floor, &below_ceiling);
-        let safe_to_deref = blk.and(I1, &tagged, &in_heap);
+        let mut safe_to_deref = blk.and(I1, &tagged, &in_heap);
+        for other in non_alias_values {
+            let other_bits = blk.bitcast_double_to_i64(other);
+            let distinct = blk.icmp_ne(I64, &bits, &other_bits);
+            safe_to_deref = blk.and(I1, &safe_to_deref, &distinct);
+        }
         blk.cond_br(&safe_to_deref, &deref_label, fallback_label);
     }
 
@@ -191,6 +197,7 @@ pub(super) fn emit_pshape_argument_dispatch(
     direct_fn: &str,
     generic_fn: &str,
     direct_arg_slices: &[(crate::types::LlvmType, &str)],
+    source_args: &[perry_hir::Expr],
 ) -> Option<String> {
     let key = (receiver_class_name.to_string(), property.to_string());
     let plan = ctx.pshape_arg_methods.get(&key)?.clone();
@@ -198,12 +205,24 @@ pub(super) fn emit_pshape_argument_dispatch(
 
     let mut guarded = Vec::with_capacity(plan.args.len());
     for arg in &plan.args {
-        let value = direct_arg_slices.get(arg.param_index + 1)?.1.to_string();
+        let direct_index = arg.param_index + 1;
+        let source_arg = source_args.get(arg.param_index)?;
+        let caller_fact = ctx.ptr_shape_argument_route_fact(source_arg)?;
+        if caller_fact.class_name != arg.fact.class_name {
+            return None;
+        }
+        let value = direct_arg_slices.get(direct_index)?.1.to_string();
+        let non_alias_values: Vec<String> = direct_arg_slices
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != direct_index)
+            .map(|(_, (_, other))| (*other).to_string())
+            .collect();
         let class_id = *ctx.class_ids.get(&arg.fact.class_name)?;
         let keys_global = ctx.class_keys_globals.get(&arg.fact.class_name)?.clone();
         let shape_id =
             crate::typed_shape::load_class_shape_id(ctx, &arg.fact.class_name, &keys_global);
-        guarded.push((arg.clone(), value, class_id, shape_id));
+        guarded.push((arg.clone(), value, non_alias_values, class_id, shape_id));
     }
     if guarded.is_empty() {
         return None;
@@ -219,7 +238,7 @@ pub(super) fn emit_pshape_argument_dispatch(
     let fallback_label = ctx.block_label(fallback_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    for (index, (_, value, class_id, shape_id)) in guarded.iter().enumerate() {
+    for (index, (_, value, non_alias_values, class_id, shape_id)) in guarded.iter().enumerate() {
         let pass_label = intermediate_idxs
             .get(index)
             .map(|block| ctx.block_label(*block))
@@ -227,6 +246,7 @@ pub(super) fn emit_pshape_argument_dispatch(
         emit_inline_exact_argument_shape_guard(
             ctx,
             value,
+            non_alias_values,
             *class_id,
             shape_id,
             &pass_label,
@@ -263,11 +283,12 @@ pub(super) fn emit_pshape_argument_dispatch(
         "argument_abi=tagged_js_value_shadow_rooted".to_string(),
         "guard_failure_fallback=generic_method".to_string(),
     ];
-    for (arg, _, _, _) in &guarded {
+    for (arg, _, _, _, _) in &guarded {
         notes.push(format!("argument_index={}", arg.param_index));
         notes.push(format!("argument_class={}", arg.fact.class_name));
         notes.push("argument_guard=exact_class_and_shape".to_string());
-        notes.push("argument_provenance=runtime_guarded_declared_candidate".to_string());
+        notes.push("argument_alias_guard=receiver_and_formals_distinct".to_string());
+        notes.push("argument_provenance=caller_containment_plus_runtime_guard".to_string());
     }
     ctx.record_lowered_value(
         "MethodCall",
@@ -511,6 +532,7 @@ pub(super) fn emit_guarded_direct_method_call(
     property: &str,
     direct_fn: &str,
     direct_arg_slices: &[(crate::types::LlvmType, &str)],
+    source_args: &[perry_hir::Expr],
     fallback_user_args: &[String],
     nonnegative_index_direct_fn: Option<&str>,
     typed_direct_fn: Option<(&str, Vec<crate::codegen::TypedParamRep>)>,
@@ -1210,6 +1232,7 @@ pub(super) fn emit_guarded_direct_method_call(
                 direct_fn,
                 pshape_arg_fallback,
                 direct_arg_slices,
+                source_args,
             ) {
                 argument_specialized
             } else {

@@ -174,19 +174,27 @@ impl Drop for CompileProgress {
     }
 }
 
+#[cfg(test)]
+mod argument_shape_clone_tests;
 pub(crate) mod arguments;
 mod artifact_context;
 mod artifacts;
 mod boxed_locals;
+#[cfg(test)]
+mod clone_suffix_tests;
 mod closure;
 mod closure_collect;
 mod ctor_arity;
+#[cfg(test)]
+mod declared_string_add_tests;
 #[cfg(test)]
 mod emission_order_tests;
 mod entry;
 pub mod entry_outline;
 mod func_registry;
 mod function;
+#[cfg(test)]
+mod guarded_undefined_method_tests;
 #[cfg(test)]
 mod hoisted_callback_method_tests;
 #[cfg(test)]
@@ -195,14 +203,6 @@ mod indexed_method_artifacts;
 mod ordinary_method_artifacts;
 // `pub(crate)` so `crate::linker` can read the inline-hot-small policy
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
-#[cfg(test)]
-mod argument_shape_clone_tests;
-#[cfg(test)]
-mod clone_suffix_tests;
-#[cfg(test)]
-mod declared_string_add_tests;
-#[cfg(test)]
-mod guarded_undefined_method_tests;
 pub(crate) mod helpers;
 mod method;
 mod method_registry;
