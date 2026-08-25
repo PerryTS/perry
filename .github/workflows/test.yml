@@ -70,6 +70,10 @@ on:
           about the run changes.
         type: boolean
         default: false
+      release_doc_diagnostic:
+        description: 'Run only the focused macOS release doc-test diagnostic'
+        type: boolean
+        default: false
 
 concurrency:
   # pull_request: superseded pushes cancel their in-flight run (per PR).
@@ -92,6 +96,68 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "13.0"
 
 jobs:
+  release-doc-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_doc_diagnostic == true
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes/*Simulator* || true
+          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/* || true
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+
+      - uses: ./.github/actions/setup-llvm22
+
+      - name: Build the exact doc-test surface
+        run: >-
+          cargo build --release
+          -p perry -p perry-runtime -p perry-stdlib
+          -p perry-runtime-static -p perry-stdlib-static
+          -p perry-ui-macos -p perry-doc-tests
+          -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-mysql2
+          -p perry-ext-pg -p perry-ext-nodemailer
+
+      - name: Compare -Os and -O3 and capture abort backtraces
+        run: |
+          SOURCE=docs/examples/stdlib/utilities/snippets.ts
+          mkdir -p target/release-doc-diagnostic
+
+          diagnose() {
+            label="$1"
+            shift
+            binary="target/release-doc-diagnostic/utilities-${label}"
+            env PERRY_NO_AUTO_OPTIMIZE=1 "$@" target/release/perry "$SOURCE" -o "$binary"
+
+            set +e
+            "$binary"
+            rc=$?
+            set -e
+            echo "${label}: direct exit=${rc}"
+
+            if [ "$rc" -ne 0 ]; then
+              lldb --batch -o run -o 'thread backtrace all' -- "$binary" || true
+            fi
+
+            set +e
+            DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib "$binary"
+            guard_rc=$?
+            set -e
+            echo "${label}: Guard Malloc exit=${guard_rc}"
+
+            if [ "$guard_rc" -ne 0 ]; then
+              DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib \
+                lldb --batch -o run -o 'thread backtrace all' -- "$binary" || true
+            fi
+          }
+
+          diagnose os
+          diagnose o3 PERRY_LL_SIZE_OPT=0
+
   # ---------------------------------------------------------------------------
   # plan: the one job that decides what this run does. ~20 s, no toolchain.
   # Everything below is `needs: plan` + `if: fromJSON(...).jobs.<x>`. If THIS
@@ -99,6 +165,7 @@ jobs:
   # `needs.plan.result != 'success'` -- a broken plan cannot silently pass.
   # ---------------------------------------------------------------------------
   plan:
+    if: github.event_name != 'workflow_dispatch' || inputs.release_doc_diagnostic != true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
