@@ -78,6 +78,10 @@ on:
         description: 'Run only the focused Linux parity release diagnostic'
         type: boolean
         default: false
+      release_cargo_diagnostic:
+        description: 'Run only the focused Linux cargo-test release diagnostic'
+        type: boolean
+        default: false
       release_windows_llvm_diagnostic:
         description: 'Run only the focused Windows LLVM setup diagnostic'
         type: boolean
@@ -203,6 +207,34 @@ jobs:
           echo "failures=${failures}/5"
           test "$failures" -eq 0
 
+  release-cargo-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_cargo_diagnostic == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+
+      - name: Verify the exact candidate checkout
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+
+      - uses: ./.github/actions/setup-llvm22
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: false
+
+      - name: Run the failing cargo-test target
+        run: cargo test -p perry --test issue_5247_property_read_source_location -- --test-threads=1
+
   release-doc-diagnostic:
     if: github.event_name == 'workflow_dispatch' && inputs.release_doc_diagnostic == true
     runs-on: windows-2022
@@ -262,6 +294,7 @@ jobs:
       github.event_name != 'workflow_dispatch' ||
       (inputs.release_doc_diagnostic != true &&
        inputs.release_net_diagnostic != true &&
+       inputs.release_cargo_diagnostic != true &&
        inputs.release_windows_llvm_diagnostic != true)
     runs-on: ubuntu-latest
     timeout-minutes: 5
