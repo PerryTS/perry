@@ -1,6 +1,8 @@
 use crate::{compile_module, CompileOptions, ImportedClass};
 use perry_hir::types::Type;
-use perry_hir::{Class, ClassField, Expr, Function, Module, Param, Stmt};
+use perry_hir::{
+    Class, ClassField, Expr, Function, Interface, InterfaceProperty, Module, Param, Stmt,
+};
 
 fn number_param(id: u32, name: &str) -> Param {
     Param {
@@ -223,6 +225,105 @@ fn compile_imported_has_ir() -> String {
     .expect("LLVM IR is UTF-8")
 }
 
+fn compile_nested_map_get_ir() -> String {
+    let mut module = Module::new("command_executor.ts");
+    module.interfaces.push(Interface {
+        id: 1,
+        name: "CommandExecutorContext".to_string(),
+        type_params: Vec::new(),
+        extends: Vec::new(),
+        properties: vec![InterfaceProperty {
+            name: "entityToArchetype".to_string(),
+            ty: Type::Generic {
+                base: "Map".to_string(),
+                type_args: vec![Type::Number, Type::Number],
+            },
+            optional: false,
+            readonly: false,
+        }],
+        methods: Vec::new(),
+        is_exported: false,
+    });
+    module.classes.push(Class {
+        id: 2,
+        name: "CommandExecutor".to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: vec![ClassField {
+            name: "ctx".to_string(),
+            key_expr: None,
+            ty: Type::Named("CommandExecutorContext".to_string()),
+            init: None,
+            is_private: false,
+            is_readonly: true,
+            decorators: Vec::new(),
+        }],
+        constructor: None,
+        methods: vec![Function {
+            id: 3,
+            name: "lookup".to_string(),
+            type_params: Vec::new(),
+            params: vec![number_param(1, "entityId")],
+            return_type: Type::Number,
+            body: vec![Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::PropertyGet {
+                            object: Box::new(Expr::This),
+                            property: "ctx".to_string(),
+                            byte_offset: 0,
+                        }),
+                        property: "entityToArchetype".to_string(),
+                        byte_offset: 0,
+                    }),
+                    property: "get".to_string(),
+                    byte_offset: 0,
+                }),
+                args: vec![Expr::LocalGet(1)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }))],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }],
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        computed_members: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+        is_nested: false,
+        alloc_width_hint: 0,
+        specialized_from: None,
+    });
+
+    String::from_utf8(
+        compile_module(
+            &module,
+            CompileOptions {
+                emit_ir_only: true,
+                ..Default::default()
+            },
+        )
+        .expect("nested declared Map.get compiles"),
+    )
+    .expect("LLVM IR is UTF-8")
+}
+
 fn method_ir<'a>(ir: &'a str, owner: &str, method: &str) -> &'a str {
     let suffix = format!("__{owner}__{method}(");
     let suffix_start = ir.find(&suffix).expect("requested method is present");
@@ -278,5 +379,20 @@ fn imported_class_readonly_set_field_uses_branded_fast_path() {
     assert!(
         !method_ir.contains("call double @js_typed_feedback_native_call_method_by_id("),
         "cross-module field metadata must not force native Sets through generic dispatch:\n{method_ir}"
+    );
+}
+
+#[test]
+fn nested_interface_map_field_get_uses_branded_dispatch() {
+    let ir = compile_nested_map_get_ir();
+    let method_ir = method_ir(&ir, "CommandExecutor", "lookup");
+
+    assert!(
+        method_ir.contains("call double @js_declared_map_get("),
+        "a Map reached through a nested interface field must retain a branded dispatch candidate:\n{method_ir}"
+    );
+    assert!(
+        !method_ir.contains("call double @js_native_call_method_by_id("),
+        "a genuine native Map must not enter generic method dispatch at this site:\n{method_ir}"
     );
 }

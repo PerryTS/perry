@@ -1637,6 +1637,11 @@ pub extern "C" fn js_map_get(map: *const MapHeader, key: f64) -> f64 {
     if map.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    map_get_resolved(map, key)
+}
+
+#[inline(always)]
+fn map_get_resolved(map: *const MapHeader, key: f64) -> f64 {
     let key = normalize_zero(key);
     unsafe {
         let idx = find_key_index(map, key);
@@ -1648,6 +1653,40 @@ pub extern "C" fn js_map_get(map: *const MapHeader, key: f64) -> f64 {
 
         f64::from_bits(TAG_UNDEFINED)
     }
+}
+
+/// Fast `Map.get`/`ReadonlyMap.get` for a declared structural receiver.
+///
+/// A TypeScript collection annotation does not prove Perry's native layout.
+/// Genuine `GC_TYPE_MAP` receivers bypass generic property/method dispatch;
+/// structural objects, proxies, subclasses, primitives, and nullish values
+/// retain ordinary `receiver.get(key)` behavior on a brand miss.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_declared_map_get(receiver: f64, key: f64) -> f64 {
+    let receiver_value = crate::value::JSValue::from_bits(receiver.to_bits());
+    if receiver_value.is_pointer() {
+        let raw = receiver_value.as_pointer::<MapHeader>();
+        if matches!(
+            crate::value::addr_class::try_read_gc_header(raw as usize),
+            Some(header) if header.obj_type == crate::gc::GC_TYPE_MAP
+        ) {
+            return map_get_resolved(raw, key);
+        }
+    }
+
+    // Generic dispatch can allocate and re-enter generated code. Keep both
+    // operands rooted and refresh them before crossing that boundary.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_handle = scope.root_nanbox_f64(receiver);
+    let key_handle = scope.root_nanbox_f64(key);
+    let refreshed_key = key_handle.get_nanbox_f64();
+    crate::object::js_native_call_method(
+        receiver_handle.get_nanbox_f64(),
+        b"get".as_ptr() as *const i8,
+        3,
+        &refreshed_key,
+        1,
+    )
 }
 
 #[no_mangle]

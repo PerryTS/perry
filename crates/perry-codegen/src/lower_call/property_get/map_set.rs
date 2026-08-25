@@ -30,7 +30,7 @@ use crate::expr::{lower_expr, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
 use crate::rooting;
 use crate::type_analysis::{
-    is_map_expr, is_readonly_set_expr, is_set_expr, is_url_search_params_expr,
+    is_declared_map_expr, is_map_expr, is_readonly_set_expr, is_set_expr, is_url_search_params_expr,
 };
 use crate::types::{DOUBLE, I64};
 
@@ -59,7 +59,23 @@ pub(crate) fn try_lower_map_set_methods(
             )))
         });
     }
-    if is_map_expr(ctx, object) {
+    let is_native_map = is_map_expr(ctx, object);
+    // A nested interface/object field can retain its `Map` or `ReadonlyMap`
+    // declaration after the stronger native-layout proof is lost. Avoid the
+    // full property/method dispatcher for a genuine native Map, but preserve
+    // structural and subclass behavior through the runtime brand miss.
+    if !is_native_map && is_declared_map_expr(ctx, object) && property == "get" && args.len() == 1 {
+        return rooting::with_operands_rooted(ctx, &[object, &args[0]], |ctx, vals| {
+            let receiver = vals[0].clone();
+            let key = vals[1].clone();
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_declared_map_get",
+                &[(DOUBLE, &receiver), (DOUBLE, &key)],
+            )))
+        });
+    }
+    if is_native_map {
         match property {
             "set" if args.len() == 2 => {
                 // #6970: each finished operand is live in an SSA register
