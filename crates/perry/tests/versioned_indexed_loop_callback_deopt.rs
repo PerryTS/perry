@@ -7,6 +7,29 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::Once;
 
+/// Normalize every collector input that can make a nominal evacuation arm
+/// non-moving. Several of these are compile-time Perry inputs, so apply the
+/// same baseline to the runtime build, fixture compile, and child process.
+const GC_ENV_OVERRIDES: &[&str] = &[
+    "PERRY_GEN_GC",
+    "PERRY_GC_SCAVENGE",
+    "PERRY_GC_SCAVENGE_NURSERY_MB",
+    "PERRY_GC_MOVING_SAFEPOINT",
+    "PERRY_GC_MOVING_LOOP_POLLS",
+    "PERRY_GC_FORCE_EVACUATE",
+    "PERRY_GC_VERIFY_EVACUATION",
+    "PERRY_CONSERVATIVE_STACK_SCAN",
+    "PERRY_WRITE_BARRIERS",
+    "PERRY_GC_INCREMENTAL",
+    "PERRY_GC_HEAP_LIMIT",
+];
+
+fn remove_gc_env_overrides(command: &mut Command) {
+    for key in GC_ENV_OVERRIDES {
+        command.env_remove(key);
+    }
+}
+
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
@@ -24,6 +47,7 @@ fn runtime_dir() -> PathBuf {
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         let mut command = Command::new(cargo);
         command.current_dir(workspace_root()).arg("build");
+        remove_gc_env_overrides(&mut command);
         if !cfg!(debug_assertions) {
             command.arg("--release");
         }
@@ -47,14 +71,11 @@ fn runtime_dir() -> PathBuf {
 
 fn run_fixture(binary: &Path, force_evacuation: bool) -> Output {
     let mut command = Command::new(binary);
+    remove_gc_env_overrides(&mut command);
     if force_evacuation {
         command
             .env("PERRY_GC_FORCE_EVACUATE", "1")
             .env("PERRY_GC_VERIFY_EVACUATION", "1");
-    } else {
-        command
-            .env_remove("PERRY_GC_FORCE_EVACUATE")
-            .env_remove("PERRY_GC_VERIFY_EVACUATION");
     }
     command.output().expect("run callback-deopt fixture")
 }
@@ -244,7 +265,8 @@ runFixture();
     )
     .expect("write callback-deopt fixture");
 
-    let compile = Command::new(perry_bin())
+    let mut compile_command = Command::new(perry_bin());
+    compile_command
         .current_dir(dir.path())
         .arg("compile")
         .arg(&entry)
@@ -254,7 +276,9 @@ runFixture();
         .arg("--no-auto-optimize")
         .arg("--trace")
         .arg("llvm")
-        .env("PERRY_RUNTIME_DIR", runtime_dir())
+        .env("PERRY_RUNTIME_DIR", runtime_dir());
+    remove_gc_env_overrides(&mut compile_command);
+    let compile = compile_command
         .output()
         .expect("compile callback-deopt fixture");
     assert!(
