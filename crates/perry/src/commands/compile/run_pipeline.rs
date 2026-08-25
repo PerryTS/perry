@@ -6210,6 +6210,13 @@ pub fn run_with_parse_cache(
     // emits `perry_module_init` instead of `main` (see is_dylib branch in
     // codegen/entry.rs, which now also covers `staticlib`).
     if is_staticlib {
+        let runtime_lib_for_manifest = optimized_libs
+            .runtime
+            .clone()
+            .or_else(|| find_runtime_library(target.as_deref()).ok());
+        if let Some(runtime) = &runtime_lib_for_manifest {
+            ensure_runtime_library_compatible(runtime)?;
+        }
         let windows_target = is_windows_target(target.as_deref());
         // Best-effort: drop a stale archive first so `ar` doesn't append to a
         // previous build's contents.
@@ -6283,10 +6290,6 @@ pub fn run_with_parse_cache(
                 "path": abs.display().to_string(),
             }));
         };
-        let runtime_lib_for_manifest = optimized_libs
-            .runtime
-            .clone()
-            .or_else(|| find_runtime_library(target.as_deref()).ok());
         if let Some(p) = &runtime_lib_for_manifest {
             push_archive(&mut link_archives, "runtime", p);
         }
@@ -6596,6 +6599,12 @@ pub fn run_with_parse_cache(
     } else {
         find_runtime_library(target.as_deref())?
     };
+    // #8752: discovery only proves that an archive exists. A runtime copied
+    // from an older compiler build can be found successfully and then fail at
+    // the final link with undefined symbols for newly emitted entrypoints.
+    // Read its embedded build stamp now so the error names the stale archive
+    // and both builds before invoking the platform linker.
+    ensure_runtime_library_compatible(&runtime_lib)?;
     // #1383 — under --enable-geisterhand, prefer the geisterhand-built stdlib
     // over the auto-optimized one. `build_geisterhand_libs` (already run above
     // when selecting `runtime_lib`) compiles perry-stdlib into target/geisterhand

@@ -391,6 +391,9 @@ mach2 = "0.6"
 # See `build.rs` and issue #395 for the rationale.
 [build-dependencies]
 perry-dispatch = { path = "../perry-dispatch" }
+# Build-time only: fingerprints the compiler/runtime source contract embedded
+# in libperry_runtime so the CLI can reject a stale archive before linking.
+sha2 = "0.11"
 # Build-time only (does NOT ship in the runtime binary): generates the WHATWG
 # single-byte TextDecoder index tables so they are always spec-accurate. Only
 # the generated `[u16; 128]` arrays land in the binary. Already vetted in the

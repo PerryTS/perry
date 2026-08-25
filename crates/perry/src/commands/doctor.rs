@@ -272,16 +272,30 @@ fn check_runtime_library() -> CheckResult {
         "libperry_runtime.a"
     };
     if let Some(path) = crate::commands::compile::find_library(lib_name, None) {
-        return CheckResult {
-            name: "runtime library".to_string(),
-            status: CheckStatus::Ok,
-            details: Some(path.display().to_string()),
+        let library_status = crate::commands::compile::runtime_library_status(&path);
+        return match &library_status {
+            crate::commands::compile::RuntimeLibraryStatus::Compatible(_) => CheckResult {
+                name: "runtime library".to_string(),
+                status: CheckStatus::Ok,
+                details: Some(crate::commands::compile::runtime_library_diagnostic(
+                    &path,
+                    &library_status,
+                )),
+            },
+            _ => CheckResult {
+                name: "runtime library".to_string(),
+                status: CheckStatus::Error,
+                details: Some(crate::commands::compile::runtime_library_diagnostic(
+                    &path,
+                    &library_status,
+                )),
+            },
         };
     }
     CheckResult {
         name: "runtime library".to_string(),
         status: CheckStatus::Warning,
-        details: Some("not found - run: cargo build --release -p perry-runtime".to_string()),
+        details: Some("not found - run: cargo build --release -p perry-runtime-static".to_string()),
     }
 }
 

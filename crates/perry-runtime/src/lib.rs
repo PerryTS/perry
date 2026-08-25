@@ -51,6 +51,8 @@ pub mod atomics_futex;
 pub mod bigint;
 pub mod r#box;
 pub mod buffer;
+mod build_stamp;
+pub use build_stamp::{PERRY_RUNTIME_BUILD_ID, PERRY_RUNTIME_BUILD_STAMP};
 pub mod builtins;
 pub mod bun_compat;
 pub mod bun_ffi;

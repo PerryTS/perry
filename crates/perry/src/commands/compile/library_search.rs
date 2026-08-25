@@ -1196,7 +1196,7 @@ pub(super) fn find_runtime_library(target: Option<&str>) -> Result<PathBuf> {
             "Could not find {lib}{extra}.\n\
              Searched:\n{list}\n\n\
              Fixes:\n\
-             - From the perry workspace: cargo build --release -p perry-runtime{tf}\n\
+             - From the perry workspace: cargo build --release -p perry-runtime-static{tf}\n\
              - Out-of-tree install: set PERRY_RUNTIME_DIR to the directory containing {lib}\n\
                (e.g. export PERRY_RUNTIME_DIR=/path/to/perry/target/release)",
             lib = lib_name,

@@ -53,6 +53,7 @@ mod windows_target;
 // reuses the subpath-imports + tsconfig-paths resolvers for `#` specifiers.
 pub(crate) mod resolve;
 mod resources;
+mod runtime_compat;
 mod sandbox_buildrs;
 mod shared_tokio;
 mod strip_dedup;
@@ -111,6 +112,10 @@ use resolve::{
     is_declaration_file, is_in_compile_package, is_in_perry_native_package, is_js_file,
     is_recognized_text_asset, parse_native_library_manifest, parse_package_specifier,
     resolve_import,
+};
+pub(crate) use runtime_compat::{
+    ensure_runtime_library_compatible, runtime_library_diagnostic, runtime_library_status,
+    RuntimeLibraryStatus,
 };
 use size_report::emit_size_report;
 use strip_dedup::{
