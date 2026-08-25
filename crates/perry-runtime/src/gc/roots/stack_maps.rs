@@ -444,6 +444,18 @@ unsafe fn rewrite_derived_slot(derived_addr: usize, base_addr: usize, old_base_w
 // the target and this runtime's `target_arch` can never disagree.
 const DWARF_REG_FP_AARCH64: u16 = 29;
 const DWARF_REG_SP_AARCH64: u16 = 31;
+// #8770: LLVM takes x19 as a frame base pointer for a function with a *dynamic*
+// stack allocation (a VLA or a spread-argument area). The base is captured as
+// `mov x19, sp` immediately after the fixed prologue and before the dynamic
+// `sub sp, sp, xN`, with no realignment — so x19 holds exactly the body SP the
+// fp chain reconstructs (`fp - fp_to_sp_offset`). The fast walker therefore
+// resolves an x19-based root like an SP-based one, once `x19_is_body_sp` has
+// confirmed that prologue shape for the owning function; a frame that does not
+// match (e.g. a realigning one) fails closed to the platform unwinder. Before
+// this these frames flipped the whole-image `chain_walkable` flag false and
+// forced every walk onto the unwinder, whose root resolution the fast walker
+// exists to avoid.
+const DWARF_REG_X19_AARCH64: u16 = 19;
 
 // A frame record is two 64-bit words, so it needs EIGHT-byte alignment, not
 // sixteen.
@@ -683,17 +695,22 @@ fn index_records(
     // dereferencing every function address at startup — unsafe for records
     // whose addresses are not live code, and unnecessary because the walker
     // already fails closed to the platform unwinder on any anomaly.
-    // The decoder only ever produces these two bases, but keep the check: it
-    // is what decides the fast walker is usable at all, and a format change
-    // that introduced a third base must disable the chain walk, not be
-    // trusted by it.
+    // The decoder produces three bases: FP, SP, and x19 (the base pointer LLVM
+    // uses for a dynamic-allocation frame — see `DWARF_REG_X19_AARCH64`). All
+    // three are chain-walkable: FP and SP directly, x19 because it is captured
+    // as `mov x19, sp` after the fixed prologue and so equals the body SP the
+    // walker already reconstructs. The x19 case is confirmed PER FRAME at walk
+    // time by `x19_is_body_sp`; a frame that fails that check fails closed to
+    // the unwinder without disabling the fast walk for the rest of the image.
+    // Any OTHER base (a format change, a register-located root) still disables
+    // the chain walk here rather than being trusted by it.
     let chain_walkable = roots
         .iter()
         .chain(derived.iter().map(|entry| &entry.slot))
         .all(|location| {
             matches!(
                 location.dwarf_reg,
-                DWARF_REG_FP_AARCH64 | DWARF_REG_SP_AARCH64
+                DWARF_REG_FP_AARCH64 | DWARF_REG_SP_AARCH64 | DWARF_REG_X19_AARCH64
             )
         });
     #[cfg(any(target_arch = "aarch64", test))]
@@ -842,10 +859,13 @@ fn fp_to_sp_offset(function_address: usize) -> Option<usize> {
                 // Anything else ends the prologue. Something later that
                 // touches sp is a body operation (a dynamic alloca, a
                 // call-argument area) which the stack map's own offsets
-                // already account for — and a frame that needs a base pointer
-                // for either reason records its roots against x19, which
-                // `chain_walkable` refuses for the whole image, so this walker
-                // never sees one.
+                // already account for. A frame that needs a base pointer for
+                // either reason records its roots against x19 — and x19 is
+                // captured as `mov x19, sp` right here, at the end of the fixed
+                // prologue, so it equals the body SP this function returns.
+                // `x19_is_body_sp` confirms that shape and the fast walker then
+                // resolves those roots off this same offset (#8770); it is no
+                // longer true that the walker never sees an x19 frame.
                 break;
             }
         }
@@ -855,6 +875,69 @@ fn fp_to_sp_offset(function_address: usize) -> Option<usize> {
         }
     }
     fp_offset
+}
+
+/// True iff `function_address` establishes its x19 frame base as `mov x19, sp`
+/// after only the fixed stack adjustments `fp_to_sp_offset` already folds in —
+/// the shape (#8770) in which x19 equals the body SP the fp chain reconstructs,
+/// so an x19-based root resolves exactly like an SP-based one at the same
+/// offset.
+///
+/// LLVM takes a base pointer (x19) for a frame with a *dynamic* stack
+/// allocation and captures it right after the fixed prologue, before the
+/// dynamic `sub sp, sp, xN`; that capture is `mov x19, sp` (`add x19, sp, #0`,
+/// 0x9100_03F3). A *realigning* frame instead masks SP (`and sp, sp, #-align`)
+/// before taking the base, and a base captured after a `sub sp, sp, xN` sits
+/// below a dynamic adjustment — in both cases x19 is a runtime SP the chain
+/// cannot reconstruct, so this returns false and the caller fails closed to the
+/// platform unwinder, exactly as for any other frame the fast walk cannot
+/// resolve. The accepted set between the frame-pointer setup and the base
+/// capture is therefore precisely the one `fp_to_sp_offset` accumulates.
+#[cfg(all(
+    any(target_vendor = "apple", target_os = "linux"),
+    target_arch = "aarch64"
+))]
+fn x19_is_body_sp(function_address: usize) -> bool {
+    // `add x19, sp, #0` — the base-pointer capture. `mov x19, sp` assembles to
+    // exactly this (Rn=sp=31, Rd=x19=19, imm=0).
+    const MOV_X19_SP: u32 = 0x9100_03F3;
+    const ADD_FP_SP_MASK: u32 = 0xFF80_03FF;
+    const ADD_FP_SP_PATTERN: u32 = 0x9100_03FD;
+    const SUB_SP_SP_MASK: u32 = 0xFF80_03FF;
+    const SUB_SP_SP_PATTERN: u32 = 0xD100_03FF;
+    const PROLOGUE_WINDOW_INSNS: usize = 24;
+    if function_address == 0 || function_address & 0x3 != 0 {
+        return false;
+    }
+    let mut fp_set = false;
+    for i in 0..PROLOGUE_WINDOW_INSNS {
+        let word = unsafe { std::ptr::read((function_address + i * 4) as *const u32) };
+        if word == MOV_X19_SP {
+            // The base is captured from sp; it equals the reconstructed body SP
+            // only once the frame pointer — the walker's anchor — is set.
+            return fp_set;
+        }
+        if !fp_set {
+            fp_set = word & ADD_FP_SP_MASK == ADD_FP_SP_PATTERN;
+            // Everything before the frame pointer is set (the callee-save
+            // stores, the initial pre-index `stp`) leaves the fp<->sp
+            // relationship `fp_to_sp_offset` reconstructs intact, so it may
+            // precede the base capture.
+            continue;
+        }
+        // After the frame pointer is set, only the adjustments `fp_to_sp_offset`
+        // itself folds in may separate it from the base capture — anything else
+        // (a realigning `and sp`, a dynamic `sub sp, sp, xN`) means x19 is not
+        // the SP the walker reconstructs.
+        if word & SUB_SP_SP_MASK == SUB_SP_SP_PATTERN
+            || writes_sp_by_vector_length(word)
+            || is_frame_store_through_sp(word)
+        {
+            continue;
+        }
+        return false;
+    }
+    false
 }
 
 /// `stp`/`str` with SP as the base register and no writeback.
@@ -1594,9 +1677,24 @@ mod fp_chain {
                             // SP-relative record in the image (#7173).
                             let sp = fp_to_sp_offset(record.function_address)
                                 .and_then(|off| caller_fp.checked_sub(off));
-                            // An SP-relative location with no decodable
-                            // prologue used to abandon the walk from inside
-                            // the location loop; keep that fail-closed
+                            // #8770: an x19-based root resolves like an SP-based
+                            // one (x19 == body SP) ONLY when the owning function
+                            // captured its base as `mov x19, sp` after the fixed
+                            // prologue. Confirm that per frame before trusting
+                            // the `sp` base for its x19 slots; a frame that does
+                            // not match fails closed to the unwinder like any
+                            // other the fast walk cannot resolve.
+                            let has_x19 = index
+                                .locations(record)
+                                .iter()
+                                .chain(index.derived_locations(record).iter().map(|d| &d.slot))
+                                .any(|l| l.dwarf_reg == DWARF_REG_X19_AARCH64);
+                            if has_x19 && !x19_is_body_sp(record.function_address) {
+                                return None;
+                            }
+                            // An SP-relative (or x19-relative) location with no
+                            // decodable prologue used to abandon the walk from
+                            // inside the location loop; keep that fail-closed
                             // answer, decided before any slot is visited.
                             if sp.is_none()
                                 && index
@@ -1608,6 +1706,9 @@ mod fp_chain {
                                 return None;
                             }
                             let mut resolve = |location: &StackMapLocation| {
+                                // FP-based → the caller's x29; SP- and
+                                // x19-based → the reconstructed body SP (x19
+                                // was proven equal to it above).
                                 let base = if location.dwarf_reg == DWARF_REG_FP_AARCH64 {
                                     caller_fp
                                 } else {

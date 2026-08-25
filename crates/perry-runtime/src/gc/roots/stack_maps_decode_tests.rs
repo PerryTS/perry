@@ -484,9 +484,12 @@ mod tests {
     }
 
     #[test]
-    fn an_explicit_base_register_disables_the_fast_walk() {
-        // The x29-chain walker can only recover FP and SP; anything else must
-        // fall back to the platform unwinder, which can.
+    fn an_x19_base_keeps_the_fast_walk_available() {
+        // #8770: x19 is the base pointer LLVM takes for a dynamic-allocation
+        // frame, captured as `mov x19, sp` after the fixed prologue — so it
+        // equals the body SP the x29-chain walker already reconstructs. It is
+        // chain-walkable (confirmed per frame at walk time by `x19_is_body_sp`),
+        // not a reason to force the whole image onto the platform unwinder.
         let index = index_records(
             vec![StackMapRecord {
                 pc: 0x1000,
@@ -499,6 +502,30 @@ mod tests {
             }],
             vec![StackMapLocation {
                 dwarf_reg: 19,
+                offset: -40,
+            }],
+            Vec::new(),
+        );
+        assert!(index.chain_walkable);
+    }
+
+    #[test]
+    fn an_unsupported_base_register_disables_the_fast_walk() {
+        // The x29-chain walker recovers FP, SP, and x19 (== body SP); any OTHER
+        // base register it cannot derive from the frame, so such a record must
+        // fall back to the platform unwinder, which reads the frame's CFI.
+        let index = index_records(
+            vec![StackMapRecord {
+                pc: 0x1000,
+                function_address: 0x1000,
+                stack_size: 64,
+                roots_start: 0,
+                roots_len: 1,
+                derived_start: 0,
+                derived_len: 0,
+            }],
+            vec![StackMapLocation {
+                dwarf_reg: 5,
                 offset: -40,
             }],
             Vec::new(),
