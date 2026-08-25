@@ -270,16 +270,26 @@ extern "C" fn native_promise_adoption_job(closure: *const crate::closure::Closur
         Some((value, is_error)) => {
             // Null-closure AsyncStep = a pure propagation task: the runner
             // resolves/rejects `outer` with `value` on the next tick.
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let outer_handle = scope.root_raw_mut_ptr(outer);
+            let value_handle = scope.root_nanbox_f64(value);
+            let context = capture_context();
+            let ((async_id, trigger_async_id), outer) =
+                outer_handle.across_mut::<Promise, _>(|| {
+                    outer_handle.with_mut_ptr::<Promise, _>(|outer| unsafe {
+                        ((*outer).async_id, (*outer).trigger_async_id)
+                    })
+                });
             TASK_QUEUE.with(|q| {
                 q.borrow_mut().push_back(Task::AsyncStep(
                     std::ptr::null(),
-                    value,
+                    value_handle.get_nanbox_f64(),
                     outer,
                     is_error,
-                    capture_context(),
+                    context,
                     std::ptr::null_mut(),
-                    unsafe { (*outer).async_id },
-                    unsafe { (*outer).trigger_async_id },
+                    async_id,
+                    trigger_async_id,
                 ));
             });
             crate::event_pump::js_notify_promise_progress();

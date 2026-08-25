@@ -442,7 +442,6 @@ pub fn gen_gc_enabled() -> bool {
 // decision that hasn't been made".
 
 fn gc_force_evacuate_enabled() -> bool {
-    #[cfg(test)]
     if let Some(forced) = knob_overrides::FORCE_EVACUATE_TEST_OVERRIDE.with(std::cell::Cell::get) {
         return forced;
     }
@@ -456,7 +455,6 @@ fn gc_force_evacuate_enabled() -> bool {
 }
 
 fn gc_verify_evacuation_enabled() -> bool {
-    #[cfg(test)]
     if let Some(forced) = knob_overrides::VERIFY_EVACUATION_TEST_OVERRIDE.with(std::cell::Cell::get)
     {
         return forced;
@@ -488,11 +486,10 @@ fn gc_verify_evacuation_enabled() -> bool {
 /// `gc::tests::evacuation::explicit_gc_under_forced_evacuation_runs_a_moving_minor`,
 /// whose comment says in as many words that "an `EnvVarGuard` would set a
 /// process-global every other test in this crate shares".
-#[cfg(test)]
 pub(super) mod knob_overrides {
     use std::cell::Cell;
 
-    thread_local! {
+    crate::perry_thread_local! {
         pub(super) static FORCE_EVACUATE_TEST_OVERRIDE: Cell<Option<bool>> =
             const { Cell::new(None) };
         pub(super) static VERIFY_EVACUATION_TEST_OVERRIDE: Cell<Option<bool>> =
@@ -500,14 +497,17 @@ pub(super) mod knob_overrides {
     }
 
     /// Pin `gc_force_evacuate_enabled()` for this thread only.
+    #[cfg(test)]
     pub(crate) struct ForcedEvacuationTestGuard(Option<bool>);
 
+    #[cfg(test)]
     impl ForcedEvacuationTestGuard {
         pub(crate) fn on() -> Self {
             Self(FORCE_EVACUATE_TEST_OVERRIDE.with(|c| c.replace(Some(true))))
         }
     }
 
+    #[cfg(test)]
     impl Drop for ForcedEvacuationTestGuard {
         fn drop(&mut self) {
             FORCE_EVACUATE_TEST_OVERRIDE.with(|c| c.set(self.0));
@@ -515,19 +515,41 @@ pub(super) mod knob_overrides {
     }
 
     /// Pin `gc_verify_evacuation_enabled()` for this thread only.
+    #[cfg(test)]
     pub(crate) struct VerifyEvacuationTestGuard(Option<bool>);
 
+    #[cfg(test)]
     impl VerifyEvacuationTestGuard {
         pub(crate) fn on() -> Self {
             Self(VERIFY_EVACUATION_TEST_OVERRIDE.with(|c| c.replace(Some(true))))
         }
     }
 
+    #[cfg(test)]
     impl Drop for VerifyEvacuationTestGuard {
         fn drop(&mut self) {
             VERIFY_EVACUATION_TEST_OVERRIDE.with(|c| c.set(self.0));
         }
     }
+}
+
+/// Test-only control surface used by separately compiled extension-crate
+/// tests. The override is thread-local, so it cannot race unrelated tests the
+/// way mutating `PERRY_GC_FORCE_EVACUATE` did. `enabled`: `1` = on, `0` = off,
+/// any negative value = clear. Returns the previous state using the same
+/// encoding.
+#[doc(hidden)]
+pub fn js_gc_force_evacuation_test_override(enabled: i32) -> i32 {
+    let next = match enabled {
+        1.. => Some(true),
+        0 => Some(false),
+        _ => None,
+    };
+    knob_overrides::FORCE_EVACUATE_TEST_OVERRIDE.with(|cell| match cell.replace(next) {
+        Some(true) => 1,
+        Some(false) => 0,
+        None => -1,
+    })
 }
 
 #[cfg(test)]

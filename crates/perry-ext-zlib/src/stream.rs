@@ -20,6 +20,7 @@
 use perry_ffi::{
     alloc_buffer, alloc_string, gc_register_mutable_root_scanner_named, notify_main_thread,
     BufferHeader, ErrorKind, GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader,
+    TransientRootScope,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
@@ -67,6 +68,7 @@ extern "C" {
     // synchronously before queuing codec work.
     pub(crate) fn js_zlib_validate_callback(callback: f64) -> i64;
     fn js_async_hooks_provider_init(type_ptr: *const u8, type_len: usize) -> u64;
+    fn js_async_hooks_provider_defer_destroy(async_id: u64, check_turns: u32);
     fn js_async_hooks_provider_enter(async_id: u64);
     fn js_async_hooks_provider_leave(async_id: u64);
     fn js_native_call_method_str_key(
@@ -706,7 +708,9 @@ pub(crate) unsafe fn queue_one_shot_callback<F>(
 ) where
     F: FnOnce(&[u8]) -> std::io::Result<Vec<u8>>,
 {
-    let callback = js_zlib_validate_callback(callback_value);
+    let scope = TransientRootScope::enter();
+    let callback_value = scope.root_nanbox(callback_value);
+    let _ = js_zlib_validate_callback(callback_value.get());
     let data_bits = data_value.to_bits() as i64;
     js_zlib_validate_buffer_arg(data_bits);
     let result = match read_input_from_bits(data_bits) {
@@ -716,6 +720,10 @@ pub(crate) unsafe fn queue_one_shot_callback<F>(
     ensure_aux_pump_registered();
     ensure_gc_scanner_registered();
     let async_id = js_async_hooks_provider_init(b"ZLIB".as_ptr(), b"ZLIB".len());
+    // Provider init delivers user hooks and may move the callback. Re-read the
+    // rooted value only after it returns, immediately before publishing it in
+    // the scanned pending queue.
+    let callback = js_zlib_validate_callback(callback_value.get());
     statics()
         .lock()
         .unwrap()
@@ -1337,6 +1345,7 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
         };
         count += 1;
         let event_async_id = event_stream_handle(&ev).map(stream_async_id).unwrap_or(0);
+        let mut destroy_after_dispatch = 0;
         if event_async_id != 0 {
             js_async_hooks_provider_enter(event_async_id);
         }
@@ -1368,7 +1377,10 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                 }
             }
             ZlibEvent::Finish(id) => {
-                for cb in listeners_for(id, "finish") {
+                let scope = TransientRootScope::enter();
+                let callbacks = scope.root_addrs(&listeners_for(id, "finish"));
+                for cb in callbacks {
+                    let cb = cb.get();
                     if cb != 0 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                     }
@@ -1422,6 +1434,7 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                     }
                 }
                 drop_buffered_stream(&mut statics().lock().unwrap(), id);
+                destroy_after_dispatch = event_async_id;
             }
             ZlibEvent::Callback(cb) => {
                 if cb != 0 {
@@ -1429,11 +1442,19 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                 }
             }
             ZlibEvent::OneShotCallback(cb, result, async_id) => {
+                let scope = TransientRootScope::enter();
+                let callback = scope.root_addr(cb);
+                // Node exposes the native codec completion and delivery of the
+                // JavaScript callback as two phases of the same ZLIB resource.
                 js_async_hooks_provider_enter(async_id);
                 js_async_hooks_provider_leave(async_id);
                 js_async_hooks_provider_enter(async_id);
-                call_one_shot_callback(cb, result);
+                call_one_shot_callback(callback.get(), result);
                 js_async_hooks_provider_leave(async_id);
+                // This is queued before the callback's Promise continuation
+                // schedules its first user immediate, so zlib needs one more
+                // check turn than synchronously closed handles.
+                js_async_hooks_provider_defer_destroy(async_id, 4);
             }
             ZlibEvent::Error(id, msg) => {
                 let err_f64 = build_error_object(&msg);
@@ -1443,10 +1464,14 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                     }
                 }
                 drop_buffered_stream(&mut statics().lock().unwrap(), id);
+                destroy_after_dispatch = event_async_id;
             }
         }
         if event_async_id != 0 {
             js_async_hooks_provider_leave(event_async_id);
+        }
+        if destroy_after_dispatch != 0 {
+            js_async_hooks_provider_defer_destroy(destroy_after_dispatch, 4);
         }
     }
     count

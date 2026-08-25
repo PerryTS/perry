@@ -8,8 +8,12 @@ pub unsafe extern "C" fn js_events_on(
 ) -> *mut ArrayHeader {
     ensure_gc_scanner_registered();
     let root_scope = TransientRootScope::enter();
-    let target =
-        event_helper_target(target_value).unwrap_or_else(|| throw_invalid_emitter(target_value));
+    let target_root = root_scope.root_nanbox(target_value);
+    let event_name_root = root_scope.root_nanbox(f64::from_bits(nanbox_string_bits(
+        string_header_ptr_from_arg(event_name_ptr) as *mut StringHeader,
+    )));
+    let _ = event_helper_target(target_root.get())
+        .unwrap_or_else(|| throw_invalid_emitter(target_root.get()));
     let queue = js_array_alloc(0);
     let queue_root = root_scope.root_nanbox(nanbox_pointer_bits(queue as i64));
     let state = events_on_state_new();
@@ -18,10 +22,10 @@ pub unsafe extern "C" fn js_events_on(
         (queue_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader,
         (state_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader,
     );
-    let Some(event_name) = event_name_from_bits(event_name_ptr as i64) else {
+    let Some(event_name) = event_name_from_bits(event_name_root.get().to_bits() as i64) else {
         return (queue_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader;
     };
-    let event_name_ptr = string_header_ptr_from_arg(event_name_ptr);
+    let event_name_ptr = (event_name_root.get().to_bits() & POINTER_MASK) as *const StringHeader;
     let signal = options_signal_or_throw(options);
     if signal.is_some_and(signal_is_aborted) {
         js_throw(js_abort_error_value());
@@ -33,26 +37,32 @@ pub unsafe extern "C" fn js_events_on(
         (state_root.get().to_bits() & POINTER_MASK) as i64,
     );
     let listener_root = root_scope.root_addr(listener as i64);
-    let handle = match target {
+    let target = event_helper_target(target_root.get())
+        .unwrap_or_else(|| throw_invalid_emitter(target_root.get()));
+    let (handle, cleanup_target, cleanup_kind) = match target {
         EventHelperTarget::EventEmitter(handle) => {
             if let Some(emitter) = get_event_emitter_mut(handle) {
                 emitter.add_listener(handle, &event_name, listener_root.get(), false, false);
             }
-            handle
+            (handle, handle as f64, EVENTS_ON_EVENT_EMITTER)
         }
         EventHelperTarget::EventTarget(target) => {
             if !event_name_ptr.is_null() {
                 js_event_target_add_event_listener(target, event_name_ptr, listener_root.get());
             }
-            target as Handle
+            (
+                target as Handle,
+                nanbox_pointer_bits(target as i64),
+                EVENTS_ON_EVENT_TARGET,
+            )
         }
         EventHelperTarget::NetSocket(handle) | EventHelperTarget::NativeHandle(handle) => {
             if !event_name_ptr.is_null() {
                 let event = f64::from_bits(nanbox_string_bits(event_name_ptr as *mut StringHeader));
-                let listener_value = nanbox_pointer_bits(listener as i64);
+                let listener_value = nanbox_pointer_bits(listener_root.get());
                 let _ = call_net_socket_method(handle, "on", &[event, listener_value]);
             }
-            handle
+            (handle, handle as f64, EVENTS_ON_NET_HANDLE)
         }
         EventHelperTarget::Stream(handle) => {
             if !event_name_ptr.is_null() {
@@ -60,13 +70,15 @@ pub unsafe extern "C" fn js_events_on(
                 let listener_value = nanbox_pointer_bits(listener_root.get());
                 let _ = js_node_stream_method_on(handle, event, listener_value);
             }
-            handle
+            (handle, handle as f64, EVENTS_ON_STREAM)
         }
     };
     events_on_state_set_target(
         (state_root.get().to_bits() & POINTER_MASK) as *mut ArrayHeader,
-        handle,
+        cleanup_target,
         listener_root.get() as *mut RawClosureHeader,
+        event_name_root.get(),
+        cleanup_kind,
     );
     if let Some(close) = get_object_property(options, b"close") {
         if js_array_is_array(close).to_bits() == TAG_TRUE_F64_BITS {

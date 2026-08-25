@@ -83,6 +83,7 @@ struct WatchFileState {
     path: String,
     object_value: f64,
     timer_id: i64,
+    async_id: u64,
     bigint: bool,
     previous: Option<StatSnapshot>,
     listeners: HashMap<String, Vec<WatchListener>>,
@@ -602,6 +603,10 @@ fn close_watch_file_state(id: usize) {
     let removed = WATCH_FILE_STATES.with(|states| states.borrow_mut().remove(&id));
     if let Some(state) = removed {
         crate::timer::clearInterval(state.timer_id);
+        // Node retires the underlying uv_fs_poll handle from its close
+        // callback, after three check phases rather than synchronously from
+        // unwatchFile(). Preserve that observable destroy-hook timing.
+        crate::async_hooks::defer_destroy_after_check_turns(state.async_id, 3);
         WATCH_FILE_PATHS.with(|paths| {
             paths.borrow_mut().remove(&state.path);
         });
@@ -1530,7 +1535,7 @@ pub extern "C" fn js_fs_watch_file(path_value: f64, arg1: f64, arg2: f64) -> f64
     }
     let id = next_watch_id();
     let object_value = build_stat_watcher_object(id);
-    let _ = crate::async_hooks::init_resource("STATWATCHER", object_value, true);
+    let async_id = crate::async_hooks::init_resource("STATWATCHER", object_value, true).async_id;
     let interval = option_interval_ms(options_value);
     let persistent = option_bool_default_local(options_value, b"persistent", true);
     let bigint = unsafe { options_bool_field(options_value, b"bigint") };
@@ -1548,6 +1553,7 @@ pub extern "C" fn js_fs_watch_file(path_value: f64, arg1: f64, arg2: f64) -> f64
                 path: path.clone(),
                 object_value,
                 timer_id,
+                async_id,
                 bigint,
                 previous: stat_snapshot(&path),
                 listeners,

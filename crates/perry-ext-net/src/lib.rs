@@ -36,7 +36,7 @@
 use bytes::{BufMut, Bytes};
 use perry_ffi::{
     alloc_buffer, alloc_string, gc_register_mutable_root_scanner_named, GcRootVisitor, JsClosure,
-    JsPromise, JsValue, RawClosureHeader, StringHeader,
+    JsPromise, JsValue, RawClosureHeader, StringHeader, TransientRootScope,
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -311,8 +311,8 @@ impl SocketState {
 }
 
 pub(crate) enum SocketCommand {
-    Write(Vec<u8>),
-    End,
+    Write(Vec<u8>, u64),
+    End(u64),
     Destroy,
     /// `socket.setNoDelay(enable)` — applies `TCP_NODELAY` to the live socket.
     /// Carried as a command (rather than a flag on `SocketState`) because the
@@ -350,22 +350,16 @@ enum PendingNetEvent {
     /// so the path from the receive buffer to the main-thread drain handler
     /// (which only borrows it as `&[u8]`) stays alloc-free per read.
     Data(i64, Bytes),
-    /// Issue #1852 — peer half-closed (FIN received, `read()` returned 0).
-    /// Node fires `'end'` on the readable side *before* `'close'`; lots of
-    /// net tests block on `socket.on('end', …)` to learn the peer is done,
-    /// so without this the connection lifecycle never completes and the
-    /// test hangs.
+    /// Peer half-closed (FIN received); public readable-side `end` event.
     End(i64),
-    /// Completion of the writable-side shutdown requested by `socket.end()`.
-    /// This is distinct from `End`, which is the peer's readable-side FIN and
+    /// Writable-side shutdown requested by `socket.end()`, distinct from FIN;
     /// fires the public `end` event.
-    ShutdownComplete(i64),
+    WriteComplete(i64, u64, Option<String>),
+    ShutdownComplete(i64, u64, Option<String>),
     Close(i64),
     Error(i64, String),
     AbortError(i64),
-    /// Issue #1123 followup — accept-loop on a `net.Server` produced
-    /// a new client socket. Fires the server's `'connection'`
-    /// listeners with the new socket handle.
+    /// Accept-loop produced a socket for the server's `connection` listeners.
     ///   `.0` = server id (for listener lookup)
     ///   `.1` = socket id (passed to listeners as the arg)
     ///   `.2` = loopback client callback has crossed a pump boundary
@@ -657,10 +651,9 @@ pub unsafe extern "C" fn js_ext_net_create_server(
 #[no_mangle]
 pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64, arg3: f64) {
     ensure_gc_scanner_registered();
-    let callback_i64 = match js_net_callback_ptr(arg3) {
-        0 => js_net_callback_ptr(arg2),
-        cb => cb,
-    };
+    let roots = TransientRootScope::enter();
+    let arg2 = roots.root_nanbox(arg2);
+    let arg3 = roots.root_nanbox(arg3);
     let path = ipc::string_value(port)
         .or_else(|| is_nanboxed_pointer(port).then(|| get_object_string_field(port, "path"))?);
     let (port_u16, host) = if path.is_some() {
@@ -676,11 +669,15 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
         // #2013: a numeric `port` must be an integer in [0, 65536); Node throws
         // RangeError [ERR_SOCKET_BAD_PORT] otherwise.
         js_net_validate_listen_port(port);
-        let host = string_from_header_i64(js_get_string_pointer_unified(arg2))
+        let host = string_from_header_i64(js_get_string_pointer_unified(arg2.get()))
             .unwrap_or_else(|| "0.0.0.0".to_string());
         (port as u16, host)
     };
     let server_async_id = init_provider(b"TCPSERVERWRAP");
+    let callback_i64 = match js_net_callback_ptr(arg3.get()) {
+        0 => js_net_callback_ptr(arg2.get()),
+        cb => cb,
+    };
 
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
 
@@ -1240,16 +1237,35 @@ pub(crate) async fn run_socket_task(
                                 rx.recv().await
                             };
                             match command {
-                                Some(SocketCommand::Write(bytes)) => {
+                                Some(SocketCommand::Write(bytes, completion)) => {
                                     if let Err(e) = t.write_all(&bytes).await {
-                                        push_event(PendingNetEvent::Error(id, format!("{}", e)));
+                                        let msg = format!("{}", e);
+                                        if completion != 0 {
+                                            push_event(PendingNetEvent::WriteComplete(
+                                                id,
+                                                completion,
+                                                Some(msg.clone()),
+                                            ));
+                                        }
+                                        push_event(PendingNetEvent::Error(id, msg));
                                         break;
                                     }
+                                    if completion != 0 {
+                                        push_event(PendingNetEvent::WriteComplete(
+                                            id,
+                                            completion,
+                                            None,
+                                        ));
+                                    }
                                 }
-                                Some(SocketCommand::End) => {
-                                    let _ = t.shutdown().await;
+                                Some(SocketCommand::End(completion)) => {
+                                    let error = t.shutdown().await.err().map(|e| e.to_string());
                                     writable_ended = true;
-                                    push_event(PendingNetEvent::ShutdownComplete(id));
+                                    push_event(PendingNetEvent::ShutdownComplete(
+                                        id,
+                                        completion,
+                                        error,
+                                    ));
                                 }
                                 Some(SocketCommand::SetNoDelay(enable)) => {
                                     let _ = t.set_nodelay(enable);
@@ -1271,7 +1287,7 @@ pub(crate) async fn run_socket_task(
                         }
                         if !writable_ended {
                             let _ = t.shutdown().await;
-                            push_event(PendingNetEvent::ShutdownComplete(id));
+                            push_event(PendingNetEvent::ShutdownComplete(id, 0, None));
                         }
                         push_event(PendingNetEvent::Close(id));
                         mark_closed(id);
@@ -1324,9 +1340,16 @@ pub(crate) async fn run_socket_task(
                 drop(window);
                 buffer_pool::checkin(buf);
                 match cmd {
-                    Some(SocketCommand::Write(bytes)) => {
+                    Some(SocketCommand::Write(bytes, completion)) => {
                         if let Err(e) = t.write_all(&bytes).await {
                             let msg = format!("{}", e);
+                            if completion != 0 {
+                                push_event(PendingNetEvent::WriteComplete(
+                                    id,
+                                    completion,
+                                    Some(msg.clone()),
+                                ));
+                            }
                             if !raw_bridge::mark_terminal(id, Some(msg.clone())) {
                                 push_event(PendingNetEvent::Error(id, msg));
                                 push_event(PendingNetEvent::Close(id));
@@ -1334,11 +1357,14 @@ pub(crate) async fn run_socket_task(
                             mark_closed(id);
                             break;
                         }
+                        if completion != 0 {
+                            push_event(PendingNetEvent::WriteComplete(id, completion, None));
+                        }
                     }
-                    Some(SocketCommand::End) => {
-                        let _ = t.shutdown().await;
+                    Some(SocketCommand::End(completion)) => {
+                        let error = t.shutdown().await.err().map(|e| e.to_string());
                         writable_ended = true;
-                        push_event(PendingNetEvent::ShutdownComplete(id));
+                        push_event(PendingNetEvent::ShutdownComplete(id, completion, error));
                     }
                     Some(SocketCommand::SetNoDelay(enable)) => {
                         // Best-effort, matching Node: a failed setsockopt (e.g.
@@ -1618,7 +1644,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 .ok()
                 .and_then(|sockets| sockets.get(id).map(|socket| vec![socket.connect_async_id]))
                 .unwrap_or_default(),
-            PendingNetEvent::ShutdownComplete(id) => statics::sockets()
+            PendingNetEvent::ShutdownComplete(id, _, _) => statics::sockets()
                 .lock()
                 .ok()
                 .and_then(|sockets| sockets.get(id).map(|socket| vec![socket.shutdown_async_id]))
@@ -1765,8 +1791,12 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 drop(frame);
                 lifecycle::drain_once_listeners(id, "end");
             }
-            PendingNetEvent::ShutdownComplete(_) => {}
+            PendingNetEvent::WriteComplete(_, completion, error)
+            | PendingNetEvent::ShutdownComplete(_, completion, error) => {
+                lifecycle::dispatch_socket_completion(completion, error);
+            }
             PendingNetEvent::Close(id) => {
+                lifecycle::drop_socket_completions(id);
                 extern "C" {
                     fn js_tls_client_record_closed(handle: i64);
                 }

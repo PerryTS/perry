@@ -105,7 +105,7 @@ extern "C" fn perry_net_raw_write(socket_id: i64, ptr: *const u8, len: usize) ->
     };
     if let Ok(g) = statics::sockets().lock() {
         if let Some(s) = g.get(&socket_id) {
-            return i32::from(s.cmd_tx.send(SocketCommand::Write(bytes)).is_ok());
+            return i32::from(s.cmd_tx.send(SocketCommand::Write(bytes, 0)).is_ok());
         }
     }
     0

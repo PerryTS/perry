@@ -51,7 +51,7 @@ pub(super) unsafe fn prepare_event_provider(ev: &PendingNetEvent) {
                 }
             }
         }
-        PendingNetEvent::ShutdownComplete(id) => {
+        PendingNetEvent::ShutdownComplete(id, _, _) => {
             let trigger = statics::sockets().lock().ok().and_then(|sockets| {
                 sockets.get(id).and_then(|socket| {
                     (socket.shutdown_async_id == 0).then_some(socket.tcp_async_id)
@@ -78,6 +78,7 @@ pub(super) fn event_provider_id(ev: &PendingNetEvent) -> u64 {
         PendingNetEvent::SecureConnect(id)
         | PendingNetEvent::Data(id, _)
         | PendingNetEvent::End(id)
+        | PendingNetEvent::WriteComplete(id, _, _)
         | PendingNetEvent::Error(id, _)
         | PendingNetEvent::AbortError(id)
         | PendingNetEvent::Close(id) => statics::sockets()
@@ -85,7 +86,7 @@ pub(super) fn event_provider_id(ev: &PendingNetEvent) -> u64 {
             .ok()
             .and_then(|sockets| sockets.get(id).map(|socket| socket.tcp_async_id))
             .unwrap_or(0),
-        PendingNetEvent::ShutdownComplete(id) => statics::sockets()
+        PendingNetEvent::ShutdownComplete(id, _, _) => statics::sockets()
             .lock()
             .ok()
             .and_then(|sockets| sockets.get(id).map(|socket| socket.shutdown_async_id))

@@ -962,11 +962,6 @@ pub(super) unsafe fn resolve_with_bytes_provider(
     resolve_with_bits_provider(val, provider_type)
 }
 
-pub(super) unsafe fn resolve_with_bool(b: bool) -> *mut Promise {
-    let bits = if b { TAG_TRUE } else { TAG_FALSE };
-    resolve_with_bits(bits)
-}
-
 pub(super) unsafe fn resolve_with_bool_provider(
     b: bool,
     provider_type: &'static str,

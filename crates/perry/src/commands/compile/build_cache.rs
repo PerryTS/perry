@@ -51,7 +51,6 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_ROOT_SPILL_RELOCATIONS",
     // #8583: selects the descriptor-backed lowering for large constant arrays.
     // The two paths emit different IR and therefore require distinct cache keys.
-    "PERRY_CONST_ARRAY_DESCRIPTOR",
     "PERRY_GC_SAFEPOINT_ONLY",
     "PERRY_INLINE_SHADOW_SLOT",
     "PERRY_DISABLE_BUFFER_FAST_PATH",
@@ -143,7 +142,6 @@ const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
     "PERRY_REPSEL_DEBUG",
     "PERRY_STATEPOINT_REPORT",
     // Writes malformed dialect IR for diagnostics without changing emitted code.
-    "PERRY_DIALECT_DUMP",
     // `opt_report`'s own module doc states the contract this exclusion rests
     // on: "Observational only. Nothing in this module is read by codegen …
     // the returned fact sets are bit-identical with the report on and off,

@@ -309,6 +309,14 @@ pub fn clear_store(handle: i64) {
             .entries
             .iter()
             .any(|entry| entry.handle == handle)
+    }) || CONTEXT_GUARDS.with(|guards| {
+        guards.borrow().iter().any(|guard| {
+            matches!(
+                &guard.action,
+                ContextGuardAction::RestoreStores(saved_handle, Some(_))
+                    if *saved_handle == handle
+            )
+        })
     });
     if was_active {
         HANDLE_GENERATIONS.with(|generations| {

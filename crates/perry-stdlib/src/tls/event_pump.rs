@@ -45,9 +45,15 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                         .and_then(|per| per.remove("listening"))
                         .unwrap_or_default()
                 };
+                let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                let callbacks: Vec<_> = callbacks
+                    .into_iter()
+                    .map(|cb| scope.root_raw_const_ptr(cb as *const ClosureHeader))
+                    .collect();
                 for cb in callbacks {
-                    if cb != 0 {
-                        js_closure_call0(cb as *const ClosureHeader);
+                    let cb = cb.get_raw_const_ptr::<ClosureHeader>();
+                    if !cb.is_null() {
+                        js_closure_call0(cb);
                     }
                 }
                 drain_once_listeners(server_id, "listening");
@@ -55,9 +61,15 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
             PendingTlsEvent::ServerSecureConnection(server_id, socket_id) => {
                 let socket = nanbox_handle(socket_id);
                 for event_name in ["secureConnection", "connection"] {
-                    for cb in listeners_for(server_id, event_name) {
-                        if cb != 0 {
-                            js_closure_call1(cb as *const ClosureHeader, socket);
+                    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                    let callbacks: Vec<_> = listeners_for(server_id, event_name)
+                        .into_iter()
+                        .map(|cb| scope.root_raw_const_ptr(cb as *const ClosureHeader))
+                        .collect();
+                    for cb in callbacks {
+                        let cb = cb.get_raw_const_ptr::<ClosureHeader>();
+                        if !cb.is_null() {
+                            js_closure_call1(cb, socket);
                         }
                     }
                     drain_once_listeners(server_id, event_name);
@@ -70,9 +82,15 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                         .and_then(|per| per.remove("close"))
                         .unwrap_or_default()
                 };
+                let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                let callbacks: Vec<_> = callbacks
+                    .into_iter()
+                    .map(|cb| scope.root_raw_const_ptr(cb as *const ClosureHeader))
+                    .collect();
                 for cb in callbacks {
-                    if cb != 0 {
-                        js_closure_call0(cb as *const ClosureHeader);
+                    let cb = cb.get_raw_const_ptr::<ClosureHeader>();
+                    if !cb.is_null() {
+                        js_closure_call0(cb);
                     }
                 }
                 servers().lock().unwrap().remove(&server_id);
@@ -80,45 +98,76 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                 once_flags().lock().unwrap().remove(&server_id);
             }
             PendingTlsEvent::ServerError(server_id, msg) => {
-                let err = build_error_object(&msg);
-                for cb in listeners_for(server_id, "error") {
-                    if cb != 0 {
-                        js_closure_call1(cb as *const ClosureHeader, err);
+                let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                let err = scope.root_nanbox_f64(build_error_object(&msg));
+                let callbacks: Vec<_> = listeners_for(server_id, "error")
+                    .into_iter()
+                    .map(|cb| scope.root_raw_const_ptr(cb as *const ClosureHeader))
+                    .collect();
+                for cb in callbacks {
+                    let cb = cb.get_raw_const_ptr::<ClosureHeader>();
+                    if !cb.is_null() {
+                        js_closure_call1(cb, err.get_nanbox_f64());
                     }
                 }
                 drain_once_listeners(server_id, "error");
             }
             PendingTlsEvent::ServerTlsClientError(server_id, socket_id, msg, code) => {
-                let err = build_error_object_with_code(&msg, code.as_deref());
-                let socket = nanbox_handle(socket_id);
-                for cb in listeners_for(server_id, "tlsClientError") {
-                    if cb != 0 {
-                        js_closure_call2(cb as *const ClosureHeader, err, socket);
+                let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                let err =
+                    scope.root_nanbox_f64(build_error_object_with_code(&msg, code.as_deref()));
+                let socket = scope.root_nanbox_f64(nanbox_handle(socket_id));
+                let callbacks: Vec<_> = listeners_for(server_id, "tlsClientError")
+                    .into_iter()
+                    .map(|cb| scope.root_raw_const_ptr(cb as *const ClosureHeader))
+                    .collect();
+                for cb in callbacks {
+                    let cb = cb.get_raw_const_ptr::<ClosureHeader>();
+                    if !cb.is_null() {
+                        js_closure_call2(cb, err.get_nanbox_f64(), socket.get_nanbox_f64());
                     }
                 }
                 drain_once_listeners(server_id, "tlsClientError");
             }
             PendingTlsEvent::SocketData(socket_id, bytes) => {
-                let data = buffer_from_bytes(&bytes);
-                for cb in listeners_for(socket_id, "data") {
-                    if cb != 0 {
-                        js_closure_call1(cb as *const ClosureHeader, data);
+                let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                let data = scope.root_nanbox_f64(buffer_from_bytes(&bytes));
+                let callbacks: Vec<_> = listeners_for(socket_id, "data")
+                    .into_iter()
+                    .map(|cb| scope.root_raw_const_ptr(cb as *const ClosureHeader))
+                    .collect();
+                for cb in callbacks {
+                    let cb = cb.get_raw_const_ptr::<ClosureHeader>();
+                    if !cb.is_null() {
+                        js_closure_call1(cb, data.get_nanbox_f64());
                     }
                 }
                 drain_once_listeners(socket_id, "data");
             }
             PendingTlsEvent::SocketEnd(socket_id) => {
-                for cb in listeners_for(socket_id, "end") {
-                    if cb != 0 {
-                        js_closure_call0(cb as *const ClosureHeader);
+                let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                let callbacks: Vec<_> = listeners_for(socket_id, "end")
+                    .into_iter()
+                    .map(|cb| scope.root_raw_const_ptr(cb as *const ClosureHeader))
+                    .collect();
+                for cb in callbacks {
+                    let cb = cb.get_raw_const_ptr::<ClosureHeader>();
+                    if !cb.is_null() {
+                        js_closure_call0(cb);
                     }
                 }
                 drain_once_listeners(socket_id, "end");
             }
             PendingTlsEvent::SocketClose(socket_id) => {
-                for cb in listeners_for(socket_id, "close") {
-                    if cb != 0 {
-                        js_closure_call0(cb as *const ClosureHeader);
+                let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                let callbacks: Vec<_> = listeners_for(socket_id, "close")
+                    .into_iter()
+                    .map(|cb| scope.root_raw_const_ptr(cb as *const ClosureHeader))
+                    .collect();
+                for cb in callbacks {
+                    let cb = cb.get_raw_const_ptr::<ClosureHeader>();
+                    if !cb.is_null() {
+                        js_closure_call0(cb);
                     }
                 }
                 sockets().lock().unwrap().remove(&socket_id);
@@ -126,10 +175,16 @@ pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
                 once_flags().lock().unwrap().remove(&socket_id);
             }
             PendingTlsEvent::SocketError(socket_id, msg) => {
-                let err = build_error_object(&msg);
-                for cb in listeners_for(socket_id, "error") {
-                    if cb != 0 {
-                        js_closure_call1(cb as *const ClosureHeader, err);
+                let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                let err = scope.root_nanbox_f64(build_error_object(&msg));
+                let callbacks: Vec<_> = listeners_for(socket_id, "error")
+                    .into_iter()
+                    .map(|cb| scope.root_raw_const_ptr(cb as *const ClosureHeader))
+                    .collect();
+                for cb in callbacks {
+                    let cb = cb.get_raw_const_ptr::<ClosureHeader>();
+                    if !cb.is_null() {
+                        js_closure_call1(cb, err.get_nanbox_f64());
                     }
                 }
                 drain_once_listeners(socket_id, "error");

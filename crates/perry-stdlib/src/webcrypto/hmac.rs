@@ -271,7 +271,7 @@ pub unsafe extern "C" fn js_webcrypto_verify(
             Err((name, message)) => return reject_with_dom_exception(name, message),
         };
         if output_length == 0 {
-            return resolve_with_bool(false);
+            return resolve_with_bool_provider(false, "SIGNREQUEST");
         }
         let customization =
             object_field_bytes(algo_bits.to_bits(), b"customization").unwrap_or_else(Vec::new);
@@ -308,7 +308,7 @@ pub unsafe extern "C" fn js_webcrypto_verify(
                 };
                 let sig = match P256EcdsaSignature::from_slice(&provided_sig) {
                     Ok(s) => s,
-                    Err(_) => return resolve_with_bool(false),
+                    Err(_) => return resolve_with_bool_provider(false, "SIGNREQUEST"),
                 };
                 verifying_key.verify(&data_bytes, &sig).is_ok()
             }
@@ -321,7 +321,7 @@ pub unsafe extern "C" fn js_webcrypto_verify(
                 };
                 let sig = match P384EcdsaSignature::from_slice(&provided_sig) {
                     Ok(s) => s,
-                    Err(_) => return resolve_with_bool(false),
+                    Err(_) => return resolve_with_bool_provider(false, "SIGNREQUEST"),
                 };
                 verifying_key.verify(&data_bytes, &sig).is_ok()
             }
@@ -334,7 +334,7 @@ pub unsafe extern "C" fn js_webcrypto_verify(
                 };
                 let sig = match P521EcdsaSignature::from_slice(&provided_sig) {
                     Ok(s) => s,
-                    Err(_) => return resolve_with_bool(false),
+                    Err(_) => return resolve_with_bool_provider(false, "SIGNREQUEST"),
                 };
                 verifying_key.verify(&data_bytes, &sig).is_ok()
             }
@@ -362,7 +362,7 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         };
         let signature = match ed25519_dalek::Signature::try_from(provided_sig.as_slice()) {
             Ok(sig) => sig,
-            Err(_) => return resolve_with_bool(false),
+            Err(_) => return resolve_with_bool_provider(false, "SIGNREQUEST"),
         };
         use ed25519_dalek::Verifier as _;
         verifying_key.verify(&data_bytes, &signature).is_ok()
@@ -388,7 +388,7 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         };
         let signature = match ed448_goldilocks::Signature::from_slice(&provided_sig) {
             Ok(sig) => sig,
-            Err(_) => return resolve_with_bool(false),
+            Err(_) => return resolve_with_bool_provider(false, "SIGNREQUEST"),
         };
         verifying_key.verify_raw(&signature, &data_bytes).is_ok()
     } else if algo_upper == "RSASSA-PKCS1-V1_5" {

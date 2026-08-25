@@ -19,6 +19,14 @@ use crate::object::{js_object_get_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::{JSValue, POINTER_MASK};
 
+mod provider_ffi;
+pub use provider_ffi::{
+    defer_destroy_after_check_turns, js_async_hooks_provider_defer_destroy,
+    js_async_hooks_provider_destroy, js_async_hooks_provider_enter, js_async_hooks_provider_init,
+    js_async_hooks_provider_init_with_trigger, js_async_hooks_provider_leave,
+    js_async_hooks_provider_run_catching, js_async_hooks_provider_run_catching_with_this,
+};
+
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
@@ -623,12 +631,21 @@ fn with_hook_callbacks(
         .iter()
         .map(|callbacks| scope.root_raw_const_ptr(callbacks.for_phase(phase)))
         .collect();
+    let mut thrown = None;
     for callback in rooted {
-        callback.with_const_ptr::<ClosureHeader, _>(|callback| {
+        let outcome = callback.with_const_ptr::<ClosureHeader, _>(|callback| {
             if !callback.is_null() {
-                f(callback);
+                return crate::exception::js_call_catching(|| {
+                    f(callback);
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                });
             }
+            Ok(f64::from_bits(crate::value::TAG_UNDEFINED))
         });
+        if let Err(error) = outcome {
+            thrown = Some(scope.root_nanbox_f64(error));
+            break;
+        }
     }
     let outermost = HOOK_CALLBACK_DEPTH.with(|depth| {
         let next = depth.get().saturating_sub(1);
@@ -640,6 +657,9 @@ fn with_hook_callbacks(
         for (index, enabled) in pending {
             set_hook_enabled(index, enabled);
         }
+    }
+    if let Some(error) = thrown {
+        crate::exception::js_throw(error.get_nanbox_f64());
     }
 }
 
@@ -908,66 +928,6 @@ pub fn run_resource_scope(ids: AsyncResourceIds, completion: impl FnOnce()) {
     enter_resource_scope(ids);
     completion();
     leave_resource_scope(ids.async_id);
-}
-
-/// C ABI used by separately-linked native providers such as perry-ext-zlib.
-#[no_mangle]
-pub unsafe extern "C" fn js_async_hooks_provider_init(type_ptr: *const u8, type_len: usize) -> u64 {
-    if type_ptr.is_null() {
-        return 0;
-    }
-    let type_name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(type_ptr, type_len));
-    let resource = crate::object::js_object_alloc_null_proto(0, 0);
-    init_resource(
-        type_name,
-        crate::value::js_nanbox_pointer(resource as i64),
-        true,
-    )
-    .async_id
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_async_hooks_provider_init_with_trigger(
-    type_ptr: *const u8,
-    type_len: usize,
-    trigger_async_id: u64,
-) -> u64 {
-    if type_ptr.is_null() {
-        return 0;
-    }
-    let type_name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(type_ptr, type_len));
-    let resource = crate::object::js_object_alloc_null_proto(0, 0);
-    init_resource_with_trigger(
-        type_name,
-        crate::value::js_nanbox_pointer(resource as i64),
-        true,
-        trigger_async_id,
-    )
-    .async_id
-}
-
-#[no_mangle]
-pub extern "C" fn js_async_hooks_provider_enter(async_id: u64) {
-    let trigger_async_id = RESOURCES
-        .lock()
-        .unwrap()
-        .get(&async_id)
-        .map(|meta| meta.trigger_async_id)
-        .unwrap_or(0);
-    enter_resource_scope(AsyncResourceIds {
-        async_id,
-        trigger_async_id,
-    });
-}
-
-#[no_mangle]
-pub extern "C" fn js_async_hooks_provider_leave(async_id: u64) {
-    leave_resource_scope(async_id);
-}
-
-#[no_mangle]
-pub extern "C" fn js_async_hooks_provider_destroy(async_id: u64) {
-    destroy(async_id);
 }
 
 pub fn enqueue_gc_destroy(async_id: u64) {
@@ -1476,7 +1436,6 @@ pub fn try_async_resource_method_dispatch(
     ) {
         return None;
     }
-    let handle = resolve_async_resource_handle(receiver)?;
     let scope = crate::gc::RuntimeHandleScope::new();
     let raw_args: Vec<f64> = if args_ptr.is_null() || args_len == 0 {
         Vec::new()
@@ -1484,6 +1443,7 @@ pub fn try_async_resource_method_dispatch(
         unsafe { std::slice::from_raw_parts(args_ptr, args_len).to_vec() }
     };
     let arg_handles = scope.root_nanbox_f64_slice(&raw_args);
+    let handle = resolve_async_resource_handle(receiver)?;
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
     Some(match method_name {
         "asyncId" => js_async_resource_async_id(handle),

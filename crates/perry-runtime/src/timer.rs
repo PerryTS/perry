@@ -602,12 +602,19 @@ fn set_timer_ref_state(id: i64, has_ref: bool) {
 }
 
 fn record_timer_handle_kind(id: i64, kind: CallbackTimerKind) {
-    TIMER_HANDLE_KINDS.lock().unwrap().insert(id, kind);
+    let mut kinds = TIMER_HANDLE_KINDS.lock().unwrap();
+    if kinds.len() >= TIMER_REF_STATES_CAP && !kinds.contains_key(&id) {
+        if let Some(oldest) = kinds.keys().copied().min() {
+            kinds.remove(&oldest);
+        }
+    }
+    kinds.insert(id, kind);
 }
 
 /// Synthetic constructor object for `Timeout`/`Immediate` native handles.
-/// Timer ids outlive queue removal, so the kind table intentionally retains
-/// the entry after clear/fire just as Node retains the wrapper's prototype.
+/// Timer ids outlive queue removal, so the kind table retains recent entries
+/// after clear/fire just as Node retains the wrapper's prototype. The bounded
+/// inventory avoids unbounded growth in long-running processes.
 pub(crate) fn timer_constructor_value(id: i64) -> Option<f64> {
     let kind = TIMER_HANDLE_KINDS.lock().unwrap().get(&id).copied()?;
     let name = match kind {

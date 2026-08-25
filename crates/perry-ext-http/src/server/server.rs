@@ -776,9 +776,6 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
         .host
         .unwrap_or_else(|| extract_host(opts_f64, "0.0.0.0"));
     let callback = parsed.callback;
-    let server_async_id =
-        crate::js_async_hooks_provider_init(b"TCPSERVERWRAP".as_ptr(), b"TCPSERVERWRAP".len());
-
     let (request_tx, request_rx) = mpsc::channel::<HttpPendingRequest>(1024);
     let (upgrade_tx, upgrade_rx) = mpsc::channel::<HttpPendingUpgrade>(256);
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
@@ -941,9 +938,16 @@ pub unsafe extern "C" fn js_node_http_server_listen(server_handle: i64, args_arr
     // `server`, so `server.address()` inside the callback threw
     // "Cannot read properties of undefined". The pump fires both with
     // `this` bound to the server (#2132), via `drain_deferred_listen_events`.
+    // Initialize the provider only after every synchronous setup step has
+    // succeeded. Failure returns above therefore cannot leak a resource with
+    // no matching destroy edge.
+    let server_async_id =
+        crate::js_async_hooks_provider_init(b"TCPSERVERWRAP".as_ptr(), b"TCPSERVERWRAP".len());
     if let Some(s) = get_handle_mut::<HttpServer>(server_handle) {
         s.async_id = server_async_id;
         queue_deferred_listening_emit(s, callback);
+    } else {
+        crate::js_async_hooks_provider_destroy(server_async_id);
     }
 
     // Closes #604 — `listen()` is now non-blocking. The accept loop is

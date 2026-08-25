@@ -1354,6 +1354,7 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
         if let Some(ids) = event_ids {
             perry_runtime::async_hooks::enter_resource_scope(ids);
         }
+        let mut destroy_after_dispatch = None;
         match ev {
             ZlibEvent::Data(id, bytes) => {
                 publish_zlib_bytes_written(id);
@@ -1395,6 +1396,7 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                 }
                 ZLIB_LISTENERS.lock().unwrap().remove(&id);
                 ZLIB_STREAMS.lock().unwrap().remove(&id);
+                destroy_after_dispatch = event_ids.map(|ids| ids.async_id);
             }
             ZlibEvent::Callback(cb) => {
                 if cb != 0 {
@@ -1402,6 +1404,9 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                 }
             }
             ZlibEvent::OneShotCallback(cb, result, ids) => {
+                // Node exposes two ZLIB provider phases for one-shot helpers:
+                // native compression completion, followed by delivery of the
+                // JavaScript callback. They intentionally share one resource.
                 perry_runtime::async_hooks::run_resource_scope(ids, || {});
                 perry_runtime::async_hooks::enter_resource_scope(ids);
                 if cb != 0 {
@@ -1433,6 +1438,7 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                     }
                 }
                 perry_runtime::async_hooks::leave_resource_scope(ids.async_id);
+                perry_runtime::async_hooks::defer_destroy_after_check_turns(ids.async_id, 4);
             }
             ZlibEvent::Error(id, msg) => {
                 let err_f64 = build_zlib_error(&msg);
@@ -1443,10 +1449,14 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                 }
                 ZLIB_LISTENERS.lock().unwrap().remove(&id);
                 ZLIB_STREAMS.lock().unwrap().remove(&id);
+                destroy_after_dispatch = event_ids.map(|ids| ids.async_id);
             }
         }
         if let Some(ids) = event_ids {
             perry_runtime::async_hooks::leave_resource_scope(ids.async_id);
+        }
+        if let Some(async_id) = destroy_after_dispatch {
+            perry_runtime::async_hooks::defer_destroy_after_check_turns(async_id, 4);
         }
     }
     count
