@@ -189,12 +189,15 @@ unsafe fn prototype_property_value_with_guard(
     // (#7795 removed the two resolution calls that used to allocate here as
     // well — the rooting is still required for the prototype read itself.)
     //
-    // Root both before the first of those calls and read each back at its
+    // Root all three before the first of those calls and read each back at its
     // point of use. NaN-boxed handles only, so this module adds no bare
     // `get_raw_*_ptr` to `scripts/raw_handle_debt.py`.
     let scope = crate::gc::RuntimeHandleScope::new();
+    let proto_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(proto_addr as i64));
     let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
     let receiver_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver_addr as i64));
+    let proto_ptr =
+        || crate::value::js_nanbox_get_pointer(proto_h.get_nanbox_f64()) as *mut ObjectHeader;
     let key = || {
         crate::value::js_nanbox_get_pointer(key_h.get_nanbox_f64()) as *const crate::StringHeader
     };
@@ -210,8 +213,7 @@ unsafe fn prototype_property_value_with_guard(
     // (`scan_prototype_addr_cache_roots_mut`) — the array index-read fast path
     // already depends on it. `Object.prototype` is non-writable and
     // non-configurable per spec, so the memo cannot go stale.
-    let proto_ptr = proto_addr as *mut ObjectHeader;
-    if proto_ptr as usize == receiver_addr() {
+    if proto_ptr() as usize == receiver_addr() {
         return None;
     }
     let receiver = crate::value::js_nanbox_pointer(receiver_addr() as i64);
@@ -224,7 +226,7 @@ unsafe fn prototype_property_value_with_guard(
     let previous_this_h = scope.root_nanbox_f64(previous_this);
     let prev_override = accessor_receiver_override_begin(receiver);
     let prev_override_h = prev_override.map(|v| scope.root_nanbox_f64(v));
-    let property = js_object_get_field_by_name(proto_ptr, key());
+    let property = js_object_get_field_by_name(proto_ptr(), key());
     accessor_receiver_override_end(prev_override_h.map(|h| h.get_nanbox_f64()));
     super::super::js_implicit_this_set(previous_this_h.get_nanbox_f64());
     if property.is_undefined() {

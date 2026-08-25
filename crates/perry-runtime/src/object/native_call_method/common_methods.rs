@@ -477,6 +477,8 @@ pub(super) unsafe fn dispatch_common(
             // internal value. The explicit Object.prototype.valueOf.call(x)
             // form uses object_prototype_value_of_thunk instead, where ToObject
             // intentionally produces a wrapper.
+            let object = object_handle.get_nanbox_f64();
+            let jsval = JSValue::from_bits(object.to_bits());
             if !jsval.is_pointer() {
                 return Some(object);
             }
