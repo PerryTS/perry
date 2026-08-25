@@ -1201,6 +1201,7 @@ pub(super) fn compile_closure(
     super::arguments::materialize_arguments_object(
         &mut ctx,
         params,
+        Some(body),
         super::arguments::ArgumentsCallee::CurrentClosure,
     );
 

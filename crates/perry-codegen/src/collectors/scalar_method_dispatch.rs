@@ -559,7 +559,7 @@ pub(super) fn for_each_expr(expr: &Expr, f: &mut dyn FnMut(&Expr)) {
     }
 }
 
-pub(super) fn for_each_expr_in_stmts(stmts: &[Stmt], f: &mut dyn FnMut(&Expr)) {
+pub(crate) fn for_each_expr_in_stmts(stmts: &[Stmt], f: &mut dyn FnMut(&Expr)) {
     for stmt in stmts {
         for_each_expr_in_stmt(stmt, f);
     }

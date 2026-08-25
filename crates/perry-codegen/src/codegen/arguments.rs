@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use perry_hir::Param;
+use perry_hir::{Expr, Param, Stmt};
 
 use crate::block::LlBlock;
 use crate::expr::{nanbox_pointer_inline, FnCtx};
@@ -40,11 +40,21 @@ pub(crate) fn store_param_slot(
 pub(crate) fn materialize_arguments_object(
     ctx: &mut FnCtx<'_>,
     params: &[Param],
+    body: Option<&[Stmt]>,
     callee: ArgumentsCallee<'_>,
 ) {
     let Some(synth_param) = params.iter().find(|p| p.arguments_object.is_some()) else {
         return;
     };
+    // Call lowering has already bundled every supplied argument into the
+    // synthesized slot as a marked Array. When the only observable operation
+    // is `arguments.length`, that bundle has exactly the required value and a
+    // full ECMAScript Arguments object would only add allocation, mapped-index
+    // setup, and GC pressure. Keep the existing conservative materialization
+    // path for every other use (including callers that cannot provide a body).
+    if body.is_some_and(|body| arguments_used_only_for_length(body, synth_param.id)) {
+        return;
+    }
     let Some(meta) = synth_param.arguments_object.as_ref() else {
         return;
     };
@@ -102,12 +112,100 @@ pub(crate) fn materialize_arguments_object(
     ctx.block().store(DOUBLE, &boxed_args, &arguments_slot);
 }
 
+/// Prove that replacing the synthesized Arguments object with its raw argument
+/// bundle cannot be observed. The proof is deliberately fail-closed: HIR's
+/// canonical local-reference collector counts every use of the synthetic local,
+/// including specialized local-bearing expressions such as `ArrayPop(id)`.
+/// Every one of those uses must correspond to an exact `arguments.length` read
+/// found by the generic expression traversal.
+fn arguments_used_only_for_length(body: &[Stmt], arguments_id: u32) -> bool {
+    let mut refs = Vec::new();
+    let mut visited_closures = HashSet::new();
+    for stmt in body {
+        perry_hir::collect_local_refs_stmt(stmt, &mut refs, &mut visited_closures);
+    }
+
+    let total_uses = refs.iter().filter(|id| **id == arguments_id).count();
+    let mut length_reads = 0usize;
+    crate::collectors::for_each_expr_in_stmts(body, &mut |expr| {
+        if matches!(
+            expr,
+            Expr::PropertyGet {
+                object,
+                property,
+                ..
+            } if property == "length"
+                && matches!(object.as_ref(), Expr::LocalGet(id) if *id == arguments_id)
+        ) {
+            length_reads += 1;
+        }
+    });
+    length_reads > 0 && total_uses == length_reads
+}
+
 fn mapped_arguments_params(params: &[Param]) -> Vec<(u32, u32)> {
     params
         .iter()
         .filter_map(|p| p.arguments_object.as_ref())
         .flat_map(|meta| meta.mapped_parameter_ids.iter().copied())
         .collect()
+}
+
+#[cfg(test)]
+mod length_only_tests {
+    use super::arguments_used_only_for_length;
+    use perry_hir::{Expr, Stmt};
+
+    const ARGUMENTS: u32 = 17;
+
+    fn length() -> Expr {
+        Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(ARGUMENTS)),
+            property: "length".to_string(),
+            byte_offset: 0,
+        }
+    }
+
+    #[test]
+    fn accepts_exact_length_reads_at_arbitrary_depth() {
+        let body = vec![Stmt::Return(Some(Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left: Box::new(Expr::Integer(1)),
+            right: Box::new(length()),
+        }))];
+        assert!(arguments_used_only_for_length(&body, ARGUMENTS));
+    }
+
+    #[test]
+    fn rejects_identity_index_and_mixed_uses() {
+        assert!(!arguments_used_only_for_length(
+            &[Stmt::Return(Some(Expr::LocalGet(ARGUMENTS)))],
+            ARGUMENTS
+        ));
+        assert!(!arguments_used_only_for_length(
+            &[Stmt::Return(Some(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(ARGUMENTS)),
+                index: Box::new(Expr::Integer(0)),
+            }))],
+            ARGUMENTS
+        ));
+        assert!(!arguments_used_only_for_length(
+            &[
+                Stmt::Expr(length()),
+                Stmt::Return(Some(Expr::LocalGet(ARGUMENTS))),
+            ],
+            ARGUMENTS
+        ));
+    }
+
+    #[test]
+    fn rejects_specialized_local_bearing_operations() {
+        let body = vec![
+            Stmt::Expr(length()),
+            Stmt::Return(Some(Expr::ArrayPop(ARGUMENTS))),
+        ];
+        assert!(!arguments_used_only_for_length(&body, ARGUMENTS));
+    }
 }
 
 /// Does `property`, resolved against `class_name`'s ancestry, declare a USER
