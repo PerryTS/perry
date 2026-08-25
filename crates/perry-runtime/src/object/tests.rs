@@ -973,6 +973,27 @@ fn transition_cache_requires_exact_predecessor_shape_id() {
 }
 
 #[test]
+fn transition_cache_prunes_a_descriptorless_target_shape() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let next_keys = crate::array::js_array_alloc(0);
+    let predecessor = crate::object::shapes::shape_id_for_keys_ensure(std::ptr::null(), 0);
+    let target = crate::object::shapes::shape_descriptor_ensure(next_keys, 0, 0)
+        .expect("shape range unexpectedly exhausted");
+    let occupancy_before = test_transition_cache_occupancy();
+    transition_cache_insert(predecessor, std::ptr::null(), next_keys as usize, 0, target);
+    assert_eq!(test_transition_cache_occupancy(), occupancy_before + 1);
+
+    crate::object::shapes::test_drop_shape_descriptors(next_keys as usize);
+    assert!(crate::object::shapes::shape_descriptor_by_id(target).is_none());
+    prune_dead_transition_cache_entries(&|_| false);
+    assert_eq!(
+        test_transition_cache_occupancy(),
+        occupancy_before,
+        "a descriptorless target must release its rooted transition edge"
+    );
+}
+
+#[test]
 fn transition_cache_lookup_rejects_slot_key_mismatch() {
     // The target bytes remain independently validated even though predecessor
     // identity now uses a stable ShapeId. Adopting a mismatched target would

@@ -989,8 +989,11 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
 ///
 /// `gc::dead_owner::DEAD_KEY_PRUNES` runs `prune_dead_shape_keys` before this
 /// function. A predecessor whose keys edge died therefore has no descriptor
-/// by the time we visit the cache; descriptor absence is the authoritative
-/// lifecycle test and avoids repeating the collector's address/type probes.
+/// by the time we visit the cache. Both ShapeIds must still resolve: the
+/// predecessor is weak, while the strongly rooted target keys normally keep
+/// their descriptor live. Checking both here makes that target invariant a
+/// release-mode post-GC proof without adding a hash-table lookup to every hot
+/// transition stamp.
 #[cold]
 pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
     with_transition_cache(|table| unsafe {
@@ -1000,7 +1003,9 @@ pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) 
                 continue;
             }
             let dead = (entry.key_ptr != 0 && is_dead_owner(entry.key_ptr))
-                || shapes::shape_descriptor_by_id(entry.prev_shape_id).is_none();
+                || shapes::shape_descriptor_by_id(entry.prev_shape_id).is_none()
+                || (entry.target_shape_id != 0
+                    && shapes::shape_descriptor_by_id(entry.target_shape_id).is_none());
             if dead {
                 *entry = TransitionEntry {
                     key_ptr: 0,

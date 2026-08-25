@@ -684,8 +684,8 @@ pub(crate) unsafe fn install_cached_object_shape_transition(
 
     // Debug/test builds verify the cache-to-table invariant before trusting
     // the constant-time release publication. This lookup is compiled out of
-    // optimized release builds, where the cache's rooted edge and stable IDs
-    // preserve the invariant by construction.
+    // optimized release builds, where full-GC pruning validates both ShapeIds
+    // and the cache's rooted target edge keeps its descriptor live.
     #[cfg(debug_assertions)]
     {
         let key_count = if _target_keys.is_null() {

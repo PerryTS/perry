@@ -310,6 +310,18 @@ fn object_set_field_by_name_transition_fast_impl(
             return 0;
         }
 
+        // `Object.prototype[<index>]` must reach the ordinary setter so it can
+        // invalidate array hole/OOB guards through
+        // `note_object_prototype_index_write`. A canonical index must start
+        // with an ASCII digit, so named transitions avoid the prototype TLS
+        // lookup entirely. Probe only after a cache hit; ordinary misses
+        // already take the semantic fallback.
+        let key_starts_with_digit =
+            (*key).byte_len != 0 && (*crate::string::string_data(key)).is_ascii_digit();
+        if key_starts_with_digit && crate::array::object_prototype_addr_matches(obj as usize) {
+            return 0;
+        }
+
         if !super::shapes::install_cached_object_shape_transition(
             obj,
             prev_shape_id,
@@ -345,4 +357,61 @@ fn object_set_field_by_name_transition_fast_impl(
     }
 
     1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transition_fast_rejects_object_prototype_even_with_a_cached_edge() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let prototype = crate::array::object_prototype_addr() as *mut ObjectHeader;
+        assert!(!prototype.is_null(), "test premise: Object.prototype");
+        let prototype_handle = scope.root_raw_mut_ptr(prototype);
+
+        let raw_key = crate::string::js_string_from_bytes(b"879400001".as_ptr(), 9);
+        let raw_key_handle = scope.root_string_ptr(raw_key);
+        let raw_key = raw_key_handle.get_raw_const_ptr::<crate::StringHeader>();
+        let key = crate::string::js_string_intern(raw_key, key_content_hash(raw_key));
+        let key_handle = scope.root_string_ptr(key);
+
+        let prototype = prototype_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let predecessor = unsafe { super::super::shapes::object_shape_stamp(prototype) };
+        assert!(
+            super::super::shapes::is_shape_id(predecessor),
+            "test premise: Object.prototype has a resolvable ShapeId"
+        );
+        let old_keys = unsafe { super::super::object_keys_array(prototype) };
+        let next_keys = crate::array::js_array_clone(old_keys);
+        let slot = crate::array::js_array_length(next_keys);
+        let next_keys = crate::array::js_array_push(
+            next_keys,
+            crate::JSValue::string_ptr(key_handle.get_raw_mut_ptr()),
+        );
+        let next_keys_handle = scope.root_raw_mut_ptr(next_keys);
+        let next_keys = next_keys_handle.get_raw_mut_ptr::<ArrayHeader>();
+        let target = super::super::shapes::shape_descriptor_ensure(
+            next_keys,
+            slot + 1,
+            unsafe { super::super::object_live_slot_count(prototype) }.max(slot + 1),
+        )
+        .expect("shape range unexpectedly exhausted");
+        let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+        super::super::transition_cache_insert(predecessor, key, next_keys as usize, slot, target);
+        assert!(
+            super::super::transition_cache_lookup(predecessor, key).is_some(),
+            "test premise: the synthetic transition must be cache-resident"
+        );
+
+        test_reset_transition_fast_hits();
+        assert_eq!(
+            object_set_field_by_name_transition_only_fast(prototype, key, 42.0),
+            0,
+            "Object.prototype must use the setter that records indexed writes"
+        );
+        assert_eq!(test_transition_fast_hits(), 0);
+        super::super::test_clear_transition_cache_root();
+    }
 }
