@@ -60,6 +60,33 @@ pub(crate) fn is_readonly_set_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
+/// True when a declared type says that the expression is a `Map<K, V>` or
+/// `ReadonlyMap<K, V>`, but does not by itself prove Perry's native Map
+/// layout.
+///
+/// In particular this retains a useful candidate through nested structural
+/// fields such as `this.ctx.entityToArchetype`. Callers must use a branded
+/// runtime operation with ordinary method dispatch on a brand miss.
+pub(crate) fn is_declared_map_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    match e {
+        Expr::LocalGet(id) => ctx.local_type_hint(id).is_some_and(type_is_declared_map),
+        Expr::PropertyGet {
+            object, property, ..
+        } => static_type_of(ctx, object).is_some_and(|owner_ty| {
+            type_may_declare_collection_field(ctx, &owner_ty, property, type_is_declared_map, 0)
+        }),
+        _ => false,
+    }
+}
+
+#[inline]
+fn type_is_declared_map(ty: &HirType) -> bool {
+    matches!(
+        ty,
+        HirType::Generic { base, .. } if base == "Map" || base == "ReadonlyMap"
+    )
+}
+
 #[inline]
 fn type_is_readonly_set(ty: &HirType) -> bool {
     matches!(ty, HirType::Generic { base, .. } if base == "ReadonlySet")
@@ -77,34 +104,57 @@ fn type_may_declare_readonly_set_field(
     property: &str,
     depth: usize,
 ) -> bool {
+    type_may_declare_collection_field(ctx, owner_ty, property, type_is_readonly_set, depth)
+}
+
+fn type_may_declare_collection_field(
+    ctx: &FnCtx<'_>,
+    owner_ty: &HirType,
+    property: &str,
+    matches_collection: fn(&HirType) -> bool,
+    depth: usize,
+) -> bool {
     if depth > 32 {
         return false;
     }
     match owner_ty {
         HirType::Union(variants) => variants.iter().any(|variant| {
             !matches!(variant, HirType::Null | HirType::Void | HirType::Never)
-                && type_may_declare_readonly_set_field(ctx, variant, property, depth + 1)
+                && type_may_declare_collection_field(
+                    ctx,
+                    variant,
+                    property,
+                    matches_collection,
+                    depth + 1,
+                )
         }),
         HirType::Named(name) | HirType::Generic { base: name, .. } => {
             if let Some(class) = ctx.classes.get(name) {
                 if let Some(field) = class.fields.iter().find(|field| field.name == property) {
-                    return type_is_readonly_set(&field.ty);
+                    return matches_collection(&field.ty);
                 }
                 if let Some(parent) = class.extends_name.as_deref() {
-                    return type_may_declare_readonly_set_field(
+                    return type_may_declare_collection_field(
                         ctx,
                         &HirType::Named(parent.to_string()),
                         property,
+                        matches_collection,
                         depth + 1,
                     );
                 }
             }
             if let Some(iface) = ctx.interfaces.get(name) {
                 if let Some(field) = iface.properties.iter().find(|field| field.name == property) {
-                    return type_is_readonly_set(&field.ty);
+                    return matches_collection(&field.ty);
                 }
                 if iface.extends.iter().any(|parent| {
-                    type_may_declare_readonly_set_field(ctx, parent, property, depth + 1)
+                    type_may_declare_collection_field(
+                        ctx,
+                        parent,
+                        property,
+                        matches_collection,
+                        depth + 1,
+                    )
                 }) {
                     return true;
                 }
@@ -115,13 +165,13 @@ fn type_may_declare_readonly_set_field(
                     if object
                         .properties
                         .get(property)
-                        .is_some_and(|field| type_is_readonly_set(&field.ty))
+                        .is_some_and(|field| matches_collection(&field.ty))
             )
         }
         HirType::Object(object) => object
             .properties
             .get(property)
-            .is_some_and(|field| type_is_readonly_set(&field.ty)),
+            .is_some_and(|field| matches_collection(&field.ty)),
         _ => false,
     }
 }
