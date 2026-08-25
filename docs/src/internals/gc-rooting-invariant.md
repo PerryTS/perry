@@ -303,9 +303,30 @@ like coverage while doing it. Two rounds of this have now been measured:
    lowering. Adding the one name takes the sabotaged arms to 13 and 8 and leaves
    the clean arms at 2 and 2.
 
+4. **A poll-capable symbol NO audit can ask for** (#8809). `--audit-poll-reach`
+   walks only symbols `ALLOC_RE` matches, so a helper that allocates but spells
+   it neither `_alloc` nor `_new` nor `_create` is outside its domain entirely.
+   `js_private_brand_add` is one: it reaches `js_object_set_field_by_name` in
+   three lines, and its own body says *"the marker-key allocation can evacuate
+   both the receiver and any live value"* — it opens a `RuntimeHandleScope` for
+   exactly that reason. Unlisted, the window `new C()` opens around it
+   classified `MOVING: no`, and every `--moving-only` arm dropped a real stale
+   instance handle. Round 3's instrument is structurally blind here, which is
+   the standing residual: **when you add a runtime helper that can re-enter JS
+   or allocate through a path that can, add it to `POLL_CAPABLE_RUNTIME` in the
+   same commit.** Nothing will ask you to.
+
 `--audit-poll-capable` is the gate for rounds 1–2 and `--audit-poll-reach` is
-the gate for round 3; `gc-root-dominance.yml` runs both alongside
-`--audit-alloc-re` before the build. `--audit-poll-capable` fails on any entry
+the gate for round 3; round 4 has no gate. `gc-root-dominance.yml` runs both
+alongside `--audit-alloc-re` before the build.
+
+**Those pre-build audits are also the job's single point of failure, and it has
+already cost ten days.** `--audit-poll-reach` went red on `main` on 2026-08-15
+over three unlisted symbols and stayed red; because it runs *before* the
+compiler build, not one of the four gated arms below it executed until #8809.
+Two rooting regressions landed inside that window, and the opt-in PR arm did
+not see either (neither PR carried `run-extended-tests`). A red audit is not a
+warning about the checker's bookkeeping — it is the whole gate off. `--audit-poll-capable` fails on any entry
 that names no exported `extern "C" fn js_*`. When it goes red, **replace** the
 phantom with the symbol codegen actually emits rather than deleting it —
 deleting turns the audit green and leaves the hole.

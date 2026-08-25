@@ -1341,6 +1341,40 @@ POLL_CAPABLE_RUNTIME = {
     "js_super_construct_apply",
     "js_vm_synthetic_module_new",
     "js_writable_stream_new",
+    # The third wave, reported by `--audit-poll-reach` and unfixed long enough
+    # to matter: that step has been the FIRST failing step of every scheduled
+    # `gc-root-dominance` run on `main` since 2026-08-15, and it runs before the
+    # compiler build, so none of the four gated arms below it executed for ten
+    # days. Two rooting regressions landed inside that window (#8809). A gate
+    # that cannot reach its own subject is hazard 4 with an extra step.
+    #
+    # Each is the audit's own premise, one hop each:
+    #   js_builtin_subclass_construct -> js_new_function_construct_with_new_target
+    #       (object/class_registry/construct/class_return.rs — runs a user
+    #       subclass constructor; nothing is more poll-capable)
+    #   js_tls_create_secure_context  -> js_tls_secure_context_new  (tls.rs:1155,
+    #       a pure delegate)
+    #   js_tls_secure_context_new     -> js_object_set_field_by_name (tls.rs:1160,
+    #       reads the caller's options object and writes the result)
+    "js_builtin_subclass_construct",
+    "js_tls_create_secure_context", "js_tls_secure_context_new",
+    # `js_private_brand_add` is the referent-with-no-name that NEITHER audit can
+    # ask for: `--audit-poll-reach` only walks symbols `ALLOC_RE` matches, and
+    # `js_private_brand_add` matches no alloc/new/create convention, so the one
+    # instrument built for this hole is structurally blind to it. It reaches
+    # `js_object_set_field_by_name` in three lines
+    # (object/field_get_set/ic_miss.rs), and its own body states the premise
+    # outright — "the marker-key allocation can evacuate both the receiver and
+    # any live value" — which is why it opens a `RuntimeHandleScope` before
+    # deriving raw pointers. Without this entry the window `new C()` opens
+    # around it classified `MOVING: no` and every `--moving-only` arm dropped
+    # the #8809 instance-handle violation, exactly the way the emitted
+    # property-GET helpers were dropped before #7284.
+    #
+    # Measured when added: the ONLY window this reclassifies over the curated
+    # corpus is that one, which the same PR fixes in
+    # `lower_call/new.rs::construction_runs_user_code`.
+    "js_private_brand_add",
 }
 
 
