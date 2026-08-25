@@ -157,6 +157,22 @@ fn versioned_callback(func_id: u32) -> Expr {
     )
 }
 
+fn versioned_update_callback(func_id: u32, op: UpdateOp, prefix: bool) -> Expr {
+    callback_with(
+        func_id,
+        vec![
+            param(29, "entity", Type::Any),
+            param(30, "pos", Type::Any),
+            param(31, "vel", Type::Any),
+        ],
+        vec![Stmt::Expr(Expr::Update {
+            id: COUNT,
+            op,
+            prefix,
+        })],
+    )
+}
+
 fn select(closures: Vec<(u32, Expr)>, direct: impl IntoIterator<Item = u32>) -> HashSet<u32> {
     select_trusted_box_closures(
         &closures,
@@ -189,14 +205,13 @@ fn emit(direct_literal: bool) -> String {
         .expect("LLVM IR is UTF-8")
 }
 
-fn emit_versioned_callback() -> String {
-    const VERSIONED_FUNC: u32 = 100;
+fn emit_versioned_callback_with(callback: Expr) -> String {
     let mut outer = outer_function(true);
     let call = outer.body.last_mut().expect("outer call exists");
     let Stmt::Expr(Expr::Call { args, .. }) = call else {
         panic!("outer tail is a call");
     };
-    args[0] = versioned_callback(VERSIONED_FUNC);
+    args[0] = callback;
 
     let mut module = Module::new("versioned_loop_callback.ts");
     module.init_kind = ModuleInitKind::Eager;
@@ -216,6 +231,10 @@ fn emit_versioned_callback() -> String {
         .expect("LLVM IR is UTF-8")
 }
 
+fn emit_versioned_callback() -> String {
+    emit_versioned_callback_with(versioned_callback(100))
+}
+
 fn function_body(ir: &str, symbol: &str) -> String {
     let start = ir
         .lines()
@@ -224,6 +243,19 @@ fn function_body(ir: &str, symbol: &str) -> String {
     ir.lines()
         .skip(start)
         .take_while(|line| *line != "}")
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn named_block_body<'a>(function: &'a str, prefix: &str) -> String {
+    let start = function
+        .lines()
+        .position(|line| line.starts_with(prefix) && line.ends_with(':'))
+        .unwrap_or_else(|| panic!("missing block {prefix}:\n{function}"));
+    function
+        .lines()
+        .skip(start + 1)
+        .take_while(|line| !line.ends_with(':'))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -300,6 +332,29 @@ fn additive_property_callback_gets_a_cold_deopting_private_body() {
 }
 
 #[test]
+fn captured_update_callback_guards_number_and_deopts_before_tonumeric() {
+    let ir =
+        emit_versioned_callback_with(versioned_update_callback(100, UpdateOp::Increment, false));
+    let special = function_body(
+        &ir,
+        "perry_closure_versioned_loop_callback_ts__100$trusted_boxes$versioned_loop",
+    );
+    assert!(special.contains("versioned_update.number"), "{special}");
+    assert!(special.contains("versioned_update.tonumeric"), "{special}");
+    assert!(
+        special.contains("versioned_callback.deopt.mark")
+            && special.contains("@js_to_numeric(")
+            && special.contains("@js_numeric_step("),
+        "the cold arm must poison the loop before preserving full update semantics:\n{special}"
+    );
+    let fast = named_block_body(&special, "versioned_update.number");
+    assert!(fast.contains("fadd double"), "{fast}");
+    assert!(!fast.contains("@js_to_numeric("), "{fast}");
+    assert!(!fast.contains("@js_numeric_step("), "{fast}");
+    assert!(!fast.contains("@js_write_barrier("), "{fast}");
+}
+
+#[test]
 fn versioned_callback_selector_rejects_calls_and_heap_writes() {
     const VERSIONED_FUNC: u32 = 100;
     let eligible = versioned_callback(VERSIONED_FUNC);
@@ -313,6 +368,23 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
         select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals)
             .contains(&VERSIONED_FUNC)
     );
+
+    for (op, prefix) in [
+        (UpdateOp::Increment, false),
+        (UpdateOp::Increment, true),
+        (UpdateOp::Decrement, false),
+        (UpdateOp::Decrement, true),
+    ] {
+        let update = versioned_update_callback(VERSIONED_FUNC, op, prefix);
+        let closures = vec![(VERSIONED_FUNC, update)];
+        let trusted =
+            select_trusted_box_closures(&closures, &direct, &boxed, &globals, &HashSet::new());
+        assert!(
+            select_versioned_loop_callbacks(&closures, &trusted, &boxed, &globals)
+                .contains(&VERSIONED_FUNC),
+            "unused-result {op:?} prefix={prefix} must be eligible"
+        );
+    }
 
     for rejected_body in [
         vec![Stmt::Expr(Expr::Call {

@@ -1,6 +1,7 @@
 //! Runtime regression for the zero-steady-state-check callback specialization
-//! in versioned checked-reader loops. Cold property/addition arms must mark the
-//! current loop for an exact once-only resume before any observable fallback.
+//! in versioned checked-reader loops. Cold property/addition/ToNumeric arms
+//! must mark the current loop for an exact once-only resume before any
+//! observable fallback.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -130,6 +131,7 @@ function makeReader(count: number): Reader {
   return reader;
 }
 
+function runFixture(): void {
 const plainReader = makeReader(4);
 let plainSum: any = 0;
 plainReader.iterate(
@@ -169,6 +171,47 @@ stringReader.iterate(
   undefined,
 );
 
+const updateReader = makeReader(4);
+let incrementCount: any = 0;
+updateReader.iterate([0, 0, 0, 0], (_entity, _value) => { incrementCount++; }, undefined);
+let decrementCount: any = 4;
+updateReader.iterate([0, 0, 0, 0], (_entity, _value) => { --decrementCount; }, undefined);
+
+const coercionReader = makeReader(3);
+let stringCount: any = "1";
+coercionReader.iterate([0, 0, 0], (_entity, _value) => { stringCount++; }, undefined);
+let valueOfCalls = 0;
+let objectCount: any = {
+  valueOf() {
+    valueOfCalls++;
+    const churn: any[] = [];
+    for (let i = 0; i < 2048; i++) churn.push({ i });
+    return 5;
+  },
+};
+coercionReader.iterate([0, 0, 0], (_entity, _value) => { ++objectCount; }, undefined);
+let bigintCount: any = 10n;
+coercionReader.iterate([0, 0, 0], (_entity, _value) => { bigintCount++; }, undefined);
+
+const throwingUpdateReader = makeReader(2);
+let throwingCount: any = {
+  valueOf() {
+    const churn: any[] = [];
+    for (let i = 0; i < 2048; i++) churn.push({ i });
+    throw new Error("cold update");
+  },
+};
+let updateError = "none";
+try {
+  throwingUpdateReader.iterate(
+    [0, 0],
+    (_entity, _value) => { throwingCount++; },
+    undefined,
+  );
+} catch (error: any) {
+  updateError = error.message;
+}
+
 const caughtReader = makeReader(2);
 let caughtSum: any = 0;
 const caughtCallback = (_entity: number, value: any) => { caughtSum += value.n; };
@@ -190,8 +233,13 @@ const caught = caughtReader.iterateCaught(
 
 console.log(
   plainSum + ":" + mutatingSum + ":" + mutatingColumn.length + ":" +
-  getterCalls + ":" + stringSum + ":" + caught + ":" + caughtSum,
+  getterCalls + ":" + stringSum + ":" + incrementCount + ":" + decrementCount + ":" +
+  stringCount + ":" + objectCount + ":" + valueOfCalls + ":" + String(bigintCount) + ":" +
+  updateError + ":" + caught + ":" + caughtSum,
 );
+}
+
+runFixture();
 "#,
     )
     .expect("write callback-deopt fixture");
@@ -216,7 +264,8 @@ console.log(
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    let ir = std::fs::read_to_string(dir.path().join(".perry-trace/llvm/main_ts.ll"))
+    let trace_dir = dir.path().join(".perry-trace/llvm");
+    let ir = std::fs::read_to_string(trace_dir.join("main_ts.ll"))
         .expect("read traced main module LLVM IR");
     let ordinary = llvm_function_body(&ir, "__Reader__iterate$undef2(");
     let caught = llvm_function_body(&ir, "__Reader__iterateCaught$undef2(");
@@ -227,6 +276,23 @@ console.log(
     assert!(
         !caught.contains("versioned_index.loop.callback.preheader"),
         "an active local EH scope must keep the collecting callback clone out:\n{caught}"
+    );
+    let callback_ir = std::fs::read_dir(&trace_dir)
+        .expect("read LLVM trace directory")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "ll"))
+        .map(|path| std::fs::read_to_string(path).expect("read traced LLVM module"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let update_number_blocks = callback_ir.matches("versioned_update.number").count();
+    let update_tonumeric_blocks = callback_ir.matches("versioned_update.tonumeric").count();
+    let callback_deopt_blocks = callback_ir.matches("versioned_callback.deopt.mark").count();
+    assert!(
+        update_number_blocks != 0 && update_tonumeric_blocks != 0 && callback_deopt_blocks != 0,
+        "captured updates must keep numeric stepping hot and ToNumeric behind exact deopt \
+         (number={update_number_blocks}, tonumeric={update_tonumeric_blocks}, \
+         deopt={callback_deopt_blocks})"
     );
 
     for force_evacuation in [false, true] {
@@ -239,7 +305,7 @@ console.log(
         );
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
-            "10:235:5:1:1x3:2:2:1\n"
+            "10:235:5:1:1x3:4:0:4:8:1:13:cold update:2:2:1\n"
         );
     }
 }
