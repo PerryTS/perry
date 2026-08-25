@@ -18,6 +18,7 @@ fn local_get_is(expr: &Expr, expected: u32) -> bool {
 
 fn eligible_method(
     hir: &Module,
+    func_names: &HashMap<u32, String>,
     class: &perry_hir::Class,
     key: &str,
     value: &Expr,
@@ -48,11 +49,7 @@ fn eligible_method(
             if function.is_async || function.is_generator {
                 return None;
             }
-            let target = format!(
-                "__perry_wrap_perry_fn_{}__{}",
-                source_prefix,
-                crate::codegen::helpers::sanitize(&function.name)
-            );
+            let target = format!("__perry_wrap_{}", func_names.get(func_id)?);
             (*func_id, &function.params, target)
         }
         _ => return None,
@@ -79,23 +76,11 @@ fn class_shape_id_global(hir: &Module, class_name: &str) -> Option<String> {
     let source_prefix = crate::codegen::helpers::sanitize(&hir.name);
     let mut used = HashSet::new();
     for class in &hir.classes {
-        let base = format!(
-            "perry_class_keys_{}__{}",
-            source_prefix,
-            crate::codegen::helpers::sanitize(&class.name)
+        let keys_global = crate::codegen::helpers::unique_class_keys_global(
+            &source_prefix,
+            &class.name,
+            &mut used,
         );
-        let keys_global = if used.insert(base.clone()) {
-            base
-        } else {
-            let mut suffix = 1u32;
-            loop {
-                let candidate = format!("{base}_{suffix}");
-                if used.insert(candidate.clone()) {
-                    break candidate;
-                }
-                suffix += 1;
-            }
-        };
         if class.name == class_name {
             return Some(crate::typed_shape::shape_id_global_name_from_keys_global(
                 &keys_global,
@@ -107,6 +92,7 @@ fn class_shape_id_global(hir: &Module, class_name: &str) -> Option<String> {
 
 fn capability_from_init(
     hir: &Module,
+    func_names: &HashMap<u32, String>,
     global_id: u32,
     init: &Expr,
 ) -> Option<ExportedObjectLiteralCapability> {
@@ -167,7 +153,10 @@ fn capability_from_init(
                 let Expr::String(key) = index.as_ref() else {
                     return None;
                 };
-                final_methods.insert(key.clone(), eligible_method(hir, class, key, value));
+                final_methods.insert(
+                    key.clone(),
+                    eligible_method(hir, func_names, class, key, value),
+                );
             }
             Stmt::Expr(Expr::Call { callee, args, .. }) => {
                 let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
@@ -182,7 +171,10 @@ fn capability_from_init(
                 if !local_get_is(receiver, param.id) {
                     return None;
                 }
-                final_methods.insert(key.clone(), eligible_method(hir, class, key, value));
+                final_methods.insert(
+                    key.clone(),
+                    eligible_method(hir, func_names, class, key, value),
+                );
             }
             Stmt::Return(Some(value)) if local_get_is(value, param.id) && !saw_return => {
                 saw_return = true;
@@ -226,6 +218,9 @@ fn capability_from_init(
 pub(crate) fn exported_object_literal_capabilities(
     hir: &Module,
 ) -> HashMap<String, ExportedObjectLiteralCapability> {
+    let source_prefix = crate::codegen::helpers::sanitize(&hir.name);
+    let func_names =
+        crate::codegen::func_registry::build_func_registry(hir, &source_prefix).func_names;
     let exported_objects: HashSet<&str> = hir.exported_objects.iter().map(String::as_str).collect();
     let mut exported_locals: HashSet<&str> = exported_objects.clone();
     for export in &hir.exports {
@@ -250,7 +245,7 @@ pub(crate) fn exported_object_literal_capabilities(
         if !exported_locals.contains(name.as_str()) {
             continue;
         }
-        if let Some(capability) = capability_from_init(hir, *id, init) {
+        if let Some(capability) = capability_from_init(hir, &func_names, *id, init) {
             by_local.insert(name.clone(), capability);
         }
     }

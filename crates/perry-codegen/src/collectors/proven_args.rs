@@ -81,6 +81,7 @@ pub(crate) fn method_proven_shape_args(
             field_reads: HashSet::new(),
             safe: true,
             escaped: false,
+            read_in_region: false,
         };
         use_check.walk_stmts(&method.body);
         if !use_check.safe || use_check.field_reads.is_empty() {
@@ -199,6 +200,10 @@ struct PrefixContainedParamUse {
     field_reads: HashSet<String>,
     safe: bool,
     escaped: bool,
+    /// Whether the currently active repeated region performed any accepted
+    /// direct field read. This is independent of `field_reads` cardinality:
+    /// rereading a field already seen before the loop must still count.
+    read_in_region: bool,
 }
 
 impl PrefixContainedParamUse {
@@ -229,18 +234,16 @@ impl PrefixContainedParamUse {
                 }
             }
             Stmt::While { condition, body } => {
-                let field_count = self.field_reads.len();
-                let escaped = self.escaped;
+                let outer = self.enter_repeated_region();
                 self.walk_expr(condition);
                 self.walk_stmts(body);
-                self.finish_repeated_region(field_count, escaped);
+                self.finish_repeated_region(outer);
             }
             Stmt::DoWhile { condition, body } => {
-                let field_count = self.field_reads.len();
-                let escaped = self.escaped;
+                let outer = self.enter_repeated_region();
                 self.walk_stmts(body);
                 self.walk_expr(condition);
-                self.finish_repeated_region(field_count, escaped);
+                self.finish_repeated_region(outer);
             }
             Stmt::For {
                 init,
@@ -251,8 +254,7 @@ impl PrefixContainedParamUse {
                 if let Some(init) = init {
                     self.walk_stmt(init);
                 }
-                let field_count = self.field_reads.len();
-                let escaped = self.escaped;
+                let outer = self.enter_repeated_region();
                 if let Some(condition) = condition {
                     self.walk_expr(condition);
                 }
@@ -260,7 +262,7 @@ impl PrefixContainedParamUse {
                     self.walk_expr(update);
                 }
                 self.walk_stmts(body);
-                self.finish_repeated_region(field_count, escaped);
+                self.finish_repeated_region(outer);
             }
             Stmt::Try {
                 body,
@@ -300,13 +302,21 @@ impl PrefixContainedParamUse {
         }
     }
 
-    fn finish_repeated_region(&mut self, field_count: usize, escaped: bool) {
+    fn enter_repeated_region(&mut self) -> (bool, bool) {
+        let outer = (self.escaped, self.read_in_region);
+        self.read_in_region = false;
+        outer
+    }
+
+    fn finish_repeated_region(&mut self, outer: (bool, bool)) {
+        let (escaped_before, read_before) = outer;
         // Even when every first-iteration read precedes publication, the next
         // iteration would perform that read after publication. Refuse the
         // whole-parameter overlay when a repeated region contains both.
-        if !escaped && self.escaped && self.field_reads.len() > field_count {
+        if !escaped_before && self.escaped && self.read_in_region {
             self.safe = false;
         }
+        self.read_in_region |= read_before;
     }
 
     fn walk_expr(&mut self, expr: &Expr) {
@@ -324,6 +334,7 @@ impl PrefixContainedParamUse {
                     self.safe = false;
                 } else {
                     self.field_reads.insert(property.clone());
+                    self.read_in_region = true;
                 }
             }
             // A direct store/update has frozen/sealed and setter semantics not
@@ -347,6 +358,48 @@ impl PrefixContainedParamUse {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn field_read(param_id: u32) -> Expr {
+        Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(param_id)),
+            property: "id".to_string(),
+            byte_offset: 0,
+        }
+    }
+
+    #[test]
+    fn repeated_reread_before_publication_rejects_entry_shape_proof() {
+        let param_id = 7;
+        let mut use_check = PrefixContainedParamUse {
+            param_id,
+            field_reads: HashSet::new(),
+            safe: true,
+            escaped: false,
+            read_in_region: false,
+        };
+        use_check.walk_stmts(&[
+            Stmt::Expr(field_read(param_id)),
+            Stmt::While {
+                condition: Expr::Bool(true),
+                body: vec![
+                    // `id` is already in the HashSet before this loop. The
+                    // repeated-region proof must count this occurrence, not a
+                    // set-size delta, because the next iteration reads after
+                    // the publication below.
+                    Stmt::Expr(field_read(param_id)),
+                    Stmt::Expr(Expr::Call {
+                        callee: Box::new(Expr::LocalGet(99)),
+                        args: vec![Expr::LocalGet(param_id)],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                ],
+            },
+        ]);
+        assert!(!use_check.safe);
+    }
+
     /// `$pshape_args` is an internal direct-call capability. Keep every place
     /// that can spell its suffix visible here so a future vtable/indirect-call
     /// registration fails the same kind of reachability ratchet as the

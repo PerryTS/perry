@@ -3,7 +3,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, unbox_to_i64, FnCtx};
+use crate::expr::{lower_expr, FnCtx};
 use crate::native_value::LoweredValue;
 use crate::rooting::{any_operand_may_collect, open_rooted_group, Repr};
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
@@ -113,16 +113,15 @@ fn emit_cached_own_method_guard(
         .block()
         .gep(DOUBLE, &fields, &[(I64, &field_index.to_string())]);
     let closure_value = ctx.block().load(DOUBLE, &slot);
-    let guard = ctx.block().call(
-        I32,
+    let fast_handle = ctx.block().call(
+        I64,
         "js_closure_exact_func_guard",
         &[
             (DOUBLE, &closure_value),
             (PTR, &format!("@{closure_symbol}")),
         ],
     );
-    let guard_passes = ctx.block().icmp_ne(I32, &guard, "0");
-    let fast_handle = unbox_to_i64(ctx.block(), &closure_value);
+    let guard_passes = ctx.block().icmp_ne(I64, &fast_handle, "0");
     let fast_end = ctx.block().label.clone();
     ctx.block()
         .cond_br(&guard_passes, &direct_label, &cold_label);

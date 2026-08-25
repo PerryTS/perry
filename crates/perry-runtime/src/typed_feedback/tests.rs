@@ -1277,7 +1277,7 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         (
             guards,
             "static G3B",
-            "static G3B: extern \"C\" fn(f64, *const u8) -> i32",
+            "static G3B: extern \"C\" fn(f64, *const u8) -> u64",
             "js_closure_exact_func_guard",
         ),
         (
@@ -2334,7 +2334,10 @@ fn exact_closure_func_guard_is_safe_and_identity_exact() {
     let fn_ptr = test_direct_closure_ptr();
     let closure = crate::closure::js_closure_alloc_singleton(fn_ptr);
     let closure_value = crate::value::js_nanbox_pointer(closure as i64);
-    assert_eq!(js_closure_exact_func_guard(closure_value, fn_ptr), 1);
+    assert_eq!(
+        js_closure_exact_func_guard(closure_value, fn_ptr),
+        closure as u64
+    );
     assert_eq!(
         js_closure_exact_func_guard(closure_value, test_direct_method_ptr()),
         0
@@ -2356,8 +2359,8 @@ fn exact_closure_func_guard_is_safe_and_identity_exact() {
 
 #[test]
 fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
-    const CLASS_ID: u32 = 0x7fff_fe75;
-    let object = crate::object::js_object_alloc(CLASS_ID, 0);
+    const TEST_CLASS_ID: u32 = 0x7fff_fe75;
+    let object = crate::object::js_object_alloc(TEST_CLASS_ID, 0);
     let method_key = crate::string::js_string_from_bytes(b"method".as_ptr(), 6);
     let extra_key = crate::string::js_string_from_bytes(b"state".as_ptr(), 5);
     let spilled_key = crate::string::js_string_from_bytes(b"spilled".as_ptr(), 7);
@@ -2371,7 +2374,7 @@ fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
     let first = unsafe {
         js_object_own_method_cache_miss(
             receiver,
-            CLASS_ID,
+            TEST_CLASS_ID,
             0,
             b"method".as_ptr() as *const i8,
             6,
@@ -2387,7 +2390,7 @@ fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
     let after_append = unsafe {
         js_object_own_method_cache_miss(
             receiver,
-            CLASS_ID,
+            TEST_CLASS_ID,
             0,
             b"method".as_ptr() as *const i8,
             6,
@@ -2409,7 +2412,7 @@ fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
     let after_spilled_append = unsafe {
         js_object_own_method_cache_miss(
             receiver,
-            CLASS_ID,
+            TEST_CLASS_ID,
             0,
             b"method".as_ptr() as *const i8,
             6,
@@ -2429,7 +2432,7 @@ fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
     let replaced = unsafe {
         js_object_own_method_cache_miss(
             receiver,
-            CLASS_ID,
+            TEST_CLASS_ID,
             0,
             b"method".as_ptr() as *const i8,
             6,
@@ -2445,7 +2448,7 @@ fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
     let deleted = unsafe {
         js_object_own_method_cache_miss(
             receiver,
-            CLASS_ID,
+            TEST_CLASS_ID,
             0,
             b"method".as_ptr() as *const i8,
             6,

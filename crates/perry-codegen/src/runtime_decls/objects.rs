@@ -231,7 +231,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE, PTR, I32, I32],
     );
-    module.declare_function("js_closure_exact_func_guard", I32, &[DOUBLE, PTR]);
+    module.declare_function("js_closure_exact_func_guard", I64, &[DOUBLE, PTR]);
     module.declare_function(
         "js_object_own_method_cache_miss",
         I64,

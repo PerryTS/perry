@@ -539,8 +539,8 @@ pub unsafe extern "C-unwind" fn js_native_call_method_apply_by_id(
 /// Materialize `fixed..., ...spread` for the generic branch of a short packed
 /// spread callsite. The fast branch has already evaluated all operands; doing
 /// the fallback assembly here preserves that source order without re-running
-/// an expression, and [`crate::object::js_array_like_to_array`] preserves the
-/// the full iterator protocol for every proof miss.
+/// an expression, and [`crate::array::array_from_spread_value`] preserves the
+/// full iterator protocol for every proof miss.
 ///
 /// The returned array is consumed immediately by
 /// [`js_native_call_method_apply_by_id`]. Every input and both arrays are held

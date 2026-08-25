@@ -191,7 +191,7 @@ mod declared_string_add_tests;
 mod emission_order_tests;
 mod entry;
 pub mod entry_outline;
-mod func_registry;
+pub(crate) mod func_registry;
 mod function;
 #[cfg(test)]
 mod guarded_undefined_method_tests;
@@ -355,23 +355,8 @@ pub fn short_spread_method_capabilities(hir: &HirModule) -> Vec<ShortSpreadMetho
     let mut used_keys_globals = std::collections::HashSet::new();
     let mut out = Vec::new();
     for class in &hir.classes {
-        let base = format!(
-            "perry_class_keys_{}__{}",
-            source_prefix,
-            sanitize(&class.name)
-        );
-        let keys_global = if used_keys_globals.insert(base.clone()) {
-            base
-        } else {
-            let mut suffix = 1u32;
-            loop {
-                let candidate = format!("{base}_{suffix}");
-                if used_keys_globals.insert(candidate.clone()) {
-                    break candidate;
-                }
-                suffix += 1;
-            }
-        };
+        let keys_global =
+            helpers::unique_class_keys_global(&source_prefix, &class.name, &mut used_keys_globals);
         let shape_id_global =
             crate::typed_shape::shape_id_global_name_from_keys_global(&keys_global);
         for method in &class.methods {
@@ -1139,23 +1124,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // `new ClassName()` site still resolves to the right global.
     let mut used_class_keys_globals: std::collections::HashSet<String> =
         std::collections::HashSet::new();
-    fn unique_global(base: String, used: &mut std::collections::HashSet<String>) -> String {
-        if used.insert(base.clone()) {
-            return base;
-        }
-        let mut n = 1u32;
-        loop {
-            let candidate = format!("{base}_{n}");
-            if used.insert(candidate.clone()) {
-                return candidate;
-            }
-            n += 1;
-        }
-    }
-
     for c in &hir.classes {
-        let global_name = unique_global(
-            format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name)),
+        let global_name = helpers::unique_class_keys_global(
+            &module_prefix,
+            &c.name,
             &mut used_class_keys_globals,
         );
         llmod.add_internal_global(&global_name, I64, "0");
@@ -1348,8 +1320,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         if class_keys_globals_map.contains_key(&c.name) {
             continue;
         }
-        let global_name = unique_global(
-            format!("perry_class_keys_{}__{}", module_prefix, sanitize(&c.name)),
+        let global_name = helpers::unique_class_keys_global(
+            &module_prefix,
+            &c.name,
             &mut used_class_keys_globals,
         );
         llmod.add_internal_global(&global_name, I64, "0");

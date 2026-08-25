@@ -1175,24 +1175,32 @@ pub extern "C" fn js_typed_feedback_closure_direct_call_guard(
 /// header validation used by the universal dispatcher: arbitrary replacement
 /// values, small handle-band ids, and bound-function sentinels must miss the
 /// direct arm without ever being dereferenced or called as code.
+fn closure_ptr_from_value_bits(bits: u64) -> *const crate::closure::ClosureHeader {
+    let addr = if (bits & TAG_MASK) == POINTER_TAG {
+        (bits & POINTER_MASK) as usize
+    } else if bits >> 48 == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
+        bits as usize
+    } else {
+        0
+    };
+    addr as *const crate::closure::ClosureHeader
+}
+
 #[no_mangle]
 pub extern "C" fn js_closure_exact_func_guard(
     closure_value: f64,
     expected_func_ptr: *const u8,
-) -> i32 {
+) -> u64 {
     if expected_func_ptr.is_null() {
         return 0;
     }
-    let bits = closure_value.to_bits();
-    let raw_ptr = if (bits & TAG_MASK) == POINTER_TAG {
-        (bits & POINTER_MASK) as *const crate::closure::ClosureHeader
-    } else if (bits >> 48) == 0 && bits >= 0x10000 {
-        bits as *const crate::closure::ClosureHeader
-    } else {
-        std::ptr::null()
-    };
+    let raw_ptr = closure_ptr_from_value_bits(closure_value.to_bits());
     let closure_ptr = crate::closure::clean_closure_ptr(raw_ptr);
-    (crate::closure::get_valid_func_ptr(closure_ptr) == expected_func_ptr) as i32
+    if crate::closure::get_valid_func_ptr(closure_ptr) == expected_func_ptr {
+        closure_ptr as u64
+    } else {
+        0
+    }
 }
 
 /// Revalidate and prime the shape token for an own object-literal method.
@@ -1273,13 +1281,7 @@ pub unsafe extern "C" fn js_object_own_method_cache_miss(
 
     let fields = (object as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
     let closure_bits = std::ptr::read(fields.add(field_index as usize));
-    let raw_ptr = if (closure_bits & TAG_MASK) == POINTER_TAG {
-        (closure_bits & POINTER_MASK) as *const crate::closure::ClosureHeader
-    } else if (closure_bits >> 48) == 0 && closure_bits >= 0x10000 {
-        closure_bits as *const crate::closure::ClosureHeader
-    } else {
-        std::ptr::null()
-    };
+    let raw_ptr = closure_ptr_from_value_bits(closure_bits);
     let closure = crate::closure::clean_closure_ptr(raw_ptr);
     if crate::closure::get_valid_func_ptr(closure) != expected_func_ptr {
         return 0;
@@ -1323,7 +1325,7 @@ mod keep_guard_symbols {
     #[cfg(feature = "keepalive-anchors")]
     #[used] static G3: extern "C" fn(u64, f64, *const u8, u32, u32) -> i32 = js_typed_feedback_closure_direct_call_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G3B: extern "C" fn(f64, *const u8) -> i32 = js_closure_exact_func_guard;
+    #[used] static G3B: extern "C" fn(f64, *const u8) -> u64 = js_closure_exact_func_guard;
     #[cfg(feature = "keepalive-anchors")]
     #[used] static G3C: unsafe extern "C" fn(f64, u32, u32, *const i8, usize, *const u8, *mut u64) -> u64 = js_object_own_method_cache_miss;
     #[cfg(feature = "keepalive-anchors")]

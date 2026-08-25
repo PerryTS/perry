@@ -475,6 +475,7 @@ NONCOLLECTING = {
     # inline-cache guards: pure reads
     "js_typed_feedback_closure_direct_call_guard", "js_closure_exact_func_guard",
     "js_object_own_method_cache_miss",
+    "js_packed_arraylike_loop_revalidate_live",
     # ctor identity selection
     "js_ctor_return_override",
     "llvm.lifetime.start.p0", "llvm.lifetime.end.p0",
