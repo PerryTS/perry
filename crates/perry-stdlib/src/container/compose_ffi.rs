@@ -6,7 +6,7 @@ pub use types::{
 };
 
 pub use backend::{detect_backend, ContainerBackend};
-use perry_runtime::{js_promise_new, Promise, StringHeader};
+use perry_runtime::{js_promise_new_cross_thread, Promise, StringHeader};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -19,7 +19,7 @@ pub unsafe extern "C" fn js_container_compose_start(
     handle: f64,
     services_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let handle_id = handle_id_from_f64(handle);
 
     let engine = match types::get_compose_handle(handle_id as u64) {
@@ -57,7 +57,7 @@ pub unsafe extern "C" fn js_container_compose_stop(
     handle: f64,
     services_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let handle_id = handle_id_from_f64(handle);
 
     let engine = match types::get_compose_handle(handle_id as u64) {
@@ -95,7 +95,7 @@ pub unsafe extern "C" fn js_container_compose_restart(
     handle: f64,
     services_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let handle_id = handle_id_from_f64(handle);
 
     let engine = match types::get_compose_handle(handle_id as u64) {
@@ -131,7 +131,7 @@ pub unsafe extern "C" fn js_container_compose_restart(
 /// FFI: `js_container_compose_config(handle: f64) -> *mut Promise`
 #[no_mangle]
 pub unsafe extern "C" fn js_container_compose_config(handle: f64) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let handle_id = handle_id_from_f64(handle);
 
     let engine = match types::get_compose_handle(handle_id as u64) {
@@ -164,7 +164,7 @@ pub unsafe extern "C" fn js_container_compose_config(handle: f64) -> *mut Promis
 pub unsafe extern "C" fn js_container_composeUp(
     spec_ptr: *const perry_runtime::StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let spec = match types::parse_compose_spec(spec_ptr) {
         Ok(s) => s,
@@ -283,7 +283,7 @@ pub unsafe extern "C" fn js_container_compose_down(
     handle: f64,
     opts_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let handle_id = handle_id_from_f64(handle);
 
     let opts_json = unsafe { string_from_header(opts_ptr) };
@@ -330,7 +330,7 @@ pub unsafe extern "C" fn js_container_compose_down(
 /// FFI: `js_container_compose_ps(handle: f64) -> *mut Promise`
 #[no_mangle]
 pub unsafe extern "C" fn js_container_compose_ps(handle: f64) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let handle_id = handle_id_from_f64(handle);
 
     let engine = match types::get_compose_handle(handle_id as u64) {
@@ -376,7 +376,7 @@ pub unsafe extern "C" fn js_container_compose_logs(
     service_ptr: *const StringHeader,
     tail: f64,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let handle_id = handle_id_from_f64(handle);
 
     let engine = match types::get_compose_handle(handle_id as u64) {
@@ -427,7 +427,7 @@ pub unsafe extern "C" fn js_container_compose_exec(
     service_ptr: *const StringHeader,
     cmd_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let handle_id = handle_id_from_f64(handle);
 
     let engine = match types::get_compose_handle(handle_id as u64) {

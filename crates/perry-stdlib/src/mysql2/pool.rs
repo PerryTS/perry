@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use perry_runtime::{js_array_get_jsvalue, js_array_length, js_promise_new, JSValue, Promise};
+use perry_runtime::{js_array_get_jsvalue, js_array_length, js_promise_new_cross_thread, JSValue, Promise};
 use sqlx::mysql::{MySqlPool, MySqlPoolOptions};
 use sqlx::pool::PoolConnection;
 use sqlx::MySql;
@@ -90,7 +90,7 @@ pub unsafe extern "C" fn js_mysql2_create_pool(config_f: f64) -> Handle {
 /// Closes all connections in the pool.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_pool_end(pool_handle: Handle) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
         use crate::common::take_handle;
@@ -139,7 +139,7 @@ pub unsafe extern "C" fn js_mysql2_pool_query(
     sql_ptr: *const u8,
     params: JSValue,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     // Extract the SQL string
     let sql = if sql_ptr.is_null() {
@@ -239,7 +239,7 @@ pub unsafe extern "C" fn js_mysql2_pool_execute(
     sql_ptr: *const u8,
     params: JSValue,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     // Extract the SQL string
     let sql = if sql_ptr.is_null() {
@@ -432,7 +432,7 @@ pub(crate) unsafe fn extract_params_from_jsvalue(params: JSValue) -> Vec<ParamVa
 /// Gets a connection from the pool.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_pool_get_connection(pool_handle: Handle) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
         use crate::common::get_handle;
@@ -495,7 +495,7 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_query(
     sql_ptr: *const u8,
     params: JSValue,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     // Extract the SQL string
     let sql = if sql_ptr.is_null() {
@@ -589,7 +589,7 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_execute(
     sql_ptr: *const u8,
     params: JSValue,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     // Extract the SQL string
     let sql = if sql_ptr.is_null() {

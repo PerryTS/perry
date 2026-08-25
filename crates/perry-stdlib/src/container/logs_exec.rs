@@ -6,7 +6,7 @@ pub use types::{
 };
 
 pub use backend::{detect_backend, ContainerBackend};
-use perry_runtime::{js_promise_new, Promise, StringHeader};
+use perry_runtime::{js_promise_new_cross_thread, Promise, StringHeader};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 /// FFI: js_container_logs(id: *const StringHeader, tail: i32) -> *mut Promise
 #[no_mangle]
 pub unsafe extern "C" fn js_container_logs(id_ptr: *const StringHeader, tail: i32) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let id = match string_from_header(id_ptr) {
         Some(s) => s,
@@ -60,7 +60,7 @@ pub unsafe extern "C" fn js_container_exec(
     env_json_ptr: *const StringHeader,
     workdir_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let id = match string_from_header(id_ptr) {
         Some(s) => s,

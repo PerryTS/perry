@@ -6,7 +6,7 @@ pub use types::{
 };
 
 pub use backend::{detect_backend, ContainerBackend};
-use perry_runtime::{js_promise_new, Promise, StringHeader};
+use perry_runtime::{js_promise_new_cross_thread, Promise, StringHeader};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -17,7 +17,7 @@ use std::sync::OnceLock;
 /// FFI: js_container_run(spec_json: *const StringHeader) -> *mut Promise
 #[no_mangle]
 pub unsafe extern "C" fn js_container_run(spec_ptr: *const StringHeader) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let spec = match types::parse_container_spec(spec_ptr) {
         Ok(s) => s,
@@ -66,7 +66,7 @@ pub unsafe extern "C" fn js_container_run(spec_ptr: *const StringHeader) -> *mut
 /// FFI: js_container_create(spec_json: *const StringHeader) -> *mut Promise
 #[no_mangle]
 pub unsafe extern "C" fn js_container_create(spec_ptr: *const StringHeader) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let spec = match types::parse_container_spec(spec_ptr) {
         Ok(s) => s,
@@ -111,7 +111,7 @@ pub unsafe extern "C" fn js_container_create(spec_ptr: *const StringHeader) -> *
 /// FFI: js_container_start(id: *const StringHeader) -> *mut Promise
 #[no_mangle]
 pub unsafe extern "C" fn js_container_start(id_ptr: *const StringHeader) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let id = match string_from_header(id_ptr) {
         Some(s) => s,
@@ -144,7 +144,7 @@ pub unsafe extern "C" fn js_container_stop(
     id_ptr: *const StringHeader,
     timeout: i32,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let id = match string_from_header(id_ptr) {
         Some(s) => s,
@@ -182,7 +182,7 @@ pub unsafe extern "C" fn js_container_remove(
     id_ptr: *const StringHeader,
     force: i32,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let id = match string_from_header(id_ptr) {
         Some(s) => s,
@@ -230,7 +230,7 @@ pub unsafe extern "C" fn js_container_downByProject(
     project_ptr: *const StringHeader,
     opts_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let project = match string_from_header(project_ptr) {
         Some(s) if !s.is_empty() => s,
         _ => {
@@ -271,7 +271,7 @@ pub unsafe extern "C" fn js_container_downByProject(
 /// FFI: `js_container_downAll(opts_json: *const StringHeader) -> *mut Promise`
 #[no_mangle]
 pub unsafe extern "C" fn js_container_downAll(opts_ptr: *const StringHeader) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let opts_json = string_from_header(opts_ptr);
 
     crate::common::spawn_for_promise_deferred(
@@ -302,7 +302,7 @@ pub unsafe extern "C" fn js_container_removeIfExists(
     id_ptr: *const StringHeader,
     force: i32,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let id = match string_from_header(id_ptr) {
         Some(s) if !s.is_empty() => s,
         _ => {
@@ -363,7 +363,7 @@ pub(crate) fn parse_cleanup_options(
 /// `JSON.parse(await list(true))` to recover the array.
 #[no_mangle]
 pub unsafe extern "C" fn js_container_list(all: i32) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     crate::common::spawn_for_promise_deferred(
         promise as *mut u8,
@@ -385,7 +385,7 @@ pub unsafe extern "C" fn js_container_list(all: i32) -> *mut Promise {
 /// FFI: js_container_inspect(id: *const StringHeader) -> *mut Promise
 #[no_mangle]
 pub unsafe extern "C" fn js_container_inspect(id_ptr: *const StringHeader) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let id = match string_from_header(id_ptr) {
         Some(s) => s,

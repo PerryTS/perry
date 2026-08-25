@@ -104,7 +104,7 @@ pub unsafe extern "C" fn js_ioredis_set(
     key_ptr: *const StringHeader,
     value_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let key = match string_from_header(key_ptr) {
@@ -176,7 +176,7 @@ pub unsafe extern "C" fn js_ioredis_get(
     handle: Handle,
     key_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let key = match string_from_header(key_ptr) {
@@ -240,7 +240,7 @@ pub unsafe extern "C" fn js_ioredis_del(
     handle: Handle,
     key_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let key = match string_from_header(key_ptr) {
@@ -297,7 +297,7 @@ pub unsafe extern "C" fn js_ioredis_exists(
     handle: Handle,
     key_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let key = match string_from_header(key_ptr) {
@@ -354,7 +354,7 @@ pub unsafe extern "C" fn js_ioredis_incr(
     handle: Handle,
     key_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let key = match string_from_header(key_ptr) {
@@ -411,7 +411,7 @@ pub unsafe extern "C" fn js_ioredis_decr(
     handle: Handle,
     key_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let key = match string_from_header(key_ptr) {
@@ -469,7 +469,7 @@ pub unsafe extern "C" fn js_ioredis_expire(
     key_ptr: *const StringHeader,
     seconds: f64,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let key = match string_from_header(key_ptr) {
@@ -525,7 +525,7 @@ pub unsafe extern "C" fn js_ioredis_expire(
 /// redis.connect() -> Promise<void>
 #[no_mangle]
 pub unsafe extern "C" fn js_ioredis_connect(handle: Handle) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     spawn(async move {
@@ -554,7 +554,7 @@ pub unsafe extern "C" fn js_ioredis_setex(
     seconds: f64,
     value_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let key = match string_from_header(key_ptr) {
@@ -632,7 +632,7 @@ pub unsafe extern "C" fn js_ioredis_disconnect(handle: Handle) {
 /// redis.ping() -> Promise<"PONG">
 #[no_mangle]
 pub unsafe extern "C" fn js_ioredis_ping(handle: Handle) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     spawn(async move {
@@ -683,7 +683,7 @@ pub unsafe extern "C" fn js_ioredis_hget(
     key_ptr: *const StringHeader,
     field_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let key = match string_from_header(key_ptr) {
@@ -755,7 +755,7 @@ pub unsafe extern "C" fn js_ioredis_hset(
     field_ptr: *const StringHeader,
     value_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let key = match string_from_header(key_ptr) {
@@ -826,7 +826,7 @@ pub unsafe extern "C" fn js_ioredis_hgetall(
     handle: Handle,
     key_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let key = match string_from_header(key_ptr) {
@@ -903,7 +903,7 @@ pub unsafe extern "C" fn js_ioredis_hdel(
     key_ptr: *const StringHeader,
     field_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let key = match string_from_header(key_ptr) {
@@ -966,7 +966,7 @@ pub unsafe extern "C" fn js_ioredis_hlen(
     handle: Handle,
     key_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let key = match string_from_header(key_ptr) {
@@ -1018,7 +1018,7 @@ pub unsafe extern "C" fn js_ioredis_hlen(
 /// redis.quit() -> Promise<"OK">
 #[no_mangle]
 pub unsafe extern "C" fn js_ioredis_quit(handle: Handle) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     // Remove connection from cache

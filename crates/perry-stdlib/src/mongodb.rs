@@ -11,7 +11,7 @@ use bson::{doc, Document};
 use mongodb::{Client, Collection, Database};
 use perry_runtime::json::js_json_stringify;
 use perry_runtime::{
-    js_object_alloc, js_object_set_field, js_promise_new, js_string_from_bytes, JSValue,
+    js_object_alloc, js_object_set_field, js_promise_new_cross_thread, js_string_from_bytes, JSValue,
     ObjectHeader, Promise, StringHeader,
 };
 
@@ -94,7 +94,7 @@ pub unsafe extern "C" fn js_mongodb_client_new(uri_ptr: *const StringHeader) -> 
 pub unsafe extern "C" fn js_mongodb_client_connect(client_handle: Handle) -> *mut Promise {
     use crate::common::get_handle_mut;
 
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let pending = if let Some(h) = get_handle_mut::<MongoClientHandle>(client_handle) {
         h.pending_uri.take()
@@ -186,7 +186,7 @@ unsafe fn bson_to_jsvalue(doc: &Document) -> *mut ObjectHeader {
 /// MongoClient.connect(uri) -> Promise<MongoClient>
 #[no_mangle]
 pub unsafe extern "C" fn js_mongodb_connect(uri_ptr: *const StringHeader) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let uri = match string_from_header(uri_ptr) {
         Some(u) => u,
@@ -272,7 +272,7 @@ pub unsafe extern "C" fn js_mongodb_collection_find_one(
     collection_handle: Handle,
     filter_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let filter_json = string_from_header(filter_json_ptr).unwrap_or_else(|| "{}".to_string());
 
@@ -328,7 +328,7 @@ pub unsafe extern "C" fn js_mongodb_collection_find(
     collection_handle: Handle,
     filter_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let filter_json = string_from_header(filter_json_ptr).unwrap_or_else(|| "{}".to_string());
 
@@ -376,7 +376,7 @@ pub unsafe extern "C" fn js_mongodb_collection_insert_one(
     collection_handle: Handle,
     doc_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let doc_json = match string_from_header(doc_json_ptr) {
         Some(j) => j,
@@ -418,7 +418,7 @@ pub unsafe extern "C" fn js_mongodb_collection_insert_many(
     collection_handle: Handle,
     docs_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let docs_json = match string_from_header(docs_json_ptr) {
         Some(j) => j,
@@ -457,7 +457,7 @@ pub unsafe extern "C" fn js_mongodb_collection_update_one(
     filter_json_ptr: *const StringHeader,
     update_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let filter_json = string_from_header(filter_json_ptr).unwrap_or_else(|| "{}".to_string());
     let update_json = match string_from_header(update_json_ptr) {
@@ -495,7 +495,7 @@ pub unsafe extern "C" fn js_mongodb_collection_update_many(
     filter_json_ptr: *const StringHeader,
     update_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let filter_json = string_from_header(filter_json_ptr).unwrap_or_else(|| "{}".to_string());
     let update_json = match string_from_header(update_json_ptr) {
@@ -532,7 +532,7 @@ pub unsafe extern "C" fn js_mongodb_collection_delete_one(
     collection_handle: Handle,
     filter_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let filter_json = string_from_header(filter_json_ptr).unwrap_or_else(|| "{}".to_string());
 
@@ -558,7 +558,7 @@ pub unsafe extern "C" fn js_mongodb_collection_delete_many(
     collection_handle: Handle,
     filter_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let filter_json = string_from_header(filter_json_ptr).unwrap_or_else(|| "{}".to_string());
 
@@ -584,7 +584,7 @@ pub unsafe extern "C" fn js_mongodb_collection_count(
     collection_handle: Handle,
     filter_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let filter_json = string_from_header(filter_json_ptr).unwrap_or_else(|| "{}".to_string());
 
@@ -714,7 +714,7 @@ pub unsafe extern "C" fn js_mongodb_collection_count_value(
 /// client.close() -> Promise<void>
 #[no_mangle]
 pub unsafe extern "C" fn js_mongodb_client_close(_client_handle: Handle) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     spawn_for_promise(promise as *mut u8, async move {
         // MongoDB client doesn't need explicit close in Rust driver
@@ -728,7 +728,7 @@ pub unsafe extern "C" fn js_mongodb_client_close(_client_handle: Handle) -> *mut
 /// client.listDatabases() -> Promise<string> (JSON array of database names)
 #[no_mangle]
 pub unsafe extern "C" fn js_mongodb_client_list_databases(client_handle: Handle) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     spawn_for_promise_deferred(
         promise as *mut u8,
@@ -759,7 +759,7 @@ pub unsafe extern "C" fn js_mongodb_client_list_databases(client_handle: Handle)
 /// db.listCollections() -> Promise<string> (JSON array of collection names)
 #[no_mangle]
 pub unsafe extern "C" fn js_mongodb_db_list_collections(db_handle: Handle) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     spawn_for_promise_deferred(
         promise as *mut u8,

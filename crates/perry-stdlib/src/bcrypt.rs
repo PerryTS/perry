@@ -15,7 +15,7 @@ pub unsafe extern "C" fn js_bcrypt_hash(
     password_ptr: *const StringHeader,
     salt_rounds: f64,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let password = match string_from_header(password_ptr) {
@@ -79,7 +79,7 @@ pub unsafe extern "C" fn js_bcrypt_compare(
     password_ptr: *const StringHeader,
     hash_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let password = match string_from_header(password_ptr) {
@@ -142,7 +142,7 @@ pub unsafe extern "C" fn js_bcrypt_compare(
 /// bcrypt.genSalt(rounds) -> Promise<string>
 #[no_mangle]
 pub unsafe extern "C" fn js_bcrypt_gen_salt(rounds: f64) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
     let cost = rounds as u32;
 

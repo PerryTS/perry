@@ -241,7 +241,7 @@ pub unsafe extern "C" fn js_ws_connect(
         }
         __android_log_print(3, b"PerryWS\0".as_ptr(), b"js_ws_connect called\0".as_ptr());
     }
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
 
     let url = match string_from_header(url_ptr) {
@@ -657,7 +657,7 @@ pub unsafe extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
 pub unsafe extern "C" fn js_ws_connect(
     url_ptr: *const StringHeader,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let handle = perry_native_ws_connect(url_ptr as *const u8);
     let result_bits = handle.to_bits();
     // Resolve immediately with the handle (connection happens async in native)
@@ -858,7 +858,7 @@ pub unsafe extern "C" fn js_ws_wait_for_message(
     handle: i64,
     timeout_ms: f64,
 ) -> *mut perry_runtime::Promise {
-    let promise = perry_runtime::js_promise_new();
+    let promise = perry_runtime::js_promise_new_cross_thread();
     let promise_ptr = promise as usize;
     let ws_id = handle as usize;
     let timeout = std::time::Duration::from_millis(timeout_ms as u64);

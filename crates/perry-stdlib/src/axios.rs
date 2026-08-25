@@ -7,7 +7,7 @@ use crate::common::{
     get_handle, register_handle, spawn_for_promise, string_from_header_lossy as string_from_header,
     Handle,
 };
-use perry_runtime::{js_promise_new, js_string_from_bytes, Promise, StringHeader};
+use perry_runtime::{js_promise_new_cross_thread, js_string_from_bytes, Promise, StringHeader};
 
 /// #598: read the body argument as a JSON string. Strings pass
 /// through as-is; everything else is JSON.stringify'd via the
@@ -49,7 +49,7 @@ unsafe fn request_without_body(
     url_ptr: *const StringHeader,
     method: reqwest::Method,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let url = match string_from_header(url_ptr) {
         Some(u) => u,
@@ -119,7 +119,7 @@ pub unsafe extern "C" fn js_axios_options(url_ptr: *const StringHeader) -> *mut 
 /// axios.post(url, data) -> Promise<AxiosResponse>
 #[no_mangle]
 pub unsafe extern "C" fn js_axios_post(url_ptr: *const StringHeader, data: f64) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let url = match string_from_header(url_ptr) {
         Some(u) => u,
@@ -186,7 +186,7 @@ pub unsafe extern "C" fn js_axios_post(url_ptr: *const StringHeader, data: f64) 
 /// axios.put(url, data) -> Promise<AxiosResponse>
 #[no_mangle]
 pub unsafe extern "C" fn js_axios_put(url_ptr: *const StringHeader, data: f64) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let url = match string_from_header(url_ptr) {
         Some(u) => u,
@@ -250,7 +250,7 @@ pub unsafe extern "C" fn js_axios_put(url_ptr: *const StringHeader, data: f64) -
 /// axios.delete(url) -> Promise<AxiosResponse>
 #[no_mangle]
 pub unsafe extern "C" fn js_axios_delete(url_ptr: *const StringHeader) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let url = match string_from_header(url_ptr) {
         Some(u) => u,
@@ -305,7 +305,7 @@ pub unsafe extern "C" fn js_axios_delete(url_ptr: *const StringHeader) -> *mut P
 /// axios.patch(url, data) -> Promise<AxiosResponse>
 #[no_mangle]
 pub unsafe extern "C" fn js_axios_patch(url_ptr: *const StringHeader, data: f64) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let url = match string_from_header(url_ptr) {
         Some(u) => u,

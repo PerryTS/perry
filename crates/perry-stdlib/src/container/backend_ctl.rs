@@ -6,7 +6,7 @@ pub use types::{
 };
 
 pub use backend::{detect_backend, ContainerBackend};
-use perry_runtime::{js_promise_new, Promise, StringHeader};
+use perry_runtime::{js_promise_new_cross_thread, Promise, StringHeader};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -77,7 +77,7 @@ pub unsafe extern "C" fn js_container_getBackend() -> *const StringHeader {
 /// FFI: js_container_detectBackend() -> *mut Promise
 #[no_mangle]
 pub unsafe extern "C" fn js_container_detectBackend() -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     crate::common::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
@@ -199,7 +199,7 @@ pub unsafe extern "C" fn js_container_selectBackendFor(
 ///   await setBackends(ready.map(b => b.name));
 #[no_mangle]
 pub unsafe extern "C" fn js_container_getAvailableBackends() -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     crate::common::spawn_for_promise_deferred(
         promise as *mut u8,
         async move {
@@ -249,7 +249,7 @@ pub unsafe extern "C" fn js_container_getBackendPriority() -> *const StringHeade
 /// - `"backend probe failed: <reason>"`
 #[no_mangle]
 pub unsafe extern "C" fn js_container_setBackend(name_ptr: *const StringHeader) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let name = match string_from_header(name_ptr) {
         Some(s) => s,
         None => {
@@ -328,7 +328,7 @@ pub unsafe extern "C" fn js_container_setBackend(name_ptr: *const StringHeader) 
 pub unsafe extern "C" fn js_container_setBackends(
     names_json_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
     let names_json = match string_from_header(names_json_ptr) {
         Some(s) => s,
         None => {

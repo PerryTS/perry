@@ -9,14 +9,14 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
-use perry_runtime::{js_promise_new, js_string_from_bytes, Promise, StringHeader};
+use perry_runtime::{js_promise_new_cross_thread, js_string_from_bytes, Promise, StringHeader};
 
 /// argon2.hash(password) -> Promise<string>
 ///
 /// Hash a password using Argon2id with default parameters.
 #[no_mangle]
 pub unsafe extern "C" fn js_argon2_hash(password_ptr: *const StringHeader) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let password = match string_from_header(password_ptr) {
         Some(p) => p,
@@ -77,7 +77,7 @@ pub unsafe extern "C" fn js_argon2_verify(
     hash_ptr: *const StringHeader,
     password_ptr: *const StringHeader,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let hash_str = match string_from_header(hash_ptr) {
         Some(h) => h,

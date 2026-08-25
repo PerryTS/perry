@@ -1,6 +1,6 @@
 //! PostgreSQL connection implementation
 
-use perry_runtime::{js_array_get_jsvalue, js_array_length, js_promise_new, JSValue, Promise};
+use perry_runtime::{js_array_get_jsvalue, js_array_length, js_promise_new_cross_thread, JSValue, Promise};
 use sqlx::postgres::PgConnection;
 use sqlx::{Connection, Row};
 
@@ -75,7 +75,7 @@ pub unsafe extern "C" fn js_pg_client_new(config_f: f64) -> Handle {
 pub unsafe extern "C" fn js_pg_client_connect(client_handle: Handle) -> *mut Promise {
     use crate::common::get_handle_mut;
 
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     // Snapshot the pending config out of the handle BEFORE entering the
     // async block — `get_handle_mut` returns a `&mut` that we can't keep
@@ -122,7 +122,7 @@ pub unsafe extern "C" fn js_pg_connect(config_f: f64) -> *mut Promise {
     // Take f64 at the FFI boundary to avoid SysV AMD64 ABI mismatch
     // (see js_mysql2_create_pool for details).
     let config = JSValue::from_bits(config_f.to_bits());
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     // Parse the config
     let pg_config = parse_pg_config(config);
@@ -148,7 +148,7 @@ pub unsafe extern "C" fn js_pg_connect(config_f: f64) -> *mut Promise {
 /// Closes the PostgreSQL connection.
 #[no_mangle]
 pub unsafe extern "C" fn js_pg_client_end(client_handle: Handle) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     crate::common::spawn_for_promise(promise as *mut u8, async move {
         use crate::common::take_handle;
@@ -178,7 +178,7 @@ pub unsafe extern "C" fn js_pg_client_query(
     client_handle: Handle,
     sql_ptr: *const u8,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     // Extract the SQL string
     let sql = if sql_ptr.is_null() {
@@ -344,7 +344,7 @@ pub unsafe extern "C" fn js_pg_client_query_params(
     sql_ptr: *const u8,
     params: JSValue,
 ) -> *mut Promise {
-    let promise = js_promise_new();
+    let promise = js_promise_new_cross_thread();
 
     let sql = if sql_ptr.is_null() {
         String::new()

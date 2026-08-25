@@ -28,7 +28,7 @@
 //! The pinning `js_promise_new_for_native_resolution` performs is likewise a
 //! consequence of deferral — it keeps the promise alive across the window
 //! between creation and the pump's resolution — and an inline settle spans no
-//! collection point, so a plain `js_promise_new` is the correct counterpart.
+//! collection point, so a plain `js_promise_new_cross_thread` is the correct counterpart.
 
 #[cfg(feature = "async-runtime")]
 pub(crate) use crate::common::async_bridge::{
@@ -46,7 +46,7 @@ mod inline {
     ///
     /// No pinning: pinning guards the deferral window, and there is none here.
     pub(crate) unsafe fn js_promise_new_for_native_resolution() -> *mut perry_runtime::Promise {
-        perry_runtime::js_promise_new()
+        perry_runtime::js_promise_new_cross_thread()
     }
 
     /// Settle now rather than queueing for a pump that does not exist.
