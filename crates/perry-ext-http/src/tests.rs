@@ -88,6 +88,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
         }],
     );
     let request_handle = register_handle(ClientRequestHandle {
+        async_id: 0,
         method: "GET".to_string(),
         url: "http://localhost/".to_string(),
         headers: HashMap::new(),
@@ -175,6 +176,7 @@ fn gc_mutable_scanner_rewrites_request_response_listener_roots() {
 /// no live codegen — only the handle registry the other tests already use.
 fn drain_streamed_body(chunks: &[&[u8]]) -> Vec<u8> {
     let request_handle = register_handle(ClientRequestHandle {
+        async_id: 0,
         method: "GET".to_string(),
         url: "http://localhost/".to_string(),
         headers: HashMap::new(),
@@ -346,6 +348,7 @@ fn dispatch_request_stays_visible_to_exit_gate_until_response_queued() {
     });
 
     let request_handle = register_handle(ClientRequestHandle {
+        async_id: 0,
         method: "GET".to_string(),
         url: format!("http://127.0.0.1:{port}/"),
         headers: HashMap::new(),

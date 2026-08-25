@@ -738,6 +738,9 @@ fn collect_module_one(
                         return;
                     }
                     for p in &set {
+                        if p.starts_with("data:text/javascript,") {
+                            ctx.uses_data_url_dynamic_import = true;
+                        }
                         if !new_dyn_imports.contains(p) {
                             new_dyn_imports.push(p.clone());
                         }

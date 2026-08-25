@@ -6,6 +6,7 @@
 //! while the callback runs.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 
@@ -23,11 +24,23 @@ impl AsyncContextSnapshot {
 #[derive(Clone)]
 struct AsyncContextEntry {
     handle: i64,
+    generation: u64,
     stores: Vec<f64>,
 }
 
 thread_local! {
     static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = RefCell::new(AsyncContextSnapshot::default());
+    static HANDLE_GENERATIONS: RefCell<HashMap<i64, u64>> = RefCell::new(HashMap::new());
+}
+
+fn handle_generation(handle: i64) -> u64 {
+    HANDLE_GENERATIONS.with(|generations| generations.borrow().get(&handle).copied().unwrap_or(0))
+}
+
+fn discard_disabled_entries(snapshot: &mut AsyncContextSnapshot) {
+    snapshot
+        .entries
+        .retain(|entry| entry.generation == handle_generation(entry.handle));
 }
 
 pub fn capture_context() -> AsyncContextSnapshot {
@@ -38,12 +51,15 @@ pub fn enter_context(snapshot: &AsyncContextSnapshot) -> AsyncContextSnapshot {
     ACTIVE_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
         let previous = ctx.clone();
-        *ctx = snapshot.clone();
+        let mut next = snapshot.clone();
+        discard_disabled_entries(&mut next);
+        *ctx = next;
         previous
     })
 }
 
-pub fn restore_context(snapshot: AsyncContextSnapshot) {
+pub fn restore_context(mut snapshot: AsyncContextSnapshot) {
+    discard_disabled_entries(&mut snapshot);
     ACTIVE_CONTEXT.with(|ctx| {
         *ctx.borrow_mut() = snapshot;
     });
@@ -104,13 +120,21 @@ pub extern "C" fn js_async_context_als_clear(handle: i64) {
 }
 
 pub fn push_store(handle: i64, store: f64) {
+    let generation = handle_generation(handle);
     ACTIVE_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
-        if let Some(entry) = ctx.entries.iter_mut().find(|entry| entry.handle == handle) {
+        ctx.entries
+            .retain(|entry| entry.handle != handle || entry.generation == generation);
+        if let Some(entry) = ctx
+            .entries
+            .iter_mut()
+            .find(|entry| entry.handle == handle && entry.generation == generation)
+        {
             entry.stores.push(store);
         } else {
             ctx.entries.push(AsyncContextEntry {
                 handle,
+                generation,
                 stores: vec![store],
             });
         }
@@ -118,9 +142,14 @@ pub fn push_store(handle: i64, store: f64) {
 }
 
 pub fn pop_store(handle: i64) {
+    let generation = handle_generation(handle);
     ACTIVE_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
-        if let Some(index) = ctx.entries.iter().position(|entry| entry.handle == handle) {
+        if let Some(index) = ctx
+            .entries
+            .iter()
+            .position(|entry| entry.handle == handle && entry.generation == generation)
+        {
             ctx.entries[index].stores.pop();
             if ctx.entries[index].stores.is_empty() {
                 ctx.entries.remove(index);
@@ -130,11 +159,12 @@ pub fn pop_store(handle: i64) {
 }
 
 pub fn get_store(handle: i64) -> Option<f64> {
+    let generation = handle_generation(handle);
     ACTIVE_CONTEXT.with(|ctx| {
         ctx.borrow()
             .entries
             .iter()
-            .find(|entry| entry.handle == handle)
+            .find(|entry| entry.handle == handle && entry.generation == generation)
             .and_then(|entry| entry.stores.last().copied())
     })
 }
@@ -146,9 +176,16 @@ pub fn get_store(handle: i64) -> Option<f64> {
 /// (which saves/restores exactly one slot for its own handle) still restores
 /// the pre-`run` value on exit (#788, differential case 21).
 pub fn set_store(handle: i64, store: f64) {
+    let generation = handle_generation(handle);
     ACTIVE_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
-        if let Some(entry) = ctx.entries.iter_mut().find(|entry| entry.handle == handle) {
+        ctx.entries
+            .retain(|entry| entry.handle != handle || entry.generation == generation);
+        if let Some(entry) = ctx
+            .entries
+            .iter_mut()
+            .find(|entry| entry.handle == handle && entry.generation == generation)
+        {
             if let Some(slot) = entry.stores.last_mut() {
                 *slot = store;
             } else {
@@ -157,6 +194,7 @@ pub fn set_store(handle: i64, store: f64) {
         } else {
             ctx.entries.push(AsyncContextEntry {
                 handle,
+                generation,
                 stores: vec![store],
             });
         }
@@ -177,7 +215,7 @@ pub enum ContextGuardAction {
     /// `run()`: pop the one store slot the scope pushed for its handle.
     PopStore(i64),
     /// `exit()`: restore the handle's store stack removed at entry.
-    RestoreStores(i64, Option<Vec<f64>>),
+    RestoreStores(i64, Option<(u64, Vec<f64>)>),
     /// `runInAsyncScope()` / snapshot trampoline: restore the full snapshot.
     RestoreSnapshot(AsyncContextSnapshot),
     /// Silently pop one async_hooks execution-id frame (no `after` hook
@@ -246,7 +284,7 @@ fn scan_context_guard_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>)
             match &mut guard.action {
                 ContextGuardAction::PopStore(_) | ContextGuardAction::RestoreExecutionIds => {}
                 ContextGuardAction::RestoreStores(_, stores) => {
-                    if let Some(stores) = stores {
+                    if let Some((_, stores)) = stores {
                         for store in stores.iter_mut() {
                             visitor.visit_nanbox_f64_slot(store);
                         }
@@ -261,6 +299,28 @@ fn scan_context_guard_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>)
 }
 
 pub fn clear_store(handle: i64) {
+    // `disable()` invalidates descendants captured from a currently-active
+    // store, but Node leaves already-captured work alone when the storage is
+    // disabled after its `run()` scope has returned.  Generation-bump only in
+    // the former case so another ALS in the same pending snapshot is not
+    // disturbed either.
+    let was_active = ACTIVE_CONTEXT.with(|ctx| {
+        ctx.borrow()
+            .entries
+            .iter()
+            .any(|entry| entry.handle == handle)
+    });
+    if was_active {
+        HANDLE_GENERATIONS.with(|generations| {
+            let mut generations = generations.borrow_mut();
+            let generation = generations.entry(handle).or_insert(0);
+            *generation = generation.wrapping_add(1);
+        });
+    }
+    remove_store(handle);
+}
+
+fn remove_store(handle: i64) {
     ACTIVE_CONTEXT.with(|ctx| {
         ctx.borrow_mut()
             .entries
@@ -268,13 +328,17 @@ pub fn clear_store(handle: i64) {
     });
 }
 
-pub fn take_store(handle: i64) -> Option<Vec<f64>> {
+pub fn take_store(handle: i64) -> Option<(u64, Vec<f64>)> {
+    let generation = handle_generation(handle);
     ACTIVE_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
         ctx.entries
             .iter()
-            .position(|entry| entry.handle == handle)
-            .map(|index| ctx.entries.remove(index).stores)
+            .position(|entry| entry.handle == handle && entry.generation == generation)
+            .map(|index| {
+                let entry = ctx.entries.remove(index);
+                (entry.generation, entry.stores)
+            })
     })
 }
 
@@ -283,14 +347,16 @@ pub fn take_store(handle: i64) -> Option<Vec<f64>> {
 /// `take_store` returns `Some` only for an existing entry, and live entries are
 /// kept non-empty by `pop_store`. The empty guard below is defensive for manual
 /// callers and prevents inert context entries from accumulating.
-pub fn restore_store(handle: i64, stores: Option<Vec<f64>>) {
-    clear_store(handle);
-    if let Some(stores) = stores {
-        if !stores.is_empty() {
+pub fn restore_store(handle: i64, stores: Option<(u64, Vec<f64>)>) {
+    remove_store(handle);
+    if let Some((generation, stores)) = stores {
+        if !stores.is_empty() && generation == handle_generation(handle) {
             ACTIVE_CONTEXT.with(|ctx| {
-                ctx.borrow_mut()
-                    .entries
-                    .push(AsyncContextEntry { handle, stores });
+                ctx.borrow_mut().entries.push(AsyncContextEntry {
+                    handle,
+                    generation,
+                    stores,
+                });
             });
         }
     }
@@ -389,6 +455,7 @@ pub(crate) fn test_snapshot_with_store(store: f64) -> AsyncContextSnapshot {
     AsyncContextSnapshot {
         entries: vec![AsyncContextEntry {
             handle: -1,
+            generation: handle_generation(-1),
             stores: vec![store],
         }],
     }

@@ -17,6 +17,7 @@ use std::sync::{
 };
 
 mod async_hooks_exports;
+pub(crate) use async_hooks_exports::async_resource_prototype_method_value;
 mod callable_export_arity_table;
 mod callable_export_check;
 mod callable_export_table;
@@ -447,13 +448,29 @@ static NM_NAMESPACE_OPS_IMPL: super::NmNamespaceOps = super::NmNamespaceOps {
 
 /// Dynamic-`super()` EventEmitter-subclass init (extracted from
 /// `closure::dispatch::value_call`; see `NmNamespaceOps::ee_dynamic_super`).
-unsafe fn nm_ee_dynamic_super(func_value: f64) -> Option<f64> {
+unsafe fn nm_ee_dynamic_super(
+    func_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
     let (module, method) = bound_native_callable_module_and_method(func_value)?;
     if module.trim_start_matches("node:") == "events"
         && (method == "EventEmitter" || method == "EventEmitterAsyncResource")
     {
         let this_val = super::js_implicit_this_get();
         if crate::value::JSValue::from_bits(this_val.to_bits()).is_pointer() {
+            if method == "EventEmitterAsyncResource" {
+                let options = if !args_ptr.is_null() && args_len > 0 {
+                    *args_ptr
+                } else {
+                    f64::from_bits(crate::value::TAG_UNDEFINED)
+                };
+                return Some(
+                    crate::node_stream::js_event_emitter_async_resource_subclass_init(
+                        this_val, options,
+                    ),
+                );
+            }
             return Some(crate::node_stream::js_event_emitter_subclass_init(this_val));
         }
     }

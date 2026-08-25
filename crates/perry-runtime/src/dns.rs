@@ -985,12 +985,10 @@ fn lookup_all_result(addresses: &[ResolvedAddress]) -> f64 {
     array_value_from_values(&values)
 }
 
-fn queue_callback(callback_value: f64, args: &[f64]) {
+fn queue_callback(callback_value: f64, args: &[f64], provider_type: &'static str) {
     let callback = closure_ptr_from_value(callback_value)
         .unwrap_or_else(|| throw_error_value(invalid_callback_error(callback_value)));
-    unsafe {
-        crate::builtins::js_queue_next_tick_args(callback as i64, args.as_ptr(), args.len() as i32);
-    }
+    crate::timer::schedule_native_callback(callback as i64, args, provider_type);
 }
 
 fn lookup_value(hostname: &str, options: LookupOptions) -> Result<f64, f64> {
@@ -1153,16 +1151,12 @@ fn promise_reverse_args(args: i64) -> String {
 
 fn call_success_callback(callback: f64, value: f64) {
     let args = [null_value(), value];
-    unsafe {
-        crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
-    }
+    queue_callback(callback, &args, "QUERYWRAP");
 }
 
 fn call_error_callback(callback: f64, error: f64) {
     let args = [error];
-    unsafe {
-        crate::closure::js_native_call_value(callback, args.as_ptr(), args.len());
-    }
+    queue_callback(callback, &args, "QUERYWRAP");
 }
 
 fn dns_callback_resolve(args: i64, default_kind: Option<RecordKind>) -> f64 {
@@ -1264,5 +1258,16 @@ fn resolver_object(initial_servers: Vec<String>) -> *mut ObjectHeader {
     for method in RESOLVER_RESOLVE_METHODS {
         js_object_set_field_by_name(obj, key(method), method_value(method));
     }
-    obj
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    let (_, obj_ptr) = obj.across_mut::<ObjectHeader, _>(|| {
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| {
+            let _ = crate::async_hooks::init_resource(
+                "DNSCHANNEL",
+                js_nanbox_pointer(obj_ptr as i64),
+                true,
+            );
+        });
+    });
+    obj_ptr
 }

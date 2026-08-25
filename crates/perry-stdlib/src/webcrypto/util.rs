@@ -916,6 +916,16 @@ pub(super) fn resolve_with_bits(bits: u64) -> *mut Promise {
     js_promise_resolved(f64::from_bits(bits))
 }
 
+pub(super) fn resolve_with_bits_provider(bits: u64, provider_type: &'static str) -> *mut Promise {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(f64::from_bits(bits));
+    let result = perry_runtime::async_hooks::run_provider_completion(provider_type, || {
+        let promise = js_promise_resolved(value.get_nanbox_f64());
+        f64::from_bits(JSValue::pointer(promise as *const u8).bits())
+    });
+    perry_runtime::value::js_nanbox_get_pointer(result) as *mut Promise
+}
+
 /// Construct a DOMException and return a rejected Promise carrying it.
 pub(super) unsafe fn reject_with_dom_exception(name: &str, message: &str) -> *mut Promise {
     let name_str = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -940,9 +950,33 @@ pub(super) unsafe fn resolve_with_bytes(bytes: &[u8]) -> *mut Promise {
     resolve_with_bits(val)
 }
 
+pub(super) unsafe fn resolve_with_bytes_provider(
+    bytes: &[u8],
+    provider_type: &'static str,
+) -> *mut Promise {
+    let buf = alloc_uint8array_from_slice(bytes);
+    if buf.is_null() {
+        return reject_with_dom_exception("OperationError", "The operation failed");
+    }
+    let val = JSValue::pointer(buf as *const u8).bits();
+    resolve_with_bits_provider(val, provider_type)
+}
+
 pub(super) unsafe fn resolve_with_bool(b: bool) -> *mut Promise {
     let bits = if b { TAG_TRUE } else { TAG_FALSE };
     resolve_with_bits(bits)
+}
+
+pub(super) unsafe fn resolve_with_bool_provider(
+    b: bool,
+    provider_type: &'static str,
+) -> *mut Promise {
+    let bits = if b {
+        JSValue::bool(true).bits()
+    } else {
+        JSValue::bool(false).bits()
+    };
+    resolve_with_bits_provider(bits, provider_type)
 }
 
 pub(super) fn compute_digest(algo: HashAlgo, data: &[u8]) -> Vec<u8> {

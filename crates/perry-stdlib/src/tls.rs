@@ -29,12 +29,17 @@ const TLS_DISPATCH_MISSING_BITS: u64 = TAG_UNDEFINED_BITS;
 
 mod client_verifier;
 mod dispatch;
+mod event_pump;
 mod module_api;
 mod socket_api;
 // Re-export the handle-dispatch and module-level entry points so
 // `crate::tls::…` (and the `pub use tls::*` glob in `lib.rs`) keep resolving
 // them exactly as before the split.
 pub use dispatch::{dispatch_tls_handle, dispatch_tls_property, should_dispatch_tls_handle};
+pub use event_pump::{
+    is_tls_server_handle, is_tls_socket_handle, js_tls_has_active_handles, js_tls_process_pending,
+    record_tls_client_handle,
+};
 pub use module_api::{
     js_tls_check_server_identity, js_tls_convert_alpn_protocols, js_tls_create_secure_context,
     js_tls_get_ca_certificates, js_tls_get_ciphers, js_tls_native_dispatch,
@@ -1838,162 +1843,38 @@ pub unsafe extern "C" fn js_tls_server_set_ticket_keys(handle: i64, value_bits: 
     }
 }
 
-pub fn record_tls_client_handle(handle: i64) {
-    if handle <= 0 {
-        return;
-    }
-    crate::common::async_bridge::ensure_pump_registered();
-    ensure_tls_gc_scanner_registered();
-    if !perry_runtime::tls::is_tls_client_handle(handle) {
-        unsafe {
-            perry_runtime::tls::js_tls_client_record_start(
-                handle,
-                undefined(),
-                std::ptr::null(),
-                0,
-            );
-        }
-    }
-}
-
-pub fn is_tls_server_handle(handle: i64) -> bool {
-    servers().lock().unwrap().contains_key(&handle)
-}
-
-pub fn is_tls_socket_handle(handle: i64) -> bool {
-    sockets().lock().unwrap().contains_key(&handle)
-        || perry_runtime::tls::is_tls_client_handle(handle)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_tls_process_pending() -> i32 {
-    let mut events = {
-        let mut pending = pending_events().lock().unwrap();
-        std::mem::take(&mut *pending)
-    };
-    let count = events.len() as i32;
-    for event in events.drain(..) {
-        match event {
-            PendingTlsEvent::ServerListening(server_id) => {
-                let callbacks = {
-                    let mut all = listeners().lock().unwrap();
-                    all.get_mut(&server_id)
-                        .and_then(|per| per.remove("listening"))
-                        .unwrap_or_default()
-                };
-                for cb in callbacks {
-                    if cb != 0 {
-                        js_closure_call0(cb as *const ClosureHeader);
-                    }
-                }
-                drain_once_listeners(server_id, "listening");
-            }
-            PendingTlsEvent::ServerSecureConnection(server_id, socket_id) => {
-                let socket = nanbox_handle(socket_id);
-                for event_name in ["secureConnection", "connection"] {
-                    for cb in listeners_for(server_id, event_name) {
-                        if cb != 0 {
-                            js_closure_call1(cb as *const ClosureHeader, socket);
-                        }
-                    }
-                    drain_once_listeners(server_id, event_name);
-                }
-            }
-            PendingTlsEvent::ServerClose(server_id) => {
-                let callbacks = {
-                    let mut all = listeners().lock().unwrap();
-                    all.get_mut(&server_id)
-                        .and_then(|per| per.remove("close"))
-                        .unwrap_or_default()
-                };
-                for cb in callbacks {
-                    if cb != 0 {
-                        js_closure_call0(cb as *const ClosureHeader);
-                    }
-                }
-                servers().lock().unwrap().remove(&server_id);
-                listeners().lock().unwrap().remove(&server_id);
-                once_flags().lock().unwrap().remove(&server_id);
-            }
-            PendingTlsEvent::ServerError(server_id, msg) => {
-                let err = build_error_object(&msg);
-                for cb in listeners_for(server_id, "error") {
-                    if cb != 0 {
-                        js_closure_call1(cb as *const ClosureHeader, err);
-                    }
-                }
-                drain_once_listeners(server_id, "error");
-            }
-            PendingTlsEvent::ServerTlsClientError(server_id, socket_id, msg, code) => {
-                let err = build_error_object_with_code(&msg, code.as_deref());
-                let socket = nanbox_handle(socket_id);
-                for cb in listeners_for(server_id, "tlsClientError") {
-                    if cb != 0 {
-                        js_closure_call2(cb as *const ClosureHeader, err, socket);
-                    }
-                }
-                drain_once_listeners(server_id, "tlsClientError");
-            }
-            PendingTlsEvent::SocketData(socket_id, bytes) => {
-                let data = buffer_from_bytes(&bytes);
-                for cb in listeners_for(socket_id, "data") {
-                    if cb != 0 {
-                        js_closure_call1(cb as *const ClosureHeader, data);
-                    }
-                }
-                drain_once_listeners(socket_id, "data");
-            }
-            PendingTlsEvent::SocketEnd(socket_id) => {
-                for cb in listeners_for(socket_id, "end") {
-                    if cb != 0 {
-                        js_closure_call0(cb as *const ClosureHeader);
-                    }
-                }
-                drain_once_listeners(socket_id, "end");
-            }
-            PendingTlsEvent::SocketClose(socket_id) => {
-                for cb in listeners_for(socket_id, "close") {
-                    if cb != 0 {
-                        js_closure_call0(cb as *const ClosureHeader);
-                    }
-                }
-                sockets().lock().unwrap().remove(&socket_id);
-                listeners().lock().unwrap().remove(&socket_id);
-                once_flags().lock().unwrap().remove(&socket_id);
-            }
-            PendingTlsEvent::SocketError(socket_id, msg) => {
-                let err = build_error_object(&msg);
-                for cb in listeners_for(socket_id, "error") {
-                    if cb != 0 {
-                        js_closure_call1(cb as *const ClosureHeader, err);
-                    }
-                }
-                drain_once_listeners(socket_id, "error");
-            }
-        }
-    }
-    count
-}
-
-pub fn js_tls_has_active_handles() -> i32 {
-    if !pending_events().lock().unwrap().is_empty() {
-        return 1;
-    }
-    if servers()
-        .lock()
-        .unwrap()
-        .values()
-        .any(|server| server.listening || (server.closing && server.active_connections > 0))
-    {
-        return 1;
-    }
-    if sockets()
-        .lock()
-        .unwrap()
-        .values()
-        .any(|s| s.server_side && s.cmd_tx.is_some())
-    {
-        return 1;
-    }
-    0
-}
+// TLS methods are called only by symbols emitted into generated object files.
+// Keep every public FFI entry point in the auto-optimized stdlib archive so
+// whole-program LTO cannot discard them before the generated object is linked.
+struct KeepTlsFfi<const N: usize>(
+    #[allow(dead_code)] [*const (); N], // link-time keepalive anchor; field never read
+);
+// SAFETY: the pointers are retained for linking only and are never read or
+// dereferenced, so sharing the static anchor between threads is sound.
+unsafe impl<const N: usize> Sync for KeepTlsFfi<N> {}
+#[used]
+static KEEP_TLS_FFI: KeepTlsFfi<23> = KeepTlsFfi([
+    js_tls_create_server as *const (),
+    js_tls_tlssocket_constructor as *const (),
+    js_tls_server_listen as *const (),
+    js_tls_server_close as *const (),
+    js_tls_server_address as *const (),
+    js_tls_server_on as *const (),
+    js_tls_server_once as *const (),
+    js_tls_server_remove_listener as *const (),
+    js_tls_server_remove_all_listeners as *const (),
+    js_tls_server_listener_count as *const (),
+    js_tls_server_event_names as *const (),
+    js_tls_server_set_secure_context as *const (),
+    js_tls_server_get_ticket_keys as *const (),
+    js_tls_server_set_ticket_keys as *const (),
+    js_tls_socket_get_protocol as *const (),
+    js_tls_socket_get_cipher as *const (),
+    js_tls_socket_get_peer_certificate as *const (),
+    js_tls_socket_get_certificate as *const (),
+    js_tls_socket_get_session as *const (),
+    js_tls_socket_is_session_reused as *const (),
+    js_tls_socket_export_keying_material as *const (),
+    js_tls_socket_set_max_send_fragment as *const (),
+    js_tls_process_pending as *const (),
+]);

@@ -78,7 +78,7 @@ pub unsafe extern "C" fn js_native_call_value(
     // probe can only match a bound native callable, which exists only once
     // `callable_exports` minted one (arming the table).
     if let Some(ops) = crate::object::nm_namespace_ops() {
-        if let Some(result) = unsafe { (ops.ee_dynamic_super)(func_value) } {
+        if let Some(result) = unsafe { (ops.ee_dynamic_super)(func_value, args_ptr, args_len) } {
             return result;
         }
     }

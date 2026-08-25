@@ -1081,3 +1081,15 @@ pub(crate) fn lower_event_emitter_subclass_init(ctx: &mut FnCtx<'_>, this_box: &
         &[(DOUBLE, this_box)],
     );
 }
+
+pub(crate) fn lower_event_emitter_async_resource_subclass_init(
+    ctx: &mut FnCtx<'_>,
+    this_box: &str,
+    options_box: &str,
+) {
+    ctx.block().call(
+        DOUBLE,
+        "js_event_emitter_async_resource_subclass_init",
+        &[(DOUBLE, this_box), (DOUBLE, options_box)],
+    );
+}

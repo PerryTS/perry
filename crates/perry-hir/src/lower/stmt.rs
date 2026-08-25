@@ -1080,6 +1080,23 @@ pub(crate) fn lower_stmt(
                                         cn.to_string(),
                                     ));
                                 }
+                                // Named-import factories lower directly to a
+                                // receiver-less NativeMethodCall. The AST
+                                // member-call registration in native_new.rs
+                                // therefore never sees
+                                // `import { createInterface } ...; const rl =
+                                // createInterface(...)`, especially inside a
+                                // Promise executor. Preserve the Interface
+                                // identity here so adjacent `rl.on(...)` calls
+                                // reach the readline FFI instead of generic
+                                // small-handle dispatch (#6764).
+                                if mod_name == "readline" && method == "createInterface" {
+                                    ctx.register_native_instance(
+                                        name.clone(),
+                                        "readline".to_string(),
+                                        "Interface".to_string(),
+                                    );
+                                }
                                 // Issue #769 — node:http / node:https CLIENT factories.
                                 // `const req = http.request(url, cb)` and `http.get` / `https.*`
                                 // variants return a ClientRequest handle; register under

@@ -64,7 +64,12 @@ pub unsafe extern "C" fn js_crypto_pbkdf2_async_alg(
     } else {
         f64::from_bits(JSValue::pointer(buf as *const u8).bits())
     };
-    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), value);
+    schedule_node_style_callback2(
+        callback_bits,
+        f64::from_bits(JSValue::null().bits()),
+        value,
+        "PBKDF2REQUEST",
+    );
     f64::from_bits(JSValue::undefined().bits())
 }
 
@@ -130,7 +135,12 @@ pub unsafe extern "C" fn js_crypto_hkdf_async_alg(
     } else {
         f64::from_bits(JSValue::pointer(buf as *const u8).bits())
     };
-    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), value);
+    schedule_node_style_callback2(
+        callback_bits,
+        f64::from_bits(JSValue::null().bits()),
+        value,
+        "DERIVEBITSREQUEST",
+    );
     f64::from_bits(JSValue::undefined().bits())
 }
 
@@ -149,7 +159,12 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
     } else {
         f64::from_bits(JSValue::pointer(buf as *const u8).bits())
     };
-    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), value);
+    schedule_node_style_callback2(
+        callback_bits,
+        f64::from_bits(JSValue::null().bits()),
+        value,
+        "SCRYPTREQUEST",
+    );
     f64::from_bits(JSValue::undefined().bits())
 }
 
@@ -324,7 +339,12 @@ pub unsafe extern "C" fn js_crypto_argon2_async(
     } else {
         f64::from_bits(JSValue::pointer(buf as *const u8).bits())
     };
-    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), value);
+    schedule_node_style_callback2(
+        callback_bits,
+        f64::from_bits(JSValue::null().bits()),
+        value,
+        "ARGON2REQUEST",
+    );
     f64::from_bits(JSValue::undefined().bits())
 }
 

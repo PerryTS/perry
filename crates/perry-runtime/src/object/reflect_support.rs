@@ -43,8 +43,12 @@ pub(crate) fn obj_value_no_extend(value: f64) -> bool {
 pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
     unsafe {
         if crate::symbol::js_is_symbol(key) != 0 {
-            let v = crate::symbol::js_object_get_symbol_property(value, key);
-            return v.to_bits() != crate::value::TAG_UNDEFINED;
+            // Presence cannot be inferred from the value: an own Symbol-keyed
+            // data property is allowed to contain `undefined`.  The old value
+            // probe therefore turned an existing writable property into an
+            // apparent miss, which made OrdinarySet drop the first metadata
+            // overwrite on native AsyncResource handles.
+            return crate::symbol::has_own_symbol_property(value, key);
         }
         let obj = extract_obj_ptr(value);
         if obj.is_null() {

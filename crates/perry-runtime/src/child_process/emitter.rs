@@ -43,6 +43,12 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
         return true;
     }
 
+    let async_ids =
+        cp_handle_of(target).and_then(|handle| reactor::cp_async_scope_for_target(handle, target));
+    if let Some(ids) = async_ids {
+        crate::async_hooks::enter_resource_scope(ids);
+    }
+
     let key = cp_listener_key(event);
     let mut i: u32 = 0;
     let mut fired = false;
@@ -72,6 +78,9 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
         crate::node_stream::emit_to_stream_listeners(target, event.as_bytes(), args);
     }
 
+    if let Some(ids) = async_ids {
+        crate::async_hooks::leave_resource_scope(ids.async_id);
+    }
     fired
 }
 

@@ -254,6 +254,12 @@
       "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
     },
     {
+      "file": "crates/perry-runtime/src/os/signal.rs",
+      "name": "SIGNAL_ASYNC_IDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Maps owned Rust signal-name strings to async_hooks async IDs. Async IDs are scalar u64 identifiers, not JS heap addresses; the AsyncResource objects themselves live in async_hooks RESOURCES, whose registered scanner visits them."
+    },
+    {
       "file": "crates/perry-runtime/src/perf_hooks.rs",
       "name": "LOOP_START_MS",
       "verdict": "not_a_gc_pointer",
@@ -336,6 +342,12 @@
       "name": "DECODER_REGISTRY",
       "verdict": "not_a_gc_pointer",
       "why": "Keyed by decoder handle id; DecoderState is Rust-owned (encoding enum, label, flags), no JS values."
+    },
+    {
+      "file": "crates/perry-runtime/src/timer.rs",
+      "name": "TIMER_HANDLE_KINDS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Maps scalar timer handle IDs to the CallbackTimerKind enum so clearTimeout/clearInterval can destroy the matching async_hooks resource. Neither the i64 keys nor the enum values contain a JS heap address."
     },
     {
       "file": "crates/perry-runtime/src/thread.rs",
@@ -438,9 +450,21 @@
     },
     {
       "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "CURRENT_WORKER_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Thread-local scalar ID of the currently executing in-process Worker. It is an index into the Rust-owned WORKERS registry, not a JS heap address."
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
       "name": "NEXT_PORT_ID",
       "verdict": "not_a_gc_pointer",
       "why": "Monotonic MessagePort id counter."
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "NEXT_WORKER_ID",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic u64 counter used to allocate in-process Worker registry IDs. It contains no address."
     },
     {
       "file": "crates/perry-stdlib/src/ws.rs",

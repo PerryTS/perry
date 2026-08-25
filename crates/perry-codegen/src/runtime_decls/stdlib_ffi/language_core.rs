@@ -166,6 +166,8 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // `expr.rs::Expr::NetCreateServer`, matching the
     // `js_node_http_create_server` (`I64, &[I64]`) convention.
     module.declare_function("js_net_create_server", I64, &[I64, I64]);
+    module.declare_function("js_ext_net_create_server", I64, &[I64, I64]);
+    module.declare_function("js_ext_net_socket_connect", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_net_normalize_args", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_net_create_server_handle_stub",
@@ -226,6 +228,9 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // pointers consumed by the NR_OBJ_FROM_JSON_STR pipeline.
     module.declare_function("js_net_socket_address", I64, &[I64]);
     module.declare_function("js_net_socket_once", I64, &[I64, I64, I64]);
+    module.declare_function("js_ext_net_socket_once", I64, &[I64, I64, I64]);
+    module.declare_function("js_ext_net_socket_on", VOID, &[I64, I64, I64]);
+    module.declare_function("js_ext_tls_connect", I64, &[DOUBLE, DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_net_socket_remove_listener", I64, &[I64, I64, I64]);
     module.declare_function("js_net_socket_remove_all_listeners", I64, &[I64, I64]);
     module.declare_function("js_net_socket_listener_count", DOUBLE, &[I64, I64]);

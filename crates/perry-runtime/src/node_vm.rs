@@ -1263,6 +1263,14 @@ fn execute_in_state(source: &str, state: &ContextState) -> f64 {
     result
 }
 
+/// Evaluate the expression payload of a runtime-loaded JavaScript data URL in
+/// the main realm. Dynamic import lives outside this module, so keep the
+/// interpreter entry narrow instead of exposing VM context internals.
+#[cfg(feature = "dyn-eval")]
+pub(crate) fn eval_dynamic_module_expression(source: &str) -> f64 {
+    execute_in_state(source, &main_context_state())
+}
+
 fn script_metadata(script_value: f64) -> Option<ScriptMetadata> {
     object_ptr_from_value(script_value)
         .and_then(|ptr| scripts().lock().unwrap().get(&(ptr as usize)).cloned())
