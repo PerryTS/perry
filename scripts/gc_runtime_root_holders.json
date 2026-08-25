@@ -156,6 +156,12 @@
       "why": "Cache miss counter (telemetry). Holds no address."
     },
     {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "CLOSURE_VERSIONED_LOOP_REGISTRY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Maps a closure body `func_ptr` (a code pointer, never moved) to TrustedDirectTarget{func_ptr:*const u8, capture_count:u32, boxed_capture_mask:u64}. Both key and value are code pointers and plain integers; no field can hold a heap pointer, so the table cannot hold a GC root. Same shape as its sibling CLOSURE_ARROW_FUNCTION_REGISTRY in the same thread_local block."
+    },
+    {
       "file": "crates/perry-runtime/src/fs/filehandle.rs",
       "name": "NEXT_READ_LINES_ID",
       "verdict": "not_a_gc_pointer",
