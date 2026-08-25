@@ -1029,6 +1029,33 @@ pub(super) fn sanitize_member(name: &str) -> String {
     s
 }
 
+/// Reserve the keys-global symbol for one source class. Keep this single
+/// implementation shared by capability harvesting and module emission: both
+/// passes must assign collision suffixes in the same source order or a
+/// harvested ShapeId external can name a global the producer never defines.
+pub(crate) fn unique_class_keys_global(
+    module_prefix: &str,
+    class_name: &str,
+    used: &mut std::collections::HashSet<String>,
+) -> String {
+    let base = format!(
+        "perry_class_keys_{}__{}",
+        module_prefix,
+        sanitize(class_name)
+    );
+    if used.insert(base.clone()) {
+        return base;
+    }
+    let mut suffix = 1u32;
+    loop {
+        let candidate = format!("{base}_{suffix}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
 /// Host default triple.
 /// Host-default LLVM target triple. Used when `CompileOptions.target`
 /// is `None`. Also re-exposed via `pub(crate)` so `linker.rs` can pin

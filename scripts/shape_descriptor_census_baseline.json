@@ -15,7 +15,7 @@
     "crates/perry-codegen/src/expr/proxy_reflect.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 2,
     "crates/perry-codegen/src/lower_call/new.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
     "crates/perry-codegen/src/lower_call/new_alloc.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple);": 1,
-    "crates/perry-codegen/src/lower_call/property_get/imported_object.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
+    "crates/perry-codegen/src/lower_call/property_get/imported_object.rs|let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
     "crates/perry-codegen/src/lower_call/scalar_method.rs|let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
     "crates/perry-codegen/src/lower_call/typed_shape_bake_tests.rs|8 + crate::target_layout::object_header_size_bytes( ) + 8 * slots;": 1,
     "crates/perry-codegen/src/stmt/loops.rs|let object_header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple);": 1,

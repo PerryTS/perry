@@ -183,37 +183,6 @@ pub struct PtrShapeLocal {
     pub report_name: Option<String>,
 }
 
-/// Whether an expression node is a §5.2 shape barrier for the module-wide
-/// first-increment kill rule. Targets are NOT inspected — any occurrence
-/// disables all `Ptr<Shape>` promotion in the module.
-pub(crate) fn expr_is_shape_barrier(expr: &Expr) -> bool {
-    match expr {
-        Expr::ObjectDefineProperty(..)
-        | Expr::ObjectDefineProperties(..)
-        | Expr::ReflectDefineProperty { .. }
-        | Expr::ObjectSetPrototypeOf(..)
-        | Expr::ReflectSetPrototypeOf { .. }
-        | Expr::ReflectSet { .. }
-        | Expr::ReflectDelete { .. }
-        | Expr::ReflectPreventExtensions(..)
-        | Expr::Delete(..)
-        | Expr::ProxyNew { .. } => true,
-        // `__proto__` writes mutate the prototype chain of an arbitrary
-        // object. (Reads and `<Class>.prototype` naming are handled by the
-        // dispatch-stability facts; only writes are shape barriers.)
-        Expr::PropertySet { property, .. } | Expr::PropertyUpdate { property, .. } => {
-            property == "__proto__"
-        }
-        Expr::PutValueSet { key, .. } => {
-            matches!(key.as_ref(), Expr::String(k) if k == "__proto__")
-        }
-        Expr::IndexSet { index, .. } => {
-            matches!(index.as_ref(), Expr::String(k) if k == "__proto__")
-        }
-        _ => false,
-    }
-}
-
 /// Compile-time visibility: one stderr line per shape-proven local, plus a
 /// process-wide running count. Only under `PERRY_REPSEL_DEBUG=1`.
 ///
@@ -287,97 +256,12 @@ fn report_early_bail(
     }
 }
 
-/// Entry point: collect the shape-proven pointer locals of one lowered region.
-///
-/// `not_bigint_locals` feeds the numeric-field proof (a `Sub`/`Div`/bitwise
-/// over provably-non-BigInt operands is a Number by spec).
-pub(crate) fn collect_shape_proven_ptr_locals(
-    stmts: &[Stmt],
-    boxed_vars: &HashSet<u32>,
-    module_globals: &HashMap<u32, String>,
-    classes: &HashMap<String, &Class>,
-    module_dispatch: &ModuleDispatchFacts,
-    not_bigint_locals: &HashSet<u32>,
-    element_facts: &ElementShapeFacts,
-) -> HashMap<u32, PtrShapeLocal> {
-    collect_shape_proven_ptr_locals_and_element_fields(
-        stmts,
-        boxed_vars,
-        module_globals,
-        classes,
-        module_dispatch,
-        not_bigint_locals,
-        element_facts,
-        &HashSet::new(),
-    )
-    .0
-}
-
-/// Collect pointer-local facts plus the group-wide numeric layouts of proven
-/// element arrays. The latter includes arrays read only as `A[i].field`, which
-/// have no element local to carry a [`PtrShapeLocal`] of their own.
-pub(crate) fn collect_shape_proven_ptr_locals_and_element_fields(
-    stmts: &[Stmt],
-    boxed_vars: &HashSet<u32>,
-    module_globals: &HashMap<u32, String>,
-    classes: &HashMap<String, &Class>,
-    module_dispatch: &ModuleDispatchFacts,
-    not_bigint_locals: &HashSet<u32>,
-    element_facts: &ElementShapeFacts,
-    numeric_param_seeds: &HashSet<u32>,
-) -> (HashMap<u32, PtrShapeLocal>, HashMap<u32, HashSet<String>>) {
-    collect_shape_proven_ptr_locals_impl(
-        stmts,
-        boxed_vars,
-        module_globals,
-        classes,
-        module_dispatch,
-        not_bigint_locals,
-        element_facts,
-        numeric_param_seeds,
-        CollectionPurpose::UnguardedRepresentation,
-    )
-}
-
-/// Containment facts that may be consumed only by a `$pshape_args` call-site
-/// guard. Unlike a guard-free `Ptr<Shape>` representation, an unrelated
-/// module barrier cannot invalidate this fact: the fresh object has not
-/// escaped, and the route rechecks its live class and ShapeId immediately
-/// before entering the clone. These facts must never feed ordinary field or
-/// method lowering.
-pub(crate) fn collect_guarded_argument_route_locals(
-    stmts: &[Stmt],
-    boxed_vars: &HashSet<u32>,
-    module_globals: &HashMap<u32, String>,
-    classes: &HashMap<String, &Class>,
-    module_dispatch: &ModuleDispatchFacts,
-    not_bigint_locals: &HashSet<u32>,
-    element_facts: &ElementShapeFacts,
-    numeric_param_seeds: &HashSet<u32>,
-) -> HashMap<u32, PtrShapeLocal> {
-    // This second pass is a proof query, not a guard-free representation
-    // selection. Suppress Ptr<Shape> report rows so it cannot claim that a
-    // barrier-gated local received the broader optimization.
-    let _quiet = report::SuppressScope::new();
-    let (mut facts, _) = collect_shape_proven_ptr_locals_impl(
-        stmts,
-        boxed_vars,
-        module_globals,
-        classes,
-        module_dispatch,
-        not_bigint_locals,
-        element_facts,
-        numeric_param_seeds,
-        CollectionPurpose::GuardedArgumentRoute,
-    );
-    // The guarded route consumes class/containment only. Do not carry a raw
-    // numeric-field representation claim into this deliberately narrower map.
-    for fact in facts.values_mut() {
-        fact.numeric_fields.clear();
-        fact.report_name = None;
-    }
-    facts
-}
+#[path = "ptr_shape_entry.rs"]
+mod entry;
+pub(crate) use entry::{
+    collect_guarded_argument_route_locals, collect_shape_proven_ptr_locals,
+    collect_shape_proven_ptr_locals_and_element_fields, expr_is_shape_barrier,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CollectionPurpose {

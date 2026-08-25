@@ -219,8 +219,8 @@ fn stable_imported_object_methods_use_guarded_direct_closure_bodies() {
     }
     assert!(main_ir.contains("call double @js_native_call_method_by_id"));
     assert!(runner_ir.contains("call double @js_native_call_method_by_id"));
-    assert!(main_ir.contains("call i32 @js_closure_exact_func_guard"));
-    assert!(runner_ir.contains("call i32 @js_closure_exact_func_guard"));
+    assert!(main_ir.contains("call i64 @js_closure_exact_func_guard"));
+    assert!(runner_ir.contains("call i64 @js_closure_exact_func_guard"));
     assert!(main_ir.contains("call i64 @js_object_own_method_cache_miss"));
     assert!(runner_ir.contains("call i64 @js_object_own_method_cache_miss"));
     assert!(!main_ir.contains("call i32 @js_typed_feedback_closure_direct_call_guard"));
