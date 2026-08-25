@@ -15,6 +15,13 @@ impl GcTestGuard {
         let lock = GC_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // This test asserts that mutable roots are rewritten, which is only
+        // observable when the collector moves its survivors. Force evacuation
+        // for the serialized GC-test window; the policy may otherwise choose
+        // a valid non-moving collection under unit-test pressure.
+        //
+        // SAFETY: `GC_TEST_LOCK` is held for the guard's whole lifetime.
+        unsafe { std::env::set_var("PERRY_GC_FORCE_EVACUATE", "1") };
         perry_runtime::gc::js_gc_write_barriers_emitted(1);
         let frame = perry_runtime::gc::js_shadow_frame_push(0);
         Self { frame, _lock: lock }
@@ -25,6 +32,8 @@ impl Drop for GcTestGuard {
     fn drop(&mut self) {
         perry_runtime::gc::js_shadow_frame_pop(self.frame);
         perry_runtime::gc::js_gc_write_barriers_emitted(0);
+        // SAFETY: still under `GC_TEST_LOCK` (dropped after this body).
+        unsafe { std::env::remove_var("PERRY_GC_FORCE_EVACUATE") };
     }
 }
 
@@ -181,6 +190,7 @@ fn gc_mutable_scanner_rewrites_listener_and_pending_promise_roots() {
         max_listeners: 10.0,
         capture_rejections: false,
         domain_handle: None,
+        async_resource_handle: 0,
     });
 
     let _ = perry_runtime::gc::gc_collect_minor();

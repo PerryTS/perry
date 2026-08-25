@@ -94,6 +94,69 @@ pub extern "C" fn js_event_emitter_subclass_init(this: f64) -> f64 {
     this
 }
 
+/// Initialize a source-compiled subclass of EventEmitterAsyncResource on its
+/// already-allocated `this` object. The listener surface remains the generic
+/// object-backed EventEmitter implementation; a hidden AsyncResource supplies
+/// the execution scope, lifecycle, ids, and `asyncResource.eventEmitter`
+/// back-reference.
+#[no_mangle]
+pub extern "C" fn js_event_emitter_async_resource_subclass_init(this: f64, options: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_handle = scope.root_nanbox_f64(this);
+    let options_handle = scope.root_nanbox_f64(options);
+    js_event_emitter_subclass_init(this_handle.get_nanbox_f64());
+
+    let this = this_handle.get_nanbox_f64();
+    let raw = raw_ptr_from_value(this);
+    if raw == 0 || unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
+        return this;
+    }
+    let options = options_handle.get_nanbox_f64();
+    let options_value = JSValue::from_bits(options.to_bits());
+    let mut name = if options_value.is_any_string() {
+        options
+    } else {
+        let key = crate::string::js_string_from_bytes(b"name".as_ptr(), 4);
+        let options = options_handle.get_nanbox_f64();
+        let options_obj = raw_ptr_from_value(options) as *const ObjectHeader;
+        if options_obj.is_null() {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        } else {
+            crate::object::js_object_get_field_by_name_f64(options_obj, key)
+        }
+    };
+    if JSValue::from_bits(name.to_bits()).is_undefined() {
+        let current_obj = raw_ptr_from_value(this_handle.get_nanbox_f64()) as *mut ObjectHeader;
+        let class_id = unsafe { (*current_obj).class_id };
+        let default_name = crate::object::class_name_for_id(class_id)
+            .unwrap_or_else(|| "EventEmitterAsyncResource".to_string());
+        let name_ptr =
+            crate::string::js_string_from_bytes(default_name.as_ptr(), default_name.len() as u32);
+        name = f64::from_bits(JSValue::string_ptr(name_ptr).bits());
+    }
+    let async_options = if options_value.is_any_string() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        options_handle.get_nanbox_f64()
+    };
+    let resource = crate::async_hooks::js_async_resource_new(name, async_options);
+    let obj = this_handle.get_nanbox_f64();
+    let raw = raw_ptr_from_value(obj);
+    crate::async_hooks::js_async_resource_set_event_emitter(resource, raw as i64);
+    unsafe {
+        crate::object::js_object_set_field_by_name(
+            raw as *mut ObjectHeader,
+            hidden_key(EVENT_EMITTER_ASYNC_RESOURCE_KEY),
+            f64::from_bits(crate::value::js_nanbox_pointer(resource).to_bits()),
+        );
+        install_event_emitter_async_resource_instance_methods(
+            raw as *mut ObjectHeader,
+            this_handle.get_nanbox_f64(),
+        );
+    }
+    this_handle.get_nanbox_f64()
+}
+
 /// `super(n)` for a source-compiled `class X extends Array` (e.g. lru-cache's
 /// `ZeroArray`: `class ZeroArray extends Array { constructor(n){ super(n);
 /// this.fill(0) } }`). Perry models the subclass instance as a plain object,

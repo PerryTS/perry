@@ -1,5 +1,6 @@
 use super::*;
 
+#[derive(Clone, Copy)]
 pub(super) enum EventHelperTarget {
     EventEmitter(Handle),
     EventTarget(*mut u8),

@@ -221,6 +221,12 @@ pub extern "C" fn js_node_stream_finished(args: *const crate::array::ArrayHeader
         .is_some_and(|v| v.to_bits() == TAG_FALSE);
     if watch_close || watch_finish {
         add_finished_once_listeners(stream, callback, watch_finish, watch_close);
+    } else {
+        // The default callback form observes normal stream completion too.
+        // A shared once-guard makes the first terminal event sufficient for
+        // this lightweight stream model and prevents the duplex sequence
+        // (`finish`, `end`, `close`) from invoking the callback repeatedly.
+        add_finished_cleanup_completion_listener(stream, callback);
     }
     if let Some(signal) = options_signal(options) {
         add_finished_signal_abort_listener(stream, signal, callback);

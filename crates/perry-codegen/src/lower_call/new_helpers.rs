@@ -35,6 +35,9 @@ use crate::types::{DOUBLE, I32};
 pub(crate) enum NativeInstanceBase {
     EventEmitter,
     Array,
+    EventEmitterAsyncResource,
+    AsyncLocalStorage,
+    AsyncResource,
     Map,
     Set,
     WeakMap,
@@ -57,6 +60,9 @@ pub(crate) fn native_instance_base(name: &str) -> Option<NativeInstanceBase> {
     match name {
         "EventEmitter" => Some(NativeInstanceBase::EventEmitter),
         "Array" | "ReadonlyArray" => Some(NativeInstanceBase::Array),
+        "EventEmitterAsyncResource" => Some(NativeInstanceBase::EventEmitterAsyncResource),
+        "AsyncLocalStorage" => Some(NativeInstanceBase::AsyncLocalStorage),
+        "AsyncResource" => Some(NativeInstanceBase::AsyncResource),
         "Map" => Some(NativeInstanceBase::Map),
         "Set" => Some(NativeInstanceBase::Set),
         "WeakMap" => Some(NativeInstanceBase::WeakMap),
@@ -155,6 +161,36 @@ pub(crate) fn emit_native_instance_base_init(
                     (DOUBLE, this_box),
                     (crate::types::PTR, &args_ptr),
                     (crate::types::I64, &args_len),
+                ],
+            );
+        }
+        NativeInstanceBase::EventEmitterAsyncResource => {
+            let options = lowered_args.first().cloned().unwrap_or(undef);
+            crate::expr::lower_event_emitter_async_resource_subclass_init(ctx, this_box, &options);
+        }
+        NativeInstanceBase::AsyncLocalStorage => {
+            ctx.block().call(
+                DOUBLE,
+                "js_async_local_storage_subclass_init",
+                &[(DOUBLE, this_box)],
+            );
+        }
+        NativeInstanceBase::AsyncResource => {
+            let type_value = lowered_args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| undef.clone());
+            let options = lowered_args
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| undef.clone());
+            ctx.block().call(
+                DOUBLE,
+                "js_async_resource_subclass_init",
+                &[
+                    (DOUBLE, this_box),
+                    (DOUBLE, &type_value),
+                    (DOUBLE, &options),
                 ],
             );
         }

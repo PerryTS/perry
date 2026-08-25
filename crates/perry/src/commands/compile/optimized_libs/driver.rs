@@ -380,6 +380,13 @@ pub(crate) fn build_optimized_libs(
             if original_features.contains(&"bundled-net") {
                 features.insert("external-net-pump");
             }
+            // perry-ext-net owns client sockets after the well-known flip,
+            // but TLS servers and TLSSocket introspection still live in
+            // perry-stdlib. Retain that surface without re-enabling
+            // `bundled-net` (and its colliding socket symbols).
+            if original_features.contains(&"tls") {
+                features.insert("external-tls-server");
+            }
             // #1843 — when the flip strips the compression base feature and
             // routes `node:zlib` to perry-ext-zlib, activate
             // `external-zlib-pump` so perry-stdlib's main-thread pump +
@@ -453,6 +460,13 @@ pub(crate) fn build_optimized_libs(
             // them would drop unresolved externs at link time.
             if matches!(module_normalized, "http" | "https" | "http2") {
                 features.insert("external-http-server-pump");
+                // perry-ext-http depends on perry-ext-net, whose TLS client
+                // object calls back into perry-stdlib's main-thread
+                // preflight hook. Retain that provider even for plain HTTP:
+                // the static archive can pull the shared socket object before
+                // a TLS-specific API is used, and otherwise leaves
+                // `js_tls_client_preflight` undefined at link time.
+                features.insert("external-tls-server");
             }
             // Issue #769 — when `node:http` / `node:https` routes to
             // perry-ext-http, also activate the client-side pump so the

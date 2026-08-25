@@ -159,6 +159,11 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_async_hook_enable", I64, &[I64]);
     module.declare_function("js_async_hook_disable", I64, &[I64]);
     module.declare_function("js_async_resource_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_async_resource_subclass_init",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_async_resource_async_id", DOUBLE, &[I64]);
     module.declare_function("js_async_resource_trigger_async_id", DOUBLE, &[I64]);
     module.declare_function("js_async_resource_emit_destroy", I64, &[I64]);
@@ -176,6 +181,7 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, DOUBLE, I64]);
     module.declare_function("js_async_local_storage_get_store", DOUBLE, &[I64]);
     module.declare_function("js_async_local_storage_new", I64, &[]);
+    module.declare_function("js_async_local_storage_subclass_init", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_async_local_storage_run",
         DOUBLE,

@@ -133,6 +133,32 @@ pub(super) fn lower_builtin_new<'a>(
         }
     }
     match class_name {
+        "Resolver"
+            if import_src.is_some_and(|source| {
+                matches!(
+                    source.strip_prefix("node:").unwrap_or(source),
+                    "dns" | "dns/promises"
+                )
+            }) =>
+        {
+            // `new Resolver()` is a constructor expression, so it bypasses
+            // the native-module call table used by `dns.Resolver()`. Route it
+            // to the same runtime constructor and preserve evaluation of any
+            // superfluous arguments.
+            for arg in args {
+                let _ = lower_expr(ctx, arg)?;
+            }
+            let runtime = if import_src.is_some_and(|source| {
+                source.strip_prefix("node:").unwrap_or(source) == "dns/promises"
+            }) {
+                "js_dns_promises_resolver_new"
+            } else {
+                "js_dns_resolver_new"
+            };
+            ctx.pending_declares
+                .push((runtime.to_string(), DOUBLE, vec![I64]));
+            Ok(Some(ctx.block().call(DOUBLE, runtime, &[(I64, "0")])))
+        }
         "Utf8Stream"
             if import_src
                 .map(|source| source.strip_prefix("node:").unwrap_or(source) == "fs")

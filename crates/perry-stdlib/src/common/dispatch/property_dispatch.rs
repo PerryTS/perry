@@ -1,4 +1,5 @@
-use super::super::handle::*;
+#[cfg(any(feature = "crypto", feature = "http-client"))]
+use super::super::handle::with_handle;
 use super::*;
 
 /// Dispatch a property access on a handle-based object.
@@ -25,6 +26,12 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
 
     if let Some(v) = crate::domain::dispatch_domain_property(handle, property_name) {
         return v;
+    }
+
+    if let Some(value) =
+        perry_runtime::async_hooks::try_async_resource_property_dispatch(handle, property_name)
+    {
+        return value;
     }
 
     #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]

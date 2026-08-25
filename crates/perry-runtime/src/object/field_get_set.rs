@@ -204,6 +204,7 @@ pub(crate) mod enumeration;
 mod field_ops;
 mod for_in_stable;
 mod get_field_by_name;
+mod get_field_by_name_async;
 #[cfg(test)]
 mod get_field_by_name_probe_tests;
 mod get_field_by_name_tail;
@@ -269,6 +270,7 @@ pub use field_ops::{
 };
 pub use for_in_stable::js_for_in_keys_stable_value;
 pub use get_field_by_name::js_object_get_field_by_name;
+pub(crate) use get_field_by_name_async::async_resource_property;
 pub(crate) use get_field_by_name_tail::get_field_by_name_object_tail;
 pub(super) use has_property::native_module_own_field_by_key;
 pub(crate) use has_property::{

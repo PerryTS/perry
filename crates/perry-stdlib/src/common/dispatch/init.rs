@@ -454,6 +454,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         fn js_register_event_emitter_async_resource_handle_probe(
             f: unsafe extern "C" fn(i64) -> bool,
         );
+        fn js_register_event_emitter_async_resource_dispatch(
+            f: unsafe extern "C" fn(i64, u32) -> f64,
+        );
         fn js_register_event_emitter_on(f: EventEmitterOn);
         #[cfg(feature = "web-fetch")]
         fn js_register_global_fetch_with_options(
@@ -577,6 +580,18 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     }
     #[cfg(feature = "bundled-events")]
     js_register_event_emitter_async_resource_handle_probe(event_emitter_async_resource_probe);
+    #[cfg(feature = "bundled-events")]
+    unsafe extern "C" fn event_emitter_async_resource_dispatch(handle: i64, operation: u32) -> f64 {
+        match operation {
+            0 => crate::events::js_event_emitter_async_resource_async_id(handle),
+            1 => crate::events::js_event_emitter_async_resource_trigger_async_id(handle),
+            2 => crate::events::js_event_emitter_async_resource_async_resource(handle),
+            3 => crate::events::js_event_emitter_async_resource_emit_destroy(handle),
+            _ => TAG_UNDEFINED_F64,
+        }
+    }
+    #[cfg(feature = "bundled-events")]
+    js_register_event_emitter_async_resource_dispatch(event_emitter_async_resource_dispatch);
     #[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
     unsafe extern "C" fn event_emitter_on_hook(
         handle: i64,

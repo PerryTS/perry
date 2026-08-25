@@ -66,6 +66,9 @@ extern "C" {
     // Async one-shot zlib helpers require a callable callback and throw
     // synchronously before queuing codec work.
     pub(crate) fn js_zlib_validate_callback(callback: f64) -> i64;
+    fn js_async_hooks_provider_init(type_ptr: *const u8, type_len: usize) -> u64;
+    fn js_async_hooks_provider_enter(async_id: u64);
+    fn js_async_hooks_provider_leave(async_id: u64);
     fn js_native_call_method_str_key(
         object: f64,
         name_handle: i64,
@@ -467,6 +470,7 @@ fn make_codec_state_with_level(codec: Codec, level: Compression) -> Option<Codec
 // ── registry ─────────────────────────────────────────────────────────────────
 
 struct ZlibStreamState {
+    async_id: u64,
     codec: Codec,
     level: Compression,
     /// Streaming codec, fed incrementally. `None` for `createUnzip` (uses
@@ -497,13 +501,14 @@ struct ZlibStreamState {
 
 enum ZlibEvent {
     Data(i64, Vec<u8>),
+    Finish(i64),
     End(i64),
     Error(i64, String),
     /// `.flush(cb)` completion callback — invoked (0 args) after its flushed
     /// 'data' is delivered.
     Callback(i64),
     /// `zlib.gzip(data, cb)` style one-shot completion callback.
-    OneShotCallback(i64, Result<Vec<u8>, String>),
+    OneShotCallback(i64, Result<Vec<u8>, String>, u64),
 }
 
 struct Statics {
@@ -560,7 +565,7 @@ fn scan_zlib_roots(visitor: &mut GcRootVisitor<'_>) {
         // hazard as listeners.
         for ev in s.pending.iter_mut() {
             match ev {
-                ZlibEvent::Callback(cb) | ZlibEvent::OneShotCallback(cb, _) => {
+                ZlibEvent::Callback(cb) | ZlibEvent::OneShotCallback(cb, _, _) => {
                     visitor.visit_i64_slot(cb);
                 }
                 _ => {}
@@ -577,12 +582,14 @@ fn create_stream(codec: Codec, level: Compression) -> i64 {
     // unnecessary and unsafe in stripped well-known-wrapper builds.
     ensure_aux_pump_registered();
     ensure_gc_scanner_registered();
+    let async_id = unsafe { js_async_hooks_provider_init(b"ZLIB".as_ptr(), b"ZLIB".len()) };
     let mut s = statics().lock().unwrap();
     let id = s.next_id;
     s.next_id += 1;
     s.streams.insert(
         id,
         ZlibStreamState {
+            async_id,
             codec,
             level,
             codec_state: make_codec_state_with_level(codec, level),
@@ -708,11 +715,12 @@ pub(crate) unsafe fn queue_one_shot_callback<F>(
     };
     ensure_aux_pump_registered();
     ensure_gc_scanner_registered();
+    let async_id = js_async_hooks_provider_init(b"ZLIB".as_ptr(), b"ZLIB".len());
     statics()
         .lock()
         .unwrap()
         .pending
-        .push_back(ZlibEvent::OneShotCallback(callback, result));
+        .push_back(ZlibEvent::OneShotCallback(callback, result, async_id));
     notify_main_thread();
 }
 
@@ -872,6 +880,9 @@ fn finish_stream(handle: i64) {
         let mut g = statics().lock().unwrap();
         match result {
             Ok(out) => {
+                // Writable completion precedes the final readable bytes/end
+                // of a Transform stream in Node.
+                g.pending.push_back(ZlibEvent::Finish(handle));
                 if !out.is_empty() {
                     g.pending.push_back(ZlibEvent::Data(handle, out));
                 }
@@ -963,9 +974,20 @@ fn flush_buffered(handle: i64) {
 /// `OneShotCallback` carry only a closure, so they are not tied to a stream.
 fn event_stream_handle(ev: &ZlibEvent) -> Option<i64> {
     match ev {
-        ZlibEvent::Data(id, _) | ZlibEvent::End(id) | ZlibEvent::Error(id, _) => Some(*id),
-        ZlibEvent::Callback(_) | ZlibEvent::OneShotCallback(_, _) => None,
+        ZlibEvent::Data(id, _)
+        | ZlibEvent::Finish(id)
+        | ZlibEvent::End(id)
+        | ZlibEvent::Error(id, _) => Some(*id),
+        ZlibEvent::Callback(_) | ZlibEvent::OneShotCallback(_, _, _) => None,
     }
+}
+
+fn stream_async_id(handle: i64) -> u64 {
+    statics()
+        .lock()
+        .ok()
+        .and_then(|g| g.streams.get(&handle).map(|stream| stream.async_id))
+        .unwrap_or(0)
 }
 
 /// Splice late-flushed buffered `Data` (then the deferred `End`) ahead of any
@@ -1314,6 +1336,10 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
             }
         };
         count += 1;
+        let event_async_id = event_stream_handle(&ev).map(stream_async_id).unwrap_or(0);
+        if event_async_id != 0 {
+            js_async_hooks_provider_enter(event_async_id);
+        }
         match ev {
             ZlibEvent::Data(id, bytes) => {
                 publish_bytes_written(id);
@@ -1338,6 +1364,13 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                     }
                     for dest in dests {
                         forward_write(dest, &bytes);
+                    }
+                }
+            }
+            ZlibEvent::Finish(id) => {
+                for cb in listeners_for(id, "finish") {
+                    if cb != 0 {
+                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                     }
                 }
             }
@@ -1366,6 +1399,9 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                         // listener or pipe) can't pin its buffered output for the
                         // process lifetime; drop the oldest excess.
                         evict_excess_buffered_ended(&mut g);
+                        if event_async_id != 0 {
+                            js_async_hooks_provider_leave(event_async_id);
+                        }
                         continue;
                     }
                     // Stream already gone — release the lock and fall through to
@@ -1373,11 +1409,6 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                     drop(g);
                 }
                 for cb in listeners_for(id, "end") {
-                    if cb != 0 {
-                        let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
-                    }
-                }
-                for cb in listeners_for(id, "finish") {
                     if cb != 0 {
                         let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                     }
@@ -1397,8 +1428,12 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                     let _ = JsClosure::from_raw(cb as *const RawClosureHeader).call0();
                 }
             }
-            ZlibEvent::OneShotCallback(cb, result) => {
+            ZlibEvent::OneShotCallback(cb, result, async_id) => {
+                js_async_hooks_provider_enter(async_id);
+                js_async_hooks_provider_leave(async_id);
+                js_async_hooks_provider_enter(async_id);
                 call_one_shot_callback(cb, result);
+                js_async_hooks_provider_leave(async_id);
             }
             ZlibEvent::Error(id, msg) => {
                 let err_f64 = build_error_object(&msg);
@@ -1409,6 +1444,9 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
                 }
                 drop_buffered_stream(&mut statics().lock().unwrap(), id);
             }
+        }
+        if event_async_id != 0 {
+            js_async_hooks_provider_leave(event_async_id);
         }
     }
     count
@@ -1625,6 +1663,7 @@ mod stream_tests {
 
     fn no_consumer_state() -> ZlibStreamState {
         ZlibStreamState {
+            async_id: 0,
             codec: Codec::Gzip,
             level: Compression::default(),
             codec_state: None,
@@ -1652,6 +1691,7 @@ mod stream_tests {
             pipes: Vec::new(),
             output_buffer: b"buffered".to_vec(),
             end_buffered: true,
+            async_id: 0,
         }
     }
 

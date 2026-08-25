@@ -1099,6 +1099,26 @@ fn auto_optimize_always_includes_keepalive_anchors() {
     );
 }
 
+#[test]
+fn data_url_dynamic_import_enables_dyn_eval_and_changes_cache_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let empty_features = std::collections::BTreeSet::new();
+    let without = CompilationContext::new(dir.path().to_path_buf());
+    let mut with_data_url = CompilationContext::new(dir.path().to_path_buf());
+    with_data_url.uses_data_url_dynamic_import = true;
+
+    let cross = auto_optimized_cross_features(&with_data_url, &empty_features, &[]);
+    assert!(
+        cross.iter().any(|f| f == "perry-runtime/dyn-eval"),
+        "data URL modules require the dyn-eval runtime, got {cross:?}"
+    );
+    assert_ne!(
+        auto_optimized_cache_key("", true, false, None, &with_data_url),
+        auto_optimized_cache_key("", true, false, None, &without),
+        "a runtime without dyn-eval must not be reused for data URL imports"
+    );
+}
+
 /// The `keepalive-anchors` feature must NOT be conditional on
 /// `PERRY_LLVM_BITCODE_LINK` — the classic link path needs it too.
 #[test]

@@ -35,7 +35,11 @@ pub extern "C" fn js_dns_lookup(args: i64) -> f64 {
         Ok(values) => values,
         Err(error) => vec![error],
     };
-    queue_callback(callback_handle.get_nanbox_f64(), &callback_args);
+    queue_callback(
+        callback_handle.get_nanbox_f64(),
+        &callback_args,
+        "GETADDRINFOREQWRAP",
+    );
     undefined_value()
 }
 
@@ -62,7 +66,7 @@ pub extern "C" fn js_dns_lookup_service(args: i64) -> f64 {
         Ok((hostname, service)) => vec![null_value(), str_value(&hostname), str_value(&service)],
         Err(error) => vec![error],
     };
-    queue_callback(callback_value, &callback_args);
+    queue_callback(callback_value, &callback_args, "GETNAMEINFOREQWRAP");
     undefined_value()
 }
 

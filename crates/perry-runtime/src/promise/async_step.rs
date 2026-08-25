@@ -295,7 +295,7 @@ pub extern "C" fn js_promise_resolved_then(
     // The primitive fast path below bypasses `js_promise_new`/`then`, so it
     // would never fire `v8.promiseHooks` (#3139). When hooks are active, route
     // through the real resolve+then path instead.
-    if crate::v8::promise_hooks_active() {
+    if crate::v8::promise_hooks_active() || crate::async_hooks::promise_hooks_active() {
         bump(&MT_FAST_PATH_MISS);
         let p1 = js_promise_resolved(value);
         return js_promise_then(p1, on_fulfilled, on_rejected);
@@ -510,24 +510,46 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
     let can_reuse = !trap.trap_next.is_null() && trap.current_step == step_closure as usize;
     let trap_next = trap.trap_next;
 
-    let (next, queued_value, is_error) = if is_definitely_primitive(value) {
+    let async_hooks_active = crate::async_hooks::promise_hooks_active();
+    let (next, queued_value, is_error, direct_trigger_async_id) = if is_definitely_primitive(value)
+    {
         // Primitive value: enqueue Task::AsyncStep directly.
         bump(&MT_FAST_PATH_HIT);
+        // The optimized path skips the `PromiseResolve(%Promise%, value)`
+        // Promise that Node creates for `await value`. That Promise is still
+        // observable through async_hooks, and the continuation Promise must
+        // name it as its trigger. Materialize it only while Promise hooks are
+        // active; the normal no-hook fast path remains allocation-free.
+        let awaited = if async_hooks_active {
+            js_promise_resolved(value)
+        } else {
+            std::ptr::null_mut()
+        };
+        let awaited_async_id = if awaited.is_null() {
+            0
+        } else {
+            unsafe { (*awaited).async_id }
+        };
         (
             if can_reuse {
                 bump(&MT_STEP_CHAIN_REUSE_HIT);
                 trap_next
+            } else if !awaited.is_null() {
+                bump(&MT_STEP_CHAIN_REUSE_MISS);
+                super::then::js_promise_new_with_parent(awaited)
             } else {
                 bump(&MT_STEP_CHAIN_REUSE_MISS);
                 js_promise_new()
             },
             value,
             false,
+            awaited_async_id,
         )
     } else if js_value_is_promise(value) != 0 {
         let inner = crate::value::js_nanbox_get_pointer(value) as *mut Promise;
         if !inner.is_null() {
             let inner_state = unsafe { (*inner).state };
+            let inner_async_id = unsafe { (*inner).async_id };
             match inner_state {
                 PromiseState::Fulfilled => {
                     // Inner already settled with a primitive (the steady
@@ -539,12 +561,16 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
                         if can_reuse {
                             bump(&MT_STEP_CHAIN_REUSE_HIT);
                             trap_next
+                        } else if async_hooks_active {
+                            bump(&MT_STEP_CHAIN_REUSE_MISS);
+                            super::then::js_promise_new_with_parent(inner)
                         } else {
                             bump(&MT_STEP_CHAIN_REUSE_MISS);
                             js_promise_new()
                         },
                         unwrapped,
                         false,
+                        inner_async_id,
                     )
                 }
                 PromiseState::Rejected => {
@@ -564,12 +590,16 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
                         if can_reuse {
                             bump(&MT_STEP_CHAIN_REUSE_HIT);
                             trap_next
+                        } else if async_hooks_active {
+                            bump(&MT_STEP_CHAIN_REUSE_MISS);
+                            super::then::js_promise_new_with_parent(inner)
                         } else {
                             bump(&MT_STEP_CHAIN_REUSE_MISS);
                             js_promise_new()
                         },
                         reason,
                         true,
+                        inner_async_id,
                     )
                 }
                 PromiseState::Pending => {
@@ -629,6 +659,25 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
             crate::value::js_nanbox_get_pointer(v) as *mut Promise
         }
     };
+    let (step_async_id, step_trigger_id) = if next.is_null() {
+        (0, 0)
+    } else if can_reuse && async_hooks_active {
+        let resource = crate::value::js_nanbox_pointer(next as i64);
+        let trigger_async_id = if direct_trigger_async_id != 0 {
+            direct_trigger_async_id
+        } else {
+            crate::async_hooks::execution_async_id_u64()
+        };
+        let ids = crate::async_hooks::init_resource_with_trigger(
+            "PROMISE",
+            resource,
+            false,
+            trigger_async_id,
+        );
+        (ids.async_id, ids.trigger_async_id)
+    } else {
+        unsafe { ((*next).async_id, (*next).trigger_async_id) }
+    };
     crate::r#box::retain_async_box_activation(trap.box_activation);
     TASK_QUEUE.with(|q| {
         q.borrow_mut().push_back(Task::AsyncStep(
@@ -638,6 +687,8 @@ pub extern "C" fn js_async_step_chain(value: f64, step_closure: ClosurePtr) -> *
             is_error,
             context,
             trap.box_activation,
+            step_async_id,
+            step_trigger_id,
         ));
     });
     crate::event_pump::js_notify_promise_progress();

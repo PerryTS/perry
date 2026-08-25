@@ -103,7 +103,7 @@ pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: 
     if perry_runtime::closure::is_closure_ptr(cb_ptr as usize) {
         let err = f64::from_bits(JSValue::null().bits());
         let args = [err, value];
-        perry_runtime::timer::js_set_immediate_callback_args(cb_ptr, args.as_ptr(), 2);
+        perry_runtime::timer::schedule_native_callback(cb_ptr, &args, "RANDOMBYTESREQUEST");
     }
     f64::from_bits(JSValue::undefined().bits())
 }
@@ -373,8 +373,24 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
             f64::from_bits(JSValue::string_ptr(js_crypto_create_public_key_value(arg(0))).bits())
         }
         "generatePrime" if args_len >= 3 => js_crypto_generate_prime_async(arg(0), arg(1), arg(2)),
+        "generatePrime"
+            if args_len == 2
+                && perry_runtime::closure::is_closure_ptr(
+                    perry_runtime::value::js_nanbox_get_pointer(arg(1)) as usize,
+                ) =>
+        {
+            js_crypto_generate_prime_async(arg(0), undefined, arg(1))
+        }
         "generatePrime" | "generatePrimeSync" => js_crypto_generate_prime_sync(arg(0), arg(1)),
         "checkPrime" if args_len >= 3 => js_crypto_check_prime_async(arg(0), arg(1), arg(2)),
+        "checkPrime"
+            if args_len == 2
+                && perry_runtime::closure::is_closure_ptr(
+                    perry_runtime::value::js_nanbox_get_pointer(arg(1)) as usize,
+                ) =>
+        {
+            js_crypto_check_prime_async(arg(0), undefined, arg(1))
+        }
         "checkPrime" | "checkPrimeSync" => js_crypto_check_prime_sync(arg(0), arg(1)),
         "getFips" => 0.0,
         "setFips" => undefined,
@@ -427,6 +443,17 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
                 js_crypto_scrypt_bytes(bytes_ptr(0), bytes_ptr(1), arg(2), options_ptr) as *mut u8,
             )
         }
+        // Node callback forms are randomInt(max, callback) and
+        // randomInt(min, max, callback); both complete asynchronously.
+        "randomInt" if args_len >= 3 => js_crypto_random_int_async(arg(0), arg(1), arg(2)),
+        "randomInt"
+            if args_len == 2
+                && perry_runtime::closure::is_closure_ptr(
+                    perry_runtime::value::js_nanbox_get_pointer(arg(1)) as usize,
+                ) =>
+        {
+            js_crypto_random_int_async(0.0, arg(0), arg(1))
+        }
         // Node: randomInt(max) → [0,max); randomInt(min,max) → [min,max).
         "randomInt" if args_len >= 2 => js_crypto_random_int(arg(0), arg(1)),
         "randomInt" => js_crypto_random_int(0.0, arg(0)),
@@ -447,7 +474,12 @@ pub unsafe extern "C" fn js_crypto_random_int_async(
     callback_bits: f64,
 ) -> f64 {
     let n = js_crypto_random_int(min_bits, max_bits);
-    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), n);
+    schedule_node_style_callback2(
+        callback_bits,
+        f64::from_bits(JSValue::null().bits()),
+        n,
+        "RANDOMBYTESREQUEST",
+    );
     f64::from_bits(JSValue::undefined().bits())
 }
 
@@ -595,7 +627,12 @@ pub unsafe extern "C" fn js_crypto_random_fill_async(
     callback_bits: f64,
 ) -> f64 {
     let value = js_crypto_random_fill_sync(buf_bits, offset_bits, size_bits);
-    call_node_style_callback2(callback_bits, f64::from_bits(JSValue::null().bits()), value);
+    schedule_node_style_callback2(
+        callback_bits,
+        f64::from_bits(JSValue::null().bits()),
+        value,
+        "RANDOMBYTESREQUEST",
+    );
     f64::from_bits(JSValue::undefined().bits())
 }
 
@@ -822,7 +859,8 @@ mod tests {
     // `"pbkdf2"` / 2-arg `"randomBytes"` arm, so the call returned `undefined`
     // and the Node-style `(err, value)` callback never fired — the awaiting
     // (promisified) Promise hung forever. These tests assert the callback IS
-    // invoked, with a null error and a non-null Buffer result.
+    // invoked — on the check phase, the way Node's threadpool completions are —
+    // with a null error and a non-null Buffer result.
     use std::cell::Cell;
     thread_local! {
         static CB_FIRED: Cell<bool> = const { Cell::new(false) };
@@ -882,6 +920,26 @@ mod tests {
         unsafe {
             js_crypto_native_dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
         }
+        // Node runs `crypto.pbkdf2` on the libuv threadpool, so its `(err, key)`
+        // callback is NEVER invoked synchronously — it lands on the check phase,
+        // exactly like the async `randomBytes` form below (#6430). Perry derives
+        // the key eagerly but must still defer delivery, because the callback has
+        // to execute inside its own `PBKDF2REQUEST` async resource so
+        // `async_hooks` observes init -> before -> after -> destroy around it
+        // (`test-parity/node-suite/async_hooks/hooks/provider-pbkdf2-lifecycle.ts`).
+        assert!(
+            !CB_FIRED.with(|f| f.get()),
+            "pbkdf2 callback must not fire synchronously"
+        );
+        // The scheduled completion must keep the event loop alive, otherwise a
+        // real caller (`util.promisify(crypto.pbkdf2)`) would exit before the
+        // callback ran and the awaiting Promise would never settle.
+        assert_ne!(
+            perry_runtime::timer::js_callback_timer_has_pending(),
+            0,
+            "pbkdf2 completion must be a pending, ref'd event-loop handle"
+        );
+        perry_runtime::timer::js_callback_timer_tick();
         assert!(CB_FIRED.with(|f| f.get()), "pbkdf2 callback must fire");
         assert!(
             CB_ERR_NULLISH.with(|f| f.get()),

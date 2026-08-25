@@ -763,7 +763,7 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
             Some(c) => c,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
-        return resolve_with_bytes(&ciphertext);
+        return resolve_with_bytes_provider(&ciphertext, "CIPHERREQUEST");
     }
     if algo_name.eq_ignore_ascii_case("AES-CBC") {
         let key_addr = strip_ptr(key_bits.to_bits());
@@ -801,7 +801,7 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
             Some(c) => c,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
-        return resolve_with_bytes(&ciphertext);
+        return resolve_with_bytes_provider(&ciphertext, "CIPHERREQUEST");
     }
     if algo_name.eq_ignore_ascii_case("AES-CTR") {
         let key_addr = strip_ptr(key_bits.to_bits());
@@ -839,7 +839,7 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
             Some(c) => c,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
-        return resolve_with_bytes(&ciphertext);
+        return resolve_with_bytes_provider(&ciphertext, "CIPHERREQUEST");
     }
     if algo_name.eq_ignore_ascii_case("ChaCha20-Poly1305") {
         let key_addr = strip_ptr(key_bits.to_bits());
@@ -877,7 +877,7 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
             Some(c) => c,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
-        return resolve_with_bytes(&ciphertext);
+        return resolve_with_bytes_provider(&ciphertext, "CIPHERREQUEST");
     }
     if algo_name.eq_ignore_ascii_case("AES-OCB") {
         let key_addr = strip_ptr(key_bits.to_bits());
@@ -915,7 +915,7 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
             Some(c) => c,
             None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
-        return resolve_with_bytes(&ciphertext);
+        return resolve_with_bytes_provider(&ciphertext, "CIPHERREQUEST");
     }
     if !algo_name.eq_ignore_ascii_case("AES-GCM") {
         return reject_with_dom_exception("NotSupportedError", "Unrecognized algorithm name");
@@ -949,7 +949,7 @@ pub unsafe extern "C" fn js_webcrypto_encrypt(
         Some(c) => c,
         None => return reject_with_dom_exception("OperationError", "The operation failed"),
     };
-    resolve_with_bytes(&ciphertext)
+    resolve_with_bytes_provider(&ciphertext, "CIPHERREQUEST")
 }
 
 /// `crypto.subtle.decrypt({ name: "AES-GCM", iv, additionalData? }, key, data)`

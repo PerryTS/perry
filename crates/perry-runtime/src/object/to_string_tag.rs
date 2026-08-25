@@ -436,7 +436,7 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
 /// caller's `None` arm.
 fn native_module_to_string_tag(module: &str) -> Option<&'static str> {
     match module {
-        "module" => Some("Module"),
+        "module" | "async_hooks" => Some("Module"),
         // `Object.prototype.toString.call(performance)` is
         // "[object Performance]" in Node.
         "perf_hooks" => Some("Performance"),

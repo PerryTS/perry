@@ -1,4 +1,5 @@
-use super::super::handle::*;
+#[cfg(any(feature = "crypto", feature = "database-redis"))]
+use super::super::handle::with_handle;
 use super::*;
 
 /// Route external zlib stream methods before the generic dispatcher creates
@@ -115,7 +116,7 @@ unsafe fn try_dispatch_external_http_client(
     };
     if !matches!(
         method_name,
-        "setEncoding" | "on" | "addListener" | "pipe" | "pause" | "resume"
+        "setEncoding" | "on" | "once" | "addListener" | "pipe" | "pause" | "resume"
     ) {
         return None;
     }

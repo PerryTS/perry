@@ -72,19 +72,35 @@ thread_local! {
     static NEXT_FILE_BLOB_STREAM_ID: RefCell<usize> = const { RefCell::new(1) };
 }
 
+fn blob_reader_promise_value(value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    crate::async_hooks::run_provider_completion("BLOBREADER", || {
+        promise_value(value.get_nanbox_f64())
+    })
+}
+
+fn blob_reader_promise_rejected(reason: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let reason = scope.root_nanbox_f64(reason);
+    crate::async_hooks::run_provider_completion("BLOBREADER", || {
+        promise_rejected(reason.get_nanbox_f64())
+    })
+}
+
 extern "C" fn blob_text_method(closure: *const ClosureHeader) -> f64 {
     let bytes = captured_blob_bytes(closure);
-    promise_value(bytes_to_text_value(&bytes))
+    blob_reader_promise_value(bytes_to_text_value(&bytes))
 }
 
 extern "C" fn blob_array_buffer_method(closure: *const ClosureHeader) -> f64 {
     let bytes = captured_blob_bytes(closure);
-    promise_value(bytes_to_array_buffer_value(&bytes))
+    blob_reader_promise_value(bytes_to_array_buffer_value(&bytes))
 }
 
 extern "C" fn blob_bytes_method(closure: *const ClosureHeader) -> f64 {
     let bytes = captured_blob_bytes(closure);
-    promise_value(bytes_to_uint8_array_value(&bytes))
+    blob_reader_promise_value(bytes_to_uint8_array_value(&bytes))
 }
 
 extern "C" fn blob_slice_method(
@@ -120,22 +136,22 @@ extern "C" fn blob_stream_method(closure: *const ClosureHeader) -> f64 {
 
 extern "C" fn file_blob_text_method(closure: *const ClosureHeader) -> f64 {
     match read_file_blob_bytes(captured_file_blob_id(closure)) {
-        Ok(bytes) => promise_value(bytes_to_text_value(&bytes)),
-        Err(reason) => promise_rejected(reason),
+        Ok(bytes) => blob_reader_promise_value(bytes_to_text_value(&bytes)),
+        Err(reason) => blob_reader_promise_rejected(reason),
     }
 }
 
 extern "C" fn file_blob_array_buffer_method(closure: *const ClosureHeader) -> f64 {
     match read_file_blob_bytes(captured_file_blob_id(closure)) {
-        Ok(bytes) => promise_value(bytes_to_array_buffer_value(&bytes)),
-        Err(reason) => promise_rejected(reason),
+        Ok(bytes) => blob_reader_promise_value(bytes_to_array_buffer_value(&bytes)),
+        Err(reason) => blob_reader_promise_rejected(reason),
     }
 }
 
 extern "C" fn file_blob_bytes_method(closure: *const ClosureHeader) -> f64 {
     match read_file_blob_bytes(captured_file_blob_id(closure)) {
-        Ok(bytes) => promise_value(bytes_to_uint8_array_value(&bytes)),
-        Err(reason) => promise_rejected(reason),
+        Ok(bytes) => blob_reader_promise_value(bytes_to_uint8_array_value(&bytes)),
+        Err(reason) => blob_reader_promise_rejected(reason),
     }
 }
 

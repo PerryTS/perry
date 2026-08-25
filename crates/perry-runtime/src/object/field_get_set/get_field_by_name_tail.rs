@@ -22,6 +22,9 @@ pub(crate) fn get_field_by_name_object_tail(
                 // undefined/null tag or null pointer — return undefined
                 return JSValue::undefined();
             }
+            if let Some(value) = async_resource_property(raw, key) {
+                return value;
+            }
             // Issue #340: small-handle receivers (raw < 0x100000) come
             // from native modules (axios, fastify, ioredis, ...) that
             // store objects in registries and expose integer ids. The
@@ -38,6 +41,11 @@ pub(crate) fn get_field_by_name_object_tail(
                             (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                         let key_len = (*key).byte_len as usize;
                         let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                        if key_bytes == b"constructor" {
+                            if let Some(value) = crate::timer::timer_constructor_value(raw as i64) {
+                                return JSValue::from_bits(value.to_bits());
+                            }
+                        }
                         if let Some(method) = timer_handle_method_name_static(key_bytes) {
                             if crate::timer::is_known_timer_id(raw as i64) {
                                 let this_f64 = f64::from_bits(
@@ -107,6 +115,9 @@ pub(crate) fn get_field_by_name_object_tail(
     if obj.is_null() {
         return JSValue::undefined();
     }
+    if let Some(value) = async_resource_property(obj, key) {
+        return value;
+    }
     // Same handle-receiver path for already-stripped pointers — happens
     // when the codegen passes a raw i64 handle through the slow path.
     if crate::value::addr_class::is_handle_band(obj as usize) {
@@ -115,6 +126,11 @@ pub(crate) fn get_field_by_name_object_tail(
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
                 let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+                if key_bytes == b"constructor" {
+                    if let Some(value) = crate::timer::timer_constructor_value(obj as i64) {
+                        return JSValue::from_bits(value.to_bits());
+                    }
+                }
                 if let Some(method) = timer_handle_method_name_static(key_bytes) {
                     if crate::timer::is_known_timer_id(obj as i64) {
                         let this_f64 =

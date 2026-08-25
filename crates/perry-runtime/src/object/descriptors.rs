@@ -1901,7 +1901,7 @@ pub(crate) unsafe fn nm_get_own_descriptor(
             .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
         return Some(build_data_descriptor(value, false, true, false));
     }
-    if module_name == "module" {
+    if matches!(module_name.as_str(), "module" | "async_hooks") {
         return Some(build_data_descriptor(
             f64::from_bits(value.bits()),
             true,

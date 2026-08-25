@@ -1376,6 +1376,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if receiver_class_is_proven && is_net_native_method_value(&class_name, property) {
                     return lower_class_method_bind(ctx, object, property);
                 }
+                if receiver_class_is_proven
+                    && class_name == "AsyncResource"
+                    && matches!(
+                        property.as_str(),
+                        "asyncId" | "triggerAsyncId" | "emitDestroy" | "runInAsyncScope" | "bind"
+                    )
+                {
+                    return lower_runtime_property_get_by_name(ctx, object, property);
+                }
                 if class_has_computed_runtime_members(ctx, &class_name) {
                     return lower_runtime_property_get_by_name(ctx, object, property);
                 }

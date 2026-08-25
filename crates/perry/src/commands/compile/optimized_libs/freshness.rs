@@ -146,7 +146,9 @@ pub(crate) fn auto_optimized_cache_key(
         needs_node_test(ctx),
         // #6559: dyn-eval presence changes the built archive, so it must
         // key the freshness stamp like every other runtime feature toggle.
-        perry_hir::has_deferred_dynamic_code_sites(),
+        perry_hir::has_deferred_dynamic_code_sites()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
         format!(
             "{}{}{}",
             size_opt_level().unwrap_or("off"),
@@ -215,13 +217,16 @@ pub(crate) fn auto_optimized_cross_features(
     // `Intl.*` namespace surface — see perry-runtime's `intl-namespace`.
     // A deferred dynamic-code site can construct `Intl.…` from a runtime
     // string, so force it on there too (mirrors the dyn-eval regex rule).
-    if ctx.uses_intl_namespace || perry_hir::has_deferred_dynamic_code_sites() {
+    let needs_dyn_eval = perry_hir::has_deferred_dynamic_code_sites()
+        || ctx.native_module_imports.contains("vm")
+        || ctx.uses_data_url_dynamic_import;
+    if ctx.uses_intl_namespace || needs_dyn_eval {
         cross_features.push("perry-runtime/intl-namespace".to_string());
     }
     // Per-namespace globalThis member tables — see perry-runtime's `global-*`.
     // A deferred dynamic-code site can reach any namespace by runtime string,
     // so force all four on there (mirrors the intl-namespace rule).
-    let dynamic_code = perry_hir::has_deferred_dynamic_code_sites();
+    let dynamic_code = needs_dyn_eval;
     for (used, feat) in [
         (ctx.uses_global_math, "global-math"),
         (ctx.uses_global_json, "global-json"),
@@ -273,7 +278,7 @@ pub(crate) fn auto_optimized_cross_features(
     // interpreter. The generated code of the schema-codegen ecosystem (ajv)
     // also leans on regex literals (`key.replace(/~/g, …)`), so the regex
     // engine rides along even when the program's own source never uses one.
-    if perry_hir::has_deferred_dynamic_code_sites() {
+    if needs_dyn_eval {
         cross_features.push("perry-runtime/dyn-eval".to_string());
         if !ctx.uses_regex {
             cross_features.push("perry-runtime/regex-engine".to_string());
