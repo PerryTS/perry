@@ -131,6 +131,9 @@ pub fn try_run_resource_scope(
         Err(error) => (true, scope.root_nanbox_f64(error)),
     };
     if let Err(error) = try_leave_resource_scope(ids.async_id) {
+        if threw {
+            return Err(result.get_nanbox_f64());
+        }
         let error = scope.root_nanbox_f64(error);
         return Err(error.get_nanbox_f64());
     }

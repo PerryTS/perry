@@ -1,5 +1,5 @@
-import { EventEmitter } from "node:events";
-import { AsyncLocalStorage } from "node:async_hooks";
+import { EventEmitter, EventEmitterAsyncResource } from "node:events";
+import { AsyncLocalStorage, executionAsyncId } from "node:async_hooks";
 
 const storage = new AsyncLocalStorage<string>();
 
@@ -45,3 +45,29 @@ conversionEmitter.on("converted", (value) => {
 });
 conversionEmitter.emit(convertedName as unknown as string, "value");
 console.log("event name conversion:", eventNameConversions, convertedValue);
+
+const scopedConversionEmitter = storage.run(
+  "conversion-resource",
+  () => new EventEmitterAsyncResource({ name: "ConversionEmitter" }),
+);
+let scopedConversions = 0;
+let conversionAsyncIdsMatch = true;
+const conversionStores: Array<string | undefined> = [];
+const scopedName = {
+  toString() {
+    scopedConversions += 1;
+    conversionAsyncIdsMatch &&=
+      executionAsyncId() === scopedConversionEmitter.asyncId;
+    conversionStores.push(storage.getStore());
+    return "converted";
+  },
+};
+scopedConversionEmitter.on("converted", () => {});
+storage.run("conversion-caller", () => {
+  scopedConversionEmitter.emit(scopedName as unknown as string);
+  scopedConversionEmitter.emit(scopedName as unknown as string, "value");
+});
+console.log("scoped event name conversion:", scopedConversions);
+console.log("scoped event name async id:", conversionAsyncIdsMatch);
+console.log("scoped event name store:", conversionStores.join(","));
+scopedConversionEmitter.emitDestroy();

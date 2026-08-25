@@ -24,6 +24,7 @@ use perry_ffi::{
     js_array_set, js_object_alloc_with_shape, js_object_set_field, nanbox_string_bits, read_string,
     throw_with_code, ArrayHeader, ErrorKind, Handle, JsPromise, JsString, JsValue, ObjectHeader,
     Promise, RawClosureHeader, StringHeader, TransientRootScope, TransientRootedAddr,
+    TransientRootedNanbox,
 };
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -696,6 +697,15 @@ unsafe fn event_name_from_bits(event_bits: i64) -> Option<String> {
     string_from_header(rendered as *const StringHeader)
 }
 
+fn event_value_from_bits(event_bits: i64) -> f64 {
+    let raw = event_bits as u64;
+    if (0x10000..MAX_HEAP_POINTER).contains(&raw) && (raw & TAG_MASK) == 0 {
+        f64::from_bits(nanbox_string_bits(raw as *mut StringHeader))
+    } else {
+        f64::from_bits(raw)
+    }
+}
+
 fn event_bits_from_string_ptr(ptr: *const StringHeader) -> i64 {
     f64::from_bits(nanbox_string_bits(ptr as *mut StringHeader)).to_bits() as i64
 }
@@ -1297,17 +1307,18 @@ pub unsafe extern "C" fn js_event_emitter_emit(
     args_ptr: *mut ArrayHeader,
 ) -> f64 {
     let roots = TransientRootScope::enter();
+    let event_value = roots.root_nanbox(event_value_from_bits(event_bits));
     let args_ptr = roots.root_addr(args_ptr as i64);
-    let Some(event_name) = event_name_from_bits(event_bits) else {
-        return f64::from_bits(0x7FFC_0000_0000_0003);
-    };
     let async_id = event_emitter_async_id(handle);
     if async_id == 0 {
+        let Some(event_name) = event_name_from_bits(event_value.get().to_bits() as i64) else {
+            return f64::from_bits(0x7FFC_0000_0000_0003);
+        };
         return js_event_emitter_emit_impl(handle, &event_name, args_ptr.get() as *mut ArrayHeader);
     }
     let mut call = EventEmitterEmitCall {
         handle,
-        event_name,
+        event_value,
         args_ptr,
     };
     js_async_hooks_provider_run_catching(
@@ -1319,15 +1330,18 @@ pub unsafe extern "C" fn js_event_emitter_emit(
 
 struct EventEmitterEmitCall {
     handle: Handle,
-    event_name: String,
+    event_value: TransientRootedNanbox,
     args_ptr: TransientRootedAddr,
 }
 
 unsafe extern "C" fn event_emitter_emit_thunk(data: *mut std::ffi::c_void) -> f64 {
     let call = &mut *(data as *mut EventEmitterEmitCall);
+    let Some(event_name) = event_name_from_bits(call.event_value.get().to_bits() as i64) else {
+        return f64::from_bits(0x7FFC_0000_0000_0003);
+    };
     js_event_emitter_emit_impl(
         call.handle,
-        &call.event_name,
+        &event_name,
         call.args_ptr.get() as *mut ArrayHeader,
     )
 }
@@ -1415,14 +1429,19 @@ unsafe fn js_event_emitter_emit_impl(
 /// `event_name_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64) -> f64 {
-    let Some(event_name) = event_name_from_bits(event_bits) else {
-        return f64::from_bits(0x7FFC_0000_0000_0003);
-    };
+    let roots = TransientRootScope::enter();
+    let event_value = roots.root_nanbox(event_value_from_bits(event_bits));
     let async_id = event_emitter_async_id(handle);
     if async_id == 0 {
+        let Some(event_name) = event_name_from_bits(event_value.get().to_bits() as i64) else {
+            return f64::from_bits(0x7FFC_0000_0000_0003);
+        };
         return js_event_emitter_emit0_impl(handle, &event_name);
     }
-    let mut call = EventEmitterEmit0Call { handle, event_name };
+    let mut call = EventEmitterEmit0Call {
+        handle,
+        event_value,
+    };
     js_async_hooks_provider_run_catching(
         async_id,
         event_emitter_emit0_thunk,
@@ -1432,12 +1451,15 @@ pub unsafe extern "C" fn js_event_emitter_emit0(handle: Handle, event_bits: i64)
 
 struct EventEmitterEmit0Call {
     handle: Handle,
-    event_name: String,
+    event_value: TransientRootedNanbox,
 }
 
 unsafe extern "C" fn event_emitter_emit0_thunk(data: *mut std::ffi::c_void) -> f64 {
     let call = &mut *(data as *mut EventEmitterEmit0Call);
-    js_event_emitter_emit0_impl(call.handle, &call.event_name)
+    let Some(event_name) = event_name_from_bits(call.event_value.get().to_bits() as i64) else {
+        return f64::from_bits(0x7FFC_0000_0000_0003);
+    };
+    js_event_emitter_emit0_impl(call.handle, &event_name)
 }
 
 unsafe fn js_event_emitter_emit0_impl(handle: Handle, event_name: &str) -> f64 {

@@ -132,6 +132,20 @@ mod tests {
     }
 
     #[test]
+    fn resource_scope_prefers_completion_error_over_after_error() {
+        reset_for_tests();
+        let ids = init_resource("double-faulting-scope", TAG_UNDEFINED_F64, true);
+        enable_throwing_lifecycle_hook(false);
+
+        let outcome = try_run_resource_scope(ids, || crate::exception::js_throw(41.0));
+
+        assert_eq!(outcome.unwrap_err().to_bits(), 41.0f64.to_bits());
+        assert_eq!(execution_async_id_u64(), 0);
+        assert!(EXECUTION_STACK.with(|stack| stack.borrow().is_empty()));
+        reset_for_tests();
+    }
+
+    #[test]
     fn track_promises_filters_hooks_and_activity() {
         reset_for_tests();
         let mut callbacks = HookCallbacks::empty();
