@@ -75,7 +75,7 @@ on:
         type: boolean
         default: false
       release_net_diagnostic:
-        description: 'Run only the focused Linux net.connect release diagnostic'
+        description: 'Run only the focused Linux parity release diagnostic'
         type: boolean
         default: false
       release_windows_llvm_diagnostic:
@@ -180,14 +180,14 @@ jobs:
       - name: Install oracle dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
 
-      - name: Run the failing fixture five times
+      - name: Run the promise stress fixture five times
         run: |
           set -euo pipefail
           failures=0
           for attempt in 1 2 3 4 5; do
             echo "==> attempt ${attempt}/5"
             set +e
-            ./run_parity_tests.sh --filter test_gap_net_connect_bound_value
+            ./run_parity_tests.sh --filter test_stress_promises
             rc=$?
             set -e
             if [ "$rc" -ne 0 ]; then
