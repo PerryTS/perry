@@ -1386,9 +1386,9 @@ mod tests {
 
     unsafe fn runtime_string(ptr: *const perry_runtime::StringHeader) -> String {
         assert!(!ptr.is_null());
-        let len = (*ptr).byte_len as usize;
-        let data = (ptr as *const u8).add(std::mem::size_of::<perry_runtime::StringHeader>());
-        String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
+        // SAFETY: callers pass a live runtime string pointer obtained from the
+        // Error object under test.
+        unsafe { perry_ffi::copy_string_from_raw(ptr) }
     }
 
     #[test]

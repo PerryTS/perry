@@ -910,12 +910,9 @@ mod tests {
             JsValue::from_bits(reason.to_bits()).as_pointer::<perry_runtime::error::ErrorHeader>();
         unsafe {
             let message = (*error).message;
-            let len = (*message).byte_len as usize;
-            let data =
-                (message as *const u8).add(std::mem::size_of::<perry_runtime::StringHeader>());
             assert_eq!(
-                std::slice::from_raw_parts(data, len),
-                b"Invalid sharp handle"
+                perry_ffi::copy_string_from_raw(message),
+                "Invalid sharp handle"
             );
             assert!(!(*error).stack.is_null());
         }

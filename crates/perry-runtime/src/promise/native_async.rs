@@ -192,12 +192,16 @@ fn complete_bits(token: *mut NativeAsyncCompletion, bits: u64, fulfilled: bool) 
 }
 
 fn error_value_bits(message: &[u8]) -> u64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
     let message = if message.is_empty() {
         crate::string::js_string_from_bytes(std::ptr::null(), 0)
     } else {
         crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32)
     };
-    let error = crate::error::js_error_new_with_message(message);
+    let message = scope.root_string_ptr(message);
+    let error = crate::error::js_error_new_with_message(
+        message.get_raw_mut_ptr::<crate::string::StringHeader>(),
+    );
     crate::value::js_nanbox_pointer(error as i64).to_bits()
 }
 
