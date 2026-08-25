@@ -230,6 +230,12 @@
       "why": "Registered prune retains on !is_dead_owner over the property owner (symbol.rs:530-539)."
     },
     {
+      "site": "crates/perry-runtime/src/symbol/gc_roots.rs::scan_symbol_side_table_root_slot",
+      "table": "SYMBOL_PROPERTIES (snapshot owner)",
+      "death": "dead_owner:prune_dead_symbol_property_owners",
+      "why": "The budgeted scanner heals the snapshot owner for lookup only; the underlying SYMBOL_PROPERTIES key is covered by the same registered owner prune as scan_symbol_property_roots_mut."
+    },
+    {
       "site": "crates/perry-runtime/src/weakref.rs::rewritten_holder_addr",
       "table": "WEAK_HOLDERS",
       "death": "self_pruned:prune_dead_weak_holders",
