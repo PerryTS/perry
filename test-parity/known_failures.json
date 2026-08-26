@@ -430,6 +430,15 @@
       "linux"
     ]
   },
+  "test_issue_4975_http_agent_keep_alive_connection_options": {
+    "issue": "8841",
+    "added": "2026-08-26",
+    "category": "bug-open",
+    "reason": "Release run 32935157745: Node exits 0, while Perry prints the expected keepAlive and keepAliveInitialDelay values but does not terminate before the 10s harness deadline. Track the Agent/socket lifecycle gap after server.close(); remove this entry with the fix tracked in #8841.",
+    "platforms": [
+      "linux"
+    ]
+  },
   "test_issue_4977_gc_toplevel_locals": {
     "issue": "8271",
     "added": "2026-08-17",
