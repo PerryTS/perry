@@ -1182,7 +1182,18 @@ pub(crate) fn try_lower_instance_method_call(
                 subclass_arms.clear();
             }
 
-            if !fallback_has_rest {
+            // A synthesized `arguments` slot is rest-shaped in the HIR, but
+            // it does not prevent a same-class guarded direct call.  The
+            // concrete ABI vector above already contains the correctly marked
+            // argument bundle, while the guard's miss path deliberately takes
+            // the original flat user arguments through
+            // `js_native_call_method_by_id` so an own override receives normal
+            // JavaScript call arguments.  Keep genuine user-rest methods and
+            // all mixed user-rest + `arguments` methods on the established
+            // dynamic path; their direct-call specialization remains a
+            // separate ABI problem.
+            let synth_arguments_only = fallback_has_synthetic_arguments && !fallback_has_user_rest;
+            if !fallback_has_rest || synth_arguments_only {
                 let typed_method_key = (class_name.clone(), property.to_string());
                 let typed_formal_count = ctx
                     .method_param_counts
