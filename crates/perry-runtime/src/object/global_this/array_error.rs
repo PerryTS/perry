@@ -581,7 +581,8 @@ pub(crate) extern "C" fn function_prototype_to_string_thunk(
 /// Thunk for `Array.prototype.slice` exposed as a real callable closure
 /// value. Reads the array receiver from `IMPLICIT_THIS` (set by
 /// `Function.prototype.call`/`.apply`'s runtime arm in
-/// `js_native_call_method`) and forwards to the shared slice-value helper.
+/// `js_native_call_method`) and forwards ordinary array-like objects to the
+/// generic engine or real arrays to the shared dense slice-value helper.
 ///
 /// Coerces start/end through the shared array slice helper, with
 /// `undefined` mapping to `0` for start and end-of-array for end — matching
@@ -618,6 +619,16 @@ pub(crate) extern "C" fn array_prototype_slice_thunk(
     };
     if arr_ptr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    // A borrowed builtin (`obj.slice = Array.prototype.slice; obj.slice()`)
+    // reaches this thunk rather than the HIR ArrayLikeMethod path. Keep the
+    // original object intact so LengthOfArrayLike and the result-length guard
+    // run before indexed reads; normalizing it would first materialize the
+    // entire receiver and narrow a length above u32::MAX. Real arrays,
+    // arguments objects, and typed arrays retain the species-aware dense path
+    // below.
+    if let Some(recv) = crate::array::plain_object_value(arr_ptr) {
+        return crate::array::js_arraylike_slice(recv, start_val, 1, end_val, 1);
     }
     let result = unsafe {
         if let Some(arr) =

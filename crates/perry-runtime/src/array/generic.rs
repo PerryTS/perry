@@ -1145,8 +1145,9 @@ pub extern "C" fn js_arraylike_includes(recv: f64, value: f64, from: f64, has_fr
 }
 
 // ---------------------------------------------------------------------------
-// at / join / slice — no callback identity concerns; materialise where it
-// keeps the implementation simple (slice/join build fresh results anyway).
+// at / join / slice — no callback identity concerns. Join materialises its
+// receiver; slice copies only its selected interval so oversized array-like
+// lengths can be validated before allocation or indexed reads.
 // ---------------------------------------------------------------------------
 
 #[no_mangle]
@@ -1164,8 +1165,8 @@ pub extern "C" fn js_arraylike_at(recv: f64, index: f64) -> f64 {
     al_get(recv, k)
 }
 
-/// Materialise `recv` into a fresh real array (holes preserved as `TAG_HOLE`),
-/// for the delegating `join` / `slice` paths.
+/// Materialise `recv` into a fresh real array (holes preserved as `TAG_HOLE`)
+/// for the delegating `join` path.
 fn materialize(recv: f64) -> *mut ArrayHeader {
     let len = al_length(recv);
     let arr = js_array_alloc_with_length(len.max(0) as u32);
@@ -1205,9 +1206,9 @@ pub extern "C" fn js_arraylike_slice(
     end: f64,
     has_end: i32,
 ) -> f64 {
-    let recv = to_object(recv);
-    let arr = materialize(recv);
-    let len = unsafe { (*arr).length as i64 };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
+    let len = al_length(recv_h.get_nanbox_f64());
     let s = if has_start == 0 {
         0
     } else {
@@ -1224,8 +1225,36 @@ pub extern "C" fn js_arraylike_slice(
     } else {
         clamp_index(end, len)
     };
-    let result = js_array_slice(arr, s as i32, e as i32);
-    nanbox_arr(result)
+    let count = e.saturating_sub(s);
+
+    // ArraySpeciesCreate(O, count) ultimately performs ArrayCreate(count),
+    // which rejects lengths above the Array index limit before consulting any
+    // source index. Do not narrow the result length to u32 (or materialise the
+    // entire receiver) first: an array-like may legitimately have a ToLength
+    // value up to 2^53 - 1. (test262 slice/*-invalid-len)
+    if count > u32::MAX as i64 {
+        crate::array::array_length_range_error();
+    }
+
+    let result_h = scope.root_raw_mut_ptr(js_array_alloc_with_length(count.max(0) as u32));
+    let value_h = scope.root_nanbox_f64(undef());
+    for n in 0..count {
+        let k = s + n;
+        if !al_has(recv_h.get_nanbox_f64(), k) {
+            continue; // preserve holes
+        }
+        value_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
+        let value = value_h.get_nanbox_f64();
+        result_h.with_mut_ptr::<ArrayHeader, _>(|result| unsafe {
+            let elems = (result as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this
+            // slot with the write barrier after the direct dense write.
+            ptr::write(elems.add(n as usize), value);
+            note_array_slot(result, n as usize, value.to_bits());
+        });
+    }
+    // Scoped argument to a non-allocating operation; see js_arraylike_map.
+    result_h.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
 }
 
 /// ECMA-262 relative-index clamp used by `slice` (negative counts from the end,
