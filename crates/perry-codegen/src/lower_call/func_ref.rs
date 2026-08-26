@@ -975,6 +975,22 @@ pub fn try_lower_func_ref_call(
         let (values, guard) = super::lower_call_args_rooted(ctx, args)?;
         arg_group = guard;
         lowered.extend(values);
+        // #8770: pad missing trailing args with TAG_UNDEFINED, exactly like
+        // the cross-module twin (`extern_func.rs`, issue #608 arm). The callee
+        // is compiled with `declared_count` double parameters and its
+        // default-parameter lowering tests each for `undefined`; an
+        // under-applied same-module call site that emits only the provided
+        // args leaves the remaining FP argument registers holding caller-saved
+        // garbage, which the callee then reads as JS values. On the Claude
+        // Code bundle (one giant module, so EVERY direct call resolves here)
+        // `aP([q])` for `function aP(q, K = !1, _)` handed `K`/`_` whatever
+        // d1/d2 held after `js_array_from_values` — the #8770 poison values
+        // (0xffffffffffffffff receivers → shape_is_url_search_params /
+        // js_is_truthy faults, corrupted async iteration → unsettled awaits).
+        let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        while lowered.len() < declared_count {
+            lowered.push(undefined_lit.clone());
+        }
     }
     let arg_slices: Vec<(crate::types::LlvmType, &str)> =
         lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
