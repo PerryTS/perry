@@ -222,6 +222,7 @@ fn build_direct_method_args(
     has_rest: bool,
     has_synthetic_arguments: bool,
     has_user_rest: bool,
+    arguments_length_only: bool,
     declared_count: usize,
     undefined_lit: &str,
 ) -> Vec<String> {
@@ -252,7 +253,10 @@ fn build_direct_method_args(
         if has_user_rest || !has_synthetic_arguments {
             bundles.push((fixed_user, false));
         }
-        if has_synthetic_arguments {
+        if has_synthetic_arguments && arguments_length_only {
+            debug_assert!(!has_user_rest);
+            direct_args.push(double_literal(user_args.len() as f64));
+        } else if has_synthetic_arguments {
             bundles.push((0, true));
         }
         for (from, mark) in bundles {
@@ -778,6 +782,7 @@ pub(crate) fn try_lower_instance_method_call(
                         impl_has_rest,
                         impl_has_synth,
                         impl_has_user_rest,
+                        false,
                         impl_decl_count,
                         &undefined_lit,
                     );
@@ -1020,6 +1025,10 @@ pub(crate) fn try_lower_instance_method_call(
             // read off the body the fallback call reaches.
             let fallback_has_user_rest =
                 crate::codegen::arguments::method_has_user_rest(ctx, &fallback_key.0, property);
+            let fallback_arguments_length_only = matches!(
+                ctx.method_arguments_length_only.get(&fallback_key),
+                Some(&true)
+            );
             // Keep the maximum declared arity only for selecting safe
             // shape-guarded/typed fast-path arms below. Direct calls no longer
             // share an ABI vector: the fallback and each virtual override are
@@ -1080,18 +1089,19 @@ pub(crate) fn try_lower_instance_method_call(
                 )?));
             }
             let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let fallback_args = build_direct_method_args(
+            let direct_args = build_direct_method_args(
                 ctx,
                 &recv_box,
                 &fallback_user_args,
                 fallback_has_rest,
                 fallback_has_synthetic_arguments,
                 fallback_has_user_rest,
+                fallback_arguments_length_only,
                 fallback_decl_count,
                 &undefined_lit,
             );
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
-                fallback_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
+                direct_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
             // Arms for the shape-guarded direct call: every class in
             // `class_name`'s subclass closure, paired with the body `property`
@@ -1179,6 +1189,12 @@ pub(crate) fn try_lower_instance_method_call(
             // chain — more instruction cache than the tower call it replaces.
             // Beyond the cap the site keeps today's single-arm guard.
             if subclass_arms.len() > MAX_SUBCLASS_DISPATCH_ARMS {
+                subclass_arms.clear();
+            }
+            // This ABI belongs to one producer-proved body. A subclass arm may
+            // resolve to a different implementation, so let it take the raw
+            // dynamic fallback instead of sharing the scalar-count vector.
+            if fallback_arguments_length_only {
                 subclass_arms.clear();
             }
 
@@ -1447,6 +1463,11 @@ pub(crate) fn try_lower_instance_method_call(
                     .unwrap_or(false);
                 if ptr_shape_receiver && !fallback_fn.starts_with("perry_static_") {
                     ctx.note_ptr_shape_consumed(object, "ptr_shape_method");
+                    if fallback_arguments_length_only {
+                        let target =
+                            crate::codegen::arguments::arguments_length_method_name(&fallback_fn);
+                        return Ok(Some(ctx.block().call(DOUBLE, &target, &arg_slices)));
+                    }
                     // Representation-selection Phase 5a: the proven-`this`
                     // clone, when one was emitted. Hoisted above the
                     // typed-receiver branch because BOTH exits of this block
@@ -1569,27 +1590,76 @@ pub(crate) fn try_lower_instance_method_call(
                     let direct = ctx.block().call(DOUBLE, generic_target, &arg_slices);
                     return Ok(Some(direct));
                 }
+                let arguments_length_direct_fn = fallback_arguments_length_only
+                    .then(|| crate::codegen::arguments::arguments_length_method_name(&fallback_fn));
                 if let Some(guarded) = emit_guarded_direct_method_call(
                     ctx,
                     &recv_box,
                     &class_name,
                     property,
                     &fallback_fn,
+                    arguments_length_direct_fn.as_deref(),
                     &arg_slices,
                     args,
                     &fallback_user_args,
-                    nonnegative_index_direct_name.as_deref(),
-                    typed_direct,
-                    typed_receiver_direct,
-                    typed_i32_direct,
-                    typed_i1_direct,
-                    typed_string_direct,
+                    if fallback_arguments_length_only {
+                        None
+                    } else {
+                        nonnegative_index_direct_name.as_deref()
+                    },
+                    if fallback_arguments_length_only {
+                        None
+                    } else {
+                        typed_direct
+                    },
+                    if fallback_arguments_length_only {
+                        None
+                    } else {
+                        typed_receiver_direct
+                    },
+                    if fallback_arguments_length_only {
+                        None
+                    } else {
+                        typed_i32_direct
+                    },
+                    if fallback_arguments_length_only {
+                        None
+                    } else {
+                        typed_i1_direct
+                    },
+                    if fallback_arguments_length_only {
+                        None
+                    } else {
+                        typed_string_direct
+                    },
                     shape_only_guard,
                     &subclass_arms,
                 ) {
                     return Ok(Some(guarded));
                 }
             }
+
+            // No direct/proven route consumed the scalar ABI. Materialize the
+            // marked public Arguments bundle only for the established
+            // own-override/static paths below.
+            drop(arg_slices);
+            let fallback_args = if fallback_arguments_length_only {
+                build_direct_method_args(
+                    ctx,
+                    &recv_box,
+                    &fallback_user_args,
+                    fallback_has_rest,
+                    fallback_has_synthetic_arguments,
+                    fallback_has_user_rest,
+                    false,
+                    fallback_decl_count,
+                    &undefined_lit,
+                )
+            } else {
+                direct_args
+            };
+            let arg_slices: Vec<(crate::types::LlvmType, &str)> =
+                fallback_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
             if overrides.is_empty() {
                 // Issue #620: before falling through to the static method,
@@ -1723,6 +1793,7 @@ pub(crate) fn try_lower_instance_method_call(
                     has_rest,
                     has_synthetic_arguments,
                     has_user_rest,
+                    false,
                     declared_count,
                     &undefined_lit,
                 );

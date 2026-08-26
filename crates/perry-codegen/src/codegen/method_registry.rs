@@ -220,6 +220,15 @@ pub(crate) fn build_method_names(
                 let clone = crate::collectors::pshape_method_name(&llvm_fn);
                 llmod.declare_function(&clone, DOUBLE, &param_types);
             }
+            if ic
+                .method_arguments_length_only
+                .get(method_idx)
+                .copied()
+                .unwrap_or(false)
+            {
+                let clone = super::arguments::arguments_length_method_name(&llvm_fn);
+                llmod.declare_function(&clone, DOUBLE, &param_types);
+            }
         }
 
         // Cross-module getters. The dispatch site at

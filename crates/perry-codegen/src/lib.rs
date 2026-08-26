@@ -99,6 +99,15 @@ pub fn exported_object_literal_method_capabilities(
     collectors::exported_object_literal_capabilities(hir)
 }
 
+/// Return whether an instance method may publish the additive direct-call ABI
+/// whose synthetic `arguments` slot carries only the actual argument count.
+/// The compile driver uses the same producer-side proof when building import
+/// metadata, so consumers never infer this capability from an incomplete
+/// class stub.
+pub fn method_supports_arguments_length_direct_abi(method: &perry_hir::Function) -> bool {
+    codegen::arguments::method_supports_arguments_length_direct_abi(method)
+}
+
 /// The shadow-stack field offsets generated code bakes into its inline root
 /// stores (#7088).
 ///

@@ -709,6 +709,8 @@ pub(crate) struct FnCtx<'a> {
     /// compiler-synthesized `arguments` binding and therefore receives every
     /// actual argument.
     pub method_has_synthetic_arguments: &'a std::collections::HashMap<(String, String), bool>,
+    /// Methods whose producer emitted a scalar `arguments.length` direct ABI.
+    pub method_arguments_length_only: &'a std::collections::HashMap<(String, String), bool>,
     /// Whole-program reverse capabilities for guarded short-spread method
     /// calls. See `CompileOptions::short_spread_method_candidates`.
     pub short_spread_method_candidates:

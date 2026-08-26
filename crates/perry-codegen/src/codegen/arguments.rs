@@ -7,6 +7,19 @@ use crate::expr::{nanbox_pointer_inline, FnCtx};
 use crate::nanbox::double_literal;
 use crate::types::{DOUBLE, I32, I64, PTR};
 
+/// Internal-only declared type used by the direct-call clone whose trailing
+/// synthetic `arguments` slot carries the already boxed argument count.
+/// Source HIR can never name this type: the marker is attached only to a
+/// cloned method immediately before codegen.
+pub(crate) const SYNTHETIC_ARGUMENTS_LENGTH_TYPE: &str = "__perry_arguments_length_scalar";
+
+/// Additive direct-call ABI for methods proved to observe `arguments` only
+/// through exact `.length` reads. The public method keeps its ordinary marked
+/// Array/Arguments ABI for runtime dispatch and reflection.
+pub(crate) fn arguments_length_method_name(public_name: &str) -> String {
+    format!("{public_name}$arguments_length")
+}
+
 pub(crate) enum ArgumentsCallee<'a> {
     Undefined,
     FunctionWrapper(&'a str),
@@ -141,6 +154,36 @@ fn arguments_used_only_for_length(body: &[Stmt], arguments_id: u32) -> bool {
         }
     });
     length_reads > 0 && total_uses == length_reads
+}
+
+/// Whether a method may expose the scalar-count direct-call clone.
+///
+/// This is deliberately stricter than the materialization elision above. A
+/// user rest parameter still needs its own array, and a nested closure may
+/// outlive the direct call, so both shapes remain on the public ABI even when
+/// every syntactic use happens to be a `.length` read.
+pub(crate) fn method_supports_arguments_length_direct_abi(method: &perry_hir::Function) -> bool {
+    let Some(synth_param) = method
+        .params
+        .last()
+        .filter(|p| p.arguments_object.is_some())
+    else {
+        return false;
+    };
+    if method
+        .params
+        .iter()
+        .any(|p| p.is_rest && p.arguments_object.is_none())
+    {
+        return false;
+    }
+    let mut captured = false;
+    crate::collectors::for_each_expr_in_stmts(&method.body, &mut |expr| {
+        if let Expr::Closure { captures, .. } = expr {
+            captured |= captures.contains(&synth_param.id);
+        }
+    });
+    !captured && arguments_used_only_for_length(&method.body, synth_param.id)
 }
 
 fn mapped_arguments_params(params: &[Param]) -> Vec<(u32, u32)> {

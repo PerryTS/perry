@@ -879,6 +879,35 @@ fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
         was_plain_async: false,
         was_unrolled: false,
     });
+    counter.methods.push(Function {
+        id: 9,
+        name: "identity".to_string(),
+        type_params: Vec::new(),
+        params: vec![Param {
+            id: 4,
+            name: "arguments".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: true,
+            arguments_object: Some(ArgumentsObjectMeta {
+                strict: false,
+                simple_parameters: true,
+                mapped_parameter_ids: Vec::new(),
+                restricted_callee: false,
+            }),
+        }],
+        return_type: Type::Any,
+        body: vec![Stmt::Return(Some(Expr::LocalGet(4)))],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
     let ir = ir_for(module_with_classes(
         "synthetic_arguments_method_guard.ts",
         vec![counter],
@@ -911,16 +940,29 @@ fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
         "synthetic-arguments-only methods should use the exact-shape direct guard:\n{probe_ir}"
     );
     assert!(
-        probe_ir.contains("call i64 @js_array_mark_arguments_object")
-            && probe_ir.contains(
-                "call double @perry_method_synthetic_arguments_method_guard_ts__Counter__count",
-            ),
-        "the direct arm must preserve the concrete method's synthesized-arguments ABI:\n{probe_ir}"
+        probe_ir.contains(
+            "call double @perry_method_synthetic_arguments_method_guard_ts__Counter__count$arguments_length",
+        ) && probe_ir.contains("double 1.0"),
+        "the guarded direct arm should pass the actual argument count to the additive clone:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_array_alloc")
+            && !probe_ir.contains("call i64 @js_array_push_f64")
+            && !probe_ir.contains("call i64 @js_array_mark_arguments_object"),
+        "a length-only direct call must not allocate or fill an argument bundle:\n{probe_ir}"
     );
     assert!(
         probe_ir.contains("call double @js_native_call_method_by_id")
             && !probe_ir.contains("call double @js_object_get_own_field_or_undef"),
         "a guard miss should preserve dynamic override dispatch without an eager own-property scan:\n{probe_ir}"
+    );
+    assert!(
+        ir.contains(
+            "define double @perry_method_synthetic_arguments_method_guard_ts__Counter__count$arguments_length",
+        ) && !ir.contains(
+            "perry_method_synthetic_arguments_method_guard_ts__Counter__identity$arguments_length",
+        ),
+        "only the producer-proved length-only method may publish the scalar ABI:\n{ir}"
     );
 }
 

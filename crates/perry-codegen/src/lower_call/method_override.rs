@@ -582,6 +582,7 @@ pub(super) fn emit_guarded_direct_method_call(
     receiver_class_name: &str,
     property: &str,
     direct_fn: &str,
+    direct_call_fn: Option<&str>,
     direct_arg_slices: &[(crate::types::LlvmType, &str)],
     source_args: &[perry_hir::Expr],
     fallback_user_args: &[String],
@@ -620,7 +621,8 @@ pub(super) fn emit_guarded_direct_method_call(
     // site (the #1787 static-receiver bug): those targets need
     // `js_class_static_method_call`, not a plain `call double`, and no
     // proven-`this` clone is ever emitted for them.
-    let pshape_fn: Option<String> = (!direct_fn.starts_with("perry_static_")
+    let pshape_fn: Option<String> = (direct_call_fn.is_none()
+        && !direct_fn.starts_with("perry_static_")
         && ctx
             .pshape_methods
             .contains_key(&(receiver_class_name.to_string(), property.to_string())))
@@ -630,6 +632,7 @@ pub(super) fn emit_guarded_direct_method_call(
     // are), so it is resolved once here rather than five times below.
     let generic_body_fn: String = pshape_fn
         .clone()
+        .or_else(|| direct_call_fn.map(str::to_string))
         .unwrap_or_else(|| crate::codegen::generic_method_body_name(direct_fn));
 
     let expected_class_id_str = expected_class_id.to_string();
@@ -1276,15 +1279,21 @@ pub(super) fn emit_guarded_direct_method_call(
             // body; a receiver miss is still handled by the outer dynamic
             // fallback.
             let pshape_arg_fallback = pshape_fn.as_deref().unwrap_or(direct_fn);
-            if let Some(argument_specialized) = emit_pshape_argument_dispatch(
-                ctx,
-                receiver_class_name,
-                property,
-                direct_fn,
-                pshape_arg_fallback,
-                direct_arg_slices,
-                source_args,
-            ) {
+            let argument_specialized = direct_call_fn
+                .is_none()
+                .then(|| {
+                    emit_pshape_argument_dispatch(
+                        ctx,
+                        receiver_class_name,
+                        property,
+                        direct_fn,
+                        pshape_arg_fallback,
+                        direct_arg_slices,
+                        source_args,
+                    )
+                })
+                .flatten();
+            if let Some(argument_specialized) = argument_specialized {
                 argument_specialized
             } else {
                 // Representation-selection Phase 5a: this arm is reached ONLY
@@ -1315,7 +1324,8 @@ pub(super) fn emit_guarded_direct_method_call(
                 // `perry_static_` exclusion and the declaring-class argument are
                 // written out) is the same clone the typed arms above now route
                 // their generic fallbacks to.
-                let target = nonnegative_index_direct_fn
+                let target = direct_call_fn
+                    .or(nonnegative_index_direct_fn)
                     .or(pshape_fn.as_deref())
                     .unwrap_or(direct_fn);
                 let result = ctx.block().call(DOUBLE, target, direct_arg_slices);

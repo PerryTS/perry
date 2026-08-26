@@ -91,6 +91,57 @@ pub(super) fn compile_ordinary_method_artifacts(
     )
     .with_context(|| format!("lowering method '{}::{}'", class.name, method.name))?;
 
+    // A separate externally callable body keeps the public/runtime ABI exact:
+    // dynamic dispatch still receives a marked argument bundle, while a
+    // guarded direct caller may pass the actual argument count in the same
+    // trailing tagged-value slot. The internal marker type makes exact
+    // `arguments.length` reads lower to that scalar without changing source
+    // HIR or teaching generic property dispatch about the specialized ABI.
+    if super::arguments::method_supports_arguments_length_direct_abi(method) {
+        let mut clone = method.clone();
+        let synth_param = clone
+            .params
+            .last_mut()
+            .expect("length-only arguments method has a synthetic parameter");
+        synth_param.ty = perry_hir::types::Type::Named(
+            super::arguments::SYNTHETIC_ARGUMENTS_LENGTH_TYPE.to_string(),
+        );
+        compile_method(
+            llmod,
+            class,
+            &clone,
+            func_names,
+            strings,
+            classes,
+            methods,
+            module_globals,
+            module_global_types,
+            import_function_prefixes,
+            enums,
+            static_field_globals,
+            class_ids,
+            func_signatures,
+            func_synthetic_arguments,
+            module_boxed_vars,
+            closure_rest_params,
+            cross_module,
+            None,
+            false,
+            None,
+            None,
+            false,
+            false,
+            false,
+            false,
+        )
+        .with_context(|| {
+            format!(
+                "lowering scalar arguments-length clone of method '{}::{}'",
+                class.name, method.name
+            )
+        })?;
+    }
+
     if cross_module
         .guarded_undefined_method_params
         .contains_key(&(class.name.clone(), method.name.clone()))
