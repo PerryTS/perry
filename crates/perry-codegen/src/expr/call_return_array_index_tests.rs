@@ -76,6 +76,19 @@ fn store_class(receiver_selector: i64) -> Class {
             strict: true,
         })],
     );
+    let clear = function(
+        4,
+        "clear",
+        Vec::new(),
+        Type::Void,
+        vec![Stmt::Expr(Expr::PutValueSet {
+            target: Box::new(call_get_data(0)),
+            key: Box::new(Expr::String("length".to_string())),
+            value: Box::new(Expr::Integer(0)),
+            receiver: Box::new(call_get_data(receiver_selector)),
+            strict: true,
+        })],
+    );
     Class {
         id: 1,
         name: "Store".to_string(),
@@ -87,7 +100,7 @@ fn store_class(receiver_selector: i64) -> Class {
         heritage_lexically_shadowed: false,
         fields: Vec::new(),
         constructor: None,
-        methods: vec![get_data, write],
+        methods: vec![get_data, write, clear],
         getters: Vec::new(),
         setters: Vec::new(),
         static_accessor_names: Vec::new(),
@@ -128,6 +141,16 @@ fn write_method_ir(ir: &str) -> &str {
     &method_and_rest[..end + 3]
 }
 
+fn clear_method_ir(ir: &str) -> &str {
+    let signature = "define double @perry_method_call_return_array_put_value_ts__Store__clear(";
+    let start = ir.find(signature).expect("clear method is present in IR");
+    let method_and_rest = &ir[start..];
+    let end = method_and_rest
+        .find("\n}\n")
+        .expect("clear method has a closing brace");
+    &method_and_rest[..end + 3]
+}
+
 #[test]
 fn same_call_returned_array_uses_array_index_store_and_evaluates_receiver_once() {
     let ir = compile_store_ir(0);
@@ -149,6 +172,43 @@ fn same_call_returned_array_uses_array_index_store_and_evaluates_receiver_once()
         .count(),
         1,
         "the syntactically duplicated target/receiver call represents one evaluated assignment base"
+    );
+}
+
+#[test]
+fn same_call_returned_array_uses_array_length_store_and_evaluates_receiver_once() {
+    let ir = compile_store_ir(0);
+    let clear_ir = clear_method_ir(&ir);
+
+    assert!(
+        clear_ir.contains("call void @js_array_set_length_strict("),
+        "a call with an Array return type must use ArraySetLength semantics:\n{clear_ir}"
+    );
+    assert_eq!(
+        clear_ir
+            .matches("@perry_method_call_return_array_put_value_ts__Store__getData")
+            .count(),
+        1,
+        "the duplicated PutValue target/receiver trees represent one source evaluation:\n{clear_ir}"
+    );
+    assert!(
+        !clear_ir.contains("@js_put_value_set_ic_miss("),
+        "a proven Array length write must not retain the generic property PIC:\n{clear_ir}"
+    );
+}
+
+#[test]
+fn distinct_call_returned_array_length_receiver_stays_on_explicit_receiver_path() {
+    let ir = compile_store_ir(1);
+    let clear_ir = clear_method_ir(&ir);
+
+    assert!(
+        !clear_ir.contains("call void @js_array_set_length_strict("),
+        "different target and receiver expressions must not collapse to one Array write:\n{clear_ir}"
+    );
+    assert!(
+        clear_ir.contains("@js_put_value_set"),
+        "the explicit-receiver PutValue fallback must remain present:\n{clear_ir}"
     );
 }
 

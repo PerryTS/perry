@@ -1233,6 +1233,37 @@ fn large_length_growth_stays_logically_sparse() {
 }
 
 #[test]
+fn dense_length_truncation_clears_slots_and_stale_named_indices() {
+    let mut dense = js_array_alloc(4);
+    dense = js_array_push_f64(dense, 10.0);
+    dense = js_array_push_f64(dense, 20.0);
+    dense = js_array_push_f64(dense, 30.0);
+
+    js_array_set_length(dense, 0.0);
+    assert_eq!(js_array_length(dense), 0);
+    js_array_set_length(dense, 3.0);
+    for index in 0..3 {
+        assert_eq!(
+            array_spec_get(dense, index).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+    }
+
+    // A numeric property can live in ARRAY_NAMED_PROPS after a sparse index's
+    // backing later grows past it. The dense bulk path must decline whenever
+    // that second representation is present, and the ordinary deletion walk
+    // must clear both representations.
+    let key = crate::string::js_string_from_bytes(b"2".as_ptr(), 1);
+    unsafe { array_named_property_set(dense, key, 99.0) };
+    js_array_set_length(dense, 0.0);
+    js_array_set_length(dense, 3.0);
+    assert_eq!(
+        array_spec_get(dense, 2).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
+}
+
+#[test]
 fn test_numeric_array_layout_immutable_helpers_preserve_or_downgrade() {
     let values = [10.0, 2.0, 30.0, 40.0];
     let src = js_array_from_f64(values.as_ptr(), values.len() as u32);

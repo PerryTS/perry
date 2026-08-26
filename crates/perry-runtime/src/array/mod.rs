@@ -212,8 +212,8 @@ pub(crate) use self::alloc::array_length_from_property_value_or_throw;
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
 pub(crate) use self::flat_clone::{dense_spread_copy, dense_spread_source, flattenable_array_ptr};
 pub(crate) use self::header::{
-    array_byte_size, array_is_frozen, array_is_sealed_or_no_extend, array_named_property_delete,
-    array_named_property_delete_by_name, array_named_property_get,
+    array_byte_size, array_has_named_properties, array_is_frozen, array_is_sealed_or_no_extend,
+    array_named_property_delete, array_named_property_delete_by_name, array_named_property_get,
     array_named_property_get_by_name, array_named_property_has, array_named_property_names,
     array_named_property_set, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
     array_numeric_raw_f64_set_inbounds, array_object_flags, array_object_flags_from_tag,
