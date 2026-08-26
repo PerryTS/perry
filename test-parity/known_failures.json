@@ -637,15 +637,6 @@
       "linux"
     ]
   },
-  "test_issue_806_curried_mixin_outer_capture": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_issue_859_native_promise_pin": {
     "issue": "8271",
     "added": "2026-08-17",
@@ -882,12 +873,6 @@
     "platforms": [
       "linux"
     ]
-  },
-  "test_parity_stream": {
-    "issue": "793",
-    "added": "2026-05-15",
-    "category": "module-inventory",
-    "reason": "Tracking issue #793 (roadmap umbrella) is CLOSED — this needs a live surface tracker (audited 2026-08-07, #7582). Node.js module inventory — `node:stream` surface not fully implemented. Tracker for surface coverage; flips to PASS as each API lands. Not a regression."
   },
   "test_parity_stream_web": {
     "issue": "793",
