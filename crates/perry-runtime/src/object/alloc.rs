@@ -269,7 +269,8 @@ fn object_alloc_class_inline_keys_impl(
     parent_class_id: u32,
     field_count: u32,
     keys_array: *mut ArrayHeader,
-) -> (*mut ObjectHeader, u32) {
+    preinstalled_shape_id: u32,
+) -> (*mut ObjectHeader, u32, bool) {
     if parent_class_id != 0 {
         register_class(class_id, parent_class_id);
     }
@@ -290,14 +291,29 @@ fn object_alloc_class_inline_keys_impl(
 
     let ptr = arena_alloc_gc(total_size, 8, crate::gc::GC_TYPE_OBJECT) as *mut ObjectHeader;
 
-    unsafe {
+    let used_preinstalled_shape = unsafe {
         (*ptr).class_id = class_id;
         (*ptr).parent_class_id = parent_class_id;
         // GC_STORE_AUDIT(INIT): fresh object starts with no per-object meta record (#6759 B).
         (*ptr).meta = ptr::null_mut();
-        // #8113: the birth live-slot bound is a PARAMETER now — it used to be
-        // read back out of the `(*ptr).field_count` store that stood here.
-        set_object_keys_array_with_live(ptr, keys_array, logical_field_count as u32);
+        // The compiled entry point passes the ShapeId installed beside this
+        // canonical keys global at module initialization. Reuse that immutable
+        // descriptor directly when its live-slot bound still matches; learned
+        // instance widening and worker-local first installs retain the exact
+        // mint-and-validate fallback.
+        let used_preinstalled_shape = preinstalled_shape_id != 0
+            && crate::object::shapes::try_birth_stamp_preinstalled_shape(
+                ptr,
+                preinstalled_shape_id,
+                keys_array,
+                logical_field_count as u32,
+            );
+        if !used_preinstalled_shape {
+            // #8113: the birth live-slot bound is a PARAMETER now — it used to
+            // be read back out of the `(*ptr).field_count` store that stood
+            // here.
+            set_object_keys_array_with_live(ptr, keys_array, logical_field_count as u32);
+        }
 
         // PerryTS/perry#4717: initialize ALL `max(field_count, 8)` field slots to
         // `undefined`, mirroring `js_object_alloc_with_parent`. The arena hands back
@@ -314,8 +330,9 @@ fn object_alloc_class_inline_keys_impl(
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
-    }
-    (ptr, logical_field_count as u32)
+        used_preinstalled_shape
+    };
+    (ptr, logical_field_count as u32, used_preinstalled_shape)
 }
 
 /// Compatibility entry point for runtime callers that do not have a
@@ -335,8 +352,8 @@ pub extern "C" fn js_object_alloc_class_inline_keys(
     field_count: u32,
     keys_array: *mut ArrayHeader,
 ) -> *mut ObjectHeader {
-    let (ptr, birth_slots) =
-        object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array);
+    let (ptr, birth_slots, _) =
+        object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array, 0);
     unsafe {
         let key_count = if keys_array.is_null() {
             0
@@ -368,10 +385,17 @@ pub extern "C" fn js_object_alloc_class_inline_keys_stamped(
     keys_array: *mut ArrayHeader,
     shape_id: u32,
 ) -> *mut ObjectHeader {
-    let (ptr, birth_slots) =
-        object_alloc_class_inline_keys_impl(class_id, parent_class_id, field_count, keys_array);
-    unsafe {
-        crate::object::shapes::birth_stamp_object_shape(ptr, shape_id, birth_slots);
+    let (ptr, birth_slots, used_preinstalled_shape) = object_alloc_class_inline_keys_impl(
+        class_id,
+        parent_class_id,
+        field_count,
+        keys_array,
+        shape_id,
+    );
+    if !used_preinstalled_shape {
+        unsafe {
+            crate::object::shapes::birth_stamp_object_shape(ptr, shape_id, birth_slots);
+        }
     }
     ptr
 }
