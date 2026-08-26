@@ -866,6 +866,64 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
     }
 }
 
+/// `Array.prototype.some` for a compiler-proved captureless inline arrow.
+///
+/// The callback literal is consumed only by `some`, has no observable
+/// function identity, and cannot read a closure environment. Passing its code
+/// pointer directly avoids the singleton-closure TLS lookup and lets the loop
+/// call the body without rebuilding closure dispatch state. Non-Array
+/// receivers retain the generic path so Buffer, TypedArray, and array-like
+/// semantics remain centralized in [`js_array_some`].
+#[no_mangle]
+pub extern "C" fn js_array_some_captureless(
+    original_arr: *const ArrayHeader,
+    callback_func: *const u8,
+) -> f64 {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+
+    let arr = normalize_array_receiver(original_arr);
+    if arr.is_null() {
+        return f64::from_bits(TAG_FALSE);
+    }
+    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        || crate::buffer::is_registered_buffer(arr as usize)
+    {
+        let callback = crate::closure::js_closure_alloc_singleton(callback_func);
+        return js_array_some(original_arr, callback);
+    }
+
+    let callback: extern "C" fn(*const ClosureHeader, f64, f64, f64) -> f64 =
+        unsafe { std::mem::transmute(callback_func) };
+    unsafe {
+        let length = (*arr).length;
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted = RootedIterArray::new(&scope, arr);
+        let exotic = crate::array::array_iteration_is_exotic(arr);
+
+        for i in 0..length as usize {
+            let element = if exotic {
+                let arr = rooted.arr();
+                if !crate::array::array_spec_has_index(arr, i as u32) {
+                    continue;
+                }
+                crate::array::array_spec_get(arr, i as u32)
+            } else {
+                match rooted.present(i) {
+                    Some(element) => element,
+                    None => continue,
+                }
+            };
+            let result = callback(std::ptr::null(), element, i as f64, rooted.receiver());
+            if crate::value::js_is_truthy(result) != 0 {
+                return f64::from_bits(TAG_TRUE);
+            }
+        }
+    }
+
+    f64::from_bits(TAG_FALSE)
+}
+
 /// every - returns true if all elements match callback(element) => true
 /// Returns TAG_TRUE or TAG_FALSE as f64
 #[no_mangle]

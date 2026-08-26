@@ -170,3 +170,63 @@ fn callback_source_array_alias_keeps_the_shape_guard() {
         "declaring the source-array argument must deny the cross-boundary fact:\n{callback}"
     );
 }
+
+fn module_with_some_callback(captures_this: bool) -> Module {
+    let callback = Expr::Closure {
+        func_id: CLOSURE_ID,
+        params: vec![param(ELEMENT_ID, "row", Type::Named("Row".to_string()))],
+        return_type: Type::Boolean,
+        body: vec![Stmt::Return(Some(Expr::Bool(true)))],
+        captures: Vec::new(),
+        mutable_captures: Vec::new(),
+        captures_this,
+        captures_new_target: false,
+        enclosing_class: None,
+        is_arrow: true,
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+    };
+    let mut module = Module::new("array_some_captureless.ts");
+    module.classes = vec![row_class()];
+    module.init = vec![
+        Stmt::Let {
+            id: ARRAY_ID,
+            name: "rows".to_string(),
+            ty: Type::Array(Box::new(Type::Named("Row".to_string()))),
+            mutable: false,
+            init: Some(Expr::Array(Vec::new())),
+        },
+        Stmt::Expr(Expr::ArraySome {
+            array: Box::new(Expr::LocalGet(ARRAY_ID)),
+            callback: Box::new(callback),
+        }),
+    ];
+    module.init_kind = ModuleInitKind::Eager;
+    module
+}
+
+#[test]
+fn captureless_inline_some_passes_the_callback_body_directly() {
+    let ir = emit(&module_with_some_callback(false));
+    assert!(
+        ir.contains("call double @js_array_some_captureless")
+            && ir.contains("ptr @perry_closure_array_some_captureless_ts__99"),
+        "a captureless inline arrow should pass its body symbol directly:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i64 @js_closure_alloc_singleton")
+            && !ir.contains("call double @js_array_some("),
+        "the direct some path must not materialize or dynamically dispatch a closure:\n{ir}"
+    );
+}
+
+#[test]
+fn lexical_this_some_callback_keeps_the_closure_path() {
+    let ir = emit(&module_with_some_callback(true));
+    assert!(
+        !ir.contains("call double @js_array_some_captureless")
+            && ir.contains("call double @js_array_some("),
+        "a callback with lexical-this state must retain its real closure environment:\n{ir}"
+    );
+}

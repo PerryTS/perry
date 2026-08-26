@@ -932,6 +932,19 @@ fn js_array_some_sees_a_buffer_receivers_bytes() {
 }
 
 #[test]
+fn captureless_some_keeps_the_buffer_receiver_fallback() {
+    let _serialized = crate::array::test_serialize();
+    let buf = subject();
+    let answer = crate::array::js_array_some_captureless(buf, cb_is_one as *const u8);
+    assert_eq!(
+        observed_values(),
+        vec![3.0, 1.0],
+        "the captureless compiler ABI must retain Buffer-backed Uint8Array semantics"
+    );
+    assert!(is_true(answer));
+}
+
+#[test]
 fn js_array_every_sees_a_buffer_receivers_bytes() {
     let _serialized = crate::array::test_serialize();
     let buf = subject();

@@ -72,6 +72,46 @@ fn is_static_number_key_map(ctx: &FnCtx<'_>, map: &Expr) -> bool {
     )
 }
 
+/// Return the compiled body symbol for an inline arrow whose function object
+/// cannot be observed by `Array.prototype.some` and whose body cannot inspect
+/// a closure environment. The runtime may then invoke the code pointer
+/// directly without allocating/looking up a singleton ClosureHeader.
+fn captureless_some_callback(ctx: &FnCtx<'_>, callback: &Expr) -> Option<String> {
+    let Expr::Closure {
+        func_id,
+        params,
+        body,
+        captures,
+        captures_this,
+        captures_new_target,
+        is_arrow,
+        is_async,
+        is_generator,
+        ..
+    } = callback
+    else {
+        return None;
+    };
+    if !is_arrow
+        || *is_async
+        || *is_generator
+        || *captures_this
+        || *captures_new_target
+        || params.len() > 3
+        || params
+            .iter()
+            .any(|param| param.is_rest || param.arguments_object.is_some())
+        || !crate::type_analysis::compute_auto_captures(ctx, params, body, captures).is_empty()
+    {
+        return None;
+    }
+    Some(format!(
+        "@perry_closure_{}__{}",
+        ctx.strings.module_prefix(),
+        func_id
+    ))
+}
+
 fn guarded_map_number_key_delete(ctx: &mut FnCtx<'_>, map_handle: &str, key_box: &str) -> String {
     let guard_raw = ctx
         .block()
@@ -305,6 +345,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // js_array_some returns a NaN-tagged TAG_TRUE/TAG_FALSE as f64,
         // so we forward it directly without conversion.
         Expr::ArraySome { array, callback } => {
+            if let Some(callback_func) = captureless_some_callback(ctx, callback) {
+                let arr_box = lower_expr(ctx, array)?;
+                let arr_handle = unbox_to_i64(ctx.block(), &arr_box);
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_array_some_captureless",
+                    &[(I64, &arr_handle), (PTR, &callback_func)],
+                ));
+            }
             // #7615 slice 2: same callback window as `ArrayFilter` above.
             rooting::with_operands_rooted(ctx, &[array, callback], |ctx, vals| {
                 let blk = ctx.block();
