@@ -89,11 +89,13 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
         // #6750 follow-up: a masked-index read covered by an ACTIVE
         // masked-window fact is a guard-proven numeric element load — never
         // a pointer — even when the receiver's static type is erased.
-        Expr::IndexGet { object, index } => matches!(
-            object.as_ref(),
-            Expr::LocalGet(arr_id)
-                if super::masked_window_fact_for_index(ctx, *arr_id, index).is_some()
-        ),
+        Expr::IndexGet { object, index } => {
+            matches!(
+                object.as_ref(),
+                Expr::LocalGet(arr_id)
+                    if super::masked_window_fact_for_index(ctx, *arr_id, index).is_some()
+            ) || super::is_proven_u32_view_read(ctx, expr)
+        }
         // #6996: a typed-array / Buffer element read is a number (or
         // `undefined` out of range) BY CONSTRUCTION -- `lower_buffer_load`'s
         // inline byte load, `js_uint8array_index_get_value` and

@@ -71,6 +71,9 @@ use inline_dyn_typed_array::lower_inline_dyn_typed_array_get;
 /// object: a type-confused, `unbox`ed-pointer-plus-wrong-offset write,
 /// not merely a missed optimization.
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    if matches!(object, Expr::LocalGet(id) if ctx.buffer_view_slots.contains_key(id)) {
+        return true;
+    }
     // This predicate selects only runtime-validated typed-array helpers (or a
     // `buffer_view_slots` proof that invalidates on assignment), as documented
     // above. Preserve the declared kind as a hint for that dynamic fallback;

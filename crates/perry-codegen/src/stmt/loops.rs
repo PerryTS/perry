@@ -5270,6 +5270,13 @@ pub(super) fn lower_for_after_init_with_i32_bound(
     let body_label = ctx.block_label(body_idx);
     let update_label = ctx.block_label(update_idx);
     let exit_label = ctx.block_label(exit_idx);
+    if let Some(fact) = ctx
+        .stable_packed_loop_facts
+        .last_mut()
+        .filter(|fact| fact.u32_component_bound.is_some())
+    {
+        fact.u32_out_of_bounds_label = Some(update_label.clone());
+    }
 
     // Branch from the block holding the init into the cond block.
     ctx.block().br(&cond_label);

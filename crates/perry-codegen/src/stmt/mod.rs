@@ -29,6 +29,7 @@ mod masked_window_region;
 #[cfg(test)]
 mod prealloc_module_global_tests;
 pub(crate) mod stable_packed_loop;
+mod stable_packed_typed_array;
 mod switch_stmt;
 mod try_stmt;
 mod unused_expr;

@@ -1529,8 +1529,9 @@ pub struct ObjectMeta {
     /// `accessor_descriptors` table twin of `attr_key_bits`.
     pub accessor_key_bits: u64,
     /// Object-only state and compact scalar proof payloads. Bit 0 is the
-    /// custom-prototype flag. #8690 reserves bit 1 plus bits 8..63 for the
-    /// packed Array-subclass numeric-prefix proof (verified bound + ShapeId);
+    /// custom-prototype flag. #8690 reserves bits 1..2 and 8..63 for the
+    /// packed Array-subclass numeric-prefix proof (kind, verified bound, and
+    /// ShapeId);
     /// its address-reuse-safe authority is a type-specific GcHeader bit.
     /// In particular, GcHeader bit 12 is `GC_OBJ_TYPED_LAYOUT_INTACT`, so
     /// using that word for prototype divergence made every typed-layout
