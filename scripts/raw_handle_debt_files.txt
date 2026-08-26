@@ -48,10 +48,11 @@
 #
 # Format: <count> <path>
 5 crates/perry-runtime/src/array/header.rs
-6 crates/perry-runtime/src/array/indexing.rs
+13 crates/perry-runtime/src/array/indexing.rs
+4 crates/perry-runtime/src/array/flat_clone.rs
 2 crates/perry-runtime/src/array/iter_methods.rs
 31 crates/perry-runtime/src/array/iterator.rs
-4 crates/perry-runtime/src/array/push_pop.rs
+12 crates/perry-runtime/src/array/push_pop.rs
 14 crates/perry-runtime/src/array/sort.rs
 12 crates/perry-runtime/src/async_hooks.rs
 5 crates/perry-runtime/src/atomics.rs
@@ -156,3 +157,4 @@
 6 crates/perry-runtime/src/weakref.rs
 20 crates/perry-runtime/src/webassembly.rs
 6 crates/perry-runtime/src/proxy/put_value.rs
+2 crates/perry-runtime/src/object/array_object_ops.rs
