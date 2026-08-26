@@ -1570,16 +1570,27 @@ min_vectorized_loops = 0
 scalar_baseline = "allowed: native-owned typed view fixture gates proof records and fallback reasons"
 allowed_missed_reason_kinds = [
   "call_instruction",
-  # #8489: three loops here now miss vectorization for `control_flow` on the
-  # Linux/release configuration this gate runs in (not reproducible on a
-  # macOS perry-dev build). It is pre-existing — it fails identically on the
-  # pre-merge baseline 3627657c7 and still fails after #8484 — so it is NOT
-  # the `extern "C-unwind"` unwind edges. This workload requires no
-  # vectorization (`min_vectorized_loops = 0`, explicit scalar baseline), so
-  # the list is a change detector rather than a performance floor, and the
+  # #8489: three loops here miss vectorization for `control_flow`. ATTRIBUTED
+  # to 40e2ce86d (#8457, "make -Os the default native optimization level"),
+  # and it is legitimate rather than a codegen regression: perry's emitted IR
+  # is byte-identical across that commit (same sha256 at 526e0b502,
+  # f14a9e262 and 40e2ce86d). Only the clang args changed, -O3 -> -Os, and
+  # the harness's remark pass reuses the compile's own args. At -Os LLVM
+  # declines the SimplifyCFG speculation and if-conversion that at -O3
+  # flattened these branches into selects before the vectorizer ran, so the
+  # loops genuinely carry control flow it cannot if-convert — and vectorizing
+  # them would grow code size, which is exactly what -Os asks it not to do.
+  # This workload requires no vectorization (`min_vectorized_loops = 0`,
+  # explicit scalar baseline), so this list is a change detector, and the
   # sibling `native_abi_packet_control` / `native_pod_layout_constants`
-  # workloads already accept this reason. Widened to unblock the release
-  # gate; #8489 stays open to attribute the codegen change that caused it.
+  # workloads already accept the same reason.
+  #
+  # Earlier notes here said Linux-only, release-config, and caused by the
+  # string-codegen work. All three were wrong: the gate builds with
+  # `cargo build -p perry` (a DEBUG build, test.yml:1809), it reproduces on
+  # macOS with that profile, and control_flow=3 predates #8448/#8450/#8453/
+  # #8454. 40e2ce86d is an ancestor of the 3627657c7 baseline, which is why
+  # that baseline looked "pre-existing".
   "control_flow",
   "generic_not_vectorized",
   "not_beneficial",
