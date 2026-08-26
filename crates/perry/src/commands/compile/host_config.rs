@@ -41,6 +41,23 @@ fn compile_packages_means_auto(value: &serde_json::Value) -> bool {
     }
 }
 
+fn is_exact_npm_package_name(name: &str) -> bool {
+    let valid_segment = |segment: &str| {
+        !segment.is_empty()
+            && !matches!(segment, "." | "..")
+            && segment.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '~')
+            })
+    };
+    if let Some(scoped) = name.strip_prefix('@') {
+        let mut parts = scoped.split('/');
+        return parts.next().is_some_and(valid_segment)
+            && parts.next().is_some_and(valid_segment)
+            && parts.next().is_none();
+    }
+    valid_segment(name)
+}
+
 fn parse_boolean_switch(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" => Some(true),
@@ -213,6 +230,31 @@ pub(super) fn apply_pkg_and_toml_config(
                                 ctx.compile_packages.insert(name.to_string());
                             }
                         }
+                    }
+                }
+                // #8523: Node-API execution is an exact, host-owned opt-in.
+                // Dependencies cannot grant it to themselves and wildcard
+                // spellings are rejected instead of being interpreted as a
+                // broader trust policy.
+                if let Some(native_addons) = pkg.get("perry").and_then(|p| p.get("nativeAddons")) {
+                    let entries = native_addons.as_array().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "`perry.nativeAddons` must be an array of exact package names"
+                        )
+                    })?;
+                    for (index, entry) in entries.iter().enumerate() {
+                        let name = entry.as_str().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "`perry.nativeAddons[{index}]` must be a package name string"
+                            )
+                        })?;
+                        let name = name.trim();
+                        if !is_exact_npm_package_name(name) {
+                            anyhow::bail!(
+                                "`perry.nativeAddons` accepts exact npm package names only; invalid entry `{name}`"
+                            );
+                        }
+                        ctx.native_addon_packages.insert(name.to_string());
                     }
                 }
                 // #1680 (Phase 2 of #1677): build-time codegen steps. Each
@@ -1220,6 +1262,32 @@ pub(super) fn apply_pkg_and_toml_config(
         }
     }
 
+    if !ctx.native_addon_packages.is_empty() {
+        let target = args.target.as_deref().unwrap_or("native");
+        let unsupported = matches!(
+            target,
+            "web"
+                | "wasm"
+                | "android"
+                | "android-arm64"
+                | "android-x64"
+                | "harmonyos"
+                | "harmonyos-simulator"
+                | "ios"
+                | "ios-simulator"
+                | "tvos"
+                | "tvos-simulator"
+                | "watchos"
+                | "watchos-simulator"
+                | "visionos"
+                | "visionos-simulator"
+        );
+        if unsupported {
+            anyhow::bail!(
+                "`perry.nativeAddons` is unavailable for target `{target}`; prebuilt Node-API sidecars are supported only on desktop/server targets"
+            );
+        }
+    }
     let _ = (perry_toml, toml_root);
     Ok((i18n_config, i18n_translations))
 }
@@ -1227,6 +1295,28 @@ pub(super) fn apply_pkg_and_toml_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_addon_policy_accepts_only_exact_npm_names() {
+        for name in ["oxc-parser", "@swc/core", "@napi-rs/keyring"] {
+            assert!(is_exact_npm_package_name(name), "{name}");
+        }
+        for name in [
+            "",
+            "*",
+            "@scope/*",
+            "scope/pkg",
+            "@scope",
+            "@/pkg",
+            ".",
+            "..",
+            "@scope/..",
+            "package:tag",
+            "two words",
+        ] {
+            assert!(!is_exact_npm_package_name(name), "{name}");
+        }
+    }
 
     #[test]
     fn auto_switch_accepts_only_documented_values() {

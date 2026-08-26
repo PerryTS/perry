@@ -10,16 +10,35 @@
 //! validity requirements are defined by `js_native_api.h`; each entry point
 //! validates nullable arguments before dereferencing them.
 
+mod async_work;
+mod bigint;
+mod buffers;
 mod functions;
+mod lifecycle;
+mod loader;
+mod metadata;
+mod promises;
+mod properties;
 mod scopes;
+mod symbols;
+mod tsfn;
 mod values;
 
 use std::cell::RefCell;
 use std::ffi::{c_char, c_void, CString};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub use async_work::*;
+pub use bigint::*;
+pub use buffers::*;
 pub use functions::*;
+pub use lifecycle::*;
+pub use loader::*;
+pub use metadata::*;
+pub use promises::*;
+pub use properties::*;
 pub use scopes::*;
+pub use tsfn::*;
 pub use values::*;
 
 pub type NapiEnv = *mut c_void;
@@ -28,6 +47,12 @@ pub type NapiHandleScope = *mut c_void;
 pub type NapiEscapableHandleScope = *mut c_void;
 pub type NapiRef = *mut c_void;
 pub type NapiCallbackInfo = *mut c_void;
+pub type NapiDeferred = *mut c_void;
+pub type NapiAsyncWork = *mut c_void;
+pub type NapiAsyncContext = *mut c_void;
+pub type NapiCallbackScope = *mut c_void;
+pub type NapiThreadsafeFunction = *mut c_void;
+pub type NapiAsyncCleanupHookHandle = *mut c_void;
 
 pub const NAPI_AUTO_LENGTH: usize = usize::MAX;
 pub const NAPI_VERSION: u32 = 8;
@@ -94,8 +119,13 @@ pub(crate) struct ScopeToken {
 pub(crate) struct ReferenceRecord {
     env_serial: u64,
     value_bits: u64,
+    /// A Perry `WeakRef` object rooted by this record while `refcount == 0`.
+    /// The weak holder is traced, but its target is not. Primitive values,
+    /// which cannot be weak targets, remain in `value_bits` instead.
+    weak_holder_bits: Option<u64>,
     refcount: u32,
     deleted: bool,
+    finalizer_link: Option<(usize, u64)>,
 }
 
 pub(crate) struct NativeCallbackRecord {
@@ -109,6 +139,12 @@ pub(crate) struct CallbackInfoRecord {
     pub this_value: NapiValue,
     pub data: usize,
     pub new_target: NapiValue,
+}
+
+pub(crate) struct DeferredRecord {
+    env_serial: u64,
+    promise_bits: u64,
+    settled: bool,
 }
 
 // The boxed records are intentional: their addresses are the opaque pointers
@@ -131,6 +167,23 @@ pub(crate) struct Env {
     reference_lookup: crate::fast_hash::PtrHashMap<usize, usize>,
     callbacks: Vec<NativeCallbackRecord>,
     active_callback_infos: Vec<usize>,
+    deferreds: Vec<Box<DeferredRecord>>,
+    deferred_lookup: crate::fast_hash::PtrHashMap<usize, usize>,
+    async_contexts: Vec<Box<AsyncContextRecord>>,
+    async_context_lookup: crate::fast_hash::PtrHashMap<usize, usize>,
+    callback_scope_tokens: Vec<Box<CallbackScopeRecord>>,
+    callback_scope_stack: Vec<usize>,
+    cleanup_hooks: Vec<CleanupHookRecord>,
+    async_cleanup_hooks: Vec<Box<AsyncCleanupHookRecord>>,
+    async_cleanup_lookup: crate::fast_hash::PtrHashMap<usize, usize>,
+    async_works: Vec<Box<AsyncWorkRecord>>,
+    async_work_lookup: crate::fast_hash::PtrHashMap<usize, usize>,
+    tsfns: Vec<std::sync::Arc<ThreadsafeFunctionInner>>,
+    loaded_addons: Vec<LoadedAddon>,
+    currently_loading_filename: Option<String>,
+    instance_data: Option<InstanceDataRecord>,
+    shutting_down: bool,
+    external_memory: i64,
     pending_exception_bits: Option<u64>,
     last_status: NapiStatus,
     last_error_message: CString,
@@ -152,6 +205,23 @@ impl Env {
             reference_lookup: crate::fast_hash::new_ptr_hash_map(),
             callbacks: Vec::new(),
             active_callback_infos: Vec::new(),
+            deferreds: Vec::new(),
+            deferred_lookup: crate::fast_hash::new_ptr_hash_map(),
+            async_contexts: Vec::new(),
+            async_context_lookup: crate::fast_hash::new_ptr_hash_map(),
+            callback_scope_tokens: Vec::new(),
+            callback_scope_stack: Vec::new(),
+            cleanup_hooks: Vec::new(),
+            async_cleanup_hooks: Vec::new(),
+            async_cleanup_lookup: crate::fast_hash::new_ptr_hash_map(),
+            async_works: Vec::new(),
+            async_work_lookup: crate::fast_hash::new_ptr_hash_map(),
+            tsfns: Vec::new(),
+            loaded_addons: Vec::new(),
+            currently_loading_filename: None,
+            instance_data: None,
+            shutting_down: false,
+            external_memory: 0,
             pending_exception_bits: None,
             last_status: NapiStatus::Ok,
             last_error_message: CString::new("napi_ok").unwrap(),
@@ -265,6 +335,50 @@ impl Env {
             .map(Box::as_mut)
             .filter(|record| record.env_serial == self.serial && !record.deleted)
     }
+
+    fn deferred(&self, deferred: NapiDeferred) -> Option<&DeferredRecord> {
+        if deferred.is_null() {
+            return None;
+        }
+        let index = *self.deferred_lookup.get(&(deferred as usize))?;
+        self.deferreds
+            .get(index)
+            .map(Box::as_ref)
+            .filter(|record| record.env_serial == self.serial && !record.settled)
+    }
+
+    fn deferred_mut(&mut self, deferred: NapiDeferred) -> Option<&mut DeferredRecord> {
+        if deferred.is_null() {
+            return None;
+        }
+        let index = *self.deferred_lookup.get(&(deferred as usize))?;
+        self.deferreds
+            .get_mut(index)
+            .map(Box::as_mut)
+            .filter(|record| record.env_serial == self.serial && !record.settled)
+    }
+
+    fn async_context(&self, context: NapiAsyncContext) -> Option<&AsyncContextRecord> {
+        if context.is_null() {
+            return None;
+        }
+        let index = *self.async_context_lookup.get(&(context as usize))?;
+        self.async_contexts
+            .get(index)
+            .map(Box::as_ref)
+            .filter(|record| record.env_serial == self.serial && !record.destroyed)
+    }
+
+    fn async_context_mut(&mut self, context: NapiAsyncContext) -> Option<&mut AsyncContextRecord> {
+        if context.is_null() {
+            return None;
+        }
+        let index = *self.async_context_lookup.get(&(context as usize))?;
+        self.async_contexts
+            .get_mut(index)
+            .map(Box::as_mut)
+            .filter(|record| record.env_serial == self.serial && !record.destroyed)
+    }
 }
 
 static NEXT_ENV_SERIAL: AtomicU64 = AtomicU64::new(1);
@@ -373,12 +487,44 @@ pub fn scan_node_api_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) 
         if let Some(exception) = env.pending_exception_bits.as_mut() {
             visitor.visit_nanbox_u64_slot(exception);
         }
+        for deferred in &mut env.deferreds {
+            if !deferred.settled {
+                visitor.visit_nanbox_u64_slot(&mut deferred.promise_bits);
+            }
+        }
+        for tsfn in &env.tsfns {
+            tsfn::scan_tsfn_function_root(tsfn, visitor);
+        }
+        for addon in &mut env.loaded_addons {
+            visitor.visit_nanbox_u64_slot(&mut addon.exports_bits);
+        }
         for reference in &mut env.references {
-            if !reference.deleted && reference.refcount > 0 {
+            if reference.deleted {
+                continue;
+            }
+            if reference.refcount > 0 || reference.weak_holder_bits.is_none() {
                 visitor.visit_nanbox_u64_slot(&mut reference.value_bits);
+            }
+            if let Some(holder) = reference.weak_holder_bits.as_mut() {
+                visitor.visit_nanbox_u64_slot(holder);
             }
         }
     });
+    metadata::scan_object_metadata_roots_mut(visitor);
+}
+
+/// Drain callbacks which must run on the owning Perry agent after GC or a
+/// worker handoff. Called from the ordinary event pump.
+pub fn process_pending() -> i32 {
+    metadata::drain_pending_finalizers()
+        .saturating_add(async_work::drain_async_completions())
+        .saturating_add(tsfn::drain_threadsafe_functions())
+}
+
+pub fn has_active_work() -> bool {
+    metadata::has_pending_finalizers()
+        || async_work::has_active_async_work()
+        || tsfn::has_active_threadsafe_functions()
 }
 
 #[no_mangle]

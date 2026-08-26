@@ -6808,6 +6808,15 @@ pub fn run_with_parse_cache(
         verbose,
     )?;
 
+    // Approved Node-API payloads are a relocatable authenticated sibling of
+    // the executable. Run this even on a link-cache hit so a changed payload
+    // refreshes distribution bytes without needlessly relinking the host.
+    if let Some(sidecar) = stage_native_addon_sidecar(&ctx, &exe_path, target.as_deref())? {
+        if matches!(format, OutputFormat::Text) {
+            println!("Wrote Node-API sidecar: {}", sidecar.display());
+        }
+    }
+
     // HarmonyOS: emit the ArkTS EntryAbility + Index page next to the .so,
     // then bundle everything into a .hap. The ArkTS shim's import name is
     // templated off the actual .so filename so it matches at dlopen time.

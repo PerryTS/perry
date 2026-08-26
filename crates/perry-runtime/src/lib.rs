@@ -488,6 +488,8 @@ pub(crate) mod stdlib_pump {
     #[no_mangle]
     pub extern "C" fn js_run_stdlib_pump() {
         crate::promise::js_native_async_process_pending();
+        #[cfg(feature = "node-api-host")]
+        crate::node_api_host::process_pending();
         crate::os::js_process_signal_drain();
         // Drain the tty resize-pending flag (#347 Phase 3). Lives in
         // perry-runtime, not stdlib, so it runs even when stdlib isn't
@@ -533,6 +535,10 @@ pub(crate) mod stdlib_pump {
     /// async ops, etc.). Returns 0 if perry-stdlib is not linked.
     #[no_mangle]
     pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
+        #[cfg(feature = "node-api-host")]
+        if crate::node_api_host::has_active_work() {
+            return 1;
+        }
         if crate::promise::js_native_async_has_active() != 0 {
             return 1;
         }

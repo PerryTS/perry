@@ -137,6 +137,102 @@ pub(super) const PLUGIN_HOST_SYMBOLS: &[&str] = &[
     "PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED",
 ];
 
+/// Checked-in Node v26.5.1 / N-API v8 export inventory. The runtime build
+/// consumes the same file to generate retention anchors.
+pub(super) fn node_api_host_symbols() -> impl Iterator<Item = &'static str> {
+    include_str!("../../../../../perry-runtime/src/node_api_host/symbols.txt")
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && !name.starts_with('#'))
+}
+
+fn add_node_api_host_link_args(
+    cmd: &mut Command,
+    ctx: &CompilationContext,
+    is_windows: bool,
+    is_linux: bool,
+    is_android: bool,
+    is_harmonyos: bool,
+    is_cross_macos: bool,
+) -> Result<()> {
+    if ctx.native_addons.is_empty() {
+        return Ok(());
+    }
+    if is_windows {
+        for symbol in node_api_host_symbols() {
+            cmd.arg(format!("/INCLUDE:{symbol}"));
+            cmd.arg(format!("/EXPORT:{symbol}"));
+        }
+    } else if is_linux || is_android || is_harmonyos {
+        for symbol in node_api_host_symbols() {
+            cmd.arg(format!("-Wl,-u,{symbol}"));
+            cmd.arg(format!("-Wl,--export-dynamic-symbol={symbol}"));
+        }
+    } else {
+        let exports_path = ctx.cache_dir.join("node-api-host-exports.txt");
+        if let Some(parent) = exports_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let exports = node_api_host_symbols()
+            .map(|symbol| format!("_{symbol}\n"))
+            .collect::<String>();
+        fs::write(&exports_path, exports)?;
+        if is_cross_macos {
+            cmd.arg("-exported_symbols_list").arg(&exports_path);
+            for symbol in node_api_host_symbols() {
+                cmd.arg("-u").arg(format!("_{symbol}"));
+            }
+        } else {
+            cmd.arg(format!(
+                "-Wl,-exported_symbols_list,{}",
+                exports_path.display()
+            ));
+            for symbol in node_api_host_symbols() {
+                cmd.arg(format!("-Wl,-u,_{symbol}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod node_api_symbol_inventory_tests {
+    use super::node_api_host_symbols;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn checked_in_inventory_matches_every_exported_host_function() {
+        let source = [
+            include_str!("../../../../../perry-runtime/src/node_api_host/async_work.rs"),
+            include_str!("../../../../../perry-runtime/src/node_api_host/bigint.rs"),
+            include_str!("../../../../../perry-runtime/src/node_api_host/buffers.rs"),
+            include_str!("../../../../../perry-runtime/src/node_api_host/functions.rs"),
+            include_str!("../../../../../perry-runtime/src/node_api_host/lifecycle.rs"),
+            include_str!("../../../../../perry-runtime/src/node_api_host/loader.rs"),
+            include_str!("../../../../../perry-runtime/src/node_api_host/metadata.rs"),
+            include_str!("../../../../../perry-runtime/src/node_api_host/mod.rs"),
+            include_str!("../../../../../perry-runtime/src/node_api_host/promises.rs"),
+            include_str!("../../../../../perry-runtime/src/node_api_host/properties.rs"),
+            include_str!("../../../../../perry-runtime/src/node_api_host/scopes.rs"),
+            include_str!("../../../../../perry-runtime/src/node_api_host/tsfn.rs"),
+            include_str!("../../../../../perry-runtime/src/node_api_host/values.rs"),
+        ]
+        .join("\n");
+        let export_re = regex::Regex::new(
+            r#"(?s)#\[no_mangle\]\s*pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+((?:napi|node_api)_[A-Za-z0-9_]+)"#,
+        )
+        .unwrap();
+        let source_exports = export_re
+            .captures_iter(&source)
+            .map(|capture| capture[1].to_string())
+            .collect::<BTreeSet<_>>();
+        let inventory = node_api_host_symbols()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(inventory, source_exports);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NativeBackendLinkMetadata {
     backend: super::NativeBackend,

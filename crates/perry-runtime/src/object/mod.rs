@@ -128,7 +128,7 @@ pub(crate) use native_module_registry::{js_nm_install_fs, js_nm_install_perf, js
 mod native_module_stream;
 pub(crate) mod native_this_alias;
 mod object_literal_ops;
-mod object_ops;
+pub(crate) mod object_ops;
 pub(crate) use object_ops::{ensure_key_in_keys_array, install_builtin_getter};
 mod object_ops_frozen;
 mod polymorphic_index;

@@ -535,10 +535,36 @@ fn generate_single_byte_encodings(out_dir: &str) {
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/node_api_host/symbols.txt");
     println!("cargo:rerun-if-changed=../perry-dispatch/src/lib.rs");
+    println!("cargo:rerun-if-env-changed=TARGET");
+    println!(
+        "cargo:rustc-env=PERRY_RUNTIME_TARGET={}",
+        std::env::var("TARGET").expect("TARGET not set by Cargo")
+    );
     emit_runtime_build_id();
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
+    let symbols = std::fs::read_to_string("src/node_api_host/symbols.txt")
+        .expect("read Node-API symbol inventory");
+    let names = symbols
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && !name.starts_with('#'))
+        .collect::<Vec<_>>();
+    let mut anchors = format!(
+        "#[used]\nstatic NODE_API_HOST_SYMBOL_ANCHORS: [NodeApiSymbol; {}] = [\n",
+        names.len()
+    );
+    for name in names {
+        writeln!(anchors, "    NodeApiSymbol(super::{name} as *const ()),").unwrap();
+    }
+    anchors.push_str("];\n");
+    std::fs::write(
+        std::path::Path::new(&out_dir).join("node_api_host_symbol_anchors.rs"),
+        anchors,
+    )
+    .expect("write Node-API symbol anchors");
     generate_single_byte_encodings(&out_dir);
     let stubs_dest = std::path::Path::new(&out_dir).join("perry_ui_harmonyos_stubs.rs");
     let manifest_dest = std::path::Path::new(&out_dir).join("perry_stub_manifest.rs");

@@ -67,13 +67,19 @@ extern "C" fn napi_callback_thunk(
     }
     let this_bits = crate::object::js_implicit_this_get().to_bits();
     let this_value = add_handle(env, this_bits).unwrap_or(std::ptr::null_mut());
+    let new_target_bits = crate::object::js_new_target_get().to_bits();
+    let new_target = if JSValue::from_bits(new_target_bits).is_undefined() {
+        std::ptr::null_mut()
+    } else {
+        add_handle(env, new_target_bits).unwrap_or(std::ptr::null_mut())
+    };
 
     let mut info = Box::new(CallbackInfoRecord {
         env_serial: with_env(env, |env| env.serial).unwrap_or_default(),
         args: argument_handles,
         this_value,
         data: callback_data,
-        new_target: std::ptr::null_mut(),
+        new_target,
     });
     let info_ptr = (&mut *info) as *mut CallbackInfoRecord as NapiCallbackInfo;
     with_env_mut(env, |env| env.active_callback_infos.push(info_ptr as usize));
@@ -263,12 +269,6 @@ pub unsafe extern "C" fn napi_call_function(
     let Ok(function_bits) = value_bits(env, function) else {
         return set_status(env, NapiStatus::InvalidArg, "function is not a live handle");
     };
-    let function_value = JSValue::from_bits(function_bits);
-    if !function_value.is_pointer()
-        || !crate::closure::is_closure_ptr(function_value.as_pointer::<u8>() as usize)
-    {
-        return set_status(env, NapiStatus::FunctionExpected, "value must be callable");
-    }
     let mut arguments = Vec::with_capacity(argc);
     for index in 0..argc {
         let handle = *argv.add(index);
@@ -296,6 +296,56 @@ pub unsafe extern "C" fn napi_call_function(
             }
             ok(env)
         }
+        Err(status) => status,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn napi_new_instance(
+    env: NapiEnv,
+    constructor: NapiValue,
+    argc: usize,
+    argv: *const NapiValue,
+    result: *mut NapiValue,
+) -> NapiStatus {
+    if result.is_null() || (argc != 0 && argv.is_null()) {
+        return set_status(
+            env,
+            NapiStatus::InvalidArg,
+            "result and argument vector must be valid",
+        );
+    }
+    if pending_exception(env).is_some() {
+        return set_status(env, NapiStatus::PendingException, "an exception is pending");
+    }
+    let Ok(constructor_bits) = value_bits(env, constructor) else {
+        return set_status(
+            env,
+            NapiStatus::InvalidArg,
+            "constructor is not a live handle",
+        );
+    };
+    let mut arguments = Vec::with_capacity(argc);
+    for index in 0..argc {
+        let Ok(bits) = value_bits(env, *argv.add(index)) else {
+            return set_status(env, NapiStatus::InvalidArg, "argument is not a live handle");
+        };
+        arguments.push(f64::from_bits(bits));
+    }
+    match catch_value_call(env, || {
+        crate::object::js_new_function_construct(
+            f64::from_bits(constructor_bits),
+            arguments.as_ptr(),
+            arguments.len(),
+        )
+    }) {
+        Ok(value) => match add_handle(env, value.to_bits()) {
+            Ok(handle) => {
+                *result = handle;
+                ok(env)
+            }
+            Err(status) => status,
+        },
         Err(status) => status,
     }
 }

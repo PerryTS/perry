@@ -112,11 +112,12 @@ pub(crate) fn auto_optimized_cache_key(
 ) -> String {
     let target_str = target.unwrap_or("host");
     format!(
-        "{}|{}|{}|wasm={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|sizeopt={}|anchors={}|v={}",
+        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|sizeopt={}|anchors={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
         ctx.needs_wasm_runtime,
+        !ctx.native_addons.is_empty(),
         ctx.uses_regex,
         ctx.uses_temporal,
         ctx.uses_event_emitter,
@@ -196,6 +197,9 @@ pub(crate) fn auto_optimized_cross_features(
     // unresolved `perry_wasm_host_*` references at link time.
     if ctx.needs_wasm_runtime {
         cross_features.push("perry-runtime/wasm-host".to_string());
+    }
+    if !ctx.native_addons.is_empty() {
+        cross_features.push("perry-runtime/node-api-host".to_string());
     }
     // Binary-size feature gating (kept in sync with the inline list on `main`):
     // each engine/table is linked only when the program actually uses it.
@@ -427,10 +431,19 @@ pub(crate) fn auto_optimized_source_fingerprint(
 
     // Seed with the crates the auto-optimize cargo invocation builds directly.
     let mut crates: BTreeSet<String> = [
+        // Keep this contract set aligned with perry-runtime/build.rs'
+        // RUNTIME_BUILD_INPUTS. Those sources participate in the embedded
+        // compiler/runtime build id even when they are not Cargo dependencies
+        // of the static runtime wrapper.
+        "perry-dispatch",
+        "perry",
+        "perry-codegen",
+        "perry-hir",
         "perry-runtime",
         "perry-stdlib",
         "perry-runtime-static",
         "perry-stdlib-static",
+        "perry-transform",
     ]
     .into_iter()
     .map(str::to_string)
@@ -505,7 +518,13 @@ pub(crate) fn auto_optimized_source_fingerprint(
             .flatten()
             .filter_map(|e| e.file_name().to_str().map(str::to_string))
             // Same exclusions as `input_newer_than`.
-            .filter(|n| n != "target" && n != ".git")
+            // Test/benchmark/example targets do not land in the static
+            // runtime archives and are not part of perry-runtime's embedded
+            // build-id inputs. Excluding them also means adding an e2e test
+            // cannot force a multi-minute optimized-runtime rebuild.
+            .filter(|n| {
+                n != "target" && n != ".git" && n != "tests" && n != "benches" && n != "examples"
+            })
             .collect();
         names.sort();
         for name in names {

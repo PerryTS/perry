@@ -296,8 +296,52 @@ pub extern "C" fn js_process_linked_binding(_name: f64) -> f64 {
 }
 
 #[no_mangle]
-pub extern "C" fn js_process_dlopen() -> f64 {
-    undefined_value()
+pub extern "C" fn js_process_dlopen(module: f64, filename: f64, flags: f64) -> f64 {
+    #[cfg(feature = "node-api-host")]
+    unsafe {
+        let Some(filename) = crate::node_api_host::js_string_value(filename) else {
+            crate::fs::validate::throw_type_error_with_code(
+                "process.dlopen(module, filename) expects filename to be a string",
+                "ERR_INVALID_ARG_TYPE",
+            );
+        };
+        let flags_value = JSValue::from_bits(flags.to_bits());
+        if !flags_value.is_undefined() && !flags_value.is_null() {
+            if !flags_value.is_number() || !matches!(flags_value.as_number() as i64, 0 | 1 | 2) {
+                crate::fs::validate::throw_error_with_code(
+                    "process.dlopen only supports RTLD_LAZY or RTLD_NOW with local symbol scope",
+                    "ERR_DLOPEN_FAILED",
+                );
+            }
+        }
+        let module_value = JSValue::from_bits(module.to_bits());
+        if !crate::object::object_ops::value_is_object_like(module) {
+            crate::fs::validate::throw_type_error_with_code(
+                "process.dlopen(module, filename) expects module to be an object",
+                "ERR_INVALID_ARG_TYPE",
+            );
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let module = scope
+            .root_raw_mut_ptr(module_value.as_pointer::<crate::object::ObjectHeader>()
+                as *mut crate::object::ObjectHeader);
+        let exports = scope.root_nanbox_f64(crate::node_api_host::load_addon_or_throw(&filename));
+        let key = scope.root_string_ptr(js_string_from_bytes(b"exports".as_ptr(), 7));
+        module.with_mut_ptr(|module| {
+            key.with_const_ptr(|key| {
+                crate::object::js_object_set_field_by_name(module, key, exports.get_nanbox_f64())
+            })
+        });
+        exports.get_nanbox_f64()
+    }
+    #[cfg(not(feature = "node-api-host"))]
+    {
+        let _ = (module, filename, flags);
+        crate::fs::validate::throw_error_with_code(
+            "this executable was compiled without an approved Node-API addon manifest",
+            "ERR_DLOPEN_FAILED",
+        )
+    }
 }
 
 #[no_mangle]

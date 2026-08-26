@@ -434,6 +434,9 @@ pub unsafe extern "C" fn napi_typeof(
         NapiValueType::Bigint
     } else if crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0 {
         NapiValueType::Symbol
+    } else if js.is_pointer() && super::metadata::is_external_owner(js.as_pointer::<u8>() as usize)
+    {
+        NapiValueType::External
     } else if js.is_pointer() && crate::closure::is_closure_ptr(js.as_pointer::<u8>() as usize) {
         NapiValueType::Function
     } else {
@@ -944,16 +947,14 @@ pub unsafe extern "C" fn napi_get_property_names(
     object: NapiValue,
     result: *mut NapiValue,
 ) -> NapiStatus {
-    let Ok(bits) = value_bits(env, object) else {
-        return set_status(env, NapiStatus::InvalidArg, "object is not a live handle");
-    };
-    match catch_value_call(env, || {
-        let array = crate::object::js_object_keys_value(f64::from_bits(bits));
-        f64::from_bits(pointer_bits(array.cast()))
-    }) {
-        Ok(value) => write_handle(env, value.to_bits(), result),
-        Err(status) => status,
-    }
+    super::properties::napi_get_all_property_names(
+        env,
+        object,
+        super::properties::NapiKeyCollectionMode::IncludePrototypes,
+        super::properties::NAPI_KEY_ENUMERABLE | super::properties::NAPI_KEY_SKIP_SYMBOLS,
+        super::properties::NapiKeyConversion::NumbersToStrings,
+        result,
+    )
 }
 
 fn create_error_kind(
@@ -1309,14 +1310,45 @@ pub unsafe extern "C" fn napi_instanceof(
 #[no_mangle]
 pub unsafe extern "C" fn napi_create_external(
     env: NapiEnv,
-    _data: *mut c_void,
-    _finalize_cb: Option<unsafe extern "C" fn(NapiEnv, *mut c_void, *mut c_void)>,
-    _finalize_hint: *mut c_void,
-    _result: *mut NapiValue,
+    data: *mut c_void,
+    finalize_cb: NapiFinalize,
+    finalize_hint: *mut c_void,
+    result: *mut NapiValue,
 ) -> NapiStatus {
-    set_status(
-        env,
-        NapiStatus::GenericFailure,
-        "external values and finalizers are not enabled in this host core",
-    )
+    if result.is_null() {
+        return set_status(env, NapiStatus::InvalidArg, "result must not be null");
+    }
+    let object = crate::object::js_object_alloc(0, 0);
+    super::metadata::attach_external_finalizer(object as usize, data, finalize_cb, finalize_hint);
+    write_handle(env, pointer_bits(object.cast()), result)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn napi_object_freeze(env: NapiEnv, object: NapiValue) -> NapiStatus {
+    let Ok(bits) = value_bits(env, object) else {
+        return set_status(env, NapiStatus::InvalidArg, "object is not a live handle");
+    };
+    if !crate::object::object_ops::value_is_object_like(f64::from_bits(bits)) {
+        return set_status(env, NapiStatus::ObjectExpected, "value must be an object");
+    }
+    match catch_value_call(env, || {
+        crate::object::js_object_freeze(f64::from_bits(bits))
+    }) {
+        Ok(_) => ok(env),
+        Err(status) => status,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn napi_object_seal(env: NapiEnv, object: NapiValue) -> NapiStatus {
+    let Ok(bits) = value_bits(env, object) else {
+        return set_status(env, NapiStatus::InvalidArg, "object is not a live handle");
+    };
+    if !crate::object::object_ops::value_is_object_like(f64::from_bits(bits)) {
+        return set_status(env, NapiStatus::ObjectExpected, "value must be an object");
+    }
+    match catch_value_call(env, || crate::object::js_object_seal(f64::from_bits(bits))) {
+        Ok(_) => ok(env),
+        Err(status) => status,
+    }
 }

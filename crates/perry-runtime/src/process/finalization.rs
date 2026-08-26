@@ -220,6 +220,8 @@ pub extern "C" fn js_process_run_finalization_before_exit() {
 #[no_mangle]
 pub extern "C" fn js_process_run_finalization_exit() {
     run_process_finalization_callbacks(ProcessFinalizationKind::Exit);
+    #[cfg(feature = "node-api-host")]
+    crate::node_api_host::shutdown_current_env();
 }
 
 pub(crate) fn process_finalization_value() -> f64 {

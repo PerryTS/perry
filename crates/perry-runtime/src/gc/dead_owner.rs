@@ -401,6 +401,12 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         owner: DeadKeyOwner::Any,
         prune: crate::proxy::prune_dead_reflect_metadata_targets,
     },
+    #[cfg(feature = "node-api-host")]
+    DeadKeyPrune {
+        table: "NODE_API_OBJECT_METADATA",
+        owner: DeadKeyOwner::Any,
+        prune: crate::node_api_host::prune_dead_object_meta_owners,
+    },
 ];
 
 fn fan_out(
