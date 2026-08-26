@@ -1017,15 +1017,20 @@ pub extern "C" fn js_throw_reference_error_unresolved_get() -> f64 {
 ///-only callee; see project_auto_optimize_keepalive_3320).
 #[cfg(feature = "keepalive-anchors")]
 #[used]
-static KEEP_JS_GLOBAL_GET_OR_THROW_UNRESOLVED: extern "C" fn(f64) -> f64 =
+static KEEP_JS_GLOBAL_GET_OR_THROW_UNRESOLVED: extern "C-unwind" fn(f64) -> f64 =
     js_global_get_or_throw_unresolved;
 
 /// Read a compile-time-unresolved identifier off `globalThis` (a global the
 /// program created dynamically — `Function("this.y = 2")()` — exists only at
 /// runtime), throwing the spec ReferenceError when no such global property
 /// exists.
+///
+/// `C-unwind` is required because the missing-global path raises a Perry
+/// exception through the system unwinder to generated code's landing pad. A
+/// plain `extern "C"` boundary aborts before a surrounding JavaScript `catch`
+/// can run when the debug runtime is linked.
 #[no_mangle]
-pub extern "C" fn js_global_get_or_throw_unresolved(name_value: f64) -> f64 {
+pub extern "C-unwind" fn js_global_get_or_throw_unresolved(name_value: f64) -> f64 {
     let g = crate::object::js_get_global_this();
     let gj = crate::value::JSValue::from_bits(g.to_bits());
     if gj.is_pointer() {
@@ -1066,6 +1071,8 @@ pub extern "C" fn js_global_get_or_throw_unresolved(name_value: f64) -> f64 {
     let err_ptr = js_referenceerror_new(msg_str);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64))
 }
+
+const _: extern "C-unwind" fn(f64) -> f64 = js_global_get_or_throw_unresolved;
 
 /// Keepalive anchor for the auto-optimize whole-program build (generated-code
 ///-only callee; see project_auto_optimize_keepalive_3320).
@@ -1732,14 +1739,20 @@ pub extern "C-unwind" fn js_throw_type_error_not_a_function(
 /// importantly plain `f64` numbers, whose bit pattern overlaps the raw pointer
 /// encoding (`new 1`, `new 1.5`). The thrown TypeError is catchable via Perry's
 /// exception machinery, matching `try { new 1 } catch (e) { … }`.
+///
+/// `C-unwind` is required because this generated-code boundary can propagate
+/// that catchable exception through the system unwinder. Plain `extern "C"`
+/// turns the throw into `panic_cannot_unwind` with the debug runtime.
 #[no_mangle]
-pub extern "C" fn js_throw_not_a_constructor() -> f64 {
+pub extern "C-unwind" fn js_throw_not_a_constructor() -> f64 {
     let msg = b"is not a constructor";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = js_typeerror_new(msg_str);
     let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
     crate::exception::js_throw(f64::from_bits(err_value))
 }
+
+const _: extern "C-unwind" fn() -> f64 = js_throw_not_a_constructor;
 
 /// Issue #615: writes to read-only / frozen / sealed / non-extensible
 /// objects must throw a TypeError under strict mode (per spec). TS files
