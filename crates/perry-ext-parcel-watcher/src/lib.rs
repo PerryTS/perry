@@ -195,6 +195,20 @@ fn normalize_root(path: PathBuf) -> PathBuf {
     fs::canonicalize(&absolute).unwrap_or(absolute)
 }
 
+fn js_visible_path(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        if let Some(path) = path.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{path}");
+        }
+        if let Some(path) = path.strip_prefix(r"\\?\") {
+            return path.to_owned();
+        }
+    }
+    path.into_owned()
+}
+
 unsafe fn read_ptr_string(ptr: *const StringHeader) -> Option<String> {
     if ptr.is_null() {
         return None;
@@ -461,7 +475,7 @@ fn event_array(events: &[ParcelEvent]) -> f64 {
     let rooted_array = scope.root_nanbox(f64::from_bits(JsValue::from_object_ptr(array).bits()));
     let (packed, shape) = build_object_shape(&["path", "type"]);
     for event in events {
-        let path = alloc_string(&event.path.to_string_lossy());
+        let path = alloc_string(&js_visible_path(&event.path));
         let path = scope.root_nanbox(f64::from_bits(
             JsValue::from_string_ptr(path.as_raw()).bits(),
         ));
@@ -861,6 +875,19 @@ pub unsafe extern "C" fn js_parcel_watcher_get_events_since(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn event_paths_do_not_expose_windows_verbatim_prefixes() {
+        assert_eq!(
+            js_visible_path(Path::new(r"\\?\C:\project\src\index.ts")),
+            r"C:\project\src\index.ts"
+        );
+        assert_eq!(
+            js_visible_path(Path::new(r"\\?\UNC\server\share\index.ts")),
+            r"\\server\share\index.ts"
+        );
+    }
 
     #[test]
     fn coalescing_matches_parcel_batch_semantics() {

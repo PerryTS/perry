@@ -92,7 +92,6 @@
 "util.compileFunction(...)" = "Same as vm.compileFunction — needs JS interpreter."
 
 # Out-of-scope — native addons / V8 internals.
-"process.dlopen(module, filename[, flags])" = "Loads Node native (.node) addons; Perry has its own native-library system (perry-ext-*)."
 "process.binding(name)" = "Internal Node binding access; not part of public surface."
 "process._linkedBinding(name)" = "Internal Node binding access; not part of public surface."
 

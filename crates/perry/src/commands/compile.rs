@@ -38,6 +38,7 @@ mod library_search;
 mod link;
 mod lock_scan;
 mod lowering_report;
+mod native_addon_sidecar;
 mod object_cache;
 mod object_staging;
 mod optimized_libs;
@@ -94,6 +95,7 @@ use library_search::{
 use link::{build_and_run_link, write_link_cache_manifest};
 pub use lock_scan::collect_native_archives_for_lock;
 pub(crate) use lock_scan::run_lock_verify_for_compile;
+use native_addon_sidecar::stage_native_addon_sidecar;
 pub use object_cache::ObjectCache;
 pub use object_cache::{cache_dir_override, resolve_cache_dir};
 use object_cache::{compute_object_cache_key, djb2_hash};

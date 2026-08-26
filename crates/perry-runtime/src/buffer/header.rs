@@ -652,6 +652,10 @@ fn foreign_backing(addr: usize) -> Option<usize> {
     FOREIGN_BACKING_REGISTRY.with(|r| r.borrow().get(&addr).copied())
 }
 
+pub(crate) fn is_foreign_backed_buffer(addr: usize) -> bool {
+    foreign_backing(addr).is_some()
+}
+
 /// Post-trace registry pruning (mirrors the #6010 Map/Set pattern): collect
 /// registered buffers whose header is genuinely dead so the sweep subphase
 /// can drop their side-table state. All buffers are TENURED old-arena

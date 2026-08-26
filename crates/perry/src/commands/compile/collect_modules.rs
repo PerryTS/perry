@@ -57,7 +57,7 @@ use import_helpers::{
 };
 use json_module::synthesize_json_module;
 pub(super) use native_addon::package_has_unsupported_node_addon;
-use native_addon::{refuse_compile_package_native_addon, refuse_node_addon_binary};
+use native_addon::{collect_or_refuse_node_addon, refuse_compile_package_native_addon};
 use parse_error::annotate_parse_error;
 use static_require_transform::transform_static_literal_requires;
 pub(super) use walk::collect_modules;
@@ -99,6 +99,16 @@ fn collect_module_one(
     parse_cache: Option<&mut ParseCache>,
 ) -> Result<ModuleDiscovery> {
     let mut pending = Vec::new();
+
+    // A `.node` member is a sidecar native module, never UTF-8 source. Record
+    // an approved entry and stop this discovery frame before any JS/TS parser
+    // or source reader sees its bytes.
+    if collect_or_refuse_node_addon(ctx, &canonical)? {
+        return Ok(ModuleDiscovery {
+            finish: None,
+            children: pending,
+        });
+    }
 
     // Check if this file should be handled by JS runtime instead of native compilation
     // This includes: JS files, declaration files (.d.ts), JSON files, or any file in node_modules when JS runtime is enabled
@@ -191,7 +201,6 @@ fn collect_module_one(
             });
         }
 
-        refuse_node_addon_binary(&canonical)?;
         let source = fs::read_to_string(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
         progress.record(ProgressSnapshot {
@@ -299,10 +308,19 @@ fn collect_module_one(
         synthesize_wasm_module(&bytes, &virtual_path).source
     } else {
         // It's a TypeScript (or synthetic JSON/text) file to compile natively.
-        refuse_node_addon_binary(&canonical)?;
         fs::read_to_string(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?
     };
+    // CJS wrapping consumes literal `require()` sites and replaces them with
+    // generated loader calls. Queue native targets before that rewrite so the
+    // graph still authenticates and packages the selected `.node` binary.
+    for specifier in super::cjs_wrap::extract_require_specifiers(&raw_source) {
+        if let Some(target) = super::resolve::resolve_relative_import_path(&specifier, &canonical) {
+            if target.extension().and_then(|extension| extension.to_str()) == Some("node") {
+                pending.push(target);
+            }
+        }
+    }
     // JSON module import: turn the data file into a native ESM module whose
     // default export is the parsed value.
     let raw_source = if imported_file_asset.is_some() || is_wasm {

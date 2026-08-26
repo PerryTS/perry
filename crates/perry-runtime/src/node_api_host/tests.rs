@@ -1,5 +1,6 @@
 use super::*;
 use std::ffi::{c_char, c_void, CString};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn test_env() -> NapiEnv {
     crate::gc::ensure_gc_initialized();
@@ -600,4 +601,390 @@ fn node_api_handles_are_rewritten_by_a_collection() {
         NapiStatus::Ok
     );
     assert_eq!(length, text.as_bytes().len());
+}
+
+#[test]
+fn descriptors_property_names_and_bigint_words_round_trip() {
+    let env = test_env();
+    let mut object = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_object(env, &mut object) },
+        NapiStatus::Ok
+    );
+    let answer = int32(env, 42);
+    let descriptor = NapiPropertyDescriptor {
+        utf8name: c"answer".as_ptr(),
+        name: std::ptr::null_mut(),
+        method: None,
+        getter: None,
+        setter: None,
+        value: answer,
+        attributes: NAPI_WRITABLE | NAPI_ENUMERABLE | NAPI_CONFIGURABLE,
+        data: std::ptr::null_mut(),
+    };
+    assert_eq!(
+        unsafe { napi_define_properties(env, object, 1, &descriptor) },
+        NapiStatus::Ok
+    );
+    let mut names = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            napi_get_all_property_names(
+                env,
+                object,
+                NapiKeyCollectionMode::OwnOnly,
+                NAPI_KEY_ENUMERABLE | NAPI_KEY_SKIP_SYMBOLS,
+                NapiKeyConversion::NumbersToStrings,
+                &mut names,
+            )
+        },
+        NapiStatus::Ok
+    );
+    let mut name_count = 0;
+    assert_eq!(
+        unsafe { napi_get_array_length(env, names, &mut name_count) },
+        NapiStatus::Ok
+    );
+    assert_eq!(name_count, 1);
+
+    let words = [0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210];
+    let mut bigint = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_bigint_words(env, 0, words.len(), words.as_ptr(), &mut bigint) },
+        NapiStatus::Ok
+    );
+    let mut sign = -1;
+    let mut count = 0;
+    assert_eq!(
+        unsafe {
+            napi_get_value_bigint_words(
+                env,
+                bigint,
+                std::ptr::null_mut(),
+                &mut count,
+                std::ptr::null_mut(),
+            )
+        },
+        NapiStatus::Ok
+    );
+    assert_eq!(count, 2);
+    let mut output = [0u64; 2];
+    assert_eq!(
+        unsafe {
+            napi_get_value_bigint_words(env, bigint, &mut sign, &mut count, output.as_mut_ptr())
+        },
+        NapiStatus::Ok
+    );
+    assert_eq!(output, words);
+}
+
+#[test]
+fn buffers_views_detach_and_promises_keep_backing_identity() {
+    let env = test_env();
+    let mut arraybuffer = std::ptr::null_mut();
+    let mut bytes = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_arraybuffer(env, 16, &mut bytes, &mut arraybuffer) },
+        NapiStatus::Ok
+    );
+    assert!(!bytes.is_null());
+    let mut typed = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            napi_create_typedarray(
+                env,
+                NapiTypedarrayType::Uint32Array,
+                4,
+                arraybuffer,
+                0,
+                &mut typed,
+            )
+        },
+        NapiStatus::Ok
+    );
+    let mut kind = NapiTypedarrayType::Int8Array;
+    let mut length = 0;
+    let mut data = std::ptr::null_mut();
+    let mut backing = std::ptr::null_mut();
+    let mut offset = usize::MAX;
+    assert_eq!(
+        unsafe {
+            napi_get_typedarray_info(
+                env,
+                typed,
+                &mut kind,
+                &mut length,
+                &mut data,
+                &mut backing,
+                &mut offset,
+            )
+        },
+        NapiStatus::Ok
+    );
+    assert_eq!(kind, NapiTypedarrayType::Uint32Array);
+    assert_eq!((length, offset), (4, 0));
+    assert_eq!(data, bytes);
+    assert!(!backing.is_null());
+
+    assert_eq!(
+        unsafe { napi_detach_arraybuffer(env, arraybuffer) },
+        NapiStatus::Ok
+    );
+    let mut detached = false;
+    assert_eq!(
+        unsafe { napi_is_detached_arraybuffer(env, arraybuffer, &mut detached) },
+        NapiStatus::Ok
+    );
+    assert!(detached);
+
+    let mut promise = std::ptr::null_mut();
+    let mut deferred = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_promise(env, &mut deferred, &mut promise) },
+        NapiStatus::Ok
+    );
+    let mut is_promise = false;
+    assert_eq!(
+        unsafe { napi_is_promise(env, promise, &mut is_promise) },
+        NapiStatus::Ok
+    );
+    assert!(is_promise);
+    let resolved = int32(env, 7);
+    assert_eq!(
+        unsafe { napi_resolve_deferred(env, deferred, resolved) },
+        NapiStatus::Ok
+    );
+}
+
+static ASYNC_EXECUTED: AtomicUsize = AtomicUsize::new(0);
+static ASYNC_COMPLETED: AtomicUsize = AtomicUsize::new(0);
+static ASYNC_OFF_THREAD_REJECTED: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "C" fn async_execute(env: NapiEnv, _data: *mut c_void) {
+    ASYNC_EXECUTED.fetch_add(1, Ordering::SeqCst);
+    let mut value = std::ptr::null_mut();
+    if napi_get_undefined(env, &mut value) == NapiStatus::InvalidArg {
+        ASYNC_OFF_THREAD_REJECTED.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+unsafe extern "C" fn async_complete(_env: NapiEnv, status: NapiStatus, _data: *mut c_void) {
+    assert_eq!(status, NapiStatus::Ok);
+    ASYNC_COMPLETED.fetch_add(1, Ordering::SeqCst);
+}
+
+#[test]
+fn async_work_executes_off_thread_and_completes_on_owner() {
+    ASYNC_EXECUTED.store(0, Ordering::SeqCst);
+    ASYNC_COMPLETED.store(0, Ordering::SeqCst);
+    ASYNC_OFF_THREAD_REJECTED.store(0, Ordering::SeqCst);
+    let env = test_env();
+    let mut name = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_string_utf8(env, c"work".as_ptr(), 4, &mut name) },
+        NapiStatus::Ok
+    );
+    let mut work = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            napi_create_async_work(
+                env,
+                std::ptr::null_mut(),
+                name,
+                Some(async_execute),
+                Some(async_complete),
+                std::ptr::null_mut(),
+                &mut work,
+            )
+        },
+        NapiStatus::Ok
+    );
+    assert_eq!(unsafe { napi_queue_async_work(env, work) }, NapiStatus::Ok);
+    for _ in 0..200 {
+        process_pending();
+        if ASYNC_COMPLETED.load(Ordering::SeqCst) != 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(ASYNC_EXECUTED.load(Ordering::SeqCst), 1);
+    assert_eq!(ASYNC_OFF_THREAD_REJECTED.load(Ordering::SeqCst), 1);
+    assert_eq!(ASYNC_COMPLETED.load(Ordering::SeqCst), 1);
+    assert_eq!(unsafe { napi_delete_async_work(env, work) }, NapiStatus::Ok);
+}
+
+static TSFN_CALLED: AtomicUsize = AtomicUsize::new(0);
+
+unsafe extern "C" fn tsfn_call_js(
+    env: NapiEnv,
+    _function: NapiValue,
+    context: *mut c_void,
+    data: *mut c_void,
+) {
+    assert!(!env.is_null());
+    assert_eq!(context as usize, 0x8523);
+    TSFN_CALLED.fetch_add(data as usize, Ordering::SeqCst);
+}
+
+#[test]
+fn threadsafe_function_accepts_foreign_thread_calls_and_drains_on_owner() {
+    TSFN_CALLED.store(0, Ordering::SeqCst);
+    let env = test_env();
+    let mut name = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_string_utf8(env, c"tsfn".as_ptr(), 4, &mut name) },
+        NapiStatus::Ok
+    );
+    let mut tsfn = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            napi_create_threadsafe_function(
+                env,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                name,
+                1,
+                1,
+                std::ptr::null_mut(),
+                None,
+                0x8523usize as *mut c_void,
+                Some(tsfn_call_js),
+                &mut tsfn,
+            )
+        },
+        NapiStatus::Ok
+    );
+    let token = tsfn as usize;
+    std::thread::spawn(move || unsafe {
+        let tsfn = token as NapiThreadsafeFunction;
+        assert_eq!(
+            napi_call_threadsafe_function(
+                tsfn,
+                3usize as *mut c_void,
+                NapiThreadsafeFunctionCallMode::Nonblocking,
+            ),
+            NapiStatus::Ok
+        );
+        assert_eq!(
+            napi_release_threadsafe_function(tsfn, NapiThreadsafeFunctionReleaseMode::Release),
+            NapiStatus::Ok
+        );
+    })
+    .join()
+    .unwrap();
+    process_pending();
+    assert_eq!(TSFN_CALLED.load(Ordering::SeqCst), 3);
+}
+
+static LIFECYCLE_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+static ASYNC_CLEANUP_STATUS: AtomicUsize = AtomicUsize::new(usize::MAX);
+static INSTANCE_FINALIZER_DATA: AtomicUsize = AtomicUsize::new(0);
+static INSTANCE_FINALIZER_HINT: AtomicUsize = AtomicUsize::new(0);
+
+fn record_lifecycle_step(step: usize) {
+    LIFECYCLE_SEQUENCE
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+            Some(value.saturating_mul(10).saturating_add(step))
+        })
+        .unwrap();
+}
+
+unsafe extern "C" fn async_cleanup(handle: NapiAsyncCleanupHookHandle, argument: *mut c_void) {
+    record_lifecycle_step(argument as usize);
+    ASYNC_CLEANUP_STATUS.store(
+        napi_remove_async_cleanup_hook(handle) as usize,
+        Ordering::SeqCst,
+    );
+}
+
+unsafe extern "C" fn cleanup(argument: *mut c_void) {
+    record_lifecycle_step(argument as usize);
+}
+
+unsafe extern "C" fn instance_finalizer(_env: NapiEnv, data: *mut c_void, hint: *mut c_void) {
+    INSTANCE_FINALIZER_DATA.store(data as usize, Ordering::SeqCst);
+    INSTANCE_FINALIZER_HINT.store(hint as usize, Ordering::SeqCst);
+    record_lifecycle_step(4);
+}
+
+#[test]
+fn instance_data_and_cleanup_hooks_run_once_in_shutdown_order() {
+    LIFECYCLE_SEQUENCE.store(0, Ordering::SeqCst);
+    ASYNC_CLEANUP_STATUS.store(usize::MAX, Ordering::SeqCst);
+    INSTANCE_FINALIZER_DATA.store(0, Ordering::SeqCst);
+    INSTANCE_FINALIZER_HINT.store(0, Ordering::SeqCst);
+
+    let env = test_env();
+    assert_eq!(
+        unsafe {
+            napi_set_instance_data(
+                env,
+                0x8523usize as *mut c_void,
+                Some(instance_finalizer),
+                0x1234usize as *mut c_void,
+            )
+        },
+        NapiStatus::Ok
+    );
+    let mut instance_data = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_get_instance_data(env, &mut instance_data) },
+        NapiStatus::Ok
+    );
+    assert_eq!(instance_data as usize, 0x8523);
+
+    assert_eq!(
+        unsafe { napi_add_env_cleanup_hook(env, Some(cleanup), 2usize as *mut c_void) },
+        NapiStatus::Ok
+    );
+    assert_eq!(
+        unsafe { napi_add_env_cleanup_hook(env, Some(cleanup), 3usize as *mut c_void) },
+        NapiStatus::Ok
+    );
+    let mut async_handle = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            napi_add_async_cleanup_hook(
+                env,
+                Some(async_cleanup),
+                1usize as *mut c_void,
+                &mut async_handle,
+            )
+        },
+        NapiStatus::Ok
+    );
+
+    shutdown_current_env();
+    assert_eq!(LIFECYCLE_SEQUENCE.load(Ordering::SeqCst), 1324);
+    assert_eq!(
+        ASYNC_CLEANUP_STATUS.load(Ordering::SeqCst),
+        NapiStatus::Ok as usize
+    );
+    assert_eq!(INSTANCE_FINALIZER_DATA.load(Ordering::SeqCst), 0x8523);
+    assert_eq!(INSTANCE_FINALIZER_HINT.load(Ordering::SeqCst), 0x1234);
+
+    shutdown_current_env();
+    assert_eq!(LIFECYCLE_SEQUENCE.load(Ordering::SeqCst), 1324);
+}
+
+#[test]
+fn run_script_and_uv_loop_fail_explicitly() {
+    let env = test_env();
+    let mut script = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_string_utf8(env, c"1+1".as_ptr(), 3, &mut script) },
+        NapiStatus::Ok
+    );
+    let mut result = 1usize as NapiValue;
+    assert_eq!(
+        unsafe { napi_run_script(env, script, &mut result) },
+        NapiStatus::GenericFailure
+    );
+    assert!(result.is_null());
+    let mut loop_pointer = 1usize as *mut c_void;
+    assert_eq!(
+        unsafe { napi_get_uv_event_loop(env, &mut loop_pointer) },
+        NapiStatus::GenericFailure
+    );
+    assert!(loop_pointer.is_null());
 }

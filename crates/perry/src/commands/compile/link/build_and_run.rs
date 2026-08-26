@@ -245,6 +245,18 @@ pub(crate) fn build_and_run_link(
     // Dead code stripping — safe because compile_init() emits func_addr
     // calls for every class method/getter during vtable registration. These
     // serve as linker roots that keep dynamically-dispatched methods alive.
+    // Node-API addons resolve their C ABI from the executable itself. Keep
+    // this exact export set narrow and entirely absent from ordinary builds.
+    add_node_api_host_link_args(
+        &mut cmd,
+        ctx,
+        is_windows,
+        is_linux,
+        is_android,
+        is_harmonyos,
+        is_cross_macos,
+    )?;
+
     if !is_windows {
         if is_android || is_linux || is_harmonyos {
             cmd.arg("-Wl,--gc-sections");
@@ -265,7 +277,7 @@ pub(crate) fn build_and_run_link(
             // handle (never `dlsym(RTLD_DEFAULT/SELF)` into the host) — except
             // the plugin-host mode, which force-exports its API via `-u` and
             // must keep the trie.
-            if !ctx.needs_plugins {
+            if !ctx.needs_plugins && ctx.native_addons.is_empty() {
                 cmd.arg("-Wl,-no_exported_symbols");
             }
         }

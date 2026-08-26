@@ -641,6 +641,13 @@ pub struct CompilationContext {
     pub cache_dir: PathBuf,
     /// External native libraries discovered from package dependencies
     pub native_libraries: Vec<NativeLibraryManifest>,
+    /// Exact host-owned package names permitted to execute prebuilt Node-API
+    /// addons. Unlike the older compile/native-library policy lists this set
+    /// deliberately has no wildcard syntax.
+    pub native_addon_packages: BTreeSet<String>,
+    /// Approved `.node` entries reached by the compile graph, keyed by their
+    /// relocatable package-relative logical id.
+    pub native_addons: BTreeMap<String, NativeAddonModule>,
     /// Package aliases: maps npm package name → replacement package name (from perry.packageAliases)
     pub package_aliases: HashMap<String, String>,
     /// Packages to compile natively instead of routing to V8 (from perry.compilePackages)
@@ -1163,6 +1170,8 @@ impl CompilationContext {
             cache_dir: super::object_cache::resolve_cache_dir(&project_root, None),
             project_root,
             native_libraries: Vec::new(),
+            native_addon_packages: BTreeSet::new(),
+            native_addons: BTreeMap::new(),
             package_aliases: HashMap::new(),
             compile_packages: HashSet::new(),
             auto_skipped_node_addon_packages: HashSet::new(),
@@ -1254,6 +1263,20 @@ impl CompilationContext {
             debug_symbols: false,
         }
     }
+}
+
+/// A prebuilt Node-API binary selected by the ordinary module resolver.
+/// `source_path` and `package_dir` are compile-time inputs only; generated
+/// code and sidecar manifests use `logical_id` and `entry_relative` so build
+/// machine paths never enter an artifact or cache key.
+#[derive(Debug, Clone)]
+pub struct NativeAddonModule {
+    pub logical_id: String,
+    pub package: String,
+    pub version: String,
+    pub source_path: PathBuf,
+    pub package_dir: PathBuf,
+    pub entry_relative: PathBuf,
 }
 
 /// External native library manifest parsed from package.json `perry.nativeLibrary` field

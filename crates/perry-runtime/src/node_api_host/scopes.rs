@@ -155,22 +155,23 @@ pub unsafe extern "C" fn napi_create_reference(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    if initial_refcount == 0 {
-        return set_status(
-            env,
-            NapiStatus::GenericFailure,
-            "weak Node-API references are not enabled in this host core",
-        );
-    }
     let Ok(bits) = value_bits(env, value) else {
         return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
+    };
+    let weak_holder_bits = if initial_refcount == 0 && weak_reference_target(bits) {
+        let holder = crate::weakref::js_weakref_new(f64::from_bits(bits));
+        Some(crate::value::JSValue::pointer(holder.cast()).bits())
+    } else {
+        None
     };
     let reference = with_env_mut(env, |env| {
         let mut record = Box::new(ReferenceRecord {
             env_serial: env.serial,
             value_bits: bits,
+            weak_holder_bits,
             refcount: initial_refcount,
             deleted: false,
+            finalizer_link: None,
         });
         let ptr = (&mut *record) as *mut ReferenceRecord as NapiRef;
         env.reference_lookup
@@ -187,15 +188,26 @@ pub unsafe extern "C" fn napi_create_reference(
 
 #[no_mangle]
 pub unsafe extern "C" fn napi_delete_reference(env: NapiEnv, reference: NapiRef) -> NapiStatus {
-    with_env_mut(env, |env| {
+    let deleted = with_env_mut(env, |env| {
         let Some(reference) = env.reference_mut(reference) else {
-            return env.set_status(NapiStatus::InvalidArg, "reference is not live");
+            return Err(env.set_status(NapiStatus::InvalidArg, "reference is not live"));
         };
+        let finalizer_link = reference.finalizer_link.take();
         reference.deleted = true;
         reference.value_bits = crate::value::TAG_UNDEFINED;
-        env.set_status(NapiStatus::Ok, "napi_ok")
-    })
-    .unwrap_or(NapiStatus::InvalidArg)
+        reference.weak_holder_bits = None;
+        Ok(finalizer_link)
+    });
+    match deleted {
+        Some(Ok(link)) => {
+            if let Some((owner, id)) = link {
+                super::metadata::cancel_finalizer(owner, id);
+            }
+            ok(env)
+        }
+        Some(Err(status)) => status,
+        None => NapiStatus::InvalidArg,
+    }
 }
 
 #[no_mangle]
@@ -204,11 +216,40 @@ pub unsafe extern "C" fn napi_reference_ref(
     reference: NapiRef,
     result: *mut u32,
 ) -> NapiStatus {
+    let holder_bits = with_env(env, |env| {
+        env.reference(reference).and_then(|record| {
+            (record.refcount == 0)
+                .then_some(record.weak_holder_bits)
+                .flatten()
+        })
+    });
+    let revived_bits = match holder_bits {
+        None => return set_status(env, NapiStatus::InvalidArg, "reference is not live"),
+        Some(Some(holder_bits)) => {
+            let value = crate::weakref::js_weakref_deref(f64::from_bits(holder_bits));
+            let bits = value.to_bits();
+            if crate::value::JSValue::from_bits(bits).is_undefined() {
+                if !result.is_null() {
+                    *result = 0;
+                }
+                return ok(env);
+            }
+            Some(bits)
+        }
+        Some(None) => None,
+    };
     with_env_mut(env, |env| {
         let Some(reference) = env.reference_mut(reference) else {
             return env.set_status(NapiStatus::InvalidArg, "reference is not live");
         };
-        reference.refcount = reference.refcount.saturating_add(1);
+        let Some(next) = reference.refcount.checked_add(1) else {
+            return env.set_status(NapiStatus::GenericFailure, "reference count overflow");
+        };
+        if let Some(bits) = revived_bits {
+            reference.value_bits = bits;
+            reference.weak_holder_bits = None;
+        }
+        reference.refcount = next;
         if !result.is_null() {
             *result = reference.refcount;
         }
@@ -223,17 +264,34 @@ pub unsafe extern "C" fn napi_reference_unref(
     reference: NapiRef,
     result: *mut u32,
 ) -> NapiStatus {
+    let bits_to_weaken = with_env(env, |env| {
+        env.reference(reference).and_then(|record| {
+            (record.refcount == 1 && weak_reference_target(record.value_bits))
+                .then_some(record.value_bits)
+        })
+    })
+    .flatten();
+    let weak_holder_bits = match bits_to_weaken {
+        None => None,
+        Some(bits) => {
+            let holder = crate::weakref::js_weakref_new(f64::from_bits(bits));
+            Some(crate::value::JSValue::pointer(holder.cast()).bits())
+        }
+    };
     with_env_mut(env, |env| {
         let Some(reference) = env.reference_mut(reference) else {
             return env.set_status(NapiStatus::InvalidArg, "reference is not live");
         };
-        if reference.refcount <= 1 {
+        if reference.refcount == 0 {
             return env.set_status(
                 NapiStatus::GenericFailure,
-                "weak Node-API references are not enabled in this host core",
+                "reference count is already zero",
             );
         }
         reference.refcount -= 1;
+        if reference.refcount == 0 {
+            reference.weak_holder_bits = weak_holder_bits;
+        }
         if !result.is_null() {
             *result = reference.refcount;
         }
@@ -251,17 +309,42 @@ pub unsafe extern "C" fn napi_get_reference_value(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let bits = with_env(env, |env| {
-        env.reference(reference).map(|record| record.value_bits)
+    let record = with_env(env, |env| {
+        env.reference(reference)
+            .map(|record| (record.value_bits, record.refcount, record.weak_holder_bits))
     });
-    let Some(Some(bits)) = bits else {
+    let Some(Some((strong_bits, refcount, weak_holder_bits))) = record else {
         return set_status(env, NapiStatus::InvalidArg, "reference is not live");
+    };
+    let bits = if refcount == 0 {
+        match weak_holder_bits {
+            Some(holder_bits) => {
+                let value = crate::weakref::js_weakref_deref(f64::from_bits(holder_bits));
+                let bits = value.to_bits();
+                if crate::value::JSValue::from_bits(bits).is_undefined() {
+                    *result = std::ptr::null_mut();
+                    return ok(env);
+                }
+                bits
+            }
+            None => strong_bits,
+        }
+    } else {
+        strong_bits
     };
     let Ok(handle) = add_handle(env, bits) else {
         return NapiStatus::InvalidArg;
     };
     *result = handle;
     ok(env)
+}
+
+fn weak_reference_target(bits: u64) -> bool {
+    let value = f64::from_bits(bits);
+    unsafe {
+        crate::object::object_ops::value_is_object_like(value)
+            || crate::symbol::js_is_symbol(value) != 0
+    }
 }
 
 #[no_mangle]

@@ -53,8 +53,8 @@ pub(crate) fn resolve_no_auto_optimized_libs(
     // `js_webassembly_*` symbols are defined. Windows also rebuilds stdlib in
     // that Cargo invocation so its bundled runtime shares the same global
     // registries as the wasm-enabled runtime.
-    let (runtime, stdlib) = if ctx.needs_wasm_runtime {
-        match build_wasm_host_runtime(target, format, verbose) {
+    let (runtime, stdlib) = if ctx.needs_wasm_runtime || !ctx.native_addons.is_empty() {
+        match build_optional_runtime(ctx, target, format, verbose) {
             Some((runtime, stdlib)) => (Some(runtime), stdlib),
             None => (None, None),
         }
@@ -75,7 +75,8 @@ pub(crate) fn resolve_no_auto_optimized_libs(
 /// clobbered. Windows also builds `perry-stdlib-static` in the same graph and
 /// returns it as the authoritative archive. Returns `(runtime, stdlib)` or
 /// `None` when there's no workspace source or the build fails.
-fn build_wasm_host_runtime(
+fn build_optional_runtime(
+    ctx: &CompilationContext,
     target: Option<&str>,
     format: OutputFormat,
     verbose: u8,
@@ -104,7 +105,7 @@ fn build_wasm_host_runtime(
     // Use a dedicated target dir so the prebuilt libperry_runtime.a in
     // target/release is not overwritten. Cargo's incremental cache makes
     // repeat builds a no-op.
-    let relative_target_dir = PathBuf::from("target").join("perry-wasm-host-runtime");
+    let relative_target_dir = PathBuf::from("target").join("perry-optional-runtime");
     let wasm_host_target_dir = cargo_target_dir_path(workspace_root.join(&relative_target_dir));
     let cargo_target_dir = if cfg!(windows) {
         relative_target_dir
@@ -113,6 +114,13 @@ fn build_wasm_host_runtime(
     };
 
     let mut cargo_cmd = Command::new("cargo");
+    let mut runtime_features = Vec::new();
+    if ctx.needs_wasm_runtime {
+        runtime_features.push("perry-runtime/wasm-host");
+    }
+    if !ctx.native_addons.is_empty() {
+        runtime_features.push("perry-runtime/node-api-host");
+    }
     cargo_cmd
         .current_dir(&workspace_root)
         .env("CARGO_TARGET_DIR", &cargo_target_dir)
@@ -121,7 +129,7 @@ fn build_wasm_host_runtime(
         .arg("-p")
         .arg("perry-runtime-static")
         .arg("--features")
-        .arg("perry-runtime/wasm-host");
+        .arg(runtime_features.join(","));
     if is_windows_target(target) {
         cargo_cmd.arg("-p").arg("perry-stdlib-static");
     }
