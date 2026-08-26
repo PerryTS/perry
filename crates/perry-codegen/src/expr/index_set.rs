@@ -355,6 +355,9 @@ pub(crate) fn lower(
     expr: &Expr,
     // #7590: THIS expression's value is discarded (not merely the statement's).
     value_discarded: bool,
+    // `PutValueSet` may route a strict module-level reference through this
+    // fast path even though the synthetic module-init function is non-strict.
+    assignment_strict: bool,
 ) -> Result<String> {
     match expr {
         Expr::IndexSet {
@@ -362,9 +365,13 @@ pub(crate) fn lower(
             index,
             value,
         } => {
-            if let Some(result) =
-                super::typed_array_rmw::try_lower_guarded_uint32_add(ctx, object, index, value)?
-            {
+            if let Some(result) = super::typed_array_rmw::try_lower_guarded_uint32_add(
+                ctx,
+                object,
+                index,
+                value,
+                assignment_strict,
+            )? {
                 if value_discarded {
                     return Ok(double_literal(0.0));
                 }
@@ -612,6 +619,7 @@ pub(crate) fn lower(
                 Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
             ) || is_string_expr(ctx, index);
             if recv_unknown && !index_is_static_string_or_symbol {
+                let strict = assignment_strict;
                 return rooting::with_operands_rooted_across(
                     ctx,
                     &[object, index],
@@ -637,6 +645,7 @@ pub(crate) fn lower(
                             &vals[0],
                             &vals[1],
                             &val_double,
+                            strict,
                         ))
                     },
                 );

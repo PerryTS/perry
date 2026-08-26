@@ -56,6 +56,15 @@ fn compile_body(name: &str, body: Vec<Stmt>) -> String {
 }
 
 fn compile_body_with_params(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> String {
+    compile_body_with_params_and_strict(name, params, body, true)
+}
+
+fn compile_body_with_params_and_strict(
+    name: &str,
+    params: Vec<Param>,
+    body: Vec<Stmt>,
+    is_strict: bool,
+) -> String {
     let mut hir = HirModule::new(name);
     hir.functions.push(Function {
         id: 0,
@@ -66,7 +75,7 @@ fn compile_body_with_params(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> 
         body,
         is_async: false,
         is_generator: false,
-        is_strict: true,
+        is_strict,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),
@@ -445,30 +454,63 @@ fn erased_receiver_inline_store_roots_receiver_and_key_across_rhs() {
     };
     let collecting = compile("erased_store_collecting", allocating_value());
     let inert = compile("erased_store_inert", inert_value());
-    let callee = "@js_dyn_index_set(";
+    let callee = "@js_dyn_index_set_strict(";
     assert!(
         collecting.contains(callee) && inert.contains(callee),
         "both fixtures must reach the #5525 inline dynamic-store arm:\n{collecting}\n{inert}"
     );
     assert_call_operand_rooted_across_operand(
         &collecting,
-        "js_dyn_index_set",
+        "js_dyn_index_set_strict",
         0,
         2,
         "the erased receiver",
     );
     assert_call_operand_rooted_across_operand(
         &collecting,
-        "js_dyn_index_set",
+        "js_dyn_index_set_strict",
         1,
         2,
         "the erased property key",
+    );
+    assert_eq!(
+        call_operand_of(&collecting, "js_dyn_index_set_strict", 3),
+        "1",
+        "ES module computed stores must preserve strict assignment semantics"
     );
     assert_eq!(
         root_slots(&collecting),
         root_slots(&inert) + 2,
         "the inert RHS must add no temporary roots, while the collecting RHS adds exactly \
          the erased receiver and key roots"
+    );
+}
+
+/// A source-text module is strict, but its top-level statements are emitted in
+/// a synthetic module-init function that is not itself marked strict. When a
+/// strict `PutValueSet` takes the untyped index-store optimization, preserve
+/// the reference's flag rather than substituting the container function's.
+#[test]
+fn put_value_index_fast_path_preserves_explicit_module_strictness() {
+    let _native_roots = crate::codegen::helpers::NativeRootsPin::native();
+    let receiver = Expr::LocalGet(1);
+    let ir = compile_body_with_params_and_strict(
+        "strict_put_value_index_fast_path",
+        vec![param(1, "receiver", Type::Any), param(2, "key", Type::Any)],
+        vec![Stmt::Expr(Expr::PutValueSet {
+            target: Box::new(receiver.clone()),
+            key: Box::new(Expr::LocalGet(2)),
+            value: Box::new(Expr::Integer(1)),
+            receiver: Box::new(receiver),
+            strict: true,
+        })],
+        false,
+    );
+
+    assert_eq!(
+        call_operand_of(&ir, "js_dyn_index_set_strict", 3),
+        "1",
+        "the strict PutValue reference must survive a non-strict module-init container"
     );
 }
 

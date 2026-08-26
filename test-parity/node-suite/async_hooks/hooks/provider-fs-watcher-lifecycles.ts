@@ -50,8 +50,12 @@ try {
   eventWatcher.close();
   watchFile(path, { interval: 20 }, () => {});
   unwatchFile(path);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  for (let turn = 0; turn < 10; turn++) {
+    if (entries.length === 2 && entries.every((entry) => entry.destroy === 1)) {
+      break;
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 } finally {
   hook.disable();
   unwatchFile(path);

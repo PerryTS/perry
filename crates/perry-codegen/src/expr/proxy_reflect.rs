@@ -1603,6 +1603,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // path returns the assigned value to ITS caller, which may
                     // well consume it. Never the discarded form.
                     false,
+                    // Preserve the reference's own strictness. Module init is
+                    // a synthetic non-strict function even though module code
+                    // carries strict PutValue references.
+                    *strict,
                 );
             }
             if let Some(result) =

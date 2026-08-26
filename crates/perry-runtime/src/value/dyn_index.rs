@@ -524,9 +524,9 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     v
 }
 
-/// Issue #957 — tag-aware dynamic index write counterpart to
-/// `js_dyn_index_get`. Used by `Expr::IndexUpdate` codegen to write back
-/// the incremented value without duplicating the IndexSet dispatch tree.
+/// Issue #957 — sloppy-assignment-compatible dynamic index write counterpart
+/// to `js_dyn_index_get`. Runtime callers retain this entry point; generated
+/// computed assignments use [`js_dyn_index_set_strict`] below.
 ///
 /// Routes by the receiver's `gc_type` byte: arrays go through
 /// `js_array_set_index_or_string_strict` (numeric/string-key spec dispatch);
@@ -536,6 +536,14 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
 /// pattern this is added for).
 #[no_mangle]
 pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
+    js_dyn_index_set_strict(obj, index, value, 0)
+}
+
+/// Strictness-aware entry point for generated computed assignments. Keep the
+/// three-argument export above for runtime callers that intentionally retain
+/// the historical sloppy-assignment behavior.
+#[no_mangle]
+pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, strict: i32) -> f64 {
     let bits = obj.to_bits();
     let jsval = JSValue::from_bits(bits);
     // Proxies use small tagged handles rather than heap addresses. They must
@@ -552,7 +560,12 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
         let index = scope.root_nanbox_f64(index);
         let value = scope.root_nanbox_f64(value);
         let boxed = crate::builtins::js_boxed_symbol_new(symbol.get_nanbox_f64());
-        return js_dyn_index_set(boxed, index.get_nanbox_f64(), value.get_nanbox_f64());
+        return js_dyn_index_set_strict(
+            boxed,
+            index.get_nanbox_f64(),
+            value.get_nanbox_f64(),
+            strict,
+        );
     }
     // #5525: a Symbol *index* (`obj[sym] = v`) routes to the symbol side-table,
     // mirroring the get side. Codegen sends all non-string-literal unknown-
@@ -655,7 +668,7 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
         } else {
             f64::from_bits(crate::value::js_nanbox_pointer(raw_ptr as i64).to_bits())
         };
-        return crate::proxy::js_put_value_set(target, index, value, target, 0);
+        return crate::proxy::js_put_value_set(target, index, value, target, strict);
     }
     if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
         crate::typedarray_props::js_typed_array_index_set_dynamic(
@@ -718,7 +731,7 @@ pub extern "C" fn js_dyn_index_set(obj: f64, index: f64, value: f64) -> f64 {
                 } else {
                     f64::from_bits(crate::value::js_nanbox_pointer(raw_ptr as i64).to_bits())
                 };
-                return crate::proxy::js_put_value_set(target, index, value, target, 0);
+                return crate::proxy::js_put_value_set(target, index, value, target, strict);
             }
         }
     }
@@ -843,7 +856,8 @@ pub extern "C" fn js_is_undefined_or_bare_nan(value: f64) -> i32 {
 
 // --- #1561: force-keep the dynamic-index FFI exports under LTO ---
 //
-// `js_dyn_index_get` / `js_dyn_index_set` / `js_is_undefined_or_bare_nan`
+// `js_dyn_index_get` / `js_dyn_index_set` / `js_dyn_index_set_strict` /
+// `js_is_undefined_or_bare_nan`
 // are `#[no_mangle] pub extern "C"`, but they have **zero internal Rust
 // callers** — they are only ever invoked from generated LLVM IR (codegen
 // emits the calls in `perry-codegen/src/expr/index_get.rs` and
@@ -868,6 +882,10 @@ static KEEP_JS_DYN_INDEX_GET: extern "C" fn(f64, f64) -> f64 = js_dyn_index_get;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_JS_DYN_INDEX_SET: extern "C" fn(f64, f64, f64) -> f64 = js_dyn_index_set;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_DYN_INDEX_SET_STRICT: extern "C" fn(f64, f64, f64, i32) -> f64 =
+    js_dyn_index_set_strict;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_JS_IS_UNDEFINED_OR_BARE_NAN: extern "C" fn(f64) -> i32 = js_is_undefined_or_bare_nan;

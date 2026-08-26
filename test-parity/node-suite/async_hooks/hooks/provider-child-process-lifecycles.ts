@@ -27,7 +27,12 @@ const hook = createHook({
   },
 }).enable();
 
-const child = spawn("/bin/sh", ["-c", "printf ok"]);
+const shell = process.platform === "win32" ? "cmd.exe" : "/bin/sh";
+const shellArgs =
+  process.platform === "win32"
+    ? ["/d", "/s", "/c", "echo ok"]
+    : ["-c", "printf ok"];
+const child = spawn(shell, shellArgs);
 accepting = false;
 child.stdin.end();
 let stdout = "";
@@ -48,7 +53,7 @@ await new Promise<void>((resolve) => setImmediate(resolve));
 hook.disable();
 const processes = activities.get("PROCESSWRAP")!;
 const pipes = activities.get("PIPEWRAP")!;
-console.log("child result:", exitCode, stdout);
+console.log("child result:", exitCode, stdout.trim());
 console.log("child resources:", processes.length, pipes.length);
 console.log(
   "child root triggers:",
