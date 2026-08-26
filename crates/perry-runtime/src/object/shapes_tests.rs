@@ -90,6 +90,8 @@ mod c3c_tests {
             (*obj).meta = std::ptr::null_mut();
             let fields = (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
                 as *mut crate::value::JSValue;
+            // GC_STORE_AUDIT(INIT): freshly allocated inline slots, filled with a
+            // non-pointer immediate before the object is reachable from anything.
             for index in 0..crate::object::INLINE_SLOT_FLOOR {
                 std::ptr::write(fields.add(index), crate::value::JSValue::undefined());
             }
