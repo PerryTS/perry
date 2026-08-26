@@ -15,7 +15,7 @@ fn open_scope(env: NapiEnv, escapable: bool, result: *mut *mut c_void) -> NapiSt
             closed: false,
         });
         let ptr = (&mut *token) as *mut ScopeToken;
-        env.scopes.push(ptr);
+        env.scopes.push(env.scope_tokens.len());
         env.scope_tokens.push(token);
         ptr.cast::<c_void>()
     });
@@ -37,19 +37,15 @@ fn close_scope(env: NapiEnv, scope: *mut c_void, escapable: bool) -> NapiStatus 
                 "handle scopes must close in LIFO order",
             );
         };
-        if !std::ptr::eq(top, scope.cast::<ScopeToken>()) {
+        let Some(token) = env.scope_tokens.get_mut(top).map(Box::as_mut) else {
+            return env.set_status(NapiStatus::InvalidArg, "unknown handle scope");
+        };
+        if !std::ptr::eq(token, scope.cast::<ScopeToken>()) {
             return env.set_status(
                 NapiStatus::HandleScopeMismatch,
                 "handle scopes must close in LIFO order",
             );
         }
-        let Some(token) = env
-            .scope_tokens
-            .iter_mut()
-            .find(|token| std::ptr::eq(token.as_ref(), top))
-        else {
-            return env.set_status(NapiStatus::InvalidArg, "unknown handle scope");
-        };
         if token.closed || token.env_serial != env.serial || token.escapable != escapable {
             return env.set_status(
                 NapiStatus::HandleScopeMismatch,
@@ -118,16 +114,12 @@ pub unsafe extern "C" fn napi_escape_handle(
         let Some(&top) = env.scopes.last() else {
             return Err(NapiStatus::HandleScopeMismatch);
         };
-        if !std::ptr::eq(top, scope.cast::<ScopeToken>()) {
-            return Err(NapiStatus::HandleScopeMismatch);
-        }
-        let Some(token) = env
-            .scope_tokens
-            .iter_mut()
-            .find(|token| std::ptr::eq(token.as_ref(), top))
-        else {
+        let Some(token) = env.scope_tokens.get_mut(top).map(Box::as_mut) else {
             return Err(NapiStatus::InvalidArg);
         };
+        if !std::ptr::eq(token, scope.cast::<ScopeToken>()) {
+            return Err(NapiStatus::HandleScopeMismatch);
+        }
         if !token.escapable || token.closed {
             return Err(NapiStatus::HandleScopeMismatch);
         }
@@ -181,6 +173,8 @@ pub unsafe extern "C" fn napi_create_reference(
             deleted: false,
         });
         let ptr = (&mut *record) as *mut ReferenceRecord as NapiRef;
+        env.reference_lookup
+            .insert(ptr as usize, env.references.len());
         env.references.push(record);
         ptr
     });
@@ -298,13 +292,14 @@ pub unsafe extern "C" fn napi_get_and_clear_last_exception(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let bits = with_env_mut(env, |env| env.pending_exception_bits.take());
-    let Some(bits) = bits else {
+    let pending = with_env_mut(env, |env| env.pending_exception_bits.take());
+    let Some(pending) = pending else {
         return NapiStatus::InvalidArg;
     };
-    let handle = add_handle(env, bits.unwrap_or(crate::value::TAG_UNDEFINED))
-        .expect("validated environment disappeared");
-    *result = handle;
+    *result = match pending {
+        Some(bits) => add_handle(env, bits).expect("validated environment disappeared"),
+        None => std::ptr::null_mut(),
+    };
     ok(env)
 }
 

@@ -81,11 +81,15 @@ fn input_len(ptr: *const c_char, length: usize) -> Result<usize, NapiStatus> {
     if ptr.is_null() {
         return Err(NapiStatus::InvalidArg);
     }
-    Ok(if length == NAPI_AUTO_LENGTH {
+    let length = if length == NAPI_AUTO_LENGTH {
         unsafe { std::ffi::CStr::from_ptr(ptr).to_bytes().len() }
     } else {
         length
-    })
+    };
+    if length > i32::MAX as usize {
+        return Err(NapiStatus::InvalidArg);
+    }
+    Ok(length)
 }
 
 fn push_wtf8(code: u32, out: &mut Vec<u8>) {
@@ -490,6 +494,9 @@ pub unsafe extern "C" fn napi_create_string_utf16(
     } else {
         length
     };
+    if length > i32::MAX as usize {
+        return set_status(env, NapiStatus::InvalidArg, "string length exceeds i32");
+    }
     let wtf8 = utf16_to_wtf8(std::slice::from_raw_parts(value, length));
     create_string(env, &wtf8, true, result)
 }
@@ -1145,7 +1152,18 @@ pub unsafe extern "C" fn napi_create_symbol(
         crate::value::js_get_string_pointer_unified(f64::from_bits(bits))
             as *mut crate::string::StringHeader
     };
-    let symbol = crate::symbol::alloc_symbol(description, false);
+    let symbol = if description.is_null() {
+        crate::symbol::alloc_symbol(std::ptr::null_mut(), false)
+    } else {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let description_root = scope.root_string_ptr(description);
+        crate::symbol::alloc_symbol(
+            description_root
+                .get_raw_const_ptr::<crate::string::StringHeader>()
+                .cast_mut(),
+            false,
+        )
+    };
     write_handle(env, pointer_bits(symbol.cast()), result)
 }
 

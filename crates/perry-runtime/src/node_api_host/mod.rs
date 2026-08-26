@@ -118,10 +118,17 @@ pub(crate) struct Env {
     serial: u64,
     owner: std::thread::ThreadId,
     slots: Vec<HandleSlot>,
+    free_slots: Vec<u32>,
+    // Tokens are intentional tombstones: their addon-visible addresses are
+    // never reused, so an out-of-scope handle cannot alias a later value.
     tokens: Vec<Box<HandleToken>>,
-    scopes: Vec<*mut ScopeToken>,
+    token_lookup: crate::fast_hash::PtrHashMap<usize, usize>,
+    scopes: Vec<usize>,
+    // Scope and reference records follow the same stable-address rule as
+    // value tokens. Their compact backing slots/roots are released instead.
     scope_tokens: Vec<Box<ScopeToken>>,
     references: Vec<Box<ReferenceRecord>>,
+    reference_lookup: crate::fast_hash::PtrHashMap<usize, usize>,
     callbacks: Vec<NativeCallbackRecord>,
     active_callback_infos: Vec<usize>,
     pending_exception_bits: Option<u64>,
@@ -136,10 +143,13 @@ impl Env {
             serial,
             owner: std::thread::current().id(),
             slots: Vec::new(),
+            free_slots: Vec::new(),
             tokens: Vec::new(),
+            token_lookup: crate::fast_hash::new_ptr_hash_map(),
             scopes: Vec::new(),
             scope_tokens: Vec::new(),
             references: Vec::new(),
+            reference_lookup: crate::fast_hash::new_ptr_hash_map(),
             callbacks: Vec::new(),
             active_callback_infos: Vec::new(),
             pending_exception_bits: None,
@@ -173,20 +183,31 @@ impl Env {
     }
 
     fn add_handle_at_depth(&mut self, value_bits: u64, scope_depth: u32) -> NapiValue {
-        let slot = self.slots.len() as u32;
-        let generation = 1;
-        self.slots.push(HandleSlot {
-            value_bits,
-            generation,
-            scope_depth,
-            live: true,
-        });
+        let (slot, generation) = if let Some(slot) = self.free_slots.pop() {
+            let record = &mut self.slots[slot as usize];
+            debug_assert!(!record.live);
+            record.value_bits = value_bits;
+            record.scope_depth = scope_depth;
+            record.live = true;
+            (slot, record.generation)
+        } else {
+            let slot = self.slots.len() as u32;
+            let generation = 1;
+            self.slots.push(HandleSlot {
+                value_bits,
+                generation,
+                scope_depth,
+                live: true,
+            });
+            (slot, generation)
+        };
         let mut token = Box::new(HandleToken {
             env_serial: self.serial,
             slot,
             generation,
         });
         let ptr = (&mut *token) as *mut HandleToken as NapiValue;
+        self.token_lookup.insert(ptr as usize, self.tokens.len());
         self.tokens.push(token);
         ptr
     }
@@ -199,10 +220,8 @@ impl Env {
         if value.is_null() {
             return None;
         }
-        self.tokens
-            .iter()
-            .find(|token| std::ptr::eq(token.as_ref(), value.cast::<HandleToken>()))
-            .map(Box::as_ref)
+        let index = *self.token_lookup.get(&(value as usize))?;
+        self.tokens.get(index).map(Box::as_ref)
     }
 
     fn value_bits(&self, value: NapiValue) -> Option<u64> {
@@ -215,11 +234,12 @@ impl Env {
     }
 
     fn invalidate_scope(&mut self, depth: u32) {
-        for slot in &mut self.slots {
+        for (index, slot) in self.slots.iter_mut().enumerate() {
             if slot.live && slot.scope_depth >= depth {
                 slot.live = false;
                 slot.generation = slot.generation.wrapping_add(1).max(1);
                 slot.value_bits = crate::value::TAG_UNDEFINED;
+                self.free_slots.push(index as u32);
             }
         }
     }
@@ -228,9 +248,9 @@ impl Env {
         if reference.is_null() {
             return None;
         }
+        let index = *self.reference_lookup.get(&(reference as usize))?;
         self.references
-            .iter()
-            .find(|record| std::ptr::eq(record.as_ref(), reference.cast::<ReferenceRecord>()))
+            .get(index)
             .map(Box::as_ref)
             .filter(|record| record.env_serial == self.serial && !record.deleted)
     }
@@ -239,9 +259,9 @@ impl Env {
         if reference.is_null() {
             return None;
         }
+        let index = *self.reference_lookup.get(&(reference as usize))?;
         self.references
-            .iter_mut()
-            .find(|record| std::ptr::eq(record.as_ref(), reference.cast::<ReferenceRecord>()))
+            .get_mut(index)
             .map(Box::as_mut)
             .filter(|record| record.env_serial == self.serial && !record.deleted)
     }

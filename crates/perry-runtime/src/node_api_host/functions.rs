@@ -128,6 +128,13 @@ pub unsafe extern "C" fn napi_create_function(
         } else {
             length
         };
+        if length > i32::MAX as usize {
+            return set_status(
+                env,
+                NapiStatus::InvalidArg,
+                "function name length exceeds i32",
+            );
+        }
         std::slice::from_raw_parts(utf8name.cast::<u8>(), length).to_vec()
     };
     let callback = callback.unwrap() as usize;
@@ -177,10 +184,14 @@ pub unsafe extern "C" fn napi_get_cb_info(
     this_arg: *mut NapiValue,
     data: *mut *mut c_void,
 ) -> NapiStatus {
-    if argc.is_null() {
-        return set_status(env, NapiStatus::InvalidArg, "argc must not be null");
+    if argc.is_null() && !argv.is_null() {
+        return set_status(
+            env,
+            NapiStatus::InvalidArg,
+            "argc is required when argv is provided",
+        );
     }
-    let capacity = *argc;
+    let capacity = if argc.is_null() { 0 } else { *argc };
     let Some((args, this_value, callback_data)) = callback_info(env, info, |info| {
         (info.args.clone(), info.this_value, info.data)
     }) else {
@@ -190,8 +201,18 @@ pub unsafe extern "C" fn napi_get_cb_info(
         for (index, argument) in args.iter().take(capacity).enumerate() {
             *argv.add(index) = *argument;
         }
+        if capacity > args.len() {
+            let Ok(undefined) = add_handle(env, crate::value::TAG_UNDEFINED) else {
+                return NapiStatus::InvalidArg;
+            };
+            for index in args.len()..capacity {
+                *argv.add(index) = undefined;
+            }
+        }
     }
-    *argc = args.len();
+    if !argc.is_null() {
+        *argc = args.len();
+    }
     if !this_arg.is_null() {
         *this_arg = this_value;
     }

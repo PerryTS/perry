@@ -1,5 +1,5 @@
 use super::*;
-use std::ffi::{c_void, CString};
+use std::ffi::{c_char, c_void, CString};
 
 fn test_env() -> NapiEnv {
     crate::gc::ensure_gc_initialized();
@@ -100,6 +100,24 @@ fn handle_scopes_are_lifo_and_invalidate_local_handles() {
         unsafe { napi_close_handle_scope(env, outer) },
         NapiStatus::Ok
     );
+
+    let slot_count = with_env(env, |env| env.slots.len()).unwrap();
+    let mut recycled_scope = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_open_handle_scope(env, &mut recycled_scope) },
+        NapiStatus::Ok
+    );
+    let recycled_value = int32(env, 3);
+    assert_eq!(with_env(env, |env| env.slots.len()).unwrap(), slot_count);
+    assert_eq!(
+        unsafe { napi_get_value_int32(env, inner_value, &mut ignored) },
+        NapiStatus::InvalidArg
+    );
+    assert_eq!(read_int32(env, recycled_value), 3);
+    assert_eq!(
+        unsafe { napi_close_handle_scope(env, recycled_scope) },
+        NapiStatus::Ok
+    );
 }
 
 #[test]
@@ -144,7 +162,7 @@ fn utf8_latin1_and_utf16_strings_round_trip() {
         },
         NapiStatus::Ok
     );
-    let mut bytes = vec![0i8; byte_length + 1];
+    let mut bytes = vec![0 as c_char; byte_length + 1];
     let mut copied = 0;
     assert_eq!(
         unsafe {
@@ -180,7 +198,7 @@ fn utf8_latin1_and_utf16_strings_round_trip() {
         },
         NapiStatus::Ok
     );
-    let mut latin_out = [0i8; 3];
+    let mut latin_out = [0 as c_char; 3];
     let mut latin_len = 0;
     assert_eq!(
         unsafe {
@@ -197,6 +215,20 @@ fn utf8_latin1_and_utf16_strings_round_trip() {
     assert_eq!(
         unsafe { std::slice::from_raw_parts(latin_out.as_ptr().cast::<u8>(), latin_len) },
         latin1
+    );
+
+    let mut oversized = std::ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            napi_create_string_utf8(env, c"".as_ptr(), i32::MAX as usize + 1, &mut oversized)
+        },
+        NapiStatus::InvalidArg
+    );
+    assert_eq!(
+        unsafe {
+            napi_create_string_utf16(env, [0u16].as_ptr(), i32::MAX as usize + 1, &mut oversized)
+        },
+        NapiStatus::InvalidArg
     );
 }
 
@@ -280,6 +312,13 @@ fn pending_exceptions_and_strong_references_are_roots() {
         NapiStatus::Ok
     );
     assert_eq!(read_int32(env, exception), 17);
+
+    let mut no_exception = 1usize as NapiValue;
+    assert_eq!(
+        unsafe { napi_get_and_clear_last_exception(env, &mut no_exception) },
+        NapiStatus::Ok
+    );
+    assert!(no_exception.is_null());
 
     let mut referenced = std::ptr::null_mut();
     assert_eq!(
@@ -385,6 +424,38 @@ fn bigint_date_symbol_and_error_helpers_use_node_api_semantics() {
 }
 
 unsafe extern "C" fn add_callback(env: NapiEnv, info: NapiCallbackInfo) -> NapiValue {
+    assert_eq!(
+        napi_get_cb_info(
+            env,
+            info,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ),
+        NapiStatus::Ok
+    );
+
+    let mut padded_argc = 4;
+    let mut padded_argv = [std::ptr::null_mut(); 4];
+    assert_eq!(
+        napi_get_cb_info(
+            env,
+            info,
+            &mut padded_argc,
+            padded_argv.as_mut_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ),
+        NapiStatus::Ok
+    );
+    assert_eq!(padded_argc, 2);
+    for value in &padded_argv[2..] {
+        let mut value_type = NapiValueType::Object;
+        assert_eq!(napi_typeof(env, *value, &mut value_type), NapiStatus::Ok);
+        assert_eq!(value_type, NapiValueType::Undefined);
+    }
+
     let mut argc = 2;
     let mut argv = [std::ptr::null_mut(); 2];
     let mut data = std::ptr::null_mut();
