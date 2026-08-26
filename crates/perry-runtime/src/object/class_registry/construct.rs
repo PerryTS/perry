@@ -230,7 +230,11 @@ pub(crate) unsafe fn nm_ctor_stream(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_new_function_construct(
+// This is a generated-code boundary whose TypeError paths unwind to the
+// caller's JavaScript catch landing pad. A plain `extern "C"` installs an
+// abort-on-unwind guard in the debug/static runtime, so `new <primitive>()`
+// aborts instead of remaining catchable.
+pub unsafe extern "C-unwind" fn js_new_function_construct(
     func_value: f64,
     args_ptr: *const f64,
     args_len: usize,
@@ -1159,6 +1163,8 @@ pub unsafe extern "C" fn js_new_function_construct(
     // Reflect()`, `new Error.prototype()` and `new sym()` silently succeed.
     super::super::object_ops::throw_object_type_error(b"is not a constructor")
 }
+
+const _: unsafe extern "C-unwind" fn(f64, *const f64, usize) -> f64 = js_new_function_construct;
 
 /// `new <callee>(...spread)` — spread-bearing construction. Codegen builds a
 /// single JS array containing every argument in evaluation order (regular args
