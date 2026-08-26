@@ -1699,12 +1699,6 @@ pub extern "C" fn js_readline_stdin_remove_listener(
                 v.retain(|registered| *registered != callback);
             }
         }
-        "end" | "close" => CLOSE_CALLBACK.with(|cb| {
-            let mut cb = cb.borrow_mut();
-            if *cb == Some(callback) {
-                *cb = None;
-            }
-        }),
         _ => {}
     }
     js_nanbox_pointer(STDIN_READLINE_HANDLE)
