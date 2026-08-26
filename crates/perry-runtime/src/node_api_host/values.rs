@@ -973,11 +973,12 @@ fn create_error_kind(
         as *mut crate::string::StringHeader;
     let scope = crate::gc::RuntimeHandleScope::new();
     let message_root = scope.root_string_ptr(message_ptr);
-    let error = kind(
-        message_root
-            .get_raw_const_ptr::<crate::string::StringHeader>()
-            .cast_mut(),
-    );
+    // `kind` is js_typeerror_new / js_rangeerror_new / js_error_new_with_message,
+    // all of which route through `alloc_error`; that opens its own handle scope
+    // and roots `message` before its first allocation, so a scoped raw argument
+    // is sound here (#7341 self-rooting entry point).
+    let error =
+        message_root.with_const_ptr::<crate::string::StringHeader, _>(|ptr| kind(ptr.cast_mut()));
     let status = write_handle(env, pointer_bits(error.cast()), result);
     if status != NapiStatus::Ok || code.is_null() {
         return status;
@@ -1164,12 +1165,12 @@ pub unsafe extern "C" fn napi_create_symbol(
     } else {
         let scope = crate::gc::RuntimeHandleScope::new();
         let description_root = scope.root_string_ptr(description);
-        crate::symbol::alloc_symbol(
-            description_root
-                .get_raw_const_ptr::<crate::string::StringHeader>()
-                .cast_mut(),
-            false,
-        )
+        // `alloc_symbol` copies the description text off the GC heap BEFORE it
+        // allocates (see #7246 in its body), so the raw pointer is never held
+        // across a collection point.
+        description_root.with_const_ptr::<crate::string::StringHeader, _>(|ptr| {
+            crate::symbol::alloc_symbol(ptr.cast_mut(), false)
+        })
     };
     write_handle(env, pointer_bits(symbol.cast()), result)
 }

@@ -210,6 +210,9 @@ mod get_field_by_name_probe_tests;
 mod get_field_by_name_tail;
 mod has_property;
 mod ic_miss;
+#[cfg(test)]
+#[path = "field_get_set/ic_miss_array_length_tests.rs"]
+mod ic_miss_array_length_tests;
 mod map_set_receiver;
 mod probe_dispatch;
 

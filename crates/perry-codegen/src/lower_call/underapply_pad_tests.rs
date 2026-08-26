@@ -85,9 +85,7 @@ fn an_underapplied_direct_call_pads_missing_params_with_undefined() {
     // The direct call must carry all three declared parameters…
     let call_line = ir
         .lines()
-        .find(|line| {
-            line.contains("call double @perry_fn_underapply_pad_test_ts__callee(")
-        })
+        .find(|line| line.contains("call double @perry_fn_underapply_pad_test_ts__callee("))
         .unwrap_or_else(|| panic!("expected a direct call to the callee:\n{ir}"));
     let args = call_line
         .split("callee(")

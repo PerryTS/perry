@@ -10,6 +10,7 @@ mod generic;
 mod generic_mutators;
 mod generic_object;
 mod header;
+mod header_gc_slots;
 mod immutable;
 mod indexing;
 mod is_array;
