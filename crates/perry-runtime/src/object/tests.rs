@@ -1430,13 +1430,11 @@ fn class_capture_value_or_rejects_tag_stripped_fallback() {
 /// Reading `.size` on a `Map` *by name* — the shape a minified bundle produces
 /// when the receiver's `Map` type is erased to `any` (`map.size` dispatched
 /// through `js_object_get_field_by_name`) — reaches the `.size` fast path,
-/// which calls `own_key_present(map, "size")`. A `MapHeader` is 16 bytes
-/// (`size`/`capacity`/`entries`) with no `keys_array` field at offset 16, so
-/// `crate::object::object_keys_array(obj)` used to read 8 bytes past the header into the adjacent
-/// allocation; that stray word cleared the keys-pointer alignment/range guard
-/// and then SIGBUS'd on the `[keys-8]` GC-type-tag load. `own_key_present` now
-/// answers `false` for a non-`GC_TYPE_OBJECT` receiver, so the read falls
-/// through to the `Map.size` tail instead of dereferencing garbage.
+/// which calls `own_key_present(map, "size")`. A `MapHeader` is not an
+/// `ObjectHeader` and has no `keys_array` field; treating it as one used to
+/// read unrelated bytes and then SIGBUS on the derived GC-type-tag load.
+/// `own_key_present` now answers `false` for a non-`GC_TYPE_OBJECT` receiver,
+/// so the read falls through to the `Map.size` tail.
 #[test]
 fn map_size_by_name_does_not_oob_read_keys_array() {
     unsafe {
@@ -1446,8 +1444,8 @@ fn map_size_by_name_does_not_oob_read_keys_array() {
         let empty = crate::map::js_map_alloc(4);
         assert!(!empty.is_null());
         // The precise frame that faulted: a Map is not an object, so it has no
-        // own string key. This must answer false without dereferencing
-        // `[obj+16]` past the 16-byte MapHeader.
+        // own string key. This must answer false without interpreting Map
+        // metadata as an ObjectHeader field.
         assert!(!own_key_present(empty as *mut ObjectHeader, size_key));
         let v0 = crate::object::js_object_get_field_by_name(empty as *const ObjectHeader, size_key);
         assert!(v0.is_number(), "empty Map .size must be a number");
