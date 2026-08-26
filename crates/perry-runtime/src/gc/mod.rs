@@ -924,6 +924,8 @@ pub fn gc_init() {
     reg_scanner!(crate::object::scan_arguments_object_roots_mut);
     // bun:ffi (#6562): the cached FFIType enum object.
     reg_scanner!(crate::bun_ffi::scan_bun_ffi_roots_mut);
+    #[cfg(feature = "node-api-host")]
+    reg_scanner!(crate::node_api_host::scan_node_api_roots_mut);
     reg_budgeted_scanner!(
         crate::object::scan_class_side_table_roots_mut,
         crate::object::scan_class_side_table_roots_mut_step,
