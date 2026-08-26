@@ -585,6 +585,27 @@ pub extern "C" fn js_typed_array_masked_window_data_ptr(receiver: f64) -> i64 {
     data_ptr(addr as *const TypedArrayHeader) as i64
 }
 
+/// One-time loop admission primitive for erased ECS component columns. Return
+/// the stable owning-header address only for an exact inline `Uint32Array`.
+/// Consult the authoritative registry instead of the tiny direct-mapped kind
+/// cache: sibling columns can collide there, which is harmless for individual
+/// accesses but must not make a whole-loop proof spuriously fail forever.
+#[inline]
+pub(crate) fn inline_u32_addr(receiver: f64) -> usize {
+    let value = crate::value::JSValue::from_bits(receiver.to_bits());
+    if !value.is_pointer() {
+        return 0;
+    }
+    let addr = value.as_pointer::<TypedArrayHeader>() as usize;
+    if lookup_typed_array_kind(addr) != Some(KIND_UINT32)
+        || crate::native_arena::is_native_typed_view(addr as *const TypedArrayHeader)
+        || crate::typedarray_view::view_meta_of(addr).is_some()
+    {
+        return 0;
+    }
+    addr
+}
+
 #[inline]
 pub(crate) fn data_ptr_mut(ta: *mut TypedArrayHeader) -> *mut u8 {
     unsafe {

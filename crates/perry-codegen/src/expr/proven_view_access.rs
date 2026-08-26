@@ -168,24 +168,66 @@ fn proven_view_for(
     if ctx.closure_captures.contains_key(id) {
         return None;
     }
-    if !index_is_exact_i32_shape(ctx, index) {
-        return None;
-    }
-    if !can_lower_expr_as_i32(
-        index,
-        &ctx.i32_counter_slots,
-        ctx.flat_const_arrays,
-        &ctx.array_row_aliases,
-        ctx.integer_locals,
-        &ctx.const_number_locals,
-        ctx.clamp3_functions,
-        ctx.clamp_u8_functions,
-        ctx.integer_returning_functions,
-        ctx.i32_identity_functions,
-    ) {
-        return None;
+    let stable_u32_index = crate::stmt::stable_packed_loop::has_u32_index_fact(ctx, index);
+    if !stable_u32_index {
+        if !index_is_exact_i32_shape(ctx, index) {
+            return None;
+        }
+        if !can_lower_expr_as_i32(
+            index,
+            &ctx.i32_counter_slots,
+            ctx.flat_const_arrays,
+            &ctx.array_row_aliases,
+            ctx.integer_locals,
+            &ctx.const_number_locals,
+            ctx.clamp3_functions,
+            ctx.clamp_u8_functions,
+            ctx.integer_returning_functions,
+            ctx.i32_identity_functions,
+        ) {
+            return None;
+        }
     }
     Some((*id, view))
+}
+
+fn lower_checked_index(ctx: &mut FnCtx<'_>, index: &Expr) -> Result<String> {
+    if let Some(index) = crate::stmt::stable_packed_loop::try_lower_u32_index(ctx, index) {
+        return Ok(index);
+    }
+    lower_expr_as_i32(ctx, index)
+}
+
+pub(crate) fn is_proven_u32_view_read(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    let Expr::IndexGet { object, index } = value else {
+        return false;
+    };
+    let Expr::LocalGet(id) = object.as_ref() else {
+        return false;
+    };
+    ctx.buffer_view_slots.get(id).is_some_and(|view| {
+        view.pointer_state.is_stable()
+            && view.storage_inline_proven
+            && view.native_owned.is_none()
+            && view.index_unit == BufferIndexUnit::Element
+            && view.alias.allows_noalias()
+            && view.scope_idx.is_some()
+            && matches!(view.elem, BufferElem::U32)
+            && crate::stmt::stable_packed_loop::has_u32_index_fact(ctx, index)
+    })
+}
+
+fn proven_u32_view_value(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    if is_proven_u32_view_read(ctx, value) {
+        return true;
+    }
+    let Expr::LocalGet(id) = value else {
+        return false;
+    };
+    ctx.stable_packed_loop_facts
+        .iter()
+        .rev()
+        .any(|fact| fact.u32_view_derived_locals.contains_key(id))
 }
 
 /// Data pointer + entry-derived length for the proven view. The length load
@@ -234,7 +276,7 @@ pub(crate) fn try_lower_proven_view_checked_f64_load(
     // no receiver value or backing-store pointer has been materialized yet.
     // Lower the index expression first, then load `data_slot` below, so even a
     // collecting proven index leaves no movable or raw address live.
-    let idx_i32 = lower_expr_as_i32(ctx, index)?;
+    let idx_i32 = lower_checked_index(ctx, index)?;
     let (data_ptr, len) = load_data_and_len(ctx, &view);
 
     let load_idx = ctx.new_block("pview.get.load");
@@ -303,7 +345,9 @@ pub(crate) fn try_lower_proven_view_checked_f64_load(
         Some(id),
         "TypedArrayGet.proven_view_checked",
         &lowered,
-        Some(BoundsState::Unknown),
+        Some(BoundsState::Guarded {
+            guard_id: "proven_view_checked_bounds".to_string(),
+        }),
         Some(view.alias.clone()),
         Some(BufferAccessMode::CheckedNative),
         None,
@@ -313,6 +357,132 @@ pub(crate) fn try_lower_proven_view_checked_f64_load(
     );
     attach_buffer_view_facts(ctx, &view);
     Ok(Some(result))
+}
+
+/// Inline checked Uint32Array read that preserves the raw lane for a native
+/// consumer. The out-of-bounds arm is zero because the public read produces
+/// `undefined`, whose ToUint32 value is zero.
+pub(crate) fn try_lower_proven_view_checked_u32_load(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    index: &Expr,
+) -> Result<Option<LoweredValue>> {
+    let Some((id, view)) = proven_view_for(ctx, object, index) else {
+        return Ok(None);
+    };
+    if !matches!(view.elem, BufferElem::U32) {
+        return Ok(None);
+    }
+    let common_bound = crate::stmt::stable_packed_loop::has_u32_component_bound(ctx, index);
+    let idx_i32 = lower_checked_index(ctx, index)?;
+    let (data_ptr, len) = load_data_and_len(ctx, &view);
+    if common_bound {
+        let idx_i64 = ctx.block().zext(I32, &idx_i32, I64);
+        let byte_off = ctx.block().shl(I64, &idx_i64, "2");
+        let elem_ptr = ctx.block().gep(I8, &data_ptr, &[(I64, &byte_off)]);
+        let lowered = LoweredValue::u32(ctx.block().load(I32, &elem_ptr));
+        ctx.record_lowered_value_with_access_mode(
+            "TypedArrayGet",
+            Some(id),
+            "TypedArrayGet.proven_view_common_bound_u32",
+            &lowered,
+            Some(BoundsState::Guarded {
+                guard_id: "stable_packed_u32_component_bound".to_string(),
+            }),
+            Some(view.alias.clone()),
+            Some(BufferAccessMode::UncheckedNative),
+            None,
+            false,
+            false,
+            vec!["proven_view=unchecked_common_bound_u32".to_string()],
+        );
+        attach_buffer_view_facts(ctx, &view);
+        return Ok(Some(lowered));
+    }
+    let load_idx = ctx.new_block("pview.get_u32.load");
+    let oob_idx = ctx.new_block("pview.get_u32.oob");
+    let merge_idx = ctx.new_block("pview.get_u32.merge");
+    let load_label = ctx.block_label(load_idx);
+    let oob_label = ctx.block_label(oob_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    let in_bounds = ctx.block().icmp_ult(I32, &idx_i32, &len);
+    ctx.block().cond_br(&in_bounds, &load_label, &oob_label);
+
+    ctx.current_block = load_idx;
+    let idx_i64 = ctx.block().zext(I32, &idx_i32, I64);
+    let byte_off = ctx.block().shl(I64, &idx_i64, "2");
+    let elem_ptr = ctx.block().gep(I8, &data_ptr, &[(I64, &byte_off)]);
+    let raw = ctx.block().load(I32, &elem_ptr);
+    let load_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = oob_idx;
+    let oob_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    let value = ctx.block().phi(I32, &[(&raw, &load_end), ("0", &oob_end)]);
+    let lowered = LoweredValue::u32(value);
+    ctx.record_lowered_value_with_access_mode(
+        "TypedArrayGet",
+        Some(id),
+        "TypedArrayGet.proven_view_checked_u32",
+        &lowered,
+        Some(BoundsState::Guarded {
+            guard_id: "proven_view_checked_bounds".to_string(),
+        }),
+        Some(view.alias.clone()),
+        Some(BufferAccessMode::CheckedNative),
+        None,
+        false,
+        false,
+        vec!["proven_view=checked_inline_u32; guards=none".to_string()],
+    );
+    attach_buffer_view_facts(ctx, &view);
+    Ok(Some(lowered))
+}
+
+fn emit_proven_view_store(
+    ctx: &mut FnCtx<'_>,
+    view: &crate::native_value::BufferViewSlot,
+    data_ptr: &str,
+    idx_i32: &str,
+    value_native: &LoweredValue,
+) {
+    let blk = ctx.block();
+    let idx_i64 = blk.zext(I32, idx_i32, I64);
+    let byte_off = if view.element_width_bytes > 1 {
+        blk.shl(
+            I64,
+            &idx_i64,
+            &view.element_width_bytes.trailing_zeros().to_string(),
+        )
+    } else {
+        idx_i64
+    };
+    let elem_ptr = blk.gep(I8, data_ptr, &[(I64, &byte_off)]);
+    // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
+    match view.elem {
+        BufferElem::I8 | BufferElem::U8 => {
+            let byte = blk.trunc(I32, &value_native.value, I8);
+            blk.store(I8, &byte, &elem_ptr);
+        }
+        BufferElem::I16 | BufferElem::U16 => {
+            let half = blk.trunc(I32, &value_native.value, I16);
+            blk.store(I16, &half, &elem_ptr);
+        }
+        BufferElem::I32 | BufferElem::U32 => {
+            blk.store(I32, &value_native.value, &elem_ptr);
+        }
+        BufferElem::F32 => {
+            let narrow = blk.fptrunc(DOUBLE, &value_native.value, F32);
+            blk.store(F32, &narrow, &elem_ptr);
+        }
+        BufferElem::F64 => {
+            blk.store(DOUBLE, &value_native.value, &elem_ptr);
+        }
+        BufferElem::U8Clamped => unreachable!("gated before store emission"),
+    }
 }
 
 /// Inline checked element write (`object[index] = value`). The value is
@@ -351,6 +521,7 @@ pub(crate) fn try_lower_proven_view_checked_store(
     if int_kind
         && !super::can_lower_integer_typed_array_store_value(ctx, value)
         && !super::can_lower_expr_as_i32_in_current_region(ctx, value)
+        && !proven_u32_view_value(ctx, value)
     {
         return Ok(None);
     }
@@ -365,7 +536,7 @@ pub(crate) fn try_lower_proven_view_checked_store(
         }
     }
 
-    let idx_i32 = lower_expr_as_i32(ctx, index)?;
+    let idx_i32 = lower_checked_index(ctx, index)?;
     let value_native = if int_kind {
         let expected = if matches!(view.elem, BufferElem::U32) {
             ExpectedNativeRep::U32
@@ -386,6 +557,26 @@ pub(crate) fn try_lower_proven_view_checked_store(
         lower_expr_native(ctx, value, ExpectedNativeRep::F64)?
     };
     let (data_ptr, len) = load_data_and_len(ctx, &view);
+    if crate::stmt::stable_packed_loop::has_u32_component_bound(ctx, index) {
+        emit_proven_view_store(ctx, &view, &data_ptr, &idx_i32, &value_native);
+        ctx.record_lowered_value_with_access_mode(
+            "TypedArraySet",
+            Some(id),
+            "TypedArraySet.proven_view_common_bound",
+            &value_native,
+            Some(BoundsState::Guarded {
+                guard_id: "stable_packed_u32_component_bound".to_string(),
+            }),
+            Some(view.alias.clone()),
+            Some(BufferAccessMode::UncheckedNative),
+            None,
+            false,
+            false,
+            vec!["proven_view=unchecked_common_bound".to_string()],
+        );
+        attach_buffer_view_facts(ctx, &view);
+        return Ok(Some(value_native));
+    }
 
     let store_idx = ctx.new_block("pview.set.store");
     let done_idx = ctx.new_block("pview.set.done");
@@ -400,52 +591,8 @@ pub(crate) fn try_lower_proven_view_checked_store(
 
     ctx.current_block = store_idx;
     {
-        let blk = ctx.block();
-        let idx_i64 = blk.zext(I32, &idx_i32, I64);
-        let byte_off = if view.element_width_bytes > 1 {
-            blk.shl(
-                I64,
-                &idx_i64,
-                &view.element_width_bytes.trailing_zeros().to_string(),
-            )
-        } else {
-            idx_i64
-        };
-        let elem_ptr = blk.gep(I8, &data_ptr, &[(I64, &byte_off)]);
-        // Every arm below stores into `elem_ptr`, which addresses the view's
-        // BACKING STORE (`view.data_slot`). Typed-array elements are raw
-        // numeric bytes and can never hold a JSValue, so none of these stores
-        // creates a heap edge and none needs a write barrier. This is the
-        // codegen-side counterpart of the runtime carve-out for the
-        // `typedarray` / `typedarray_view` / `buffer` modules
-        // (`is_pointer_free_module` in scripts/gc_store_site_inventory.py).
-        match view.elem {
-            BufferElem::I8 | BufferElem::U8 => {
-                let byte = blk.trunc(I32, &value_native.value, I8);
-                // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
-                blk.store(I8, &byte, &elem_ptr);
-            }
-            BufferElem::I16 | BufferElem::U16 => {
-                let half = blk.trunc(I32, &value_native.value, I16);
-                // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
-                blk.store(I16, &half, &elem_ptr);
-            }
-            BufferElem::I32 | BufferElem::U32 => {
-                // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
-                blk.store(I32, &value_native.value, &elem_ptr);
-            }
-            BufferElem::F32 => {
-                let narrow = blk.fptrunc(DOUBLE, &value_native.value, F32);
-                // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
-                blk.store(F32, &narrow, &elem_ptr);
-            }
-            BufferElem::F64 => {
-                // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
-                blk.store(DOUBLE, &value_native.value, &elem_ptr);
-            }
-            BufferElem::U8Clamped => unreachable!("gated above"),
-        }
-        blk.br(&done_label);
+        emit_proven_view_store(ctx, &view, &data_ptr, &idx_i32, &value_native);
+        ctx.block().br(&done_label);
     }
     ctx.current_block = done_idx;
 
@@ -454,7 +601,9 @@ pub(crate) fn try_lower_proven_view_checked_store(
         Some(id),
         "TypedArraySet.proven_view_checked",
         &value_native,
-        Some(BoundsState::Unknown),
+        Some(BoundsState::Guarded {
+            guard_id: "proven_view_checked_bounds".to_string(),
+        }),
         Some(view.alias.clone()),
         Some(BufferAccessMode::CheckedNative),
         None,

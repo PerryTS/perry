@@ -128,6 +128,9 @@ fn lower_value_for_dynamic_index_set(
 /// typed-array object (data at byte 16): a type-confused write, not a missed
 /// optimization.
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    if matches!(object, Expr::LocalGet(id) if ctx.buffer_view_slots.contains_key(id)) {
+        return true;
+    }
     let ty = match object {
         Expr::LocalGet(id) => ctx.local_type_hint(id).cloned(),
         _ => crate::type_analysis::static_type_of(ctx, object),

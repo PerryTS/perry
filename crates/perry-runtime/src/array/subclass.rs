@@ -21,14 +21,18 @@ use crate::value::JSValue;
 //
 //     bit 0       existing custom-[[Prototype]] flag
 //     bit 1       payload valid
-//     bits 8..31  verified numeric prefix bound (24 bits, max 16,000,000)
+//     bit 2       compact nonnegative-int entity proof (mode 2)
+//     bits 8..31  verified prefix bound (24 bits, max 16,000,000)
 //     bits 32..63 exact semantic ShapeId
 const PACKED_NUMERIC_META_VALID: u64 = 1 << 1;
+const PACKED_NUMERIC_META_U32: u64 = 1 << 2;
 const PACKED_NUMERIC_META_BOUND_SHIFT: u32 = 8;
 const PACKED_NUMERIC_META_BOUND_MASK: u64 = 0x00FF_FFFF << PACKED_NUMERIC_META_BOUND_SHIFT;
 const PACKED_NUMERIC_META_SHAPE_MASK: u64 = 0xFFFF_FFFF_0000_0000;
-const PACKED_NUMERIC_META_MASK: u64 =
-    PACKED_NUMERIC_META_VALID | PACKED_NUMERIC_META_BOUND_MASK | PACKED_NUMERIC_META_SHAPE_MASK;
+const PACKED_NUMERIC_META_MASK: u64 = PACKED_NUMERIC_META_VALID
+    | PACKED_NUMERIC_META_U32
+    | PACKED_NUMERIC_META_BOUND_MASK
+    | PACKED_NUMERIC_META_SHAPE_MASK;
 
 // #8655: Array-subclass instances use ordinary ObjectHeader property slots,
 // but their hot numeric reads have a much stronger invariant than a generic
@@ -317,6 +321,7 @@ unsafe fn subclass_numeric_prefix_is_proven(
     obj: *const ObjectHeader,
     shape_id: u32,
     bound: u32,
+    require_u32: bool,
 ) -> bool {
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
         return false;
@@ -334,8 +339,13 @@ unsafe fn subclass_numeric_prefix_is_proven(
     let payload_valid = flags & PACKED_NUMERIC_META_VALID != 0;
     let proven_bound =
         ((flags & PACKED_NUMERIC_META_BOUND_MASK) >> PACKED_NUMERIC_META_BOUND_SHIFT) as u32;
+    let exact_u32 = flags & PACKED_NUMERIC_META_U32 != 0;
     let proven_shape = (flags >> 32) as u32;
-    if payload_valid && proven_shape == shape_id && proven_bound >= bound {
+    if payload_valid
+        && proven_shape == shape_id
+        && proven_bound >= bound
+        && require_u32 == exact_u32
+    {
         return true;
     }
     clear_packed_subclass_numeric_proof(obj as *mut ObjectHeader);
@@ -347,6 +357,7 @@ unsafe fn publish_subclass_numeric_prefix(
     obj: *const ObjectHeader,
     shape_id: u32,
     bound: u32,
+    exact_u32: bool,
 ) -> bool {
     let meta = (*obj).meta;
     if meta.is_null() || bound > 16_000_000 {
@@ -355,6 +366,11 @@ unsafe fn publish_subclass_numeric_prefix(
     let flags = (*meta).flags;
     (*meta).flags = (flags & !PACKED_NUMERIC_META_MASK)
         | PACKED_NUMERIC_META_VALID
+        | if exact_u32 {
+            PACKED_NUMERIC_META_U32
+        } else {
+            0
+        }
         | (u64::from(bound) << PACKED_NUMERIC_META_BOUND_SHIFT)
         | (u64::from(shape_id) << 32);
     let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
@@ -374,12 +390,13 @@ unsafe fn ensure_subclass_numeric_prefix(
     obj: *const ObjectHeader,
     layout: DenseSubclassLayout,
     bound: u32,
+    require_u32: bool,
 ) -> bool {
     if bound == 0 {
         return true;
     }
     let shape_id = (*obj).parent_class_id;
-    if subclass_numeric_prefix_is_proven(obj, shape_id, bound) {
+    if subclass_numeric_prefix_is_proven(obj, shape_id, bound, require_u32) {
         return true;
     }
     for index in 0..bound {
@@ -406,7 +423,7 @@ unsafe fn ensure_subclass_numeric_prefix(
                 .add(slot as usize)
         };
         let value = JSValue::from_bits(ptr::read(value_ptr));
-        if value.is_int32() {
+        let number = if value.is_int32() {
             // `push(i)` commonly stores Perry's compact INT32 Number tag. The
             // direct clone consumes raw doubles, so normalize that Number to
             // its representation-equivalent f64 bits during the one-time
@@ -415,12 +432,39 @@ unsafe fn ensure_subclass_numeric_prefix(
             // barrier nor a layout downgrade.
             // GC_STORE_AUDIT(POINTER_FREE): canonical raw-f64 Number bits
             // replace compact int32 Number bits in an already numeric slot.
-            ptr::write(value_ptr, (value.as_int32() as f64).to_bits());
+            let integer = value.as_int32();
+            let number = integer as f64;
+            if !require_u32 {
+                ptr::write(value_ptr, number.to_bits());
+            }
+            number
         } else if !value.is_number() {
             return false;
+        } else {
+            value.as_number()
+        };
+        if require_u32 {
+            // ECS entity ids in this tier are normalized to Perry's ordinary
+            // compact INT32 Number representation. Generic reads still
+            // observe the same JS Number, while generated component access
+            // can consume the low native lane without an f64 conversion.
+            // Values outside the nonnegative i31 subset retain the generic
+            // loop; no public behavior is narrowed.
+            if !number.is_finite()
+                || number < 0.0
+                || number > i32::MAX as f64
+                || number.fract() != 0.0
+            {
+                return false;
+            }
+            if !value.is_int32() {
+                // GC_STORE_AUDIT(POINTER_FREE): compact Number bits replace
+                // raw-f64 Number bits in an already numeric slot.
+                ptr::write(value_ptr, JSValue::int32(number as i32).bits());
+            }
         }
     }
-    publish_subclass_numeric_prefix(obj, shape_id, bound)
+    publish_subclass_numeric_prefix(obj, shape_id, bound, require_u32)
 }
 
 #[inline]
@@ -650,6 +694,13 @@ fn packed_arraylike_loop_guard(
         if bound > length || length > capacity || capacity > 16_000_000 {
             return None;
         }
+        // Mode 2 is the stronger ECS entity-id contract. Plain Arrays do not
+        // carry the per-prefix payload needed to distinguish an exact-u32
+        // proof from their whole-array raw-f64 bit, so retain the generic
+        // clone for them.
+        if require_numeric >= 2 {
+            return None;
+        }
         if require_numeric != 0 {
             // The raw-f64 invariant is an O(1) GcHeader bit after its first
             // self-healing scan, and every nonnumeric Array write already
@@ -694,8 +745,19 @@ fn packed_arraylike_loop_guard(
     if bound > length || bound > layout.dense_prefix_len || length > 16_000_000 {
         return None;
     }
+    if require_numeric >= 2 {
+        // The direct ECS clone uses one preheader base. Reject the uncommon
+        // layout whose admitted prefix straddles inline object fields and the
+        // object-owned spill array; the unchanged generic clone handles it.
+        let Some(end_slot) = layout.element_base.checked_add(bound) else {
+            return None;
+        };
+        if layout.element_base < layout.live_inline_slots && end_slot > layout.live_inline_slots {
+            return None;
+        }
+    }
     if require_numeric != 0 {
-        if !unsafe { ensure_subclass_numeric_prefix(object, layout, bound) } {
+        if !unsafe { ensure_subclass_numeric_prefix(object, layout, bound, require_numeric >= 2) } {
             return None;
         }
     }
@@ -742,6 +804,58 @@ pub extern "C" fn js_packed_arraylike_loop_guard_live(
     packed_arraylike_loop_guard(receiver, bound, require_numeric, out)
         .map(|(_, raw)| raw as i64)
         .unwrap_or(0)
+}
+
+/// Fused admission for the call-free ECS swap clone. The source layout and
+/// exact-u32 prefix are validated by the packed-loop guard, while two to four
+/// erased component columns must be pairwise-distinct owning Uint32Arrays.
+/// The first seven output words retain the ordinary source descriptor; words
+/// 7..10 receive up to four stable component header addresses. A zero return
+/// leaves the complete operation to the unchanged generic loop.
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn js_packed_ecs_u32_loop_guard(
+    receiver: f64,
+    bound: f64,
+    column0: f64,
+    column1: f64,
+    column2: f64,
+    column3: f64,
+    column_count: i32,
+    out: *mut u64,
+) -> i64 {
+    if out.is_null() || !(2..=4).contains(&column_count) {
+        return 0;
+    }
+    let Some((_, live_raw)) = packed_arraylike_loop_guard(receiver, bound, 2, out) else {
+        return 0;
+    };
+    let columns = [column0, column1, column2, column3];
+    let mut addresses = [0usize; 4];
+    let mut common_length = None;
+    for index in 0..column_count as usize {
+        let address = crate::typedarray::inline_u32_addr(columns[index]);
+        if address == 0 || addresses[..index].contains(&address) {
+            return 0;
+        }
+        let length = unsafe { (*(address as *const crate::typedarray::TypedArrayHeader)).length };
+        if common_length.is_some_and(|common| common != length) {
+            return 0;
+        }
+        common_length = Some(length);
+        addresses[index] = address;
+    }
+    unsafe {
+        for (index, address) in addresses
+            .iter()
+            .copied()
+            .take(column_count as usize)
+            .enumerate()
+        {
+            out.add(7 + index).write(address as u64);
+        }
+    }
+    live_raw as i64
 }
 
 /// Revalidate a receiver against facts published by a successful complete
@@ -843,6 +957,7 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
             || (!live_length_bound && length < admitted_bound)
             || length > capacity
             || capacity > 16_000_000
+            || require_numeric >= 2
             || (require_numeric != 0 && header._reserved & crate::gc::GC_ARRAY_RAW_F64_LAYOUT == 0)
         {
             return 0;
@@ -881,7 +996,12 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
         || (!live_length_bound && length < admitted_bound)
         || (require_numeric != 0
             && !unsafe {
-                subclass_numeric_prefix_is_proven(object, (*object).parent_class_id, admitted_bound)
+                subclass_numeric_prefix_is_proven(
+                    object,
+                    (*object).parent_class_id,
+                    admitted_bound,
+                    require_numeric >= 2,
+                )
             })
     {
         return 0;
@@ -950,7 +1070,12 @@ fn revalidate_admitted_subclass_live(
         || (bound != -1.0 && length < admitted_bound)
         || (require_numeric != 0
             && !unsafe {
-                subclass_numeric_prefix_is_proven(object, (*object).parent_class_id, admitted_bound)
+                subclass_numeric_prefix_is_proven(
+                    object,
+                    (*object).parent_class_id,
+                    admitted_bound,
+                    require_numeric >= 2,
+                )
             })
     {
         return 0;

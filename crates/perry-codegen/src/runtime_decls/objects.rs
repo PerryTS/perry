@@ -408,6 +408,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     );
     module.declare_function("js_typed_array_masked_window_data_ptr", I64, &[DOUBLE]);
     module.declare_function(
+        "js_packed_ecs_u32_loop_guard",
+        I64,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, I32, PTR],
+    );
+    module.declare_function(
         "js_typed_feedback_packed_u32_array_loop_guard",
         I32,
         &[I64, DOUBLE],

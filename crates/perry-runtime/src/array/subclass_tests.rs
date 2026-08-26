@@ -20,7 +20,7 @@
 use super::subclass::{
     array_object_receiver, array_subclass_fast_index_get, array_subclass_fast_length,
     is_array_subclass_class_id, js_packed_arraylike_index_get, js_packed_arraylike_loop_guard,
-    raw_receiver_is_heap_object,
+    js_packed_ecs_u32_loop_guard, raw_receiver_is_heap_object,
 };
 use crate::array::{clean_arr_ptr, js_array_alloc, ArrayHeader};
 use crate::object::{js_object_alloc, ObjectHeader};
@@ -262,6 +262,111 @@ fn packed_numeric_proof_is_retired_by_sso_index_overwrite() {
         js_packed_arraylike_loop_guard(receiver_h.get_nanbox_f64(), 3.0, 1, facts.as_mut_ptr(),),
         0,
         "the next numeric loop must side-exit after an element-kind transition"
+    );
+}
+
+#[test]
+fn fused_ecs_guard_requires_distinct_owning_u32_columns_and_exact_entity_ids() {
+    let class_id = 0x0074_8691;
+    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
+    let obj = js_object_alloc(class_id, 2);
+    assert!(!obj.is_null());
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_h = scope.root_nanbox_f64(receiver);
+    crate::node_stream::js_array_subclass_init(receiver_h.get_nanbox_f64(), 0.0);
+    for (index, value) in [3.0, 12.0, 7.0].into_iter().enumerate() {
+        let live_raw = receiver_h.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF;
+        crate::object::js_object_set_index_polymorphic(live_raw as i64, index as f64, value);
+    }
+
+    let left =
+        crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT32 as i32, 16);
+    let right =
+        crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT32 as i32, 16);
+    let wrong_kind =
+        crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_INT32 as i32, 16);
+    let short =
+        crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT32 as i32, 8);
+    let left_value = crate::value::js_nanbox_pointer(left as i64);
+    let right_value = crate::value::js_nanbox_pointer(right as i64);
+    let wrong_value = crate::value::js_nanbox_pointer(wrong_kind as i64);
+    let short_value = crate::value::js_nanbox_pointer(short as i64);
+    let mut facts = [0u64; 11];
+
+    assert_ne!(
+        js_packed_ecs_u32_loop_guard(
+            receiver_h.get_nanbox_f64(),
+            3.0,
+            left_value,
+            right_value,
+            0.0,
+            0.0,
+            2,
+            facts.as_mut_ptr(),
+        ),
+        0
+    );
+    assert_eq!(facts[7], left as u64);
+    assert_eq!(facts[8], right as u64);
+    assert_eq!(
+        js_packed_ecs_u32_loop_guard(
+            receiver_h.get_nanbox_f64(),
+            3.0,
+            left_value,
+            left_value,
+            0.0,
+            0.0,
+            2,
+            facts.as_mut_ptr(),
+        ),
+        0,
+        "aliased component columns must retain generic assignment semantics"
+    );
+    assert_eq!(
+        js_packed_ecs_u32_loop_guard(
+            receiver_h.get_nanbox_f64(),
+            3.0,
+            left_value,
+            wrong_value,
+            0.0,
+            0.0,
+            2,
+            facts.as_mut_ptr(),
+        ),
+        0,
+        "non-Uint32 component columns must not borrow the direct clone"
+    );
+    assert_eq!(
+        js_packed_ecs_u32_loop_guard(
+            receiver_h.get_nanbox_f64(),
+            3.0,
+            left_value,
+            short_value,
+            0.0,
+            0.0,
+            2,
+            facts.as_mut_ptr(),
+        ),
+        0,
+        "unequal column lengths need per-column out-of-bounds semantics"
+    );
+
+    let live_raw = receiver_h.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF;
+    crate::object::js_object_set_index_polymorphic(live_raw as i64, 1.0, 12.5);
+    assert_eq!(
+        js_packed_ecs_u32_loop_guard(
+            receiver_h.get_nanbox_f64(),
+            3.0,
+            left_value,
+            right_value,
+            0.0,
+            0.0,
+            2,
+            facts.as_mut_ptr(),
+        ),
+        0,
+        "a fractional entity id must revoke the exact-u32 source proof"
     );
 }
 
