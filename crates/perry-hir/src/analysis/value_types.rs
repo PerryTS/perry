@@ -1590,7 +1590,7 @@ fn infer_arraylike_method_type<F: HirTypeFacts + ?Sized>(
                 .map(|callback| function_return_type_from_expr(callback, env))
                 .unwrap_or(Type::Any),
         )),
-        "filter" | "slice" | "splice" => {
+        "filter" | "slice" | "splice" | "flat" => {
             Type::Array(Box::new(array_element_type_from_expr(receiver, env)))
         }
         "concat" => Type::Array(Box::new(Type::Any)),

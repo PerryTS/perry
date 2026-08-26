@@ -280,11 +280,29 @@ pub extern "C" fn js_array_flat_depth(arr: *const ArrayHeader, depth: f64) -> *m
     } else {
         depth as u32
     };
-    unsafe {
-        let mut result = js_array_alloc(0);
-        result = js_array_flat_into(result, arr, levels);
-        result
-    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr as *mut ArrayHeader);
+    let result = js_array_alloc(0);
+    unsafe { js_array_flat_into(result, arr_handle.get_raw_mut_ptr::<ArrayHeader>(), levels) }
+}
+
+/// Generic `Array.prototype.flat.call(receiver, depth?)` entry. The receiver is
+/// first converted with ToObject/LengthOfArrayLike while preserving holes, then
+/// flattened as an Array. `undefined` (whether omitted or explicitly supplied)
+/// selects the specification default depth of one.
+#[no_mangle]
+pub extern "C" fn js_arraylike_flat(receiver: f64, depth: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_handle = scope.root_nanbox_f64(receiver);
+    let source = js_array_from_arraylike_holey_value(receiver_handle.get_nanbox_f64());
+    let source_handle = scope.root_raw_mut_ptr(source);
+    let depth = if depth.to_bits() == crate::value::TAG_UNDEFINED {
+        1.0
+    } else {
+        crate::builtins::js_number_coerce(depth)
+    };
+    let result = js_array_flat_depth(source_handle.get_raw_mut_ptr::<ArrayHeader>(), depth);
+    f64::from_bits(crate::value::JSValue::pointer(result as *const u8).bits())
 }
 
 /// Recursive worker for `js_array_flat_depth`. Returns the (possibly
@@ -295,24 +313,35 @@ unsafe fn js_array_flat_into(
     src: *const ArrayHeader,
     depth_left: u32,
 ) -> *mut ArrayHeader {
-    let len = (*src).length as usize;
-    let elements = (src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+    // A push into `result` can allocate and move `src`; keep the source rooted
+    // and derive its live address for every observable indexed operation.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let src_handle = scope.root_raw_mut_ptr(src as *mut ArrayHeader);
+    let len = (*src_handle.get_raw_mut_ptr::<ArrayHeader>()).length as usize;
+    let exotic = crate::array::array_iteration_is_exotic(src);
     for i in 0..len {
-        let element = *elements.add(i);
-        // Per ECMAScript FlattenIntoArray, holes are absent (HasProperty is
-        // false) and are skipped, not copied as `null`/`undefined`.
-        if element.to_bits() == crate::value::TAG_HOLE {
-            continue;
-        }
+        let live_src = src_handle.get_raw_mut_ptr::<ArrayHeader>();
+        let element = if exotic {
+            if !crate::array::array_spec_has_index(live_src, i as u32) {
+                continue;
+            }
+            crate::array::array_spec_get(live_src, i as u32)
+        } else {
+            let elements =
+                (live_src as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+            let element = *elements.add(i);
+            // Per FlattenIntoArray, holes are absent and skipped.
+            if element.to_bits() == crate::value::TAG_HOLE {
+                continue;
+            }
+            element
+        };
         let mut pushed = false;
         if depth_left > 0 {
             let sub_arr = flattenable_array_ptr(element);
             if !sub_arr.is_null() {
-                let sub_len = (*sub_arr).length as usize;
-                if sub_len <= 1_000_000 {
-                    result = js_array_flat_into(result, sub_arr, depth_left - 1);
-                    pushed = true;
-                }
+                result = js_array_flat_into(result, sub_arr, depth_left - 1);
+                pushed = true;
             }
         }
         if !pushed {

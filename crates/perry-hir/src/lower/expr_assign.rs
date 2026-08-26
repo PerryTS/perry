@@ -457,6 +457,22 @@ pub(crate) fn lower_ident_assignment(
                 throw_type_error_const_assignment(&name),
             ]));
         }
+        // A JavaScript `var` inferred from an array literal can later hold an
+        // ordinary object. Lowering is source-ordered, so revoke the local's
+        // Array specialization as soon as a certainly non-array object is
+        // assigned; subsequent `x.unshift(...)` / indexed reads must use
+        // dynamic dispatch rather than ArrayHeader intrinsics. The module-wide
+        // type-widening pass mirrors this decision onto the already-emitted
+        // `Stmt::Let` declaration for codegen.
+        let invalidate_array_type = matches!(
+            ctx.lookup_local_type(&name),
+            Some(Type::Array(_)) | Some(Type::Tuple(_))
+        ) && assignment_is_certainly_non_array_object(&value);
+        if invalidate_array_type {
+            if let Some(ty) = ctx.locals.lookup_type_mut(&name) {
+                *ty = Type::Any;
+            }
+        }
         let local_set = Expr::LocalSet(id, value);
         let mirrors_script_var = super::lower_expr::global_script_this_enabled()
             && ctx.script_var_decl_names.contains(&name)
@@ -538,6 +554,19 @@ pub(crate) fn lower_ident_assignment(
             value,
         })
     }
+}
+
+fn assignment_is_certainly_non_array_object(value: &Expr) -> bool {
+    matches!(
+        value,
+        Expr::This
+            | Expr::Object(_)
+            | Expr::ObjectSpread { .. }
+            | Expr::ObjectAssign { .. }
+            | Expr::Closure { .. }
+            | Expr::Null
+            | Expr::Undefined
+    ) || matches!(value, Expr::New { class_name, .. } if class_name != "Array")
 }
 
 fn lower_assignment_target(

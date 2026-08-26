@@ -469,6 +469,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &[(DOUBLE, &recv_box), (DOUBLE, &sep)],
                         )
                     }
+                    // flat(depth?): undefined selects the default depth 1.
+                    "flat" => {
+                        let depth = nth(0).unwrap_or_else(undef);
+                        blk.call(
+                            DOUBLE,
+                            "js_arraylike_flat",
+                            &[(DOUBLE, &recv_box), (DOUBLE, &depth)],
+                        )
+                    }
                     // slice(start?, end?): has-flags distinguish omitted from undefined.
                     "slice" => {
                         let (has_start, start) = match nth(0) {

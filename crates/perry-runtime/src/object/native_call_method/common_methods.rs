@@ -859,7 +859,7 @@ pub(super) unsafe fn dispatch_common(
             if !args_ptr.is_null() {
                 for i in 0..args_len {
                     let val = *args_ptr.add(i);
-                    arr = crate::array::js_array_push_f64(arr, val);
+                    arr = crate::array::js_array_push_f64_spec(arr, val);
                 }
             }
             return Some(crate::array::js_array_length(arr) as f64);

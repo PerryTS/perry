@@ -70,7 +70,8 @@ pub use self::element_shape::{
 pub(crate) use self::element_shape::{test_element_shape_record_exists, test_serialize};
 pub use self::flat_clone::{
     js_array_clone, js_array_clone_for_spread, js_array_entries, js_array_flat,
-    js_array_flat_depth, js_array_keys, js_array_values, js_short_packed_spread_values,
+    js_array_flat_depth, js_array_keys, js_array_values, js_arraylike_flat,
+    js_short_packed_spread_values,
 };
 pub use self::from_concat::{
     array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,
@@ -121,7 +122,7 @@ pub use self::immutable::{
 pub(crate) use self::indexing::test_keys_array_slot_fallbacks;
 pub(crate) use self::indexing::{
     array_has_own_index, array_iteration_is_exotic, array_proto_iterator_modified,
-    array_prototype_has_index_flag, array_spec_get, array_spec_has_index,
+    array_prototype_has_index_flag, array_spec_get, array_spec_has_index, array_spec_set,
     invalidate_array_index_fast_path, keys_array_len_capped_to_capacity, keys_array_slot,
     note_array_proto_iterator_write, note_object_prototype_index_write,
     object_prototype_has_index_flag, PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
@@ -193,9 +194,9 @@ pub use self::jsvalue_api::{
 pub(crate) use self::push_pop::guard_writable_length;
 pub use self::push_pop::{
     js_array_delete, js_array_grow, js_array_numeric_push_f64_unboxed, js_array_pop_f64,
-    js_array_push_f64, js_array_push_hole, js_array_push_spread_f64, js_array_set_length,
-    js_array_set_length_strict, js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue,
-    js_array_unshift_variadic,
+    js_array_push_f64, js_array_push_f64_spec, js_array_push_hole, js_array_push_spread_f64,
+    js_array_set_length, js_array_set_length_strict, js_array_shift_f64, js_array_unshift_f64,
+    js_array_unshift_jsvalue, js_array_unshift_variadic,
 };
 pub use self::reduce_right::js_array_reduce_right;
 pub use self::search::{

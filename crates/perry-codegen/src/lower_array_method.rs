@@ -933,7 +933,7 @@ pub(crate) fn lower_array_method(
                 let len_i32 = ctx
                     .block()
                     .call(I32, "js_array_length", &[(I64, &new_handle)]);
-                Ok(ctx.block().sitofp(I32, &len_i32, DOUBLE))
+                Ok(ctx.block().uitofp(I32, &len_i32, DOUBLE))
             }
             // Issue #655 (chained-receiver path): without this arm, a
             // chained `obj.field.splice(...)` resolved through `is_array_expr`

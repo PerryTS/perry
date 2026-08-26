@@ -58,10 +58,28 @@ struct WidenSets {
     object_like: HashSet<LocalId>,
     /// Assigned a primitive that is not a JS number → widen a numeric declared type.
     non_number_primitive: HashSet<LocalId>,
+    /// Assigned a certainly non-array object -> revoke Array/Tuple intrinsics.
+    non_array_object: HashSet<LocalId>,
+}
+
+fn rhs_certainly_non_array_object(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::This
+            | Expr::Object(_)
+            | Expr::ObjectSpread { .. }
+            | Expr::ObjectAssign { .. }
+            | Expr::Closure { .. }
+            | Expr::Null
+            | Expr::Undefined
+    ) || matches!(expr, Expr::New { class_name, .. } if class_name != "Array")
 }
 
 fn visit_expr(expr: &Expr, out: &mut WidenSets, env: &HirTypeEnv) {
     if let Expr::LocalSet(id, rhs) = expr {
+        if rhs_certainly_non_array_object(rhs) {
+            out.non_array_object.insert(*id);
+        }
         if rhs_certainly_object_like(rhs, env) {
             out.object_like.insert(*id);
         } else if rhs_certainly_non_number_primitive(rhs, env) {
@@ -174,6 +192,7 @@ fn widen_lets_stmt(stmt: &mut Stmt, sets: &WidenSets) {
                     sets.object_like.contains(id) || sets.non_number_primitive.contains(id)
                 }
                 Type::String | Type::Boolean => sets.object_like.contains(id),
+                Type::Array(_) | Type::Tuple(_) => sets.non_array_object.contains(id),
                 _ => false,
             };
             if widen {
@@ -276,7 +295,10 @@ impl TypeWidening {
     }
 
     pub(crate) fn apply(&self, stmts: &mut [Stmt]) {
-        if self.sets.object_like.is_empty() && self.sets.non_number_primitive.is_empty() {
+        if self.sets.object_like.is_empty()
+            && self.sets.non_number_primitive.is_empty()
+            && self.sets.non_array_object.is_empty()
+        {
             return;
         }
         for s in stmts {
@@ -455,6 +477,36 @@ mod tests {
                 init: Some(Expr::Array(vec![])),
             },
             Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::ArrayPop(2)))),
+        ];
+
+        let mut widening = TypeWidening::from_module(&module);
+        widening.collect(&module.init);
+        widening.apply(&mut module.init);
+
+        assert_eq!(let_ty(&module.init, 1), &Type::Any);
+    }
+
+    #[test]
+    fn widens_array_local_assigned_plain_object() {
+        let mut module = Module::new("type-widening-test");
+        module.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "value".to_string(),
+                ty: Type::Array(Box::new(Type::Number)),
+                mutable: true,
+                init: Some(Expr::Array(vec![Expr::Number(1.0)])),
+            },
+            Stmt::Expr(Expr::LocalSet(
+                1,
+                Box::new(Expr::New {
+                    class_name: "__AnonShape_test".to_string(),
+                    args: vec![],
+                    type_args: vec![],
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+            )),
         ];
 
         let mut widening = TypeWidening::from_module(&module);

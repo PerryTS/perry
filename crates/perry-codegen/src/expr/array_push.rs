@@ -256,7 +256,7 @@ fn emit_array_handle_length(
     }
     let blk = ctx.block();
     let len_i32 = blk.call(I32, "js_array_length", &[(I64, array_handle)]);
-    blk.sitofp(I32, &len_i32, DOUBLE)
+    blk.uitofp(I32, &len_i32, DOUBLE)
 }
 
 fn emit_array_box_length(ctx: &mut FnCtx<'_>, array_box: &str, value_discarded: bool) -> String {
@@ -489,7 +489,7 @@ fn lower_array_push_spec_order(
             let recv_handle = unbox_to_i64(blk, &recv_box);
             let new_handle = blk.call(
                 I64,
-                "js_array_push_f64",
+                "js_array_push_f64_spec",
                 &[(I64, &recv_handle), (DOUBLE, &v)],
             );
             let new_box = nanbox_pointer_inline(blk, &new_handle);
@@ -725,7 +725,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                     let arr_handle = unbox_to_i64(blk, &arr_box);
                     let new_handle = blk.call(
                         I64,
-                        "js_array_push_f64",
+                        "js_array_push_f64_spec",
                         &[(I64, &arr_handle), (DOUBLE, &v)],
                     );
                     let new_box = nanbox_pointer_inline(blk, &new_handle);
@@ -741,7 +741,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                 ctx.record_lowered_value_with_access_mode_and_facts(
                     "NumericArrayPush",
                     Some(*array_id),
-                    "js_array_push_f64",
+                    "js_array_push_f64_spec",
                     &fallback,
                     Some(BoundsState::Unknown),
                     None,
@@ -872,7 +872,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                     let blk = ctx.block();
                     let new_handle = blk.call(
                         I64,
-                        "js_array_push_f64",
+                        "js_array_push_f64_spec",
                         &[(I64, &arr_handle), (DOUBLE, &v)],
                     );
                     let new_box = nanbox_pointer_inline(blk, &new_handle);
@@ -960,6 +960,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                         let integrity_bits = blk.and(I16, &obj_flags, "1031");
                         blk.icmp_eq(I16, &integrity_bits, "0")
                     };
+                    // A sticky runtime byte records indexed properties on
+                    // Array/Object.prototype (and custom Array prototypes).
+                    // Such a property can intercept push with an inherited
+                    // setter, so the raw append is valid only while the default
+                    // prototype chain remains pristine.
+                    let invalidated =
+                        blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+                    let prototype_clean = blk.icmp_eq(I8, &invalidated, "0");
+                    let clean = blk.and(I1, &clean, &prototype_clean);
                     let length = blk.safe_load_i32_from_ptr(&arr_handle);
                     let cap_addr = blk.add(I64, &arr_handle, "4");
                     let cap_ptr = blk.inttoptr(I64, &cap_addr);
@@ -1093,7 +1102,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                     let blk = ctx.block();
                     let new_handle = blk.call(
                         I64,
-                        "js_array_push_f64",
+                        "js_array_push_f64_spec",
                         &[(I64, &arr_handle), (DOUBLE, &v)],
                     );
                     let new_box = nanbox_pointer_inline(blk, &new_handle);
@@ -1114,7 +1123,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let new_handle = blk.call(
                 I64,
-                "js_array_push_f64",
+                "js_array_push_f64_spec",
                 &[(I64, &arr_handle), (DOUBLE, &v)],
             );
             let new_box = nanbox_pointer_inline(blk, &new_handle);

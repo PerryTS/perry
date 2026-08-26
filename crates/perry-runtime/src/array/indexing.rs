@@ -385,6 +385,82 @@ pub(crate) fn array_spec_get(arr: *const ArrayHeader, index: u32) -> f64 {
     }
 }
 
+/// Spec `Set(O, ToString(index), value, true)` for an Array receiver. Unlike
+/// the internal dense setter, this observes an inherited indexed accessor
+/// before creating an own element. Array mutators use it on their exotic path
+/// because a prototype setter may mutate the receiver (including freezing it
+/// or making `length` non-writable) before the mutator's final length Set.
+pub(crate) fn array_spec_set(arr: *mut ArrayHeader, index: u32, value: f64) -> *mut ArrayHeader {
+    let arr = clean_arr_ptr_mut(arr);
+    if arr.is_null() {
+        return arr;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    let value_handle = scope.root_nanbox_f64(value);
+    let receiver =
+        || crate::value::js_nanbox_pointer(arr_handle.get_raw_mut_ptr::<ArrayHeader>() as i64);
+    let key = index.to_string();
+
+    unsafe {
+        if array_has_own_index(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), index) {
+            return js_array_set_f64_extend_strict(
+                arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                index,
+                value_handle.get_nanbox_f64(),
+            );
+        }
+
+        let mut inherited_owner =
+            array_custom_array_prototype(arr_handle.get_raw_mut_ptr::<ArrayHeader>())
+                .filter(|proto| array_has_own_index(*proto, index))
+                .map(|proto| proto as usize)
+                .unwrap_or(0);
+        if inherited_owner == 0 {
+            let proto = array_prototype_addr();
+            inherited_owner = if proto != 0
+                && proto != arr_handle.get_raw_mut_ptr::<ArrayHeader>() as usize
+                && array_has_own_index(proto as *const ArrayHeader, index)
+            {
+                proto
+            } else if object_prototype_has_index_flag()
+                && crate::array::object_prototype_has_index_prop(index)
+            {
+                object_prototype_addr()
+            } else {
+                0
+            };
+        }
+
+        if inherited_owner != 0 {
+            if let Some(accessor) = crate::object::get_accessor_descriptor(inherited_owner, &key) {
+                if accessor.set == 0 {
+                    crate::collection_iter::throw_type_error(&format!(
+                        "Cannot set property {index} which has only a getter"
+                    ));
+                }
+                crate::object::invoke_accessor_setter(
+                    accessor.set,
+                    receiver(),
+                    value_handle.get_nanbox_f64(),
+                );
+                return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+            }
+            if crate::object::get_property_attrs(inherited_owner, &key)
+                .is_some_and(|attrs| !attrs.writable())
+            {
+                throw_frozen_array_index_write(index);
+            }
+        }
+
+        js_array_set_f64_extend_strict(
+            arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+            index,
+            value_handle.get_nanbox_f64(),
+        )
+    }
+}
+
 /// Read an own indexed property from an Array prototype while preserving the
 /// original receiver for an inherited accessor's `this` value.
 unsafe fn array_inherited_index_get(

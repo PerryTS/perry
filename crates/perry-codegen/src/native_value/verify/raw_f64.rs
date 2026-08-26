@@ -72,7 +72,7 @@ pub(crate) fn validate_js_value_bits_record(record: &NativeRepRecord, errors: &m
 pub(crate) fn raw_f64_dynamic_fallback_record(record: &NativeRepRecord) -> bool {
     matches!(
         (record.expr_kind.as_str(), record.consumer.as_str()),
-        ("NumericArrayPush", "js_array_push_f64")
+        ("NumericArrayPush", "js_array_push_f64_spec")
             | (
                 "NumericArrayIndexGet",
                 "js_typed_feedback_array_index_get_fallback_boxed"

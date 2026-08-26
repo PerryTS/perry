@@ -309,7 +309,12 @@ pub(super) fn al_length(recv: f64) -> i64 {
                 // `Object.prototype.length = 2` (test262 sort/S15.4.4.11_A6_T2,
                 // splice/S15.4.4.12_A4_T1) resolves only when there is no own
                 // property at all.
-                if len_val.to_bits() == TAG_UNDEFINED && !own_present {
+                // The fast own-field getter uses a numeric zero miss sentinel
+                // for some empty anonymous shapes. Existence, not that returned
+                // payload, decides whether Get must continue up the prototype
+                // chain; otherwise `{}` incorrectly hides
+                // `Object.prototype.length` with a fabricated own zero.
+                if !own_present {
                     len_val = object_get_named_property_chain(raw_addr, "length");
                     // The recorded/default proto tables may resolve a DIFFERENT
                     // cell than the user-visible `Object.prototype` (read off
@@ -361,6 +366,11 @@ fn canonical_object_prototype_named_get(name: &str) -> f64 {
         return undef();
     }
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let proto_bits = f64::from_bits(JSValue::pointer(proto_v.as_pointer::<u8>()).bits());
+    let key_bits = f64::from_bits(JSValue::string_ptr(key).bits());
+    if crate::object::js_object_has_own(proto_bits, key_bits).to_bits() != TAG_TRUE {
+        return undef();
+    }
     crate::object::js_object_get_field_by_name_f64(
         proto_v.as_pointer::<crate::object::ObjectHeader>(),
         key,
@@ -1535,7 +1545,7 @@ pub(super) unsafe fn real_array_mutator(
             crate::array::guard_writable_length(arr);
             let mut a = arr;
             for i in 0..args_len {
-                a = crate::array::js_array_push_f64(a, arg_or_undef(args_ptr, args_len, i));
+                a = crate::array::js_array_push_f64_spec(a, arg_or_undef(args_ptr, args_len, i));
             }
             crate::array::js_array_length(a) as f64
         }

@@ -2102,9 +2102,20 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         let method_key =
             crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
         if !method_key.is_null() {
-            if let Some(field_val) =
-                super::prototype_chain::resolve_inherited_field(obj as usize, method_key)
-            {
+            let inherited = super::prototype_chain::resolve_inherited_field(
+                obj as usize,
+                method_key,
+            )
+            .or_else(|| unsafe {
+                // A plain object's implicit Object.prototype is not stored in
+                // the recorded-prototype table. Property reads already use
+                // this guarded fallback, so direct `obj.method()` dispatch
+                // must consult it too (including user-added methods such as a
+                // borrowed Array.prototype.join). The helper rejects arrays,
+                // exotic/null-prototype objects, and explicit overrides.
+                super::field_get_set::ordinary_object_prototype_property_value(obj, method_key)
+            });
+            if let Some(field_val) = inherited {
                 if !field_val.is_undefined() && !field_val.is_null() {
                     let bound = crate::closure::clone_closure_rebind_this(
                         field_val.bits(),
