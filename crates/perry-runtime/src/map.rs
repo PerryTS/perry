@@ -132,7 +132,7 @@ impl MapSideAllocation {
         Self {
             entries,
             capacity,
-            numeric_index: Box::new(crate::fast_hash::new_ptr_hash_map()),
+            numeric_index: Box::new(NumericIndex::new()),
         }
     }
 
@@ -307,7 +307,206 @@ impl PartialEq for NumericKey {
 }
 impl Eq for NumericKey {}
 
-type NumericIndex = crate::fast_hash::PtrHashMap<NumericKey, u32>;
+const DENSE_NUMERIC_EMPTY: u32 = u32::MAX;
+const DENSE_NUMERIC_MIN_KEYS: usize = 8;
+const DENSE_NUMERIC_SPAN_FACTOR: usize = 4;
+const DENSE_NUMERIC_MAX_SLOTS: usize = 1 << 20;
+
+struct DenseNumericIndex {
+    base: u32,
+    slots: Vec<u32>,
+}
+
+/// Numeric Map keys always retain the hash index for complete semantics, but
+/// exact nonnegative integers also acquire a bounded range table once their
+/// observed density justifies it. Sequential IDs are common outside ECS too
+/// (database rows, handles, protocol sequence numbers), and a range lookup is
+/// just bounds-check + load instead of a hash and Swiss-table control probe.
+///
+/// The dense table is deliberately adaptive rather than key-magnitude based:
+/// a run beginning at 1_000_000 costs the same as a run beginning at zero.
+/// Sparse, fractional, negative, tagged, and very wide key sets continue to
+/// use `hashed` without allocating a range proportional to their values.
+struct NumericIndex {
+    hashed: crate::fast_hash::PtrHashMap<NumericKey, u32>,
+    dense: Option<DenseNumericIndex>,
+    dense_key_count: usize,
+}
+
+#[inline]
+fn dense_integer_key(key: NumericKey) -> Option<u32> {
+    let value = f64::from_bits(key.0);
+    if !value.is_finite() || value < 0.0 || value > u32::MAX as f64 {
+        return None;
+    }
+    let integer = value as u32;
+    (integer as f64 == value).then_some(integer)
+}
+
+impl NumericIndex {
+    fn new() -> Self {
+        Self {
+            hashed: crate::fast_hash::new_ptr_hash_map(),
+            dense: None,
+            dense_key_count: 0,
+        }
+    }
+
+    #[inline]
+    fn get(&self, key: &NumericKey) -> Option<u32> {
+        if let (Some(integer), Some(dense)) = (dense_integer_key(*key), self.dense.as_ref()) {
+            if integer >= dense.base {
+                let offset = integer as usize - dense.base as usize;
+                if offset < dense.slots.len() {
+                    let entry = dense.slots[offset];
+                    return (entry != DENSE_NUMERIC_EMPTY).then_some(entry);
+                }
+            }
+        }
+        self.hashed.get(key).copied()
+    }
+
+    #[cfg(test)]
+    fn contains_key(&self, key: &NumericKey) -> bool {
+        self.get(key).is_some()
+    }
+
+    fn insert(&mut self, key: NumericKey, entry_index: u32) {
+        let integer = dense_integer_key(key);
+        let is_new = self.hashed.insert(key, entry_index).is_none();
+        if is_new && integer.is_some() {
+            self.dense_key_count += 1;
+        }
+
+        let Some(integer) = integer else {
+            return;
+        };
+        if let Some(dense) = self.dense.as_mut() {
+            if integer >= dense.base {
+                let offset = integer as usize - dense.base as usize;
+                if offset < dense.slots.len() {
+                    dense.slots[offset] = entry_index;
+                    return;
+                }
+            }
+            self.maybe_expand_dense(integer);
+        } else {
+            self.maybe_initialize_dense();
+        }
+    }
+
+    fn remove(&mut self, key: &NumericKey) -> Option<u32> {
+        let removed = self.hashed.remove(key);
+        if removed.is_some() {
+            if let Some(integer) = dense_integer_key(*key) {
+                self.dense_key_count = self.dense_key_count.saturating_sub(1);
+                if let Some(dense) = self.dense.as_mut() {
+                    if integer >= dense.base {
+                        let offset = integer as usize - dense.base as usize;
+                        if offset < dense.slots.len() {
+                            dense.slots[offset] = DENSE_NUMERIC_EMPTY;
+                        }
+                    }
+                }
+            }
+        }
+        removed
+    }
+
+    fn clear(&mut self) {
+        self.hashed.clear();
+        self.dense = None;
+        self.dense_key_count = 0;
+    }
+
+    fn repair_entry_indices_after_delete(&mut self, deleted_index: u32) {
+        for entry_index in self.hashed.values_mut() {
+            if *entry_index > deleted_index {
+                *entry_index -= 1;
+            }
+        }
+        if let Some(dense) = self.dense.as_mut() {
+            for entry_index in &mut dense.slots {
+                if *entry_index != DENSE_NUMERIC_EMPTY && *entry_index > deleted_index {
+                    *entry_index -= 1;
+                }
+            }
+        }
+    }
+
+    fn allowed_dense_span(&self) -> usize {
+        self.dense_key_count
+            .saturating_mul(DENSE_NUMERIC_SPAN_FACTOR)
+            .clamp(32, DENSE_NUMERIC_MAX_SLOTS)
+    }
+
+    fn maybe_initialize_dense(&mut self) {
+        if self.dense_key_count < DENSE_NUMERIC_MIN_KEYS {
+            return;
+        }
+
+        let mut min_key = u32::MAX;
+        let mut max_key = 0u32;
+        for &key in self.hashed.keys() {
+            let Some(integer) = dense_integer_key(key) else {
+                continue;
+            };
+            min_key = min_key.min(integer);
+            max_key = max_key.max(integer);
+        }
+        let span = max_key as u64 - min_key as u64 + 1;
+        let allowed = self.allowed_dense_span();
+        if span > allowed as u64 {
+            return;
+        }
+
+        let target_len = (span as usize)
+            .next_power_of_two()
+            .min(allowed)
+            .max(span as usize);
+        self.rebuild_dense(min_key, target_len);
+    }
+
+    fn maybe_expand_dense(&mut self, integer: u32) {
+        let Some(dense) = self.dense.as_ref() else {
+            return;
+        };
+        let current_base = dense.base as u64;
+        let current_end = current_base + dense.slots.len() as u64;
+        let new_base = current_base.min(integer as u64);
+        let new_end = current_end.max(integer as u64 + 1);
+        let needed = (new_end - new_base) as usize;
+        let allowed = self.allowed_dense_span();
+        if needed > allowed {
+            return;
+        }
+
+        let addressable = (u32::MAX as u64 + 1 - new_base) as usize;
+        let target_len = needed
+            .max(dense.slots.len().saturating_mul(2))
+            .min(allowed)
+            .min(addressable);
+        if target_len >= needed {
+            self.rebuild_dense(new_base as u32, target_len);
+        }
+    }
+
+    fn rebuild_dense(&mut self, base: u32, len: usize) {
+        let mut slots = vec![DENSE_NUMERIC_EMPTY; len];
+        for (&key, &entry_index) in &self.hashed {
+            let Some(integer) = dense_integer_key(key) else {
+                continue;
+            };
+            if integer >= base {
+                let offset = integer as usize - base as usize;
+                if offset < slots.len() {
+                    slots[offset] = entry_index;
+                }
+            }
+        }
+        self.dense = Some(DenseNumericIndex { base, slots });
+    }
+}
 
 /// `true` if `bits` is a non-pointer JSValue (number, bool, undefined,
 /// null, or any NaN-tagged value that is NOT a string/heap pointer).
@@ -685,6 +884,17 @@ pub(crate) fn test_map_numeric_index_contains(map: *const MapHeader, key: f64) -
             .numeric_index
             .as_ref()
             .is_some_and(|index| index.contains_key(&NumericKey(bits)))
+    }
+}
+
+#[cfg(test)]
+fn test_map_dense_numeric_index_range(map: *const MapHeader) -> Option<(u32, usize)> {
+    unsafe {
+        (*map)
+            .numeric_index
+            .as_ref()
+            .and_then(|index| index.dense.as_ref())
+            .map(|dense| (dense.base, dense.slots.len()))
     }
 }
 
@@ -1145,7 +1355,7 @@ pub(crate) unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
     // undefined/null) hash by raw bits — no pointers, immune to GC moves.
     if is_safe_numeric_key(key_bits) {
         if let Some(index) = (*map).numeric_index.as_ref() {
-            if let Some(&i) = index.get(&NumericKey(key_bits)) {
+            if let Some(i) = index.get(&NumericKey(key_bits)) {
                 if i < size {
                     return i as i32;
                 }
@@ -1910,11 +2120,7 @@ unsafe fn repair_map_indices_after_ordered_delete(
         if is_safe_numeric_key(deleted_bits) {
             index.remove(&NumericKey(deleted_bits));
         }
-        for entry_idx in index.values_mut() {
-            if *entry_idx > deleted_idx {
-                *entry_idx -= 1;
-            }
-        }
+        index.repair_entry_indices_after_delete(deleted_idx);
     }
 
     MAP_STRING_INDEX.with(|indexes| {
@@ -2731,6 +2937,44 @@ mod tests {
             assert_eq!(js_map_get(map, i as f64), (i * 10) as f64);
             assert!(test_map_numeric_index_contains(map, i as f64));
         }
+    }
+
+    #[test]
+    fn numeric_index_adapts_to_dense_high_range_without_widening_for_sparse_keys() {
+        let map = js_map_alloc(4);
+
+        for key in 1_024..1_040 {
+            js_map_set(map, key as f64, (key * 10) as f64);
+        }
+        let (base, len) = test_map_dense_numeric_index_range(map)
+            .expect("a dense run should activate the numeric range index");
+        assert!(base <= 1_024);
+        assert!(base as usize + len > 1_039);
+        assert!(
+            len <= 64,
+            "dense range must scale with span, not key magnitude"
+        );
+
+        for key in 1_024..1_040 {
+            assert_eq!(js_map_get(map, key as f64), (key * 10) as f64);
+        }
+        assert_eq!(js_map_has(map, 1_040.0), 0);
+
+        js_map_set(map, 1_000_000.0, 77.0);
+        js_map_set(map, -3.0, 88.0);
+        js_map_set(map, 4.5, 99.0);
+        assert_eq!(js_map_get(map, 1_000_000.0), 77.0);
+        assert_eq!(js_map_get(map, -3.0), 88.0);
+        assert_eq!(js_map_get(map, 4.5), 99.0);
+        assert_eq!(
+            test_map_dense_numeric_index_range(map),
+            Some((base, len)),
+            "isolated sparse keys must stay on the hash fallback"
+        );
+
+        js_map_clear(map);
+        assert_eq!(test_map_dense_numeric_index_range(map), None);
+        assert_eq!(js_map_size(map), 0);
     }
 
     #[test]
