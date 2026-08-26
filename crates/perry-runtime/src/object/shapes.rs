@@ -823,6 +823,50 @@ pub(crate) unsafe fn birth_stamp_object_shape(
     }
 }
 
+/// Stamp a newborn compiled-class allocation from the ShapeId installed at
+/// module initialization, without re-canonicalizing the same shape facts.
+///
+/// A hit proves the immutable ordered-keys edge and live inline-slot bound
+/// directly from the agent-local descriptor. Canonical class keys never mutate
+/// in place: structural growth forks a new keys array and mints a new ShapeId,
+/// so exact `(ShapeId, keys pointer)` identity also carries the descriptor's
+/// logical key count. Missing worker-local ids and learned-width mismatches
+/// return `false` for the existing mint-and-validate path to handle.
+///
+/// # Safety
+///
+/// `obj` must be a freshly allocated, unpublished `ObjectHeader` and `keys`
+/// must be the module-init canonical keys pointer paired with
+/// `runtime_shape_id`. No allocation or collection may occur between this
+/// function returning `true` and initialization of the newborn's fields.
+#[inline]
+pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
+    obj: *mut crate::object::ObjectHeader,
+    runtime_shape_id: u32,
+    keys: *mut ArrayHeader,
+    live_inline_slot_count: u32,
+) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    let Some(descriptor) = shape_descriptor_by_id(runtime_shape_id) else {
+        return false;
+    };
+    if descriptor.keys != keys as u64
+        || descriptor.live_inline_slot_count != live_inline_slot_count
+        || descriptor.semantic_generation != 0
+        || descriptor.object_kind != ShapeObjectKind::Ordinary
+    {
+        return false;
+    }
+    (*obj).parent_class_id = runtime_shape_id;
+    if !crate::arena::pointer_in_nursery(obj as usize) {
+        note_old_generation_carrier(Some(descriptor));
+    }
+    debug_assert_object_shape_parity(obj);
+    true
+}
+
 /// Publish the exact descriptor for a FRESHLY ALLOCATED header. #8113: the
 /// birth live-slot bound must be supplied because no header word carries it.
 ///
