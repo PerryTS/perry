@@ -795,13 +795,24 @@ fn inline_functions_inner(
     // — without inlining each call goes through `js_native_call_method`
     // dispatch + heap-allocates the returned `{entityId, componentType,
     // component}` literal.
+    // A method that is itself an inline candidate must not see the method
+    // candidate map while its own body is optimized: a direct or mutual
+    // method call could recursively expand without a stable fixed point.
+    // Standalone functions already use the ordinary self-recursion rejection
+    // and bounded nested-inline machinery, and skipping them used to leave
+    // ordinary calls inside small candidate methods permanently outlined.
+    // That is particularly costly when the helper returns an anonymous record
+    // which the later aggregate-scalar pass could otherwise eliminate.
+    let no_method_candidates: HashMap<(String, String), MethodCandidate> = HashMap::new();
     for class in &mut module.classes {
         let class_name = class.name.clone();
         for method in &mut class.methods {
-            // Skip if this method is itself a candidate (avoid recursion)
-            if method_candidates.contains_key(&(class_name.clone(), method.name.clone())) {
-                continue;
-            }
+            let method_candidates_for_body =
+                if method_candidates.contains_key(&(class_name.clone(), method.name.clone())) {
+                    &no_method_candidates
+                } else {
+                    &method_candidates
+                };
             let mut local_id = next_module_id;
             let mut local_types: HashMap<LocalId, String> = HashMap::new();
             let mut exact_receiver_facts = ExactReceiverFacts::new();
@@ -813,7 +824,7 @@ fn inline_functions_inner(
             inline_calls_in_stmts(
                 &mut method.body,
                 &func_candidates,
-                &method_candidates,
+                method_candidates_for_body,
                 &class_names,
                 &mut local_types,
                 &mut exact_receiver_facts,
@@ -1389,6 +1400,72 @@ mod tests {
 
         let dump = format!("{:?}", module.classes[0].methods[0].body);
         assert!(!dump.contains("requireObjectCoercible"), "{dump}");
+        assert!(!dump.contains("FuncRef(1)"), "{dump}");
+        assert!(dump.contains("DoWhile"), "{dump}");
+    }
+
+    #[test]
+    fn candidate_method_still_inlines_standalone_record_helper() {
+        let record = |value| Expr::New {
+            class_name: "__AnonShape_result".to_string(),
+            args: vec![Expr::Integer(value)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        };
+        let mut resolver = function(
+            1,
+            vec![
+                Stmt::If {
+                    condition: Expr::Bool(false),
+                    then_branch: vec![Stmt::Return(Some(record(1)))],
+                    else_branch: None,
+                },
+                Stmt::Return(Some(record(2))),
+            ],
+        );
+        resolver.name = "resolve".to_string();
+
+        let mut method = function(
+            2,
+            vec![
+                Stmt::Let {
+                    id: 10,
+                    name: "result".to_string(),
+                    ty: Type::Any,
+                    mutable: false,
+                    init: Some(Expr::Call {
+                        callee: Box::new(Expr::FuncRef(1)),
+                        args: Vec::new(),
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                },
+                Stmt::Return(Some(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(10)),
+                    property: "type".to_string(),
+                    byte_offset: 0,
+                })),
+            ],
+        );
+        method.name = "exists".to_string();
+        assert!(is_inlinable_method(&method));
+
+        let mut class = anon_class(1, "Store");
+        class.methods.push(method);
+        let mut module = Module::new("candidate-method-helper.ts");
+        module.functions.push(resolver);
+        module.classes.push(class);
+
+        inline_functions(
+            &mut module,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        let dump = format!("{:?}", module.classes[0].methods[0].body);
         assert!(!dump.contains("FuncRef(1)"), "{dump}");
         assert!(dump.contains("DoWhile"), "{dump}");
     }
