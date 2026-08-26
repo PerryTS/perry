@@ -745,6 +745,15 @@
       "linux"
     ]
   },
+  "test_parcel_watcher_facade": {
+    "issue": "8841",
+    "added": "2026-08-26",
+    "category": "ci-env",
+    "reason": "Release run 32922022811: the Linux Node oracle exits in package_json_reader while Perry's native watcher sees events but times out waiting for the nested create event. Track the CI-dependent facade mismatch without weakening the dedicated Parcel watcher integration tests.",
+    "platforms": [
+      "linux"
+    ]
+  },
   "test_parity_cluster": {
     "issue": "8271",
     "added": "2026-08-17",

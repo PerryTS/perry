@@ -2401,7 +2401,9 @@ jobs:
   #
   # Sharded 2026-08-16: the unsharded job was killed by GitHub's 6-hour job
   # cap (run 31935729773, 11:44 -> 17:45) — the release gate could not
-  # complete even in principle. Each shard runs `run_parity_tests.sh
+  # complete even in principle. Increased 8 -> 12 shards after release run
+  # 32922022811 reached only 152/173 tests in shard 8 before the old
+  # 150-minute cap. Each shard runs `run_parity_tests.sh
   # --shard N/M` (round-robin partition, same mechanism as gap-suite) plus
   # `parity_known_failures.py`, which is shard-safe by design ("not in this
   # shard is never flagged"). The AGGREGATE gates — the threshold minimums
@@ -2426,7 +2428,10 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.plan).parity.shards }}
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    # A healthy shard must finish well below this cap after the 12-way split.
+    # 210 is a hang backstop with cold-cache/host-contention margin, not a
+    # performance budget; a cancelled shard makes full-suite-gate fail.
+    timeout-minutes: 210
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install Rust toolchain

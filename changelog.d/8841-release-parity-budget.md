@@ -1,0 +1,1 @@
+- Keep release-grade parity CI viable as the corpus grows by spreading it over twelve shards, adding timeout margin, and tracking the Linux Parcel watcher facade mismatch surfaced by the v0.5.1519 candidate.
