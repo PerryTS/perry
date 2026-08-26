@@ -39,7 +39,7 @@
   },
   "test_class_field_layout": {
     "issue": "8841",
-    "added": "2026-08-26",
+    "added": "2026-08-25",
     "category": "bug-open",
     "reason": "Reproduces 5/5 on pre-#8835 r13 and in r14 Full CI: both runtimes exit 0 but their class-field layout output differs. Tracked in #8841.",
     "platforms": [
@@ -243,7 +243,7 @@
   },
   "test_issue_3199_3200_tls_server_tlssocket": {
     "issue": "8841",
-    "added": "2026-08-26",
+    "added": "2026-08-25",
     "category": "bug-open",
     "reason": "Reproduces 5/5 on both pre-#8835 r13 and r14: Perry exits 1 after the initial TLS server-address line while Node completes with exit 0. Tracked in #8841.",
     "platforms": [
@@ -960,7 +960,7 @@
   },
   "test_stress_promises": {
     "issue": "8841",
-    "added": "2026-08-26",
+    "added": "2026-08-25",
     "category": "bug-open",
     "reason": "Reproduces 5/5 on both pre-#8835 r13 and r14: Perry dies with SIGSEGV (exit 139) after six output lines while Node exits 0. Tracked in #8841.",
     "platforms": [

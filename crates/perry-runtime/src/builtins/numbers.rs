@@ -719,7 +719,7 @@ pub(crate) fn string_coerce_is_inert(value: f64) -> bool {
 /// `js_string_coerce` used for `String(x)` / `'' + x`. `prop_name_*` carries
 /// the static method name for the diagnostic.
 #[no_mangle]
-pub extern "C" fn js_string_coerce_method_this(
+pub extern "C-unwind" fn js_string_coerce_method_this(
     value: f64,
     prop_name_ptr: *const u8,
     prop_name_len: usize,
