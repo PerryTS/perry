@@ -4,6 +4,13 @@ static CLASS_FIELD_SETTER_CALLS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 static CLASS_FIELD_SETTER_VALUE_BITS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+// Keep the two direct-call fixtures distinguishable under MSVC's identical
+// COMDAT folding: their different Rust signatures otherwise lower to the same
+// x64 machine code, which makes pointer-identity guard tests spuriously fail.
+static TEST_DIRECT_METHOD_CALLS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+static TEST_DIRECT_CLOSURE_CALLS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 extern "C" fn test_class_field_setter(_this: f64, value: f64) -> f64 {
     CLASS_FIELD_SETTER_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -12,10 +19,12 @@ extern "C" fn test_class_field_setter(_this: f64, value: f64) -> f64 {
 }
 
 extern "C" fn test_direct_method(_this: f64, value: f64) -> f64 {
+    TEST_DIRECT_METHOD_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     value
 }
 
 extern "C" fn test_direct_closure(_closure: *const crate::closure::ClosureHeader, arg: f64) -> f64 {
+    TEST_DIRECT_CLOSURE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     arg
 }
 
