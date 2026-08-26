@@ -508,19 +508,35 @@ pub extern "C" fn js_object_get_field_ic_miss(
         // run time — more than the entire polymorphic-dispatch fix above saved.
         //
         // `GC_TYPE_ARRAY` is a genuine dense array: buffers, typed arrays, lazy
-        // arrays, Sets and Maps all carry their own distinct `obj_type`, and an
-        // `class X extends Array` instance is an `ObjectHeader`
-        // (`GC_TYPE_OBJECT`). `js_array_length` still resolves growth-forwarding
-        // stubs, proxies and subclass receivers, so this only skips probes that
-        // cannot match — the expression returned is exactly the one
-        // `get_field_by_name_object_tail`'s array arm computes for this key,
-        // which is what makes it a pure short-circuit rather than a second
-        // implementation.
-        if unsafe { gc_type_of(obj) } == Some(crate::gc::GC_TYPE_ARRAY)
-            && unsafe { key_bytes_are(key, b"length") }
-        {
-            let arr = obj as *const crate::array::ArrayHeader;
-            return crate::array::js_array_length(arr) as f64;
+        // arrays, Sets and Maps all carry their own distinct `obj_type`. A
+        // `class X extends Array` instance instead uses `GC_TYPE_OBJECT`, but
+        // the exact-ShapeId dense-layout proof can read its live own `length`
+        // slot without repeating generic object dispatch. Both arms retain
+        // their established helpers, making this a dispatch short-circuit
+        // rather than a second implementation of either representation.
+        if unsafe { key_bytes_are(key, b"length") } {
+            match unsafe { gc_type_of(obj) } {
+                Some(crate::gc::GC_TYPE_ARRAY) => {
+                    let arr = obj as *const crate::array::ArrayHeader;
+                    return crate::array::js_array_length(arr) as f64;
+                }
+                Some(crate::gc::GC_TYPE_OBJECT) => {
+                    // Wolf ECS's Query and Archetype are `class ... extends
+                    // Array` instances. They use ObjectHeader storage, so the
+                    // Array arm above cannot recognize them and a megamorphic
+                    // `.length` site otherwise repeats the full object lookup
+                    // on every loop entry. Reuse the exact ShapeId-backed
+                    // subclass layout proof already used by packed numeric
+                    // reads. It declines accessor, prototype-override, sparse,
+                    // and non-Array-subclass receivers, preserving the generic
+                    // lookup below for every case it cannot prove.
+                    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                    if let Some(length) = crate::array::array_subclass_fast_length(receiver) {
+                        return length;
+                    }
+                }
+                _ => {}
+            }
         }
         unsafe {
             if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
@@ -1954,5 +1970,41 @@ mod array_length_fast_path_tests {
                 "`length` on a plain object must keep its normal answer"
             );
         }
+    }
+
+    /// Array subclasses are ObjectHeader-backed, so a polymorphic loop over
+    /// differently shaped instances cannot use the real-Array short circuit
+    /// above or reliably stay in one property PIC. The dense subclass proof
+    /// must return the live own `length`, while unrelated object-backed values
+    /// continue through ordinary property lookup.
+    #[test]
+    fn array_subclass_length_short_circuit_preserves_object_semantics() {
+        const CLASS_ID_ARRAY: u32 = 0xFFFF_0024;
+        const SUBCLASS_ID: u32 = 0x0077_8655;
+        let _lock = crate::gc::global_side_table_test_lock();
+        crate::object::js_register_class_parent(SUBCLASS_ID, CLASS_ID_ARRAY);
+
+        let obj = crate::object::js_object_alloc(SUBCLASS_ID, 2);
+        let receiver = crate::value::js_nanbox_pointer(obj as i64);
+        crate::node_stream::js_array_subclass_init(receiver, 0.0);
+        for (index, value) in [11.0, 22.0, 33.0].into_iter().enumerate() {
+            crate::object::js_object_set_index_polymorphic(obj as i64, index as f64, value);
+        }
+
+        let len_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+        let mut cache = [0i64; super::PIC_CACHE_WORDS];
+        let via_ic = super::js_object_get_field_ic_miss(obj, len_key, &mut cache);
+        let via_ladder = super::js_object_get_field_by_name_f64(obj, len_key);
+        assert_eq!(via_ic.to_bits(), via_ladder.to_bits());
+        assert_eq!(via_ic, 3.0, "the fast path must observe the live length");
+
+        let plain = crate::object::js_object_alloc(0, 1);
+        crate::object::js_object_set_field_by_name(plain, len_key, 123.0);
+        let mut plain_cache = [0i64; super::PIC_CACHE_WORDS];
+        assert_eq!(
+            super::js_object_get_field_ic_miss(plain, len_key, &mut plain_cache),
+            123.0,
+            "ordinary objects must retain their own `length` property semantics"
+        );
     }
 }
