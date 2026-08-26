@@ -304,10 +304,13 @@ pub(super) unsafe fn plausible_gc_header(header: *mut GcHeader, arena: bool) -> 
 /// ~1024 (the top 32 bits of the address), which never matches the
 /// fixed total.
 fn fixed_layout_total_size(info: &GcTypeInfo) -> Option<usize> {
-    // MapHeader { size: u32, capacity: u32, entries: *mut f64 } = 16 B.
-    // SetHeader { size: u32, capacity: u32, elements: *mut f64 } = 16 B.
     match info.type_id {
-        crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => Some(GC_HEADER_SIZE + 16),
+        crate::gc::GC_TYPE_MAP => {
+            Some(GC_HEADER_SIZE + std::mem::size_of::<crate::map::MapHeader>())
+        }
+        crate::gc::GC_TYPE_SET => {
+            Some(GC_HEADER_SIZE + std::mem::size_of::<crate::set::SetHeader>())
+        }
         _ => None,
     }
 }
