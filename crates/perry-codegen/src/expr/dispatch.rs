@@ -60,7 +60,10 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             super::objects_arrays_lit::lower(ctx, expr)
         }
         Expr::IndexGet { .. } => super::index_get::lower(ctx, expr),
-        Expr::IndexSet { .. } => super::index_set::lower(ctx, expr, value_discarded),
+        Expr::IndexSet { .. } => {
+            let strict = ctx.is_strict_fn;
+            super::index_set::lower(ctx, expr, value_discarded, strict)
+        }
         Expr::PropertySet { .. } => super::property_set::lower(ctx, expr),
         Expr::PropertyGet { .. } => super::property_get::lower(ctx, expr),
         Expr::Conditional { .. } => super::conditional::lower(ctx, expr),

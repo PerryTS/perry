@@ -89,43 +89,13 @@ but its current `createHook` is a no-op and its provider table remains mutable
 with an ordinary object prototype. These divergences are recorded as comparison
 evidence, not used to weaken the Node oracle.
 
-The current focused result is **78/193** and is recorded in
-`node_suite_baseline.json`. The suite keeps every stable mismatch as a diagnostic
-rather than removing unsupported cases: failures identify context loss, missing hook callbacks/resources,
-lifecycle differences, validation gaps, or a compile/runtime boundary for the
-specific provider named by the fixture.
-
-The 115 non-matching diagnostics are stable and grouped as follows:
-
-- hook delivery/configuration: custom and built-in provider lifecycle callbacks,
-  cancelled resource destruction and identity, simultaneous hooks, late
-  activation during timers/immediates/next ticks and Promise chains,
-  pre-created Promise relationships, mixed Promise hook shapes, destroy work
-  queued from a destroy callback, repeated interval and sibling-nextTick
-  resources, fs.readFile/fs-promises and DNS trigger/lifecycle resources,
-  filesystem watcher, DIRHANDLE, BLOBREADER, DNSCHANNEL, PROCESS/PIPE, SIGNAL,
-  WORKER/MESSAGEPORT, HTTP client/incoming, UDP/TCP/shutdown,
-  classic and WebCrypto request, randomBytes, and zlib resources,
-  `promiseResolve`, resource arguments, execution-resource mapping/metadata,
-  static-bind resource types, the async-wrap provider table prototype, and
-  `trackPromises` behavior/validation;
-- scheduling/context: zlib, HTTP/HTTPS keep-alive reuse and concurrent clients,
-  net callback/data isolation, dgram, subprocess, worker, VM, dynamic import,
-  readline, events.on, and stream.finished boundaries;
-- callback contract: several async crypto APIs invoke their callback before the
-  call returns, while prime callbacks do not settle;
-- resource/storage semantics: AsyncResource and AsyncLocalStorage native-class
-  subclassing, constructor-call behavior, option getter access/exception
-  cleanup, detached-method receivers, reflected API metadata, module namespace
-  descriptors/immutability, self-cleared Immediate metadata, EventEmitterAsyncResource
-  back-references, snapshot receiver handling, top
-  execution-resource restoration, disable cleanup, caught async `exit()`
-  rejection routing, module namespace branding, and EventEmitterAsyncResource
-  prototype/getter brand behavior; and
-- runtime: after a clean Perry compiler/runtime rebuild, the direct `node:tls`
-  fixture compiles but its local TLS connection does not settle within the
-  granular runner's 30-second execution limit. The same certificate fixture
-  passes the pinned Node oracle.
+The current focused result is **195/195** and is recorded in
+`node_suite_baseline.json`. This locks the deterministic curated surface at full
+parity, including hook delivery and lifecycle ordering, provider resources,
+context propagation, callback contracts, validation, and reflected API shape.
+Provider fixtures use platform-native subprocess and temporary-directory paths,
+and bounded event-loop drains where Node's destroy delivery timing varies by
+operating system.
 
 ## Coverage
 
