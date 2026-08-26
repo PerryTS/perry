@@ -494,8 +494,15 @@ pub unsafe extern "C" fn napi_create_string_utf16(
     } else {
         length
     };
-    if length > i32::MAX as usize {
-        return set_status(env, NapiStatus::InvalidArg, "string length exceeds i32");
+    // A lone UTF-16 surrogate expands to three WTF-8 bytes. Reject before
+    // constructing the input slice so the encoded byte length always fits the
+    // u32 length accepted by Perry's string allocator.
+    if length > u32::MAX as usize / 3 {
+        return set_status(
+            env,
+            NapiStatus::InvalidArg,
+            "encoded string length may exceed u32",
+        );
     }
     let wtf8 = utf16_to_wtf8(std::slice::from_raw_parts(value, length));
     create_string(env, &wtf8, true, result)

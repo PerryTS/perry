@@ -226,7 +226,12 @@ fn utf8_latin1_and_utf16_strings_round_trip() {
     );
     assert_eq!(
         unsafe {
-            napi_create_string_utf16(env, [0u16].as_ptr(), i32::MAX as usize + 1, &mut oversized)
+            napi_create_string_utf16(
+                env,
+                [0u16].as_ptr(),
+                u32::MAX as usize / 3 + 1,
+                &mut oversized,
+            )
         },
         NapiStatus::InvalidArg
     );
