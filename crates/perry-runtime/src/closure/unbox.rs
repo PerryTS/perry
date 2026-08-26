@@ -21,8 +21,13 @@ use super::dispatch::throw_not_callable;
 /// available. A callable value (closure, bound method/function, native
 /// handle) is always `POINTER_TAG`; numbers, strings, bigints, booleans,
 /// null and undefined are not, and throw here.
+///
+/// `C-unwind` is required because `throw_not_callable` can raise a Perry
+/// exception through the system unwinder to generated code's landing pad.
+/// A plain `extern "C"` boundary turns that catchable throw into
+/// `panic_cannot_unwind` and aborts the process.
 #[no_mangle]
-pub extern "C" fn js_closure_unbox_callee_checked(callee: f64) -> i64 {
+pub extern "C-unwind" fn js_closure_unbox_callee_checked(callee: f64) -> i64 {
     let bits = callee.to_bits();
     if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
         throw_not_callable();
@@ -48,7 +53,7 @@ pub extern "C" fn js_closure_unbox_callee_checked(callee: f64) -> i64 {
 /// `this` (plain functions, arrows), so receiverless shapes and the common
 /// own-method call (baked `this` == receiver) keep their exact behavior.
 #[no_mangle]
-pub extern "C" fn js_closure_unbox_callee_checked_rebind(callee: f64, receiver: f64) -> i64 {
+pub extern "C-unwind" fn js_closure_unbox_callee_checked_rebind(callee: f64, receiver: f64) -> i64 {
     let bits = callee.to_bits();
     if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
         throw_not_callable();
@@ -60,5 +65,9 @@ pub extern "C" fn js_closure_unbox_callee_checked_rebind(callee: f64, receiver: 
 /// Keepalive: generated code is the only caller (#6475).
 #[cfg(feature = "keepalive-anchors")]
 #[used]
-static KEEP_JS_CLOSURE_UNBOX_CALLEE_CHECKED_REBIND: extern "C" fn(f64, f64) -> i64 =
+static KEEP_JS_CLOSURE_UNBOX_CALLEE_CHECKED_REBIND: extern "C-unwind" fn(f64, f64) -> i64 =
     js_closure_unbox_callee_checked_rebind;
+
+// Compile-time ABI guards for both throw-capable generated-code boundaries.
+const _: extern "C-unwind" fn(f64) -> i64 = js_closure_unbox_callee_checked;
+const _: extern "C-unwind" fn(f64, f64) -> i64 = js_closure_unbox_callee_checked_rebind;
