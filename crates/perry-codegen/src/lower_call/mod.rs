@@ -60,6 +60,10 @@ mod field_init;
 mod func_ref;
 #[cfg(test)]
 mod pipeline_call_tests;
+/// #8770: an under-applied same-module direct call must pad the missing
+/// trailing parameters with `TAG_UNDEFINED` (the cross-module arm always did).
+#[cfg(test)]
+mod underapply_pad_tests;
 pub(crate) use func_ref::{
     guarded_call_return_proof, guarded_discriminant_branch_proofs, guarded_expr_proof,
     guarded_path_type,
