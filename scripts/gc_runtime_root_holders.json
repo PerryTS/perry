@@ -1991,10 +1991,6 @@
     },
     {
       "file": "crates/perry-runtime/src/map.rs",
-      "name": "MAP_INDEX"
-    },
-    {
-      "file": "crates/perry-runtime/src/map.rs",
       "name": "MAP_PTR_INDEX"
     },
     {
