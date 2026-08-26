@@ -1657,6 +1657,22 @@ pub(crate) struct StablePackedNumericAccess {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct StablePackedReadCache {
+    /// The cache is keyed by the scalar loop counter rather than assumed to
+    /// expire on the back edge. This remains correct through `continue` edges
+    /// and lets LLVM promote all three slots without relying on block layout.
+    pub valid_slot: String,
+    pub counter_slot: String,
+    /// A boxed JS value. It is not a GC root: any call that could move a
+    /// pointer dirties the associated proof before entering the callee, and a
+    /// dirty cache is never loaded.
+    pub value_slot: String,
+    /// Compile-time source-order state. The first lowered occurrence only
+    /// populates the slots; later occurrences emit a runtime hit/miss test.
+    pub has_producer: bool,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct StablePackedLoopFact {
     pub counter_local_id: u32,
     pub array_local_id: u32,
@@ -1678,6 +1694,19 @@ pub(crate) struct StablePackedLoopFact {
     /// use, after those temporaries, so none of their runtime loads can leave a
     /// stale raw address.
     pub revalidate_before_indexed_read: bool,
+    /// Path-sensitive validity bit for a nested-derived raw receiver. Calls
+    /// set it before entering the callee; a successful exact revalidation
+    /// clears it. LLVM promotes the compiler-private alloca to SSA, so the
+    /// clean hot arm is one branch and no runtime call.
+    pub revalidation_dirty_slot: Option<String>,
+    /// Non-root cache paired with `revalidation_dirty_slot`. It is read only
+    /// on the clean arm; a call dirties the proof before a moving collection,
+    /// and successful revalidation refreshes this word before clearing it.
+    pub revalidation_live_raw_slot: Option<String>,
+    /// One exact `array[counter]` result shared by repeated occurrences in the
+    /// same source iteration. A hit additionally requires a clean revalidation
+    /// proof, so observable calls force an exact reread at the next occurrence.
+    pub repeated_read_cache: Option<StablePackedReadCache>,
     pub live_receiver_handle: Option<String>,
     /// Admission scanned the complete indexed range and proved every value is
     /// an untagged IEEE Number. This is requested only when the indexed value

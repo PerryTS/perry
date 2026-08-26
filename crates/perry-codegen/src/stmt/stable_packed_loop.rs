@@ -8,7 +8,7 @@
 use anyhow::Result;
 use perry_hir::{CompareOp, Expr, Stmt, UpdateOp};
 
-use crate::expr::{FnCtx, StablePackedLoopFact, StablePackedNumericAccess};
+use crate::expr::{FnCtx, StablePackedLoopFact, StablePackedNumericAccess, StablePackedReadCache};
 use crate::native_value::{BoundsState, BufferAccessMode, LoweredValue, MaterializationReason};
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
@@ -27,6 +27,7 @@ struct Candidate {
     capture_uses_box: bool,
     nested_derived: bool,
     nested_requires_access_revalidation: bool,
+    cache_repeated_index_reads: bool,
 }
 
 fn target_below_numeric_operator(
@@ -109,6 +110,150 @@ fn stmt_flags(stmt: &Stmt, array_id: u32, counter_id: u32) -> (bool, bool) {
         _ => {}
     }
     (target, call)
+}
+
+/// Count exact `receiver[counter]` reads without descending into closures.
+fn target_read_count(expr: &Expr, array_id: u32, counter_id: u32) -> usize {
+    if matches!(
+        expr,
+        Expr::IndexGet { object, index }
+            if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id)
+                && matches!(index.as_ref(), Expr::LocalGet(id) if *id == counter_id)
+    ) {
+        return 1;
+    }
+    if matches!(expr, Expr::Closure { .. }) {
+        return 0;
+    }
+    let mut count = 0;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        count += target_read_count(child, array_id, counter_id);
+    });
+    count
+}
+
+/// Count exact target reads in the straight-line statements admitted here.
+fn body_target_read_count(body: &[Stmt], array_id: u32, counter_id: u32) -> usize {
+    body.iter()
+        .map(|stmt| match stmt {
+            Stmt::Let {
+                init: Some(expr), ..
+            }
+            | Stmt::Expr(expr)
+            | Stmt::Throw(expr)
+            | Stmt::Return(Some(expr)) => target_read_count(expr, array_id, counter_id),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// A repeated element value can survive calls only through the dirty-bit
+/// protocol below. Direct writes need a separate alias argument. A statically
+/// proven TypedArray store is brand-disjoint from the admitted
+/// Array/Array-subclass receiver. An erased IndexSet has the same property on
+/// its sole no-call arm; every other brand crosses a dirtying runtime call.
+/// Property writes, statically Array stores, and in-place Array operations
+/// disable value caching.
+fn indexed_store_direct_arm_is_brand_disjoint(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    matches!(
+        crate::type_analysis::static_type_of(ctx, object),
+        None | Some(perry_hir::types::Type::Any) | Some(perry_hir::types::Type::Unknown)
+    ) || crate::type_analysis::is_typed_array_expr(ctx, object)
+}
+
+/// Whether `expr` has a direct mutation arm that can alias the cached Array.
+fn expr_blocks_repeated_read_cache(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    if matches!(
+        expr,
+        Expr::PropertySet { .. }
+            | Expr::PropertyUpdate { .. }
+            | Expr::SuperPropertySet { .. }
+            | Expr::ObjectSuperPropertySet { .. }
+            | Expr::ObjectAssign { .. }
+            | Expr::ObjectDefineProperty(..)
+            | Expr::ObjectDefineProperties(..)
+            | Expr::ObjectSetPrototypeOf(..)
+            | Expr::ArrayPush { .. }
+            | Expr::ArrayPushSpread { .. }
+            | Expr::ArrayPop(..)
+            | Expr::ArrayShift(..)
+            | Expr::ArrayUnshift { .. }
+            | Expr::ArraySplice { .. }
+            | Expr::ArraySort { .. }
+            | Expr::ArrayReverseValue { .. }
+            | Expr::ArrayCopyWithin { .. }
+            | Expr::ArrayCopyWithinValue { .. }
+    ) {
+        return true;
+    }
+    if let Expr::IndexSet { object, .. } = expr {
+        // An erased IndexSet's only no-call direct arm is the guarded
+        // TypedArray store; every other brand reaches `js_dyn_index_set`,
+        // which dirties the proof before mutating. This is exactly Wolf's
+        // unannotated component-column shape. A statically Array-typed store,
+        // on the other hand, can directly mutate an alias of the source.
+        if !indexed_store_direct_arm_is_brand_disjoint(ctx, object) {
+            return true;
+        }
+    }
+    if let Expr::PutValueSet {
+        target,
+        key,
+        receiver,
+        ..
+    } = expr
+    {
+        // Source assignments reach HIR as PutValueSet. The codegen's narrow
+        // same-receiver, non-string-key route immediately delegates to the
+        // IndexSet arm described above. Match only the side-effect-free local
+        // identity form here; every explicit-receiver or computed-base form
+        // remains conservatively blocked.
+        let same_local = matches!(
+            (target.as_ref(), receiver.as_ref()),
+            (Expr::LocalGet(target_id), Expr::LocalGet(receiver_id))
+                if target_id == receiver_id
+        );
+        let static_string_or_symbol = matches!(
+            key.as_ref(),
+            Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
+        ) || crate::type_analysis::is_string_expr(ctx, key);
+        if !same_local
+            || static_string_or_symbol
+            || !indexed_store_direct_arm_is_brand_disjoint(ctx, target)
+        {
+            return true;
+        }
+    }
+    if let Expr::IndexUpdate { object, .. } = expr {
+        // The update lowering has more direct receiver arms than IndexSet, so
+        // require a static TypedArray brand rather than admitting `any`.
+        if !crate::type_analysis::is_typed_array_expr(ctx, object) {
+            return true;
+        }
+    }
+    if matches!(expr, Expr::Closure { .. }) {
+        return false;
+    }
+    let mut blocked = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        if !blocked && expr_blocks_repeated_read_cache(ctx, child) {
+            blocked = true;
+        }
+    });
+    blocked
+}
+
+/// Whether any admitted body statement can directly invalidate the cache.
+fn body_blocks_repeated_read_cache(ctx: &FnCtx<'_>, body: &[Stmt]) -> bool {
+    body.iter().any(|stmt| match stmt {
+        Stmt::Let {
+            init: Some(expr), ..
+        }
+        | Stmt::Expr(expr)
+        | Stmt::Throw(expr)
+        | Stmt::Return(Some(expr)) => expr_blocks_repeated_read_cache(ctx, expr),
+        _ => false,
+    })
 }
 
 /// The direct read must be in the first straight-line statement and before any
@@ -274,6 +419,9 @@ fn match_candidate(
     let nested_derived = derived_parent.is_some();
     let nested_requires_access_revalidation = derived_parent
         .is_some_and(|fact| fact.revalidate_each_iteration || fact.revalidate_before_indexed_read);
+    let cache_repeated_index_reads = nested_requires_access_revalidation
+        && body_target_read_count(body, array_id, counter_id) > 1
+        && !body_blocks_repeated_read_cache(ctx, body);
     let storage_is_available = capture_index.is_some()
         || (ctx.locals.contains_key(&array_id) && !ctx.boxed_vars.contains(&array_id))
         || (!ctx.locals.contains_key(&array_id) && ctx.module_globals.contains_key(&array_id));
@@ -346,6 +494,7 @@ fn match_candidate(
         capture_uses_box: capture_index.is_some() && ctx.boxed_vars.contains(&array_id),
         nested_derived,
         nested_requires_access_revalidation,
+        cache_repeated_index_reads,
     })
 }
 
@@ -516,6 +665,9 @@ fn record_artifacts(ctx: &mut FnCtx<'_>, candidate: &Candidate, receiver: &str) 
                 .push("nested_read_miss=generic_read_without_iteration_replay".to_string());
         }
     }
+    if candidate.cache_repeated_index_reads {
+        selected_facts.push("same_counter_read_cache=call_invalidated".to_string());
+    }
     ctx.record_lowered_value_with_access_mode_and_facts(
         "StablePackedArraylikeLoop",
         Some(array_id),
@@ -580,10 +732,30 @@ pub(crate) fn try_lower_index_get(
     // so it must dominate both successors.
     let counter_slot = ctx.i32_counter_slots.get(counter_id)?.clone();
     let idx_i32 = ctx.block().load(I32, &counter_slot);
+    let repeated_read_cache = begin_repeated_read_cache(ctx, &fact, &idx_i32);
     let mut per_read_fallback = None;
+    let mut per_read_live_raw = None;
+    let mut per_read_numeric_access = None;
     if fact.revalidate_before_indexed_read {
+        let dirty_slot = fact.revalidation_dirty_slot.as_ref()?;
+        let live_raw_slot = fact.revalidation_live_raw_slot.as_ref()?;
         let receiver_slot = ctx.locals.get(array_id)?.clone();
         let receiver = ctx.block().load(DOUBLE, &receiver_slot);
+        let dirty = ctx.block().load(I1, dirty_slot);
+        let validate_idx = ctx.new_block("stable_packed.indexed_read.proof_dirty");
+        let clean_idx = ctx.new_block("stable_packed.indexed_read.proof_clean");
+        let live_merge_idx = ctx.new_block("stable_packed.indexed_read.live_merge");
+        let validate_label = ctx.block_label(validate_idx);
+        let clean_label = ctx.block_label(clean_idx);
+        let live_merge_label = ctx.block_label(live_merge_idx);
+        ctx.block().cond_br(&dirty, &validate_label, &clean_label);
+
+        ctx.current_block = clean_idx;
+        let clean_raw = ctx.block().load(I64, live_raw_slot);
+        let clean_end = ctx.block().label.clone();
+        ctx.block().br(&live_merge_label);
+
+        ctx.current_block = validate_idx;
         let live_raw = ctx.block().call(
             I64,
             "js_packed_arraylike_loop_revalidate_live",
@@ -614,18 +786,20 @@ pub(crate) fn try_lower_index_get(
         let fallback_label = ctx.block_label(fallback_idx);
         ctx.block().cond_br(&pass, &continue_label, &fallback_label);
         ctx.current_block = continue_idx;
-        let numeric_access = fact
+        ctx.block().store(I64, &live_raw, live_raw_slot);
+        ctx.block().store(I1, "0", dirty_slot);
+        let validated_end = ctx.block().label.clone();
+        ctx.block().br(&live_merge_label);
+
+        ctx.current_block = live_merge_idx;
+        let merged_live_raw = ctx.block().phi(
+            I64,
+            &[(&clean_raw, &clean_end), (&live_raw, &validated_end)],
+        );
+        per_read_numeric_access = fact
             .numeric_elements
-            .then(|| build_numeric_access(ctx, &fact.descriptor, &live_raw));
-        let active = ctx
-            .stable_packed_loop_facts
-            .iter_mut()
-            .rev()
-            .find(|active| {
-                active.array_local_id == *array_id && active.counter_local_id == *counter_id
-            })?;
-        active.live_receiver_handle = Some(live_raw);
-        active.numeric_access = numeric_access;
+            .then(|| build_numeric_access(ctx, &fact.descriptor, &merged_live_raw));
+        per_read_live_raw = Some(merged_live_raw);
         per_read_fallback = Some((fallback_idx, read_merge_idx, fallback_label, receiver));
     }
     let fact = ctx
@@ -634,9 +808,9 @@ pub(crate) fn try_lower_index_get(
         .rev()
         .find(|fact| fact.array_local_id == *array_id && fact.counter_local_id == *counter_id)?
         .clone();
-    let raw = fact.live_receiver_handle?;
+    let raw = per_read_live_raw.or(fact.live_receiver_handle)?;
     let idx_i64 = ctx.block().zext(I32, &idx_i32, I64);
-    if let Some(access) = fact.numeric_access {
+    if let Some(access) = per_read_numeric_access.or(fact.numeric_access) {
         let byte_offset = ctx.block().shl(I64, &idx_i64, "3");
         let plain_addr = ctx.block().add(I64, &access.plain_base, &byte_offset);
         let inline_addr = ctx
@@ -656,11 +830,12 @@ pub(crate) fn try_lower_index_get(
             .select(I1, &access.is_plain, I64, &plain_addr, &object_addr);
         let element_ptr = ctx.block().inttoptr(I64, &element_addr);
         let direct = ctx.block().load(DOUBLE, &element_ptr);
-        return Some(finish_revalidated_read(
+        let resolved = finish_revalidated_read(ctx, direct, idx_i32.clone(), per_read_fallback);
+        return Some(finish_repeated_read_cache(
             ctx,
-            direct,
+            resolved,
             idx_i32,
-            per_read_fallback,
+            repeated_read_cache,
         ));
     }
     let kind = descriptor_word(ctx, &fact.descriptor, 0);
@@ -784,15 +959,120 @@ pub(crate) fn try_lower_index_get(
             (&spill_value, &spill_end),
         ],
     );
-    Some(finish_revalidated_read(
+    let resolved = finish_revalidated_read(ctx, direct, idx_i32.clone(), per_read_fallback);
+    Some(finish_repeated_read_cache(
         ctx,
-        direct,
+        resolved,
         idx_i32,
-        per_read_fallback,
+        repeated_read_cache,
     ))
 }
 
 type PerReadFallback = (usize, usize, String, String);
+enum RepeatedReadCacheMiss {
+    Populate(StablePackedReadCache),
+    Lookup {
+        cache: StablePackedReadCache,
+        cached: String,
+        hit_end: String,
+        merge_idx: usize,
+    },
+}
+
+/// Enter the miss arm of a same-counter value cache. A cached value is read
+/// only when no semantic call has executed since it was produced; this is what
+/// makes an unrooted boxed pointer safe under the moving collector as well as
+/// preserving getters, proxies, and mutation between source occurrences.
+fn begin_repeated_read_cache(
+    ctx: &mut FnCtx<'_>,
+    fact: &StablePackedLoopFact,
+    idx_i32: &str,
+) -> Option<RepeatedReadCacheMiss> {
+    let mut cache = fact.repeated_read_cache.clone()?;
+    let active = ctx
+        .stable_packed_loop_facts
+        .iter_mut()
+        .rev()
+        .find(|active| {
+            active.array_local_id == fact.array_local_id
+                && active.counter_local_id == fact.counter_local_id
+        })?;
+    if !active
+        .repeated_read_cache
+        .as_ref()
+        .is_some_and(|active_cache| active_cache.has_producer)
+    {
+        active
+            .repeated_read_cache
+            .as_mut()
+            .expect("active repeated-read cache")
+            .has_producer = true;
+        cache.has_producer = true;
+        return Some(RepeatedReadCacheMiss::Populate(cache));
+    }
+    let dirty_slot = fact.revalidation_dirty_slot.as_ref()?;
+    let valid = ctx.block().load(I1, &cache.valid_slot);
+    let cached_counter = ctx.block().load(I32, &cache.counter_slot);
+    let same_counter = ctx.block().icmp_eq(I32, &cached_counter, idx_i32);
+    let dirty = ctx.block().load(I1, dirty_slot);
+    let clean = ctx.block().icmp_eq(I1, &dirty, "0");
+    let valid_and_same = ctx.block().and(I1, &valid, &same_counter);
+    let hit = ctx.block().and(I1, &valid_and_same, &clean);
+    let hit_idx = ctx.new_block("stable_packed.indexed_read.cache_hit");
+    let miss_idx = ctx.new_block("stable_packed.indexed_read.cache_miss");
+    let merge_idx = ctx.new_block("stable_packed.indexed_read.cache_merge");
+    let hit_label = ctx.block_label(hit_idx);
+    let miss_label = ctx.block_label(miss_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&hit, &hit_label, &miss_label);
+
+    ctx.current_block = hit_idx;
+    let cached = ctx.block().load(DOUBLE, &cache.value_slot);
+    let hit_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = miss_idx;
+    Some(RepeatedReadCacheMiss::Lookup {
+        cache,
+        cached,
+        hit_end,
+        merge_idx,
+    })
+}
+
+/// Publish a miss value, then merge it with any previously emitted hit arm.
+fn finish_repeated_read_cache(
+    ctx: &mut FnCtx<'_>,
+    resolved: String,
+    idx_i32: String,
+    cache_miss: Option<RepeatedReadCacheMiss>,
+) -> String {
+    let Some(cache_miss) = cache_miss else {
+        return resolved;
+    };
+    let (cache, hit) = match cache_miss {
+        RepeatedReadCacheMiss::Populate(cache) => (cache, None),
+        RepeatedReadCacheMiss::Lookup {
+            cache,
+            cached,
+            hit_end,
+            merge_idx,
+        } => (cache, Some((cached, hit_end, merge_idx))),
+    };
+    ctx.block().store(I32, &idx_i32, &cache.counter_slot);
+    ctx.block().store(DOUBLE, &resolved, &cache.value_slot);
+    ctx.block().store(I1, "1", &cache.valid_slot);
+    let Some((cached, hit_end, merge_idx)) = hit else {
+        return resolved;
+    };
+    let miss_end = ctx.block().label.clone();
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(&cached, &hit_end), (&resolved, &miss_end)])
+}
 
 /// Complete a nested-derived indexed read. The direct arm has already
 /// consumed the live raw address with no intervening safepoint. On a guard or
@@ -975,6 +1255,39 @@ pub(super) fn lower(
     } else {
         None
     };
+    let revalidation_dirty_slot = candidate
+        .nested_requires_access_revalidation
+        .then(|| ctx.func.alloca_entry(I1));
+    let revalidation_live_raw_slot = candidate
+        .nested_requires_access_revalidation
+        .then(|| ctx.func.alloca_entry(I64));
+    let repeated_read_cache = candidate
+        .cache_repeated_index_reads
+        .then(|| StablePackedReadCache {
+            valid_slot: ctx.func.alloca_entry(I1),
+            counter_slot: ctx.func.alloca_entry(I32),
+            value_slot: ctx.func.alloca_entry(DOUBLE),
+            has_producer: false,
+        });
+    if let Some(cache) = repeated_read_cache.as_ref() {
+        ctx.block().store(I1, "0", &cache.valid_slot);
+    }
+    if let Some(slot) = revalidation_dirty_slot.as_ref() {
+        // The admitting guard and the post-guard receiver reload establish a
+        // clean proof. Calls emitted after this point dirty it at their actual
+        // control-flow location via LlBlock's call choke points.
+        ctx.block().store(I1, "0", slot);
+        ctx.block().store(
+            I64,
+            &fast_raw,
+            revalidation_live_raw_slot
+                .as_ref()
+                .expect("nested revalidation raw slot"),
+        );
+        ctx.func
+            .reg_counter()
+            .push_stable_packed_revalidation_slot(slot.clone());
+    }
     ctx.stable_packed_loop_facts.push(StablePackedLoopFact {
         counter_local_id: candidate.counter_id,
         array_local_id: candidate.array_id,
@@ -985,6 +1298,9 @@ pub(super) fn lower(
         live_length_bound: matches!(candidate.bound, LoopBound::LiveLength),
         revalidate_each_iteration: candidate.capture_index.is_some(),
         revalidate_before_indexed_read: candidate.nested_requires_access_revalidation,
+        revalidation_dirty_slot: revalidation_dirty_slot.clone(),
+        revalidation_live_raw_slot,
+        repeated_read_cache,
         live_receiver_handle: Some(fast_raw),
         numeric_elements: candidate.numeric_elements,
         numeric_access,
@@ -1000,6 +1316,11 @@ pub(super) fn lower(
         Some((candidate.counter_id, bound_i32)),
     )?;
     ctx.stable_packed_loop_facts.pop();
+    if let Some(slot) = revalidation_dirty_slot.as_ref() {
+        ctx.func
+            .reg_counter()
+            .pop_stable_packed_revalidation_slot(slot);
+    }
     if !ctx.block().is_terminated() {
         // A call-free clone cannot grow or shrink its receiver, so exhausting
         // the admitted bound is also the exact live-length loop exit.

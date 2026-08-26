@@ -92,6 +92,18 @@ pub struct RegCounter {
     /// callee is UB, so the registry, not the emitting code, is the single
     /// source of truth. `None` for functions built outside a module (tests).
     preserve_none_fns: RefCell<Option<Rc<RefCell<HashSet<String>>>>>,
+    /// Compiler-private validity bits for nested stable-packed loop proofs.
+    ///
+    /// A guarded inner receiver may keep its raw address across call-free
+    /// direct-load/store arms. Every actually executed runtime/indirect call
+    /// that can collect or run semantic heap work dirties the active proofs
+    /// before control can enter the callee; the next indexed read then reloads
+    /// its GC root and revalidates. Root bookkeeping and write barriers are
+    /// proof-preserving: they neither collect nor change JS-visible receiver
+    /// state. Keeping this at the call-emission choke point makes invalidation
+    /// path-sensitive: cold IC misses dirty the proof, while their unexecuted
+    /// hot siblings do not impose a revalidation on every read.
+    stable_packed_revalidation_slots: RefCell<Vec<String>>,
 }
 
 impl RegCounter {
@@ -101,7 +113,27 @@ impl RegCounter {
             eh_unwind_labels: RefCell::new(Vec::new()),
             shadow_slot_allocas: RefCell::new(HashSet::new()),
             preserve_none_fns: RefCell::new(None),
+            stable_packed_revalidation_slots: RefCell::new(Vec::new()),
         }
+    }
+
+    pub(crate) fn push_stable_packed_revalidation_slot(&self, slot: String) {
+        self.stable_packed_revalidation_slots
+            .borrow_mut()
+            .push(slot);
+    }
+
+    pub(crate) fn pop_stable_packed_revalidation_slot(&self, expected: &str) {
+        let actual = self
+            .stable_packed_revalidation_slots
+            .borrow_mut()
+            .pop()
+            .expect("stable-packed revalidation slot stack underflow");
+        debug_assert_eq!(actual, expected);
+    }
+
+    fn stable_packed_revalidation_slots(&self) -> Vec<String> {
+        self.stable_packed_revalidation_slots.borrow().clone()
     }
 
     /// Install the module's `preserve_nonecc` symbol registry (#8175). Called
@@ -276,6 +308,26 @@ impl LlBlock {
 
     fn reg(&self) -> String {
         format!("%r{}", self.counter.next())
+    }
+
+    /// Invalidate every nested packed receiver whose live raw address may be
+    /// observed after this call. Intrinsics cannot enter Perry or user code.
+    /// Shadow-stack operations and write barriers are also safe: both families
+    /// are noncollecting GC bookkeeping and cannot mutate the guarded object's
+    /// JS-visible shape, prototype, length, or indexed values. Every other
+    /// direct call stays conservative, including unknown GC-leaf helpers that
+    /// may perform a semantic write without collecting.
+    fn dirty_stable_packed_revalidations_before_call(&mut self, direct_callee: Option<&str>) {
+        if direct_callee.is_some_and(|callee| {
+            callee.starts_with("llvm.")
+                || callee.starts_with("js_shadow_")
+                || callee.starts_with("js_write_barrier")
+        }) {
+            return;
+        }
+        for slot in self.counter.stable_packed_revalidation_slots() {
+            self.store(crate::types::I1, "1", &slot);
+        }
     }
 
     pub fn next_reg(&self) -> String {
@@ -1245,6 +1297,7 @@ impl LlBlock {
         args: &[(LlvmType, &str)],
         gc_leaf: bool,
     ) -> String {
+        self.dirty_stable_packed_revalidations_before_call(Some(func_name));
         // #835 + #846: record this emission against the FFI provenance
         // registry. The driver consults the registry after all per-module
         // codegen finishes to auto-link the providing crate.
@@ -1285,6 +1338,7 @@ impl LlBlock {
     }
 
     pub fn call_void(&mut self, func_name: &str, args: &[(LlvmType, &str)]) {
+        self.dirty_stable_packed_revalidations_before_call(Some(func_name));
         // #835 + #846: same registry hook as `call` — see comment there.
         crate::ext_registry::record_ffi_call(func_name);
         self.counter
@@ -1353,6 +1407,7 @@ impl LlBlock {
         args: &[(LlvmType, &str)],
         gc_leaf: bool,
     ) -> String {
+        self.dirty_stable_packed_revalidations_before_call(None);
         let r = self.reg();
         // Indirect targets (closures, method pointers) can always throw.
         if let Some(lpad) = self.counter.current_eh_unwind_label() {
@@ -1492,7 +1547,7 @@ fn format_args(args: &[(LlvmType, &str)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{DOUBLE, I64};
+    use crate::types::{DOUBLE, I64, PTR};
     use std::thread;
 
     fn fresh() -> LlBlock {
@@ -1609,6 +1664,38 @@ mod tests {
         assert!(b
             .to_ir()
             .contains("call double @js_nanbox_string(i64 %handle)"));
+    }
+
+    #[test]
+    fn active_stable_packed_proofs_are_dirtied_only_by_executed_non_intrinsic_calls() {
+        let mut b = fresh();
+        b.counter
+            .push_stable_packed_revalidation_slot("%proof_dirty".to_string());
+        b.call(DOUBLE, "llvm.fabs.f64", &[(DOUBLE, "%value")]);
+        b.call_void("js_shadow_slot_bind", &[(I64, "0"), (PTR, "%root")]);
+        b.call_void("js_write_barrier_root_nanbox", &[(I64, "%bits")]);
+        b.call(DOUBLE, "js_dyn_index_get", &[(DOUBLE, "%object")]);
+        b.call_indirect(DOUBLE, "%callback", &[(DOUBLE, "%value")]);
+        b.counter
+            .pop_stable_packed_revalidation_slot("%proof_dirty");
+        b.call(DOUBLE, "js_dyn_index_get", &[(DOUBLE, "%object")]);
+
+        let ir = b.to_ir();
+        assert_eq!(
+            ir.matches("store i1 1, ptr %proof_dirty").count(),
+            2,
+            "{ir}"
+        );
+        assert!(
+            ir.find("call double @llvm.fabs.f64") < ir.find("store i1 1, ptr %proof_dirty"),
+            "proof-preserving calls must not dirty the proof: {ir}"
+        );
+        let first_dirty = ir.find("store i1 1, ptr %proof_dirty").unwrap();
+        assert!(
+            ir.find("@js_shadow_slot_bind").unwrap() < first_dirty
+                && ir.find("@js_write_barrier_root_nanbox").unwrap() < first_dirty,
+            "GC bookkeeping must preserve the proof: {ir}"
+        );
     }
 
     #[test]
