@@ -26,7 +26,8 @@ fn lower_debug(src: &str) -> String {
     let mut cache = SourceCache::new();
     let parsed = parse_typescript_with_cache(src, "/tmp/stdin_once_test.ts", &mut cache)
         .expect("parse failed");
-    let hir = lower_module(&parsed.module, "test", "/tmp/stdin_once_test.ts").expect("lower failed");
+    let hir =
+        lower_module(&parsed.module, "test", "/tmp/stdin_once_test.ts").expect("lower failed");
     clear_current_module_source();
     format!("{:#?}", hir.init)
 }

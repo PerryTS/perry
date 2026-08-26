@@ -227,9 +227,7 @@ pub(super) fn try_module_class_static(
                                 // registered via `once` are a documented
                                 // residual (they behave like `on`) — the streams
                                 // that matter here are EOF-driven.
-                                ("stdin", "on")
-                                | ("stdin", "addListener")
-                                | ("stdin", "once")
+                                ("stdin", "on") | ("stdin", "addListener") | ("stdin", "once")
                                     if args.len() >= 2 =>
                                 {
                                     let mut iter = args.into_iter();
