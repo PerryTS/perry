@@ -26,8 +26,9 @@ pub use finally_inline::inline_finally_into_returns;
 pub use generator::transform_generators;
 pub use i18n::{apply_i18n, I18nDiagnostic, I18nStringTable};
 pub use inline::{
-    gather_cross_module_anon_classes, gather_cross_module_methods,
-    gather_cross_module_methods_with_extern_imports, inline_functions, MethodCandidate,
+    gather_cross_module_anon_classes, gather_cross_module_functions, gather_cross_module_methods,
+    gather_cross_module_methods_with_extern_imports, inline_functions, FunctionCandidate,
+    MethodCandidate, RequiredExternImport,
 };
 pub use unroll::unroll_static_loops;
 

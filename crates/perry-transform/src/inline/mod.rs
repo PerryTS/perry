@@ -21,7 +21,7 @@ mod super_detect;
 // Public re-exports (explicit named — globs don't propagate transitively
 // through `pub(crate) use crate::inline::*` consumers).
 pub use cross_module::{
-    gather_cross_module_anon_classes, gather_cross_module_methods,
+    gather_cross_module_anon_classes, gather_cross_module_functions, gather_cross_module_methods,
     gather_cross_module_methods_with_extern_imports, is_cross_module_safe,
 };
 
@@ -81,6 +81,29 @@ pub struct MethodCandidate {
     pub required_extern_imports: Vec<(String, String)>,
 }
 
+/// One named import used by a cross-module function candidate.
+///
+/// Keeping both names matters for aliased imports: the candidate body refers
+/// to `local`, while a destination module must import `imported` from the
+/// resolved source module (possibly under a fresh collision-free alias).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RequiredExternImport {
+    pub local: String,
+    pub imported: String,
+    pub resolved_path: String,
+}
+
+/// A small exported function plus the bounded same-module helper graph it
+/// needs. The graph is localized into an importing module under fresh IDs,
+/// which gives the ordinary inliner a valid fallback call if a particular
+/// call site cannot be expanded.
+#[derive(Clone, Debug)]
+pub struct FunctionCandidate {
+    pub root_id: FuncId,
+    pub functions: Vec<Function>,
+    pub required_extern_imports: Vec<RequiredExternImport>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ExactReceiverFact {
     pub(crate) class_name: String,
@@ -101,9 +124,11 @@ pub(crate) type ExactReceiverFacts = HashMap<LocalId, ExactReceiverFact>;
 pub fn inline_functions(
     module: &mut Module,
     extra_methods: &HashMap<(String, String), MethodCandidate>,
+    extra_functions: &HashMap<(String, String), FunctionCandidate>,
     extra_class_fields: &HashMap<(String, String), String>,
     extra_anon_classes: &HashMap<String, &Class>,
 ) {
+    cross_module::localize_cross_module_functions(module, extra_functions);
     let first_fresh_id = find_max_local_id_in_module(module).saturating_add(1);
     let span_remaps = crate::source_spans::RemapSession::start(first_fresh_id);
     inline_functions_inner(
@@ -373,6 +398,14 @@ fn inline_functions_inner(
         let mut needed: HashSet<String> = HashSet::new();
         for cand in extra_methods.values() {
             collect_anon_refs(&cand.func.body, &mut needed);
+        }
+        // Cross-module free-function candidates have already been localized
+        // into `module.functions` before this pass. Scan the destination's
+        // function bodies as well so any content-addressed result-record
+        // shapes referenced by those private clones receive their class
+        // definitions before codegen.
+        for function in &module.functions {
+            collect_anon_refs(&function.body, &mut needed);
         }
         let already_present: HashSet<String> =
             module.classes.iter().map(|c| c.name.clone()).collect();
@@ -980,6 +1013,7 @@ mod tests {
             &extra_methods,
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
         );
 
         let sources: Vec<&str> = module.imports.iter().map(|i| i.source.as_str()).collect();
@@ -1026,11 +1060,337 @@ mod tests {
             &mut module,
             &extra_methods,
             &HashMap::new(),
+            &HashMap::new(),
             &extra_anon_classes,
         );
 
         let class_names: Vec<&str> = module.classes.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(class_names, vec!["__AnonShape_aaa", "__AnonShape_bbb"]);
+    }
+
+    #[test]
+    fn cross_module_free_function_graph_is_localized_and_inlined() {
+        let mut source = Module::new("/src/ops.ts");
+        source.imports.push(perry_hir::Import {
+            source: "./predicate".to_string(),
+            specifiers: vec![ImportSpecifier::Named {
+                imported: "predicate".to_string(),
+                local: "sourcePredicate".to_string(),
+            }],
+            is_native: false,
+            module_kind: ModuleKind::NativeCompiled,
+            resolved_path: Some("/src/predicate.ts".to_string()),
+            type_only: false,
+            is_dynamic: false,
+            is_dynamic_target: false,
+            is_deferred_require: false,
+            is_adopted_require: false,
+        });
+        let helper = function(
+            1,
+            vec![Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::ExternFuncRef {
+                    name: "sourcePredicate".to_string(),
+                    param_types: Vec::new(),
+                    return_type: Type::Any,
+                }),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }))],
+        );
+        let mut root = function(
+            2,
+            vec![Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::FuncRef(1)),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }))],
+        );
+        root.name = "operation".to_string();
+        root.is_exported = true;
+        source.functions.extend([helper, root]);
+        source.exported_functions.push(("operation".to_string(), 2));
+
+        let gathered = gather_cross_module_functions(&source);
+        let candidate = gathered
+            .get("operation")
+            .expect("exported helper graph should be harvested")
+            .clone();
+        assert_eq!(candidate.functions.len(), 2);
+        assert_eq!(
+            candidate.required_extern_imports,
+            vec![RequiredExternImport {
+                local: "sourcePredicate".to_string(),
+                imported: "predicate".to_string(),
+                resolved_path: "/src/predicate.ts".to_string(),
+            }]
+        );
+
+        let mut destination = Module::new("/src/main.ts");
+        destination.imports.push(perry_hir::Import {
+            source: "./ops".to_string(),
+            specifiers: vec![ImportSpecifier::Named {
+                imported: "operation".to_string(),
+                local: "runOperation".to_string(),
+            }],
+            is_native: false,
+            module_kind: ModuleKind::NativeCompiled,
+            resolved_path: Some("/src/ops.ts".to_string()),
+            type_only: false,
+            is_dynamic: false,
+            is_dynamic_target: false,
+            is_deferred_require: false,
+            is_adopted_require: false,
+        });
+        destination.imports.push(perry_hir::Import {
+            source: "./predicate".to_string(),
+            specifiers: vec![ImportSpecifier::Named {
+                imported: "predicate".to_string(),
+                local: "destinationPredicate".to_string(),
+            }],
+            is_native: false,
+            module_kind: ModuleKind::NativeCompiled,
+            resolved_path: Some("/src/predicate.ts".to_string()),
+            type_only: false,
+            is_dynamic: false,
+            is_dynamic_target: false,
+            is_deferred_require: false,
+            is_adopted_require: false,
+        });
+        let call = Stmt::Let {
+            id: 1,
+            name: "result".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::Call {
+                callee: Box::new(Expr::ExternFuncRef {
+                    name: "runOperation".to_string(),
+                    param_types: Vec::new(),
+                    return_type: Type::Any,
+                }),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+        };
+        let mut caller_body = vec![Stmt::Expr(Expr::Integer(0)); MAX_INLINE_STMTS];
+        caller_body.push(call);
+        let mut caller = function(50, caller_body);
+        caller.name = "caller".to_string();
+        destination.functions.push(caller);
+        let mut extra_functions = HashMap::new();
+        extra_functions.insert(
+            ("/src/ops.ts".to_string(), "operation".to_string()),
+            candidate,
+        );
+
+        inline_functions(
+            &mut destination,
+            &HashMap::new(),
+            &extra_functions,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        let dump = format!("{:?}", destination.functions[0].body);
+        assert!(
+            !dump.contains("runOperation"),
+            "root call was not localized: {dump}"
+        );
+        assert!(
+            !dump.contains("callee: FuncRef("),
+            "helper call was not inlined: {dump}"
+        );
+        assert!(
+            dump.contains("destinationPredicate"),
+            "source import alias was not rebound to the destination: {dump}"
+        );
+    }
+
+    #[test]
+    fn cross_module_free_function_cycle_is_rejected() {
+        let mut source = Module::new("/src/cycle.ts");
+        let call = |id| {
+            vec![Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::FuncRef(id)),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }))]
+        };
+        let mut first = function(1, call(2));
+        first.is_exported = true;
+        source.functions.extend([first, function(2, call(1))]);
+        source.exported_functions.push(("first".to_string(), 1));
+
+        assert!(gather_cross_module_functions(&source).is_empty());
+    }
+
+    #[test]
+    fn cross_module_free_function_with_module_local_is_rejected() {
+        let mut source = Module::new("/src/constants.ts");
+        let mut reads_module_binding = function(1, vec![Stmt::Return(Some(Expr::LocalGet(99)))]);
+        reads_module_binding.name = "withinLimit".to_string();
+        reads_module_binding.is_exported = true;
+        source.functions.push(reads_module_binding);
+        source
+            .exported_functions
+            .push(("withinLimit".to_string(), 1));
+
+        assert!(gather_cross_module_functions(&source).is_empty());
+    }
+
+    #[test]
+    fn cross_module_runtime_import_does_not_reuse_type_only_import() {
+        let mut root = function(
+            1,
+            vec![Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::ExternFuncRef {
+                    name: "sourcePredicate".to_string(),
+                    param_types: Vec::new(),
+                    return_type: Type::Any,
+                }),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }))],
+        );
+        root.name = "operation".to_string();
+        let candidate = FunctionCandidate {
+            root_id: 1,
+            functions: vec![root],
+            required_extern_imports: vec![RequiredExternImport {
+                local: "sourcePredicate".to_string(),
+                imported: "predicate".to_string(),
+                resolved_path: "/src/predicate.ts".to_string(),
+            }],
+        };
+
+        let mut destination = Module::new("/src/main.ts");
+        destination.imports.push(perry_hir::Import {
+            source: "./ops".to_string(),
+            specifiers: vec![ImportSpecifier::Named {
+                imported: "operation".to_string(),
+                local: "runOperation".to_string(),
+            }],
+            is_native: false,
+            module_kind: ModuleKind::NativeCompiled,
+            resolved_path: Some("/src/ops.ts".to_string()),
+            type_only: false,
+            is_dynamic: false,
+            is_dynamic_target: false,
+            is_deferred_require: false,
+            is_adopted_require: false,
+        });
+        destination.imports.push(perry_hir::Import {
+            source: "./predicate".to_string(),
+            specifiers: vec![ImportSpecifier::Named {
+                imported: "Predicate".to_string(),
+                local: "Predicate".to_string(),
+            }],
+            is_native: false,
+            module_kind: ModuleKind::NativeCompiled,
+            resolved_path: Some("/src/predicate.ts".to_string()),
+            type_only: true,
+            is_dynamic: false,
+            is_dynamic_target: false,
+            is_deferred_require: false,
+            is_adopted_require: false,
+        });
+        let mut candidates = HashMap::new();
+        candidates.insert(
+            ("/src/ops.ts".to_string(), "operation".to_string()),
+            candidate,
+        );
+
+        cross_module::localize_cross_module_functions(&mut destination, &candidates);
+
+        let predicate_imports: Vec<_> = destination
+            .imports
+            .iter()
+            .filter(|import| import.resolved_path.as_deref() == Some("/src/predicate.ts"))
+            .collect();
+        assert_eq!(predicate_imports.len(), 2);
+        assert!(predicate_imports.iter().any(|import| import.type_only
+            && import.specifiers.len() == 1
+            && matches!(
+                &import.specifiers[0],
+                ImportSpecifier::Named { imported, local }
+                    if imported == "Predicate" && local == "Predicate"
+            )));
+        assert!(predicate_imports.iter().any(|import| !import.type_only
+            && import.specifiers.iter().any(|specifier| {
+                matches!(specifier, ImportSpecifier::Named { imported, .. } if imported == "predicate")
+            })));
+    }
+
+    #[test]
+    fn inlines_record_call_hidden_by_destructure_coercion() {
+        let record = |value| Expr::New {
+            class_name: "__AnonShape_result".to_string(),
+            args: vec![Expr::Integer(value)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        };
+        let mut resolver = function(
+            1,
+            vec![
+                Stmt::If {
+                    condition: Expr::Bool(false),
+                    then_branch: vec![Stmt::Return(Some(record(1)))],
+                    else_branch: None,
+                },
+                Stmt::Return(Some(record(2))),
+            ],
+        );
+        resolver.name = "resolve".to_string();
+
+        let wrapped_call = Expr::NativeMethodCall {
+            module: "__perry_runtime".to_string(),
+            class_name: None,
+            object: None,
+            method: "requireObjectCoercible".to_string(),
+            args: vec![
+                Expr::Call {
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                },
+                Expr::Number(10.0),
+            ],
+        };
+        let mut method_body = vec![Stmt::Expr(Expr::Integer(0)); MAX_INLINE_STMTS + 1];
+        method_body.push(Stmt::Let {
+            id: 1,
+            name: "__destruct_1".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(wrapped_call),
+        });
+        let mut method = function(2, method_body);
+        method.name = "consume".to_string();
+        let mut class = anon_class(1, "Consumer");
+        class.methods.push(method);
+        let mut module = Module::new("destructure-inline.ts");
+        module.functions.push(resolver);
+        module.classes.push(class);
+
+        inline_functions(
+            &mut module,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        let dump = format!("{:?}", module.classes[0].methods[0].body);
+        assert!(!dump.contains("requireObjectCoercible"), "{dump}");
+        assert!(!dump.contains("FuncRef(1)"), "{dump}");
+        assert!(dump.contains("DoWhile"), "{dump}");
     }
 
     #[test]
@@ -1059,6 +1419,7 @@ mod tests {
 
         inline_functions(
             &mut module,
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
