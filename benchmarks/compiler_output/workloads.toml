@@ -1570,16 +1570,29 @@ min_vectorized_loops = 0
 scalar_baseline = "allowed: native-owned typed view fixture gates proof records and fallback reasons"
 allowed_missed_reason_kinds = [
   "call_instruction",
-  # #8489: three loops here now miss vectorization for `control_flow` on the
-  # Linux/release configuration this gate runs in (not reproducible on a
-  # macOS perry-dev build). It is pre-existing — it fails identically on the
-  # pre-merge baseline 3627657c7 and still fails after #8484 — so it is NOT
-  # the `extern "C-unwind"` unwind edges. This workload requires no
-  # vectorization (`min_vectorized_loops = 0`, explicit scalar baseline), so
-  # the list is a change detector rather than a performance floor, and the
-  # sibling `native_abi_packet_control` / `native_pod_layout_constants`
-  # workloads already accept this reason. Widened to unblock the release
-  # gate; #8489 stays open to attribute the codegen change that caused it.
+  # #8489: attributed to 40e2ce86d, "perf(codegen): make -Os the default
+  # native optimization level" (#8457). NOT a codegen regression — perry's
+  # emitted IR is byte-identical either side of that commit (sha256
+  # 247d4d764e7f… for this fixture at 40e2ce86d and at its parent). The only
+  # thing that changed is the `-O` level perry hands to clang, and the
+  # harness's remark pass reuses the compile's own args
+  # (`_analysis_args_from_metadata`), so the analysis flipped -O3 -> -Os with
+  # it. At -Os LLVM declines the SimplifyCFG speculation / if-conversion /
+  # inlining that at -O3 had flattened these branches into selects before the
+  # vectorizer ran, so the loops genuinely carry control flow it cannot
+  # if-convert — and vectorizing them would grow code size, which is exactly
+  # what -Os asks LLVM not to do. `-Os` did not cost real vectorization:
+  # `vectorized_buffer_transform` still vectorizes 2 loops (min 1).
+  #
+  # Not Linux-specific and not release-specific, despite the issue title: the
+  # CI job builds `cargo build -p perry` (debug), and on macOS/arm64 the same
+  # debug build reproduces it exactly — control_flow 0 at 40e2ce86d's parent,
+  # 3 at 40e2ce86d, matching CI's Linux counts.
+  #
+  # This workload requires no vectorization (`min_vectorized_loops = 0`,
+  # explicit scalar baseline), so the list is a change detector rather than a
+  # performance floor, and the sibling `native_abi_packet_control` /
+  # `native_pod_layout_constants` workloads already accept this reason.
   "control_flow",
   "generic_not_vectorized",
   "not_beneficial",
