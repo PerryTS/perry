@@ -233,6 +233,18 @@ pub const TA_CACHE_NEGATIVE: u64 = 0xFF;
 pub static PERRY_TA_KIND_CACHE: [AtomicU64; TA_KIND_CACHE_SLOTS] =
     [const { AtomicU64::new(0) }; TA_KIND_CACHE_SLOTS];
 
+// The generic kind cache deliberately uses the exact slot formula duplicated
+// by codegen. Large, equal-sized ECS columns can therefore share the same low
+// address bits and continually evict one another. Whole-loop admission needs
+// the stronger, persistent fact "this exact address is an owning Uint32Array",
+// so keep a separate direct cache whose index folds higher address bits too.
+// A hit is safe until unregister: a TypedArray header's kind and owning/view
+// storage class never change during its lifetime, and unregister clears both
+// caches before an address can be reused.
+const INLINE_OWNING_U32_CACHE_SLOTS: usize = 64;
+static INLINE_OWNING_U32_CACHE: [AtomicU64; INLINE_OWNING_U32_CACHE_SLOTS] =
+    [const { AtomicU64::new(0) }; INLINE_OWNING_U32_CACHE_SLOTS];
+
 /// #5525 follow-up: process-global "any exotic typed-array views exist" guard,
 /// exported under a stable link name for the codegen inline element path. A
 /// non-owning typed array (an `ArrayBuffer`-aliasing view, or a native-arena
@@ -284,6 +296,33 @@ fn ta_kind_cache_invalidate(addr: usize) {
     let entry = PERRY_TA_KIND_CACHE[slot].load(Ordering::Relaxed);
     if entry != 0 && (entry >> 8) as usize == addr {
         PERRY_TA_KIND_CACHE[slot].store(0, Ordering::Relaxed);
+    }
+}
+
+#[inline]
+fn inline_owning_u32_cache_slot(addr: usize) -> usize {
+    let word = addr >> 3;
+    let mixed = word ^ (word >> 6) ^ (word >> 12);
+    mixed & (INLINE_OWNING_U32_CACHE_SLOTS - 1)
+}
+
+#[inline]
+fn inline_owning_u32_cache_get(addr: usize) -> bool {
+    INLINE_OWNING_U32_CACHE[inline_owning_u32_cache_slot(addr)].load(Ordering::Relaxed)
+        == addr as u64
+}
+
+#[inline]
+fn inline_owning_u32_cache_store(addr: usize) {
+    INLINE_OWNING_U32_CACHE[inline_owning_u32_cache_slot(addr)]
+        .store(addr as u64, Ordering::Relaxed);
+}
+
+#[inline]
+fn inline_owning_u32_cache_invalidate(addr: usize) {
+    let slot = inline_owning_u32_cache_slot(addr);
+    if INLINE_OWNING_U32_CACHE[slot].load(Ordering::Relaxed) == addr as u64 {
+        INLINE_OWNING_U32_CACHE[slot].store(0, Ordering::Relaxed);
     }
 }
 
@@ -339,6 +378,7 @@ pub(crate) fn typed_array_registry_ever_used() -> bool {
 pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
     let owner = ptr as usize;
     ta_kind_cache_invalidate(owner);
+    inline_owning_u32_cache_invalidate(owner);
     TYPED_ARRAY_REGISTRY.with(|r| {
         r.borrow_mut().remove(&owner);
     });
@@ -587,9 +627,11 @@ pub extern "C" fn js_typed_array_masked_window_data_ptr(receiver: f64) -> i64 {
 
 /// One-time loop admission primitive for erased ECS component columns. Return
 /// the stable owning-header address only for an exact inline `Uint32Array`.
-/// Consult the authoritative registry instead of the tiny direct-mapped kind
-/// cache: sibling columns can collide there, which is harmless for individual
-/// accesses but must not make a whole-loop proof spuriously fail forever.
+/// Use the admission-specific address cache first, then consult the
+/// authoritative registry on a miss. The generic direct-mapped kind cache is
+/// intentionally not authority here: sibling columns can collide there,
+/// which is harmless for individual accesses but must not make a whole-loop
+/// proof spuriously fail forever.
 #[inline]
 pub(crate) fn inline_u32_addr(receiver: f64) -> usize {
     let value = crate::value::JSValue::from_bits(receiver.to_bits());
@@ -597,12 +639,16 @@ pub(crate) fn inline_u32_addr(receiver: f64) -> usize {
         return 0;
     }
     let addr = value.as_pointer::<TypedArrayHeader>() as usize;
+    if inline_owning_u32_cache_get(addr) {
+        return addr;
+    }
     if lookup_typed_array_kind(addr) != Some(KIND_UINT32)
         || crate::native_arena::is_native_typed_view(addr as *const TypedArrayHeader)
         || crate::typedarray_view::view_meta_of(addr).is_some()
     {
         return 0;
     }
+    inline_owning_u32_cache_store(addr);
     addr
 }
 
@@ -1252,6 +1298,25 @@ pub extern "C" fn js_native_memory_copy(dst_raw: u64, src_raw: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owning_u32_admission_cache_skips_registry_and_invalidates() {
+        let ta = typed_array_alloc(KIND_UINT32, 16);
+        let boxed = crate::value::js_nanbox_pointer(ta as i64);
+
+        let before = test_typed_array_registry_probe_count();
+        assert_eq!(inline_u32_addr(boxed), ta as usize);
+        let primed = test_typed_array_registry_probe_count();
+        assert_eq!(primed, before + 1);
+        assert_eq!(inline_u32_addr(boxed), ta as usize);
+        assert_eq!(test_typed_array_registry_probe_count(), primed);
+
+        unregister_typed_array(ta);
+        assert_eq!(inline_u32_addr(boxed), 0);
+        assert_eq!(test_typed_array_registry_probe_count(), primed + 1);
+        // Leave the live allocation registered for its eventual finalizer.
+        register_typed_array(ta, KIND_UINT32);
+    }
 
     #[test]
     fn large_object_typed_array_alloc_uses_old_gc_header_and_stays_usable() {
