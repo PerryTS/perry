@@ -186,6 +186,13 @@ pub(super) fn compile_method(
     if is_index_clone {
         lf.pre_statepoint_inline = true;
     }
+    // #8872: methods participate in the same allocation-hot analysis as
+    // functions and closures.  This must be set before the entry block exists
+    // because `lower_call/new_alloc.rs` consults it while lowering each `new`
+    // site.  Previously `collect_alloc_hot_functions` could discover a method
+    // FuncId, but method codegen silently discarded the result, leaving tiny
+    // cross-module allocation kernels on the outlined runtime allocator.
+    lf.alloc_hot = cross_module.alloc_hot_functions.contains(&method.id);
 
     // gh #6206 / #6081: methods were compiled WITHOUT a shadow frame — same
     // exact-roots liveness hole as closures (see compile_closure). One extra

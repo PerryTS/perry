@@ -46,6 +46,24 @@ struct HotCalleeScan {
 /// module's speculative growth to ~2.1 KiB.
 const INDIRECT_CLOSURE_ALLOC_SITE_BUDGET: u32 = 8;
 
+/// #8872 follow-up: tiny allocation-bearing instance methods are allocation
+/// kernels even when their callers live in another module and this module's
+/// lexical loop scan cannot see them.  Keep the admission deliberately
+/// bounded on both axes that contribute code size:
+///
+/// * at most two HIR statements per method, so this does not become a generic
+///   "methods are hot" rule; and
+/// * at most eight admitted `new` sites across the module, the same ~2.1 KiB
+///   worst-case budget used for indirect closure calls above.
+///
+/// The motivating shape is a command-buffer method whose whole body is an
+/// optional-argument prologue plus `commands.push({ ... })`.  Cross-module
+/// callers make call-site hotness invisible here, but the method itself is a
+/// stable, reusable allocation site.  The outlined allocator is semantically
+/// identical, so declining modules over the budget is a safe under-inclusion.
+const TINY_METHOD_MAX_STMTS: usize = 2;
+const TINY_METHOD_ALLOC_SITE_BUDGET: u32 = 8;
+
 /// Collect the set of `FuncId`s eligible for `inlinehint`: those with ≥1 direct
 /// call site inside a loop AND at most `max_call_sites` total direct call sites
 /// across the whole module (`init` + every function + every executable
@@ -132,7 +150,7 @@ pub fn collect_hot_loop_callees(hir: &Module, max_call_sites: u32) -> HashSet<u3
 /// other 16 within a ±1.6% noise floor established by the 15 binaries that
 /// come out byte-identical.
 ///
-/// ## The three admission rules
+/// ## The four admission rules
 ///
 /// 1. **≥1 direct call site inside a loop** — the existing proxy for "runs many
 ///    times", now uncapped.
@@ -148,6 +166,11 @@ pub fn collect_hot_loop_callees(hir: &Module, max_call_sites: u32) -> HashSet<u3
 ///    most [`INDIRECT_CLOSURE_ALLOC_SITE_BUDGET`] `new` sites in total. The
 ///    all-or-none cap avoids traversal-order-dependent code size and prices the
 ///    actual emitted cost rather than closure count.
+/// 4. **Bounded tiny allocation methods** — instance methods with at most two
+///    HIR statements, admitted only when their `new` sites total at most eight
+///    across the module.  This covers cross-module allocation kernels whose
+///    call-site loop is not visible in their defining module without turning
+///    every method allocation into an inline site.
 ///
 /// Direction of error is unchanged from the sibling: under-inclusion forgoes
 /// speed, never correctness — the outlined call performs the identical bump
@@ -212,6 +235,36 @@ pub fn collect_alloc_hot_functions(hir: &Module) -> HashSet<u32> {
                 .iter()
                 .filter_map(|(&func_id, &sites)| (sites > 0).then_some(func_id)),
         );
+    }
+    // Rule 4: a tiny method that exists chiefly to construct and publish a
+    // value is its own allocation kernel.  Count only allocations owned by the
+    // method body; `count_alloc_sites_in_stmts` switches ownership at closure
+    // boundaries, so a nested callback's `new` is still governed by rule 3.
+    // Select all or none after counting to keep the result independent of
+    // class/method traversal order.
+    let mut tiny_method_sites: HashMap<u32, u32> = HashMap::new();
+    for class in &hir.classes {
+        for method in &class.methods {
+            if method.body.len() > TINY_METHOD_MAX_STMTS {
+                continue;
+            }
+            // Count into a scratch map because the ownership-aware walker also
+            // records nested closures.  Only transfer the sites still owned by
+            // the method; closure-owned sites remain exclusively under rule 3.
+            let mut owned_sites = HashMap::new();
+            count_alloc_sites_in_stmts(&method.body, Some(method.id), &mut owned_sites);
+            if let Some(sites) = owned_sites.get(&method.id).copied() {
+                tiny_method_sites.insert(method.id, sites);
+            }
+        }
+    }
+    tiny_method_sites.retain(|_, sites| *sites != 0);
+    let tiny_method_site_count = tiny_method_sites
+        .values()
+        .copied()
+        .fold(0_u32, u32::saturating_add);
+    if tiny_method_site_count > 0 && tiny_method_site_count <= TINY_METHOD_ALLOC_SITE_BUDGET {
+        hot.extend(tiny_method_sites.into_keys());
     }
     hot
 }

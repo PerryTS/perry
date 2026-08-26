@@ -51,6 +51,7 @@ const HEADER_IMAGE_STORE: &str = "store <2 x i64> %";
 
 const N_ID: u32 = 11;
 const WALK_ID: u32 = 700;
+const FACTORY_METHOD_ID: u32 = 701;
 const STAGE_LOCAL_BASE: u32 = 800;
 const STAGE_FUNC_BASE: u32 = 900;
 
@@ -145,6 +146,86 @@ fn cell_class() -> Class {
         alloc_width_hint: 0,
         specialized_from: None,
     }
+}
+
+fn tiny_factory_class(prefix_stmts: usize) -> Class {
+    let mut body = Vec::new();
+    for i in 0..prefix_stmts {
+        body.push(Stmt::Expr(Expr::Number(i as f64)));
+    }
+    body.push(Stmt::Return(Some(Expr::New {
+        class_name: "Cell".to_string(),
+        args: vec![Expr::Number(1.0)],
+        type_args: Vec::new(),
+        byte_offset: 0,
+        cap_args_appended: 0,
+    })));
+    Class {
+        id: 4,
+        name: "Factory".to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: Vec::new(),
+        constructor: None,
+        methods: vec![Function {
+            id: FACTORY_METHOD_ID,
+            name: "make".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Named("Cell".to_string()),
+            body,
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }],
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        computed_members: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+        is_nested: false,
+        alloc_width_hint: 0,
+        specialized_from: None,
+    }
+}
+
+fn tiny_factory_module(prefix_stmts: usize) -> Module {
+    let mut module = Module::new("tiny_factory.ts");
+    module.classes = vec![cell_class(), tiny_factory_class(prefix_stmts)];
+    module.init_kind = ModuleInitKind::Eager;
+    module
+}
+
+fn tiny_factory_budget_module(method_count: u32) -> Module {
+    let mut factory = tiny_factory_class(0);
+    let template = factory.methods.pop().expect("factory method template");
+    factory.methods = (0..method_count)
+        .map(|offset| {
+            let mut method = template.clone();
+            method.id = FACTORY_METHOD_ID + offset;
+            method.name = format!("make{offset}");
+            method
+        })
+        .collect();
+
+    let mut module = Module::new("tiny_factory_budget.ts");
+    module.classes = vec![cell_class(), factory];
+    module.init_kind = ModuleInitKind::Eager;
+    module
 }
 
 /// `function walk(n) { if (n > 0) walk(n - 1); return new Cell(n) }` — the
@@ -293,6 +374,51 @@ fn assert_inline_new_not_forced() {
     assert!(
         std::env::var_os("PERRY_INLINE_NEW").is_none(),
         "these tests describe the DEFAULT gate; PERRY_INLINE_NEW must be unset"
+    );
+}
+
+#[test]
+fn a_tiny_allocation_method_inlines_its_bump_allocator() {
+    assert_inline_new_not_forced();
+    let ir = ir_for(tiny_factory_module(0));
+    assert!(
+        ir.contains(INLINE_SLOW_CALL) && ir.contains(INLINE_FAST_BLOCK),
+        "a one-statement allocation method is a bounded allocation kernel, but its `new` \
+         took the outlined allocator:\n{ir}"
+    );
+    assert!(
+        !ir.contains(STAMPED_OUTLINED_CALL),
+        "the tiny allocation method still emitted the outlined allocator:\n{ir}"
+    );
+}
+
+#[test]
+fn a_non_tiny_allocation_method_keeps_the_outlined_allocator() {
+    assert_inline_new_not_forced();
+    // Two prefix statements plus the return make this a three-statement
+    // method, just beyond the deliberately narrow tiny-method admission.
+    let ir = ir_for(tiny_factory_module(2));
+    assert!(
+        ir.contains(STAMPED_OUTLINED_CALL),
+        "a three-statement method escaped the bounded tiny-method rule:\n{ir}"
+    );
+    assert!(
+        !ir.contains(INLINE_FAST_BLOCK),
+        "the non-tiny method unexpectedly emitted an inline allocation site:\n{ir}"
+    );
+}
+
+#[test]
+fn tiny_allocation_methods_over_the_module_budget_are_all_outlined() {
+    assert_inline_new_not_forced();
+    let ir = ir_for(tiny_factory_budget_module(9));
+    assert!(
+        ir.contains(STAMPED_OUTLINED_CALL),
+        "allocation methods over the eight-site budget emitted no outlined allocator:\n{ir}"
+    );
+    assert!(
+        !ir.contains(INLINE_FAST_BLOCK),
+        "the all-or-none method budget admitted part of a nine-site module:\n{ir}"
     );
 }
 
