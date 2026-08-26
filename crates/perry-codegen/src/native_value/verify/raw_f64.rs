@@ -72,7 +72,14 @@ pub(crate) fn validate_js_value_bits_record(record: &NativeRepRecord, errors: &m
 pub(crate) fn raw_f64_dynamic_fallback_record(record: &NativeRepRecord) -> bool {
     matches!(
         (record.expr_kind.as_str(), record.consumer.as_str()),
-        ("NumericArrayPush", "js_array_push_f64_spec")
+        // #8858 added the spec-compliant observable push helper alongside the
+        // original own-property one; BOTH are still emitted (the original at
+        // expr/static_method.rs, expr/static_field_meta.rs and
+        // rooting/temp_root.rs), so both must keep the raw_f64_layout
+        // requirement. Replacing the entry rather than adding to it silently
+        // dropped it for `js_array_push_f64`.
+        ("NumericArrayPush", "js_array_push_f64")
+            | ("NumericArrayPush", "js_array_push_f64_spec")
             | (
                 "NumericArrayIndexGet",
                 "js_typed_feedback_array_index_get_fallback_boxed"
