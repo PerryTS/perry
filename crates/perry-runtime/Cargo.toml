@@ -237,6 +237,9 @@ ohos-napi = []
 # this on only when the user's program references `WebAssembly.*`, so non-wasm
 # programs don't pay an unresolvable-symbol penalty at link time.
 wasm-host = []
+# #8523: opt-in Node-API ABI and host-core symbols. The compiler enables this
+# only for an allowlisted native-addon graph, preserving the default size gate.
+node-api-host = []
 # #6559: runtime dynamic-code evaluation — `new Function(p1, …, body)` with a
 # RUNTIME-constructed body parses the generated source with perry-parser (SWC)
 # and runs it through a scoped tree-walking interpreter (`src/dyn_eval/`).

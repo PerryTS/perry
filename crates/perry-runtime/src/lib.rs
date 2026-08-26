@@ -103,6 +103,8 @@ pub mod native_handle;
 pub mod native_value_profile;
 pub mod navigator;
 pub mod net_validate;
+#[cfg(feature = "node-api-host")]
+pub mod node_api_host;
 mod param_type_guard;
 // #6468: the `node:http2` constant tables are only reachable through the
 // `http2` native-module namespace, so a program that never imports `node:http2`

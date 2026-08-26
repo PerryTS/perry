@@ -2,8 +2,23 @@
 
 Status: design contract for [#8523](https://github.com/PerryTS/perry/issues/8523).
 The implementation is deliberately staged behind the completed `bun:ffi`
-callback work in #6562. This document fixes the representation, lifetime, ABI,
-loader, and shipping decisions before the first `napi_*` symbol is exported.
+callback work in #6562. This document fixed the representation, lifetime, ABI,
+loader, and shipping decisions before implementation began.
+
+## Implementation status
+
+The optional `perry-runtime/node-api-host` feature now contains the Stage 1
+host core: environment and opaque handle validation, strict handle scopes,
+strong references, mutable GC root scanning, pending exceptions, primitive and
+string conversion, objects and arrays, BigInt/date/symbol values, and native
+callback invocation. It is intentionally not enabled by the compiler yet, so
+programs without native addons retain the zero-byte default path.
+
+The feature is an internal integration surface until the remaining Stage 1
+weak-reference/finalizer work and the Stage 2 loader/export table land. In
+particular, a successful build with this feature does not by itself make
+`process.dlopen()` accept `.node` files. Unsupported external values and weak
+references fail safely instead of exposing untraced Perry heap addresses.
 
 The host lets a Perry executable load a prebuilt Node-API (`.node`) addon
 without embedding Node, V8, JavaScriptCore, or another JavaScript engine. It is
