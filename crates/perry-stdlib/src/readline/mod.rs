@@ -164,6 +164,39 @@ static KEYPRESS_CALLBACKS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
 /// the consumer pulls the bytes itself with `process.stdin.read()`.
 static READABLE_CALLBACKS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
 
+/// `process.stdin.on("end" | "close", …)` listeners.
+///
+/// These used to be stuffed into the single-slot readline `CLOSE_CALLBACK`
+/// ("only one terminal close listener is supported per process"), so every new
+/// registration silently CLOBBERED the previous one. Node allows any number,
+/// and real programs register several: the Claude Code bundle attaches three
+/// `stdin.on("end")` handlers, so the one that actually resolves its
+/// read-stdin promise was overwritten — the promise never settled, the loop
+/// ran out of work and the process exited 0 having printed nothing (piped
+/// stdin produced no output at all, while `printf "" | cc` worked because that
+/// path never registers a second listener).
+///
+/// A `Vec` keyed like DATA/READABLE_CALLBACKS, fired in registration order.
+static STDIN_END_CALLBACKS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
+
+/// True while at least one `process.stdin.on("readable", …)` listener is
+/// registered — Node's paused ("pull") mode, where bytes are buffered until the
+/// consumer calls `read()` rather than pushed to a `data` listener.
+///
+/// The fd-0 reader consults this the same way it consults `RAW_MODE` /
+/// `STDIN_DATA_FLOWING`. Without it, pull-mode bytes fell into the reader's
+/// final `else` branch and were queued as readline *lines* (`PENDING_LINES`),
+/// which nothing in the `read()` path ever drains — the exact hazard the
+/// `PENDING_LINES` comment above records for the `data` case (#5227), left
+/// unfixed for `readable`. Symptom: `echo hi | app` where the app uses
+/// `stdin.on("readable")` + `read()` (which is what Claude Code's `-p` stdin
+/// path does) reads nothing and the event loop parks forever waiting for input
+/// that was already consumed and discarded.
+///
+/// An `AtomicBool` rather than a `READABLE_CALLBACKS.lock()` test because the
+/// reader checks it once per byte.
+static STDIN_PULL_MODE: AtomicBool = AtomicBool::new(false);
+
 // ---------------------------------------------------------------------------
 // Main-thread-only state — callbacks are dispatched from the main thread
 // only (where the GC/runtime are safe to touch), so thread_local is correct.
@@ -328,6 +361,7 @@ extern "C" fn stdin_on_op(name_ptr: *const u8, name_len: usize, cb: i64, _once: 
             if let Ok(mut v) = READABLE_CALLBACKS.lock() {
                 v.push(cb);
             }
+            STDIN_PULL_MODE.store(true, Ordering::Release);
         }
         "keypress" => {
             if let Ok(mut v) = KEYPRESS_CALLBACKS.lock() {
@@ -358,6 +392,9 @@ extern "C" fn stdin_off_op(name_ptr: *const u8, name_len: usize, cb: i64) {
         "readable" => {
             if let Ok(mut v) = READABLE_CALLBACKS.lock() {
                 v.retain(|r| *r != cb);
+                if v.is_empty() {
+                    STDIN_PULL_MODE.store(false, Ordering::Release);
+                }
             }
         }
         "keypress" => {
@@ -1018,7 +1055,9 @@ fn ensure_reader_started() {
                         if let Ok(mut q) = PENDING_DATA.lock() {
                             q.push(vec![byte[0]]);
                         }
-                    } else if STDIN_DATA_FLOWING.load(Ordering::Acquire) {
+                    } else if STDIN_DATA_FLOWING.load(Ordering::Acquire)
+                        || STDIN_PULL_MODE.load(Ordering::Acquire)
+                    {
                         // Cooked flowing mode (#5227): a `process.stdin.on('data')`
                         // listener is attached but raw mode is off. Deliver input
                         // as 'data' chunks (newline INCLUDED, matching Node's
@@ -1053,7 +1092,10 @@ fn ensure_reader_started() {
         // flowing mode this is the last 'data' chunk for input like
         // `printf "abc"` (no final newline); otherwise it's a final 'line'.
         if !line_buf.is_empty() && !STDIN_DESTROYED.load(Ordering::Acquire) {
-            if STDIN_DATA_FLOWING.load(Ordering::Acquire) && !RAW_MODE.load(Ordering::Acquire) {
+            if (STDIN_DATA_FLOWING.load(Ordering::Acquire)
+                || STDIN_PULL_MODE.load(Ordering::Acquire))
+                && !RAW_MODE.load(Ordering::Acquire)
+            {
                 if let Ok(mut q) = PENDING_DATA.lock() {
                     q.push(std::mem::take(&mut line_buf));
                 }
@@ -1594,13 +1636,19 @@ pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback:
             if let Ok(mut v) = READABLE_CALLBACKS.lock() {
                 v.push(callback);
             }
+            STDIN_PULL_MODE.store(true, Ordering::Release);
             try_register_pump();
             ensure_reader_started();
         }
         "end" | "close" => {
-            // Reuse the readline close callback slot — only one terminal
-            // close listener is supported per process.
-            CLOSE_CALLBACK.with(|cb| *cb.borrow_mut() = Some(callback));
+            // Node supports many `end` listeners; keep them all (see
+            // STDIN_END_CALLBACKS). The reader must also be running or EOF is
+            // never observed for a consumer that only listens for `end`.
+            if let Ok(mut v) = STDIN_END_CALLBACKS.lock() {
+                v.push(callback);
+            }
+            try_register_pump();
+            ensure_reader_started();
         }
         _ => {}
     }
@@ -1619,6 +1667,14 @@ pub extern "C" fn js_readline_stdin_remove_listener(
     match event.as_str() {
         "readable" => {
             if let Ok(mut v) = READABLE_CALLBACKS.lock() {
+                v.retain(|registered| *registered != callback);
+                if v.is_empty() {
+                    STDIN_PULL_MODE.store(false, Ordering::Release);
+                }
+            }
+        }
+        "end" | "close" => {
+            if let Ok(mut v) = STDIN_END_CALLBACKS.lock() {
                 v.retain(|registered| *registered != callback);
             }
         }
@@ -1771,6 +1827,57 @@ mod tests {
         // reports 0 callbacks fired.
         assert_eq!(js_readline_process_pending(), 0);
         assert_eq!(PENDING_LINES.lock().unwrap().len(), 0);
+    }
+
+    /// Every `process.stdin.on("end", …)` listener must fire, not just the
+    /// last one registered.
+    ///
+    /// These used to share the single-slot readline `CLOSE_CALLBACK`, so each
+    /// registration clobbered the previous one. Claude Code registers three
+    /// `stdin.on("end")` handlers; the one that resolved its read-stdin promise
+    /// was silently dropped, the promise never settled, and the process exited
+    /// 0 having printed nothing.
+    #[test]
+    fn every_stdin_end_listener_fires() {
+        let _g = reset();
+        let a = data_counter_callback();
+        let b = data_counter_callback();
+        let c = data_counter_callback();
+        for cb in [a, b, c] {
+            js_readline_stdin_on(event_name("end"), cb);
+        }
+        assert_eq!(
+            STDIN_END_CALLBACKS.lock().map(|v| v.len()).unwrap_or(0),
+            3,
+            "all three end listeners must be retained"
+        );
+        EOF_REACHED.store(true, Ordering::Release);
+        js_readline_process_pending();
+        assert_eq!(
+            DATA_COUNT.with(|n| *n.borrow()),
+            3,
+            "each registered end listener must be invoked exactly once"
+        );
+    }
+
+    /// An `on("readable")` listener puts stdin in paused/pull mode, where the
+    /// fd-0 reader must buffer bytes for `process.stdin.read()` instead of
+    /// routing them to readline's line queue (which `read()` never drains).
+    #[test]
+    fn readable_listener_enables_pull_mode() {
+        let _g = reset();
+        assert!(!STDIN_PULL_MODE.load(Ordering::Acquire));
+        let cb = readable_counter_callback();
+        js_readline_stdin_on(event_name("readable"), cb);
+        assert!(
+            STDIN_PULL_MODE.load(Ordering::Acquire),
+            "a readable listener must switch the reader into pull mode"
+        );
+        js_readline_stdin_remove_listener(event_name("readable"), cb);
+        assert!(
+            !STDIN_PULL_MODE.load(Ordering::Acquire),
+            "removing the last readable listener must leave pull mode"
+        );
     }
 
     #[test]

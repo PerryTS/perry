@@ -362,6 +362,17 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
                 js_closure_call0(closure);
                 fired += 1;
             }
+            // Every `process.stdin.on("end" | "close", …)` listener, in
+            // registration order. Node fires all of them; the previous
+            // single-slot storage kept only the last one registered.
+            let end_cbs: Vec<i64> = STDIN_END_CALLBACKS
+                .lock()
+                .map(|mut v| std::mem::take(&mut *v))
+                .unwrap_or_default();
+            for cb_i64 in end_cbs {
+                js_closure_call0(cb_i64 as *const ClosureHeader);
+                fired += 1;
+            }
         }
     }
     fired
@@ -403,8 +414,12 @@ pub extern "C" fn js_readline_has_active() -> i32 {
             .unwrap_or(false);
     let has_line_callbacks = QUESTION_CALLBACK.with(|c| c.borrow().is_some())
         || LINE_CALLBACK.with(|c| c.borrow().is_some());
-    let has_close_cb =
-        !CLOSE_FIRED.with(|f| *f.borrow()) && CLOSE_CALLBACK.with(|c| c.borrow().is_some());
+    let has_close_cb = !CLOSE_FIRED.with(|f| *f.borrow())
+        && (CLOSE_CALLBACK.with(|c| c.borrow().is_some())
+            || STDIN_END_CALLBACKS
+                .lock()
+                .map(|v| !v.is_empty())
+                .unwrap_or(false));
     let has_dispatchable_data = has_data && has_stdin_callbacks && !paused;
     let reader_keeps_alive = started
         && !eof

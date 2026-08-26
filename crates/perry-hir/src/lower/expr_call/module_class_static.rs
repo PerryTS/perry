@@ -205,7 +205,33 @@ pub(super) fn try_module_class_static(
                                     let arg = args.into_iter().next().unwrap();
                                     return Ok(Ok(Expr::ProcessStdinSetRawMode(Box::new(arg))));
                                 }
-                                ("stdin", "on") | ("stdin", "addListener") if args.len() >= 2 => {
+                                // `once` lowers here too. Without it, only
+                                // `on`/`addListener` reached readline's stdin
+                                // listener registry and `process.stdin.once(…)`
+                                // fell through to the generic member-call path,
+                                // which never registers with the fd-0 reader —
+                                // so the callback simply never fired.
+                                //
+                                // That is not a corner case: Claude Code's `-p`
+                                // stdin reader awaits
+                                // `race(stdin.once("end"), timeout(3000))`, so
+                                // with `once` dropped the `end` half could never
+                                // win. The race fell through to the timeout, and
+                                // because that timer is unref'd nothing kept the
+                                // loop alive — `echo hi | claude -p …` exited 0
+                                // having printed NOTHING (node prints the result).
+                                //
+                                // One-shot semantics are handled downstream by
+                                // the pump, which takes the `end` listener list
+                                // when it fires; `data`/`readable` listeners
+                                // registered via `once` are a documented
+                                // residual (they behave like `on`) — the streams
+                                // that matter here are EOF-driven.
+                                ("stdin", "on")
+                                | ("stdin", "addListener")
+                                | ("stdin", "once")
+                                    if args.len() >= 2 =>
+                                {
                                     let mut iter = args.into_iter();
                                     let event = iter.next().unwrap();
                                     let handler = iter.next().unwrap();

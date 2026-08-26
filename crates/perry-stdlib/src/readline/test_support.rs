@@ -69,6 +69,10 @@ pub(super) fn reset() -> MutexGuard<'static, ()> {
     if let Ok(mut v) = READABLE_CALLBACKS.lock() {
         v.clear();
     }
+    if let Ok(mut v) = STDIN_END_CALLBACKS.lock() {
+        v.clear();
+    }
+    STDIN_PULL_MODE.store(false, Ordering::Release);
     PENDING_LINES.lock().unwrap().clear();
     PENDING_DATA.lock().unwrap().clear();
     PENDING_ESCAPE.lock().unwrap().clear();
