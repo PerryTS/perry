@@ -121,10 +121,13 @@ GAP_SUITE = {
 }
 
 # Parity: full tier only, sharded. The unsharded job was killed by GitHub's
-# 6-hour job cap on 2026-08-16 (run 31935729773) — 8 shards puts each around
-# 45-75 min. `parity-aggregate` (not in JOBS: it keys off `jobs.parity`)
-# merges the shard reports and runs the aggregate-only gates.
-PARITY_SHARDS = 8
+# 6-hour job cap on 2026-08-16 (run 31935729773). The corpus subsequently
+# outgrew the original 8-way split: release run 32922022811 reached only
+# 152/173 tests in shard 8 before its 150-minute cap. Twelve shards restore
+# wall-time margin without exceeding the org's 20-runner pool once the other
+# full-tier jobs drain. `parity-aggregate` (not in JOBS: it keys off
+# `jobs.parity`) merges the shard reports and runs the aggregate-only gates.
+PARITY_SHARDS = 12
 
 EXTENDED_LABEL = "run-extended-tests"
 
