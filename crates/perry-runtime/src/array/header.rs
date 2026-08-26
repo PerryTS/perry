@@ -475,6 +475,25 @@ pub(crate) unsafe fn array_named_property_get_by_name(
     })
 }
 
+/// Whether this Array owns any side-table properties.
+///
+/// Numeric properties normally live in dense element storage, but a far
+/// sparse index can enter this table and later fall below a grown capacity.
+/// Bulk element operations use this predicate to decline a dense-only path
+/// instead of leaving that second representation observable.
+#[inline]
+pub(crate) unsafe fn array_has_named_properties(arr: *const ArrayHeader) -> bool {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() {
+        return false;
+    }
+    ARRAY_NAMED_PROPS.with(|m| {
+        m.borrow()
+            .get(&(arr as usize))
+            .is_some_and(|props| !props.is_empty())
+    })
+}
+
 pub(crate) unsafe fn array_named_property_get(
     arr: *const ArrayHeader,
     key: *const crate::StringHeader,

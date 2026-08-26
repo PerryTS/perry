@@ -981,6 +981,28 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             // table. Delete them first, in the same descending order required
             // by ArraySetLength, then visit the allocated dense prefix.
             let capacity = (*arr).capacity;
+            // With no indexed descriptors and no side-table properties, every
+            // own index in the truncated suffix is an ordinary dense slot.
+            // ArraySetLength has no observable per-index operation in this
+            // case, so clear the suffix in one runtime region and rebuild the
+            // live-prefix GC layout once. This preserves the holes required if
+            // the array grows again without paying String construction and
+            // three descriptor/expando probes for every removed element.
+            if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+                && cur <= capacity
+                && !array_has_named_properties(arr)
+            {
+                let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+                for i in n..cur {
+                    // GC_STORE_AUDIT(BARRIERED): the suffix becomes unreachable
+                    // when length is published below; rebuild_array_layout then
+                    // rebuilds the complete live-prefix layout/barrier state.
+                    ptr::write(elements.add(i as usize), crate::value::TAG_HOLE);
+                }
+                (*arr).length = n;
+                rebuild_array_layout(arr);
+                return;
+            }
             if cur > capacity {
                 let mut sparse_indices: Vec<u32> = array_named_property_names(arr, false)
                     .into_iter()
