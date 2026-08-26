@@ -469,16 +469,20 @@ fn emit_proven_view_store(
         }
         BufferElem::I16 | BufferElem::U16 => {
             let half = blk.trunc(I32, &value_native.value, I16);
+            // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
             blk.store(I16, &half, &elem_ptr);
         }
         BufferElem::I32 | BufferElem::U32 => {
+            // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
             blk.store(I32, &value_native.value, &elem_ptr);
         }
         BufferElem::F32 => {
             let narrow = blk.fptrunc(DOUBLE, &value_native.value, F32);
+            // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
             blk.store(F32, &narrow, &elem_ptr);
         }
         BufferElem::F64 => {
+            // GC_STORE_AUDIT(POINTER_FREE): typed-array backing store.
             blk.store(DOUBLE, &value_native.value, &elem_ptr);
         }
         BufferElem::U8Clamped => unreachable!("gated before store emission"),

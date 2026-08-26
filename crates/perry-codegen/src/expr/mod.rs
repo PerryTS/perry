@@ -2498,6 +2498,7 @@ pub(crate) use masked_window::masked_window_fact_for_index;
 mod computed_store_rooting_tests;
 mod index_set;
 mod index_set_guarded;
+mod index_set_packed_loop;
 mod index_set_typed_array;
 mod instance_misc1;
 mod member_update;
