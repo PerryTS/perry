@@ -98,11 +98,13 @@ fn run_fixture(fixture: &str, extra_args: &[&str]) -> String {
     let bin = root.join("main_bin");
     let run = Command::new(&bin).output().expect("run compiled binary");
     // Both fixtures catch the throw and log it, so the program must exit
-    // cleanly. Preserve stderr here so an ABI abort cannot masquerade as an
-    // empty-output assertion failure.
+    // cleanly. This is also the ABI regression assertion: every runtime
+    // boundary between the throw helper and generated code's catch landing
+    // pad must permit unwinding. Preserve stderr so an ABI abort cannot
+    // masquerade as an empty-output assertion failure.
     assert!(
         run.status.success(),
-        "compiled binary must exit successfully; status: {:?}\nstdout:\n{}\nstderr:\n{}",
+        "compiled binary must catch the runtime throw and exit successfully; status: {:?}\nstdout:\n{}\nstderr:\n{}",
         run.status,
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr),
