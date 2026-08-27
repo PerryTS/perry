@@ -270,6 +270,71 @@ fn test_array_mixed_bulk_producers_preserve_pointer_layout() {
     clear_mark_seeds();
 }
 
+/// `length = 0` keeps an all-pointer array all-pointer (the state a declared
+/// `[]` literal starts in) so a reused pool bucket's first push needs no
+/// layout transition, while a numeric array keeps its raw-f64 claim.
+#[test]
+fn test_truncate_to_zero_keeps_the_layout_the_history_predicts() {
+    clear_marks();
+    clear_mark_seeds();
+
+    // Pointer bucket: three heap strings, then emptied.
+    let mut bucket = crate::array::js_array_alloc(4);
+    for name in [&b"a-child"[..], &b"b-child"[..], &b"c-child"[..]] {
+        let child =
+            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32) as *mut u8;
+        let boxed = f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK));
+        bucket = crate::array::js_array_push_f64(bucket, boxed);
+    }
+    let before = unsafe { crate::array::array_object_flags_resolved(bucket) };
+    assert_eq!(
+        before & (crate::gc::GC_LAYOUT_STATE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS),
+        crate::gc::GC_LAYOUT_SIDE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS,
+        "premise: three pointer pushes leave the bucket SIDE_MASK | ALL_POINTERS"
+    );
+    crate::array::js_array_set_length(bucket, 0.0);
+    let after = unsafe { crate::array::array_object_flags_resolved(bucket) };
+    assert_eq!(
+        after & (crate::gc::GC_LAYOUT_STATE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS),
+        crate::gc::GC_LAYOUT_SIDE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS,
+        "an emptied all-pointer bucket must stay all-pointer for its next fill"
+    );
+    assert_eq!(
+        after & crate::gc::GC_ARRAY_RAW_F64_LAYOUT,
+        0,
+        "and must not claim a raw-f64 layout it will never use"
+    );
+    // A non-pointer store into the emptied bucket still demotes the claim.
+    bucket = crate::array::js_array_push_f64(bucket, 7.0);
+    let demoted = unsafe { crate::array::array_object_flags_resolved(bucket) };
+    assert_ne!(
+        demoted & (crate::gc::GC_LAYOUT_STATE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS),
+        crate::gc::GC_LAYOUT_SIDE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS,
+        "a number pushed into the kept all-pointer state must leave it"
+    );
+    assert_eq!(
+        test_layout_pointer_slot_count(bucket as usize, 1),
+        None,
+        "the demotion is to the conservative tag scan (UNKNOWN), the same state a \
+         declared literal takes on its first non-pointer store"
+    );
+
+    // Numeric array: the raw-f64 claim survives truncation as before.
+    let mut nums = crate::array::js_array_alloc(4);
+    nums = crate::array::js_array_push_f64(nums, 1.0);
+    nums = crate::array::js_array_push_f64(nums, 2.0);
+    crate::array::js_array_set_length(nums, 0.0);
+    let flags = unsafe { crate::array::array_object_flags_resolved(nums) };
+    assert_eq!(
+        flags & crate::gc::GC_LAYOUT_STATE_MASK,
+        crate::gc::GC_LAYOUT_POINTER_FREE
+    );
+    assert_ne!(flags & crate::gc::GC_ARRAY_RAW_F64_LAYOUT, 0);
+
+    clear_marks();
+    clear_mark_seeds();
+}
+
 #[test]
 fn test_numeric_array_push_heap_value_transitions_and_traces() {
     clear_marks();
