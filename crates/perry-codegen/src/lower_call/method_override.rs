@@ -1273,8 +1273,7 @@ pub(super) fn emit_guarded_direct_method_call(
                 .collect();
             let mut guard: Option<String> = None;
             for (value, rep) in formal_args.iter().zip(typed_param_reps.iter()) {
-                let raw = ctx.block().call(I32, rep.guard_fn(), &[(DOUBLE, *value)]);
-                let ok = ctx.block().icmp_ne(I32, &raw, "0");
+                let ok = crate::codegen::emit_typed_arg_guard(ctx.block(), *rep, value);
                 guard = Some(match guard {
                     Some(prev) => ctx.block().and(I1, &prev, &ok),
                     None => ok,
@@ -1298,8 +1297,7 @@ pub(super) fn emit_guarded_direct_method_call(
             for (value, rep) in formal_args.iter().zip(typed_param_reps.iter()) {
                 typed_args_storage.push(match rep {
                     crate::codegen::TypedParamRep::F64 => {
-                        ctx.block()
-                            .call(DOUBLE, rep.unbox_fn(), &[(DOUBLE, *value)])
+                        crate::codegen::emit_typed_arg_to_raw(ctx.block(), *rep, value)
                     }
                     crate::codegen::TypedParamRep::I32 => {
                         ctx.block().call(I32, rep.unbox_fn(), &[(DOUBLE, *value)])

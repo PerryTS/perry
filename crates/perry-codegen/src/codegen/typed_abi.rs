@@ -242,6 +242,9 @@ pub(crate) fn emit_typed_arg_guard(
     rep: TypedParamRep,
     arg: &str,
 ) -> String {
+    if rep == TypedParamRep::F64 {
+        return emit_typed_f64_guard(blk, arg);
+    }
     let raw = blk.call(
         crate::types::I32,
         rep.guard_fn(),
@@ -250,17 +253,53 @@ pub(crate) fn emit_typed_arg_guard(
     blk.icmp_ne(crate::types::I32, &raw, "0")
 }
 
+/// Inline the exact contract of runtime `js_typed_f64_arg_guard`
+/// (`JSValue::is_number || JSValue::is_int32`), the way
+/// [`emit_typed_i32_guard_and_raw`] already does for the i32 lane.
+///
+/// The public entry of every function with a boxed-double clone runs this
+/// guard on each numeric parameter before dispatching; a one-line predicate
+/// such as an ECS `isComponentId(id)` paid a cross-crate call per invocation
+/// for a compare it could have done in four instructions. Same predicate,
+/// same routing decision.
+pub(crate) fn emit_typed_f64_guard(blk: &mut crate::block::LlBlock, arg: &str) -> String {
+    use crate::types::{I1, I64};
+    let bits = blk.bitcast_double_to_i64(arg);
+    // JSValue::is_number: Perry-owned tags occupy the positive-qNaN top words
+    // 0x7ff9..=0x7fff; everything outside that band is a Number.
+    let top16 = blk.lshr(I64, &bits, "48");
+    let below_tag_band = blk.icmp_ult(I64, &top16, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
+    let above_tag_band = blk.icmp_ugt(I64, &top16, crate::nanbox::STRING_TAG_TOP16_I64);
+    let is_plain_number = blk.or(I1, &below_tag_band, &above_tag_band);
+    // JSValue::is_int32: the INT32 tag with any payload.
+    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
+    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
+    let is_int32 = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
+    blk.or(I1, &is_plain_number, &is_int32)
+}
+
+/// Inline `js_typed_f64_arg_to_raw` for a value the F64 guard admitted: an
+/// INT32-tagged value converts its low lane, anything else is already the
+/// double the clone wants. Only valid after [`emit_typed_f64_guard`] passed
+/// (a tagged non-number would otherwise reach the clone as its raw bits).
+pub(crate) fn emit_typed_f64_to_raw_guarded(blk: &mut crate::block::LlBlock, arg: &str) -> String {
+    use crate::types::{DOUBLE, I1, I32, I64};
+    let bits = blk.bitcast_double_to_i64(arg);
+    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
+    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
+    let is_int32 = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
+    let low = blk.trunc(I64, &bits, I32);
+    let converted = blk.sitofp(I32, &low, DOUBLE);
+    blk.select(I1, &is_int32, DOUBLE, &converted, arg)
+}
+
 pub(crate) fn emit_typed_arg_to_raw(
     blk: &mut crate::block::LlBlock,
     rep: TypedParamRep,
     arg: &str,
 ) -> String {
     match rep {
-        TypedParamRep::F64 => blk.call(
-            crate::types::DOUBLE,
-            rep.unbox_fn(),
-            &[(crate::types::DOUBLE, arg)],
-        ),
+        TypedParamRep::F64 => emit_typed_f64_to_raw_guarded(blk, arg),
         TypedParamRep::I32 => blk.call(
             crate::types::I32,
             rep.unbox_fn(),

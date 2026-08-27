@@ -672,10 +672,11 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
             .count(),
         1
     );
-    assert_eq!(
-        public.matches("call i32 @js_typed_f64_arg_guard(").count(),
-        1
-    );
+    // The Number leg is the inline `is_number || is_int32` predicate now
+    // (`emit_typed_f64_guard`): one band test against the Perry tag range,
+    // no runtime call.
+    assert!(!public.contains("call i32 @js_typed_f64_arg_guard("));
+    assert_eq!(public.matches(", 32761").count(), 1, "{public}");
     assert!(public.contains("$spec_b_b("));
     assert!(public.contains("$generic("));
     let specialized = function_ir(&ir, "renderAsync$spec_b_b(");
