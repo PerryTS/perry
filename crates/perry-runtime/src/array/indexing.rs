@@ -2,7 +2,7 @@
 use super::indexing_support::*;
 use super::*;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::Ordering;
 
 #[path = "indexing_keyed.rs"]
 mod keyed;
@@ -74,41 +74,8 @@ pub(crate) fn test_strict_dense_pointer_overwrite_hits() -> u64 {
     STRICT_DENSE_POINTER_OVERWRITE_HITS.with(std::cell::Cell::get)
 }
 
-/// Record (if `obj` is the canonical `Object.prototype`) that it now carries
-/// an indexed property. Called from the object index-write / numeric
-/// defineProperty paths; cheap (relaxed loads + compare).
-#[inline]
-pub(crate) fn note_object_prototype_index_write(obj: usize) {
-    if !OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed) && obj != 0 && obj == object_prototype_addr()
-    {
-        OBJECT_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
-        invalidate_array_index_fast_path();
-    }
-}
-
 pub(crate) fn object_prototype_has_index_flag() -> bool {
     OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
-}
-
-/// Record (if `obj` is `Array.prototype` and `sym_key` is the well-known
-/// `Symbol.iterator`) that the array iteration protocol has been tampered
-/// with. Called from the symbol-property set/delete paths.
-pub(crate) fn note_array_proto_iterator_write(obj: usize, sym_key: usize) {
-    if ARRAY_PROTO_ITERATOR_MODIFIED.load(Ordering::Relaxed) || obj == 0 || sym_key == 0 {
-        return;
-    }
-    if obj == array_prototype_addr()
-        && sym_key == crate::symbol::well_known_symbol("iterator") as usize
-    {
-        ARRAY_PROTO_ITERATOR_MODIFIED.store(true, Ordering::Relaxed);
-        // Publish to generated code. Release so a loop that observes the `1`
-        // also observes the prototype write that preceded it.
-        PERRY_ARRAY_PROTO_ITERATOR_PATCHED.store(1, Ordering::Release);
-    }
-}
-
-pub(crate) fn array_proto_iterator_modified() -> bool {
-    ARRAY_PROTO_ITERATOR_MODIFIED.load(Ordering::Relaxed)
 }
 
 /// Record (if `arr` is `Array.prototype`) that the prototype now carries an
