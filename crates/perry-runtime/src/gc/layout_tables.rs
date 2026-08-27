@@ -31,7 +31,7 @@
 
 use super::hot_tls::{hot_layout_slot_masks, hot_per_object_layout_hint, hot_typed_layouts};
 use super::layout::{LayoutSlotMask, TypedLayoutDescriptor};
-use super::types::{GcHeader, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_OBJECT};
+use super::types::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_OBJECT};
 use std::cell::{Cell, RefCell};
 
 thread_local! {
@@ -70,6 +70,12 @@ pub(in crate::gc) struct PerObjectLayoutHint {
     pub(in crate::gc) sets: Cell<u32>,
     /// Which addresses may have an entry — see [`layout_addr_filter_may_hold`].
     pub(in crate::gc) filter: std::cell::UnsafeCell<[u64; LAYOUT_ADDR_FILTER_WORDS]>,
+    /// This thread's contribution to [`PERRY_YOUNG_LAYOUT_RECORDS`]: how many
+    /// of its per-object records are keyed by an address the inline bump
+    /// allocator could hand out again (nursery, or not yet classified). Bumped
+    /// on every new nursery-keyed insert; made exact again by
+    /// [`recount_young_layout_records`] after each collection's death prune.
+    pub(in crate::gc) young_records: Cell<u32>,
 }
 
 impl PerObjectLayoutHint {
@@ -78,6 +84,7 @@ impl PerObjectLayoutHint {
             nonempty: Cell::new(false),
             sets: Cell::new(0),
             filter: std::cell::UnsafeCell::new([0u64; LAYOUT_ADDR_FILTER_WORDS]),
+            young_records: Cell::new(0),
         }
     }
 }
@@ -91,7 +98,143 @@ impl Drop for PerObjectLayoutHint {
         if self.nonempty.get() {
             per_object_layouts_global_disarm();
         }
+        let young = self.young_records.replace(0);
+        if young != 0 {
+            PERRY_YOUNG_LAYOUT_RECORDS.fetch_sub(young, std::sync::atomic::Ordering::SeqCst);
+        }
     }
+}
+
+/// Process-global count of per-object layout records keyed by an address the
+/// inline bump allocator could hand out again — a nursery address, or one the
+/// page classifier cannot place yet — summed over every thread.
+///
+/// Why it exists: [`PERRY_PER_OBJECT_LAYOUTS_ANY`] stays armed for the life of
+/// ONE long-lived masked object (a harness closure, a registered listener),
+/// and once it is armed every inline allocation has to ask whether the
+/// recycled address still carries a previous tenant's record. The process
+/// address sketch (`PERRY_LAYOUT_ADDR_FILTER`) is monotone, so a nursery that
+/// recycles the same addresses every cycle saturates it: a 5k-entity ECS
+/// round still paid ~14k `js_gc_forget_object_layout` calls with ZERO live
+/// nursery records. This count answers the question the allocator is really
+/// asking. It is kept conservative between collections (every new
+/// nursery-keyed insert bumps it, nothing decrements it) and exact at each
+/// collection's death prune (`prune_dead_per_object_layout_owners`), which
+/// is also the moment a stale from-space key is dropped — so a zero load
+/// proves no inline allocation can inherit a record.
+///
+/// Cross-thread staleness is harmless for the same reason it is for the
+/// armed-thread count: a thread's own records are program-ordered with its
+/// own loads, and another thread's nursery cannot hand out this thread's
+/// addresses.
+#[no_mangle]
+pub static PERRY_YOUNG_LAYOUT_RECORDS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+/// Could the inline bump allocator ever produce `addr` again? A `gc_malloc`
+/// block (no `GC_FLAG_ARENA`; system-allocated, unregistered in the page map)
+/// never; an arena object on a `Longlived`/`Old` page never; anything else —
+/// eden, either survivor space, or a page the classifier cannot place — is
+/// counted, not assumed away.
+#[inline]
+fn layout_key_may_be_nursery(addr: usize) -> bool {
+    use crate::arena::HeapSpace;
+    // The tracked probe refuses anything outside a registered arena range or
+    // the malloc registry, so an untracked key (a test fixture's synthetic
+    // address) is simply counted.
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) })
+    else {
+        return true;
+    };
+    if unsafe { header.as_ref() }.gc_flags & GC_FLAG_ARENA == 0 {
+        return false;
+    }
+    !matches!(
+        crate::arena::classify_heap_space(addr),
+        HeapSpace::Longlived | HeapSpace::Old
+    )
+}
+
+/// A NEW per-object record was keyed by `user_ptr`.
+#[inline]
+fn note_new_layout_record(user_ptr: usize) {
+    if !layout_key_may_be_nursery(user_ptr) {
+        return;
+    }
+    let hint = hot_per_object_layout_hint();
+    if let Some(next) = hint.young_records.get().checked_add(1) {
+        hint.young_records.set(next);
+        PERRY_YOUNG_LAYOUT_RECORDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Re-derive this thread's young-record count from the live keys and publish
+/// the delta. Runs after every death prune (all cycle kinds) and whenever the
+/// tables empty, so promotion (a key moving to an old page) and death both
+/// bring the count back down.
+fn recount_young_layout_records() {
+    let live = {
+        let masks = hot_layout_slot_masks().borrow();
+        let typed = hot_typed_layouts().borrow();
+        masks
+            .keys()
+            .chain(typed.keys())
+            .filter(|key| layout_key_may_be_nursery(**key))
+            .count()
+    };
+    let live = u32::try_from(live).unwrap_or(u32::MAX);
+    let prev = hot_per_object_layout_hint().young_records.replace(live);
+    use std::sync::atomic::Ordering::SeqCst;
+    if live > prev {
+        PERRY_YOUNG_LAYOUT_RECORDS.fetch_add(live - prev, SeqCst);
+    } else if prev > live {
+        PERRY_YOUNG_LAYOUT_RECORDS.fetch_sub(prev - live, SeqCst);
+    }
+}
+
+/// Death prune for both per-object layout tables (`DEAD_KEY_PRUNES` entry).
+///
+/// Before this, a dead owner's record lingered until its address was
+/// recycled and `layout_forget_object` cleared it — which is exactly why
+/// every allocation had to probe. Dropping dead keys here (headers are still
+/// intact at every prune site) and recounting leaves the young-record count
+/// at zero whenever the surviving records all live on old pages, and the
+/// inline allocator's gate reads that instead of probing.
+pub(in crate::gc) fn prune_dead_per_object_layout_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    if !per_object_layouts_maybe_nonempty() {
+        return;
+    }
+    let masks_emptied = {
+        let mut masks = hot_layout_slot_masks().borrow_mut();
+        let had = !masks.is_empty();
+        masks.retain(|key, _| !is_dead_owner(*key));
+        had && masks.is_empty()
+    };
+    let typed_emptied = {
+        let mut typed = hot_typed_layouts().borrow_mut();
+        let had = !typed.is_empty();
+        typed.retain(|key, _| !is_dead_owner(*key));
+        had && typed.is_empty()
+    };
+    refresh_per_object_layouts_flag(masks_emptied || typed_emptied);
+    if per_object_layouts_maybe_nonempty() {
+        // Stale filter bits are what the pruned keys leave behind; rebuilding
+        // from the survivors keeps the runtime probes as selective as the
+        // tables really are.
+        layout_addr_filter_rebuild();
+        recount_young_layout_records();
+    }
+}
+
+#[cfg(test)]
+pub(in crate::gc) fn test_per_object_layout_present(user_ptr: usize) -> bool {
+    hot_layout_slot_masks().borrow().contains_key(&user_ptr)
+        || hot_typed_layouts().borrow().contains_key(&user_ptr)
+}
+
+#[cfg(test)]
+pub(in crate::gc) fn test_young_layout_records() -> u32 {
+    PERRY_YOUNG_LAYOUT_RECORDS.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 /// Bits in the per-object address filter (see [`layout_addr_filter_may_hold`]).
@@ -557,6 +700,10 @@ pub(in crate::gc) fn refresh_per_object_layouts_flag(touched_map_emptied: bool) 
         if hot_per_object_layout_hint().nonempty.replace(false) {
             per_object_layouts_global_disarm();
         }
+        let young = hot_per_object_layout_hint().young_records.replace(0);
+        if young != 0 {
+            PERRY_YOUNG_LAYOUT_RECORDS.fetch_sub(young, std::sync::atomic::Ordering::SeqCst);
+        }
         // Both maps are empty, so every bit is now stale. Clearing here is what
         // makes the filter's occupancy track LIVE entries rather than every
         // entry the program has ever created.
@@ -569,9 +716,13 @@ pub(in crate::gc) fn refresh_per_object_layouts_flag(touched_map_emptied: bool) 
 pub(in crate::gc) fn typed_layouts_insert(user_ptr: usize, descriptor: TypedLayoutDescriptor) {
     mark_per_object_layouts_nonempty();
     layout_addr_filter_add(user_ptr);
-    hot_typed_layouts()
+    let fresh = hot_typed_layouts()
         .borrow_mut()
-        .insert(user_ptr, descriptor);
+        .insert(user_ptr, descriptor)
+        .is_none();
+    if fresh {
+        note_new_layout_record(user_ptr);
+    }
 }
 
 /// The one way to add a per-object pointer mask.
@@ -579,7 +730,10 @@ pub(in crate::gc) fn typed_layouts_insert(user_ptr: usize, descriptor: TypedLayo
 pub(in crate::gc) fn slot_masks_insert(user_ptr: usize, mask: LayoutSlotMask) {
     mark_per_object_layouts_nonempty();
     layout_addr_filter_add(user_ptr);
-    hot_layout_slot_masks().borrow_mut().insert(user_ptr, mask);
+    let fresh = hot_layout_slot_masks().borrow_mut().insert(user_ptr, mask).is_none();
+    if fresh {
+        note_new_layout_record(user_ptr);
+    }
 }
 
 /// Drop `user_ptr`'s per-object typed descriptor (only).

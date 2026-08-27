@@ -291,6 +291,15 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         owner: DeadKeyOwner::Any,
         prune: crate::array::prune_dead_array_named_property_owners,
     },
+    // Re-keyed by the per-object move hook (`transfer_per_object_slot_mask` /
+    // `transfer_per_object_descriptor`), not by a metadata visitor. Dropping
+    // dead keys here is what lets `PERRY_YOUNG_LAYOUT_RECORDS` reach zero, so
+    // the inline allocator stops probing for a previous tenant's record.
+    DeadKeyPrune {
+        table: "LAYOUT_SLOT_MASKS + TYPED_LAYOUTS",
+        owner: DeadKeyOwner::Any,
+        prune: crate::gc::layout_tables::prune_dead_per_object_layout_owners,
+    },
     // Re-keyed by the per-object move hook, not by a metadata visitor.
     DeadKeyPrune {
         table: "ELEMENT_SHAPES",
