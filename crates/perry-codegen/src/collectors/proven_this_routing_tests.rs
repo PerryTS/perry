@@ -820,6 +820,26 @@ fn unproven_bitset_index_still_has_raw_number_truthiness() {
     );
 }
 
+/// `fcmp one` has two sources. The constructive-proof shortcut this test guards
+/// emits it unguarded; the dynamic truthiness lowering also emits one, but only
+/// inside its own `truthy.num` block — after the bit test that has already proved
+/// the value is a plain untagged non-NaN double, where it is exactly correct.
+///
+/// So the claim is "no *unguarded* numeric truthiness", not "no `fcmp one`".
+/// Mirrors `type_analysis::numeric::tests::fcmp_one_only_under_the_plain_number_guard`.
+fn fcmp_one_outside_the_plain_number_guard(body: &str) -> bool {
+    let mut label = String::new();
+    for line in body.lines() {
+        let trimmed = line.trim_start();
+        if !line.starts_with(' ') && trimmed.ends_with(':') {
+            label = trimmed.trim_end_matches(':').to_string();
+        } else if trimmed.contains("fcmp one") && !label.starts_with("truthy.num") {
+            return true;
+        }
+    }
+    false
+}
+
 /// A generic bitwise method is not enough. Keep using total truthiness unless
 /// the full Number-or-throw bitset tree matched structurally.
 #[test]
@@ -837,7 +857,7 @@ fn noncanonical_bitwise_method_does_not_gain_raw_number_truthiness() {
         "a noncanonical bitwise return bypassed total JavaScript truthiness:\n{probe}"
     );
     assert!(
-        !probe.contains("fcmp one double"),
+        !fcmp_one_outside_the_plain_number_guard(&probe),
         "an arbitrary bitwise return was mistaken for the canonical bitset test:\n{probe}"
     );
 }
