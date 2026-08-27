@@ -435,6 +435,15 @@ pub extern "C" fn js_build_class_keys_array(
         .filter(|s| !s.is_empty())
         .collect();
     let num_keys = keys.len();
+    // This array is long-lived and never dies. Without the scope, the per-slot
+    // notes below mint a per-object pointer mask for any class with enough
+    // keys, which arms `PERRY_PER_OBJECT_LAYOUTS_ANY` and puts the address
+    // filter probe on EVERY later allocation in the program (measured as 3%
+    // of an allocation-heavy ECS row: `layout_forget_object` from each object
+    // literal). Under the scope the notes settle on the tag-checked scan, and
+    // `layout_init_all_pointer_slots` below records the final all-pointer
+    // layout anyway.
+    let _immortal = crate::gc::ImmortalLayoutScope::new();
     // Issue #179: the keys_array and its string elements are shape-cache
     // resident for the program's lifetime (anchored by
     // `scan_shape_cache_roots`). Route them through the longlived arena
