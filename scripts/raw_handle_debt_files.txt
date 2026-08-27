@@ -101,7 +101,7 @@
 2 crates/perry-runtime/src/object/global_this/ctor_thunks.rs
 9 crates/perry-runtime/src/object/global_this/populate.rs
 5 crates/perry-runtime/src/object/global_this_webassembly.rs
-1 crates/perry-runtime/src/object/mod.rs
+3 crates/perry-runtime/src/object/mod.rs
 3 crates/perry-runtime/src/object/namespace_create.rs
 1 crates/perry-runtime/src/object/native_call_method/object_proto.rs
 4 crates/perry-runtime/src/object/native_call_method/primitive_methods.rs
@@ -158,3 +158,4 @@
 19 crates/perry-runtime/src/wasi.rs
 6 crates/perry-runtime/src/weakref.rs
 20 crates/perry-runtime/src/webassembly.rs
+1 crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs

@@ -231,13 +231,6 @@
       "why": "Visited from the sibling module, so the same-file rule misses it. The `events: [i64; 5]` are DIAG_CHANNELS ids, not addresses."
     },
     {
-      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
-      "name": "ERROR_USER_PROPS",
-      "verdict": "covered_elsewhere",
-      "scanner": "node_submodules::diagnostics_gc::scan_error_user_props_roots_mut (diagnostics_gc.rs:46/72/134)",
-      "why": "The whole GC half of diagnostics lives in diagnostics_gc.rs, including the ErrorHeader-address rekey."
-    },
-    {
       "file": "crates/perry-runtime/src/node_submodules/diagnostics_tail.rs",
       "name": "DIAG_STORE_SCOPES",
       "verdict": "not_a_gc_pointer",
