@@ -11,6 +11,45 @@ mod c3c_tests {
         crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
     }
 
+    #[test]
+    fn repeated_class_evaluations_reuse_the_class_shape() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            const CID: u32 = 0x5268;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let first = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
+            let second = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
+
+            let ordinary =
+                first.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj));
+            assert_eq!(
+                ordinary,
+                second.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj)),
+                "test premise: equal class evaluations start with one shape"
+            );
+
+            first.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
+                transition_object_shape_to_class(obj);
+            });
+            second.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
+                transition_object_shape_to_class(obj);
+            });
+
+            let first_class =
+                first.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj));
+            let second_class =
+                second.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj));
+            assert_ne!(
+                ordinary, first_class,
+                "becoming a class must invalidate guards"
+            );
+            assert_eq!(
+                first_class, second_class,
+                "equivalent class evaluations must not mint unbounded descriptors"
+            );
+        }
+    }
+
     /// #6759 C3c: ids come from the dedicated range (disjoint from real and
     /// builtin class ids), are stable per exact descriptor facts, and distinct
     /// across identities.

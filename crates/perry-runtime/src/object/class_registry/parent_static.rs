@@ -1803,50 +1803,6 @@ mod shape_authority_tests_8067 {
     }
 
     #[test]
-    fn repeated_class_evaluations_reuse_the_class_shape() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        unsafe {
-            const CID: u32 = 0x5268;
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let first = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
-            let second = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
-
-            let ordinary = first.with_const_ptr::<crate::ObjectHeader, _>(|obj| {
-                crate::object::shapes::object_shape_id(obj)
-            });
-            assert_eq!(
-                ordinary,
-                second.with_const_ptr::<crate::ObjectHeader, _>(|obj| {
-                    crate::object::shapes::object_shape_id(obj)
-                }),
-                "test premise: equal class evaluations start with one shape"
-            );
-
-            first.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
-                super::js_object_mark_class(obj as i64)
-            });
-            second.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
-                super::js_object_mark_class(obj as i64)
-            });
-
-            let first_class = first.with_const_ptr::<crate::ObjectHeader, _>(|obj| {
-                crate::object::shapes::object_shape_id(obj)
-            });
-            let second_class = second.with_const_ptr::<crate::ObjectHeader, _>(|obj| {
-                crate::object::shapes::object_shape_id(obj)
-            });
-            assert_ne!(
-                ordinary, first_class,
-                "becoming a class must invalidate guards"
-            );
-            assert_eq!(
-                first_class, second_class,
-                "equivalent class evaluations must not mint unbounded descriptors"
-            );
-        }
-    }
-
-    #[test]
     fn class_kind_survives_static_field_installation_and_deletion() {
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
