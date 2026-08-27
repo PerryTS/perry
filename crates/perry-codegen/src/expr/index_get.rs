@@ -412,15 +412,82 @@ fn lower_array_index_get_via_canonical_i32_split(
         .cond_br(&is_canonical_i32, &element_label, &runtime_label);
 
     ctx.current_block = element_idx;
-    let element_value = lower_guarded_array_index_get(
-        ctx,
-        arr_box,
-        &idx_i32,
-        "aidx.dynamic",
-        require_numeric_layout,
-        coerce_numeric_fallback,
-        receiver_slot,
-    )?;
+    let element_value = if preserve_claimed_receiver_fallback {
+        // An erased Array declaration admits object-backed Array subclasses
+        // (`class Archetype extends Array` — wolf-ecs `packed[sparse[x]]`) and
+        // typed arrays as readily as plain Arrays. The guarded plain-array
+        // tier rejects those on its `GC_TYPE_ARRAY` brand and its feedback
+        // fallback then classifies the receiver out of line on every read.
+        // Read the brand once here: a plain Array keeps the guarded tier,
+        // every other heap pointer takes the receiver-unknown numeric tiers
+        // (inline typed-array read, dense-subclass `arrlike.ic`, complete
+        // dispatcher) that the runtime-key arm already uses for the same
+        // receivers. Non-pointers keep the guarded tier's unchanged fallback.
+        let brand_idx = ctx.new_block("aidx.claimed.brand");
+        let array_idx = ctx.new_block("aidx.claimed.array");
+        let other_idx = ctx.new_block("aidx.claimed.other");
+        let claimed_merge_idx = ctx.new_block("aidx.claimed.merge");
+        let brand_label = ctx.block_label(brand_idx);
+        let array_label = ctx.block_label(array_idx);
+        let other_label = ctx.block_label(other_idx);
+        let claimed_merge_label = ctx.block_label(claimed_merge_idx);
+        {
+            let blk = ctx.block();
+            let arr_bits = blk.bitcast_double_to_i64(arr_box);
+            let arr_handle = blk.and(I64, &arr_bits, crate::nanbox::POINTER_MASK_I64);
+            let tag = blk.lshr(I64, &arr_bits, "48");
+            let is_pointer = blk.icmp_eq(I64, &tag, "32765"); // POINTER_TAG
+                                                              // The same heap band the receiver-unknown tiers dereference in.
+            let above_handle_band = blk.icmp_ugt(I64, &arr_handle, "1048575");
+            let below_heap_limit = blk.icmp_ult(I64, &arr_handle, "140737488355328");
+            let in_heap = blk.and(I1, &above_handle_band, &below_heap_limit);
+            let heap_candidate = blk.and(I1, &is_pointer, &in_heap);
+            blk.cond_br(&heap_candidate, &brand_label, &array_label);
+        }
+        ctx.current_block = brand_idx;
+        {
+            let blk = ctx.block();
+            let arr_bits = blk.bitcast_double_to_i64(arr_box);
+            let arr_handle = blk.and(I64, &arr_bits, crate::nanbox::POINTER_MASK_I64);
+            let gc_type_addr = blk.sub(I64, &arr_handle, "8");
+            let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
+            let gc_type = blk.load(I8, &gc_type_ptr);
+            let is_array = blk.icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
+            blk.cond_br(&is_array, &array_label, &other_label);
+        }
+        ctx.current_block = array_idx;
+        let array_value = lower_guarded_array_index_get(
+            ctx,
+            arr_box,
+            &idx_i32,
+            "aidx.dynamic",
+            require_numeric_layout,
+            coerce_numeric_fallback,
+            receiver_slot,
+        )?;
+        let array_end = ctx.block().label.clone();
+        ctx.block().br(&claimed_merge_label);
+        ctx.current_block = other_idx;
+        let other_value =
+            lower_inline_dyn_typed_array_get(ctx, arr_box, idx_double, coerce_numeric_fallback);
+        let other_end = ctx.block().label.clone();
+        ctx.block().br(&claimed_merge_label);
+        ctx.current_block = claimed_merge_idx;
+        ctx.block().phi(
+            DOUBLE,
+            &[(&array_value, &array_end), (&other_value, &other_end)],
+        )
+    } else {
+        lower_guarded_array_index_get(
+            ctx,
+            arr_box,
+            &idx_i32,
+            "aidx.dynamic",
+            require_numeric_layout,
+            coerce_numeric_fallback,
+            receiver_slot,
+        )?
+    };
     let element_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
