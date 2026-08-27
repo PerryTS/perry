@@ -1024,7 +1024,26 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
             if entry.next_keys != 0 {
                 let mut invalidate = false;
                 invalidate |= visitor.visit_metadata_usize_slot(&mut entry.key_ptr);
-                visitor.visit_usize_slot(&mut entry.next_keys);
+                // #6759 phase 3: `next_keys` is WEAK, not a strong root.
+                //
+                // `visit_usize_slot` MARKS. With 16384 slots this cache was
+                // therefore keeping up to 16384 keys arrays — and, through
+                // them, their shape descriptors — alive whether or not any live
+                // object still had that shape. That is a direct contributor to
+                // the shape table growing without bound between full
+                // collections (measured: 786k descriptors on a workload holding
+                // under 400 live objects).
+                //
+                // A transition entry is a pure cache: it answers "adding key k
+                // to shape S yields shape T". If nothing has shape T any more,
+                // the answer is worthless, so pinning T's keys array to keep it
+                // answerable is backwards. `key_ptr` was already weak for the
+                // same reason; this makes the pair consistent.
+                //
+                // Rewrite-only keeps a surviving target's address correct;
+                // `prune_dead_transition_cache_entries` drops the entry when the
+                // target did not survive.
+                visitor.visit_metadata_usize_slot(&mut entry.next_keys);
                 if invalidate {
                     *entry = TransitionEntry {
                         key_ptr: 0,
@@ -1066,6 +1085,10 @@ pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) 
                 continue;
             }
             let dead = (entry.key_ptr != 0 && is_dead_owner(entry.key_ptr))
+                // #6759 phase 3: `next_keys` stopped being a strong root, so a
+                // dead target is now possible and must be reaped here — this is
+                // the half that makes weakening it safe.
+                || is_dead_owner(entry.next_keys)
                 || shapes::shape_descriptor_by_id(entry.prev_shape_id).is_none()
                 || (entry.target_shape_id != 0
                     && shapes::shape_descriptor_by_id(entry.target_shape_id).is_none());

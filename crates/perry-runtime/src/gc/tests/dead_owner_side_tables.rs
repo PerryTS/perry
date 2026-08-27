@@ -1812,3 +1812,58 @@ fn object_meta_expando_is_appended_not_inserted() {
         "expando must sit after every field codegen has an offset contract on"
     );
 }
+
+/// #6759 phase 3: a transition-cache entry must NOT keep its target keys array
+/// alive, and an entry whose target died must be reaped.
+///
+/// `next_keys` used to be visited with `visit_usize_slot`, which MARKS. With
+/// 16384 slots the cache could pin 16384 keys arrays — and through them their
+/// shape descriptors — whether or not any live object still had that shape,
+/// feeding unbounded shape-table growth. A transition entry is a pure cache
+/// ("adding key k to shape S yields shape T"); if nothing has shape T, the
+/// answer is worthless, so pinning T to keep it answerable is backwards.
+/// `key_ptr` was already weak; this makes the pair consistent.
+///
+/// The two halves must move together — weakening the edge without reaping dead
+/// targets leaves a dangling `next_keys`. This pins the reaping half.
+///
+/// The entry is seeded with a LIVE `prev_shape_id` on purpose. An earlier
+/// version of this test used `prev_shape_id = 0`, which the prune's
+/// pre-existing `shape_descriptor_by_id(..).is_none()` clause already treats as
+/// dead — so it passed with the new clause deleted, proving nothing. Sabotage
+/// check: removing `is_dead_owner(entry.next_keys)` must fail this test.
+#[test]
+fn transition_cache_entry_does_not_pin_its_target() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        // A real object gives a real, live shape id, so the ONLY thing that can
+        // make the seeded entry dead is its target.
+        let obj = crate::object::js_object_alloc(0, 0);
+        let keys = crate::object::object_keys_array(obj);
+        let live_shape = crate::object::shapes::test_shape_id_for_keys(keys as usize)
+            .expect("a freshly allocated object must have a registered shape");
+        assert!(
+            crate::object::shapes::shape_descriptor_by_id(live_shape).is_some(),
+            "test premise: prev_shape_id must be LIVE, or the prune's existing \
+             dead-shape clause decides the outcome and this test is vacuous"
+        );
+
+        let before = crate::object::test_transition_cache_occupancy();
+        let dead_target = 0xDEAD_0000_1000usize;
+        crate::object::test_seed_transition_cache_entry(live_shape, 0, dead_target);
+        assert!(
+            crate::object::test_transition_cache_occupancy() > before,
+            "test premise: the entry must actually be installed"
+        );
+
+        // Only the target address is dead.
+        crate::object::prune_dead_transition_cache_entries(&|addr| addr == dead_target);
+
+        assert_eq!(
+            crate::object::test_transition_cache_occupancy(),
+            before,
+            "an entry whose target keys array is dead must be dropped — without \
+             this, weakening `next_keys` leaves a dangling pointer in the cache"
+        );
+    }
+}
