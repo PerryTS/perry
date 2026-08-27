@@ -1,4 +1,5 @@
 use super::*;
+use crate::object::class_image::{ImageTable, StaticAccessorTable, StaticMethodTable};
 use std::collections::HashMap;
 use std::sync::RwLock;
 
@@ -234,8 +235,10 @@ pub struct ClassVTable {
     pub setters: HashMap<String, usize>, // setter func_ptr (signature: fn(this_f64, value_f64) -> f64)
 }
 
-/// Global vtable registry: class_id -> vtable
-pub static CLASS_VTABLE_REGISTRY: RwLock<Option<HashMap<u32, ClassVTable>>> = RwLock::new(None);
+/// Vtable registry of the calling thread's image (#8546 — see
+/// `object/class_image.rs`): class_id -> vtable.
+pub static CLASS_VTABLE_REGISTRY: ImageTable<RwLock<Option<HashMap<u32, ClassVTable>>>> =
+    ImageTable::new(|image| &image.vtables);
 
 /// #1788: per-class STATIC-method registry: class_id -> { name -> (func_ptr,
 /// param_count, has_rest) }. Static methods are emitted as `perry_static_*`
@@ -247,13 +250,13 @@ pub static CLASS_VTABLE_REGISTRY: RwLock<Option<HashMap<u32, ClassVTable>>> = Rw
 /// `js_class_static_method_call`. `has_rest` marks a trailing rest param
 /// (`static pipe(...args)`, effect's `pipe`/`dual`) so the dispatcher bundles
 /// the call args into an array for that slot.
-pub static CLASS_STATIC_METHODS: RwLock<Option<HashMap<u32, HashMap<String, (usize, u32, bool)>>>> =
-    RwLock::new(None);
+pub static CLASS_STATIC_METHODS: ImageTable<RwLock<Option<StaticMethodTable>>> =
+    ImageTable::new(|image| &image.static_methods);
 
-per_test_global! {
-    pub static CLASS_STATIC_ACCESSORS: RwLock<Option<HashMap<u32, HashMap<String, (usize, usize)>>>> =
-        RwLock::new(None);
-}
+/// Static accessors on the class constructor: class_id -> { name -> (getter
+/// func_ptr, setter func_ptr) }, each 0 when that half is absent.
+pub static CLASS_STATIC_ACCESSORS: ImageTable<RwLock<Option<StaticAccessorTable>>> =
+    ImageTable::new(|image| &image.static_accessors);
 
 /// Spec `Function.prototype.length` per (class_id, method/accessor name) — the
 /// count of formal parameters before the first one with a default or a rest.
@@ -261,16 +264,17 @@ per_test_global! {
 /// which overcounts methods with default-valued params; codegen computes the
 /// real `.length` at registration and stashes it here so `C.prototype.m.length`
 /// is exact (Test262 .../class/*/dflt-params-trailing-comma).
-pub static CLASS_METHOD_BIND_LENGTHS: RwLock<Option<HashMap<(u32, String), u32>>> =
-    RwLock::new(None);
+pub static CLASS_METHOD_BIND_LENGTHS: ImageTable<RwLock<Option<HashMap<(u32, String), u32>>>> =
+    ImageTable::new(|image| &image.method_bind_lengths);
 
 /// Default-aware spec `.length` for STATIC methods, keyed (class_id, name).
 /// Distinct from `CLASS_METHOD_BIND_LENGTHS` (instance methods) so a class with
 /// both `static m(a, b = 1)` and `m(c)` keeps independent lengths instead of
 /// colliding on the (class_id, name) key. (Test262 *-method-static
 /// dflt-params-trailing-comma.)
-pub static CLASS_STATIC_METHOD_BIND_LENGTHS: RwLock<Option<HashMap<(u32, String), u32>>> =
-    RwLock::new(None);
+pub static CLASS_STATIC_METHOD_BIND_LENGTHS: ImageTable<
+    RwLock<Option<HashMap<(u32, String), u32>>>,
+> = ImageTable::new(|image| &image.static_method_bind_lengths);
 
 crate::perry_thread_local! {
     pub static CLASS_SYMBOL_METHODS: RwLock<Option<HashMap<(u32, usize, bool), (usize, u32, bool)>>> =
@@ -283,7 +287,8 @@ crate::perry_thread_local! {
 /// Set of all registered class ids. Populated at module init by codegen
 /// emitting `js_register_class_id(cid)` for every user class — even
 /// classes without any methods. Refs #618 / #420 followup.
-pub static REGISTERED_CLASS_IDS: RwLock<Option<std::collections::HashSet<u32>>> = RwLock::new(None);
+pub static REGISTERED_CLASS_IDS: ImageTable<RwLock<Option<std::collections::HashSet<u32>>>> =
+    ImageTable::new(|image| &image.registered_class_ids);
 
 crate::perry_thread_local! {
     /// Issue #711 part 2: `function Base() {}; Base.prototype = obj` pattern.

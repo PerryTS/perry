@@ -1238,7 +1238,13 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     );
 
     let thread_options = options_state.clone();
+    // #8546: the Worker re-runs its module bodies on its own thread, but it is
+    // the SAME image as its parent (same code addresses, same class ids), so it
+    // shares the parent's class tables instead of building a second copy. Its
+    // entry's `js_gc_init` then finds an image already installed and keeps it.
+    let class_image = perry_runtime::object::class_image::current_image_handle();
     std::thread::spawn(move || {
+        perry_runtime::object::class_image::adopt_image(class_image);
         let previous_env = apply_worker_env(&thread_options.env);
         CURRENT_WORKER_ID.with(|id| id.set(worker_id));
         CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = worker_data);

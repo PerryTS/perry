@@ -67,6 +67,7 @@ mod buffer_dispatch;
 mod class_constructors;
 mod class_gc_roots;
 mod class_handles;
+pub mod class_image;
 mod class_registry;
 pub(crate) use class_registry::scan_current_new_target_root_mut;
 mod collection_proto_thunks;
