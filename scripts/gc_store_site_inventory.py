@@ -554,7 +554,10 @@ MIN_STEMS = 4
 # barrier arm every census stem exercises.
 CODEGEN_BARRIERED_BINDINGS = {
     "crates/perry-codegen/src/expr/write_barrier.rs": ("*", 2),
-    "crates/perry-codegen/src/expr/array_push.rs": ("apush", 1),
+    # Two markers: the original generation-tested push store and, since #8872,
+    # the unconditional element store inside `emit_dynamic_pointer_push_store`,
+    # which the same `apush`-stem caller barriers after its layout bookkeeping.
+    "crates/perry-codegen/src/expr/array_push.rs": ("apush", 2),
 }
 
 RUNTIME_MARKER_RE = re.compile(r"GC_STORE_AUDIT\((BARRIERED|EXTERNAL_BARRIERED)\)")
@@ -579,6 +582,9 @@ RUNTIME_DISCHARGE_HELPERS = {
         "array/header.rs: layout note + born-old barrier (fresh/suppressed sites)"
     ),
     "store_array_slot": "array/header.rs: canonicalize + runtime_store_jsvalue_slot",
+    "store_array_slot_resolved": (
+        "array/header_gc_slots.rs: resolved-head store + layout note + runtime_write_barrier_slot"
+    ),
     "rebuild_array_layout": "array/header.rs: post-hoc bulk funnel; replays slot barriers",
     "rebuild_array_layout_exact": "array/header.rs: exact rebuild after bulk copy",
     "rebuild_array_layout_from_slots": "object/gc_slots.rs: rebuild from slot table",
@@ -1423,7 +1429,8 @@ def run_self_tests() -> int:
                 "}\n"
             ),
             "crates/perry-codegen/src/expr/array_push.rs": (
-                "// GC_STORE_AUDIT(BARRIERED): planted\n" + codegen_calls
+                "// GC_STORE_AUDIT(BARRIERED): planted\n"
+                "// GC_STORE_AUDIT(BARRIERED): planted store\n" + codegen_calls
             ),
             STEM_REGISTRY_PATH: (
                 "pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[\n"

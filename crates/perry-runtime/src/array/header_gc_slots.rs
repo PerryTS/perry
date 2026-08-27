@@ -58,6 +58,8 @@ pub(crate) unsafe fn store_array_slot_resolved(
 ) -> u64 {
     let value = canonicalize_array_numeric_store_value_from_flags(flags, value);
     let value_bits = value.to_bits();
+    // GC_STORE_AUDIT(BARRIERED): the layout note and runtime_write_barrier_slot
+    // below cover this resolved-head slot write.
     std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
     note_array_numeric_index_write(arr, index, value_bits);
     crate::gc::layout_note_slot(arr as usize, index, value_bits);

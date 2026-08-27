@@ -19,6 +19,7 @@ mod iter_object;
 mod iterator;
 mod join;
 mod jsvalue_api;
+mod numeric_range;
 mod prototype_addr;
 mod push_pop;
 mod reduce_right;
@@ -130,10 +131,9 @@ pub(crate) use self::indexing::{
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
     js_array_get_index_or_string, js_array_get_length, js_array_length,
-    js_array_numeric_get_f64_unboxed, js_array_numeric_range_add, js_array_numeric_range_add_len,
-    js_array_numeric_set_f64_unboxed, js_array_set_f64, js_array_set_f64_extend,
-    js_array_set_f64_extend_strict, js_array_set_f64_unchecked, js_array_set_index_or_string,
-    js_array_set_index_or_string_strict, js_array_set_string_key,
+    js_array_numeric_get_f64_unboxed, js_array_numeric_set_f64_unboxed, js_array_set_f64,
+    js_array_set_f64_extend, js_array_set_f64_extend_strict, js_array_set_f64_unchecked,
+    js_array_set_index_or_string, js_array_set_index_or_string_strict, js_array_set_string_key,
 };
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
@@ -154,6 +154,7 @@ pub use self::iterator::{
     js_array_spread_append, js_for_of_to_array, js_get_async_iterator, js_iterator_to_array,
 };
 pub use self::join::{js_array_join, js_array_join_value};
+pub use self::numeric_range::{js_array_numeric_range_add, js_array_numeric_range_add_len};
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
     array_prototype_addr, object_prototype_addr, object_prototype_addr_matches,
