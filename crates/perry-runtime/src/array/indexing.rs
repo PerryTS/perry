@@ -1332,23 +1332,27 @@ fn array_strict_index_write_guard_resolved(clean: *mut ArrayHeader, index: u32, 
 /// `f64` the raw-f64 layout stores), cannot be a heap pointer (no barrier, no
 /// pointer-mask update), and keeps a pointer-free or tag-scanned layout valid.
 #[inline]
-unsafe fn try_strict_dense_number_store(arr: *mut ArrayHeader, index: u32, value: f64) -> bool {
+unsafe fn try_strict_dense_number_store(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+) -> Option<*mut ArrayHeader> {
     const PAYLOAD_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
     let value_bits = value.to_bits();
     // A plain double or an INT32 box (`value_bits_to_number` already refuses
     // the class-reference values that share that tag). NaN keeps the general
     // path so its canonical encoding stays in one place.
     let Some(number) = super::header::value_bits_to_number(value_bits) else {
-        return false;
+        return None;
     };
     if number.is_nan() {
-        return false;
+        return None;
     }
     let bits = arr as u64;
     let top16 = bits >> 48;
     let raw = if top16 >= 0x7FF8 {
         if top16 == 0x7FFC || bits & PAYLOAD_MASK == 0 {
-            return false;
+            return None;
         }
         (bits & PAYLOAD_MASK) as usize
     } else {
@@ -1358,18 +1362,18 @@ unsafe fn try_strict_dense_number_store(arr: *mut ArrayHeader, index: u32, value
         || raw % std::mem::align_of::<crate::gc::GcHeader>() != 0
         || !crate::value::addr_class::is_plausible_heap_addr(raw)
     {
-        return false;
+        return None;
     }
     if matches!(
         crate::arena::classify_heap_generation(raw),
         crate::arena::HeapGeneration::Unknown
     ) {
-        return false;
+        return None;
     }
     let mut raw = raw;
     let mut header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
     if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
-        return false;
+        return None;
     }
     if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         // An alias that kept a growth stub (the resolver path-compresses
@@ -1384,13 +1388,13 @@ unsafe fn try_strict_dense_number_store(arr: *mut ArrayHeader, index: u32, value
                 crate::arena::HeapGeneration::Unknown
             )
         {
-            return false;
+            return None;
         }
         let target_header = (target - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if (*target_header).obj_type != crate::gc::GC_TYPE_ARRAY
             || (*target_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
-            return false;
+            return None;
         }
         raw = target;
         header = target_header;
@@ -1405,21 +1409,24 @@ unsafe fn try_strict_dense_number_store(arr: *mut ArrayHeader, index: u32, value
         | crate::gc::GC_ARRAY_ELEMENT_SHAPE
         | crate::gc::GC_LAYOUT_ALL_POINTERS;
     if flags & REJECT != 0 {
-        return false;
+        return None;
     }
     let layout = flags & crate::gc::GC_LAYOUT_STATE_MASK;
     if layout != crate::gc::GC_LAYOUT_POINTER_FREE && layout != 0 {
-        return false;
+        return None;
     }
     let arr = raw as *mut ArrayHeader;
     if index >= (*arr).length || index >= (*arr).capacity {
-        return false;
+        return None;
     }
-    if crate::buffer::is_registered_buffer(raw)
-        || crate::typedarray::lookup_typed_array_kind(raw).is_some()
-        || raw == array_prototype_addr()
-    {
-        return false;
+    // No registry probes: a `GC_TYPE_ARRAY` header is never a Buffer
+    // (`GC_TYPE_BUFFER`), a %TypedArray% (`GC_TYPE_TYPED_ARRAY`) or a native
+    // view (`GC_TYPE_NATIVE_TYPED_VIEW`) — every registration carries its own
+    // object type — so the obj_type test above already answered both. Only
+    // `Array.prototype` itself still needs the address compare: an index
+    // write there must flip `ARRAY_PROTO_HAS_INDEX` on the slow path.
+    if raw == array_prototype_addr() {
+        return None;
     }
     // The raw-f64 layouts store the canonical double (what the general path's
     // canonicalization and `note_array_numeric_index_write` produce); every
@@ -1436,7 +1443,7 @@ unsafe fn try_strict_dense_number_store(arr: *mut ArrayHeader, index: u32, value
         super::header::array_elements_ptr(arr).add(index as usize),
         store_bits,
     );
-    true
+    Some(arr)
 }
 
 /// Exercised by the unit tests: `true` when the fast lane answered the store.
@@ -1446,7 +1453,7 @@ pub(crate) fn test_strict_dense_number_store(
     index: u32,
     value: f64,
 ) -> bool {
-    unsafe { try_strict_dense_number_store(arr, index, value) }
+    unsafe { try_strict_dense_number_store(arr, index, value) }.is_some()
 }
 
 #[no_mangle]
@@ -1457,8 +1464,11 @@ pub extern "C" fn js_array_set_f64_extend_strict(
 ) -> *mut ArrayHeader {
     // SAFETY: the lane validates the receiver before every dereference and
     // stores only where the general path would store the same bits.
-    if unsafe { try_strict_dense_number_store(arr, index, value) } {
-        return clean_arr_ptr_mut(arr);
+    if let Some(resolved) = unsafe { try_strict_dense_number_store(arr, index, value) } {
+        // The lane already resolved the head it stored into (one forwarding
+        // edge at most); handing that back saves the second classification
+        // `clean_arr_ptr_mut` would repeat.
+        return resolved;
     }
     let clean = clean_arr_ptr_mut(arr);
     if clean.is_null()
