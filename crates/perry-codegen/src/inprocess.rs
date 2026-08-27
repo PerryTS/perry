@@ -345,6 +345,9 @@ pub struct UnitCodegenStats {
     pub rewrite_secs: f64,
     pub optimize_secs: f64,
     pub emit_secs: f64,
+    /// Functions stamped `"disable-tail-calls"` because their alloca-walk
+    /// estimate exceeded [`DEFAULT_TRE_MAX_ALLOCA_WALK`] (#8883).
+    pub tail_call_elim_skipped: Vec<TreWalkOverBudget>,
 }
 
 fn function_instruction_count(function: inkwell::values::FunctionValue<'_>) -> usize {
@@ -642,6 +645,187 @@ fn pre_rewrite_sizes(
     sizes
 }
 
+/// Per-function budget for TailCallElim's alloca-escape walk (#8883).
+///
+/// `TailCallElimPass::markTails` starts a use-def walk at EVERY alloca (and
+/// byval argument) and follows the transitive SSA uses: through call
+/// results, phis, selects, casts, GEPs and arithmetic; only a `load` or
+/// `store` ends a branch, and only a `nocapture` call argument. In a
+/// statepoint-rewritten function an alloca handed to any runtime call (the
+/// argument arrays Perry builds on the stack) reaches the statepoint token,
+/// every `gc.relocate` hanging off it, and through their `gc-live` bundles
+/// every later statepoint — so each walk covers close to the whole function
+/// and the pass costs `allocas × uses`, not `uses`. The reported Next.js
+/// route (jsonwebtoken's bundled entry, 400 allocas, 643k post-RS4GC
+/// instructions, 3.4k statepoints with 477k relocates) held one LLVM worker
+/// for ~100 CPU-minutes in that walk, on a unit the rest of `-Os` finishes
+/// in ~20 s.
+///
+/// The estimate is the product `allocas × instructions` of the function LLVM
+/// is about to optimize — an upper bound on the walk that costs one linear
+/// pass to compute. A function over the cap is stamped
+/// `"disable-tail-calls"="true"`, which is the switch TRE itself honours
+/// (`eliminateTailRecursion` returns before `markTails`). #8421's contract
+/// — every function optimized at the requested level — is kept for every
+/// other pass: the function still goes through the full `default<O*>`
+/// pipeline. What it gives up is exactly what the attribute names: tail
+/// recursion is not turned into a loop, and the backend does not emit calls
+/// in return position as jumps (SelectionDAG's `canTailCall` and GlobalISel's
+/// `CallLowering` both read the attribute; `musttail` is exempt and Perry
+/// emits none). It is NOT `optnone` — #8583's RS4GC-root hazard does not
+/// apply, because RS4GC has already run when the attribute is stamped and
+/// nothing about GC roots changes.
+///
+/// `PERRY_LL_TRE_MAX_ALLOCA_WALK=<n>` raises or lowers the cap; `0`/`off`
+/// disables the budget (every function keeps TRE, whatever it costs).
+const DEFAULT_TRE_MAX_ALLOCA_WALK: u64 = 1 << 26;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TreWalkBudget {
+    Off,
+    Cap(u64),
+}
+
+fn parse_tre_walk_budget(value: Option<&str>) -> TreWalkBudget {
+    match value.map(str::trim) {
+        None | Some("") => TreWalkBudget::Cap(DEFAULT_TRE_MAX_ALLOCA_WALK),
+        Some("0") | Some("off") | Some("false") => TreWalkBudget::Off,
+        Some(v) => match v.parse::<u64>() {
+            Ok(0) => TreWalkBudget::Off,
+            Ok(n) => TreWalkBudget::Cap(n),
+            Err(_) => TreWalkBudget::Cap(DEFAULT_TRE_MAX_ALLOCA_WALK),
+        },
+    }
+}
+
+fn tre_walk_budget() -> TreWalkBudget {
+    #[cfg(test)]
+    if let Some(budget) = TEST_TRE_WALK_BUDGET.with(std::cell::Cell::get) {
+        return budget;
+    }
+    parse_tre_walk_budget(
+        std::env::var("PERRY_LL_TRE_MAX_ALLOCA_WALK")
+            .ok()
+            .as_deref(),
+    )
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_TRE_WALK_BUDGET: std::cell::Cell<Option<TreWalkBudget>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+/// Thread-local budget seam for tests, for the same reason as
+/// [`with_test_rs4gc_budget`]: mutating `PERRY_LL_TRE_MAX_ALLOCA_WALK` would
+/// race every concurrently running LLVM test in the binary.
+#[cfg(test)]
+pub(crate) fn with_test_tre_walk_budget<T>(cap: u64, run: impl FnOnce() -> T) -> T {
+    struct Restore(Option<TreWalkBudget>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_TRE_WALK_BUDGET.with(|budget| budget.set(self.0));
+        }
+    }
+    let old = TEST_TRE_WALK_BUDGET.replace(Some(TreWalkBudget::Cap(cap)));
+    let _restore = Restore(old);
+    run()
+}
+
+/// The function attribute TailCallElim and the backends' tail-call lowering
+/// both read. Stamped by [`disable_tail_call_elim_over_budget`].
+const DISABLE_TAIL_CALLS_ATTR: &str = "disable-tail-calls";
+
+/// One function whose alloca-walk estimate exceeded the budget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreWalkOverBudget {
+    pub name: String,
+    pub allocas: usize,
+    pub instructions: usize,
+    pub cap: u64,
+}
+
+impl TreWalkOverBudget {
+    fn estimate(&self) -> u64 {
+        self.allocas as u64 * self.instructions as u64
+    }
+}
+
+impl std::fmt::Display for TreWalkOverBudget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "`{}` has {} allocas across {} instructions (alloca-walk estimate {}, budget {}); \
+             skipping tail-call elimination for it, because TailCallElim's alloca-escape walk \
+             is quadratic in exactly that product on a statepoint-rewritten body (#8883). Every \
+             other pass still runs at the requested level; the function only loses \
+             tail-recursion-to-loop and sibling-call codegen. Override with \
+             PERRY_LL_TRE_MAX_ALLOCA_WALK=<n> (raise) or =0 (disable).",
+            self.name,
+            self.allocas,
+            self.instructions,
+            self.estimate(),
+            self.cap
+        )
+    }
+}
+
+/// `(allocas, instructions)` of one defined function — the two factors of
+/// the walk estimate, from the same linear pass `function_instruction_count`
+/// makes.
+fn alloca_walk_factors(function: inkwell::values::FunctionValue<'_>) -> (usize, usize) {
+    let mut allocas = 0usize;
+    let mut instrs = 0usize;
+    for bb in function.get_basic_blocks() {
+        let mut inst = bb.get_first_instruction();
+        while let Some(i) = inst {
+            instrs += 1;
+            if i.get_opcode() == inkwell::values::InstructionOpcode::Alloca {
+                allocas += 1;
+            }
+            inst = i.get_next_instruction();
+        }
+    }
+    (allocas, instrs)
+}
+
+/// Stamp `"disable-tail-calls"="true"` on every defined function whose
+/// `allocas × instructions` exceeds `budget`, and return what was stamped
+/// so the caller can say so. Runs on the module exactly as the optimization
+/// pipeline will see it (after RS4GC under native roots).
+fn disable_tail_call_elim_over_budget<'ctx>(
+    module: &inkwell::module::Module<'ctx>,
+    budget: TreWalkBudget,
+) -> Vec<TreWalkOverBudget> {
+    let cap = match budget {
+        TreWalkBudget::Off => return Vec::new(),
+        TreWalkBudget::Cap(cap) => cap,
+    };
+    let context = module.get_context();
+    let mut over = Vec::new();
+    let mut function = module.get_first_function();
+    while let Some(f) = function {
+        if f.count_basic_blocks() > 0 {
+            let (allocas, instructions) = alloca_walk_factors(f);
+            if allocas as u64 * instructions as u64 > cap {
+                f.add_attribute(
+                    inkwell::attributes::AttributeLoc::Function,
+                    context.create_string_attribute(DISABLE_TAIL_CALLS_ATTR, "true"),
+                );
+                over.push(TreWalkOverBudget {
+                    name: f.get_name().to_string_lossy().into_owned(),
+                    allocas,
+                    instructions,
+                    cap,
+                });
+            }
+        }
+        function = f.get_next_function();
+    }
+    over
+}
+
 fn optimize_and_emit(
     module: &inkwell::module::Module<'_>,
     effective_target: &str,
@@ -781,6 +965,18 @@ fn optimize_and_emit(
         'z' => "default<Oz>",
         _ => "default<O3>",
     };
+    // TailCallElim runs inside every `default<O1+>` function-simplification
+    // pipeline; bound its alloca walk on the module the pipeline will see
+    // (#8883). `-O0` runs no TRE, so there is nothing to bound.
+    if opt != '0' {
+        let skipped = disable_tail_call_elim_over_budget(module, tre_walk_budget());
+        for over in &skipped {
+            eprintln!("perry: {over}");
+        }
+        if let Some(stats) = stats.as_deref_mut() {
+            stats.tail_call_elim_skipped = skipped;
+        }
+    }
     let optimize_started = std::time::Instant::now();
     module
         .run_passes(pipeline, &tm, PassBuilderOptions::create())
@@ -1474,5 +1670,220 @@ entry:
             "assembly and object emission returned identical bytes — `-S` is \
              being ignored somewhere in the emission path"
         );
+    }
+    #[test]
+    fn tre_walk_budget_spellings() {
+        assert_eq!(
+            parse_tre_walk_budget(None),
+            TreWalkBudget::Cap(DEFAULT_TRE_MAX_ALLOCA_WALK)
+        );
+        assert_eq!(
+            parse_tre_walk_budget(Some("")),
+            TreWalkBudget::Cap(DEFAULT_TRE_MAX_ALLOCA_WALK)
+        );
+        assert_eq!(parse_tre_walk_budget(Some("0")), TreWalkBudget::Off);
+        assert_eq!(parse_tre_walk_budget(Some("off")), TreWalkBudget::Off);
+        assert_eq!(parse_tre_walk_budget(Some("false")), TreWalkBudget::Off);
+        assert_eq!(
+            parse_tre_walk_budget(Some(" 250000 ")),
+            TreWalkBudget::Cap(250_000)
+        );
+        assert_eq!(
+            parse_tre_walk_budget(Some("lots")),
+            TreWalkBudget::Cap(DEFAULT_TRE_MAX_ALLOCA_WALK)
+        );
+    }
+
+    /// Two functions: `wide` has 4 allocas across 9 instructions (estimate
+    /// 36), `narrow` has one across 3 (estimate 3), and `decl` has no body.
+    fn alloca_walk_fixture() -> &'static str {
+        r#"
+declare void @sink(ptr)
+
+define void @wide() {
+entry:
+  %a = alloca i64
+  %b = alloca i64
+  %c = alloca i64
+  %d = alloca i64
+  call void @sink(ptr %a)
+  call void @sink(ptr %b)
+  call void @sink(ptr %c)
+  call void @sink(ptr %d)
+  ret void
+}
+
+define void @narrow() {
+entry:
+  %a = alloca i64
+  call void @sink(ptr %a)
+  ret void
+}
+"#
+    }
+
+    fn has_disable_tail_calls(module: &inkwell::module::Module<'_>, name: &str) -> bool {
+        module
+            .get_function(name)
+            .expect("fixture function exists")
+            .get_string_attribute(
+                inkwell::attributes::AttributeLoc::Function,
+                DISABLE_TAIL_CALLS_ATTR,
+            )
+            .is_some_and(|attr| attr.get_string_value().to_bytes() == b"true")
+    }
+
+    /// The budget is `allocas × instructions`, applied per function: only
+    /// the function over it is stamped, the boundary is exclusive, and
+    /// `off` stamps nothing.
+    #[test]
+    fn tre_budget_stamps_only_the_function_over_it() {
+        let context = Context::create();
+        let module = parse_ir_text(&context, alloca_walk_fixture(), "tre_budget_fixture")
+            .expect("fixture parses");
+        let wide = module.get_function("wide").expect("wide");
+        let narrow = module.get_function("narrow").expect("narrow");
+        assert_eq!(alloca_walk_factors(wide), (4, 9));
+        assert_eq!(alloca_walk_factors(narrow), (1, 3));
+
+        assert!(
+            disable_tail_call_elim_over_budget(&module, TreWalkBudget::Off).is_empty(),
+            "a disabled budget stamps nothing"
+        );
+        assert!(!has_disable_tail_calls(&module, "wide"));
+
+        let exact = disable_tail_call_elim_over_budget(&module, TreWalkBudget::Cap(36));
+        assert!(exact.is_empty(), "the cap is inclusive: {exact:?}");
+
+        let over = disable_tail_call_elim_over_budget(&module, TreWalkBudget::Cap(35));
+        assert_eq!(
+            over,
+            vec![TreWalkOverBudget {
+                name: "wide".to_string(),
+                allocas: 4,
+                instructions: 9,
+                cap: 35,
+            }]
+        );
+        assert!(has_disable_tail_calls(&module, "wide"));
+        assert!(!has_disable_tail_calls(&module, "narrow"));
+        let message = over[0].to_string();
+        for needle in [
+            "`wide`",
+            "4 allocas",
+            "9 instructions",
+            "estimate 36",
+            "budget 35",
+            "PERRY_LL_TRE_MAX_ALLOCA_WALK",
+            "#8883",
+        ] {
+            assert!(
+                message.contains(needle),
+                "{needle} missing from:\n{message}"
+            );
+        }
+        assert!(
+            !message.contains("optnone"),
+            "the budget must never read as a demotion:\n{message}"
+        );
+    }
+
+    /// A self-recursive tail call that TailCallElim turns into a loop at
+    /// the pinned LLVM: with no attribute the recursive `call` disappears,
+    /// with `"disable-tail-calls"="true"` (exactly what the budget stamps)
+    /// it survives the full `default<Os>` pipeline — so the lever the
+    /// budget pulls is live, not merely spelled.
+    fn tail_recursive_fixture(attrs: &str) -> String {
+        format!(
+            "define i64 @count_down(i64 %n, i64 %acc) noinline {attrs} {{\n\
+             entry:\n\
+             \x20 %done = icmp eq i64 %n, 0\n\
+             \x20 br i1 %done, label %ret, label %rec\n\
+             rec:\n\
+             \x20 %n1 = sub i64 %n, 1\n\
+             \x20 %acc1 = add i64 %acc, %n\n\
+             \x20 %r = call i64 @count_down(i64 %n1, i64 %acc1)\n\
+             \x20 ret i64 %r\n\
+             ret:\n\
+             \x20 ret i64 %acc\n\
+             }}\n"
+        )
+    }
+
+    #[test]
+    fn disable_tail_calls_attribute_stops_tail_call_elim_at_the_pinned_llvm() {
+        let target = crate::codegen::default_target_triple();
+        let with_tre = statepoint_rewritten_ir_with_passes(
+            &tail_recursive_fixture(""),
+            &target,
+            "tre_control",
+            "default<Os>",
+        )
+        .expect("control optimizes");
+        assert!(
+            !with_tre.contains("call i64 @count_down"),
+            "control: TailCallElim must turn the tail recursion into a loop, or this test \
+             cannot tell the attribute apart from a no-op:\n{with_tre}"
+        );
+
+        let without_tre = statepoint_rewritten_ir_with_passes(
+            &tail_recursive_fixture(&format!("\"{DISABLE_TAIL_CALLS_ATTR}\"=\"true\"")),
+            &target,
+            "tre_disabled",
+            "default<Os>",
+        )
+        .expect("attributed fixture optimizes");
+        assert!(
+            without_tre.contains("call i64 @count_down"),
+            "the attribute must keep TailCallElim off the function:\n{without_tre}"
+        );
+    }
+
+    /// The budget is wired into the shipped emission path: under a cap of
+    /// zero every function with an alloca is stamped before `default<O*>`
+    /// runs, the per-unit stats name it, and the unit still emits.
+    #[test]
+    fn tre_budget_is_applied_by_the_shipped_pipeline() {
+        global_init(&[]);
+        let target = crate::codegen::default_target_triple();
+        let context = Context::create();
+        let module = parse_ir_text(&context, alloca_walk_fixture(), "tre_budget_shipped")
+            .expect("fixture parses");
+        let mut stats = UnitCodegenStats::default();
+        let object = with_test_tre_walk_budget(0, || {
+            optimize_and_emit_module_with_stats(
+                &module,
+                &target,
+                &["-Os".into(), "-c".into()],
+                false,
+                Some(&mut stats),
+            )
+        })
+        .expect("a stamped module still optimizes and emits");
+        assert!(!object.is_empty());
+        let mut names: Vec<&str> = stats
+            .tail_call_elim_skipped
+            .iter()
+            .map(|over| over.name.as_str())
+            .collect();
+        names.sort_unstable();
+        assert_eq!(names, ["narrow", "wide"]);
+
+        // -O0 runs no TailCallElim, so nothing is stamped there.
+        let module = parse_ir_text(&context, alloca_walk_fixture(), "tre_budget_o0")
+            .expect("fixture parses");
+        let mut stats = UnitCodegenStats::default();
+        with_test_tre_walk_budget(0, || {
+            optimize_and_emit_module_with_stats(
+                &module,
+                &target,
+                &["-O0".into(), "-c".into()],
+                false,
+                Some(&mut stats),
+            )
+        })
+        .expect("-O0 emits");
+        assert!(stats.tail_call_elim_skipped.is_empty());
+        assert!(!has_disable_tail_calls(&module, "wide"));
     }
 }

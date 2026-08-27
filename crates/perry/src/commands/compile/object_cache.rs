@@ -1018,6 +1018,14 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // #8883: the TailCallElim alloca-walk budget stamps `disable-tail-calls`
+    // on the functions it trips on, which changes their object code.
+    h.field(
+        "env_ll_tre_max_alloca_walk",
+        env_var("PERRY_LL_TRE_MAX_ALLOCA_WALK")
+            .as_deref()
+            .unwrap_or(""),
+    );
     // #8583: root-spill threshold changes which functions carry statepoints.
     h.field(
         "env_root_spill_relocations",
