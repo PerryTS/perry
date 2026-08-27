@@ -336,6 +336,7 @@ fn merge_array_named_props(
     owner: usize,
     owner_props: Vec<ArrayNamedProperty>,
 ) {
+    note_array_named_props_ever();
     let entry = props.entry(owner).or_default();
     for prop in owner_props {
         if let Some(existing) = entry.iter_mut().find(|existing| existing.name == prop.name) {
@@ -396,6 +397,20 @@ unsafe fn string_header_as_str<'a>(key: *const crate::StringHeader) -> Option<&'
     std::str::from_utf8(bytes).ok()
 }
 
+/// Has ANY array on this process ever taken a named (non-index) property?
+///
+/// `array_has_named_properties` is on the `length` shrink path of every
+/// `pooled.length = 0` an object pool performs; without the latch each of
+/// those paid a thread-local hash probe to learn that the table has always
+/// been empty. Monotone (never cleared), so a false answer is always safe.
+static ARRAY_NAMED_PROPS_EVER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[inline]
+fn note_array_named_props_ever() {
+    ARRAY_NAMED_PROPS_EVER.store(true, std::sync::atomic::Ordering::Release);
+}
+
 pub(crate) unsafe fn array_named_property_set(
     arr: *mut ArrayHeader,
     key: *const crate::StringHeader,
@@ -409,6 +424,7 @@ pub(crate) unsafe fn array_named_property_set(
         return;
     };
     let owner = arr as usize;
+    note_array_named_props_ever();
     ARRAY_NAMED_PROPS.with(|m| {
         let mut map = m.borrow_mut();
         let props = map.entry(owner).or_default();
@@ -485,8 +501,20 @@ pub(crate) unsafe fn array_named_property_get_by_name(
 /// instead of leaving that second representation observable.
 #[inline]
 pub(crate) unsafe fn array_has_named_properties(arr: *const ArrayHeader) -> bool {
+    if !ARRAY_NAMED_PROPS_EVER.load(std::sync::atomic::Ordering::Acquire) {
+        return false;
+    }
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
+        return false;
+    }
+    array_has_named_properties_resolved(arr)
+}
+
+/// [`array_has_named_properties`] for a head the caller already resolved.
+#[inline]
+pub(crate) unsafe fn array_has_named_properties_resolved(arr: *const ArrayHeader) -> bool {
+    if !ARRAY_NAMED_PROPS_EVER.load(std::sync::atomic::Ordering::Acquire) {
         return false;
     }
     ARRAY_NAMED_PROPS.with(|m| {
@@ -1168,7 +1196,7 @@ pub(super) unsafe fn array_has_raw_f64_layout_flag(arr: *const ArrayHeader) -> b
 }
 
 #[inline]
-unsafe fn set_array_raw_f64_layout_flag(arr: *const ArrayHeader) {
+pub(super) unsafe fn set_array_raw_f64_layout_flag(arr: *const ArrayHeader) {
     if let Some(header) = array_gc_header(arr) {
         (*header)._reserved |= crate::gc::GC_ARRAY_RAW_F64_LAYOUT;
     }
@@ -1665,6 +1693,12 @@ pub(crate) unsafe fn refresh_array_numeric_layout(arr: *mut ArrayHeader) {
     if arr.is_null() {
         return;
     }
+    refresh_array_numeric_layout_resolved(arr);
+}
+
+/// [`refresh_array_numeric_layout`] for a head the caller already resolved.
+#[inline]
+pub(crate) unsafe fn refresh_array_numeric_layout_resolved(arr: *mut ArrayHeader) {
     if array_slots_are_numeric(arr) {
         rebuild_array_numeric_raw_f64(arr);
     } else {

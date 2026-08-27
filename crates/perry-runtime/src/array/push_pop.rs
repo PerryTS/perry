@@ -80,6 +80,20 @@ pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {
     }
 }
 
+/// The `_reserved` flags of `arr`'s header when that header is a plain
+/// `GC_TYPE_ARRAY`, read without re-classifying an already-resolved head.
+/// `None` for anything else `clean_arr_ptr` can hand back unchanged (a typed
+/// array, a Buffer), which keeps the registry-probing generic helpers in
+/// charge of those.
+#[inline]
+unsafe fn resolved_plain_array_flags(arr: *const ArrayHeader) -> Option<u16> {
+    if (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let gc_header = (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    ((*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY).then(|| (*gc_header)._reserved)
+}
+
 #[inline]
 fn guard_writable_length_with_flags(arr: *const ArrayHeader, flags: u16) {
     if array_length_is_non_writable_with_flags(arr, flags) {
@@ -915,10 +929,25 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
     if arr.is_null() {
         return TAG_UNDEFINED_F64;
     }
-    if array_is_frozen(arr) {
-        throw_frozen_array_mutation();
+    // Resolve the header flags ONCE. `array_is_frozen`, `guard_writable_length`
+    // and `array_iteration_is_exotic` each re-ran `clean_arr_ptr` on the head
+    // this function had just resolved — three classifications per pop on an
+    // object pool's `pool.pop()`.
+    let plain_flags = unsafe { resolved_plain_array_flags(arr) };
+    match plain_flags {
+        Some(flags) => {
+            if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
+                throw_frozen_array_mutation();
+            }
+            guard_writable_length_with_flags(arr, flags);
+        }
+        None => {
+            if array_is_frozen(arr) {
+                throw_frozen_array_mutation();
+            }
+            guard_writable_length(arr);
+        }
     }
-    guard_writable_length(arr);
     unsafe {
         let length = (*arr).length;
         if length == 0 {
@@ -926,7 +955,11 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
         }
 
         let new_length = length - 1;
-        if !crate::array::array_iteration_is_exotic(arr) {
+        let exotic = match plain_flags {
+            Some(flags) => crate::array::array_iteration_is_exotic_resolved(arr, flags),
+            None => crate::array::array_iteration_is_exotic(arr),
+        };
+        if !exotic {
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             let value = *elements_ptr.add(new_length as usize);
             (*arr).length = new_length;
@@ -1020,11 +1053,15 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
         return;
     }
     let n = array_length_from_property_value_or_throw(new_length);
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let _arr_handle = scope.root_raw_mut_ptr(arr);
     unsafe {
         let cur = (*arr).length;
-        let flags = array_object_flags(arr);
+        // The head was resolved a line ago; read its flags directly when the
+        // header really is an array (the common case) instead of classifying
+        // it a second time through `array_object_flags`.
+        let flags = match resolved_plain_array_flags(arr) {
+            Some(flags) => flags,
+            None => array_object_flags(arr),
+        };
         if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
             return;
         }
@@ -1064,8 +1101,13 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             // three descriptor/expando probes for every removed element.
             if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
                 && cur <= capacity
-                && !array_has_named_properties(arr)
+                && !array_has_named_properties_resolved(arr)
             {
+                // Plain shrink: nothing below can run user code or allocate
+                // on the GC heap (hole stores, a length write, a layout
+                // rebuild from the surviving slots), so the head needs no
+                // handle scope. `pooled.length = 0` in an object pool is this
+                // branch every time.
                 let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
                 for i in n..cur {
                     // GC_STORE_AUDIT(BARRIERED): the suffix becomes unreachable
@@ -1077,6 +1119,8 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 rebuild_array_layout(arr);
                 return;
             }
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let _arr_handle = scope.root_raw_mut_ptr(arr);
             if cur > capacity {
                 let mut sparse_indices: Vec<u32> = array_named_property_names(arr, false)
                     .into_iter()
@@ -1109,6 +1153,8 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             (*arr).length = n;
             refresh_array_numeric_layout(arr);
         } else if n > cur {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let _arr_handle = scope.root_raw_mut_ptr(arr);
             // Growing `length` creates holes conceptually; it must not allocate
             // a dense backing store proportional to the requested length.
             // Test262's descriptor probe writes 2^32-1 here. Keep large sparse

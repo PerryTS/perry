@@ -138,7 +138,18 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
         return;
     }
     crate::gc::layout_rebuild_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
-    refresh_array_numeric_layout(arr);
+    if length == 0 {
+        // `layout_rebuild_from_slots` just left the head POINTER_FREE with its
+        // per-object records dropped and the typed-intact bit cleared, which
+        // is everything `refresh_array_numeric_layout` would redo for zero
+        // slots via `rebuild_array_numeric_raw_f64` -> `layout_init_pointer_free`
+        // (a second header resolution, a second forget probe). All that is
+        // left of that path is the raw-f64 claim an empty array holds
+        // vacuously; there are no slots for the old-gen barrier replay either.
+        super::header::set_array_raw_f64_layout_flag(arr);
+        return;
+    }
+    super::header::refresh_array_numeric_layout_resolved(arr);
     if crate::arena::pointer_in_old_gen(arr as usize) {
         let slots = array_elements_ptr(arr);
         for i in 0..length {
