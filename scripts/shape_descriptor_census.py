@@ -315,6 +315,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         # nothing loses the keys array of a shape only OLD objects carry, which
         # a minor never enumerates.
         (r"pub\(crate\)\s+old_carrier\s*:\s*bool", "old-carrier ephemeron gate"),
+        (r"pub\(crate\)\s+cache_carrier\s*:\s*bool", "cache-carrier strong metadata owner"),
         (r"\bfn\s+rotate_old_carrier_epoch_after_full_trace\b", "old-carrier gate recomputed by a full trace"),
         (r"is_dead_owner\s*\(\s*descriptor\.keys\s+as\s+usize\s*\)", "dead descriptor pruning"),
     ):
@@ -343,15 +344,16 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # just the set of APIs called: a sabotage that widens the gate, or that
     # swaps the arms, has to be red.
     if not re.search(
-        r"if\s+descriptor\.old_carrier\s*\{\s*"
+        r"if\s+descriptor\.old_carrier\s*\|\|\s*descriptor\.cache_carrier\s*\{\s*"
         r"visitor\.visit_usize_slot\(&mut addr\)\s*\}\s*else\s*\{\s*"
         r"visitor\.visit_metadata_usize_slot\(&mut addr\)\s*\}",
         scanner,
     ):
         raise CensusError(
-            "descriptor rooting is not gated on `old_carrier`: the shape table "
-            "either roots unconditionally (every keys array immortal) or not at "
-            "all (a shape only old objects carry loses its keys array)"
+            "descriptor rooting is not gated on `old_carrier || cache_carrier`: "
+            "the shape table either roots unconditionally (every keys array "
+            "immortal) or not at all (a shape only old objects carry, or one a "
+            "runtime optimization cache can reinstall, loses its keys array)"
         )
     scanner_slot_apis = set(re.findall(r"\b(visit_[A-Za-z0-9_]*slot)\s*\(", scanner))
     if scanner_slot_apis != {"visit_metadata_usize_slot", "visit_usize_slot"}:
@@ -739,7 +741,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
 
     ungated_root = dict(sources)
     ungated_root[shapes_path] = ungated_root[shapes_path].replace(
-        "let moved = if descriptor.old_carrier {",
+        "let moved = if descriptor.old_carrier || descriptor.cache_carrier {",
         "let moved = if true {",
         1,
     )
