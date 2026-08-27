@@ -77,22 +77,19 @@ pub(crate) fn extract_ts_type_with_ctx(
         }
 
         // Union type: A | B | C
-        TsUnionOrIntersectionType(union_or_inter) => {
-            match union_or_inter {
-                ast::TsUnionOrIntersectionType::TsUnionType(union) => {
-                    let types: Vec<Type> = union
-                        .types
-                        .iter()
-                        .map(|t| extract_ts_type_with_ctx(t, ctx))
-                        .collect();
-                    Type::Union(types)
-                }
-                ast::TsUnionOrIntersectionType::TsIntersectionType(_) => {
-                    // Intersection types are complex - treat as Any for now
-                    Type::Any
-                }
+        TsUnionOrIntersectionType(union_or_inter) => match union_or_inter {
+            ast::TsUnionOrIntersectionType::TsUnionType(union) => {
+                let types: Vec<Type> = union
+                    .types
+                    .iter()
+                    .map(|t| extract_ts_type_with_ctx(t, ctx))
+                    .collect();
+                Type::Union(types)
             }
-        }
+            ast::TsUnionOrIntersectionType::TsIntersectionType(inter) => {
+                lower_intersection_type(&inter.types, ctx)
+            }
+        },
 
         // Type reference: Array<T>, MyClass, T (type param), etc.
         TsTypeRef(type_ref) => {
@@ -639,4 +636,71 @@ fn decorator_prop_name(name: &ast::PropName) -> Option<String> {
         ast::PropName::Num(n) => Some(n.value.to_string()),
         _ => None,
     }
+}
+
+/// `A & B & …`.
+///
+/// TypeScript's branded-primitive idiom — `number & { readonly __tag: T }`,
+/// `string & {}` — describes a value whose runtime representation is exactly
+/// the primitive member: the object-literal "brand" exists only in the type
+/// system and is never materialized, since a primitive cannot carry own
+/// properties. Lower such an intersection to that primitive when exactly one
+/// primitive kind is present and every other member is a brand-shaped object,
+/// reference, or type-variable type. This gives a branded id the same
+/// guarded-but-native treatment as a plain `number` annotation; it trusts the
+/// annotation no further than `number` itself is trusted. Anything else —
+/// object-object merges, conflicting primitives, arrays, functions — keeps the
+/// prior `Any` lowering.
+fn lower_intersection_type(members: &[Box<ast::TsType>], ctx: Option<&LoweringContext>) -> Type {
+    let mut primitive: Option<Type> = None;
+    for member in members {
+        // An object-literal type is a brand whatever it lowers to (`{}`
+        // extracts as `Any`, which is the identity of `&` here, not TS `any`).
+        if matches!(member.as_ref(), ast::TsType::TsTypeLit(_)) {
+            continue;
+        }
+        let ty = extract_ts_type_with_ctx(member, ctx);
+        match ty {
+            Type::Number
+            | Type::Int32
+            | Type::String
+            | Type::StringLiteral(_)
+            | Type::Boolean
+            | Type::BigInt
+            | Type::Symbol => match &primitive {
+                None => primitive = Some(ty),
+                // `string & "a"` is the literal; `number & number` is number.
+                Some(prev) if same_primitive_kind(prev, &ty) => {
+                    if matches!(ty, Type::StringLiteral(_)) {
+                        primitive = Some(ty);
+                    }
+                }
+                Some(_) => return Type::Any,
+            },
+            // Brand-shaped members: object literal types, named/generic
+            // references (interfaces, other brands), type variables, and
+            // `unknown` (the identity of `&`).
+            Type::Object(_)
+            | Type::Named(_)
+            | Type::Generic { .. }
+            | Type::TypeVar(_)
+            | Type::Unknown => {}
+            _ => return Type::Any,
+        }
+    }
+    primitive.unwrap_or(Type::Any)
+}
+
+fn same_primitive_kind(a: &Type, b: &Type) -> bool {
+    matches!(
+        (a, b),
+        (Type::Number | Type::Int32, Type::Number | Type::Int32)
+            | (
+                Type::String | Type::StringLiteral(_),
+                Type::String | Type::StringLiteral(_)
+            )
+            | (Type::Boolean, Type::Boolean)
+            | (Type::BigInt, Type::BigInt)
+            | (Type::Symbol, Type::Symbol)
+    )
 }

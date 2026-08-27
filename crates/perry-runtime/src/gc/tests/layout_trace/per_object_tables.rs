@@ -161,7 +161,7 @@ fn test_global_gate_exposes_a_recycled_address_record_to_forget() {
     clear_marks();
     clear_mark_seeds();
 
-    let previous_tenant = crate::object::js_object_alloc(0, 2);
+    let previous_tenant = crate::object::js_object_alloc(0, 8);
     let child = crate::object::js_object_alloc(0, 0);
     crate::gc::layout_note_slot(
         previous_tenant as usize,
@@ -169,7 +169,7 @@ fn test_global_gate_exposes_a_recycled_address_record_to_forget() {
         POINTER_TAG | (child as u64 & POINTER_MASK),
     );
     assert_eq!(
-        test_layout_pointer_slot_count(previous_tenant as usize, 2),
+        test_layout_pointer_slot_count(previous_tenant as usize, 8),
         Some(1),
         "test premise: the previous tenant must leave an address-keyed mask"
     );
@@ -285,7 +285,7 @@ fn test_per_object_tables_flag_arms_on_a_pointer_store_into_a_pointer_free_objec
     clear_marks();
     clear_mark_seeds();
 
-    let obj = crate::object::js_object_alloc(0, 2);
+    let obj = crate::object::js_object_alloc(0, 8);
     crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.0));
     crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(2.0));
     crate::gc::layout_clear_for_ptr(obj as usize);
@@ -302,7 +302,7 @@ fn test_per_object_tables_flag_arms_on_a_pointer_store_into_a_pointer_free_objec
         flag(),
         "the mask grown in place by `layout_note_slot` must arm the flag too"
     );
-    assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(obj as usize, 8), Some(1));
 
     clear_marks();
     clear_mark_seeds();
@@ -377,7 +377,7 @@ fn test_pointer_store_outside_an_immortal_scope_still_mints_a_mask() {
     assert_flag_sound("before store");
     assert!(test_per_object_tables_are_empty());
 
-    let obj = crate::object::js_object_alloc(0, 2);
+    let obj = crate::object::js_object_alloc(0, 8);
     let child = crate::object::js_object_alloc(0, 0);
     crate::gc::layout_note_slot(obj as usize, 1, POINTER_TAG | (child as u64 & POINTER_MASK));
 
@@ -387,7 +387,7 @@ fn test_pointer_store_outside_an_immortal_scope_still_mints_a_mask() {
          if it no longer does, the scoped test below proves nothing"
     );
     assert!(!test_per_object_tables_are_empty());
-    assert_eq!(test_layout_pointer_slot_count(obj as usize, 2), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(obj as usize, 8), Some(1));
 
     crate::gc::layout_clear_for_ptr(obj as usize);
     assert!(test_per_object_tables_are_empty());
@@ -500,7 +500,7 @@ fn test_addr_filter_never_hides_a_live_record_across_a_rebuild() {
     // the rebuild path is exercised rather than merely reachable.
     let mut objs = Vec::new();
     for _ in 0..6000 {
-        let obj = crate::object::js_object_alloc(0, 2);
+        let obj = crate::object::js_object_alloc(0, 8);
         let child = crate::object::js_object_alloc(0, 0);
         crate::gc::layout_note_slot(obj as usize, 1, POINTER_TAG | (child as u64 & POINTER_MASK));
         objs.push(obj);
@@ -509,7 +509,7 @@ fn test_addr_filter_never_hides_a_live_record_across_a_rebuild() {
 
     for (i, obj) in objs.iter().enumerate() {
         assert_eq!(
-            test_layout_pointer_slot_count(*obj as usize, 2),
+            test_layout_pointer_slot_count(*obj as usize, 8),
             Some(1),
             "record {i} became invisible — the filter proved absence for an \
              address that has a live entry"
@@ -544,7 +544,7 @@ fn test_addr_filter_proves_absence_while_the_global_flag_is_armed() {
     clear_marks();
     clear_mark_seeds();
 
-    let live = crate::object::js_object_alloc(0, 2);
+    let live = crate::object::js_object_alloc(0, 8);
     let child = crate::object::js_object_alloc(0, 0);
     crate::gc::layout_note_slot(
         live as usize,

@@ -1127,6 +1127,7 @@ pub(super) fn compile_function(
         shadow_slots_bound: bound_param_slots,
         temp_roots: crate::rooting::TempRootPool::default(),
         arena_state_slot,
+        arena_state_lazy: false,
         class_keys_slots: HashMap::new(),
         class_shape_slots: HashMap::new(),
         class_header_images: HashMap::new(),

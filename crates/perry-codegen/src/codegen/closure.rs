@@ -1111,6 +1111,7 @@ pub(super) fn compile_closure(
         declared_only_numeric_locals: std::collections::HashSet::new(),
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,
+        arena_state_lazy: false,
         class_keys_slots: HashMap::new(),
         class_shape_slots: HashMap::new(),
         class_header_images: HashMap::new(),

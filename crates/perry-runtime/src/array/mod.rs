@@ -13,6 +13,7 @@ mod header;
 mod header_gc_slots;
 mod immutable;
 mod indexing;
+mod indexing_support;
 mod is_array;
 mod iter_methods;
 mod iter_object;
@@ -35,6 +36,8 @@ mod collection_tag_tests;
 mod forwarding_tests;
 #[cfg(test)]
 mod spread_dense_tests;
+#[cfg(test)]
+mod strict_store_tests;
 #[cfg(test)]
 mod subclass_tests;
 #[cfg(test)]
@@ -119,14 +122,9 @@ pub use self::immutable::{
     js_array_to_sorted_default, js_array_to_sorted_with_comparator, js_array_to_spliced,
     js_array_with, js_arraylike_copy_within,
 };
-#[cfg(test)]
-pub(crate) use self::indexing::test_keys_array_slot_fallbacks;
 pub(crate) use self::indexing::{
-    array_has_own_index, array_iteration_is_exotic, array_proto_iterator_modified,
+    array_has_own_index, array_iteration_is_exotic, array_iteration_is_exotic_resolved,
     array_prototype_has_index_flag, array_spec_get, array_spec_has_index, array_spec_set,
-    invalidate_array_index_fast_path, keys_array_len_capped_to_capacity, keys_array_slot,
-    note_array_proto_iterator_write, note_object_prototype_index_write,
-    object_prototype_has_index_flag, PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
 };
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
@@ -134,6 +132,14 @@ pub use self::indexing::{
     js_array_numeric_get_f64_unboxed, js_array_numeric_set_f64_unboxed, js_array_set_f64,
     js_array_set_f64_extend, js_array_set_f64_extend_strict, js_array_set_f64_unchecked,
     js_array_set_index_or_string, js_array_set_index_or_string_strict, js_array_set_string_key,
+};
+#[cfg(test)]
+pub(crate) use self::indexing_support::test_keys_array_slot_fallbacks;
+pub(crate) use self::indexing_support::{
+    array_proto_iterator_modified, invalidate_array_index_fast_path,
+    keys_array_len_capped_to_capacity, keys_array_slot, note_array_proto_iterator_write,
+    note_object_prototype_index_write, object_prototype_has_index_flag,
+    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
 };
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
@@ -171,7 +177,7 @@ pub use self::subclass::{
     array_subclass_dense_snapshot, array_subclass_has_iterator_override, is_array_subclass_instance,
 };
 #[cfg(test)]
-pub(crate) use indexing::test_swap_array_index_fast_path_invalidated;
+pub(crate) use indexing_support::test_swap_array_index_fast_path_invalidated;
 // #7574 — array-like OBJECT receiver resolution for the raw `js_array_*` entry
 // points, plus the Array-exotic `length` maintenance the generic OBJECT index
 // store needs for a `class X extends Array` receiver.
@@ -217,20 +223,20 @@ pub(crate) use self::alloc::array_length_from_property_value_or_throw;
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
 pub(crate) use self::flat_clone::{dense_spread_copy, dense_spread_source, flattenable_array_ptr};
 pub(crate) use self::header::{
-    array_byte_size, array_has_named_properties, array_is_frozen, array_is_sealed_or_no_extend,
-    array_named_property_delete, array_named_property_delete_by_name, array_named_property_get,
-    array_named_property_get_by_name, array_named_property_has, array_named_property_names,
-    array_named_property_set, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
-    array_numeric_raw_f64_set_inbounds, array_object_flags, array_object_flags_from_tag,
-    array_object_flags_resolved, array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
-    buffer_receiver_as_uint8_typed_array, clean_arr_ptr, clean_arr_ptr_mut,
-    clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
-    mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
-    note_array_slot, note_array_slot_layout_only, note_array_slot_resolved_flags,
-    rebuild_array_layout, rebuild_array_layout_exact, refresh_array_numeric_layout,
-    replay_array_growth_write_barriers, set_array_numeric_layout, store_array_slot,
-    store_array_slot_resolved, transfer_array_numeric_layout, typed_array_receiver,
-    value_bits_to_number, NumericArrayLayout, MIN_ARRAY_CAPACITY,
+    array_byte_size, array_has_named_properties_resolved, array_is_frozen,
+    array_is_sealed_or_no_extend, array_named_property_delete, array_named_property_delete_by_name,
+    array_named_property_get, array_named_property_get_by_name, array_named_property_has,
+    array_named_property_names, array_named_property_set, array_numeric_raw_f64_get,
+    array_numeric_raw_f64_push_inbounds, array_numeric_raw_f64_set_inbounds, array_object_flags,
+    array_object_flags_from_tag, array_object_flags_resolved, array_ptr_as_proxy,
+    array_receiver_addr, array_receiver_gc_tag, buffer_receiver_as_uint8_typed_array,
+    clean_arr_ptr, clean_arr_ptr_mut, clear_array_numeric_layout, clear_array_numeric_layout_ptr,
+    gc_element_slot_range, mark_array_layout_unknown, mark_array_raw_f64_holes_fresh,
+    normalize_array_receiver, note_array_slot, note_array_slot_layout_only,
+    note_array_slot_resolved_flags, rebuild_array_layout, rebuild_array_layout_exact,
+    refresh_array_numeric_layout, replay_array_growth_write_barriers, set_array_numeric_layout,
+    store_array_slot, store_array_slot_resolved, transfer_array_numeric_layout,
+    typed_array_receiver, value_bits_to_number, NumericArrayLayout, MIN_ARRAY_CAPACITY,
 };
 
 // Sole caller is the regex-engine-gated `regex::exec_array`, so the helper and

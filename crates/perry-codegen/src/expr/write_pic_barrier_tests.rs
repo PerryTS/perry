@@ -62,7 +62,7 @@ const ADDREF: &str = "call void @js_string_addref_if_heap_string(";
 /// The trailing `(` is what separates this from `..._aware(`.
 const NOTE: &str = "call void @js_gc_note_slot_layout(";
 const NOTE_AWARE: &str = "call void @js_gc_note_slot_layout_aware(";
-const BARRIER_CALL: &str = "call void @js_write_barrier_slot(";
+const BARRIER_CALL: &str = "call void @js_write_barrier_slot";
 
 const OBJECT: u32 = 1;
 const VALUE: u32 = 2;

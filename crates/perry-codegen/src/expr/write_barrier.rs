@@ -221,7 +221,16 @@ pub(crate) fn emit_write_barrier_slot_generation_tested(
     ctx.current_block = barrier_idx;
     {
         let blk = ctx.block();
-        emit_write_barrier_slot_on_block(blk, parent_bits, slot_addr, child_bits);
+        // The gate above just dereferenced `parent_handle`'s header, so the
+        // runtime need not re-validate or re-classify it: the validated-parent
+        // entry takes the raw handle and goes straight to the decoded barrier.
+        // `parent_bits` is deliberately unused on this arm — it is the same
+        // object, boxed or raw, and the raw handle is what the gate proved.
+        let _ = parent_bits;
+        blk.call_void(
+            "js_write_barrier_slot_validated_parent",
+            &[(I64, parent_handle), (I64, slot_addr), (I64, child_bits)],
+        );
         blk.br(&done_label);
     }
     ctx.current_block = done_idx;
@@ -305,7 +314,16 @@ pub(crate) fn emit_write_barrier_slot_value_and_generation_tested(
     ctx.current_block = barrier_idx;
     {
         let blk = ctx.block();
-        emit_write_barrier_slot_on_block(blk, parent_bits, slot_addr, child_bits);
+        // The gate above just dereferenced `parent_handle`'s header, so the
+        // runtime need not re-validate or re-classify it: the validated-parent
+        // entry takes the raw handle and goes straight to the decoded barrier.
+        // `parent_bits` is deliberately unused on this arm — it is the same
+        // object, boxed or raw, and the raw handle is what the gate proved.
+        let _ = parent_bits;
+        blk.call_void(
+            "js_write_barrier_slot_validated_parent",
+            &[(I64, parent_handle), (I64, slot_addr), (I64, child_bits)],
+        );
         blk.br(&done_label);
     }
     ctx.current_block = done_idx;

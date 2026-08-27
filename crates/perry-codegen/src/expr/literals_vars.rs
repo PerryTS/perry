@@ -67,13 +67,35 @@ fn load_trusted_box_capture_bits(ctx: &mut FnCtx<'_>, capture: &TrustedBoxCaptur
 /// bypasses this rule. Limit the call to declared-string bindings: only those
 /// bindings can select in-place append, and erased annotations remain safe
 /// because the runtime helper checks the live tag.
+/// Read capture slot `capture_idx` of the running closure as raw bits, inline.
+///
+/// `js_closure_get_capture_bits` is a null test, a bounds test against the
+/// header's capture count, and one load. Inside a closure body neither test
+/// can fail: `closure_ptr` is the rooted `%this_closure` (re-read by
+/// `current_closure_ptr_value`, so a relocation is already accounted for), and
+/// `capture_idx` is the index this compiler assigned when it laid the closure
+/// out — the same layout `codegen/closure.rs` walks at entry for boxed
+/// captures. A benchmark loop closure reading its captured world/entities on
+/// every iteration paid a call per read; this is the load the call did.
+fn load_closure_capture_bits_inline(
+    ctx: &mut FnCtx<'_>,
+    closure_ptr: &str,
+    capture_idx: u32,
+) -> String {
+    let offset =
+        crate::target_layout::closure_header_size_bytes(ctx.target_triple) + 8 * capture_idx as u64;
+    let blk = ctx.block();
+    let slot_addr = blk.add(I64, closure_ptr, &offset.to_string());
+    let slot_ptr = blk.inttoptr(I64, &slot_addr);
+    blk.load(I64, &slot_ptr)
+}
+
 fn demote_extracted_string_binding(ctx: &mut FnCtx<'_>, id: u32, value: &str) {
     let persistent_binding = ctx.closure_captures.contains_key(&id)
         || (ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id))
         || ctx.module_globals.contains_key(&id);
     if persistent_binding && matches!(ctx.local_type_hint(&id), Some(HirType::String)) {
-        ctx.block()
-            .call_void("js_string_addref_if_heap_string", &[(DOUBLE, value)]);
+        super::helpers::emit_string_addref_if_heap_string(ctx, value);
     }
 }
 
@@ -447,7 +469,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             // Captured by closure (from outer scope):
             if let Some(&capture_idx) = ctx.closure_captures.get(id) {
-                let idx_str = capture_idx.to_string();
                 // If the captured id is a boxed var, the capture slot holds a
                 // raw box pointer. Read the capture, extract the box pointer,
                 // and deref via js_box_get_bits.
@@ -465,23 +486,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     } else {
                         "js_box_get_bits"
                     };
+                    let box_ptr = load_closure_capture_bits_inline(ctx, &closure_ptr, capture_idx);
                     let blk = ctx.block();
-                    let box_ptr = blk.call(
-                        I64,
-                        "js_closure_get_capture_bits",
-                        &[(I64, &closure_ptr), (I32, &idx_str)],
-                    );
                     let bits = blk.call(I64, getter, &[(I64, &box_ptr)]);
                     let value = blk.bitcast_i64_to_double(&bits);
                     demote_extracted_string_binding(ctx, *id, &value);
                     return Ok(value);
                 }
                 let closure_ptr = super::current_closure_ptr_value(ctx, "captured local")?;
-                let bits = ctx.block().call(
-                    I64,
-                    "js_closure_get_capture_bits",
-                    &[(I64, &closure_ptr), (I32, &idx_str)],
-                );
+                let bits = load_closure_capture_bits_inline(ctx, &closure_ptr, capture_idx);
                 let value = ctx.block().bitcast_i64_to_double(&bits);
                 demote_extracted_string_binding(ctx, *id, &value);
                 return Ok(value);
@@ -734,8 +747,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // variables as LocalSet, making that gap observable as the saved
             // string growing in place with its boxed accumulator (#8432).
             if matches!(value.as_ref(), Expr::LocalGet(source_id) if source_id != id) {
-                ctx.block()
-                    .call_void("js_string_addref_if_heap_string", &[(DOUBLE, &v)]);
+                super::helpers::emit_string_addref_if_heap_string(ctx, &v);
             }
             // Closure captures first (write through the runtime), then
             // locals, then module globals.

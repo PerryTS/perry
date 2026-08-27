@@ -201,6 +201,7 @@ const NON_COLLECTING: &[&str] = &[
     "js_write_barrier",
     "js_write_barrier_root_nanbox",
     "js_write_barrier_slot",
+    "js_write_barrier_slot_validated_parent",
     "js_gc_register_global_root",
     // pure value predicates / bit twiddling.
     //

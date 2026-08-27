@@ -82,10 +82,11 @@ pub(crate) use helpers::{
     array_store_needs_layout_note, array_store_needs_write_barrier, buffer_alias_metadata_suffix,
     class_field_store_layout_note_is_conforming, class_field_store_needs_layout_note,
     class_field_store_needs_string_addref, emit_all_pointer_array_declaration,
-    expr_has_numeric_pointer_free_array_layout, expr_produces_fresh_heap_allocation,
-    expr_produces_non_pointer_bits_by_construction, is_global_this_builtin_function_name,
-    is_global_this_builtin_name, lower_expr_with_expected_type, lower_js_args_array,
-    store_needs_string_addref, unbox_str_handle, unbox_to_i64,
+    emit_string_addref_if_heap_string, expr_has_numeric_pointer_free_array_layout,
+    expr_produces_fresh_heap_allocation, expr_produces_non_pointer_bits_by_construction,
+    is_global_this_builtin_function_name, is_global_this_builtin_name,
+    lower_expr_with_expected_type, lower_js_args_array, store_needs_string_addref,
+    unbox_str_handle, unbox_to_i64,
 };
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region,
@@ -919,6 +920,9 @@ pub(crate) struct FnCtx<'a> {
     /// `None` until the first `new` lowers; thereafter `Some(slot_name)`
     /// (e.g. `"%r3"`).
     pub arena_state_slot: Option<String>,
+    /// `arena_state_slot` is a lazily-resolved null-initialized slot minted by
+    /// `load_inline_arena_state` (as opposed to a seeded hidden parameter).
+    pub arena_state_lazy: bool,
 
     /// Per-class cached `keys_array` global slots. The
     /// `@perry_class_keys_<class>` global is set once at module init,
@@ -2178,14 +2182,43 @@ fn inline_cache_global_name_for_prefix(module_prefix: &str, site_id: u32) -> Str
 /// every other function lazily emits the ordinary entry accessor when its
 /// first inline allocation site is lowered.
 pub(crate) fn load_inline_arena_state(ctx: &mut FnCtx<'_>) -> String {
+    // The state is resolved on the first allocation that actually executes,
+    // not in the entry block: a function whose hot path never allocates
+    // (`exists`, the typed guard arms of `set`) used to pay the thread-local
+    // accessor on every call for an allocation on a cold branch. The slot is
+    // an entry alloca so the resolved pointer is shared by every later site,
+    // including sites inside loops; a seeded slot (#8591's hidden parameter)
+    // is simply never null.
     let arena_state_slot = if let Some(slot) = ctx.arena_state_slot.clone() {
         slot
     } else {
-        let slot = ctx.func.entry_init_call_ptr("js_inline_arena_state");
+        let slot = ctx.func.alloca_entry_null_ptr();
         ctx.arena_state_slot = Some(slot.clone());
+        ctx.arena_state_lazy = true;
         slot
     };
-    ctx.block().load(PTR, &arena_state_slot)
+    if !ctx.arena_state_lazy {
+        // Seeded by the recursive-allocator entry: never null.
+        return ctx.block().load(PTR, &arena_state_slot);
+    }
+    let cached = ctx.block().load(PTR, &arena_state_slot);
+    let is_null = ctx.block().icmp_eq(PTR, &cached, "null");
+    let init_idx = ctx.new_block("arena_state.init");
+    let done_idx = ctx.new_block("arena_state.ready");
+    let init_label = ctx.block_label(init_idx);
+    let done_label = ctx.block_label(done_idx);
+    let cached_pred = ctx.block().label.clone();
+    ctx.block().cond_br(&is_null, &init_label, &done_label);
+
+    ctx.current_block = init_idx;
+    let fresh = ctx.block().call(PTR, "js_inline_arena_state", &[]);
+    ctx.block().store(PTR, &fresh, &arena_state_slot);
+    let init_pred = ctx.block().label.clone();
+    ctx.block().br(&done_label);
+
+    ctx.current_block = done_idx;
+    ctx.block()
+        .phi(PTR, &[(&cached, &cached_pred), (&fresh, &init_pred)])
 }
 
 #[cfg(test)]

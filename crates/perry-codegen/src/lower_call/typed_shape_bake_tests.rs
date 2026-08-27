@@ -51,6 +51,13 @@ const FORGET_CALL: &str = "call void @js_gc_forget_object_layout(";
 const ANY_GLOBAL: &str = "@PERRY_PER_OBJECT_LAYOUTS_ANY";
 const ANY_ATOMIC_LOAD: &str =
     "load atomic i32, ptr @PERRY_PER_OBJECT_LAYOUTS_ANY monotonic, align 4";
+/// The second gate: records keyed by an address this allocator could have
+/// recycled. Read only once the armed count is non-zero, and before the
+/// address sketch — a long-lived masked object on an old page keeps the
+/// armed count non-zero forever while this stays at zero.
+const YOUNG_ATOMIC_LOAD: &str =
+    "load atomic i32, ptr @PERRY_YOUNG_LAYOUT_RECORDS monotonic, align 4";
+const SKETCH_WORD_GEP: &str = "getelementptr i64, ptr @PERRY_LAYOUT_ADDR_FILTER";
 
 /// The packed `GcHeader` word the inline bump writes for a two-`number`-field
 /// class:
@@ -404,6 +411,15 @@ fn a_pointer_free_shape_bakes_its_layout_into_the_header_constant() {
          emptiness proof: a recycled address can carry a previous tenant's \
          per-object mask, and `layout_note_slot` would then OR the new \
          object's pointer bits into it:\n{ir}"
+    );
+    let any_at = ir.find(ANY_ATOMIC_LOAD).expect("armed-count load");
+    let young_at = ir.find(YOUNG_ATOMIC_LOAD).expect("young-record load");
+    let sketch_at = ir.find(SKETCH_WORD_GEP).expect("address sketch probe");
+    assert!(
+        any_at < young_at && young_at < sketch_at,
+        "the gate must read the armed count, then the young-record count, and \
+         only then hash the address into the sketch — each load is the cheap \
+         proof that skips everything after it:\n{ir}"
     );
 }
 

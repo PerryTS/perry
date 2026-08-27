@@ -167,8 +167,36 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
         crate::gc::layout_mark_unknown(arr as *mut u8);
         return;
     }
+    let was_all_pointer = super::header::array_object_flags_resolved(arr)
+        & (crate::gc::GC_LAYOUT_STATE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS)
+        == (crate::gc::GC_LAYOUT_SIDE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS);
     crate::gc::layout_rebuild_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
-    refresh_array_numeric_layout(arr);
+    if length == 0 {
+        // `layout_rebuild_from_slots` just left the head POINTER_FREE with its
+        // per-object records dropped and the typed-intact bit cleared, which
+        // is everything `refresh_array_numeric_layout` would redo for zero
+        // slots via `rebuild_array_numeric_raw_f64` -> `layout_init_pointer_free`
+        // (a second header resolution, a second forget probe). There are no
+        // slots for the old-gen barrier replay either.
+        //
+        // An empty array holds BOTH vacuous claims, so keep the one its
+        // history predicts. A pool bucket that held pointers and is emptied
+        // for reuse (`pooled.length = 0`) will take pointers again: leaving
+        // it `SIDE_MASK | ALL_POINTERS` — the state a declared `[]` literal
+        // starts in — lets every push take the inline pointer-layout arm,
+        // where resetting it to POINTER_FREE | RAW_F64 made the first push
+        // of every reuse pay a layout transition (5k per frame on the ECS
+        // command buffer). A non-pointer store into that state still demotes
+        // it to UNKNOWN through `layout_note_slot`, exactly as it does for a
+        // declared literal. Everything else keeps the raw-f64 claim.
+        if was_all_pointer {
+            crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
+        } else {
+            super::header::set_array_raw_f64_layout_flag(arr);
+        }
+        return;
+    }
+    super::header::refresh_array_numeric_layout_resolved(arr);
     if crate::arena::pointer_in_old_gen(arr as usize) {
         let slots = array_elements_ptr(arr);
         for i in 0..length {

@@ -11,7 +11,11 @@ use crate::native_value::{materialize_js_value, MaterializationReason, NativeRep
 use crate::type_analysis::{
     expr_may_return_boxed_value_from_raw_f64_fallback, is_bool_expr, is_numeric_expr,
 };
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I1, I32, I64};
+
+/// #8885: the quiet-NaN prefix mask, as the i64 literal codegen emits.
+/// Defined locally to keep this lowering independent of `expr::compare`.
+const QNAN_PREFIX_I64: &str = "9221120237041090560";
 
 /// Convert a lowered condition value to an `i1` for `cond_br`.
 ///
@@ -68,8 +72,60 @@ pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr
         let bits = blk.bitcast_double_to_i64(cond_val);
         return blk.icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
     }
+    // Dynamic value: decide the bit-decidable shapes inline and keep the
+    // runtime predicate for the rest. A plain (non-NaN, untagged) double is
+    // truthy iff it is non-zero; `true`/`false`/`undefined`/`null` are single
+    // bit patterns. Strings (empty is falsy), BigInt (`0n` is falsy), pointers,
+    // handles, int32 boxes, and NaN take `js_is_truthy` exactly as before.
+    let bits = ctx.block().bitcast_double_to_i64(cond_val);
+    let masked = ctx.block().and(I64, &bits, QNAN_PREFIX_I64);
+    let plain = ctx.block().icmp_ne(I64, &masked, QNAN_PREFIX_I64);
+
+    let num_idx = ctx.new_block("truthy.num");
+    let tag_idx = ctx.new_block("truthy.tag");
+    let slow_idx = ctx.new_block("truthy.slow");
+    let merge_idx = ctx.new_block("truthy.merge");
+    let num_l = ctx.block_label(num_idx);
+    let tag_l = ctx.block_label(tag_idx);
+    let slow_l = ctx.block_label(slow_idx);
+    let merge_l = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&plain, &num_l, &tag_l);
+
+    ctx.current_block = num_idx;
+    let num_res = ctx.block().fcmp("one", cond_val, "0.0");
+    let num_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+
+    ctx.current_block = tag_idx;
+    let is_true = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
+    let is_false = ctx
+        .block()
+        .icmp_eq(I64, &bits, crate::nanbox::TAG_FALSE_I64);
+    let is_undef = ctx
+        .block()
+        .icmp_eq(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
+    let is_null = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_NULL_I64);
+    let falsy_a = ctx.block().or(I1, &is_false, &is_undef);
+    let falsy = ctx.block().or(I1, &falsy_a, &is_null);
+    let decided = ctx.block().or(I1, &is_true, &falsy);
+    let tag_pred = ctx.block().label.clone();
+    ctx.block().cond_br(&decided, &merge_l, &slow_l);
+
+    ctx.current_block = slow_idx;
     let i32_truthy = ctx.block().call(I32, "js_is_truthy", &[(DOUBLE, cond_val)]);
-    ctx.block().icmp_ne(I32, &i32_truthy, "0")
+    let slow_res = ctx.block().icmp_ne(I32, &i32_truthy, "0");
+    let slow_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+
+    ctx.current_block = merge_idx;
+    ctx.block().phi(
+        I1,
+        &[
+            (&num_res, &num_pred),
+            (&is_true, &tag_pred),
+            (&slow_res, &slow_pred),
+        ],
+    )
 }
 
 /// Lower one expression once and return both its ordinary boxed value and its

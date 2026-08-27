@@ -296,6 +296,36 @@ pub(crate) fn class_field_store_layout_note_is_conforming(
 /// there would leave a refcount==1 string aliased from the heap for a later
 /// in-place `+=` to rewrite underneath the stored slot — silent corruption
 /// with no crash to trace it back from.
+/// `js_string_addref_if_heap_string(v)` with the helper's own tag test hoisted
+/// into IR: the call is taken only when `v` carries `STRING_TAG`.
+///
+/// The helper is deliberately applied to every local-sourced copy (#7846: a
+/// declared numeric/object type is not proof the value is not a string), so
+/// on a numeric-heavy path — the ids and records an ECS `world.set` copies
+/// around — every one of those calls returned after its first compare. The
+/// compare is four instructions inline; the call stays exactly as it was for
+/// a real heap string, so the aliasing contract (#7846, #8432) is unchanged.
+pub(crate) fn emit_string_addref_if_heap_string(ctx: &mut FnCtx<'_>, value: &str) {
+    const TAG_MASK_I64: &str = "-281474976710656"; // 0xFFFF_0000_0000_0000
+    const STRING_TAG_I64: &str = "9223090561878065152"; // 0x7FFF_0000_0000_0000
+    let call_idx = ctx.new_block("str_addref.call");
+    let done_idx = ctx.new_block("str_addref.done");
+    let call_label = ctx.block_label(call_idx);
+    let done_label = ctx.block_label(done_idx);
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(value);
+        let tag = blk.and(I64, &bits, TAG_MASK_I64);
+        let not_string = blk.icmp_ne(I64, &tag, STRING_TAG_I64);
+        blk.cond_br(&not_string, &done_label, &call_label);
+    }
+    ctx.current_block = call_idx;
+    ctx.block()
+        .call_void("js_string_addref_if_heap_string", &[(DOUBLE, value)]);
+    ctx.block().br(&done_label);
+    ctx.current_block = done_idx;
+}
+
 pub(crate) fn class_field_store_needs_string_addref(ctx: &FnCtx<'_>, value: &Expr) -> bool {
     store_needs_string_addref(ctx, value)
 }

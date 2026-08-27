@@ -558,23 +558,30 @@ pub extern "C" fn js_ge(a: JSValue, b: JSValue) -> JSValue {
 // tool reads emitted LLVM IR, and this is a runtime-side table. The static
 // checker could never have found it, which is why the runtime instruments had
 // to be pointed at the registry first.
-thread_local! {
-    static TYPEOF_UNDEFINED: std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
-    static TYPEOF_OBJECT:    std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
-    static TYPEOF_BOOLEAN:   std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
-    static TYPEOF_NUMBER:    std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
-    static TYPEOF_STRING:    std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
-    static TYPEOF_FUNCTION:  std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
-    static TYPEOF_BIGINT:    std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
-    static TYPEOF_SYMBOL:    std::cell::Cell<*mut StringHeader> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+//
+// One hot-TLS array rather than eight `std::thread_local!`s: `typeof` on a
+// branchy fast path (`typeof merge !== "undefined"` per command in an ECS
+// apply loop) paid a `_tlv_get_addr` resolution per call just to reach the
+// cached pointer. The slot constants keep the eight names.
+const TYPEOF_UNDEFINED: usize = 0;
+const TYPEOF_OBJECT: usize = 1;
+const TYPEOF_BOOLEAN: usize = 2;
+const TYPEOF_NUMBER: usize = 3;
+const TYPEOF_STRING: usize = 4;
+const TYPEOF_FUNCTION: usize = 5;
+const TYPEOF_BIGINT: usize = 6;
+const TYPEOF_SYMBOL: usize = 7;
+const TYPEOF_CACHE_SLOTS: usize = 8;
+
+crate::perry_thread_local! {
+    static TYPEOF_CACHE: [std::cell::Cell<*mut StringHeader>; TYPEOF_CACHE_SLOTS] =
+        const { [const { std::cell::Cell::new(std::ptr::null_mut()) }; TYPEOF_CACHE_SLOTS] };
 }
 
 /// Get or initialize a cached `typeof` string.
-fn get_cached(
-    cache: &'static std::thread::LocalKey<std::cell::Cell<*mut StringHeader>>,
-    s: &str,
-) -> *mut StringHeader {
-    cache.with(|cell| {
+fn get_cached(slot: usize, s: &str) -> *mut StringHeader {
+    TYPEOF_CACHE.with(|cells| {
+        let cell = &cells[slot];
         let ptr = cell.get();
         if !ptr.is_null() {
             return ptr;
@@ -597,28 +604,17 @@ fn get_cached(
 /// `StringHeader`s, matching `json::scan_parse_roots_mut`'s interned-key
 /// treatment.
 pub fn scan_typeof_string_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    fn visit(
-        cache: &'static std::thread::LocalKey<std::cell::Cell<*mut StringHeader>>,
-        visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    ) {
-        cache.with(|cell| {
+    TYPEOF_CACHE.with(|cells| {
+        for cell in cells {
             let mut ptr = cell.get() as *const StringHeader;
             if ptr.is_null() {
-                return;
+                continue;
             }
             if visitor.visit_tagged_raw_const_ptr_slot(&mut ptr, crate::value::STRING_TAG) {
                 cell.set(ptr as *mut StringHeader);
             }
-        });
-    }
-    visit(&TYPEOF_UNDEFINED, visitor);
-    visit(&TYPEOF_OBJECT, visitor);
-    visit(&TYPEOF_BOOLEAN, visitor);
-    visit(&TYPEOF_NUMBER, visitor);
-    visit(&TYPEOF_STRING, visitor);
-    visit(&TYPEOF_FUNCTION, visitor);
-    visit(&TYPEOF_BIGINT, visitor);
-    visit(&TYPEOF_SYMBOL, visitor);
+        }
+    });
 }
 
 /// The eight cells and their payloads, in `scan_typeof_string_roots_mut`
@@ -626,19 +622,16 @@ pub fn scan_typeof_string_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<
 /// cell: that scanner is eight hand-written `visit(...)` calls, and a dropped
 /// line is invisible to any test that exercises only some of them.
 #[cfg(test)]
-type TypeofCacheCell = &'static std::thread::LocalKey<std::cell::Cell<*mut StringHeader>>;
-
-#[cfg(test)]
-fn typeof_cache_entries_for_test() -> [(TypeofCacheCell, &'static str); 8] {
+fn typeof_cache_entries_for_test() -> [(usize, &'static str); 8] {
     [
-        (&TYPEOF_UNDEFINED, "undefined"),
-        (&TYPEOF_OBJECT, "object"),
-        (&TYPEOF_BOOLEAN, "boolean"),
-        (&TYPEOF_NUMBER, "number"),
-        (&TYPEOF_STRING, "string"),
-        (&TYPEOF_FUNCTION, "function"),
-        (&TYPEOF_BIGINT, "bigint"),
-        (&TYPEOF_SYMBOL, "symbol"),
+        (TYPEOF_UNDEFINED, "undefined"),
+        (TYPEOF_OBJECT, "object"),
+        (TYPEOF_BOOLEAN, "boolean"),
+        (TYPEOF_NUMBER, "number"),
+        (TYPEOF_STRING, "string"),
+        (TYPEOF_FUNCTION, "function"),
+        (TYPEOF_BIGINT, "bigint"),
+        (TYPEOF_SYMBOL, "symbol"),
     ]
 }
 
@@ -652,8 +645,8 @@ fn typeof_cache_entries_for_test() -> [(TypeofCacheCell, &'static str); 8] {
 // nothing adopts it, delete it rather than letting it rot behind this attribute.
 #[allow(dead_code)]
 pub(crate) fn reset_typeof_string_cache_for_test() {
-    for (cache, _) in typeof_cache_entries_for_test() {
-        cache.with(|cell| cell.set(std::ptr::null_mut()));
+    for (slot, _) in typeof_cache_entries_for_test() {
+        TYPEOF_CACHE.with(|cells| cells[slot].set(std::ptr::null_mut()));
     }
 }
 
@@ -662,15 +655,15 @@ pub(crate) fn reset_typeof_string_cache_for_test() {
 /// from Rust otherwise means building a BigInt and a registered Symbol.
 #[cfg(test)]
 pub(crate) fn populate_typeof_string_cache_for_test() {
-    for (cache, text) in typeof_cache_entries_for_test() {
-        get_cached(cache, text);
+    for (slot, text) in typeof_cache_entries_for_test() {
+        get_cached(slot, text);
     }
 }
 
 /// Read the eight cells without populating them. Test-only.
 #[cfg(test)]
 pub(crate) fn typeof_string_cache_cells_for_test() -> [*mut StringHeader; 8] {
-    typeof_cache_entries_for_test().map(|(cache, _)| cache.with(|cell| cell.get()))
+    typeof_cache_entries_for_test().map(|(slot, _)| TYPEOF_CACHE.with(|cells| cells[slot].get()))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -839,14 +832,14 @@ pub extern "C" fn js_value_typeof_tag(value: f64) -> u32 {
 #[no_mangle]
 pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
     match classify_value_typeof(value) {
-        ValueTypeofTag::Undefined => get_cached(&TYPEOF_UNDEFINED, "undefined"),
-        ValueTypeofTag::Object => get_cached(&TYPEOF_OBJECT, "object"),
-        ValueTypeofTag::Boolean => get_cached(&TYPEOF_BOOLEAN, "boolean"),
-        ValueTypeofTag::Number => get_cached(&TYPEOF_NUMBER, "number"),
-        ValueTypeofTag::String => get_cached(&TYPEOF_STRING, "string"),
-        ValueTypeofTag::Function => get_cached(&TYPEOF_FUNCTION, "function"),
-        ValueTypeofTag::BigInt => get_cached(&TYPEOF_BIGINT, "bigint"),
-        ValueTypeofTag::Symbol => get_cached(&TYPEOF_SYMBOL, "symbol"),
+        ValueTypeofTag::Undefined => get_cached(TYPEOF_UNDEFINED, "undefined"),
+        ValueTypeofTag::Object => get_cached(TYPEOF_OBJECT, "object"),
+        ValueTypeofTag::Boolean => get_cached(TYPEOF_BOOLEAN, "boolean"),
+        ValueTypeofTag::Number => get_cached(TYPEOF_NUMBER, "number"),
+        ValueTypeofTag::String => get_cached(TYPEOF_STRING, "string"),
+        ValueTypeofTag::Function => get_cached(TYPEOF_FUNCTION, "function"),
+        ValueTypeofTag::BigInt => get_cached(TYPEOF_BIGINT, "bigint"),
+        ValueTypeofTag::Symbol => get_cached(TYPEOF_SYMBOL, "symbol"),
     }
 }
 

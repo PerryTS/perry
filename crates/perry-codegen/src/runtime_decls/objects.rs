@@ -44,6 +44,15 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // construction site can skip `js_gc_forget_object_layout` outright.
     // perry-runtime: `gc::layout_tables::PERRY_PER_OBJECT_LAYOUTS_ANY`.
     module.add_external_global("PERRY_PER_OBJECT_LAYOUTS_ANY", I32);
+    // Process-global 4,096-bit address sketch of every per-object layout
+    // record ever installed (`gc::layout_tables::PERRY_LAYOUT_ADDR_FILTER`).
+    // An armed count only says SOME thread holds records; a clear sketch bit
+    // for this address proves none of them is about this object, so the
+    // construction site skips the call without a thread-local access.
+    module.add_external_global("PERRY_LAYOUT_ADDR_FILTER", "[64 x i64]");
+    // perry-runtime: `gc::layout_tables::PERRY_YOUNG_LAYOUT_RECORDS` — records
+    // keyed by an address the inline bump allocator could recycle.
+    module.add_external_global("PERRY_YOUNG_LAYOUT_RECORDS", I32);
     // Sticky summary of indexed Array/Object prototype pollution and custom
     // Array [[Prototype]] installation. Normal compiled programs read this
     // byte directly in the inline plain-array index guard.

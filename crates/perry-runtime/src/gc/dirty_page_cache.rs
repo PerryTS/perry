@@ -85,7 +85,11 @@ use std::cell::Cell;
 /// `usize::MAX` would need a 76-bit address.
 const NO_PAGE: usize = usize::MAX;
 
-thread_local! {
+// Hot TLS, not `std::thread_local!`: this is the HIT path of every old→young
+// store the barrier remembers (an old bucket taking a young command each
+// push), and the `_tlv_get_addr` resolution a plain thread-local pays per
+// probe was ~1% of a 5k-entity ECS frame by itself.
+crate::perry_thread_local! {
     static LAST_DIRTY_OLD_PAGE: Cell<usize> = const { Cell::new(NO_PAGE) };
 }
 

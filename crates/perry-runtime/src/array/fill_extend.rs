@@ -8,7 +8,7 @@
 //! loop-pattern lowering in `perry-codegen/src/stmt/loops.rs`.
 
 use super::header::{array_numeric_layout, NumericArrayLayout};
-use super::indexing::note_array_index_write;
+use super::indexing_support::note_array_index_write;
 use super::*;
 use std::ptr;
 

@@ -504,18 +504,18 @@ mod tests {
             "inline store must keep both guards; body:\n{body}"
         );
         assert!(
-            body.contains("icmp eq i64 %r13, -1"),
+            body.contains("icmp eq i64 %r16, -1"),
             "frame_top must be tested against the usize::MAX no-frame sentinel; \
              body:\n{body}"
         );
         assert!(
-            body.contains("icmp ult i64 %r15, %r17"),
+            body.contains("icmp ult i64 %r18, %r20"),
             "slot index must be bounds-checked against ShadowStackState::len; \
              body:\n{body}"
         );
         assert!(
             body.contains(&format!(
-                "getelementptr inbounds i8, ptr %r10, i64 {}",
+                "getelementptr inbounds i8, ptr %r13, i64 {}",
                 SHADOW_STATE_LEN_OFFSET
             )),
             "the bounds check must read len at offset {SHADOW_STATE_LEN_OFFSET}; \
@@ -543,7 +543,7 @@ mod tests {
              body:\n{body}"
         );
         assert!(
-            body.contains("call void @js_write_barrier_root_nanbox(i64 %r23)"),
+            body.contains("call void @js_write_barrier_root_nanbox(i64 %r26)"),
             "inline bind must shade the value it just stored when a cycle is in \
              flight; body:\n{body}"
         );

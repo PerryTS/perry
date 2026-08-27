@@ -386,7 +386,7 @@ fn test_layout_mask_object_and_closure_slots() {
 
     let object_child = crate::string::js_string_from_bytes(b"object-child".as_ptr(), 12) as *mut u8;
     let object_child_header = unsafe { header_from_user_ptr(object_child) };
-    let obj = crate::object::js_object_alloc(0, 3);
+    let obj = crate::object::js_object_alloc(0, 8);
     crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.0));
     crate::object::js_object_set_field(
         obj,
@@ -395,7 +395,7 @@ fn test_layout_mask_object_and_closure_slots() {
     );
     crate::object::js_object_set_field(obj, 2, crate::value::JSValue::number(3.0));
 
-    assert_eq!(test_layout_pointer_slot_count(obj as usize, 3), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(obj as usize, 8), Some(1));
     let valid_ptrs = build_valid_pointer_set();
     let mut worklist = Vec::new();
     test_reset_trace_slot_reads();
@@ -408,7 +408,7 @@ fn test_layout_mask_object_and_closure_slots() {
     let closure_child =
         crate::string::js_string_from_bytes(b"closure-child".as_ptr(), 13) as *mut u8;
     let closure_child_header = unsafe { header_from_user_ptr(closure_child) };
-    let closure = crate::closure::js_closure_alloc(std::ptr::null(), 3);
+    let closure = crate::closure::js_closure_alloc(std::ptr::null(), 8);
     crate::closure::js_closure_set_capture_f64(closure, 0, 10.0);
     crate::closure::js_closure_set_capture_f64(
         closure,
@@ -417,7 +417,7 @@ fn test_layout_mask_object_and_closure_slots() {
     );
     crate::closure::js_closure_set_capture_f64(closure, 2, 30.0);
 
-    assert_eq!(test_layout_pointer_slot_count(closure as usize, 3), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(closure as usize, 8), Some(1));
     let valid_ptrs = build_valid_pointer_set();
     let mut worklist = Vec::new();
     test_reset_trace_slot_reads();

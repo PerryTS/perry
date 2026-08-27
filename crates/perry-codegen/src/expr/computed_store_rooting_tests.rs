@@ -978,7 +978,7 @@ fn growing_array_store_uses_the_reallocated_head_for_its_barrier() {
         .join("\n");
     let barrier = realloc_body
         .lines()
-        .find(|line| line.contains("@js_write_barrier_slot("))
+        .find(|line| line.contains("@js_write_barrier_slot"))
         .unwrap_or_else(|| panic!("realloc path lost its write barrier:\n{realloc_body}"));
     assert!(
         barrier.contains(&format!("i64 {new_head}")),

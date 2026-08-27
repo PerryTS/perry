@@ -749,8 +749,7 @@ pub(crate) fn lower_let(
                 let needs_string_demote = matches!(elem, perry_hir::Expr::LocalGet(_))
                     && !expr_produces_non_pointer_bits_by_construction(ctx, elem);
                 if needs_string_demote {
-                    ctx.block()
-                        .call_void("js_string_addref_if_heap_string", &[(DOUBLE, &v)]);
+                    crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                 }
                 let lowered = LoweredValue {
                     semantic: SemanticKind::JsValue,
@@ -1826,8 +1825,7 @@ pub(crate) fn lower_let(
                     // still hold a string at runtime, and the old type gate
                     // then left this alias invisible to self-append (#7846).
                     if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
-                        ctx.block()
-                            .call_void("js_string_addref_if_heap_string", &[(DOUBLE, &v)]);
+                        crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                     }
                     ctx.block().store(DOUBLE, &v, &slot);
                     v
@@ -1850,8 +1848,7 @@ pub(crate) fn lower_let(
                 // started returning `start-try-finally` instead of
                 // `start-try`.
                 if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
-                    ctx.block()
-                        .call_void("js_string_addref_if_heap_string", &[(DOUBLE, &v)]);
+                    crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                 }
                 ctx.block().store(DOUBLE, &v, &slot);
                 v

@@ -784,9 +784,26 @@ mod symbol_keyed_element_reads {
              helper, or a NaN-boxed function reads as false:\n{body}"
         );
         assert!(
-            !body.contains("fcmp one"),
+            fcmp_one_only_under_the_plain_number_guard(&body),
             "the numeric fast path must not fire for a non-numeric index:\n{body}"
         );
+    }
+
+    /// The dynamic truthiness lowering decides a plain (untagged, non-NaN)
+    /// double inline with `fcmp one` — but only inside its `truthy.num` block,
+    /// after the bit test that proves the value is a number. An `fcmp one`
+    /// anywhere else is the unguarded numeric claim these tests forbid.
+    fn fcmp_one_only_under_the_plain_number_guard(body: &str) -> bool {
+        let mut label = String::new();
+        for line in body.lines() {
+            let trimmed = line.trim_start();
+            if !line.starts_with(' ') && trimmed.ends_with(':') {
+                label = trimmed.trim_end_matches(':').to_string();
+            } else if trimmed.contains("fcmp one") && !label.starts_with("truthy.num") {
+                return false;
+            }
+        }
+        true
     }
 
     #[test]
@@ -828,7 +845,7 @@ mod symbol_keyed_element_reads {
             "the result binding must use runtime truthiness:\n{body}"
         );
         assert!(
-            !body.contains("fcmp one"),
+            fcmp_one_only_under_the_plain_number_guard(&body),
             "the read's boxed fallback must not become a numeric proof:\n{body}"
         );
     }

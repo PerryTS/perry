@@ -111,9 +111,11 @@ unsafe fn slot_bits(obj: *mut crate::ObjectHeader, slot: usize) -> u64 {
 /// `layout_note_slot` decline the mask and take `GC_LAYOUT_UNKNOWN` instead;
 /// this test wants the `SIDE_MASK` arm.
 unsafe fn plant_baked_instance(shape_id: u32, packed_keys: &[u8]) -> *mut crate::ObjectHeader {
+    // Eight fields: a payload below eight slots takes the tag scan, and this
+    // fixture's premise is the generic branch minting a per-object mask.
     let obj = crate::object::js_object_alloc_with_shape(
         shape_id,
-        4,
+        8,
         packed_keys.as_ptr(),
         packed_keys.len() as u32,
     );
@@ -174,7 +176,7 @@ unsafe fn plant_descriptor_backed_instance(
 #[test]
 fn a_descriptorless_bake_drops_its_intact_claim_on_the_generic_downgrade() {
     unsafe {
-        let obj = plant_baked_instance(0x8115_0001, b"x\0y\0z\0pad\0");
+        let obj = plant_baked_instance(0x8115_0001, b"x\0y\0z\0pad\0p4\0p5\0p6\0p7\0");
         let child = string_bits(young_leaf());
 
         crate::object::store_object_field_slot(obj, 0, child);

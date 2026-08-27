@@ -478,11 +478,11 @@ fn test_copying_minor_rewrites_exact_object_pointer_slot_only() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let child = young_leaf();
-    let obj = crate::object::js_object_alloc(0, 3);
+    let obj = crate::object::js_object_alloc(0, 8);
     crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(11.0));
     crate::object::js_object_set_field(obj, 1, crate::value::JSValue::from_bits(ptr_bits(child)));
     crate::object::js_object_set_field(obj, 2, crate::value::JSValue::number(33.0));
-    assert_eq!(test_layout_pointer_slot_count(obj as usize, 3), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(obj as usize, 8), Some(1));
     js_shadow_slot_set(0, ptr_bits(obj as usize));
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
@@ -517,11 +517,11 @@ fn test_copying_minor_rewrites_exact_closure_pointer_capture_only() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
     let child = young_leaf();
-    let closure = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 3);
+    let closure = crate::closure::js_closure_alloc(test_captured_singleton_func as *const u8, 8);
     crate::closure::js_closure_set_capture_f64(closure, 0, 10.0);
     crate::closure::js_closure_set_capture_f64(closure, 1, f64::from_bits(ptr_bits(child)));
     crate::closure::js_closure_set_capture_f64(closure, 2, 30.0);
-    assert_eq!(test_layout_pointer_slot_count(closure as usize, 3), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(closure as usize, 8), Some(1));
     js_shadow_slot_set(0, ptr_bits(closure as usize));
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);

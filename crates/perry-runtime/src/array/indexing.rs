@@ -1,4 +1,5 @@
 //! Indexing — length / element get / element set / hybrid string-or-index dispatch.
+use super::indexing_support::*;
 use super::*;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -47,30 +48,6 @@ fn throw_array_not_extensible_add(index: u32) -> ! {
     ));
 }
 
-/// Sticky flag: someone installed an indexed property on `Array.prototype`.
-/// An out-of-bounds element read on an ordinary array must fall through to
-/// `Array.prototype[index]` (ECMA-262 OrdinaryGet -> prototype chain), but in
-/// real code nobody adds numeric indices there, so the hot OOB path stays a
-/// single relaxed atomic load until the (rare) write flips this. The address
-/// it is compared against lives in [`super::prototype_addr`], which also owns
-/// the GC hazard that address carries (#6981).
-static ARRAY_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
-
-/// Same idea for `Object.prototype`: a numeric index installed there
-/// (`Object.prototype[2] = 2`, or a defineProperty accessor) shows through
-/// array HOLES and OOB reads (chain: arr -> Array.prototype ->
-/// Object.prototype; test262 concat/S15.4.4.4_A3_T3). Flipped by the object
-/// index-write/defineProperty hooks; consulted by the typed-feedback guards
-/// and the hole/OOB read fallbacks.
-static OBJECT_PROTO_HAS_INDEX: AtomicBool = AtomicBool::new(false);
-
-/// Sticky summary of the process-wide conditions that invalidate codegen's
-/// inline plain-array index guard. The generated guard loads this byte
-/// directly; keeping the three rare prototype conditions behind one exported
-/// byte avoids an out-of-line runtime call on every array read.
-#[no_mangle]
-pub static PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED: AtomicU8 = AtomicU8::new(0);
-
 #[inline]
 pub(crate) fn invalidate_array_index_fast_path() {
     PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.store(1, Ordering::Relaxed);
@@ -112,32 +89,6 @@ pub(crate) fn note_object_prototype_index_write(obj: usize) {
 pub(crate) fn object_prototype_has_index_flag() -> bool {
     OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
 }
-
-/// Sticky flag: user code replaced or deleted `Array.prototype[Symbol.iterator]`.
-/// `js_get_iterator`'s array short-circuit assumes the builtin values iterator;
-/// once this flips, GetIterator on an array must consult the (patched) method
-/// per spec — or throw TypeError when it was deleted. Same single-relaxed-load
-/// hot-path shape as `ARRAY_PROTO_HAS_INDEX` above.
-static ARRAY_PROTO_ITERATOR_MODIFIED: AtomicBool = AtomicBool::new(false);
-
-/// The same fact as [`ARRAY_PROTO_ITERATOR_MODIFIED`], exported so GENERATED
-/// code can read it (#7760 item 1).
-///
-/// `for…of` over a statically-proven array desugars to an index loop
-/// (`__i < __arr.length` / `__arr[__i]`) in HIR lowering, which never consults
-/// the iteration protocol — so a patched `Array.prototype[Symbol.iterator]` was
-/// ignored there even after the spread paths were fixed (#7542). The loop now
-/// branches on this flag ONCE at entry, which is also what the spec wants:
-/// `for…of` performs GetIterator exactly once, so a patch landing mid-loop must
-/// not change the iterator already in hand.
-///
-/// A separate `u8` global rather than exposing the `AtomicBool`: codegen emits
-/// a plain volatile `i8` load, the same shape as
-/// `PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED`, so the fast arm pays one load and
-/// a predictable branch per LOOP — not per iteration — and the index loop
-/// itself is emitted byte-identically to before.
-#[no_mangle]
-pub static PERRY_ARRAY_PROTO_ITERATOR_PATCHED: AtomicU8 = AtomicU8::new(0);
 
 /// Record (if `obj` is `Array.prototype` and `sym_key` is the well-known
 /// `Symbol.iterator`) that the array iteration protocol has been tampered
@@ -253,6 +204,21 @@ pub(crate) fn array_iteration_is_exotic(arr: *const ArrayHeader) -> bool {
     // precedes every operation that could allocate or safepoint. The
     // compatible header-less receivers exited above.
     let flags = unsafe { array_object_flags_resolved(arr) };
+    unsafe { array_iteration_is_exotic_resolved(arr, flags) }
+}
+
+/// [`array_iteration_is_exotic`] for a caller that already resolved the live
+/// plain-array head, excluded Buffer/TypedArray receivers, and owns the header
+/// word: the policy tests without a second receiver resolution and registry
+/// probe (the iteration helpers call this once per invocation).
+///
+/// # Safety
+///
+/// `arr` and `flags` must satisfy [`array_object_flags_resolved`]'s contract.
+pub(crate) unsafe fn array_iteration_is_exotic_resolved(
+    arr: *const ArrayHeader,
+    flags: u16,
+) -> bool {
     if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
         return true;
     }
@@ -537,110 +503,6 @@ fn array_get_property_by_key(arr: *const ArrayHeader, key: *const crate::StringH
     f64::from_bits(value.bits())
 }
 
-#[no_mangle]
-/// Reported length of an object's keys/property array, capped at its physical
-/// capacity.
-///
-/// Object property walks (the wide-key field-get index and `Object.assign`'s
-/// source enumeration) size their work by the keys array's length. A dense
-/// keys array's logical length can never exceed its capacity, so for a
-/// well-formed array this is a no-op. But when a keys array is malformed and
-/// `js_array_length` reports a bogus, oversized value (observed: a pointer-
-/// sized length ~= the keys pointer's own low bits, far beyond the real key
-/// count), an unclamped `for i in 0..len` / `HashMap::with_capacity(len)` turns
-/// a single missing-property read or `Object.assign` into a multi-GB / minutes-
-/// long spin. Capping to capacity bounds that work to physically-present slots.
-///
-/// FOR DENSE KEYS/PROPERTY ARRAYS ONLY — general JS arrays may have
-/// `length > capacity` (sparse), where this cap would be incorrect.
-pub(crate) unsafe fn keys_array_len_capped_to_capacity(arr: *const ArrayHeader) -> usize {
-    // #7765: a well-formed dense keys array answers from its own two words.
-    // `js_array_length` re-derives the same number through a proxy probe, a
-    // second header read for its lazy/object arms, and a `clean_arr_ptr`
-    // forwarding walk — once per property read on the field-get funnel.
-    // `length <= capacity` is exactly the well-formed case; the sparse and
-    // corrupted shapes this cap exists for fall through unchanged.
-    if let Some(header) = crate::value::addr_class::try_read_gc_header(arr as usize) {
-        if header.obj_type == crate::gc::GC_TYPE_ARRAY
-            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-            && (*arr).length <= (*arr).capacity
-        {
-            return (*arr).length as usize;
-        }
-    }
-    // A forwarding stub overwrites the old payload's `(length, capacity)`
-    // words with the target address. Resolve once, then read BOTH facts from
-    // the live header; mixing a resolved length with the stale from-space
-    // capacity can truncate an otherwise exact shape count.
-    let live = clean_arr_ptr(arr);
-    if live.is_null() {
-        return js_array_length(arr) as usize;
-    }
-    let raw = js_array_length(live) as usize;
-    raw.min((*live).capacity as usize)
-}
-
-/// Read slot `index` of a dense internal keys/property array.
-///
-/// The object field-get funnel has already proved `keys` is a live
-/// `GC_TYPE_ARRAY` — it reads the `GcHeader` and returns `undefined` otherwise
-/// — and has capped `index` below the array's own capacity (see
-/// [`keys_array_len_capped_to_capacity`]). Those are precisely the two facts
-/// [`js_array_get_f64`] re-establishes from scratch on every call: a
-/// `clean_arr_ptr` forwarding walk, a lazy-header probe, the exotic-receiver
-/// classifications and a descriptor-flag read — per key examined, per property
-/// read. On `gc-handoff/apps/asyncpipe_big.ts` that one funnel was 78% of all
-/// `js_array_get_f64` samples.
-///
-/// Falls back to the general getter for anything it cannot serve on those
-/// terms — a forwarded array (which `clean_arr_ptr` would relocate), one
-/// carrying index descriptors, an out-of-range index, or a hole (which reads
-/// through the prototype chain) — so no general semantics move. Keys arrays
-/// are dense and descriptor-free, so the fallback is the cold arm.
-#[inline]
-pub(crate) unsafe fn keys_array_slot(
-    keys: *const ArrayHeader,
-    index: u32,
-) -> crate::value::JSValue {
-    if let Some(header) = crate::value::addr_class::try_read_gc_header(keys as usize) {
-        if header.obj_type == crate::gc::GC_TYPE_ARRAY
-            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-            && header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
-            && index < (*keys).length
-            && index < (*keys).capacity
-        {
-            let elements =
-                (keys as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
-            let raw = std::ptr::read(elements.add(index as usize));
-            if raw.to_bits() != crate::value::TAG_HOLE {
-                return crate::value::JSValue::from_bits(raw.to_bits());
-            }
-        }
-    }
-    #[cfg(test)]
-    KEYS_ARRAY_SLOT_FALLBACKS.with(|c| c.set(c.get().wrapping_add(1)));
-    crate::array::js_array_get(keys, index)
-}
-
-#[cfg(test)]
-thread_local! {
-/// Times [`keys_array_slot`] could NOT serve a slot from the dense words and
-/// had to delegate. Asserted in both directions by
-/// `array::collection_tag_tests` — zero for the dense keys arrays the fast path
-/// exists for, non-zero for every shape it must refuse — so a fast path that
-/// silently stopped applying, or one that started swallowing a shape it should
-/// have delegated, both go red.
-///
-/// Per THREAD — `cargo test` runs every case on its own thread in one process,
-/// so a process-global counter would be moved by whatever else is running.
-    static KEYS_ARRAY_SLOT_FALLBACKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn test_keys_array_slot_fallbacks() -> u64 {
-    KEYS_ARRAY_SLOT_FALLBACKS.with(|c| c.get())
-}
-
 /// Auto-opt dead-strip anchor: codegen emits a bare `js_array_length` symbol in
 /// native-region wrappers (`__perry_wrap_*`) and elsewhere, so it must be a
 /// `#[no_mangle]` C export AND survive dead-stripping even when no Rust caller
@@ -651,6 +513,47 @@ static KEEP_ARRAY_LENGTH: extern "C" fn(*const ArrayHeader) -> u32 = js_array_le
 
 #[no_mangle]
 pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
+    // Fast lane: a live plain array on an arena page. Every dynamic `.length`
+    // read and every native push lowering (which re-reads the length for the
+    // result) lands here; the proxy, Set/Map, object and subclass arms below
+    // all begin with probes this receiver cannot satisfy. A proxy id sits in
+    // the handle band and a Set/Map/object header has another type, so the
+    // lane's own checks exclude them.
+    {
+        let bits = arr as u64;
+        let top16 = bits >> 48;
+        let raw = if top16 >= 0x7FF8 {
+            if top16 == (crate::value::POINTER_TAG >> 48) {
+                (bits & crate::value::POINTER_MASK) as usize
+            } else {
+                0
+            }
+        } else {
+            bits as usize
+        };
+        if raw >= crate::gc::GC_HEADER_SIZE
+            && raw % std::mem::align_of::<crate::gc::GcHeader>() == 0
+            && crate::value::addr_class::is_plausible_heap_addr(raw)
+            && !matches!(
+                crate::arena::classify_heap_generation(raw),
+                crate::arena::HeapGeneration::Unknown
+            )
+        {
+            // SAFETY: owned arena page, header-aligned; the header word
+            // precedes every arena block.
+            let header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            let (obj_type, gc_flags) = unsafe { ((*header).obj_type, (*header).gc_flags) };
+            if obj_type == crate::gc::GC_TYPE_ARRAY
+                && gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                && gc_flags & crate::gc::GC_FLAG_ARENA != 0
+            {
+                let hdr = unsafe { &*(raw as *const ArrayHeader) };
+                if hdr.length <= hdr.capacity {
+                    return hdr.length;
+                }
+            }
+        }
+    }
     // #5135: a Proxy typed (statically) as an array (immer drafts) reaches here
     // with the masked proxy id. Read `length` through the proxy `get` trap
     // rather than deref-ing the id as an `ArrayHeader`.
@@ -1313,6 +1216,152 @@ fn array_strict_index_write_guard_resolved(clean: *mut ArrayHeader, index: u32, 
         // New index on a non-extensible array: cannot add the property.
         throw_array_not_extensible_add(index);
     }
+}
+
+/// Fast lane for the dominant element-store shape: a plain number written
+/// into an in-bounds slot of a live, unrestricted array whose GC layout is
+/// either pointer-free or tag-scanned.
+///
+/// The general path resolves the receiver through the tracked-header
+/// classifier, probes two registries, roots both operands in a handle scope,
+/// canonicalizes the value, and then funnels the slot write through the
+/// layout note and the write barrier. For this shape every one of those steps
+/// is provably a no-op, so it is answered here with a handful of header
+/// tests: the receiver is validated the same way `clean_arr_ptr` starts
+/// (tag strip, address band) and is then required to sit on a page the arena
+/// owns (`classify_heap_generation`, the cached lookup the write barrier
+/// itself relies on) before its header is read. Everything else — forwarded
+/// stubs, descriptors, frozen/sealed/non-extensible arrays, side-mask or typed
+/// or element-shape layouts, typed arrays and buffers, out-of-range indices,
+/// tagged or NaN values, `Array.prototype` — returns `false` untouched and
+/// takes the general path exactly as before.
+///
+/// A plain double needs no numeric canonicalization (it is already the raw
+/// `f64` the raw-f64 layout stores), cannot be a heap pointer (no barrier, no
+/// pointer-mask update), and keeps a pointer-free or tag-scanned layout valid.
+#[inline]
+unsafe fn try_strict_dense_number_store(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+) -> Option<*mut ArrayHeader> {
+    const PAYLOAD_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let value_bits = value.to_bits();
+    // A plain double or an INT32 box (`value_bits_to_number` already refuses
+    // the class-reference values that share that tag). NaN keeps the general
+    // path so its canonical encoding stays in one place.
+    let Some(number) = super::header::value_bits_to_number(value_bits) else {
+        return None;
+    };
+    if number.is_nan() {
+        return None;
+    }
+    let bits = arr as u64;
+    let top16 = bits >> 48;
+    let raw = if top16 >= 0x7FF8 {
+        if top16 == 0x7FFC || bits & PAYLOAD_MASK == 0 {
+            return None;
+        }
+        (bits & PAYLOAD_MASK) as usize
+    } else {
+        bits as usize
+    };
+    if raw < crate::gc::GC_HEADER_SIZE
+        || raw % std::mem::align_of::<crate::gc::GcHeader>() != 0
+        || !crate::value::addr_class::is_plausible_heap_addr(raw)
+    {
+        return None;
+    }
+    if matches!(
+        crate::arena::classify_heap_generation(raw),
+        crate::arena::HeapGeneration::Unknown
+    ) {
+        return None;
+    }
+    let mut raw = raw;
+    let mut header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
+        return None;
+    }
+    if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        // An alias that kept a growth stub (the resolver path-compresses
+        // longer chains to one edge): follow it once, re-proving the target
+        // exactly like the stub. Anything else stays on the full resolver.
+        let target = crate::gc::forwarding_address(header) as usize;
+        if target < crate::gc::GC_HEADER_SIZE
+            || target % std::mem::align_of::<crate::gc::GcHeader>() != 0
+            || !crate::value::addr_class::is_plausible_heap_addr(target)
+            || matches!(
+                crate::arena::classify_heap_generation(target),
+                crate::arena::HeapGeneration::Unknown
+            )
+        {
+            return None;
+        }
+        let target_header = (target - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        if (*target_header).obj_type != crate::gc::GC_TYPE_ARRAY
+            || (*target_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return None;
+        }
+        raw = target;
+        header = target_header;
+    }
+    let flags = (*header)._reserved;
+    // Array header bits only: for `GC_TYPE_ARRAY` the 0x1000 bit is
+    // `GC_ARRAY_RAW_F64_HOLES`, not the object typed-layout flag.
+    const REJECT: u16 = crate::gc::OBJ_FLAG_FROZEN
+        | crate::gc::OBJ_FLAG_SEALED
+        | crate::gc::OBJ_FLAG_NO_EXTEND
+        | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS
+        | crate::gc::GC_ARRAY_ELEMENT_SHAPE
+        | crate::gc::GC_LAYOUT_ALL_POINTERS;
+    if flags & REJECT != 0 {
+        return None;
+    }
+    let layout = flags & crate::gc::GC_LAYOUT_STATE_MASK;
+    if layout != crate::gc::GC_LAYOUT_POINTER_FREE && layout != 0 {
+        return None;
+    }
+    let arr = raw as *mut ArrayHeader;
+    if index >= (*arr).length || index >= (*arr).capacity {
+        return None;
+    }
+    // No registry probes: a `GC_TYPE_ARRAY` header is never a Buffer
+    // (`GC_TYPE_BUFFER`), a %TypedArray% (`GC_TYPE_TYPED_ARRAY`) or a native
+    // view (`GC_TYPE_NATIVE_TYPED_VIEW`) — every registration carries its own
+    // object type — so the obj_type test above already answered both. Only
+    // `Array.prototype` itself still needs the address compare: an index
+    // write there must flip `ARRAY_PROTO_HAS_INDEX` on the slow path.
+    if raw == array_prototype_addr() {
+        return None;
+    }
+    // The raw-f64 layouts store the canonical double (what the general path's
+    // canonicalization and `note_array_numeric_index_write` produce); every
+    // other layout keeps the value's own encoding.
+    let store_bits =
+        if flags & (crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES) != 0 {
+            number.to_bits()
+        } else {
+            value_bits
+        };
+    // GC_STORE_AUDIT(POINTER_FREE): a number never holds a heap pointer, and
+    // the receiver's layout was proved pointer-free or tag-scanned above.
+    ptr::write(
+        super::header::array_elements_ptr(arr).add(index as usize),
+        store_bits,
+    );
+    Some(arr)
+}
+
+/// Exercised by the unit tests: `true` when the fast lane answered the store.
+#[cfg(test)]
+pub(crate) fn test_strict_dense_number_store(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+) -> bool {
+    unsafe { try_strict_dense_number_store(arr, index, value) }.is_some()
 }
 
 #[no_mangle]

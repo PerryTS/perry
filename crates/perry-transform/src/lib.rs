@@ -9,6 +9,7 @@
 mod aggregate_scalar;
 pub mod async_to_generator;
 pub mod closure;
+mod closure_local_inline;
 pub mod deforest;
 pub mod finally_inline;
 pub mod generator;
@@ -50,5 +51,6 @@ pub use unroll::unroll_static_loops;
 pub fn post_inline_cleanups(module: &mut perry_hir::Module) {
     unroll_static_loops(module);
     aggregate_scalar::run(module);
+    closure_local_inline::run(module);
     prop_cse::run(module);
 }

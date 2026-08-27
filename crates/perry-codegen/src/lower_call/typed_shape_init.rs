@@ -191,15 +191,50 @@ pub(super) fn emit_typed_shape_layout_declare(
 /// takes the call. A never-taken branch per allocation is the entire
 /// steady-state cost.
 fn emit_gated_forget_object_layout(ctx: &mut FnCtx<'_>, obj_handle: &str) {
+    let young_idx = ctx.new_block("layout_forget.young");
+    let sketch_idx = ctx.new_block("layout_forget.sketch");
     let call_idx = ctx.new_block("layout_forget.armed");
     let done_idx = ctx.new_block("layout_forget.done");
+    let young_label = ctx.block_label(young_idx);
+    let sketch_label = ctx.block_label(sketch_idx);
     let call_label = ctx.block_label(call_idx);
     let done_label = ctx.block_label(done_idx);
     {
         let blk = ctx.block();
         let any = blk.load_atomic_monotonic(crate::types::I32, "@PERRY_PER_OBJECT_LAYOUTS_ANY", 4);
         let armed = blk.icmp_ne(crate::types::I32, &any, "0");
-        blk.cond_br(&armed, &call_label, &done_label);
+        blk.cond_br(&armed, &young_label, &done_label);
+    }
+    // Armed, but is any record keyed by an address THIS allocator could have
+    // just recycled? `layout_tables::PERRY_YOUNG_LAYOUT_RECORDS` counts the
+    // nursery-keyed records and is exact after every collection's death
+    // prune; a long-lived masked object on an old page keeps the flag armed
+    // without keeping this non-zero.
+    ctx.current_block = young_idx;
+    {
+        let blk = ctx.block();
+        let young = blk.load_atomic_monotonic(crate::types::I32, "@PERRY_YOUNG_LAYOUT_RECORDS", 4);
+        let any_young = blk.icmp_ne(crate::types::I32, &young, "0");
+        blk.cond_br(&any_young, &sketch_label, &done_label);
+    }
+    // Armed: some thread holds a per-object record. Test the process-global
+    // address sketch (`layout_tables::layout_addr_filter_slot`: Fibonacci
+    // hash, top 12 bits index 4,096 bits) before paying the runtime call —
+    // one long-lived masked object (a harness closure, a registered listener)
+    // otherwise taxes every later allocation with a thread-local probe.
+    ctx.current_block = sketch_idx;
+    {
+        let blk = ctx.block();
+        let hashed = blk.mul(I64, obj_handle, "-7046029254386353131");
+        let index = blk.lshr(I64, &hashed, "52");
+        let word = blk.lshr(I64, &index, "6");
+        let bit_index = blk.and(I64, &index, "63");
+        let bit = blk.shl(I64, "1", &bit_index);
+        let word_ptr = blk.gep(I64, "@PERRY_LAYOUT_ADDR_FILTER", &[(I64, &word)]);
+        let word_bits = blk.load_atomic_monotonic(I64, &word_ptr, 8);
+        let masked = blk.and(I64, &word_bits, &bit);
+        let may_hold = blk.icmp_ne(I64, &masked, "0");
+        blk.cond_br(&may_hold, &call_label, &done_label);
     }
     ctx.current_block = call_idx;
     ctx.block()

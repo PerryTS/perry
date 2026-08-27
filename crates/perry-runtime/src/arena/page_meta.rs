@@ -132,6 +132,10 @@ impl PageGenerationCache {
 /// the barrier's working set (child, parent, array payload, header) with room
 /// to spare; it is still a fixed-size array probed linearly, so a hit is a few
 /// compares off one cache line.
+// Four ways, measured: widening to 16 removed the 1.5% of misses the ECS
+// command path took (`classify_heap_generation_uncached`) but the longer
+// linear scan cost every barrier and array-receiver classification more than
+// that — an 8.6% regression on the same row (0/7 pairs). Keep the scan short.
 const PAGE_GENERATION_CACHE_WAYS: usize = 4;
 
 /// Small direct-probed cache in front of [`PageGenerationMap`].
