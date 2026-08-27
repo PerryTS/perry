@@ -167,7 +167,23 @@ struct ShapeTableInner {
     /// OVERWRITE the accumulator instead of folding it, which is exactly right
     /// for a single-word key and wrong for this five-field one — every
     /// `ShapeFacts` would hash to its last field alone.
-    ids_by_facts: HashMap<ShapeFacts, Vec<u32>>,
+    ///
+    /// It is a `FastKeyHashMap` rather than the SipHash default, though: that
+    /// objection is to `PtrHasher` specifically, and leaving std's
+    /// `RandomState` here made this the only SipHash map left on the shape
+    /// path. Profiling `claude -p` showed `RandomState::hash_one` at 17
+    /// self-samples inside `shapes::` alone (57 across the process) — pure
+    /// hashing overhead on a lookup that runs on every descriptor
+    /// install/retire.
+    ///
+    /// `FastKeyHasher` is the right third option: it implements only `write`,
+    /// so every `write_u32` / `write_u64` from the derived `Hash` forwards
+    /// there and FOLDS with FNV-1a. All five fields reach the accumulator,
+    /// which is exactly the property `PtrHasher` lacks. The key is built from
+    /// internal shape state (never program input), so DoS-resistant hashing
+    /// buys nothing here — the same rationale already applied to the
+    /// descriptor side tables and to `indices` (#8125).
+    ids_by_facts: crate::fast_hash::FastKeyHashMap<ShapeFacts, Vec<u32>>,
     /// Keys-array address -> every descriptor id that currently names it.
     /// Same-address key-count retirement uses this index instead of scanning
     /// every shape ever observed by the agent. Single-word key, so `PtrHasher`
@@ -185,7 +201,7 @@ impl ShapeTable {
             inner: RefCell::new(ShapeTableInner {
                 indices: crate::fast_hash::new_ptr_hash_map(),
                 descriptors: crate::fast_hash::new_ptr_hash_map(),
-                ids_by_facts: HashMap::new(),
+                ids_by_facts: crate::fast_hash::new_fast_key_hash_map(),
                 ids_by_keys: crate::fast_hash::new_ptr_hash_map(),
             }),
         }
