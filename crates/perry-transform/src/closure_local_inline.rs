@@ -583,7 +583,7 @@ fn for_each_expr_in_stmt_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Expr)) {
     }
 }
 
-fn nested_stmt_lists(s: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
+pub(crate) fn nested_stmt_lists(s: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
     match s {
         Stmt::If {
             then_branch,

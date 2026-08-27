@@ -11,6 +11,7 @@ pub mod async_to_generator;
 pub mod closure;
 mod closure_local_inline;
 pub mod deforest;
+mod field_push_local_bind;
 pub mod finally_inline;
 pub mod generator;
 pub mod i18n;
@@ -52,5 +53,6 @@ pub fn post_inline_cleanups(module: &mut perry_hir::Module) {
     unroll_static_loops(module);
     aggregate_scalar::run(module);
     closure_local_inline::run(module);
+    field_push_local_bind::run(module);
     prop_cse::run(module);
 }
