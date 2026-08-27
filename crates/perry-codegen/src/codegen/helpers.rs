@@ -358,6 +358,20 @@ pub(super) fn apply_pshape_inline_policy(
     }
 }
 
+/// Maximum pre-optimization LLVM IR body size admitted to the native-roots
+/// pre-statepoint inliner for a guarded specialization.
+///
+/// HIR statement count is deliberately not used here: one source statement
+/// can lower to a large property/index dispatch lattice.  Sixteen KiB admits
+/// compact exact-receiver and nonnegative-index leaves while rejecting bodies
+/// such as mutation-heavy ECS transitions by nearly an order of magnitude.
+pub(super) const GUARDED_SPECIALIZATION_PREINLINE_MAX_IR_BYTES: usize = 16 * 1024;
+
+#[inline]
+pub(super) fn guarded_specialization_fits_preinline_budget(ir_bytes: usize) -> bool {
+    ir_bytes <= GUARDED_SPECIALIZATION_PREINLINE_MAX_IR_BYTES
+}
+
 /// Maximum total (module-wide) direct call sites a function may have and still
 /// be hinted. This is the anti-bloat backstop: the raised `-inlinehint-threshold`
 /// lifts LLVM's ceiling for a hinted callee at *every* one of its call sites, so
@@ -1467,6 +1481,23 @@ mod sanitize_tests {
         // And therefore no composed public symbol contains one either.
         assert!(!scoped_fn_name("m", "add$typed_f64").contains('$'));
         assert!(!scoped_method_name("m", "C$x", "foo$generic").contains('$'));
+    }
+}
+
+#[cfg(test)]
+mod guarded_specialization_preinline_tests {
+    use super::{
+        guarded_specialization_fits_preinline_budget, GUARDED_SPECIALIZATION_PREINLINE_MAX_IR_BYTES,
+    };
+
+    #[test]
+    fn generated_ir_budget_is_inclusive_and_bounded() {
+        assert!(guarded_specialization_fits_preinline_budget(
+            GUARDED_SPECIALIZATION_PREINLINE_MAX_IR_BYTES
+        ));
+        assert!(!guarded_specialization_fits_preinline_budget(
+            GUARDED_SPECIALIZATION_PREINLINE_MAX_IR_BYTES + 1
+        ));
     }
 }
 

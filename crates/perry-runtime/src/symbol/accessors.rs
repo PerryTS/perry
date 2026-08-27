@@ -21,7 +21,9 @@ per_test_global! {
 pub(super) fn clear_symbol_accessor_property(obj_key: usize, sym_key: usize) {
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
     if let Some(map) = guard.as_mut() {
-        map.remove(&(obj_key, sym_key));
+        if map.remove(&(obj_key, sym_key)).is_some() {
+            crate::symbol::symbol_property_ic_epoch_bump();
+        }
     }
 }
 
@@ -31,7 +33,11 @@ pub(super) fn clear_symbol_accessor_property(obj_key: usize, sym_key: usize) {
 pub(super) fn clear_all_symbol_accessor_properties_for_object(obj_key: usize) {
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
     if let Some(map) = guard.as_mut() {
+        let before = map.len();
         map.retain(|(o, _), _| *o != obj_key);
+        if map.len() != before {
+            crate::symbol::symbol_property_ic_epoch_bump();
+        }
     }
 }
 
@@ -121,6 +127,7 @@ pub(crate) unsafe fn set_symbol_accessor_property(
             },
         );
     }
+    crate::symbol::symbol_property_ic_epoch_bump();
     if get_bits != 0 {
         publish_symbol_side_table_root_edges(sym_key, get_bits);
     }

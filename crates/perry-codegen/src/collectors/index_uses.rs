@@ -3,8 +3,7 @@ use std::collections::HashSet;
 use super::*;
 
 pub fn collect_index_used_locals(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
-    let mut out: HashSet<u32> = HashSet::new();
-    walk_index_uses_in_stmts(stmts, &mut out);
+    let mut out = collect_direct_index_used_locals(stmts);
     // Issue #435: take the transitive closure backward through writes so
     // that locals which feed an array index via arithmetic are also
     // marked. Image-convolution's `xx → idx → array[idx]` shape relies
@@ -18,6 +17,20 @@ pub fn collect_index_used_locals(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
     // stay outside the set, so the gate keeps them off the i32 shadow
     // path — closing #435 while preserving the image_conv perf win.
     propagate_index_used_transitive(stmts, &mut out);
+    out
+}
+
+/// Locals mentioned by an index expression itself, before walking backward
+/// through assignments that produced that value.
+///
+/// Most representation selectors want the transitive set above. Method-entry
+/// guards also need this seed set to distinguish an erased numeric parameter
+/// used *as* an index from an arbitrary object whose property merely produces
+/// one (`let i = component.meta.id; rows[i]`). Guarding the latter object as if
+/// it were a nonnegative integer makes the generated fast path unreachable.
+pub fn collect_direct_index_used_locals(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
+    let mut out = HashSet::new();
+    walk_index_uses_in_stmts(stmts, &mut out);
     out
 }
 

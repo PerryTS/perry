@@ -79,6 +79,18 @@ pub(crate) fn test_swap_array_index_fast_path_invalidated(value: u8) -> u8 {
     PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.swap(value, Ordering::Relaxed)
 }
 
+#[cfg(test)]
+thread_local! {
+    static STRICT_DENSE_POINTER_OVERWRITE_HITS: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+pub(crate) fn test_strict_dense_pointer_overwrite_hits() -> u64 {
+    STRICT_DENSE_POINTER_OVERWRITE_HITS.with(std::cell::Cell::get)
+}
+
 /// Record (if `obj` is the canonical `Object.prototype`) that it now carries
 /// an indexed property. Called from the object index-write / numeric
 /// defineProperty paths; cheap (relaxed loads + compare).
@@ -618,6 +630,14 @@ pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
                 && ((*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
                     || (*gc_header).obj_type == crate::gc::GC_TYPE_CLOSURE)
             {
+                if let Some(v) = crate::array::subclass::array_subclass_fast_length_raw(raw_ptr) {
+                    let n = crate::builtins::js_number_coerce(v);
+                    return if n.is_nan() || n <= 0.0 {
+                        0
+                    } else {
+                        n.min(u32::MAX as f64) as u32
+                    };
+                }
                 let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
                 let v = crate::object::js_object_get_field_by_name_f64(
                     raw_ptr as *const crate::object::ObjectHeader,
@@ -677,6 +697,9 @@ pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32
     let cleaned = clean_arr_ptr(arr);
     if cleaned.is_null() {
         // #7574: array-like OBJECT receiver — see `js_array_get_f64`.
+        if let Some(value) = crate::array::subclass::array_subclass_fast_index_get_raw(arr, index) {
+            return value;
+        }
         if crate::array::subclass::array_object_receiver(arr).is_some() {
             return js_array_get_f64(arr, index);
         }
@@ -840,6 +863,9 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         // #7574: `a[i]` on a `class X extends Array` instance held in a
         // `T[]`-annotated binding. Read the object's indexed property through
         // the spec-generic `Get`, not the `ObjectHeader` words.
+        if let Some(value) = crate::array::subclass::array_subclass_fast_index_get_raw(arr, index) {
+            return value;
+        }
         if let Some(recv) = crate::array::subclass::array_object_receiver(arr) {
             return crate::array::subclass::array_object_index_get(recv, index);
         }
@@ -1158,8 +1184,164 @@ pub extern "C" fn js_array_set_f64_extend_strict(
     index: u32,
     value: f64,
 ) -> *mut ArrayHeader {
+    if let Some(resolved) = try_strict_dense_index_set(arr, index, value) {
+        return resolved;
+    }
     array_strict_index_write_guard(arr, index);
     js_array_set_f64_extend(arr, index, value)
+}
+
+/// Complete a strict existing-slot assignment without redispatching
+/// the receiver through the guard, extending setter, layout classifier, and
+/// write barrier independently.
+///
+/// This is deliberately narrower than the ordinary dense-array setter:
+///
+/// - a plain Array must have an existing own dense slot (not a hole); a dense
+///   raw-f64 Number-to-Number overwrite takes the metadata-free sub-path;
+/// - an object-backed Array subclass must prove the exact dense shape and a
+///   writable existing numeric slot through its own guarded fast path; and
+/// - frozen arrays, descriptors, growth, holes, and forwarding failures
+///   decline to the unchanged strict implementation.
+///
+/// General values retain the ordinary numeric-layout note, element-shape note,
+/// slot-layout update, and write barrier, but reuse the receiver flags already
+/// read here instead of reclassifying the Array in each layer.
+#[inline]
+pub(crate) fn try_strict_dense_index_set(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+) -> Option<*mut ArrayHeader> {
+    let value_bits = value.to_bits();
+    let number = value_bits_to_number(value_bits);
+    // Complete the overwhelmingly common Number-to-Number ordinary-Array
+    // overwrites from the live header and slot themselves. The generated
+    // guarded store already uses this exact magnitude/header discipline; this
+    // tier is for dynamic-key sites that reach the feedback helper instead
+    // (notably both sparse-set number moves and ECS archetype pointer moves).
+    //
+    // Both values are constructively classified as Numbers, so the store
+    // cannot add or remove a GC edge, change the per-slot pointer mask, demote
+    // a unique string, or require a write barrier.  Requiring an existing own
+    // non-hole slot plus the same frozen/descriptor/prototype guards as the
+    // resolved path preserves every observable assignment case.  Forwarding,
+    // growth, sparse holes, accessors and non-number values retain the complete
+    // implementation below.
+    if number.is_some() {
+        if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
+        {
+            if header.obj_type == crate::gc::GC_TYPE_ARRAY
+                && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                && header._reserved
+                    & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
+                    == 0
+                && super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) == 0
+            {
+                unsafe {
+                    let length = (*arr).length;
+                    let capacity = (*arr).capacity;
+                    if index < length && length <= capacity && length <= 100_000_000 {
+                        let elements = (arr as *mut u8)
+                            .add(std::mem::size_of::<ArrayHeader>())
+                            .cast::<f64>();
+                        let slot = elements.add(index as usize);
+                        let old = ptr::read(slot);
+                        let old_bits = old.to_bits();
+                        if let Some(new_number) = number.filter(|_| {
+                            old_bits != crate::value::TAG_HOLE
+                                && value_bits_to_number(old_bits).is_some()
+                        }) {
+                            // GC_STORE_AUDIT(POINTER_FREE): old and new were
+                            // constructively decoded as ECMAScript Numbers.
+                            ptr::write(slot, new_number);
+                            return Some(arr);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Object-backed Array subclasses are rejected by `clean_arr_ptr_mut`.
+    // Ask their exact shape/descriptor proof first so a hit performs only its
+    // one validated-object resolution rather than two failed Array cleans.
+    if let Some(number) = number {
+        if crate::array::subclass::array_subclass_fast_index_set_raw(arr, index, number) {
+            return Some(arr);
+        }
+    }
+
+    let resolved = clean_arr_ptr_mut(arr);
+    if resolved.is_null() {
+        return None;
+    }
+    let flags = unsafe { array_object_flags_resolved(resolved) };
+    if flags & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS) != 0 {
+        return None;
+    }
+    if super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0 {
+        return None;
+    }
+    unsafe {
+        if index >= (*resolved).length || index >= (*resolved).capacity {
+            return None;
+        }
+        let elements = (resolved as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        if flags & crate::gc::GC_ARRAY_RAW_F64_LAYOUT != 0 {
+            if let Some(number) = number {
+                // GC_STORE_AUDIT(POINTER_FREE): `GC_ARRAY_RAW_F64_LAYOUT`
+                // proves the retired value is a Number, and
+                // `value_bits_to_number` constructively produced its
+                // replacement above.
+                ptr::write(elements.add(index as usize), number);
+                return Some(resolved);
+            }
+        }
+
+        // An in-range hole is not an existing own property: a prototype
+        // accessor may intercept it and sealed/non-extensible Arrays may
+        // reject creating it. The unchanged strict fallback owns that case.
+        let slot = elements.add(index as usize);
+        let old_bits = ptr::read(slot).to_bits();
+        if old_bits == crate::value::TAG_HOLE {
+            return None;
+        }
+
+        let pointer_tag = crate::value::POINTER_TAG;
+        let pointer_mask = crate::value::POINTER_MASK;
+        let raw_numeric_flags =
+            crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES;
+        if flags & raw_numeric_flags == 0
+            && value_bits & crate::value::TAG_MASK == pointer_tag
+            && value_bits & pointer_mask != 0
+            && old_bits & crate::value::TAG_MASK == pointer_tag
+            && old_bits & pointer_mask != 0
+        {
+            #[cfg(test)]
+            STRICT_DENSE_POINTER_OVERWRITE_HITS.with(|hits| hits.set(hits.get().wrapping_add(1)));
+            // GC_STORE_AUDIT(BARRIERED): old and new are constructively
+            // pointer-bearing, so the slot mask is unchanged. Maintain the
+            // independent element proof and the mandatory generational/SATB
+            // edge.
+            ptr::write(slot, value);
+            crate::array::element_shape::note_element_store_resolved_flags(
+                resolved,
+                index as usize,
+                value_bits,
+                flags,
+            );
+            crate::gc::runtime_write_barrier_slot(resolved as usize, slot as usize, value_bits);
+            return Some(resolved);
+        }
+
+        // A heap string assigned into an existing slot becomes shared before
+        // the store, exactly as in `js_array_set_f64_extend`. This call does
+        // not allocate or safepoint, so the resolved receiver remains live.
+        crate::string::js_string_addref_if_heap_string(value);
+        crate::array::note_array_slot_resolved_flags(resolved, index as usize, value, flags);
+    }
+    Some(resolved)
 }
 
 /// Set an element in an array by index, extending the array if needed
@@ -1180,6 +1362,9 @@ pub extern "C" fn js_array_set_f64_extend(
         // `ObjectHeader.keys_array` / `.meta`. Run the object `[[Set]]` plus
         // the Array-exotic `length` maintenance, and return the ORIGINAL
         // receiver so the caller's realloc write-back keeps the binding.
+        if crate::array::subclass::array_subclass_fast_index_set_raw(arr, index, value) {
+            return arr;
+        }
         if let Some(recv) = crate::array::subclass::array_object_receiver(arr) {
             crate::array::subclass::array_object_index_set(recv, index, value);
             return arr;

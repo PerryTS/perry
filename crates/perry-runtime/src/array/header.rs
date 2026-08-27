@@ -1841,6 +1841,35 @@ pub(crate) unsafe fn note_array_slot(arr: *mut ArrayHeader, index: usize, value_
     crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
 }
 
+/// [`note_array_slot`] for a live plain Array whose flag word was already
+/// read by the caller's receiver guard. This preserves the exact store,
+/// numeric-layout, element-shape, per-slot-layout, and barrier sequence
+/// without redispatching through `array_numeric_layout` merely to recover the
+/// same raw-f64 bits.
+///
+/// # Safety
+///
+/// `arr` must be a live, forwarding-resolved `GC_TYPE_ARRAY`; `index` must be
+/// inside its allocation, and `flags` must be the current preceding
+/// `GcHeader::_reserved` word with no intervening safepoint.
+#[inline]
+pub(crate) unsafe fn note_array_slot_resolved_flags(
+    arr: *mut ArrayHeader,
+    index: usize,
+    value: f64,
+    flags: u16,
+) {
+    let value = canonicalize_array_numeric_store_value_from_flags(flags, value);
+    let mut value_bits = value.to_bits();
+    let slot_ptr = array_elements_ptr(arr).add(index);
+    let old_bits = std::ptr::read(slot_ptr);
+    std::ptr::write(slot_ptr, value_bits);
+    value_bits = note_array_numeric_index_write(arr, index, value_bits);
+    crate::gc::layout_note_slot_aware(arr as usize, index, value_bits, old_bits);
+    let slot = slot_ptr as usize;
+    crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
+}
+
 #[inline]
 pub(crate) unsafe fn note_array_slot_layout_only(
     arr: *mut ArrayHeader,

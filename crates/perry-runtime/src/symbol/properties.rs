@@ -133,6 +133,7 @@ pub(crate) unsafe fn js_object_delete_symbol_property(obj_f64: f64, sym_f64: f64
             map.remove(&(obj_key, sym_key));
         }
     }
+    crate::symbol::symbol_property_ic_epoch_bump();
     1
 }
 
@@ -159,6 +160,7 @@ pub(crate) fn clear_all_symbol_properties_for_object(obj_key: usize) {
             map.retain(|(o, _), _| *o != obj_key);
         }
     }
+    crate::symbol::symbol_property_ic_epoch_bump();
 }
 
 /// #6710: clear every per-handle JS-property side table for a recycled handle

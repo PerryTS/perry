@@ -87,6 +87,10 @@ struct TowerPshapeRoute {
     /// The `{public}$pshape` clone symbol (same `(double this, args…)` ABI as
     /// the public one — only the body's `this.field` lowering differs).
     clone_fn: String,
+    /// Receiver-safe target for the shape-miss arm. When every indexed
+    /// parameter is already proved nonnegative i32 at this call site, this is
+    /// the unshaped `$idx_u31` clone; otherwise it is the public method.
+    generic_fn: String,
     /// `@perry_class_keys_<mod>__<Class>`, holding the class's canonical
     /// keys-array pointer. A receiver still carrying it has the declared packed
     /// layout; `delete` swaps in a freshly cloned array, which is exactly what
@@ -110,6 +114,7 @@ fn tower_pshape_route(
     owner: Option<&str>,
     property: &str,
     fname: &str,
+    args: &[Expr],
 ) -> Option<TowerPshapeRoute> {
     let owner = owner?;
     // Carried forward from both existing routing sites (the #1787
@@ -124,8 +129,40 @@ fn tower_pshape_route(
         return None;
     }
     let keys_global = ctx.class_keys_globals.get(owner)?.clone();
+    let index_params = ctx.nonnegative_index_methods.get(&key);
+    let index_proven = index_params.is_some_and(|params| {
+        let Some(method) = ctx
+            .classes
+            .get(owner)
+            .and_then(|class| class.methods.iter().find(|method| method.name == property))
+        else {
+            return false;
+        };
+        args.len() == method.params.len()
+            && params.iter().all(|id| {
+                method
+                    .params
+                    .iter()
+                    .position(|param| param.id == *id)
+                    .and_then(|position| args.get(position))
+                    .is_some_and(|arg| {
+                        crate::expr::numeric_index_has_integer_array_index_proof(ctx, arg)
+                    })
+            })
+    });
+    let pshape_fn = crate::collectors::pshape_method_name(fname);
+    let (clone_fn, generic_fn) = if index_proven {
+        let params = index_params.expect("proved indexed tower method remains registered");
+        (
+            crate::codegen::nonnegative_index_method_name(&pshape_fn, params),
+            crate::codegen::nonnegative_index_method_name(fname, params),
+        )
+    } else {
+        (pshape_fn, fname.to_string())
+    };
     Some(TowerPshapeRoute {
-        clone_fn: crate::collectors::pshape_method_name(fname),
+        clone_fn,
+        generic_fn,
         keys_global,
     })
 }
@@ -160,7 +197,6 @@ fn emit_tower_pshape_call(
     case_no: usize,
     route: &TowerPshapeRoute,
     recv_handle: &str,
-    fname: &str,
     case_arg_slices: &[(crate::types::LlvmType, &str)],
 ) -> String {
     // The global is read ONCE per function (entry-hoisted); the case block only
@@ -191,7 +227,7 @@ fn emit_tower_pshape_call(
     ctx.block().br(&join_label);
 
     ctx.current_block = generic_idx;
-    let v_generic = ctx.block().call(DOUBLE, fname, case_arg_slices);
+    let v_generic = ctx.block().call(DOUBLE, &route.generic_fn, case_arg_slices);
     let generic_end = ctx.block().label.clone();
     ctx.block().br(&join_label);
 
@@ -783,13 +819,12 @@ pub(crate) fn try_lower_instance_method_call(
                     );
                     let case_arg_slices: Vec<(crate::types::LlvmType, &str)> =
                         case_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
-                    match tower_pshape_route(ctx, owner.as_deref(), property, fname) {
+                    match tower_pshape_route(ctx, owner.as_deref(), property, fname, args) {
                         Some(route) => emit_tower_pshape_call(
                             ctx,
                             case_no,
                             &route,
                             &recv_handle,
-                            fname,
                             &case_arg_slices,
                         ),
                         None => ctx.block().call(DOUBLE, fname, &case_arg_slices),
@@ -1466,8 +1501,17 @@ pub(crate) fn try_lower_instance_method_call(
                         (!crate::collectors::ptr_array_cache_fields(class, method).is_empty())
                             .then(|| crate::collectors::ptr_array_cache_method_name(&fallback_fn))
                     });
-                    let generic_target = nonnegative_index_direct_name
+                    let pshape_index_target =
+                        nonnegative_index_direct_name.as_ref().and_then(|_| {
+                            let pshape = pshape_target.as_ref()?;
+                            let params = ctx.nonnegative_index_methods.get(&typed_method_key)?;
+                            Some(crate::codegen::nonnegative_index_method_name(
+                                pshape, params,
+                            ))
+                        });
+                    let generic_target = pshape_index_target
                         .as_deref()
+                        .or(nonnegative_index_direct_name.as_deref())
                         .or(ptr_array_cache_target.as_deref())
                         .or(pshape_target.as_deref())
                         .unwrap_or(fallback_fn.as_str());
@@ -1484,6 +1528,11 @@ pub(crate) fn try_lower_instance_method_call(
                         &arg_slices,
                         args,
                     ) {
+                        super::super::method_override::publish_constructive_method_truthy(
+                            ctx,
+                            &fallback_fn,
+                            &argument_specialized,
+                        );
                         return Ok(Some(argument_specialized));
                     }
                     // Prefer the typed-receiver clone (bare gep+load field
@@ -1547,6 +1596,11 @@ pub(crate) fn try_lower_instance_method_call(
                                 (v_generic.as_str(), &generic_end),
                             ],
                         );
+                        super::super::method_override::publish_constructive_method_truthy(
+                            ctx,
+                            &fallback_fn,
+                            &merged,
+                        );
                         return Ok(Some(merged));
                     }
                     // Representation-selection Phase 5a: route to the
@@ -1556,6 +1610,11 @@ pub(crate) fn try_lower_instance_method_call(
                     // all. Same ABI, so the call is unchanged apart from the
                     // callee name.
                     let direct = ctx.block().call(DOUBLE, generic_target, &arg_slices);
+                    super::super::method_override::publish_constructive_method_truthy(
+                        ctx,
+                        &fallback_fn,
+                        &direct,
+                    );
                     return Ok(Some(direct));
                 }
                 if let Some(guarded) = emit_guarded_direct_method_call(

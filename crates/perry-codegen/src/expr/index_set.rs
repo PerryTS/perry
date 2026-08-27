@@ -1159,11 +1159,8 @@ pub(crate) fn lower(
                             let g_ref = format!("@{}", global_name);
                             // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
                             emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
-                            // Gen-GC Phase C2: write barrier on array element store.
-                            if write_barrier_needed {
-                                let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
-                                emit_write_barrier(ctx, &arr_bits, &val_bits);
-                            }
+                            // The extending runtime setter barriers the actual
+                            // destination slot on every pointer-bearing store.
                         } else {
                             // Closure-captured array, or local without a
                             // stack slot (rare). Issue #637 followup / hono r2:
@@ -1194,11 +1191,8 @@ pub(crate) fn lower(
                                     (DOUBLE, &val_double),
                                 ],
                             );
-                            // Gen-GC Phase C2: write barrier on array element store.
-                            if write_barrier_needed {
-                                let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
-                                emit_write_barrier(ctx, &arr_bits, &val_bits);
-                            }
+                            // The extending runtime setter barriers the actual
+                            // destination slot on every pointer-bearing store.
                         }
                     } else {
                         let idx_i32 = {
@@ -1241,11 +1235,7 @@ pub(crate) fn lower(
                                             (DOUBLE, &val_double),
                                         ],
                                     );
-                                    if write_barrier_needed {
-                                        let val_bits =
-                                            ctx.block().bitcast_double_to_i64(&val_double);
-                                        emit_write_barrier(ctx, &arr_bits, &val_bits);
-                                    }
+                                    // The helper owns the precise slot barrier.
                                     Ok(())
                                 },
                             )?;
@@ -1275,11 +1265,9 @@ pub(crate) fn lower(
                                 (DOUBLE, &val_double),
                             ],
                         );
-                        // Gen-GC Phase C2: write barrier on array element store.
-                        if write_barrier_needed {
-                            let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
-                            emit_write_barrier(ctx, &arr_bits, &val_bits);
-                        }
+                        // The extending runtime setter owns the precise slot
+                        // barrier; a second opaque parent/child barrier here
+                        // would repeat both pointer decodes.
                     }
                     // The group is released after `body` returns, never before:
                     // every branch above ends in a helper that can itself allocate

@@ -57,10 +57,10 @@ pub(crate) fn emit_write_barrier(ctx: &mut FnCtx<'_>, parent_bits: &str, child_b
     // touches the incremental-mark latch, the parent decode or the remembered
     // set — so for every numeric store this call does nothing but cost a call.
     //
-    // An array element store pays it unconditionally today: `this.vals[i] = v`
-    // in `gc-handoff/apps/pipeline.ts`'s `Registry` emits
-    // `js_typed_feedback_array_set_f64_extend` immediately followed by a bare
-    // `js_write_barrier`, on a `number[]`.
+    // Runtime array setters now own a precise destination-slot barrier and do
+    // not use this opaque compatibility wrapper. Other opaque property-store
+    // helpers still reach it when their internal destination is unavailable to
+    // generated code.
     //
     // `emit_may_carry_heap_pointer_check` is a deliberate SUPERSET of the
     // runtime predicate (its doc records why the direction is load-bearing,
@@ -347,9 +347,10 @@ pub(crate) fn emit_layout_note_slot_on_block(
     );
 }
 
-/// Scalar-aware layout note: passes the slot's previous value (`old_bits`) so
+/// Value-aware layout note: passes the slot's previous value (`old_bits`) so
 /// the runtime can skip the thread-local layout hashmap when the store does not
-/// change the slot's pointer-ness (scalar-over-scalar). See
+/// change the slot's pointer-ness (scalar-over-scalar or pointer-over-pointer).
+/// Array element-shape bookkeeping still runs for the latter. See
 /// `js_gc_note_slot_layout_aware`.
 pub(crate) fn emit_layout_note_slot_aware_on_block(
     blk: &mut LlBlock,
@@ -487,10 +488,12 @@ pub(crate) fn emit_jsvalue_slot_store_with_value_bits_on_block(
 /// As [`emit_jsvalue_slot_store_on_block`], but for an **in-place element
 /// overwrite** of a slot that already holds a valid value: routes the layout
 /// note through `js_gc_note_slot_layout_aware`, which loads the previous slot
-/// value and skips the thread-local layout hashmap when neither old nor new is
-/// a heap pointer. Use only where the slot is guaranteed initialized (array
-/// `arr[i] = …` overwrites), not for fresh-slot appends/literals or object
-/// field writes (which are POINTER_FREE-dominated and only pay the extra load).
+/// value and skips the thread-local layout hashmap when old and new have the
+/// same heap-pointer classification. Array element-shape bookkeeping still
+/// runs for pointer-over-pointer. Use only where the slot is guaranteed
+/// initialized (array `arr[i] = …` overwrites), not for fresh-slot
+/// appends/literals or object field writes (which are POINTER_FREE-dominated
+/// and only pay the extra load).
 /// This is the dominant per-write cost on downgraded `any[]` numeric loops
 /// (#5094) and gives ~9× on `bench_numeric_array_downgrade` without regressing
 /// `bench_object_property`.
@@ -820,9 +823,10 @@ fn emit_jsvalue_slot_store_on_block_inner(
         .unwrap_or_else(|| blk.bitcast_double_to_i64(value_double));
     if layout_note_needed {
         match old_bits.as_deref() {
-            // Scalar-over-scalar stores leave the GC slot layout unchanged — the
-            // aware note skips the thread-local layout hashmap when neither the
-            // new nor the old value is a heap pointer (#5094).
+            // Same-classification overwrites leave the GC slot mask unchanged.
+            // The aware note skips the general layout pipeline; its runtime
+            // pointer-over-pointer arm still maintains Array element-shape
+            // metadata (#5094).
             Some(old) => emit_layout_note_slot_aware_on_block(
                 blk,
                 layout_parent_bits,

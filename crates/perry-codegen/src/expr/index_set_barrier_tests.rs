@@ -377,3 +377,36 @@ fn the_gated_element_store_still_reaches_the_barrier_call() {
          exist — the remembered set's arming protocol reads this:\n{ir}"
     );
 }
+
+/// The guarded diamond has two mutually exclusive store owners:
+///
+/// - its inline arm writes the slot itself and must emit the precise slot
+///   barrier asserted above;
+/// - its slow arm calls `js_typed_feedback_array_set_f64_extend`, whose every
+///   successful pointer-bearing destination is barriered inside the runtime.
+///
+/// Re-adding a bare parent/child barrier after the helper is correct but
+/// duplicates receiver/child decoding on every slow pointer overwrite. This
+/// pins that ownership boundary while also proving the fixture reaches both
+/// tiers rather than passing because it stopped emitting an array setter.
+#[test]
+fn runtime_array_setter_is_not_followed_by_a_duplicate_opaque_barrier() {
+    assert_default_barrier_env_not_disabled();
+    let ir = ir();
+    assert!(
+        ir.contains("call i64 @js_typed_feedback_array_set_f64_extend("),
+        "fixture no longer reaches the runtime array-set fallback:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call void @js_write_barrier("),
+        "the runtime array setter already barriers its destination slot; the \
+         generated opaque wrapper repeats that work:\n{ir}"
+    );
+    let barrier_body = numbered_barrier_block_body(&ir)
+        .unwrap_or_else(|| panic!("inline store lost `{BARRIER_BLOCK}<N>`:\n{ir}"));
+    assert!(
+        barrier_body.contains(BARRIER_CALL),
+        "removing the slow helper's duplicate barrier must not remove the \
+         inline store's precise slot barrier:\n{barrier_body}"
+    );
+}

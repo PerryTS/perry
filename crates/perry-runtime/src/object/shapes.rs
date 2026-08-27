@@ -87,6 +87,11 @@ pub(crate) struct ShapeDescriptor {
     /// Notes accumulated since the last full trace; adopted into `old_carrier`
     /// by [`rotate_old_carrier_epoch_after_full_trace`].
     pub(crate) old_carrier_seen: bool,
+    /// A runtime optimization cache can reinstall this historical shape even
+    /// while no live object currently carries it. Such a cache is an explicit
+    /// strong metadata owner, so collection must root and rewrite `keys` before
+    /// weak descriptor pruning.
+    pub(crate) cache_carrier: bool,
     pub(crate) logical_key_count: u32,
     pub(crate) live_inline_slot_count: u32,
     /// Zero for ordinary structural shapes. Descriptor/prototype mutations
@@ -125,6 +130,61 @@ impl Eq for ShapeDescriptor {}
 pub(crate) enum ShapeObjectKind {
     Ordinary,
     Class,
+}
+
+/// Per-agent direct cache for the immutable `object_kind` half of a ShapeId.
+/// A collision only falls back to the descriptor table. Entries contain no
+/// managed address, and descriptor retirement clears a matching id before it
+/// can be observed without the authoritative table record.
+pub(crate) const SHAPE_KIND_CACHE_SIZE: usize = 16_384;
+const SHAPE_KIND_CACHE_MASK: usize = SHAPE_KIND_CACHE_SIZE - 1;
+const SHAPE_KIND_ORDINARY: u64 = 1;
+const SHAPE_KIND_CLASS: u64 = 2;
+
+#[inline(always)]
+fn shape_kind_cache_slot(shape_id: u32) -> usize {
+    let mixed = u64::from(shape_id).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    (mixed ^ (mixed >> 32)) as usize & SHAPE_KIND_CACHE_MASK
+}
+
+#[inline]
+fn cached_shape_object_kind(shape_id: u32) -> Option<ShapeObjectKind> {
+    let cache = unsafe { &mut *crate::state::state().object_hot.shape_kind_cache.get() };
+    let packed = cache[shape_kind_cache_slot(shape_id)];
+    if (packed >> 32) as u32 != shape_id {
+        return None;
+    }
+    match packed & 0xFFFF_FFFF {
+        SHAPE_KIND_ORDINARY => Some(ShapeObjectKind::Ordinary),
+        SHAPE_KIND_CLASS => Some(ShapeObjectKind::Class),
+        _ => None,
+    }
+}
+
+#[inline]
+fn publish_shape_object_kind(shape_id: u32, kind: ShapeObjectKind) {
+    let cache = unsafe { &mut *crate::state::state().object_hot.shape_kind_cache.get() };
+    let tag = match kind {
+        ShapeObjectKind::Ordinary => SHAPE_KIND_ORDINARY,
+        ShapeObjectKind::Class => SHAPE_KIND_CLASS,
+    };
+    cache[shape_kind_cache_slot(shape_id)] = (u64::from(shape_id) << 32) | tag;
+}
+
+#[inline]
+fn retire_cached_shape_object_kind(shape_id: u32) {
+    let cache = unsafe { &mut *crate::state::state().object_hot.shape_kind_cache.get() };
+    let entry = &mut cache[shape_kind_cache_slot(shape_id)];
+    if (*entry >> 32) as u32 == shape_id {
+        *entry = 0;
+    }
+}
+
+#[cfg(test)]
+#[inline]
+fn clear_shape_object_kind_cache() {
+    let cache = unsafe { &mut *crate::state::state().object_hot.shape_kind_cache.get() };
+    cache.fill(0);
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -279,6 +339,7 @@ fn remove_descriptor_and_reverse_indices(inner: &mut ShapeTableInner, id: u32) {
     let Some(descriptor) = inner.descriptors.remove(&id) else {
         return;
     };
+    retire_cached_shape_object_kind(id);
     let facts = descriptor_facts_with_keys(*descriptor, descriptor.indexed_keys);
     remove_descriptor_id_from_facts_index(inner, facts, id);
     remove_descriptor_id_from_keys_index(inner, descriptor.indexed_keys, id);
@@ -394,6 +455,7 @@ fn shape_descriptor_ensure_with_generation(
         record: 0,
         old_carrier: false,
         old_carrier_seen: false,
+        cache_carrier: false,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -471,6 +533,19 @@ pub(crate) fn shape_descriptor_by_id(shape_id: u32) -> Option<ShapeDescriptor> {
         .map(|record| lift_descriptor(record))
 }
 
+/// Immutable ordinary-vs-class fact with a pointer-free, per-agent direct
+/// cache. The first observation remains the authoritative descriptor lookup;
+/// subsequent observations avoid the hot ShapeId HashMap borrow.
+#[inline]
+pub(crate) fn shape_object_kind_by_id(shape_id: u32) -> Option<ShapeObjectKind> {
+    if let Some(kind) = cached_shape_object_kind(shape_id) {
+        return Some(kind);
+    }
+    let kind = shape_descriptor_by_id(shape_id)?.object_kind;
+    publish_shape_object_kind(shape_id, kind);
+    Some(kind)
+}
+
 /// Box a descriptor and stamp the record with its OWN address (#8112).
 ///
 /// Self-referential on purpose. The alternative — deriving the address in
@@ -523,6 +598,22 @@ pub(crate) unsafe fn note_old_generation_carrier(descriptor: Option<ShapeDescrip
     // GC_STORE_AUDIT(POINTER_FREE): liveness bookkeeping byte, never a heap reference.
     (*record).old_carrier = true;
     (*record).old_carrier_seen = true;
+}
+
+/// Permanently retain a descriptor while an agent-local optimization cache can
+/// reinstall its ShapeId. Cache tables live with `RuntimeState`, so this bit
+/// has the same lifetime and is reclaimed with the whole agent.
+#[inline]
+pub(crate) unsafe fn note_cache_carrier(descriptor: Option<ShapeDescriptor>) {
+    let Some(descriptor) = descriptor else {
+        return;
+    };
+    if descriptor.record == 0 {
+        return;
+    }
+    let record = descriptor.record as *mut ShapeDescriptor;
+    // GC_STORE_AUDIT(POINTER_FREE): liveness bookkeeping byte, never a heap reference.
+    (*record).cache_carrier = true;
 }
 
 /// Recompute the old-carrier gate from the trace that just finished.
@@ -595,6 +686,7 @@ fn install_external_shape_id(
         record: 0,
         old_carrier: false,
         old_carrier_seen: false,
+        cache_carrier: false,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation: 0,
@@ -674,6 +766,78 @@ pub(crate) unsafe fn install_cached_object_shape_transition(
     target_shape_id: u32,
     _target_keys: *mut ArrayHeader,
 ) -> bool {
+    let target_key_count = if _target_keys.is_null() {
+        0
+    } else {
+        crate::array::keys_array_len_capped_to_capacity(_target_keys) as u32
+    };
+    install_cached_object_shape_version(
+        obj,
+        expected_predecessor_shape_id,
+        target_shape_id,
+        _target_keys,
+        target_key_count,
+    )
+}
+
+/// Install an exact historical shape version whose authoritative keys array
+/// may have grown in place since the descriptor was minted. Reflection and
+/// field tracing use the descriptor's logical bound, not the backing array's
+/// later physical length.
+#[inline]
+pub(crate) unsafe fn install_cached_object_shape_version(
+    obj: *mut crate::object::ObjectHeader,
+    expected_predecessor_shape_id: u32,
+    target_shape_id: u32,
+    _target_keys: *mut ArrayHeader,
+    _target_key_count: u32,
+) -> bool {
+    install_cached_object_shape_version_impl(
+        obj,
+        expected_predecessor_shape_id,
+        target_shape_id,
+        _target_keys,
+        _target_key_count,
+        false,
+    )
+}
+
+/// Install a historical shape held by an optimization cache that permanently
+/// owns the target descriptor and roots its keys array.
+///
+/// Unlike the general cached-shape entry, this does not need to probe the
+/// shape table merely to note an old-generation carrier: `cache_carrier`
+/// already keeps the descriptor and keys live for the lifetime of the cache,
+/// which is strictly stronger than the epoch-scoped old-carrier note. The
+/// Array-subclass tail cache establishes that ownership before publishing an
+/// edge and never returns an unowned entry.
+#[inline]
+pub(crate) unsafe fn install_cache_carried_object_shape_version(
+    obj: *mut crate::object::ObjectHeader,
+    expected_predecessor_shape_id: u32,
+    target_shape_id: u32,
+    _target_keys: *mut ArrayHeader,
+    _target_key_count: u32,
+) -> bool {
+    install_cached_object_shape_version_impl(
+        obj,
+        expected_predecessor_shape_id,
+        target_shape_id,
+        _target_keys,
+        _target_key_count,
+        true,
+    )
+}
+
+#[inline]
+unsafe fn install_cached_object_shape_version_impl(
+    obj: *mut crate::object::ObjectHeader,
+    expected_predecessor_shape_id: u32,
+    target_shape_id: u32,
+    _target_keys: *mut ArrayHeader,
+    _target_key_count: u32,
+    target_is_cache_carried: bool,
+) -> bool {
     if obj.is_null()
         || !shape_word_is_writable(obj)
         || object_shape_stamp(obj) != expected_predecessor_shape_id
@@ -688,13 +852,10 @@ pub(crate) unsafe fn install_cached_object_shape_transition(
     // and the cache's rooted target edge keeps its descriptor live.
     #[cfg(debug_assertions)]
     {
-        let key_count = if _target_keys.is_null() {
-            0
-        } else {
-            crate::array::keys_array_len_capped_to_capacity(_target_keys) as u32
-        };
         if !shape_descriptor_by_id(target_shape_id).is_some_and(|descriptor| {
-            descriptor.keys == _target_keys as u64 && descriptor.logical_key_count == key_count
+            descriptor.keys == _target_keys as u64
+                && descriptor.logical_key_count == _target_key_count
+                && (!target_is_cache_carried || descriptor.cache_carrier)
         }) {
             return false;
         }
@@ -704,12 +865,16 @@ pub(crate) unsafe fn install_cached_object_shape_transition(
     // invalidated while the predecessor stamp is still authoritative.
     super::mark_object_dynamic_shape_unknown(obj);
     (*obj).parent_class_id = target_shape_id;
-    if !crate::arena::pointer_in_nursery(obj as usize) {
+    if !target_is_cache_carried && !crate::arena::pointer_in_nursery(obj as usize) {
         note_old_generation_carrier(shape_descriptor_by_id(target_shape_id));
     }
 
     #[cfg(debug_assertions)]
-    debug_assert_object_shape_parity_for_keys(obj, _target_keys);
+    if !_target_keys.is_null()
+        && crate::array::keys_array_len_capped_to_capacity(_target_keys) as u32 == _target_key_count
+    {
+        debug_assert_object_shape_parity_for_keys(obj, _target_keys);
+    }
     #[cfg(test)]
     TEST_CACHED_TRANSITION_WATCH.with(|watch| {
         if watch.get() == obj as usize {
@@ -751,6 +916,7 @@ pub(crate) unsafe fn stamp_object_shape(
         return 0;
     }
     let Some(lineage) = object_shape_descriptor(obj) else {
+        crate::array::clear_array_subclass_named_prefix_token(obj);
         let id = shape_descriptor_ensure(keys, key_count, live_inline_slot_count)
             .unwrap_or_else(|error| shape_descriptor_error_abort(error));
         (*obj).parent_class_id = id;
@@ -764,6 +930,13 @@ pub(crate) unsafe fn stamp_object_shape(
         lineage.semantic_generation,
         lineage.object_kind,
     ));
+    if id != (*obj).parent_class_id {
+        // Read-side lookup also calls `stamp_object_shape` to populate its
+        // field cache. Preserve a proved Array-subclass prefix when that call
+        // merely republishes the exact current descriptor; retire it only for
+        // an actual structural identity change.
+        crate::array::clear_array_subclass_named_prefix_token(obj);
+    }
     (*obj).parent_class_id = id;
     debug_assert_object_shape_parity(obj);
     id
@@ -921,6 +1094,10 @@ pub(crate) unsafe fn publish_object_shape_from(
     if obj.is_null() || !shape_word_is_writable(obj) {
         return 0;
     }
+    // Generic structural publication may add/delete/reorder a named field.
+    // The learned exact numeric-tail installer has its own entry point and
+    // intentionally preserves this Array-subclass family proof.
+    crate::array::clear_array_subclass_named_prefix_token(obj);
     let key_count = if keys.is_null() {
         0
     } else {
@@ -991,6 +1168,7 @@ pub(crate) unsafe fn transition_object_shape_semantics(
     if obj.is_null() || !shape_word_is_writable(obj) {
         return 0;
     }
+    crate::array::clear_array_subclass_named_prefix_token(obj);
     let current = object_shape_descriptor(obj).unwrap_or_else(|| {
         synchronize_object_shape_descriptor(obj);
         object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
@@ -1022,6 +1200,7 @@ pub(crate) unsafe fn transition_object_shape_to_class(
     if obj.is_null() || !shape_word_is_writable(obj) {
         return 0;
     }
+    crate::array::clear_array_subclass_named_prefix_token(obj);
     let current = object_shape_descriptor(obj).unwrap_or_else(|| {
         synchronize_object_shape_descriptor(obj);
         object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
@@ -1435,7 +1614,7 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
         // rooting them from the table would make every keys array ever minted
         // immortal and turn `prune_dead_shape_keys`'s "is the keys array
         // dead?" into a question it asks of itself.
-        let moved = if descriptor.old_carrier {
+        let moved = if descriptor.old_carrier || descriptor.cache_carrier {
             visitor.visit_usize_slot(&mut addr)
         } else {
             visitor.visit_metadata_usize_slot(&mut addr)
@@ -1595,6 +1774,8 @@ pub(crate) fn test_clear_shape_table() {
     inner.descriptors.clear();
     inner.ids_by_facts.clear();
     inner.ids_by_keys.clear();
+    drop(inner);
+    clear_shape_object_kind_cache();
 }
 
 #[cfg(test)]

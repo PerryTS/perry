@@ -42,6 +42,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // blob_len). Returns the nanboxed JS value (a fresh, mutable array).
     module.declare_function("js_value_from_const_descriptor", DOUBLE, &[PTR, I32]);
     module.declare_function("js_array_push_f64", I64, &[I64, DOUBLE]);
+    module.declare_function("js_array_push_u31_with_length", I64, &[I64, I32, PTR]);
     module.declare_function("js_array_push_guard", VOID, &[I64]);
     module.declare_function("js_array_push_hole", I64, &[I64]);
     module.declare_function("js_array_numeric_push_f64_unboxed", I64, &[I64, DOUBLE]);
@@ -106,6 +107,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // it preserves `undefined` and non-numeric property values and throws for
     // nullish receivers.
     module.declare_function("js_value_length_property_f64", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_value_length_property_ic_f64", DOUBLE, &[DOUBLE, PTR]);
 
     // Shadow stack for precise root tracking (gen-GC Phase A per
     // docs/generational-gc-plan.md). Declared now so codegen can

@@ -6,7 +6,8 @@
 use anyhow::Result;
 use perry_hir::{Expr, LogicalOp};
 
-use crate::expr::{lower_expr, FnCtx};
+use crate::expr::{lower_expr, lower_expr_value, FnCtx};
+use crate::native_value::{materialize_js_value, MaterializationReason, NativeRep};
 use crate::type_analysis::{
     expr_may_return_boxed_value_from_raw_f64_fallback, is_bool_expr, is_numeric_expr,
 };
@@ -71,6 +72,44 @@ pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr
     ctx.block().icmp_ne(I32, &i32_truthy, "0")
 }
 
+/// Lower one expression once and return both its ordinary boxed value and its
+/// JavaScript truthiness as native `i1`.
+///
+/// Guarded direct user-method calls may publish a use-sensitive truthiness
+/// result: the proven method arm tests a constructively-Boolean return inline,
+/// while the dynamic override arm still uses the total runtime predicate.  The
+/// boxed SSA-name equality below makes publication compositional — a call in
+/// the receiver or an argument cannot impersonate the outer expression.
+pub(crate) fn lower_expr_with_truthy(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, String)> {
+    if let Some(lowered) = lower_expr_value(ctx, expr)? {
+        if matches!(lowered.rep, NativeRep::I1) {
+            let truthy = lowered.value.clone();
+            let boxed = materialize_js_value(ctx, lowered, MaterializationReason::RuntimeApi);
+            return Ok((boxed, truthy));
+        }
+        let boxed = materialize_js_value(ctx, lowered, MaterializationReason::RuntimeApi);
+        let truthy = lower_truthy(ctx, &boxed, expr);
+        return Ok((boxed, truthy));
+    }
+
+    let saved_request = ctx.truthy_call_result_requested;
+    let saved_pending = ctx.pending_truthy_call_result.take();
+    ctx.truthy_call_result_requested = true;
+    let lowered = lower_expr(ctx, expr);
+    let published = ctx.pending_truthy_call_result.take();
+    ctx.truthy_call_result_requested = saved_request;
+    ctx.pending_truthy_call_result = saved_pending;
+    let boxed = lowered?;
+
+    if let Some((published_boxed, truthy)) = published {
+        if published_boxed == boxed {
+            return Ok((boxed, truthy));
+        }
+    }
+    let truthy = lower_truthy(ctx, &boxed, expr);
+    Ok((boxed, truthy))
+}
+
 /// Lower `cond ? then_expr : else_expr` to a 4-block CFG with a phi at
 /// the merge: condition → conditional cond_br → then → merge ← else.
 /// Both then and else are always lowered (no short-circuit), but only one
@@ -85,8 +124,7 @@ pub(crate) fn lower_conditional(
     let saved_guarded_proof = branch_proofs
         .as_ref()
         .and_then(|(id, _, _)| ctx.snapshot_guarded_proof(id));
-    let cond = lower_expr(ctx, condition)?;
-    let cond_bool = lower_truthy(ctx, &cond, condition);
+    let (_cond, cond_bool) = lower_expr_with_truthy(ctx, condition)?;
 
     let then_idx = ctx.new_block("ternary.then");
     let else_idx = ctx.new_block("ternary.else");
@@ -206,13 +244,10 @@ pub(crate) fn lower_logical(
     }
 
     // Lower left in the current block.
-    let l = lower_expr(ctx, left)?;
+    let (l, l_bool) = lower_expr_with_truthy(ctx, left)?;
     // Capture the post-left block — left's lowering may have created new
     // blocks via nested control flow.
     let l_block_label = ctx.block().label.clone();
-    // Truthiness test: fast fcmp for numeric, js_is_truthy for NaN-boxed.
-    let l_bool = lower_truthy(ctx, &l, left);
-
     let then_idx = ctx.new_block("logical.then");
     let merge_idx = ctx.new_block("logical.merge");
     let then_label = ctx.block_label(then_idx);
@@ -230,9 +265,17 @@ pub(crate) fn lower_logical(
         LogicalOp::Coalesce => unreachable!("guarded above"),
     }
 
-    // The "then" block evaluates the right side.
+    // The "then" block evaluates the right side. When an enclosing condition
+    // requested native truthiness, preserve the right operand's truthiness as
+    // well as its actual JavaScript value; `&&` / `||` return an operand, so
+    // replacing the value itself with a Boolean would be observably wrong.
     ctx.current_block = then_idx;
-    let r = lower_expr(ctx, right)?;
+    let (r, r_bool) = if ctx.truthy_call_result_requested {
+        let (value, truthy) = lower_expr_with_truthy(ctx, right)?;
+        (value, Some(truthy))
+    } else {
+        (lower_expr(ctx, right)?, None)
+    };
     let r_block_label = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
@@ -240,7 +283,23 @@ pub(crate) fn lower_logical(
 
     // Merge block: phi between l (short-circuit path) and r (normal path).
     ctx.current_block = merge_idx;
-    Ok(ctx
+    let result = ctx
         .block()
-        .phi(DOUBLE, &[(&l, &l_block_label), (&r, &r_block_label)]))
+        .phi(DOUBLE, &[(&l, &l_block_label), (&r, &r_block_label)]);
+    if let Some(r_bool) = r_bool {
+        let short_circuit_truthy = match op {
+            LogicalOp::And => "false",
+            LogicalOp::Or => "true",
+            LogicalOp::Coalesce => unreachable!("guarded above"),
+        };
+        let truthy = ctx.block().phi(
+            crate::types::I1,
+            &[
+                (short_circuit_truthy, &l_block_label),
+                (&r_bool, &r_block_label),
+            ],
+        );
+        ctx.pending_truthy_call_result = Some((result.clone(), truthy));
+    }
+    Ok(result)
 }

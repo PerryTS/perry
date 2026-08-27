@@ -806,10 +806,8 @@ pub(crate) fn lower(
                 return rooting::with_operands_rooted(ctx, &[array, index], |ctx, vals| {
                     let a = vals[0].clone();
                     let key = vals[1].clone();
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_object_get_symbol_property",
-                        &[(DOUBLE, &a), (DOUBLE, &key)],
+                    Ok(super::index_get::lower_symbol_property_get_ic(
+                        ctx, &a, &key,
                     ))
                 });
             }

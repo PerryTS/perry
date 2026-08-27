@@ -309,6 +309,17 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         &[DOUBLE, DOUBLE],
     );
     module.declare_function("js_object_get_symbol_property", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_object_get_symbol_property_ic_miss",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, PTR],
+    );
+    module.declare_function(
+        "js_object_get_symbol_then_field_ic_miss",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64, I64, PTR, PTR],
+    );
+    module.add_external_global("PERRY_SYMBOL_PROPERTY_IC_EPOCH", I64);
     module.declare_function("js_object_create", DOUBLE, &[DOUBLE]);
     // #2816: Object.create(proto[, propertiesObject]) — validates the
     // prototype and applies the optional descriptor bag.

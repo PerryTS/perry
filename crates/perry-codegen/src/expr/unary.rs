@@ -7,25 +7,34 @@
 use anyhow::Result;
 use perry_hir::{Expr, UnaryOp};
 
-use crate::lower_conditional::lower_truthy;
+use crate::lower_conditional::lower_expr_with_truthy;
 use crate::type_analysis::{
     expr_may_return_boxed_value_from_raw_f64_fallback, is_bigint_expr, is_numeric_expr,
+    is_provably_not_bigint,
 };
-use crate::types::{DOUBLE, I64};
+use crate::types::{DOUBLE, I32, I64};
 
-use super::{lower_expr, FnCtx};
+use super::{is_known_i32_range, lower_expr, FnCtx};
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Unary { op, operand } => {
             let numeric = is_numeric_expr(ctx, operand)
                 && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, operand);
+            let native_bitnot =
+                matches!(op, UnaryOp::BitNot) && numeric && is_provably_not_bigint(ctx, operand);
+            let bitnot_known_i32 = native_bitnot && is_known_i32_range(ctx, operand);
             // `-<bigint>` must stay a BigInt (`typeof -1n === "bigint"`).
             // `fneg` on a NaN-boxed BigInt flips the NaN payload's sign bit
             // and produces a garbage number, so route negation through the
             // runtime dynamic helper when the operand is statically bigint.
             let is_big = matches!(op, UnaryOp::Neg) && is_bigint_expr(ctx, operand);
-            let v = lower_expr(ctx, operand)?;
+            let (v, precomputed_truthy) = if matches!(op, UnaryOp::Not) {
+                let (boxed, truthy) = lower_expr_with_truthy(ctx, operand)?;
+                (boxed, Some(truthy))
+            } else {
+                (lower_expr(ctx, operand)?, None)
+            };
             let blk = ctx.block();
             match op {
                 UnaryOp::Neg => {
@@ -49,7 +58,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // !x: truthiness inverted, then NaN-box as a JS
                     // boolean (TAG_TRUE / TAG_FALSE) so console.log
                     // prints "true" / "false" instead of 1 / 0.
-                    let bit = lower_truthy(ctx, &v, operand);
+                    let bit =
+                        precomputed_truthy.expect("UnaryOp::Not precomputes operand truthiness");
                     let blk = ctx.block();
                     let inv = blk.xor(crate::types::I1, &bit, "true");
                     let tagged_i64 = blk.select(
@@ -62,9 +72,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     Ok(blk.bitcast_i64_to_double(&tagged_i64))
                 }
                 UnaryOp::BitNot => {
-                    // `~x` preserves BigInt when the runtime value is a BigInt
-                    // and otherwise falls back to JS ToInt32 semantics.
-                    Ok(blk.call(DOUBLE, "js_dynamic_bitnot", &[(DOUBLE, &v)]))
+                    // A proven Number result can perform ToInt32 and `~`
+                    // directly. This notably covers coercive arithmetic such
+                    // as `~~(erased / 32)`: the division either throws for a
+                    // mixed BigInt or returns a Number, so both bitwise-NOTs
+                    // are native. An erased direct operand and a potentially
+                    // BigInt-producing chain (`~(a & b)`) retain the dynamic
+                    // helper, which is what preserves BigInt semantics.
+                    if native_bitnot {
+                        let i = if bitnot_known_i32 {
+                            blk.toint32_fast(&v)
+                        } else {
+                            blk.toint32_wrap(&v)
+                        };
+                        let flipped = blk.xor(I32, &i, "-1");
+                        Ok(blk.sitofp(I32, &flipped, DOUBLE))
+                    } else {
+                        Ok(blk.call(DOUBLE, "js_dynamic_bitnot", &[(DOUBLE, &v)]))
+                    }
                 }
             }
         }

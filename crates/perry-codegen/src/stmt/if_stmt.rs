@@ -4,8 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::*;
 
-use crate::lower_conditional::lower_truthy;
-use crate::native_value::NativeRep;
+use crate::lower_conditional::lower_expr_with_truthy;
 
 #[derive(Clone)]
 struct NativeArenaOwnerAliasSnapshot {
@@ -270,14 +269,6 @@ pub(crate) fn lower_if(
 }
 
 fn lower_if_condition_i1(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr) -> Result<String> {
-    if let Some(lowered) = lower_expr_value(ctx, condition)? {
-        if matches!(lowered.rep, NativeRep::I1) {
-            return Ok(lowered.value);
-        }
-        let boxed = materialize_js_value(ctx, lowered, MaterializationReason::RuntimeApi);
-        return Ok(lower_truthy(ctx, &boxed, condition));
-    }
-
-    let cond_val = lower_expr(ctx, condition)?;
-    Ok(lower_truthy(ctx, &cond_val, condition))
+    let (_boxed, truthy) = lower_expr_with_truthy(ctx, condition)?;
+    Ok(truthy)
 }

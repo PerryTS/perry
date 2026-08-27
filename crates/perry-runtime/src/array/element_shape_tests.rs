@@ -25,6 +25,7 @@ use crate::array::{
 /// registers for itself.
 const CLASS_A: u32 = 0x0007_4801;
 const CLASS_B: u32 = 0x0007_4802;
+const CLASS_SAME_CLASS_VARIANT: u32 = 0x0007_4803;
 
 fn instance(class_id: u32) -> f64 {
     let obj = crate::object::js_object_alloc(class_id, 2);
@@ -53,6 +54,11 @@ fn proof(arr: *mut ArrayHeader) -> Option<ElementShapeProof> {
 // ---------------------------------------------------------------------------
 // SET
 // ---------------------------------------------------------------------------
+
+#[test]
+fn element_shape_record_keeps_the_hot_table_footprint() {
+    assert_eq!(std::mem::size_of::<ElementShapeRecord>(), 24);
+}
 
 #[test]
 fn first_push_of_a_shaped_object_into_an_empty_array_sets_the_invariant() {
@@ -159,11 +165,81 @@ fn an_in_bounds_overwrite_with_a_matching_shape_keeps_the_invariant() {
     let _serialized = test_serialize();
     let arr = built_from_pushes(CLASS_A, 4);
     let before = proof(arr).expect("proven");
+    let exact_hits_before = test_exact_shape_store_hits();
     js_array_set_f64(arr, 2, instance(CLASS_A));
     let after = proof(arr).expect("a same-class overwrite must keep the proof");
     assert_eq!(after.class_id, CLASS_A);
     assert_eq!(after.verified_len, 4);
     assert_eq!(after.epoch, before.epoch, "the proof itself is unchanged");
+    assert!(
+        test_exact_shape_store_hits() > exact_hits_before,
+        "the already-validated exact shape should avoid another descriptor-table probe"
+    );
+}
+
+#[test]
+fn resolved_dense_pointer_overwrite_keeps_or_retires_element_shape_exactly() {
+    let _serialized = test_serialize();
+    let arr = built_from_pushes(CLASS_A, 3);
+    let before = proof(arr).expect("proven");
+    let fast_hits_before = crate::array::indexing::test_strict_dense_pointer_overwrite_hits();
+
+    assert_eq!(
+        crate::array::indexing::try_strict_dense_index_set(arr, 1, instance(CLASS_A)),
+        Some(arr)
+    );
+    assert!(
+        crate::array::indexing::test_strict_dense_pointer_overwrite_hits() > fast_hits_before,
+        "an existing object-over-object slot must take the resolved pointer path"
+    );
+    let after = proof(arr).expect("a same-class resolved overwrite must keep the proof");
+    assert_eq!(after, before);
+
+    assert_eq!(
+        crate::array::indexing::try_strict_dense_index_set(arr, 1, instance(CLASS_B)),
+        Some(arr)
+    );
+    assert!(
+        proof(arr).is_none(),
+        "the pointer-over-pointer layout shortcut must still retire a mismatched element shape"
+    );
+}
+
+#[test]
+fn a_same_class_different_exact_shape_keeps_the_class_level_invariant() {
+    let _serialized = test_serialize();
+    let arr = built_from_pushes(CLASS_SAME_CLASS_VARIANT, 4);
+    let before = proof(arr).expect("proven");
+    let variant = instance(CLASS_SAME_CLASS_VARIANT);
+    let obj = (variant.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
+    let original_shape = unsafe { (*obj).parent_class_id };
+    unsafe { crate::object::shapes::transition_object_shape_semantics(obj) };
+    assert_ne!(unsafe { (*obj).parent_class_id }, original_shape);
+    assert_eq!(
+        element_identity_of_bits(variant.to_bits()).map(|identity| identity.0),
+        Some(CLASS_SAME_CLASS_VARIANT),
+        "the complete fallback classifier must retain same-class ordinary objects"
+    );
+    let record = record_for(arr as usize).expect("live class proof record");
+    assert!(
+        element_matches_record(variant.to_bits(), record),
+        "a different exact shape must fall back to the class-level classifier"
+    );
+
+    js_array_set_f64(arr, 2, variant);
+    unsafe {
+        assert!(
+            test_element_shape_bit_set(arr),
+            "store must not clear the authority bit"
+        )
+    };
+    let retained = record_for(arr as usize).expect("store must retain the class proof record");
+    assert_eq!(retained.verified_len, unsafe { (*arr).length });
+    assert_eq!(u64::from(retained.generation), class_shape_generation());
+    let after = proof(arr).expect("same class with a different shape remains class-homogeneous");
+    assert_eq!(after.class_id, CLASS_SAME_CLASS_VARIANT);
+    assert_eq!(after.verified_len, 4);
+    assert_eq!(after.epoch, before.epoch);
 }
 
 #[test]

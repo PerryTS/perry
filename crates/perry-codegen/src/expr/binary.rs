@@ -785,6 +785,14 @@ fn try_lower_small_bigint_literal_binary(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Binary { op, left, right } => {
+            // A proven-u31 index turns the canonical 32-bit ECS bitset test
+            // into one guarded Uint32Array load. Match before the erased
+            // receiver makes the ordinary BitAnd arm choose its fully dynamic
+            // BigInt-capable lowering; every guard miss retains that lowering
+            // in the peephole's slow arm.
+            if let Some(value) = super::bitset_test::try_lower_u32_bitset_test(ctx, expr)? {
+                return Ok(value);
+            }
             if matches!(op, BinaryOp::Add) {
                 // Use the stricter `is_definitely_string_expr` check for
                 // the string-concat fast path. A union type `string|number`

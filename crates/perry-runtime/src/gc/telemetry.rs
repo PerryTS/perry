@@ -49,6 +49,9 @@ impl GcStats {
     /// collection path can update one without the others.
     ///
     pub(super) fn record_collection(&mut self, freed_bytes: u64, elapsed_us: u64) {
+        // Generated Symbol-property ICs are weak raw-bit caches. Invalidate
+        // them before the mutator can observe any relocated/reused address.
+        crate::symbol::symbol_property_ic_epoch_bump();
         self.collection_count += 1;
         self.total_freed_bytes = self.total_freed_bytes.saturating_add(freed_bytes);
         self.last_pause_us = elapsed_us;

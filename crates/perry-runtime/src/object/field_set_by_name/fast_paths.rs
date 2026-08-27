@@ -399,7 +399,14 @@ mod tests {
         )
         .expect("shape range unexpectedly exhausted");
         let key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
-        super::super::transition_cache_insert(predecessor, key, next_keys as usize, slot, target);
+        super::super::transition_cache_insert(
+            std::ptr::null(),
+            predecessor,
+            key,
+            next_keys as usize,
+            slot,
+            target,
+        );
         assert!(
             super::super::transition_cache_lookup(predecessor, key).is_some(),
             "test premise: the synthetic transition must be cache-resident"

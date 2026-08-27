@@ -539,3 +539,125 @@ fn i8_literal_writes_high_bytes_in_twos_complement() {
     assert_eq!(i8_literal(0xC3), "-61");
     assert_eq!(i8_literal(0xFF), "-1");
 }
+
+#[test]
+fn local_typeof_strict_ne_literal_uses_the_integer_classifier() {
+    let ir = cmp_ir(
+        "typeof_local_ne_number",
+        CompareOp::Ne,
+        Expr::TypeOf(Box::new(Expr::LocalGet(X))),
+        Expr::String("number".to_string()),
+    );
+    assert!(
+        ir.contains("call i32 @js_value_typeof_tag("),
+        "literal typeof comparison did not use the integer classifier:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i64 @js_value_typeof("),
+        "literal typeof comparison still materialized a typeof string:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_string_equals("),
+        "literal typeof comparison still entered string equality:\n{ir}"
+    );
+}
+
+#[test]
+fn reversed_local_typeof_strict_eq_uses_the_same_integer_classifier() {
+    let ir = cmp_ir(
+        "typeof_local_eq_reversed",
+        CompareOp::Eq,
+        Expr::String("string".to_string()),
+        Expr::TypeOf(Box::new(Expr::LocalGet(X))),
+    );
+    assert!(ir.contains("call i32 @js_value_typeof_tag("), "{ir}");
+    assert!(!ir.contains("call i64 @js_value_typeof("), "{ir}");
+}
+
+#[test]
+fn nonliteral_typeof_comparison_keeps_runtime_string_semantics() {
+    let ir = cmp_ir(
+        "typeof_nonliteral_compare",
+        CompareOp::Eq,
+        Expr::TypeOf(Box::new(Expr::LocalGet(X))),
+        Expr::LocalGet(Y),
+    );
+    assert!(
+        ir.contains("call i64 @js_value_typeof("),
+        "a nonliteral comparison incorrectly took the integer-tag ABI:\n{ir}"
+    );
+    assert!(!ir.contains("call i32 @js_value_typeof_tag("), "{ir}");
+}
+
+#[test]
+fn dynamic_strict_eq_against_number_normalizes_int32_without_js_eq() {
+    let ir = cmp_ir(
+        "dynamic_strict_eq_number",
+        CompareOp::Eq,
+        Expr::LocalGet(X),
+        Expr::Number(7.0),
+    );
+    assert!(
+        ir.contains(crate::nanbox::INT32_TAG_TOP16_I64),
+        "the compact-INT32 normalization guard is absent:\n{ir}"
+    );
+    assert!(
+        ir.contains("fcmp oeq double"),
+        "dynamic-vs-number equality did not become numeric fcmp:\n{ir}"
+    );
+    assert!(
+        !ir.contains(JS_EQ_CALL),
+        "dynamic-vs-number strict equality retained js_eq:\n{ir}"
+    );
+}
+
+#[test]
+fn reversed_dynamic_strict_ne_against_number_uses_unordered_numeric_compare() {
+    let ir = cmp_ir(
+        "dynamic_strict_ne_number_reversed",
+        CompareOp::Ne,
+        Expr::Number(7.0),
+        Expr::LocalGet(X),
+    );
+    assert!(
+        ir.contains("fcmp une double"),
+        "strict !== must treat NaN and every non-number tag as unequal:\n{ir}"
+    );
+    assert!(!ir.contains(JS_EQ_CALL), "{ir}");
+}
+
+#[test]
+fn dynamic_relational_against_number_inlines_primitive_arm_and_keeps_coercing_fallback() {
+    let ir = cmp_ir(
+        "dynamic_lt_number",
+        CompareOp::Lt,
+        Expr::LocalGet(X),
+        Expr::Number(7.0),
+    );
+    assert!(
+        ir.contains("relnum.fast") && ir.contains("relnum.slow"),
+        "dynamic-vs-number relational compare lacks guarded primitive dispatch:\n{ir}"
+    );
+    assert!(
+        ir.contains("fcmp olt double"),
+        "the admitted primitive arm did not lower to fcmp:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_rel_lt("),
+        "objects, strings, BigInts, and Symbols lost their coercing fallback:\n{ir}"
+    );
+}
+
+#[test]
+fn loose_equality_against_number_keeps_coercion() {
+    let ir = cmp_ir(
+        "dynamic_loose_eq_number",
+        CompareOp::LooseEq,
+        Expr::LocalGet(X),
+        Expr::Number(7.0),
+    );
+    assert!(
+        ir.contains(JS_LOOSE_EQ_CALL),
+        "dynamic == number incorrectly bypassed coercion:\n{ir}"
+    );
+}

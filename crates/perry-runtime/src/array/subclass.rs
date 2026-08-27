@@ -45,7 +45,11 @@ const PACKED_NUMERIC_META_MASK: u64 = PACKED_NUMERIC_META_VALID
 // The cache stores no heap pointer, so it is not a GC root. ShapeIds are never
 // reused, and the class id prevents an unrelated class with the same ordered
 // keys from borrowing the Array-subclass proof.
-const DENSE_SUBCLASS_CACHE_SLOTS: usize = 256;
+// Lifecycle-heavy Array subclasses revisit one shape per historical length.
+// Keep the common 1k-entity lattice resident so an allocation-free tail
+// transition does not fall back to an O(length) ordered-key rescan next cycle.
+const DENSE_SUBCLASS_CACHE_SLOTS: usize = 16384;
+const ARRAY_SUBCLASS_NAMED_PREFIX_TOKEN_BIT: u64 = 1 << 63;
 
 struct DenseSubclassCacheEntry {
     /// Even while stable, odd while a colliding writer publishes a payload.
@@ -78,6 +82,29 @@ struct DenseSubclassLayout {
     element_base: u32,
     dense_prefix_len: u32,
     live_inline_slots: u32,
+}
+
+/// A live, non-forwarded ordinary object whose `GcHeader` has already been
+/// validated. Keeping the integrity flags beside the pointer lets a hot
+/// Array-subclass mutation reuse that single header read for brand, layout,
+/// and frozen/sealed/no-extend checks.
+#[derive(Clone, Copy)]
+struct ValidatedObjectReceiver {
+    object: *const ObjectHeader,
+    object_flags: u16,
+}
+
+/// Read the per-instance prototype-divergence bit after the caller has already
+/// proved a live, non-forwarded `GC_TYPE_OBJECT` receiver.
+///
+/// The public prototype-chain predicate accepts arbitrary addresses and must
+/// re-run buffer/heap/header classification before touching `ObjectHeader`.
+/// Dense Array-subclass paths have just completed that proof, so repeating it
+/// ahead of every receiver-local layout-cache hit is both redundant and hot.
+#[inline(always)]
+unsafe fn validated_object_has_prototype_override(obj: *const ObjectHeader) -> bool {
+    let meta = (*obj).meta;
+    !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_PROTO_OVERRIDE != 0
 }
 
 #[inline(always)]
@@ -151,6 +178,46 @@ fn publish_dense_layout(key: u64, layout: DenseSubclassLayout) {
         .store(sequence.wrapping_add(2), Ordering::Release);
 }
 
+/// Receiver-local front cache for the current Array-subclass layout. Unlike
+/// the process-wide collision cache above, these scalar words move with the
+/// owner and need no atomics: Perry heap objects are agent-local, and workers
+/// deep-copy rather than concurrently share ObjectHeaders.
+#[inline(always)]
+unsafe fn owner_cached_dense_layout(obj: *const ObjectHeader) -> Option<DenseSubclassLayout> {
+    let meta = (*obj).meta;
+    if meta.is_null() {
+        return None;
+    }
+    let key = dense_cache_key((*obj).class_id, (*obj).parent_class_id);
+    if key == 0 || (*meta).array_subclass_dense_key != key {
+        return None;
+    }
+    let slots = (*meta).array_subclass_dense_slots;
+    let bounds = (*meta).array_subclass_dense_bounds;
+    Some(DenseSubclassLayout {
+        length_slot: (slots >> 32) as u32,
+        element_base: slots as u32,
+        dense_prefix_len: bounds as u32,
+        live_inline_slots: (bounds >> 32) as u32,
+    })
+}
+
+#[inline(always)]
+unsafe fn publish_owner_dense_layout(obj: *const ObjectHeader, layout: DenseSubclassLayout) {
+    let meta = (*obj).meta;
+    if meta.is_null() {
+        return;
+    }
+    // Publish the key last. This is single-agent state, but retaining the
+    // payload-before-authority ordering also makes an accidental diagnostic
+    // read fail closed rather than combine a new key with old bounds.
+    (*meta).array_subclass_dense_slots =
+        ((layout.length_slot as u64) << 32) | layout.element_base as u64;
+    (*meta).array_subclass_dense_bounds =
+        ((layout.live_inline_slots as u64) << 32) | layout.dense_prefix_len as u64;
+    (*meta).array_subclass_dense_key = dense_cache_key((*obj).class_id, (*obj).parent_class_id);
+}
+
 fn decimal_u32<'a>(mut value: u32, buf: &'a mut [u8; 10]) -> &'a [u8] {
     let mut start = buf.len();
     loop {
@@ -170,7 +237,7 @@ unsafe fn build_dense_layout(obj: *const ObjectHeader) -> Option<DenseSubclassLa
     let class_id = (*obj).class_id;
     if class_id == 0
         || !is_array_subclass_class_id(class_id)
-        || crate::object::prototype_chain::object_has_prototype_override(obj as usize)
+        || validated_object_has_prototype_override(obj)
     {
         return None;
     }
@@ -200,10 +267,13 @@ unsafe fn build_dense_layout(obj: *const ObjectHeader) -> Option<DenseSubclassLa
         }
     }
     let length_slot = length_slot?;
-    // A length-only empty subclass has no `"0"` key yet. Cache its length
-    // read, while leaving the numeric prefix empty so every index side-exits.
+    // A length-only empty subclass has no `"0"` key yet. Its first numeric
+    // slot is nevertheless known: it starts immediately after the complete
+    // named prefix. Recording that boundary lets named-field PICs prove the
+    // prefix while the tail is empty; `dense_prefix_len == 0` still makes
+    // every numeric index side-exit.
     let has_element_zero = element_base.is_some();
-    let element_base = element_base.unwrap_or(0);
+    let element_base = element_base.unwrap_or(key_count as u32);
     let mut dense_prefix_len = 0u32;
     if has_element_zero {
         while (element_base as usize + dense_prefix_len as usize) < key_count {
@@ -237,6 +307,11 @@ unsafe fn build_dense_layout(obj: *const ObjectHeader) -> Option<DenseSubclassLa
             if crate::object::get_accessor_descriptor(obj as usize, key).is_some() {
                 return None;
             }
+            if crate::object::get_property_attrs(obj as usize, key)
+                .is_some_and(|attrs| !attrs.writable())
+            {
+                return None;
+            }
         }
     }
 
@@ -248,26 +323,40 @@ unsafe fn build_dense_layout(obj: *const ObjectHeader) -> Option<DenseSubclassLa
     })
 }
 
-/// Resolve a live Array-subclass object and its cached dense layout. Every
-/// rejected brand, forwarding, descriptor, hole, or prototype case returns
-/// `None`; callers retain their existing fully generic fallback.
 #[inline]
-fn dense_layout_for_value(value: f64) -> Option<(*const ObjectHeader, DenseSubclassLayout)> {
-    let js = JSValue::from_bits(value.to_bits());
-    if !js.is_pointer() {
-        return None;
-    }
-    let obj = js.as_pointer::<ObjectHeader>();
-    let header = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize)? };
+fn validated_object_receiver(raw: usize) -> Option<ValidatedObjectReceiver> {
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(raw)? };
     if header.obj_type != crate::gc::GC_TYPE_OBJECT
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
     }
+    Some(ValidatedObjectReceiver {
+        object: raw as *const ObjectHeader,
+        object_flags: header._reserved,
+    })
+}
+
+#[inline]
+fn validated_object_receiver_for_value(value: f64) -> Option<ValidatedObjectReceiver> {
+    let js = JSValue::from_bits(value.to_bits());
+    js.is_pointer()
+        .then(|| validated_object_receiver(js.as_pointer::<ObjectHeader>() as usize))
+        .flatten()
+}
+
+/// Resolve the cached dense layout after the caller has proved that `obj` is
+/// a live, non-forwarded ordinary object. Every rejected Array-subclass brand,
+/// descriptor, hole, or prototype case returns `None`.
+#[inline]
+fn dense_layout_for_validated_object(obj: *const ObjectHeader) -> Option<DenseSubclassLayout> {
     // This is per receiver, not per ShapeId. A cached layout built before
     // Object.setPrototypeOf must not let this object borrow the old proof.
-    if crate::object::prototype_chain::object_has_prototype_override(obj as usize) {
+    if unsafe { validated_object_has_prototype_override(obj) } {
         return None;
+    }
+    if let Some(layout) = unsafe { owner_cached_dense_layout(obj) } {
+        return Some(layout);
     }
     let (class_id, shape_id) = unsafe { ((*obj).class_id, (*obj).parent_class_id) };
     let key = dense_cache_key(class_id, shape_id);
@@ -276,7 +365,244 @@ fn dense_layout_for_value(value: f64) -> Option<(*const ObjectHeader, DenseSubcl
         publish_dense_layout(key, layout);
         Some(layout)
     })?;
-    Some((obj, layout))
+    unsafe { publish_owner_dense_layout(obj, layout) };
+    Some(layout)
+}
+
+/// Resolve a live Array-subclass object and its cached dense layout. Every
+/// rejected brand, forwarding, descriptor, hole, or prototype case returns
+/// `None`; callers retain their existing fully generic fallback.
+#[inline]
+fn dense_layout_for_value(value: f64) -> Option<(*const ObjectHeader, DenseSubclassLayout)> {
+    let receiver = validated_object_receiver_for_value(value)?;
+    let layout = dense_layout_for_validated_object(receiver.object)?;
+    Some((receiver.object, layout))
+}
+
+/// Return the class-wide identity of a proved Array-subclass named prefix.
+///
+/// Perry's object-backed Array subclasses append numeric keys to the same
+/// ordered keys array that holds their declared fields. Consequently every
+/// numeric tail length has a different ShapeId, even though the slots before
+/// `"0"` are byte-for-byte the class allocation shape. A property-read PIC
+/// can safely keep using one declared-field slot across those tail shapes only
+/// after this function proves all of the following:
+///
+/// - the receiver is a live ordinary Array-subclass instance;
+/// - its prefix matches the class's registered allocation keys exactly;
+/// - the only additional named keys are the canonical Array-subclass
+///   `length` and `fill` slots;
+/// - every remaining key is the complete dense numeric suffix already proved
+///   by `DenseSubclassLayout`; and
+/// - `requested_slot` lies before that numeric suffix.
+///
+/// The token is stored on the object, not in a pointer-keyed side table, so it
+/// moves with the receiver. Generic structural/semantic shape publication
+/// clears it via `clear_array_subclass_named_prefix_token`; exact learned
+/// numeric-tail transitions deliberately do not.
+pub(crate) unsafe fn array_subclass_named_prefix_token_for_slot(
+    obj: *const ObjectHeader,
+    requested_slot: usize,
+) -> u64 {
+    if obj.is_null() {
+        return 0;
+    }
+    let header = match crate::value::addr_class::try_read_gc_header(obj as usize) {
+        Some(header) => header,
+        None => return 0,
+    };
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return 0;
+    }
+    let meta = (*obj).meta;
+    if meta.is_null() {
+        return 0;
+    }
+    let class_id = (*obj).class_id;
+    if class_id == 0 || !is_array_subclass_class_id(class_id) {
+        return 0;
+    }
+    let Some((declared_keys, declared_count)) =
+        crate::object::registered_class_keys_array(class_id)
+    else {
+        return 0;
+    };
+    if declared_keys.is_null() {
+        return 0;
+    }
+    let shape_id = (*obj).parent_class_id;
+    let cache_key = dense_cache_key(class_id, shape_id);
+    let layout = cached_dense_layout(cache_key).or_else(|| {
+        let layout = build_dense_layout(obj)?;
+        publish_dense_layout(cache_key, layout);
+        Some(layout)
+    });
+    let Some(layout) = layout else {
+        return 0;
+    };
+    // Descriptor-bearing Array subclasses cannot use the ordinary exact-shape
+    // raw-load PIC even while empty: their unrelated `length` descriptor sends
+    // them through the descriptor arm. Admit the fully validated named prefix
+    // before the first numeric key exists as well. `element_base` is the first
+    // prospective numeric slot and `dense_prefix_len == 0` proves there is no
+    // tail yet; the complete-prefix equality below remains the authority.
+    if requested_slot >= layout.element_base as usize {
+        return 0;
+    }
+    let cached = (*meta).array_subclass_named_prefix_token;
+    if cached != 0 {
+        return cached;
+    }
+
+    let Some(shape) = crate::object::shapes::object_shape_descriptor(obj) else {
+        return 0;
+    };
+    if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary {
+        return 0;
+    }
+    let current_keys = shape.keys as usize as *const ArrayHeader;
+    let (current_slots, current_physical_len) = crate::object::keys_array_dense_slots(current_keys);
+    let (declared_slots, declared_physical_len) =
+        crate::object::keys_array_dense_slots(declared_keys as *const ArrayHeader);
+    let current_count = (shape.logical_key_count as usize).min(current_physical_len);
+    let declared_count = (declared_count as usize).min(declared_physical_len);
+    if current_slots.is_null()
+        || declared_slots.is_null()
+        || declared_count > current_count
+        || layout.element_base as usize + layout.dense_prefix_len as usize != current_count
+    {
+        return 0;
+    }
+
+    // Declared slots must occupy the identical prefix positions. Stored object
+    // keys are heap strings, so string equality is exact even after one keys
+    // array was cloned and the two pointer words differ after a moving GC.
+    let mut declared_length_slot = None;
+    let mut declared_fill = false;
+    for slot in 0..declared_count {
+        let current_bits = (*current_slots.add(slot)).to_bits();
+        let declared_bits = (*declared_slots.add(slot)).to_bits();
+        let current_key = (current_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
+        let declared_key = (declared_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
+        if current_key.is_null()
+            || declared_key.is_null()
+            || crate::string::js_string_equals(current_key, declared_key) == 0
+        {
+            return 0;
+        }
+        // An unrelated descriptor (notably Array-subclass `length`) must not
+        // disable direct reads of class-declared data fields. Prove every key
+        // covered by this class-wide token is not an accessor on THIS object;
+        // any later descriptor mutation mints a semantic ShapeId and clears
+        // the token before it becomes observable.
+        let Some(name) = crate::object::has_own_helpers::str_from_string_header(current_key) else {
+            return 0;
+        };
+        if name == "length" {
+            declared_length_slot = Some(slot as u32);
+        } else if name == "fill" {
+            declared_fill = true;
+        }
+        if crate::object::get_accessor_descriptor(obj as usize, name).is_some() {
+            return 0;
+        }
+    }
+
+    // `js_array_subclass_init` installs two canonical own properties that are
+    // absent from most class allocation shapes: `length` and the generic
+    // `fill` method. If a class declared either name, init overwrites its
+    // existing slot; otherwise the exact missing names must follow the
+    // declared prefix in that order. Anything else is instance-specific.
+    let declared_count = declared_count as u32;
+    let expected_length_slot = if let Some(slot) = declared_length_slot {
+        slot
+    } else {
+        declared_count
+    };
+    if layout.length_slot != expected_length_slot {
+        return 0;
+    }
+    let mut expected_runtime_names: [&[u8]; 2] = [&[]; 2];
+    let mut expected_runtime_count = 0usize;
+    if declared_length_slot.is_none() {
+        expected_runtime_names[expected_runtime_count] = b"length";
+        expected_runtime_count += 1;
+    }
+    if !declared_fill {
+        expected_runtime_names[expected_runtime_count] = b"fill";
+        expected_runtime_count += 1;
+    }
+    if layout.element_base != declared_count.saturating_add(expected_runtime_count as u32) {
+        return 0;
+    }
+    for (offset, expected) in expected_runtime_names[..expected_runtime_count]
+        .iter()
+        .enumerate()
+    {
+        let slot = declared_count as usize + offset;
+        let bits = (*current_slots.add(slot)).to_bits();
+        let key = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
+        if key.is_null()
+            || !crate::string::js_string_key_matches_bytes(JSValue::from_bits(bits), expected)
+        {
+            return 0;
+        }
+        let Some(name) = crate::object::has_own_helpers::str_from_string_header(key) else {
+            return 0;
+        };
+        if crate::object::get_accessor_descriptor(obj as usize, name).is_some() {
+            return 0;
+        }
+    }
+
+    let token = ARRAY_SUBCLASS_NAMED_PREFIX_TOKEN_BIT | u64::from(class_id);
+    (*meta).array_subclass_named_prefix_token = token;
+    token
+}
+
+/// Retire the named-prefix proof before any generic shape or semantic
+/// publication. Value-only field stores leave slot identity unchanged and do
+/// not call this; exact numeric-tail shape installs bypass it deliberately.
+#[inline]
+pub(crate) unsafe fn clear_array_subclass_named_prefix_token(obj: *mut ObjectHeader) {
+    if obj.is_null() {
+        return;
+    }
+    let meta = (*obj).meta;
+    if !meta.is_null() {
+        (*meta).array_subclass_named_prefix_token = 0;
+    }
+}
+
+/// Test an already-published Array-subclass named-prefix proof against the
+/// class expected by a consumer.
+///
+/// The token is stronger than an ordinary-object ShapeId-kind query for this
+/// purpose: its publisher admitted only a live ordinary instance of this
+/// exact Array-subclass class, validated the complete declared prefix and the
+/// dense numeric suffix, and stored the class id in the token itself. Generic
+/// structural/semantic transitions clear it before publishing a new ShapeId;
+/// only the exact learned numeric-tail transitions preserve it.
+///
+/// # Safety
+///
+/// `obj` must already have been validated as a live, non-forwarded
+/// `GC_TYPE_OBJECT`. The helper reads only its inline `meta` edge and scalar
+/// token payload.
+#[inline(always)]
+pub(crate) unsafe fn array_subclass_named_prefix_token_matches_class(
+    obj: *const ObjectHeader,
+    class_id: u32,
+) -> bool {
+    if obj.is_null() || class_id == 0 {
+        return false;
+    }
+    let meta = (*obj).meta;
+    !meta.is_null()
+        && (*meta).array_subclass_named_prefix_token
+            == (ARRAY_SUBCLASS_NAMED_PREFIX_TOKEN_BIT | u64::from(class_id))
 }
 
 /// Clear an established Array-subclass numeric-prefix proof before an owner
@@ -526,6 +852,46 @@ pub(crate) fn array_subclass_fast_length(value: f64) -> Option<f64> {
     Some(f64::from_bits(layout_length_value(obj, layout).bits()))
 }
 
+/// Fast own `length` read that also primes a pointer-free generated-code IC.
+///
+/// The three published words are `(identity, length slot, inline bound)`.
+/// `identity` is either the exact `(class_id, ShapeId)` pair or the stable
+/// Array-subclass named-prefix token used by the dense indexed-read IC.  The
+/// payload is published before the identity, and no managed pointer escapes
+/// into the cache, so moving GC needs neither a root nor a rewrite hook.
+#[inline]
+pub(crate) fn array_subclass_fast_length_with_ic(value: f64, cache: *mut u64) -> Option<f64> {
+    let (obj, layout) = dense_layout_for_value(value)?;
+    let result = f64::from_bits(layout_length_value(obj, layout).bits());
+    if !cache.is_null() {
+        let family_token = if crate::object::object_spill_enabled() {
+            unsafe { array_subclass_named_prefix_token_for_slot(obj, layout.length_slot as usize) }
+        } else {
+            0
+        };
+        unsafe {
+            cache.add(1).write(layout.length_slot as u64);
+            cache.add(2).write(layout.live_inline_slots as u64);
+            cache.write(if family_token != 0 {
+                family_token
+            } else {
+                dense_cache_key((*obj).class_id, (*obj).parent_class_id)
+            });
+        }
+    }
+    Some(result)
+}
+
+#[inline]
+pub(crate) fn array_subclass_fast_length_raw(arr: *const ArrayHeader) -> Option<f64> {
+    let raw = (arr as u64 & crate::value::POINTER_MASK) as usize;
+    let receiver = validated_object_receiver(raw)?;
+    let layout = dense_layout_for_validated_object(receiver.object)?;
+    Some(f64::from_bits(
+        layout_length_value(receiver.object, layout).bits(),
+    ))
+}
+
 /// Guarded dense numeric read for an object-backed Array subclass. The live
 /// `length` value is checked on every hit, while `dense_prefix_len` caps the
 /// proof when a length-only grow created holes without changing the shape.
@@ -533,6 +899,526 @@ pub(crate) fn array_subclass_fast_length(value: f64) -> Option<f64> {
 pub(crate) fn array_subclass_fast_index_get(value: f64, index: u32) -> Option<f64> {
     let (obj, layout) = dense_layout_for_value(value)?;
     dense_index_get_with_layout(obj, layout, index)
+}
+
+#[inline]
+pub(crate) fn array_subclass_fast_index_get_raw(
+    arr: *const ArrayHeader,
+    index: u32,
+) -> Option<f64> {
+    let raw = (arr as u64 & crate::value::POINTER_MASK) as usize;
+    let receiver = validated_object_receiver(raw)?;
+    let layout = dense_layout_for_validated_object(receiver.object)?;
+    dense_index_get_with_layout(receiver.object, layout, index)
+}
+
+#[inline]
+unsafe fn dense_slot_exists(obj: *const ObjectHeader, slot: u32, live_inline_slots: u32) -> bool {
+    if slot < live_inline_slots {
+        return true;
+    }
+    if !crate::object::object_spill_enabled() {
+        return false;
+    }
+    let meta = (*obj).meta;
+    if meta.is_null() {
+        return false;
+    }
+    let spill = (*meta).spill as *const ArrayHeader;
+    !spill.is_null() && slot < (*spill).length && slot < (*spill).capacity
+}
+
+#[inline]
+unsafe fn store_dense_slot(
+    obj: *mut ObjectHeader,
+    slot: u32,
+    live_inline_slots: u32,
+    value_bits: u64,
+) -> bool {
+    if slot < live_inline_slots {
+        crate::object::store_object_field_slot(obj, slot as usize, value_bits);
+        return true;
+    }
+    if !crate::object::object_spill_enabled() {
+        return false;
+    }
+    let meta = (*obj).meta;
+    if meta.is_null() {
+        return false;
+    }
+    let spill = (*meta).spill as *mut ArrayHeader;
+    if spill.is_null() || slot >= (*spill).length || slot >= (*spill).capacity {
+        return false;
+    }
+    note_packed_subclass_spill_store(obj, meta);
+    let elements = (spill as *mut u8)
+        .add(std::mem::size_of::<ArrayHeader>())
+        .cast::<u64>();
+    ptr::write(elements.add(slot as usize), value_bits);
+    note_array_slot(spill, slot as usize, value_bits);
+    true
+}
+
+/// Store a raw Number into a dense Array-subclass slot without changing its
+/// pointer-layout metadata.
+///
+/// This is deliberately narrower than [`store_dense_slot`]. The caller has
+/// already proved either that the slot was outside the predecessor shape or
+/// that its old value was also pointer-free, that its physical storage exists,
+/// and that the new value is a nonnegative `i32` encoded as raw f64 bits.
+/// Consequently the store cannot publish or remove a heap edge, cannot demote
+/// a unique string, and cannot change a pointer-layout bit. Skipping the
+/// general layout note and write barrier here removes two full metadata
+/// pipelines from numeric tail mutation and the hot ECS swap-with-last write.
+#[inline]
+unsafe fn store_dense_nonpointer_number_slot(
+    obj: *mut ObjectHeader,
+    slot: u32,
+    live_inline_slots: u32,
+    number: f64,
+) -> bool {
+    let value_bits = number.to_bits();
+    if slot < live_inline_slots {
+        let fields = (obj as *mut u8)
+            .add(std::mem::size_of::<ObjectHeader>())
+            .cast::<u64>();
+        ptr::write(fields.add(slot as usize), value_bits);
+        return true;
+    }
+    if !crate::object::object_spill_enabled() {
+        return false;
+    }
+    let meta = (*obj).meta;
+    if meta.is_null() {
+        return false;
+    }
+    let spill = (*meta).spill as *mut ArrayHeader;
+    if spill.is_null() || slot >= (*spill).length || slot >= (*spill).capacity {
+        return false;
+    }
+    let elements = (spill as *mut u8)
+        .add(std::mem::size_of::<ArrayHeader>())
+        .cast::<u64>();
+    ptr::write(elements.add(slot as usize), value_bits);
+    true
+}
+
+#[inline]
+unsafe fn clear_retired_dense_slot(
+    obj: *mut ObjectHeader,
+    slot: u32,
+    former_live_inline_slots: u32,
+) {
+    if slot < former_live_inline_slots {
+        let fields = (obj as *mut u8)
+            .add(std::mem::size_of::<ObjectHeader>())
+            .cast::<u64>();
+        // The predecessor ShapeId is already installed, so this physical tail
+        // is outside the object's traced slot range. Clearing it is storage
+        // hygiene, not publication of a new edge.
+        ptr::write(fields.add(slot as usize), crate::value::TAG_UNDEFINED);
+        return;
+    }
+    let meta = (*obj).meta;
+    if meta.is_null() {
+        return;
+    }
+    let spill = (*meta).spill as *mut ArrayHeader;
+    if spill.is_null() || slot >= (*spill).length {
+        return;
+    }
+    let elements = (spill as *mut u8)
+        .add(std::mem::size_of::<ArrayHeader>())
+        .cast::<u64>();
+    ptr::write(elements.add(slot as usize), crate::value::TAG_UNDEFINED);
+    note_array_slot(spill, slot as usize, crate::value::TAG_UNDEFINED);
+}
+
+/// Clear a numeric tail slot after its exact predecessor shape has been
+/// installed. The removed value was constructively classified as a
+/// nonnegative i32 Number, so replacing it with `undefined` cannot remove or
+/// add a heap edge. Unlike the generic helper above this may therefore leave
+/// both the object's and its spill buffer's pointer-layout metadata untouched.
+#[inline]
+unsafe fn clear_retired_dense_numeric_tail_slot(
+    obj: *mut ObjectHeader,
+    slot: u32,
+    former_live_inline_slots: u32,
+) {
+    if slot < former_live_inline_slots {
+        let fields = (obj as *mut u8)
+            .add(std::mem::size_of::<ObjectHeader>())
+            .cast::<u64>();
+        ptr::write(fields.add(slot as usize), crate::value::TAG_UNDEFINED);
+        return;
+    }
+    let meta = (*obj).meta;
+    if meta.is_null() {
+        return;
+    }
+    let spill = (*meta).spill as *mut ArrayHeader;
+    if spill.is_null() || slot >= (*spill).length {
+        return;
+    }
+    let elements = (spill as *mut u8)
+        .add(std::mem::size_of::<ArrayHeader>())
+        .cast::<u64>();
+    ptr::write(elements.add(slot as usize), crate::value::TAG_UNDEFINED);
+}
+
+/// Prove once, while learning an exact semantic shape transition, that neither
+/// `length` nor the appended numeric property has custom mutation semantics.
+/// Descriptor installation/removal mints a new ShapeId, so a later exact cache
+/// hit can consume this proof without rebuilding decimal keys and probing two
+/// descriptor maps on every push/pop.
+pub(crate) fn array_subclass_tail_descriptors_are_plain(
+    obj: *const ObjectHeader,
+    index: u32,
+) -> bool {
+    if !crate::object::object_has_descriptors(obj as usize) {
+        return true;
+    }
+    if crate::object::get_accessor_descriptor(obj as usize, "length").is_some()
+        || crate::object::get_property_attrs(obj as usize, "length")
+            .is_some_and(|attrs| !attrs.writable())
+    {
+        return false;
+    }
+    let mut decimal = [0u8; 10];
+    let bytes = decimal_u32(index, &mut decimal);
+    let key = unsafe { std::str::from_utf8_unchecked(bytes) };
+    if crate::object::get_accessor_descriptor(obj as usize, key).is_some() {
+        return false;
+    }
+    crate::object::get_property_attrs(obj as usize, key).is_none()
+}
+
+#[inline(always)]
+fn mutation_receiver_allows_plain_tail(object_flags: u16) -> bool {
+    object_flags
+        & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND)
+        == 0
+        && super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) == 0
+}
+
+/// In-bounds indexed write for an exact dense Array-subclass shape. The dense
+/// layout builder proves every numeric prefix property is a writable data
+/// property; descriptor or prototype mutations publish a different ShapeId
+/// and therefore miss that cached proof.
+#[inline]
+pub(crate) fn array_subclass_fast_index_set(receiver: f64, index: u32, value: f64) -> bool {
+    let Some(receiver) = validated_object_receiver_for_value(receiver) else {
+        return false;
+    };
+    array_subclass_fast_index_set_validated(receiver, index, value)
+}
+
+#[inline]
+pub(crate) fn array_subclass_fast_index_set_raw(
+    arr: *const ArrayHeader,
+    index: u32,
+    value: f64,
+) -> bool {
+    let raw = (arr as u64 & crate::value::POINTER_MASK) as usize;
+    let Some(receiver) = validated_object_receiver(raw) else {
+        return false;
+    };
+    array_subclass_fast_index_set_validated(receiver, index, value)
+}
+
+#[inline]
+fn array_subclass_fast_index_set_validated(
+    receiver: ValidatedObjectReceiver,
+    index: u32,
+    value: f64,
+) -> bool {
+    let obj = receiver.object;
+    let Some(layout) = dense_layout_for_validated_object(obj) else {
+        return false;
+    };
+    let Some(length) = nonnegative_u32_length(layout_length_value(obj, layout)) else {
+        return false;
+    };
+    let Some(slot) = layout.element_base.checked_add(index) else {
+        return false;
+    };
+    if index >= length || index >= layout.dense_prefix_len {
+        return false;
+    }
+    if receiver.object_flags & crate::gc::OBJ_FLAG_FROZEN != 0
+        || !unsafe { dense_slot_exists(obj, slot, layout.live_inline_slots) }
+    {
+        return false;
+    }
+    let obj = obj as *mut ObjectHeader;
+    unsafe {
+        let old_value = layout_field_value(obj, slot, layout.live_inline_slots);
+        let numeric_u31 = |bits| {
+            crate::array::value_bits_to_number(bits).filter(|number| {
+                number.is_finite()
+                    && *number >= 0.0
+                    && *number <= i32::MAX as f64
+                    && number.fract() == 0.0
+            })
+        };
+        if let (Some(_old), Some(new)) =
+            (numeric_u31(old_value.bits()), numeric_u31(value.to_bits()))
+        {
+            // Both sides are pointer-free Numbers, so neither the pointer mask
+            // nor an established packed-u32 prefix changes. Keep that proof
+            // live and overwrite the slot without the general metadata path.
+            store_dense_nonpointer_number_slot(obj, slot, layout.live_inline_slots, new)
+        } else {
+            clear_packed_subclass_numeric_proof(obj);
+            store_dense_slot(obj, slot, layout.live_inline_slots, value.to_bits())
+        }
+    }
+}
+
+/// Allocation-free `Array.prototype.push` for a previously observed dense
+/// Array-subclass tail transition. The first append at each length learns the
+/// ordinary object transition; later cycles reuse it under exact shape and
+/// descriptor guards.
+#[inline]
+pub(crate) fn array_subclass_fast_push_one(receiver: f64, value: f64) -> Option<f64> {
+    let receiver = validated_object_receiver_for_value(receiver)?;
+    array_subclass_fast_push_one_validated(receiver, value, None)
+}
+
+/// Raw-entry counterpart to [`array_subclass_fast_push_one`]. The pointer is
+/// magnitude- and header-validated exactly once before the dense mutation.
+#[inline]
+pub(crate) fn array_subclass_fast_push_one_raw(arr: *const ArrayHeader, value: f64) -> Option<f64> {
+    let raw = (arr as u64 & crate::value::POINTER_MASK) as usize;
+    let receiver = validated_object_receiver(raw)?;
+    array_subclass_fast_push_one_validated(receiver, value, None)
+}
+
+/// Raw-entry counterpart for a value constructively proved by generated code
+/// to be a nonnegative signed-i32 Number. Besides keeping tagged integers and
+/// ClassRefs out of this path, that proof lets the hot Array-subclass append
+/// skip `value_bits_to_number`, finiteness, range, and fractional checks.
+#[inline]
+pub(crate) fn array_subclass_fast_push_u31_raw(arr: *const ArrayHeader, value: u32) -> Option<f64> {
+    let raw = (arr as u64 & crate::value::POINTER_MASK) as usize;
+    let receiver = validated_object_receiver(raw)?;
+    debug_assert!(value <= i32::MAX as u32);
+    array_subclass_fast_push_one_validated(receiver, f64::from(value), Some(value))
+}
+
+#[inline]
+fn array_subclass_fast_push_one_validated(
+    receiver: ValidatedObjectReceiver,
+    value: f64,
+    proven_u31: Option<u32>,
+) -> Option<f64> {
+    let obj = receiver.object;
+    let layout = dense_layout_for_validated_object(obj)?;
+    let length = nonnegative_u32_length(layout_length_value(obj, layout))?;
+    if length > layout.dense_prefix_len
+        || !mutation_receiver_allows_plain_tail(receiver.object_flags)
+    {
+        return None;
+    }
+    let predecessor_shape_id = unsafe { (*obj).parent_class_id };
+    let transition = crate::object::array_tail_transition::lookup_forward_for_owner(
+        obj,
+        predecessor_shape_id,
+        length,
+    )?;
+    if length != 0 && transition.slot != layout.element_base.checked_add(length)? {
+        return None;
+    }
+    if layout.live_inline_slots != transition.predecessor_live_inline_slots
+        || !unsafe {
+            dense_slot_exists(obj, transition.slot, transition.successor_live_inline_slots)
+                && dense_slot_exists(
+                    obj,
+                    layout.length_slot,
+                    transition.successor_live_inline_slots,
+                )
+        }
+    {
+        return None;
+    }
+
+    let obj = obj as *mut ObjectHeader;
+    let installed = unsafe {
+        crate::object::shapes::install_cache_carried_object_shape_version(
+            obj,
+            predecessor_shape_id,
+            transition.successor_shape_id,
+            transition.successor_keys as *mut ArrayHeader,
+            transition.slot.saturating_add(1),
+        )
+    };
+    if !installed {
+        return None;
+    }
+    let new_length = length.checked_add(1)?;
+    unsafe {
+        // ECS entity ids arrive here as exact nonnegative i32 Numbers. Keep
+        // this proof constructive and local: tagged class references share the
+        // INT32 tag, and arbitrary doubles can look pointer-bearing to the
+        // conservative layout classifier, so neither is admitted. The generic
+        // barriered store below remains the complete fallback for them.
+        let numeric_entity = proven_u31.map(f64::from).or_else(|| {
+            crate::array::value_bits_to_number(value.to_bits()).filter(|number| {
+                number.is_finite()
+                    && *number >= 0.0
+                    && *number <= i32::MAX as f64
+                    && number.fract() == 0.0
+            })
+        });
+        let (value_stored, length_stored) = if let Some(number) = numeric_entity {
+            // `layout_note_slot` used to retire this proof as a side effect.
+            // Retire it explicitly before bypassing that general hook.
+            clear_packed_subclass_numeric_proof(obj);
+            (
+                store_dense_nonpointer_number_slot(
+                    obj,
+                    transition.slot,
+                    transition.successor_live_inline_slots,
+                    number,
+                ),
+                store_dense_nonpointer_number_slot(
+                    obj,
+                    layout.length_slot,
+                    transition.successor_live_inline_slots,
+                    f64::from(new_length),
+                ),
+            )
+        } else {
+            (
+                store_dense_slot(
+                    obj,
+                    transition.slot,
+                    transition.successor_live_inline_slots,
+                    value.to_bits(),
+                ),
+                store_dense_slot(
+                    obj,
+                    layout.length_slot,
+                    transition.successor_live_inline_slots,
+                    f64::from(new_length).to_bits(),
+                ),
+            )
+        };
+        debug_assert!(value_stored && length_stored);
+        publish_owner_dense_layout(
+            obj,
+            DenseSubclassLayout {
+                length_slot: layout.length_slot,
+                element_base: layout.element_base,
+                dense_prefix_len: layout.dense_prefix_len.max(new_length),
+                live_inline_slots: transition.successor_live_inline_slots,
+            },
+        );
+    }
+    Some(f64::from(new_length))
+}
+
+/// Allocation-free `Array.prototype.pop` for an exact learned dense-tail
+/// transition. All rejected cases retain the generic observable algorithm.
+#[inline]
+pub(crate) fn array_subclass_fast_pop(receiver: f64) -> Option<f64> {
+    let receiver = validated_object_receiver_for_value(receiver)?;
+    array_subclass_fast_pop_validated(receiver)
+}
+
+/// Raw-entry counterpart to [`array_subclass_fast_pop`], sharing one validated
+/// object-header read across the entire dense-tail mutation.
+#[inline]
+pub(crate) fn array_subclass_fast_pop_raw(arr: *const ArrayHeader) -> Option<f64> {
+    let raw = (arr as u64 & crate::value::POINTER_MASK) as usize;
+    let receiver = validated_object_receiver(raw)?;
+    array_subclass_fast_pop_validated(receiver)
+}
+
+#[inline]
+fn array_subclass_fast_pop_validated(receiver: ValidatedObjectReceiver) -> Option<f64> {
+    let obj = receiver.object;
+    let layout = dense_layout_for_validated_object(obj)?;
+    let length = nonnegative_u32_length(layout_length_value(obj, layout))?;
+    let index = length.checked_sub(1)?;
+    if length > layout.dense_prefix_len
+        || !mutation_receiver_allows_plain_tail(receiver.object_flags)
+    {
+        return None;
+    }
+    let successor_shape_id = unsafe { (*obj).parent_class_id };
+    let transition =
+        crate::object::array_tail_transition::lookup_reverse_for_owner(obj, successor_shape_id)?;
+    if transition.array_index != index
+        || transition.slot != layout.element_base.checked_add(index)?
+    {
+        return None;
+    }
+    if layout.live_inline_slots != transition.successor_live_inline_slots
+        || !unsafe {
+            dense_slot_exists(obj, transition.slot, transition.successor_live_inline_slots)
+                && dense_slot_exists(
+                    obj,
+                    layout.length_slot,
+                    transition.predecessor_live_inline_slots,
+                )
+        }
+    {
+        return None;
+    }
+    let value = layout_field_value(obj, transition.slot, transition.successor_live_inline_slots);
+    let numeric_entity = crate::array::value_bits_to_number(value.bits()).filter(|number| {
+        number.is_finite() && *number >= 0.0 && *number <= i32::MAX as f64 && number.fract() == 0.0
+    });
+    let obj = obj as *mut ObjectHeader;
+    unsafe { clear_packed_subclass_numeric_proof(obj) };
+    crate::object::prop_plan::prop_plan_epoch_bump();
+    let installed = unsafe {
+        crate::object::shapes::install_cache_carried_object_shape_version(
+            obj,
+            successor_shape_id,
+            transition.predecessor_shape_id,
+            transition.predecessor_keys as *mut ArrayHeader,
+            transition.slot,
+        )
+    };
+    if !installed {
+        return None;
+    }
+    unsafe {
+        let length_stored = if numeric_entity.is_some() {
+            clear_retired_dense_numeric_tail_slot(
+                obj,
+                transition.slot,
+                transition.successor_live_inline_slots,
+            );
+            store_dense_nonpointer_number_slot(
+                obj,
+                layout.length_slot,
+                transition.predecessor_live_inline_slots,
+                f64::from(index),
+            )
+        } else {
+            clear_retired_dense_slot(obj, transition.slot, transition.successor_live_inline_slots);
+            store_dense_slot(
+                obj,
+                layout.length_slot,
+                transition.predecessor_live_inline_slots,
+                f64::from(index).to_bits(),
+            )
+        };
+        debug_assert!(length_stored);
+        publish_owner_dense_layout(
+            obj,
+            DenseSubclassLayout {
+                length_slot: layout.length_slot,
+                element_base: layout.element_base,
+                dense_prefix_len: index,
+                live_inline_slots: transition.predecessor_live_inline_slots,
+            },
+        );
+    }
+    Some(f64::from_bits(value.bits()))
 }
 
 #[inline(always)]
@@ -591,25 +1477,37 @@ pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64, cache
                         index_u32,
                     );
                 }
-                if header.obj_type == crate::gc::GC_TYPE_OBJECT {
-                    if let Some((obj, layout)) = dense_layout_for_value(receiver) {
-                        // The codegen hit path reads length inline and wide
-                        // slots through ObjectMeta::spill. Decline to prime in
-                        // the legacy side-table mode or for a pathological
-                        // layout whose length itself spilled.
-                        if !cache.is_null()
-                            && crate::object::object_spill_enabled()
-                            && layout.length_slot < layout.live_inline_slots
-                        {
+                if header.obj_type == crate::gc::GC_TYPE_OBJECT
+                    && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                {
+                    let obj = raw.cast::<ObjectHeader>();
+                    if let Some(layout) = dense_layout_for_validated_object(obj) {
+                        // The codegen hit path handles both inline and
+                        // object-owned spill slots.  In spill mode, publish a
+                        // class-wide dense-tail identity when the owner has
+                        // proved one.  Exact push/pop transitions preserve
+                        // that move-stable token, so a lifecycle loop does not
+                        // miss once for every historical tail ShapeId.  The
+                        // cached dense-prefix word remains the admitted high
+                        // water mark: a generic `length` grow beyond it still
+                        // side-exits and re-establishes the complete proof.
+                        if !cache.is_null() && crate::object::object_spill_enabled() {
+                            let family_token = unsafe {
+                                array_subclass_named_prefix_token_for_slot(
+                                    obj,
+                                    layout.length_slot as usize,
+                                )
+                            };
                             unsafe {
                                 cache.add(1).write(layout.length_slot as u64);
                                 cache.add(2).write(layout.element_base as u64);
                                 cache.add(3).write(layout.dense_prefix_len as u64);
                                 cache.add(4).write(layout.live_inline_slots as u64);
-                                cache.write(dense_cache_key(
-                                    (*obj).class_id,
-                                    (*obj).parent_class_id,
-                                ));
+                                cache.write(if family_token != 0 {
+                                    family_token
+                                } else {
+                                    dense_cache_key((*obj).class_id, (*obj).parent_class_id)
+                                });
                             }
                         }
                         if let Some(value) = dense_index_get_with_layout(obj, layout, index_u32) {
@@ -727,8 +1625,8 @@ fn packed_arraylike_loop_guard(
     if header.obj_type != crate::gc::GC_TYPE_OBJECT {
         return None;
     }
-    let live_receiver = f64::from_bits(crate::value::js_nanbox_pointer(raw as i64).to_bits());
-    let Some((object, layout)) = dense_layout_for_value(live_receiver) else {
+    let object = raw.cast::<ObjectHeader>();
+    let Some(layout) = dense_layout_for_validated_object(object) else {
         return None;
     };
     // Stable-loop codegen already handles both inline and object-owned spill
@@ -1274,13 +2172,7 @@ pub fn array_subclass_has_iterator_override(value: f64) -> bool {
 #[inline]
 pub(crate) fn raw_receiver_is_heap_object(arr: *const ArrayHeader) -> bool {
     let raw = ((arr as u64) & 0x0000_FFFF_FFFF_FFFF) as usize;
-    if raw == 0 {
-        return false;
-    }
-    match unsafe { crate::value::addr_class::try_read_gc_header(raw) } {
-        Some(header) => header.obj_type == crate::gc::GC_TYPE_OBJECT,
-        None => false,
-    }
+    validated_object_receiver(raw).is_some()
 }
 
 #[cold]
@@ -1320,6 +2212,15 @@ pub(crate) fn is_array_subclass_value(value: f64) -> bool {
 #[cold]
 #[inline(never)]
 pub(crate) fn array_object_method(recv: f64, method: &str, args: &[f64]) -> Option<f64> {
+    if method == "push" && args.len() == 1 {
+        if let Some(length) = array_subclass_fast_push_one(recv, args[0]) {
+            return Some(length);
+        }
+    } else if method == "pop" && args.is_empty() {
+        if let Some(value) = array_subclass_fast_pop(recv) {
+            return Some(value);
+        }
+    }
     let (ptr, len) = (args.as_ptr(), args.len());
     if let Some(result) = super::generic::run_object_mutator(recv, method, ptr, len) {
         return Some(result);
@@ -1331,6 +2232,9 @@ pub(crate) fn array_object_method(recv: f64, method: &str, args: &[f64]) -> Opti
 #[cold]
 #[inline(never)]
 pub(crate) fn array_object_index_get(recv: f64, index: u32) -> f64 {
+    if let Some(value) = array_subclass_fast_index_get(recv, index) {
+        return value;
+    }
     al_get(recv, index as i64)
 }
 
@@ -1346,6 +2250,9 @@ pub(crate) fn array_object_index_get(recv: f64, index: u32) -> f64 {
 #[cold]
 #[inline(never)]
 pub(crate) fn array_object_index_set(recv: f64, index: u32, value: f64) {
+    if array_subclass_fast_index_set(recv, index, value) {
+        return;
+    }
     // The store interns a key string and can allocate, so root the receiver
     // across it — it is a movable `ObjectHeader` and is read again below.
     let scope = crate::gc::RuntimeHandleScope::new();

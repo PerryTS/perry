@@ -947,7 +947,7 @@ fn transition_cache_lookup_rejects_mutated_edge_target() {
     let keys = crate::array::js_array_push(keys, JSValue::string_ptr(key));
     let keys = crate::array::js_array_push(keys, JSValue::string_ptr(key));
 
-    transition_cache_insert(0, key, keys as usize, 0, 0);
+    transition_cache_insert(std::ptr::null(), 0, key, keys as usize, 0, 0);
 
     assert!(
         transition_cache_lookup(0, key).is_none(),
@@ -977,7 +977,7 @@ fn transition_cache_requires_exact_predecessor_shape_id() {
     const OTHER_PREDECESSOR: u32 = 102;
     const TARGET: u32 = 201;
 
-    transition_cache_insert(PREDECESSOR, key, keys as usize, 0, TARGET);
+    transition_cache_insert(std::ptr::null(), PREDECESSOR, key, keys as usize, 0, TARGET);
     assert!(
         transition_cache_lookup(OTHER_PREDECESSOR, key).is_none(),
         "equal keys edges with different semantic ShapeIds must not alias"
@@ -1008,7 +1008,14 @@ fn transition_cache_prunes_a_descriptorless_target_shape() {
     let target = crate::object::shapes::shape_descriptor_ensure(next_keys, 0, 0)
         .expect("shape range unexpectedly exhausted");
     let occupancy_before = test_transition_cache_occupancy();
-    transition_cache_insert(predecessor, std::ptr::null(), next_keys as usize, 0, target);
+    transition_cache_insert(
+        std::ptr::null(),
+        predecessor,
+        std::ptr::null(),
+        next_keys as usize,
+        0,
+        target,
+    );
     assert_eq!(test_transition_cache_occupancy(), occupancy_before + 1);
 
     crate::object::shapes::test_drop_shape_descriptors(next_keys as usize);
@@ -1036,7 +1043,7 @@ fn transition_cache_lookup_rejects_slot_key_mismatch() {
     // Insert an edge keyed on (prev=0, `alpha`) but targeting the `beta` shape,
     // mirroring a recycled-address false match (target_len is set because the
     // length matches slot_idx+1, so only the content check can catch it).
-    transition_cache_insert(0, want, keys as usize, 0, 0);
+    transition_cache_insert(std::ptr::null(), 0, want, keys as usize, 0, 0);
 
     assert!(
         transition_cache_lookup(0, want).is_none(),
@@ -1046,7 +1053,7 @@ fn transition_cache_lookup_rejects_slot_key_mismatch() {
     // Sanity: an edge whose target slot DOES hold the key still hits.
     let good_keys = crate::array::js_array_alloc(4);
     let good_keys = crate::array::js_array_push(good_keys, JSValue::string_ptr(want));
-    transition_cache_insert(0, want, good_keys as usize, 0, 0);
+    transition_cache_insert(std::ptr::null(), 0, want, good_keys as usize, 0, 0);
     assert!(
         transition_cache_lookup(0, want).is_some(),
         "a genuine edge (target slot holds the key) must still hit (#6006)"
@@ -1080,7 +1087,7 @@ fn transition_cache_lookup_rejects_grown_shared_target() {
     // A 1-key target with spare capacity, cached as a slot-0 edge (target_len=1).
     let keys = crate::array::js_array_alloc(4);
     let keys = crate::array::js_array_push(keys, JSValue::string_ptr(key));
-    transition_cache_insert(0, key, keys as usize, 0, 0);
+    transition_cache_insert(std::ptr::null(), 0, key, keys as usize, 0, 0);
     assert!(
         transition_cache_lookup(0, key).is_some(),
         "sanity: a genuine 1-key edge hits before the target grows (#6006)"

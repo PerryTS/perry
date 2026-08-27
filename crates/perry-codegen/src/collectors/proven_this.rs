@@ -544,7 +544,7 @@ pub(crate) fn method_proven_this(
         return None;
     }
     for param in &method.params {
-        if param.default.is_some() || param.is_rest || param.arguments_object.is_some() {
+        if param.is_rest || param.arguments_object.is_some() {
             return None;
         }
     }
@@ -564,13 +564,34 @@ pub(crate) fn method_proven_this(
     let fields = chain_field_names(&chain);
     let methods = chain_method_map(&chain);
 
+    // A default that only reads a declared receiver field cannot invalidate
+    // the exact receiver shape. The parser also lowers that read into the
+    // explicit `arg === undefined` prologue walked below. Keep every other
+    // default conservative-off: an arbitrary initializer could run user code
+    // and mutate an aliased receiver after the call-site shape guard.
+    if method.params.iter().any(|param| {
+        param.default.as_ref().is_some_and(|default| {
+            !matches!(
+                default,
+                Expr::PropertyGet {
+                    object,
+                    property,
+                    ..
+                } if matches!(object.as_ref(), Expr::This)
+                    && fields.contains(property.as_str())
+            )
+        })
+    }) {
+        return None;
+    }
+
     // `this`-flow safety: `this` never used as a value (`Expr::This` in value
     // position rejects), no closure mentioning `this`, every `this.f = v`
     // write to a DECLARED chain field, every internally-invoked `this.m()` /
     // `super.m()` vetted transitively. This is the same walk Phase 3b runs
     // over the methods called on a proven local.
     let mut analysis = ThisFlowAnalysis::new(&chain, &fields, &methods);
-    if !analysis.method_safe(&class.name, method) {
+    if !analysis.method_safe_with_terminal_this_return(&class.name, method) {
         return None;
     }
 

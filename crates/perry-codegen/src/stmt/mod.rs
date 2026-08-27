@@ -13,6 +13,7 @@ use crate::types::DOUBLE;
 
 #[cfg(test)]
 mod boxed_slot_no_root_tests;
+mod cached_field_index_return;
 #[cfg(test)]
 mod class_field_loop_tests;
 mod counter_range;
@@ -140,6 +141,14 @@ fn lower_async_rejecting_stmts_inner(
 fn lower_stmts_inner(ctx: &mut FnCtx<'_>, stmts: &[Stmt], emit_shadow_clears: bool) -> Result<()> {
     let mut i = 0;
     while i < stmts.len() {
+        // A common memo-table method shape is
+        // `if (!owner.table[i]) { ...fill... } return owner.table[i]`.
+        // Before lowering the untouched statements, add a guarded direct
+        // data-field/Array probe that can return the first truthy value. Every
+        // miss falls into the ordinary lowering below, including accessors,
+        // proxies, sparse/OOB arrays and the falsy fill branch.
+        cached_field_index_return::try_emit_cached_field_index_return(ctx, &stmts[i..])?;
+
         // Channel-reduction fusion: detect a length-3-or-4 sequence of
         // `acc[c] += arr[idx + c] * k` accumulator updates and emit a
         // single `<4 x i32>` SIMD multiply-add. The canonical hot shape

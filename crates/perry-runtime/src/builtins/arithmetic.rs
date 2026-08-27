@@ -424,14 +424,16 @@ unsafe fn string_content_for_bigint(value: f64) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-/// Both operands already numeric (plain IEEE double or int32-tagged)?
+/// Can this primitive operand be converted to Number without allocation,
+/// user code, or observable coercion ordering?
 ///
 /// `abstract_relational` opens a `RuntimeHandleScope`, roots both operands and
 /// runs `ToPrimitive` on each — necessary only because a *heap* operand can run
-/// user `valueOf`/`toString`. For a number `ToPrimitive` is the identity and
-/// there is no pointer to root, so the whole apparatus is dead weight. This is
-/// the same predicate and the same reasoning `dynamic_arith`'s binary operators
-/// already use; the relational operators were simply never given it.
+/// user `valueOf`/`toString`. Numbers, undefined, null, and booleans contain no
+/// pointer and their ToPrimitive/ToNumber results are fixed by the spec, so the
+/// whole apparatus is dead weight. Strings stay on the full path because two
+/// strings compare lexicographically; BigInts, Symbols, objects, and internal
+/// sentinels stay there for their distinct semantics and errors.
 ///
 /// NaN must stay `false` for all four operators, which Rust's `<`/`>`/`<=`/`>=`
 /// on `f64` already deliver.
@@ -445,7 +447,12 @@ fn rel_numeric_operand(v: f64) -> Option<f64> {
     if jv.is_int32() {
         return Some(jv.as_int32() as f64);
     }
-    None
+    match v.to_bits() {
+        crate::value::TAG_UNDEFINED => Some(f64::NAN),
+        crate::value::TAG_NULL | crate::value::TAG_FALSE => Some(0.0),
+        crate::value::TAG_TRUE => Some(1.0),
+        _ => None,
+    }
 }
 
 /// `x < y` — codegen routes here for any relational `<` whose operands are not
@@ -666,38 +673,50 @@ pub(crate) fn typeof_string_cache_cells_for_test() -> [*mut StringHeader; 8] {
     typeof_cache_entries_for_test().map(|(cache, _)| cache.with(|cell| cell.get()))
 }
 
-/// Return the typeof a value as a string
-/// Takes an f64 that uses NaN-boxing to distinguish types.
-/// Returns a pointer to a string: "undefined", "boolean", "number", "string", "object", "function"
-///
-/// Optimization: typeof only returns 8 possible strings, so we cache them as
-/// pre-allocated StringHeader pointers to avoid heap allocation on every call.
-/// The cache is a registered GC root — see the `thread_local!` above.
-#[no_mangle]
-pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+enum ValueTypeofTag {
+    Undefined = 0,
+    Object = 1,
+    Boolean = 2,
+    Number = 3,
+    String = 4,
+    Function = 5,
+    BigInt = 6,
+    Symbol = 7,
+}
+
+/// Classify a value once, independently of the string representation exposed
+/// by the `typeof` operator. Keeping every exceptional Perry representation in
+/// this one classifier makes the literal-comparison entry point below exactly
+/// agree with [`js_value_typeof`]: class refs, callable proxies, raw typed-array
+/// pointers, stream handles, Symbols, closures, and class-expression objects
+/// cannot drift between the two APIs.
+#[inline]
+fn classify_value_typeof(value: f64) -> ValueTypeofTag {
     let jsval = JSValue::from_bits(value.to_bits());
 
     if jsval.is_undefined() {
-        get_cached(&TYPEOF_UNDEFINED, "undefined")
+        ValueTypeofTag::Undefined
     } else if jsval.is_null() {
         // typeof null === "object" in JavaScript
-        get_cached(&TYPEOF_OBJECT, "object")
+        ValueTypeofTag::Object
     } else if jsval.is_bool() {
-        get_cached(&TYPEOF_BOOLEAN, "boolean")
+        ValueTypeofTag::Boolean
     } else if jsval.is_any_string() {
         // String pointer (STRING_TAG) OR inline SSO (SHORT_STRING_TAG).
         // `typeof` doesn't distinguish between representations — both
         // are observed as "string" from user code.
-        get_cached(&TYPEOF_STRING, "string")
+        ValueTypeofTag::String
     } else if crate::value::is_js_handle(value) {
         // JS handle from V8 runtime — ask V8 whether it's a callable, otherwise default
         // to "object". Issue #258: pre-fix this always returned "object" even for
         // V8 functions; the registered callback now flips it to "function" when the
         // handle wraps a v8::Function.
         if crate::value::js_handle_is_function(value) {
-            get_cached(&TYPEOF_FUNCTION, "function")
+            ValueTypeofTag::Function
         } else {
-            get_cached(&TYPEOF_OBJECT, "object")
+            ValueTypeofTag::Object
         }
     } else if jsval.is_pointer() {
         // Object/array/closure/symbol pointer - check via the side-table first.
@@ -713,43 +732,43 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
         // (possibly nested) [[ProxyTarget]] is callable.
         if crate::proxy::js_proxy_is_proxy(value) == 1 {
             return if crate::proxy::proxy_wraps_callable(value) {
-                get_cached(&TYPEOF_FUNCTION, "function")
+                ValueTypeofTag::Function
             } else {
-                get_cached(&TYPEOF_OBJECT, "object")
+                ValueTypeofTag::Object
             };
         }
         if crate::value::addr_class::is_above_handle_band(ptr as usize) {
             // Symbols: registered in SYMBOL_POINTERS (handles both gc_malloc'd
             // and Box-leaked symbols, which have no GcHeader).
             if crate::symbol::is_registered_symbol(ptr as usize) {
-                get_cached(&TYPEOF_SYMBOL, "symbol")
+                ValueTypeofTag::Symbol
             } else if crate::date::is_date_cell_addr(ptr as usize) {
                 // Date is a NaN-boxed pointer to an 8-byte `DateCell` (#2089).
                 // `typeof aDate === "object"`. Check this BEFORE reading the
                 // `type_tag` at offset 12 below — the cell is only 8 bytes, so
                 // that read would fall off the end of the allocation.
-                get_cached(&TYPEOF_OBJECT, "object")
+                ValueTypeofTag::Object
             } else {
                 // ClosureHeader has type_tag at offset 12 (after func_ptr:8 + capture_count:4)
                 let type_tag =
                     unsafe { *(ptr.add(crate::closure::CLOSURE_TYPE_TAG_OFFSET) as *const u32) };
                 if type_tag == crate::closure::CLOSURE_MAGIC {
-                    get_cached(&TYPEOF_FUNCTION, "function")
+                    ValueTypeofTag::Function
                 } else if crate::object::is_class_object_ptr(ptr) {
                     // #1789: a class-expression VALUE is a heap object stamped
                     // with OBJECT_TYPE_CLASS — `typeof aClassObject ===
                     // "function"` (classes are callable in JS), matching the
                     // INT32 ClassRef case below.
-                    get_cached(&TYPEOF_FUNCTION, "function")
+                    ValueTypeofTag::Function
                 } else {
-                    get_cached(&TYPEOF_OBJECT, "object")
+                    ValueTypeofTag::Object
                 }
             }
         } else {
-            get_cached(&TYPEOF_OBJECT, "object")
+            ValueTypeofTag::Object
         }
     } else if jsval.is_bigint() {
-        get_cached(&TYPEOF_BIGINT, "bigint")
+        ValueTypeofTag::BigInt
     } else if jsval.is_int32() {
         // Refs #618 / #420 followup: class refs share INT32_TAG storage
         // shape (codegen emits `INT32_TAG | class_id` as the value form
@@ -759,9 +778,9 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
         let raw = jsval.bits() & 0xFFFF_FFFF;
         let class_id = raw as u32;
         if crate::object::is_class_id_registered(class_id) {
-            get_cached(&TYPEOF_FUNCTION, "function")
+            ValueTypeofTag::Function
         } else {
-            get_cached(&TYPEOF_NUMBER, "number")
+            ValueTypeofTag::Number
         }
     } else {
         // Issue #654: typed-array pointers arrive as a raw `i64 → f64`
@@ -776,7 +795,7 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
         if top16 == 0 && bits >= 0x10000 {
             let addr = bits as usize;
             if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-                return get_cached(&TYPEOF_OBJECT, "object");
+                return ValueTypeofTag::Object;
             }
         }
         // Date is now a NaN-boxed `DateCell` pointer (#2089), handled in the
@@ -792,12 +811,42 @@ pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
         if value.is_finite() && value > 0.0 && value.fract() == 0.0 {
             if let Some(probe) = crate::object::stream_handle_kind_probe() {
                 if unsafe { probe(value as usize) } != 0 {
-                    return get_cached(&TYPEOF_OBJECT, "object");
+                    return ValueTypeofTag::Object;
                 }
             }
         }
         // Regular f64 number
-        get_cached(&TYPEOF_NUMBER, "number")
+        ValueTypeofTag::Number
+    }
+}
+
+/// Integer form of `typeof`, for comparisons against a compile-time literal.
+/// Avoids materializing a cached heap string and then comparing its contents.
+/// The numeric values are part of the codegen/runtime ABI; keep them in sync
+/// with `TYPEOF_LITERAL_TAGS` in `perry-codegen/src/expr/compare.rs`.
+#[no_mangle]
+pub extern "C" fn js_value_typeof_tag(value: f64) -> u32 {
+    classify_value_typeof(value) as u32
+}
+
+/// Return the typeof a value as a string
+/// Takes an f64 that uses NaN-boxing to distinguish types.
+/// Returns a pointer to a string: "undefined", "boolean", "number", "string", "object", "function"
+///
+/// Optimization: typeof only returns 8 possible strings, so each classified
+/// result is mapped to a pre-allocated cached StringHeader pointer. The cache
+/// is a registered GC root — see the `thread_local!` above.
+#[no_mangle]
+pub extern "C" fn js_value_typeof(value: f64) -> *mut StringHeader {
+    match classify_value_typeof(value) {
+        ValueTypeofTag::Undefined => get_cached(&TYPEOF_UNDEFINED, "undefined"),
+        ValueTypeofTag::Object => get_cached(&TYPEOF_OBJECT, "object"),
+        ValueTypeofTag::Boolean => get_cached(&TYPEOF_BOOLEAN, "boolean"),
+        ValueTypeofTag::Number => get_cached(&TYPEOF_NUMBER, "number"),
+        ValueTypeofTag::String => get_cached(&TYPEOF_STRING, "string"),
+        ValueTypeofTag::Function => get_cached(&TYPEOF_FUNCTION, "function"),
+        ValueTypeofTag::BigInt => get_cached(&TYPEOF_BIGINT, "bigint"),
+        ValueTypeofTag::Symbol => get_cached(&TYPEOF_SYMBOL, "symbol"),
     }
 }
 
@@ -818,11 +867,38 @@ mod rel_numeric_fastpath_tests {
         v.to_bits() == TAG_TRUE_BITS
     }
 
-    /// The early-out accepts exactly the operands for which `ToPrimitive` is
-    /// the identity and there is nothing to root; everything else must fall
-    /// through to the full abstract relational comparison.
     #[test]
-    fn fast_path_accepts_only_numbers() {
+    fn integer_typeof_classifier_covers_the_primitive_tag_families() {
+        let cases = [
+            (f64::from_bits(UNDEF), ValueTypeofTag::Undefined),
+            (f64::from_bits(NULLV), ValueTypeofTag::Object),
+            (f64::from_bits(TRUEV), ValueTypeofTag::Boolean),
+            (42.5, ValueTypeofTag::Number),
+            (i32v(-123), ValueTypeofTag::Number),
+            (
+                f64::from_bits(crate::value::SHORT_STRING_TAG | (1_u64 << 40) | b'x' as u64),
+                ValueTypeofTag::String,
+            ),
+            (
+                f64::from_bits(crate::value::BIGINT_TAG | 1),
+                ValueTypeofTag::BigInt,
+            ),
+            (
+                f64::from_bits(crate::value::POINTER_TAG | 42),
+                ValueTypeofTag::Object,
+            ),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(classify_value_typeof(value), expected);
+            assert_eq!(js_value_typeof_tag(value), expected as u32);
+        }
+    }
+
+    /// The early-out accepts exactly the operands whose ToPrimitive/ToNumber
+    /// result is fixed and which have nothing to root; everything else must
+    /// fall through to the full abstract relational comparison.
+    #[test]
+    fn fast_path_accepts_numbers_and_simple_singletons() {
         assert!(rel_numeric_operand(1.5).is_some());
         assert!(rel_numeric_operand(-0.0).is_some());
         assert!(rel_numeric_operand(f64::INFINITY).is_some());
@@ -830,12 +906,31 @@ mod rel_numeric_fastpath_tests {
         assert!(rel_numeric_operand(f64::NAN).is_some());
         assert_eq!(rel_numeric_operand(i32v(7)), Some(7.0));
         assert_eq!(rel_numeric_operand(i32v(-7)), Some(-7.0));
-        for tag in [UNDEF, NULLV, FALSEV, TRUEV] {
-            assert!(
-                rel_numeric_operand(f64::from_bits(tag)).is_none(),
-                "tag {tag:#x} must not take the numeric fast path"
-            );
+        assert!(rel_numeric_operand(f64::from_bits(UNDEF)).unwrap().is_nan());
+        assert_eq!(rel_numeric_operand(f64::from_bits(NULLV)), Some(0.0));
+        assert_eq!(rel_numeric_operand(f64::from_bits(FALSEV)), Some(0.0));
+        assert_eq!(rel_numeric_operand(f64::from_bits(TRUEV)), Some(1.0));
+    }
+
+    #[test]
+    fn simple_singleton_relational_comparisons_match_to_number() {
+        let undefined = f64::from_bits(UNDEF);
+        let null = f64::from_bits(NULLV);
+        let false_value = f64::from_bits(FALSEV);
+        let true_value = f64::from_bits(TRUEV);
+
+        for got in [
+            js_rel_lt(undefined, 1.0),
+            js_rel_gt(undefined, 1.0),
+            js_rel_le(undefined, 1.0),
+            js_rel_ge(undefined, 1.0),
+        ] {
+            assert!(!is_true(got), "undefined must compare as NaN");
         }
+        assert!(is_true(js_rel_lt(null, 1.0)));
+        assert!(is_true(js_rel_ge(null, 0.0)));
+        assert!(is_true(js_rel_le(false_value, 0.0)));
+        assert!(is_true(js_rel_gt(true_value, 0.0)));
     }
 
     /// NaN makes all four operators false. This is the one way a naive `fcmp`

@@ -1521,7 +1521,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
         }
         for class in self.chain {
             if let Some(ctor) = &class.constructor {
-                if !self.function_this_safe(&class.name, "constructor", ctor) {
+                if !self.function_this_safe(&class.name, "constructor", ctor, false) {
                     return false;
                 }
             }
@@ -1530,7 +1530,20 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
     }
 
     pub(super) fn method_safe(&mut self, owner: &str, func: &'a perry_hir::Function) -> bool {
-        self.function_this_safe(owner, &func.name, func)
+        self.function_this_safe(owner, &func.name, func, false)
+    }
+
+    /// Phase 5a root-method variant: `return this` is safe only as the final
+    /// statement of the method whose receiver was already guarded. It creates
+    /// no alias until every specialized field access has completed. Nested
+    /// methods continue through [`Self::method_safe`] and may not return the
+    /// receiver, preserving Phase 3b's no-escape contract.
+    pub(super) fn method_safe_with_terminal_this_return(
+        &mut self,
+        owner: &str,
+        func: &'a perry_hir::Function,
+    ) -> bool {
+        self.function_this_safe(owner, &func.name, func, true)
     }
 
     fn function_this_safe(
@@ -1538,6 +1551,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
         owner: &str,
         name: &str,
         func: &'a perry_hir::Function,
+        allow_terminal_this_return: bool,
     ) -> bool {
         let key = (owner.to_string(), name.to_string());
         if !self.visited.insert(key) {
@@ -1552,11 +1566,14 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
         let param_ids: Vec<u32> = func.params.iter().map(|p| p.id).collect();
         let ctx = (owner.to_string(), name.to_string(), param_ids);
         let mut safe = true;
-        for s in &func.body {
+        for (index, s) in func.body.iter().enumerate() {
             if !safe {
                 break;
             }
-            safe &= self.stmt_this_safe(s, &ctx);
+            let terminal_this_return = allow_terminal_this_return
+                && index + 1 == func.body.len()
+                && matches!(s, Stmt::Return(Some(Expr::This)));
+            safe &= terminal_this_return || self.stmt_this_safe(s, &ctx);
         }
         safe
     }
@@ -1731,7 +1748,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                     return false;
                 };
                 self.internally_invoked.insert(property.clone());
-                if !self.function_this_safe(&owner, property, func) {
+                if !self.function_this_safe(&owner, property, func, false) {
                     return false;
                 }
                 args.iter()
@@ -1761,7 +1778,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                     return false;
                 };
                 self.internally_invoked.insert(method.clone());
-                if !self.function_this_safe(&owner, method, func) {
+                if !self.function_this_safe(&owner, method, func, false) {
                     return false;
                 }
                 args.iter()

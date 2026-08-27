@@ -24,9 +24,13 @@
 //! Two fact sets restore the missing half:
 //!
 //! * [`ModuleDispatchFacts`] — module-scoped: which classes' prototypes are
-//!   named anywhere in the module. Naming is enough, because a named prototype
-//!   can be aliased and written through. A per-function walk cannot see this;
-//!   the mutation typically lives in a helper the constructor calls.
+//!   named anywhere in the module. Naming is normally enough, because a named
+//!   prototype can be aliased and written through. The one exception is a
+//!   fully-contained, immutable alias used only by the lowered
+//!   `Object.getOwnPropertyNames(proto)` / `typeof proto[key]` /
+//!   `proto[key].bind(...)` introspection pattern; that pattern never exposes
+//!   or mutates the prototype object. A per-function mutation walk cannot see
+//!   this; the mutation typically lives in a helper the constructor calls.
 //! * [`collect_candidate_property_writes`] — function-scoped: which property
 //!   names are written directly on each scalar-replacement candidate.
 //!
@@ -44,9 +48,11 @@ use super::cjs_scaffolding::CjsScaffolding;
 #[derive(Debug, Clone)]
 pub struct ModuleDispatchFacts {
     /// Classes whose prototype object is named — read or written — anywhere in
-    /// the module. Reading is enough: `let p = C.prototype; p.m = fn` mutates
-    /// through an alias, and `<Class>.prototype.<m> = fn` lowers to
-    /// `Expr::RegisterPrototypeMethod` only when the recogniser matches.
+    /// the module. Reading is normally enough: `let p = C.prototype; p.m = fn`
+    /// mutates through an alias, and `<Class>.prototype.<m> = fn` lowers to
+    /// `Expr::RegisterPrototypeMethod` only when the recogniser matches. The
+    /// contained read-only reflection exception is proved before this set is
+    /// populated; see [`read_only_prototype_reads`].
     prototype_touched_classes: HashSet<String>,
     /// A prototype was named through an expression that cannot be attributed to
     /// a declared class (`k.prototype`, `x.constructor.prototype`, …). Nothing
@@ -325,6 +331,137 @@ impl ModuleDispatchFacts {
     }
 }
 
+/// Exact `Class.prototype` expression nodes whose value is held by one
+/// immutable local and used only for the read-only reflection pattern emitted
+/// by libraries' `bind()` helpers:
+///
+/// ```text
+/// const proto = C.prototype;
+/// Object.getOwnPropertyNames(proto);
+/// typeof proto[key];
+/// proto[key].bind(receiver);
+/// ```
+///
+/// Merely seeing the first line is not enough: every reference to the local is
+/// counted with HIR's exhaustive local-reference walker, and every one must be
+/// the exact `LocalGet` consumed by one of the three read-only forms above.
+/// The class must also have a plain method-only prototype; otherwise the
+/// indexed reads could invoke an accessor with arbitrary side effects. Any
+/// write, return, call argument, alias, specialized local-id operation, or
+/// unrecognised use keeps the historical conservative prototype kill.
+fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
+    let plain_prototype_classes: HashSet<&str> = hir
+        .classes
+        .iter()
+        .filter(|class| {
+            class.getters.is_empty()
+                && class.setters.is_empty()
+                && class.computed_members.is_empty()
+        })
+        .map(|class| class.name.as_str())
+        .collect();
+    let mut reads = HashSet::new();
+
+    let mut inspect_scope = |stmts: &[Stmt]| {
+        for stmt in stmts {
+            let Stmt::Let {
+                id,
+                mutable: false,
+                init: Some(init),
+                ..
+            } = stmt
+            else {
+                continue;
+            };
+            let Expr::PropertyGet {
+                object, property, ..
+            } = init
+            else {
+                continue;
+            };
+            let Expr::ClassRef(class_name) = object.as_ref() else {
+                continue;
+            };
+            if !is_prototype_key(property) || !plain_prototype_classes.contains(class_name.as_str())
+            {
+                continue;
+            }
+
+            let mut allowed_local_gets = HashSet::new();
+            let mut saw_names = false;
+            let mut saw_typeof_index = false;
+            let mut saw_bound_index = false;
+            for_each_expr_in_stmts(stmts, &mut |expr| match expr {
+                Expr::ObjectGetOwnPropertyNames(value) if matches!(value.as_ref(), Expr::LocalGet(local) if local == id) =>
+                {
+                    allowed_local_gets.insert(value.as_ref() as *const Expr as usize);
+                    saw_names = true;
+                }
+                Expr::TypeOf(value) => {
+                    if let Expr::IndexGet { object, .. } = value.as_ref() {
+                        if matches!(object.as_ref(), Expr::LocalGet(local) if local == id) {
+                            allowed_local_gets.insert(object.as_ref() as *const Expr as usize);
+                            saw_typeof_index = true;
+                        }
+                    }
+                }
+                Expr::Call { callee, .. } => {
+                    if let Expr::PropertyGet {
+                        object, property, ..
+                    } = callee.as_ref()
+                    {
+                        if property == "bind" {
+                            if let Expr::IndexGet { object, .. } = object.as_ref() {
+                                if matches!(object.as_ref(), Expr::LocalGet(local) if local == id) {
+                                    allowed_local_gets
+                                        .insert(object.as_ref() as *const Expr as usize);
+                                    saw_bound_index = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            });
+
+            let mut refs = Vec::new();
+            let mut visited = HashSet::new();
+            for stmt in stmts {
+                perry_hir::analysis::collect_local_refs_stmt(stmt, &mut refs, &mut visited);
+            }
+            let reference_count = refs.iter().filter(|local| *local == id).count();
+            if saw_names
+                && saw_typeof_index
+                && saw_bound_index
+                && reference_count == allowed_local_gets.len()
+            {
+                reads.insert(init as *const Expr as usize);
+            }
+        }
+    };
+
+    inspect_scope(&hir.init);
+    for function in &hir.functions {
+        inspect_scope(&function.body);
+    }
+    for class in &hir.classes {
+        if let Some(ctor) = &class.constructor {
+            inspect_scope(&ctor.body);
+        }
+        for method in class
+            .methods
+            .iter()
+            .chain(class.static_methods.iter())
+            .chain(class.getters.iter().map(|(_, f)| f))
+            .chain(class.setters.iter().map(|(_, f)| f))
+            .chain(class.computed_members.iter().map(|m| &m.function))
+        {
+            inspect_scope(&method.body);
+        }
+    }
+    reads
+}
+
 /// Scan a whole module — top-level init, every function, and every class body
 /// (constructor, field initializers, methods, accessors, computed members) —
 /// for expressions that can rewrite a class's prototype.
@@ -350,14 +487,15 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
     // bindings first — the barrier classifier below consults them to skip the
     // two `defineProperty` sites every `cjs_wrap`-compiled module contains.
     let cjs = super::cjs_scaffolding::collect(hir);
+    let read_only_prototype_reads = read_only_prototype_reads(hir);
 
-    note_stmts(&hir.init, &mut facts, &cjs);
+    note_stmts(&hir.init, &mut facts, &cjs, &read_only_prototype_reads);
     for function in &hir.functions {
-        note_stmts(&function.body, &mut facts, &cjs);
+        note_stmts(&function.body, &mut facts, &cjs, &read_only_prototype_reads);
     }
     for class in &hir.classes {
         if let Some(ctor) = &class.constructor {
-            note_stmts(&ctor.body, &mut facts, &cjs);
+            note_stmts(&ctor.body, &mut facts, &cjs, &read_only_prototype_reads);
         }
         for method in class
             .methods
@@ -367,18 +505,23 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
             .chain(class.setters.iter().map(|(_, f)| f))
             .chain(class.computed_members.iter().map(|m| &m.function))
         {
-            note_stmts(&method.body, &mut facts, &cjs);
+            note_stmts(&method.body, &mut facts, &cjs, &read_only_prototype_reads);
         }
         for field in class.fields.iter().chain(class.static_fields.iter()) {
             if let Some(init) = &field.init {
-                note_expr_tree(init, &mut facts, &cjs);
+                note_expr_tree(init, &mut facts, &cjs, &read_only_prototype_reads);
             }
             if let Some(key) = &field.key_expr {
-                note_expr_tree(key, &mut facts, &cjs);
+                note_expr_tree(key, &mut facts, &cjs, &read_only_prototype_reads);
             }
         }
         for member in &class.computed_members {
-            note_expr_tree(&member.key_expr, &mut facts, &cjs);
+            note_expr_tree(
+                &member.key_expr,
+                &mut facts,
+                &cjs,
+                &read_only_prototype_reads,
+            );
         }
     }
 
@@ -397,17 +540,36 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
     facts
 }
 
-fn note_stmts(stmts: &[Stmt], facts: &mut ModuleDispatchFacts, cjs: &CjsScaffolding) {
-    for_each_expr_in_stmts(stmts, &mut |expr| note_expr(expr, facts, cjs));
+fn note_stmts(
+    stmts: &[Stmt],
+    facts: &mut ModuleDispatchFacts,
+    cjs: &CjsScaffolding,
+    read_only_prototype_reads: &HashSet<usize>,
+) {
+    for_each_expr_in_stmts(stmts, &mut |expr| {
+        note_expr(expr, facts, cjs, read_only_prototype_reads)
+    });
 }
 
-fn note_expr_tree(expr: &Expr, facts: &mut ModuleDispatchFacts, cjs: &CjsScaffolding) {
-    for_each_expr(expr, &mut |node| note_expr(node, facts, cjs));
+fn note_expr_tree(
+    expr: &Expr,
+    facts: &mut ModuleDispatchFacts,
+    cjs: &CjsScaffolding,
+    read_only_prototype_reads: &HashSet<usize>,
+) {
+    for_each_expr(expr, &mut |node| {
+        note_expr(node, facts, cjs, read_only_prototype_reads)
+    });
 }
 
 /// Classify one already-visited expression node.
-fn note_expr(expr: &Expr, facts: &mut ModuleDispatchFacts, cjs: &CjsScaffolding) {
-    note_prototype_effect(expr, facts);
+fn note_expr(
+    expr: &Expr,
+    facts: &mut ModuleDispatchFacts,
+    cjs: &CjsScaffolding,
+    read_only_prototype_reads: &HashSet<usize>,
+) {
+    note_prototype_effect(expr, facts, read_only_prototype_reads);
     // #7139: the CommonJS wrap's own `defineProperty(require, 'name', …)`
     // preamble and the transpiled-CJS `defineProperty(exports, "__esModule",
     // …)` marker target module scaffolding that can never be a `Ptr<Shape>`
@@ -430,7 +592,11 @@ fn note_expr(expr: &Expr, facts: &mut ModuleDispatchFacts, cjs: &CjsScaffolding)
 ///
 /// Only the node itself is classified — [`for_each_expr`] supplies every node
 /// in the tree, including closure bodies.
-fn note_prototype_effect(expr: &Expr, facts: &mut ModuleDispatchFacts) {
+fn note_prototype_effect(
+    expr: &Expr,
+    facts: &mut ModuleDispatchFacts,
+    read_only_prototype_reads: &HashSet<usize>,
+) {
     match expr {
         // `<Class>.prototype.<m> = fn` (and its aliased `let p = C.prototype`
         // shape) — issue #838's recogniser resolves the class by name.
@@ -447,7 +613,9 @@ fn note_prototype_effect(expr: &Expr, facts: &mut ModuleDispatchFacts) {
         // can be aliased into a local and written through later.
         Expr::PropertyGet {
             object, property, ..
-        } if is_prototype_key(property) => {
+        } if is_prototype_key(property)
+            && !read_only_prototype_reads.contains(&(expr as *const Expr as usize)) =>
+        {
             note_prototype_holder(object, facts);
         }
         Expr::PropertySet {
@@ -917,6 +1085,73 @@ mod tests {
             Box::new(Expr::String("getValue".to_string())),
             Box::new(Expr::Undefined),
         )));
+        module.classes.push(class.clone());
+
+        let facts = collect_module_dispatch_facts(&module);
+        let classes = HashMap::from([(class.name.clone(), &class)]);
+        assert!(!facts.prototype_is_stable(&classes, "C"));
+    }
+
+    fn read_only_bind_introspection_stmts() -> Vec<Stmt> {
+        const PROTO: u32 = 41;
+        vec![
+            Stmt::Let {
+                id: PROTO,
+                name: "proto".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::PropertyGet {
+                    byte_offset: 77,
+                    object: Box::new(Expr::ClassRef("C".to_string())),
+                    property: "prototype".to_string(),
+                }),
+            },
+            Stmt::Expr(Expr::ObjectGetOwnPropertyNames(Box::new(Expr::LocalGet(
+                PROTO,
+            )))),
+            Stmt::Expr(Expr::TypeOf(Box::new(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(PROTO)),
+                index: Box::new(Expr::String("getValue".to_string())),
+            }))),
+            Stmt::Expr(Expr::Call {
+                callee: Box::new(Expr::PropertyGet {
+                    byte_offset: 78,
+                    object: Box::new(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(PROTO)),
+                        index: Box::new(Expr::String("getValue".to_string())),
+                    }),
+                    property: "bind".to_string(),
+                }),
+                args: vec![Expr::Undefined],
+                type_args: Vec::new(),
+                byte_offset: 78,
+            }),
+        ]
+    }
+
+    #[test]
+    fn contained_bind_introspection_does_not_mark_the_prototype_unstable() {
+        let class = summarizable_class("C");
+        let mut module = Module::new("m.ts");
+        module.init = read_only_bind_introspection_stmts();
+        module.classes.push(class.clone());
+
+        let facts = collect_module_dispatch_facts(&module);
+        let classes = HashMap::from([(class.name.clone(), &class)]);
+        assert!(facts.prototype_is_stable(&classes, "C"));
+    }
+
+    #[test]
+    fn a_write_through_the_introspection_alias_keeps_the_prototype_unstable() {
+        const PROTO: u32 = 41;
+        let class = summarizable_class("C");
+        let mut module = Module::new("m.ts");
+        module.init = read_only_bind_introspection_stmts();
+        module.init.push(Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::LocalGet(PROTO)),
+            property: "getValue".to_string(),
+            value: Box::new(Expr::Number(9.0)),
+        }));
         module.classes.push(class.clone());
 
         let facts = collect_module_dispatch_facts(&module);

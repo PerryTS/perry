@@ -194,6 +194,8 @@ pub mod entry_outline;
 pub(crate) mod func_registry;
 mod function;
 #[cfg(test)]
+mod guarded_falsy_default_method_tests;
+#[cfg(test)]
 mod guarded_undefined_method_tests;
 #[cfg(test)]
 mod hoisted_callback_method_tests;
@@ -1790,7 +1792,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         .classes
         .iter()
         .flat_map(|class| {
-            class.methods.iter().filter_map(move |method| {
+            class.methods.iter().filter_map(|method| {
                 let params = typed_abi::nonnegative_index_method_params(method);
                 (!params.is_empty()).then(|| ((class.name.clone(), method.name.clone()), params))
             })
@@ -1813,6 +1815,20 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                         candidate.param_index,
                     )
                 })
+            })
+        })
+        .collect();
+    let mut guarded_falsy_field_default_candidates: Vec<_> = hir
+        .classes
+        .iter()
+        .flat_map(|class| {
+            class.methods.iter().filter_map(|method| {
+                let key = (class.name.clone(), method.name.clone());
+                if !nonnegative_index_methods.contains_key(&key) {
+                    return None;
+                }
+                param_guard::guarded_falsy_field_default_method_candidate(class, method)
+                    .map(|candidate| (candidate.body_nodes, key, candidate))
             })
         })
         .collect();
@@ -1865,7 +1881,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 receiver_class_table,
                 &module_dispatch_facts,
             ) {
-                pshape_methods.insert((class.name.clone(), method.name.clone()), fact);
+                let key = (class.name.clone(), method.name.clone());
+                // Indexed methods compose this receiver proof with their
+                // exact nonnegative-i32 argument proof. Their published
+                // The published proven-receiver entry guards the live
+                // argument once, then selects its combined integer clone or
+                // its receiver-safe generic body.
+                pshape_methods.insert(key, fact);
             }
             match typed_abi::typed_f64_method_rejection_reason(method) {
                 None => {
@@ -2052,6 +2074,14 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .take(16)
             .map(|(_, key, param_index)| (key, param_index))
             .collect();
+    guarded_falsy_field_default_candidates
+        .sort_unstable_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    let guarded_falsy_field_default_methods: std::collections::HashMap<_, _> =
+        guarded_falsy_field_default_candidates
+            .into_iter()
+            .take(16)
+            .map(|(_, key, candidate)| (key, candidate))
+            .collect();
     // #8774: one non-combinatorial tagged-ABI clone per local method. Source
     // annotations or a unique unannotated field signature only nominate a
     // class; every routed call emits an exact runtime class+shape guard. Keep
@@ -2076,6 +2106,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 || typed_f64_receiver_methods.contains_key(&key)
                 || nonnegative_index_methods.contains_key(&key)
                 || guarded_undefined_method_params.contains_key(&key)
+                || guarded_falsy_field_default_methods.contains_key(&key)
             {
                 continue;
             }
@@ -2446,6 +2477,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         typed_f64_receiver_methods,
         nonnegative_index_methods,
         guarded_undefined_method_params,
+        guarded_falsy_field_default_methods,
         pshape_methods,
         pshape_arg_methods,
         pshape_tower_routable,

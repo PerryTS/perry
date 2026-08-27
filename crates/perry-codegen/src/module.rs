@@ -579,6 +579,19 @@ impl LlModule {
         self.functions.get_mut(idx)
     }
 
+    /// Render-free body-size estimate for an already-lowered function.
+    ///
+    /// Guarded entry wrappers are emitted after their private specialization
+    /// bodies.  They use this lookup to decide whether flattening that body
+    /// before statepoint rewriting stays inside the explicit native-roots
+    /// code-size budget.
+    pub(crate) fn function_estimated_ir_bytes(&self, name: &str) -> Option<usize> {
+        self.functions
+            .iter()
+            .find(|function| function.name == name)
+            .map(LlFunction::estimated_ir_bytes)
+    }
+
     /// Every defined function, mutably — for the whole-module passes that run
     /// after lowering and before any rendering path. See
     /// [`crate::root_reload`], and note that "before ANY rendering path" is the

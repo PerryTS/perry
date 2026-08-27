@@ -802,6 +802,14 @@ pub(crate) struct GuardedUndefinedMethodCandidate {
     pub body_nodes: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct GuardedFalsyFieldDefaultMethodCandidate {
+    pub param_index: usize,
+    pub prologue_stmt_index: usize,
+    pub field_index: usize,
+    pub body_nodes: usize,
+}
+
 const MAX_GUARDED_UNDEFINED_METHOD_NODES: usize = 1_024;
 
 /// Select one optional parameter whose exact-`undefined` value can profitably
@@ -970,6 +978,206 @@ pub(crate) fn guarded_undefined_method_candidate(
             },
         )
     })
+}
+
+/// Select an indexed method whose omitted final-style parameter defaults from
+/// one declared receiver field and is subsequently used only as a direct
+/// condition.
+///
+/// The candidate is not itself a value proof. The public indexed-method
+/// wrapper must still prove all three mutable runtime facts before entering a
+/// private clone: the actual argument is exactly `undefined`, the receiver has
+/// this class's exact current ShapeId with ordinary packed fields, and the live
+/// default slot is exactly canonical `false`. Every miss executes the original
+/// body, including its ordinary property read and JavaScript truthiness.
+pub(crate) fn guarded_falsy_field_default_method_candidate(
+    class: &perry_hir::Class,
+    method: &perry_hir::Function,
+) -> Option<GuardedFalsyFieldDefaultMethodCandidate> {
+    use perry_hir::{CompareOp, Expr, Stmt};
+
+    if method.is_async
+        || method.is_generator
+        || class.extends.is_some()
+        || class.extends_name.is_some()
+        || class.native_extends.is_some()
+        || class.extends_expr.is_some()
+    {
+        return None;
+    }
+    let body_nodes = super::closure_collect::count_body_nodes(&method.body);
+    if body_nodes > MAX_GUARDED_UNDEFINED_METHOD_NODES {
+        return None;
+    }
+    let closure_refs = crate::expr::collect_closure_referenced_locals(&method.body);
+
+    fn field_default(expr: &Expr) -> Option<&str> {
+        let Expr::PropertyGet {
+            object, property, ..
+        } = expr
+        else {
+            return None;
+        };
+        matches!(object.as_ref(), Expr::This).then_some(property.as_str())
+    }
+
+    fn is_matching_prologue(stmt: &Stmt, id: u32, field: &str) -> bool {
+        let Stmt::If {
+            condition:
+                Expr::Compare {
+                    op: CompareOp::Eq,
+                    left,
+                    right,
+                },
+            then_branch,
+            else_branch: None,
+        } = stmt
+        else {
+            return false;
+        };
+        let compares_undefined = matches!(
+            (left.as_ref(), right.as_ref()),
+            (Expr::LocalGet(local), Expr::Undefined)
+                | (Expr::Undefined, Expr::LocalGet(local)) if *local == id
+        );
+        compares_undefined
+            && matches!(
+                then_branch.as_slice(),
+                [Stmt::Expr(Expr::LocalSet(local, value))]
+                    if *local == id && field_default(value) == Some(field)
+            )
+    }
+
+    fn scan_only_direct_conditions(stmts: &[Stmt], id: u32, guards: &mut usize) -> bool {
+        use crate::collectors::expr_contains_local_get;
+        stmts.iter().all(|stmt| match stmt {
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                if matches!(condition, Expr::LocalGet(local) if *local == id) {
+                    *guards += 1;
+                } else if expr_contains_local_get(condition, id) {
+                    return false;
+                }
+                scan_only_direct_conditions(then_branch, id, guards)
+                    && else_branch
+                        .as_deref()
+                        .is_none_or(|body| scan_only_direct_conditions(body, id, guards))
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                !expr_contains_local_get(condition, id)
+                    && scan_only_direct_conditions(body, id, guards)
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.as_deref().is_none_or(|stmt| {
+                    scan_only_direct_conditions(std::slice::from_ref(stmt), id, guards)
+                }) && condition
+                    .as_ref()
+                    .is_none_or(|expr| !expr_contains_local_get(expr, id))
+                    && update
+                        .as_ref()
+                        .is_none_or(|expr| !expr_contains_local_get(expr, id))
+                    && scan_only_direct_conditions(body, id, guards)
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                scan_only_direct_conditions(body, id, guards)
+                    && catch
+                        .as_ref()
+                        .is_none_or(|catch| scan_only_direct_conditions(&catch.body, id, guards))
+                    && finally
+                        .as_deref()
+                        .is_none_or(|body| scan_only_direct_conditions(body, id, guards))
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                !expr_contains_local_get(discriminant, id)
+                    && cases.iter().all(|case| {
+                        case.test
+                            .as_ref()
+                            .is_none_or(|expr| !expr_contains_local_get(expr, id))
+                            && scan_only_direct_conditions(&case.body, id, guards)
+                    })
+            }
+            Stmt::Labeled { body, .. } => {
+                scan_only_direct_conditions(std::slice::from_ref(body.as_ref()), id, guards)
+            }
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+                !expr_contains_local_get(expr, id)
+            }
+            Stmt::Let {
+                init: Some(expr), ..
+            } => !expr_contains_local_get(expr, id),
+            Stmt::Return(None)
+            | Stmt::Let { init: None, .. }
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => true,
+        })
+    }
+
+    method
+        .params
+        .iter()
+        .enumerate()
+        .find_map(|(param_index, param)| {
+            if param.is_rest || param.arguments_object.is_some() || closure_refs.contains(&param.id)
+            {
+                return None;
+            }
+            let field_name = param.default.as_ref().and_then(field_default)?;
+            let (field_index, _) = class
+                .fields
+                .iter()
+                .filter(|field| field.key_expr.is_none())
+                .enumerate()
+                .find(|(_, field)| {
+                    !field.is_private && field.decorators.is_empty() && field.name == field_name
+                })?;
+            let prologue_stmt_index = method
+                .body
+                .iter()
+                .position(|stmt| is_matching_prologue(stmt, param.id, field_name))?;
+            let has_real_reassignment = method.body.iter().enumerate().any(|(index, stmt)| {
+                index != prologue_stmt_index
+                    && crate::collectors::reassigned_locals(std::slice::from_ref(stmt))
+                        .contains(&param.id)
+            });
+            if has_real_reassignment {
+                return None;
+            }
+            let mut guards = 0;
+            let uses_are_safe = method.body.iter().enumerate().all(|(index, stmt)| {
+                index == prologue_stmt_index
+                    || scan_only_direct_conditions(
+                        std::slice::from_ref(stmt),
+                        param.id,
+                        &mut guards,
+                    )
+            });
+            (uses_are_safe && guards > 0).then_some(GuardedFalsyFieldDefaultMethodCandidate {
+                param_index,
+                prologue_stmt_index,
+                field_index,
+                body_nodes,
+            })
+        })
 }
 
 /// Whether the current function body can suspend after its entry guard.

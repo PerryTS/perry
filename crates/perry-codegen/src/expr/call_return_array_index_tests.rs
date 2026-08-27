@@ -119,8 +119,23 @@ fn compile_store_ir(receiver_selector: i64) -> String {
 }
 
 fn write_method_ir(ir: &str) -> &str {
-    let signature = "define double @perry_method_call_return_array_put_value_ts__Store__write(";
-    let start = ir.find(signature).expect("write method is present in IR");
+    // Index-specialized methods publish a small guard wrapper and retain the
+    // original semantics in `$generic`; assertions about assignment lowering
+    // belong to that body rather than the wrapper.
+    let generic = "@perry_method_call_return_array_put_value_ts__Store__write$generic(";
+    let public = "@perry_method_call_return_array_put_value_ts__Store__write(";
+    let start = ir
+        .match_indices("define ")
+        .map(|(start, _)| start)
+        .find(|start| {
+            let line_end = ir[*start..]
+                .find('\n')
+                .map(|len| *start + len)
+                .unwrap_or(ir.len());
+            let signature = &ir[*start..line_end];
+            signature.contains(generic) || signature.contains(public)
+        })
+        .expect("write method body is present in IR");
     let method_and_rest = &ir[start..];
     let end = method_and_rest
         .find("\n}\n")

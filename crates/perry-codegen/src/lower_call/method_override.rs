@@ -29,6 +29,177 @@ const GC_OBJECT_METHOD_GUARD_MASK_I32: &str = "142639359"; // 0x0880_80ff
 const SHAPE_ID_BASE_NEG_I32: &str = "-2147483648"; // subtract 0x8000_0000
 const SHAPE_ID_RANGE_LEN: &str = "1073741824"; // 0x4000_0000
 
+/// A deliberately small constructive Boolean proof for method returns.
+///
+/// Source annotations are erased and therefore cannot license a native result.
+/// These expression forms, however, produce a Boolean for every JavaScript
+/// input. Keeping this proof local to the guarded direct-call site also means a
+/// dynamic own/prototype override remains completely unconstrained.
+fn expr_constructs_boolean(expr: &perry_hir::Expr) -> bool {
+    use perry_hir::{Expr, UnaryOp};
+    match expr {
+        Expr::Bool(_)
+        | Expr::Compare { .. }
+        | Expr::BooleanCoerce(_)
+        | Expr::IsFinite(_)
+        | Expr::IsNaN(_)
+        | Expr::NumberIsNaN(_)
+        | Expr::NumberIsFinite(_)
+        | Expr::NumberIsInteger(_)
+        | Expr::IsUndefinedOrBareNan(_)
+        | Expr::SetHas { .. }
+        | Expr::SetDelete { .. }
+        | Expr::MapHas { .. }
+        | Expr::MapDelete { .. }
+        | Expr::ArrayIncludes { .. } => true,
+        Expr::Unary {
+            op: UnaryOp::Not, ..
+        } => true,
+        Expr::Logical { left, right, .. } => {
+            expr_constructs_boolean(left) && expr_constructs_boolean(right)
+        }
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } => expr_constructs_boolean(then_expr) && expr_constructs_boolean(else_expr),
+        _ => false,
+    }
+}
+
+/// `(all encountered returns are Boolean, every normal path exits)` for the
+/// conservative straight-line/if subset used by hot predicate methods.
+/// Unsupported control flow rejects the proof instead of trying to infer it.
+fn block_constructively_returns_boolean(stmts: &[perry_hir::Stmt]) -> (bool, bool) {
+    use perry_hir::Stmt;
+    for stmt in stmts {
+        match stmt {
+            Stmt::Return(Some(expr)) => return (expr_constructs_boolean(expr), true),
+            Stmt::Return(None) => return (false, true),
+            Stmt::Throw(_) => return (true, true),
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let (then_ok, then_exits) = block_constructively_returns_boolean(then_branch);
+                let (else_ok, else_exits) = else_branch
+                    .as_deref()
+                    .map(block_constructively_returns_boolean)
+                    .unwrap_or((true, false));
+                if !then_ok || !else_ok {
+                    return (false, false);
+                }
+                if then_exits && else_exits {
+                    return (true, true);
+                }
+            }
+            // Neither form can hide a statement-level return.
+            Stmt::Let { .. } | Stmt::Expr(_) => {}
+            // Loops, try/finally, switches and labels need a real CFG proof.
+            // Refuse them here; the runtime truthiness path remains exact.
+            _ => return (false, false),
+        }
+    }
+    (true, false)
+}
+
+pub(super) fn direct_method_constructively_returns_boolean(
+    ctx: &FnCtx<'_>,
+    direct_fn: &str,
+) -> bool {
+    ctx.classes.iter().any(|(class_name, class)| {
+        class.methods.iter().any(|method| {
+            !method.is_async
+                && !method.is_generator
+                && ctx
+                    .methods
+                    .get(&(class_name.to_string(), method.name.clone()))
+                    .is_some_and(|name| name == direct_fn)
+                && block_constructively_returns_boolean(&method.body) == (true, true)
+        })
+    })
+}
+
+pub(super) fn canonical_boolean_truthy(ctx: &mut FnCtx<'_>, value: &str) -> String {
+    let bits = ctx.block().bitcast_double_to_i64(value);
+    ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64)
+}
+
+#[derive(Clone, Copy)]
+enum ConstructiveMethodTruthiness {
+    CanonicalBoolean,
+    RawNumber,
+}
+
+/// The representation-independent truthiness contract of a statically
+/// resolved method body.
+///
+/// The Number case is intentionally narrower than the Boolean proof. It is
+/// licensed only when the complete source body is the canonical ECS bitset
+/// return. That expression either returns a Number or throws for every input;
+/// selecting its native non-negative-index clone is a separate lowering
+/// decision. Erased return annotations never participate in either proof.
+fn constructive_method_truthiness(
+    ctx: &FnCtx<'_>,
+    direct_fn: &str,
+) -> Option<ConstructiveMethodTruthiness> {
+    if direct_method_constructively_returns_boolean(ctx, direct_fn) {
+        return Some(ConstructiveMethodTruthiness::CanonicalBoolean);
+    }
+    ctx.classes.iter().find_map(|(class_name, class)| {
+        class.methods.iter().find_map(|method| {
+            let is_target = !method.is_async
+                && !method.is_generator
+                && ctx
+                    .methods
+                    .get(&(class_name.to_string(), method.name.clone()))
+                    .is_some_and(|name| name == direct_fn);
+            let [perry_hir::Stmt::Return(Some(expr))] = method.body.as_slice() else {
+                return None;
+            };
+            (is_target && crate::expr::is_u32_bitset_test(expr))
+                .then_some(ConstructiveMethodTruthiness::RawNumber)
+        })
+    })
+}
+
+fn constructive_truthy(
+    ctx: &mut FnCtx<'_>,
+    kind: ConstructiveMethodTruthiness,
+    value: &str,
+) -> String {
+    match kind {
+        ConstructiveMethodTruthiness::CanonicalBoolean => canonical_boolean_truthy(ctx, value),
+        // `fcmp one` exactly matches Number truthiness: both signed zeroes and
+        // NaN are false; every other finite or infinite Number is true.
+        ConstructiveMethodTruthiness::RawNumber => ctx.block().fcmp("one", value, "0.0"),
+    }
+}
+
+/// Publish a native truthiness result for a call site that has already proved
+/// exact method identity (for example Phase 3b's containment route). Unlike
+/// the guarded diamond, no arbitrary fallback arm exists here.
+pub(super) fn publish_constructive_method_truthy(
+    ctx: &mut FnCtx<'_>,
+    direct_fn: &str,
+    boxed: &str,
+) {
+    if let Some(kind) = ctx
+        .truthy_call_result_requested
+        .then(|| constructive_method_truthiness(ctx, direct_fn))
+        .flatten()
+    {
+        let truthy = constructive_truthy(ctx, kind, boxed);
+        ctx.pending_truthy_call_result = Some((boxed.to_string(), truthy));
+    }
+}
+
+fn total_value_truthy(ctx: &mut FnCtx<'_>, value: &str) -> String {
+    let raw = ctx.block().call(I32, "js_is_truthy", &[(DOUBLE, value)]);
+    ctx.block().icmp_ne(I32, &raw, "0")
+}
+
 /// Emit the single-arm equivalent of `js_method_direct_shape_guard` directly
 /// into the generated module. The guard remains dynamic at every call site:
 /// arbitrary callback code may replace a prototype method or mutate the
@@ -594,6 +765,10 @@ pub(super) fn emit_guarded_direct_method_call(
     shape_only_guard: bool,
     subclass_arms: &[SubclassDispatchArm],
 ) -> Option<String> {
+    let truthy_result_kind = ctx
+        .truthy_call_result_requested
+        .then(|| constructive_method_truthiness(ctx, direct_fn))
+        .flatten();
     let expected_class_id = *ctx.class_ids.get(receiver_class_name)?;
     let keys_global_name = ctx.class_keys_globals.get(receiver_class_name)?.clone();
     // Only the shape-only guard is widened. The typed-feedback guard records an
@@ -625,6 +800,11 @@ pub(super) fn emit_guarded_direct_method_call(
             .pshape_methods
             .contains_key(&(receiver_class_name.to_string(), property.to_string())))
     .then(|| crate::collectors::pshape_method_name(direct_fn));
+    let pshape_index_fn = nonnegative_index_direct_fn.and_then(|index_fn| {
+        let pshape = pshape_fn.as_ref()?;
+        let index_suffix = index_fn.strip_prefix(direct_fn)?;
+        Some(format!("{pshape}{index_suffix}"))
+    });
 
     // The body a failed typed guard falls back to. Arm-invariant (both inputs
     // are), so it is resolved once here rather than five times below.
@@ -1315,7 +1495,9 @@ pub(super) fn emit_guarded_direct_method_call(
                 // `perry_static_` exclusion and the declaring-class argument are
                 // written out) is the same clone the typed arms above now route
                 // their generic fallbacks to.
-                let target = nonnegative_index_direct_fn
+                let target = pshape_index_fn
+                    .as_deref()
+                    .or(nonnegative_index_direct_fn)
                     .or(pshape_fn.as_deref())
                     .unwrap_or(direct_fn);
                 let result = ctx.block().call(DOUBLE, target, direct_arg_slices);
@@ -1354,6 +1536,8 @@ pub(super) fn emit_guarded_direct_method_call(
             }
         }
     };
+    let fast_truthy =
+        truthy_result_kind.map(|kind| constructive_truthy(ctx, kind, fast_value.as_str()));
     let after_fast = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
@@ -1364,12 +1548,23 @@ pub(super) fn emit_guarded_direct_method_call(
     // proof the declared-class arm rests on, so the statically resolved body
     // is the one the dispatch tower would have found.
     let mut sub_values: Vec<(String, String)> = Vec::with_capacity(subclass_arms.len());
+    let mut sub_truthy_values: Vec<(String, String)> = Vec::with_capacity(subclass_arms.len());
     for (i, arm) in subclass_arms.iter().enumerate() {
         ctx.current_block = sub_case_idxs[i];
         let value = ctx.block().call(DOUBLE, &arm.target_fn, direct_arg_slices);
+        let truthy = truthy_result_kind.map(|_| {
+            if let Some(kind) = constructive_method_truthiness(ctx, &arm.target_fn) {
+                constructive_truthy(ctx, kind, &value)
+            } else {
+                total_value_truthy(ctx, &value)
+            }
+        });
         let after = ctx.block().label.clone();
         if !ctx.block().is_terminated() {
             ctx.block().br(&merge_label);
+        }
+        if let Some(truthy) = truthy {
+            sub_truthy_values.push((truthy, after.clone()));
         }
         sub_values.push((value, after));
     }
@@ -1411,6 +1606,7 @@ pub(super) fn emit_guarded_direct_method_call(
             (I64, &args_len),
         ],
     );
+    let fallback_truthy = truthy_result_kind.map(|_| total_value_truthy(ctx, &fallback_value));
     let after_fallback = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
@@ -1423,5 +1619,26 @@ pub(super) fn emit_guarded_direct_method_call(
         phi_inputs.push((value.as_str(), label.as_str()));
     }
     phi_inputs.push((fallback_value.as_str(), after_fallback.as_str()));
-    Some(ctx.block().phi(DOUBLE, &phi_inputs))
+    let boxed = ctx.block().phi(DOUBLE, &phi_inputs);
+    if truthy_result_kind.is_some() {
+        let mut truthy_inputs: Vec<(&str, &str)> = Vec::with_capacity(sub_truthy_values.len() + 2);
+        truthy_inputs.push((
+            fast_truthy
+                .as_deref()
+                .expect("truthy mode constructs a fast truthiness value"),
+            after_fast.as_str(),
+        ));
+        for (value, label) in &sub_truthy_values {
+            truthy_inputs.push((value.as_str(), label.as_str()));
+        }
+        truthy_inputs.push((
+            fallback_truthy
+                .as_deref()
+                .expect("truthy mode constructs a fallback truthiness value"),
+            after_fallback.as_str(),
+        ));
+        let truthy = ctx.block().phi(I1, &truthy_inputs);
+        ctx.pending_truthy_call_result = Some((boxed.clone(), truthy));
+    }
+    Some(boxed)
 }
