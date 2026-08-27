@@ -141,7 +141,7 @@ pub(super) fn emit_guarded_inbounds_array_store(
     };
 
     ctx.current_block = live_deref_idx;
-    {
+    let reserved = {
         let blk = ctx.block();
         let arr_handle = live_handle.clone();
 
@@ -188,7 +188,10 @@ pub(super) fn emit_guarded_inbounds_array_store(
         guard_ok = blk.and(I1, &guard_ok, &capacity_sane);
         guard_ok = blk.and(I1, &guard_ok, &length_within_capacity);
         blk.cond_br(&guard_ok, &fast_label, &slow_label);
-    }
+        // The live head's `_reserved` word dominates the fast arm; the numeric
+        // write note below is gated on it.
+        reserved
+    };
 
     ctx.current_block = fast_idx;
     // #7715 B3: the barrier is emitted separately, behind an inline live test
@@ -247,15 +250,38 @@ pub(super) fn emit_guarded_inbounds_array_store(
             block_prefix,
         );
     }
-    {
-        let blk = ctx.block();
-        if !value_is_numeric {
-            // A non-numeric store into a raw-f64-flagged array downgrades the
-            // layout. Identical to the local-receiver arm.
-            emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
+    if !value_is_numeric {
+        // A non-numeric store into a raw-f64-flagged array downgrades the
+        // layout. The runtime note is exactly "clear GC_ARRAY_RAW_F64_LAYOUT |
+        // GC_ARRAY_RAW_F64_HOLES if the value is not a Number", so an array
+        // whose header already has both bits clear has nothing to note. Test
+        // the `_reserved` word `deref.live` just loaded and skip the call —
+        // which re-resolved the receiver through the allocator/registry
+        // resolver on EVERY pointer store (the ECS archetype moves) — unless a
+        // raw-f64 bit is actually set. Nothing between that load and here can
+        // SET a raw-f64 bit: the slot store, string addref, layout note and
+        // write barrier only ever clear them; the bits are set solely by the
+        // explicit verify/rebuild paths.
+        let note_idx = ctx.new_block(&format!("{}.numnote", block_prefix));
+        let note_done_idx = ctx.new_block(&format!("{}.numnote.done", block_prefix));
+        let note_label = ctx.block_label(note_idx);
+        let note_done_label = ctx.block_label(note_done_idx);
+        {
+            let blk = ctx.block();
+            // GC_ARRAY_RAW_F64_LAYOUT (0x80) | GC_ARRAY_RAW_F64_HOLES (0x1000).
+            let raw_bits = blk.and(I16, &reserved, "4224");
+            let has_raw_layout = blk.icmp_ne(I16, &raw_bits, "0");
+            blk.cond_br(&has_raw_layout, &note_label, &note_done_label);
         }
-        blk.br(&merge_label);
+        ctx.current_block = note_idx;
+        {
+            let blk = ctx.block();
+            emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
+            blk.br(&note_done_label);
+        }
+        ctx.current_block = note_done_idx;
     }
+    ctx.block().br(&merge_label);
 
     ctx.current_block = slow_idx;
     fallback(ctx)?;

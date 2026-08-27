@@ -858,6 +858,21 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         }
     }
 
+    // A %TypedArray% receiver reaching the generic element read (an untyped
+    // `mask[i]` on a `Uint32Array` field) used to pay `clean_arr_ptr`'s
+    // tracked-allocation resolver — a guaranteed miss for a typed array —
+    // before the registry probe below could route it. The managed header tag
+    // already read above selects the typed authority first; the registry
+    // remains the liveness/layout proof, exactly as for Map/Set.
+    if receiver_tag.0 == crate::gc::GC_TYPE_TYPED_ARRAY
+        && crate::typedarray::lookup_typed_array_kind(raw_ptr as usize).is_some()
+    {
+        return crate::typedarray::js_typed_array_get(
+            raw_ptr as *const crate::typedarray::TypedArrayHeader,
+            index as i32,
+        );
+    }
+
     let cleaned = clean_arr_ptr(arr);
     if cleaned.is_null() {
         // #7574: `a[i]` on a `class X extends Array` instance held in a

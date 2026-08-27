@@ -474,3 +474,53 @@ fn the_guarded_property_receiver_store_follows_one_forwarding_edge_inline() {
         "the fast arm must address the element relative to the live head, not the stub"
     );
 }
+
+/// The fast arm's raw-f64 downgrade note is gated on the live head's
+/// `_reserved` word rather than called unconditionally: `js_array_note_numeric_write`
+/// is exactly "clear the raw-f64 bits if the value is not a Number", and it
+/// re-resolves the receiver through the tracked resolver on every call, so a
+/// pointer store into an array whose raw-f64 bits are already clear must not
+/// reach it at all.
+#[test]
+fn the_fast_arm_numeric_note_is_gated_on_the_raw_f64_header_bits() {
+    let ir = ir();
+    let live = block_body(&ir, "idxset.recv_prop.deref.live.")
+        .expect("guarded store emits its `deref.live` block");
+    let reserved_line = live
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains("load i16"))
+        .expect("`deref.live` loads the live head's `_reserved` word");
+    let reserved = reserved_line
+        .split(" = ")
+        .next()
+        .expect("load defines a register")
+        .to_string();
+
+    let (gate, gate_body) = branch_into_block(&ir, "idxset.recv_prop.numnote.")
+        .expect("the numeric note sits behind a conditional branch");
+    let cond = operand(&gate, 0).expect("cond_br has a condition");
+    let cond_def = def_of(&gate_body, &cond).expect("gate condition is defined in its block");
+    assert!(
+        cond_def.contains("icmp ne i16"),
+        "gate must test the raw-f64 bits for non-zero, got `{cond_def}`"
+    );
+    let masked = operand(cond_def, 0).expect("icmp operand");
+    let masked_def = def_of(&gate_body, &masked).expect("masked bits are defined in the block");
+    assert!(
+        masked_def.contains(&format!("and i16 {reserved}, 4224")),
+        "gate must mask GC_ARRAY_RAW_F64_LAYOUT|GC_ARRAY_RAW_F64_HOLES (0x1080) out of the \\
+         live head's `_reserved`, got `{masked_def}`"
+    );
+
+    let note = block_body(&ir, "idxset.recv_prop.numnote.").expect("the numeric note block exists");
+    assert!(
+        note.contains("call void @js_array_note_numeric_write("),
+        "the note call must live inside the gated block:\n{note}"
+    );
+    let fast = block_body(&ir, "idxset.recv_prop.fast.").expect("fast block");
+    assert!(
+        !fast.contains("js_array_note_numeric_write"),
+        "the fast arm must not call the note unconditionally:\n{fast}"
+    );
+}
