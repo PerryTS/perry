@@ -1552,6 +1552,47 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     // (Stripe's `protoExtend` does `Object.assign(Constructor, Super)` to copy a
     // resource class's enumerable statics like `.extend`/`.method`; without this
     // the call hung at `import 'stripe'`.)
+    // An `Error` source. Like the buffer and closure arms around it, an
+    // `ErrorHeader` is not the JSObject keys/values layout, so it has no
+    // `keys_array` for the generic path below to walk — `{...err}` and
+    // `Object.assign({}, err)` therefore copied NOTHING and produced `{}`.
+    //
+    // Node treats an error as an ordinary property bearer here: its own
+    // ENUMERABLE properties are copied, which for a caught fs error means
+    // `code`/`errno`/`syscall`/`path`, and for any error means whatever the
+    // program assigned. `message`/`name`/`stack` stay behind because they are
+    // non-enumerable — `exotic_own_keys(.., enumerable_only = true)` encodes
+    // exactly that rule, and is the same enumeration `Object.keys` and
+    // `JSON.stringify` use, so the three cannot disagree.
+    if src_raw >= 0x10000 && src_raw.is_multiple_of(8) && {
+        let src_gc =
+            (src_raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        (*src_gc).obj_type == crate::gc::GC_TYPE_ERROR
+    } {
+        use crate::object::exotic_expando::{exotic_get_own_property, exotic_own_keys, ExoticKind};
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let tgt_h = scope.root_raw_mut_ptr(target);
+        let receiver = crate::value::js_nanbox_pointer(src_raw as i64);
+        for name in exotic_own_keys(ExoticKind::Error, src_raw, true) {
+            let Some(value) = exotic_get_own_property(src_raw, ExoticKind::Error, &name, receiver)
+            else {
+                continue;
+            };
+            let value_h = scope.root_nanbox_f64(value);
+            let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            tgt_h.with_mut_ptr::<ObjectHeader, _>(|tgt| {
+                object_assign_set_string_key(
+                    tgt,
+                    target_is_array,
+                    key_ptr,
+                    value_h.get_nanbox_f64(),
+                )
+            });
+        }
+        return tgt_h
+            .with_mut_ptr::<ObjectHeader, _>(|tgt| crate::value::js_nanbox_pointer(tgt as i64));
+    }
+
     if crate::closure::is_closure_ptr(src_raw) {
         // #7200: `js_string_from_bytes` and the write funnel both allocate, and
         // the snapshot's VALUES are heap references held in a plain `Vec` for

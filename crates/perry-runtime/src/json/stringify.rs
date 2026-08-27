@@ -357,6 +357,56 @@ pub(crate) unsafe fn arm_to_json_result_guard(result: f64) {
     }
 }
 
+/// Serialize an `Error`'s own ENUMERABLE properties, the way node does.
+///
+/// Errors do not have the JSObject keys/values layout, so they cannot go
+/// through `stringify_object` — but they are still ordinary property bearers to
+/// an observer. `exotic_own_keys(.., enumerable_only = true)` is the same
+/// enumeration `Object.keys` uses on an error, so JSON output and `Object.keys`
+/// cannot disagree.
+///
+/// `depth` is `Some` when called from the depth-tracking variant, so nested
+/// values keep the cycle/recursion budget of the caller.
+unsafe fn stringify_error_own_props(ptr: *const u8, buf: &mut String, depth: Option<u32>) {
+    let ptr = ptr as usize;
+    use crate::object::exotic_expando::{exotic_get_own_property, exotic_own_keys, ExoticKind};
+    let keys = exotic_own_keys(ExoticKind::Error, ptr, true);
+    buf.push('{');
+    let mut first = true;
+    for key in keys {
+        let Some(v) = exotic_get_own_property(
+            ptr,
+            ExoticKind::Error,
+            &key,
+            f64::from_bits(bits_of_ptr(ptr)),
+        ) else {
+            continue;
+        };
+        // `undefined` own properties are omitted from objects, per JSON.stringify.
+        if v.to_bits() == crate::value::TAG_UNDEFINED {
+            continue;
+        }
+        if !first {
+            buf.push(',');
+        }
+        first = false;
+        write_escaped_string(buf, &key);
+        buf.push(':');
+        match depth {
+            Some(d) => stringify_value_depth(v, 0, buf, d + 1),
+            None => stringify_value(v, 0, buf),
+        }
+    }
+    buf.push('}');
+}
+
+/// NaN-box `ptr` back into the pointer value an exotic `[[Get]]` wants as its
+/// `receiver` (used only to rebind `this` for an accessor property).
+#[inline]
+fn bits_of_ptr(ptr: usize) -> u64 {
+    crate::value::js_nanbox_pointer(ptr as i64).to_bits()
+}
+
 #[inline]
 pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut String) {
     let bits: u64 = value.to_bits();
@@ -554,15 +604,24 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
                 }
             }
             crate::gc::GC_TYPE_ERROR => {
-                // Issue #928: Built-in Error objects (and subclasses
-                // like TypeError) have a dedicated `ErrorHeader` layout —
-                // not the JSObject keys/values layout. Routing them
-                // through `stringify_object` derefs garbage as a
-                // `keys_array` pointer and segfaults the process.
-                // Node's `JSON.stringify(new Error("x"))` returns "{}"
-                // because Error's intrinsic props (`message`, `name`,
-                // `stack`) are non-enumerable; mirror that.
-                buf.push_str("{}");
+                // Issue #928: Built-in Error objects (and subclasses like
+                // TypeError) have a dedicated `ErrorHeader` layout — not the
+                // JSObject keys/values layout — so they must never reach
+                // `stringify_object`, which would deref garbage as a
+                // `keys_array` pointer and segfault.
+                //
+                // They are NOT always "{}", though. Node emits an error's own
+                // ENUMERABLE properties like any other object; `{}` is merely
+                // what a *plain* error produces, because `message`/`name`/
+                // `stack` are non-enumerable:
+                //
+                //   JSON.stringify(new Error("x"))            -> {}
+                //   e.foo = 1; JSON.stringify(e)              -> {"foo":1}
+                //   JSON.stringify(fsError)                   -> {"errno":-2,"code":"ENOENT",…}
+                //
+                // Hardcoding "{}" silently dropped every one of those, so any
+                // code that logs a caught error as JSON lost its whole payload.
+                stringify_error_own_props(ptr, buf, None);
             }
             crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => {
                 // Map/Set have a `{size, capacity, entries/elements}` header,
@@ -770,7 +829,7 @@ pub(crate) unsafe fn stringify_value_depth(
             }
             crate::gc::GC_TYPE_ERROR => {
                 // Issue #928: see the matching branch in `stringify_value`.
-                buf.push_str("{}");
+                stringify_error_own_props(ptr, buf, Some(depth));
             }
             crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => {
                 // See the matching branch in `stringify_value` — Map/Set

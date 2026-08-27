@@ -602,7 +602,19 @@ thread_local! {
     /// string/primitive own properties. Stale entries after a GC move of the
     /// error are harmless (same model as the message-keyed tables above): a
     /// lookup at the new address simply misses.
-    pub(crate) static ERROR_USER_PROPS: RefCell<HashMap<usize, HashMap<String, ErrUserProp>>> =
+    /// Insertion-ORDERED per error: a `Vec`, not a `HashMap`.
+    ///
+    /// ECMA-262 enumerates an object's own string keys in insertion order, and
+    /// that order is observable through `Object.keys`, `for…in`, `{...err}` and
+    /// `JSON.stringify`. Backed by a `HashMap` this list came out in hash order,
+    /// so `error_user_props` sorted it alphabetically to at least be
+    /// deterministic — which is stable but still not node's order. A caught fs
+    /// error serialized as `{"code":…,"errno":…,"path":…,"syscall":…}` where
+    /// node writes `{"errno":…,"code":…,"syscall":…,"path":…}`.
+    ///
+    /// An error carries a handful of properties, so a linear scan is cheaper
+    /// than hashing and the order falls out for free.
+    pub(crate) static ERROR_USER_PROPS: RefCell<HashMap<usize, Vec<(String, ErrUserProp)>>> =
         RefCell::new(HashMap::new());
 }
 
@@ -629,10 +641,14 @@ pub fn set_error_user_prop(error_ptr: usize, key: &str, value: f64) {
         ErrUserProp::Bits(value.to_bits())
     };
     ERROR_USER_PROPS.with(|m| {
-        m.borrow_mut()
-            .entry(error_ptr)
-            .or_default()
-            .insert(key.to_string(), stored);
+        let mut map = m.borrow_mut();
+        let props = map.entry(error_ptr).or_default();
+        // Reassigning an existing key keeps its original position — `o.a=1;
+        // o.b=2; o.a=3` still enumerates `a,b` in node.
+        match props.iter_mut().find(|(k, _)| k == key) {
+            Some(slot) => slot.1 = stored,
+            None => props.push((key.to_string(), stored)),
+        }
     });
 }
 
@@ -645,7 +661,7 @@ pub fn error_user_prop(error_ptr: usize, key: &str) -> Option<f64> {
     }
     ERROR_USER_PROPS.with(|m| {
         m.borrow().get(&error_ptr).and_then(|props| {
-            props.get(key).map(|v| match v {
+            props.iter().find(|(k, _)| k == key).map(|(_, v)| match v {
                 ErrUserProp::Str(s) => {
                     let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
                     f64::from_bits(crate::js_nanbox_string(ptr as i64).to_bits())
@@ -666,7 +682,13 @@ pub fn remove_error_user_prop(error_ptr: usize, key: &str) -> bool {
     ERROR_USER_PROPS.with(|m| {
         m.borrow_mut()
             .get_mut(&error_ptr)
-            .map(|props| props.remove(key).is_some())
+            .map(|props| match props.iter().position(|(k, _)| k == key) {
+                Some(i) => {
+                    props.remove(i);
+                    true
+                }
+                None => false,
+            })
             .unwrap_or(false)
     })
 }
@@ -701,7 +723,8 @@ pub fn error_user_props(error_ptr: usize) -> Vec<(String, f64)> {
             (key, materialized)
         })
         .collect();
-    props.sort_by(|a, b| a.0.cmp(&b.0));
+    // No sort: the Vec is already in insertion order, which is the order
+    // ECMA-262 specifies and node emits.
     props
 }
 
@@ -1996,5 +2019,71 @@ mod tests {
             "subscribed channel must not be evicted"
         );
         DIAG_CHANNELS.with(|m| m.borrow_mut().clear());
+    }
+}
+
+#[cfg(test)]
+mod error_prop_order_tests {
+    use super::*;
+
+    /// Own string keys enumerate in INSERTION order, not hash or alphabetical
+    /// order. This is observable through `Object.keys`, `for…in`, `{...err}`
+    /// and `JSON.stringify`, so a caught fs error must serialize as node's
+    /// `{"errno":…,"code":…,"syscall":…,"path":…}`.
+    ///
+    /// The store was a `HashMap` with an alphabetical `sort_by` bolted on for
+    /// determinism, which is stable but wrong: it emitted `code` before
+    /// `errno`. Reverting to any unordered container fails this test.
+    #[test]
+    fn user_props_enumerate_in_insertion_order() {
+        let err = 0x4000_1000usize;
+        for k in ["errno", "code", "syscall", "path"] {
+            set_error_user_prop(err, k, 1.0);
+        }
+        let keys: Vec<String> = error_user_props(err).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "errno".to_string(),
+                "code".to_string(),
+                "syscall".to_string(),
+                "path".to_string()
+            ],
+            "fs error fields must enumerate in node's insertion order, not sorted"
+        );
+    }
+
+    /// Reassigning an existing key keeps its ORIGINAL position — in node,
+    /// `o.a=1; o.b=2; o.a=3` still enumerates `a,b`. An implementation that
+    /// removed-then-appended would report `b,a`.
+    #[test]
+    fn reassignment_keeps_original_position() {
+        let err = 0x4000_2000usize;
+        set_error_user_prop(err, "a", 1.0);
+        set_error_user_prop(err, "b", 2.0);
+        set_error_user_prop(err, "a", 3.0);
+        let keys: Vec<String> = error_user_props(err).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            error_user_prop(err, "a"),
+            Some(3.0),
+            "reassignment must still update the value"
+        );
+    }
+
+    /// Removing a key must not disturb the order of the survivors.
+    #[test]
+    fn removal_preserves_order_of_the_rest() {
+        let err = 0x4000_3000usize;
+        for k in ["one", "two", "three"] {
+            set_error_user_prop(err, k, 0.0);
+        }
+        assert!(remove_error_user_prop(err, "two"));
+        let keys: Vec<String> = error_user_props(err).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, vec!["one".to_string(), "three".to_string()]);
+        assert!(
+            !remove_error_user_prop(err, "two"),
+            "second remove is a no-op"
+        );
     }
 }
