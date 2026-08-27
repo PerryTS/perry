@@ -87,10 +87,7 @@ pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {
 /// charge of those.
 #[inline]
 unsafe fn resolved_plain_array_flags(arr: *const ArrayHeader) -> Option<u16> {
-    if (arr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return None;
-    }
-    let gc_header = (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let gc_header = super::header::array_gc_header(arr)?;
     ((*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY).then(|| (*gc_header)._reserved)
 }
 

@@ -213,8 +213,7 @@ fn emit_gated_forget_object_layout(ctx: &mut FnCtx<'_>, obj_handle: &str) {
     ctx.current_block = young_idx;
     {
         let blk = ctx.block();
-        let young =
-            blk.load_atomic_monotonic(crate::types::I32, "@PERRY_YOUNG_LAYOUT_RECORDS", 4);
+        let young = blk.load_atomic_monotonic(crate::types::I32, "@PERRY_YOUNG_LAYOUT_RECORDS", 4);
         let any_young = blk.icmp_ne(crate::types::I32, &young, "0");
         blk.cond_br(&any_young, &sketch_label, &done_label);
     }

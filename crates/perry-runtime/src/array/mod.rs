@@ -13,6 +13,7 @@ mod header;
 mod header_gc_slots;
 mod immutable;
 mod indexing;
+mod indexing_support;
 mod is_array;
 mod iter_methods;
 mod iter_object;
@@ -35,6 +36,8 @@ mod collection_tag_tests;
 mod forwarding_tests;
 #[cfg(test)]
 mod spread_dense_tests;
+#[cfg(test)]
+mod strict_store_tests;
 #[cfg(test)]
 mod subclass_tests;
 #[cfg(test)]
@@ -119,15 +122,9 @@ pub use self::immutable::{
     js_array_to_sorted_default, js_array_to_sorted_with_comparator, js_array_to_spliced,
     js_array_with, js_arraylike_copy_within,
 };
-#[cfg(test)]
-pub(crate) use self::indexing::test_keys_array_slot_fallbacks;
 pub(crate) use self::indexing::{
     array_has_own_index, array_iteration_is_exotic, array_iteration_is_exotic_resolved,
-    array_proto_iterator_modified, array_prototype_has_index_flag, array_spec_get,
-    array_spec_has_index, array_spec_set, invalidate_array_index_fast_path,
-    keys_array_len_capped_to_capacity, keys_array_slot, note_array_proto_iterator_write,
-    note_object_prototype_index_write, object_prototype_has_index_flag,
-    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
+    array_prototype_has_index_flag, array_spec_get, array_spec_has_index, array_spec_set,
 };
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
@@ -135,6 +132,14 @@ pub use self::indexing::{
     js_array_numeric_get_f64_unboxed, js_array_numeric_set_f64_unboxed, js_array_set_f64,
     js_array_set_f64_extend, js_array_set_f64_extend_strict, js_array_set_f64_unchecked,
     js_array_set_index_or_string, js_array_set_index_or_string_strict, js_array_set_string_key,
+};
+#[cfg(test)]
+pub(crate) use self::indexing_support::test_keys_array_slot_fallbacks;
+pub(crate) use self::indexing_support::{
+    array_proto_iterator_modified, invalidate_array_index_fast_path,
+    keys_array_len_capped_to_capacity, keys_array_slot, note_array_proto_iterator_write,
+    note_object_prototype_index_write, object_prototype_has_index_flag,
+    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
 };
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
@@ -172,7 +177,7 @@ pub use self::subclass::{
     array_subclass_dense_snapshot, array_subclass_has_iterator_override, is_array_subclass_instance,
 };
 #[cfg(test)]
-pub(crate) use indexing::test_swap_array_index_fast_path_invalidated;
+pub(crate) use indexing_support::test_swap_array_index_fast_path_invalidated;
 // #7574 — array-like OBJECT receiver resolution for the raw `js_array_*` entry
 // points, plus the Array-exotic `length` maintenance the generic OBJECT index
 // store needs for a `class X extends Array` receiver.

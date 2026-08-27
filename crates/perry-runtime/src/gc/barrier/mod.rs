@@ -1122,130 +1122,6 @@ pub extern "C" fn js_write_barrier(parent: u64, child: u64) {
     js_write_barrier_slot(parent, 0, child);
 }
 
-/// Gen-GC Phase C1: slot-aware write barrier. Called by
-/// codegen-emitted store sites unless `PERRY_WRITE_BARRIERS=0`/
-/// `off`/`false` disabled barrier emission at compile time.
-///
-/// Decode the parent + child as raw addresses. If parent's
-/// GcHeader sits in the old-gen arena AND child's NaN-boxed
-/// pointer (any of POINTER / STRING / BIGINT / SHORT_STRING)
-/// resolves to a heap address inside the nursery, dirty the page
-/// containing the written slot. A zero slot address falls back to
-/// dirtying every occupied page in the parent object.
-///
-/// Hot-path constraints: this fires on EVERY heap store in
-/// compiled code by default. Must be cheap:
-/// generation checks use arena page side metadata rather than
-/// scanning every arena block.
-#[no_mangle]
-pub extern "C" fn js_write_barrier_slot(parent: u64, slot_addr: u64, child: u64) {
-    write_barrier_slot_inner(parent, slot_addr as usize, child, false);
-}
-
-/// [`js_write_barrier_slot`] for a parent the caller has ALREADY validated:
-/// `parent_user` is the raw (untagged) user pointer of a live, non-forwarded
-/// GC object whose header the emitted code dereferenced a few instructions
-/// earlier (`emit_parent_may_need_remembering_check` reads `gc_flags`).
-///
-/// Skips `decode_heap_addr(parent)` — a tag dispatch, an alignment/floor
-/// test and a page-generation classification that `write_barrier_decoded_parent`
-/// repeats one call later — and nothing else. For every parent that meets the
-/// contract the two entries decide identically: a classified arena parent
-/// reaches the same `barrier_parent_needs_remembering`, and an unregistered
-/// (`gc_malloc`) parent, which `decode_heap_addr` would have turned into a
-/// skip, is refused there instead because an inline slot never qualifies as
-/// external. On a 5k-entity ECS frame the buckets' `push` stores were
-/// classifying each old parent twice per command.
-#[no_mangle]
-pub extern "C" fn js_write_barrier_slot_validated_parent(
-    parent_user: u64,
-    slot_addr: u64,
-    child: u64,
-) {
-    let Some(child_addr) = barrier_child_prologue(child) else {
-        return;
-    };
-    if !barrier_remembering_active() {
-        return;
-    }
-    if parent_user == 0 {
-        bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerParentSkips);
-        return;
-    }
-    write_barrier_decoded_parent(parent_user as usize, slot_addr as usize, child_addr, false);
-}
-
-pub(super) fn write_barrier_slot_inner(
-    parent: u64,
-    slot_addr: usize,
-    child: u64,
-    external_slot: bool,
-) {
-    // Decode child first: primitive stores are the overwhelmingly common
-    // case (every numeric array/field store) and need NEITHER the
-    // incremental-mark probe (nothing to mark) NOR the remembered set (no
-    // old→young edge) — so they must not pay the incremental barrier's
-    // unconditional thread-local access, which dominated tight numeric store
-    // loops (#6011: `ema[i] = <f64>` spent more time in this preamble than
-    // in the store itself).
-    let Some(child_addr) = barrier_child_prologue(child) else {
-        return;
-    };
-    if !barrier_remembering_active() {
-        return;
-    }
-    // Decode the parent — must be a NaN-boxed heap pointer.
-    let parent_addr = decode_heap_addr(parent);
-    if parent_addr == 0 {
-        bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerParentSkips);
-        return;
-    }
-    write_barrier_decoded_parent(parent_addr, slot_addr, child_addr, external_slot);
-}
-
-/// The never-skippable half of the barrier: decode the stored child and shade
-/// it for any in-progress incremental cycle. Returns the child's heap address,
-/// or `None` when the store published no heap pointer at all (every numeric
-/// array/field store — the #6011 fast path, which must stay the cheapest exit).
-#[inline]
-fn barrier_child_prologue(child: u64) -> Option<usize> {
-    let child_addr = decode_heap_addr(child);
-    bump_write_barrier_trace_counter(BarrierTraceCounter::Calls);
-    if child_addr == 0 {
-        bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerChildSkips);
-        return None;
-    }
-    incremental_mark_barrier_value(child);
-    Some(child_addr)
-}
-
-/// #7187: should this barrier call do remembered-set work at all?
-///
-/// Placed **after** [`barrier_child_prologue`] and **before** the parent
-/// decode, in every entry point. Both halves of that placement are
-/// load-bearing:
-///
-///   * After the prologue, so the #6011 fast path (any number stored into any
-///     slot — the overwhelmingly common store) pays literally nothing new, and
-///     so SATB/insertion shading for an in-progress incremental cycle is never
-///     skipped. An incremental cycle implies a collection has run implies
-///     armed, so this could not bite today; writing the order down keeps a
-///     later refactor from hoisting the check above the shading.
-///   * Before the parent decode, so the unarmed window also skips
-///     `decode_heap_addr`'s raw-pointer arm — itself a
-///     `classify_heap_generation` on the bare-`u64` entry point.
-///
-/// Cost once armed: one relaxed load of a `static` (`adrp`/`ldr`) plus a
-/// perfectly-predicted, permanently-taken branch.
-#[inline]
-fn barrier_remembering_active() -> bool {
-    if barrier_remembering_armed() {
-        return true;
-    }
-    bump_write_barrier_trace_counter(BarrierTraceCounter::UnarmedSkips);
-    false
-}
-
 /// [`write_barrier_slot_inner`] for a caller that already holds the parent as
 /// a plain GC user pointer — see [`write_barrier_decoded_parent`] for why the
 /// `u64` round-trip is worth avoiding (#7187).
@@ -2043,4 +1919,6 @@ pub(super) fn remembered_dirty_page_count() -> usize {
 // module purely for the 2000-line file-size gate; same module tree, same
 // visibility semantics (the statics they read are pub(super)/pub(crate)).
 mod maintenance;
+
+pub(super) use super::barrier_store::{barrier_child_prologue, barrier_remembering_active};
 pub use maintenance::*;

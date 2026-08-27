@@ -80,7 +80,7 @@ fn validated_parent_entry_matches_js_write_barrier_slot() {
     let dirty_page = crate::arena::generation_page_for_addr(fields as usize);
     assert!(!old_page_dirty_for(dirty_page));
 
-    crate::gc::barrier::js_write_barrier_slot_validated_parent(
+    crate::gc::barrier_store::js_write_barrier_slot_validated_parent(
         old_obj as u64,
         fields as u64,
         child_bits,
@@ -96,7 +96,7 @@ fn validated_parent_entry_matches_js_write_barrier_slot() {
     // A young parent is not remembered by either entry.
     reset_remembered_set();
     let young_parent = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
-    crate::gc::barrier::js_write_barrier_slot_validated_parent(
+    crate::gc::barrier_store::js_write_barrier_slot_validated_parent(
         young_parent as u64,
         (young_parent + 8) as u64,
         child_bits,

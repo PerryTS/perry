@@ -730,7 +730,10 @@ pub(in crate::gc) fn typed_layouts_insert(user_ptr: usize, descriptor: TypedLayo
 pub(in crate::gc) fn slot_masks_insert(user_ptr: usize, mask: LayoutSlotMask) {
     mark_per_object_layouts_nonempty();
     layout_addr_filter_add(user_ptr);
-    let fresh = hot_layout_slot_masks().borrow_mut().insert(user_ptr, mask).is_none();
+    let fresh = hot_layout_slot_masks()
+        .borrow_mut()
+        .insert(user_ptr, mask)
+        .is_none();
     if fresh {
         note_new_layout_record(user_ptr);
     }
