@@ -1180,8 +1180,7 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 // O(1) via the owner index. This used to walk every descriptor
                 // in the program on every `Object.keys(array)` — profiling
                 // `claude -p` put this scan at the top of self-time by 4×.
-                let has_idx_descriptors =
-                    super::super::owner_has_property_descriptors(owner);
+                let has_idx_descriptors = super::super::owner_has_property_descriptors(owner);
                 let result = crate::array::js_array_alloc(length);
                 for i in 0..length {
                     if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {

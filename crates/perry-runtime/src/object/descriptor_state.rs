@@ -135,7 +135,11 @@ fn owner_index_add(index: &RefCell<FastKeyHashMap<usize, Vec<String>>>, owner: u
 
 /// Drop `key` from `owner`'s index entry, removing the entry entirely once it
 /// is empty so a dead owner leaves nothing behind for the GC scan to walk.
-fn owner_index_remove(index: &RefCell<FastKeyHashMap<usize, Vec<String>>>, owner: usize, key: &str) {
+fn owner_index_remove(
+    index: &RefCell<FastKeyHashMap<usize, Vec<String>>>,
+    owner: usize,
+    key: &str,
+) {
     let mut idx = index.borrow_mut();
     if let Some(keys) = idx.get_mut(&owner) {
         keys.retain(|k| k != key);
@@ -1253,11 +1257,7 @@ pub(crate) fn transfer_descriptor_owner(old_owner: usize, new_owner: usize) {
         }
     }
     owner_index_transfer(&st.descriptors.attr_keys_by_owner, old_owner, new_owner);
-    owner_index_transfer(
-        &st.descriptors.accessor_keys_by_owner,
-        old_owner,
-        new_owner,
-    );
+    owner_index_transfer(&st.descriptors.accessor_keys_by_owner, old_owner, new_owner);
 
     // Carry the per-object Bloom summary across too. Every descriptor read is
     // gated on the owner's `attr_key_bits` / `accessor_key_bits`
