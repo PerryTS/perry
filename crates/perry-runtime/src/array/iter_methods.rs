@@ -254,7 +254,9 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
     if arr.is_null() {
         return;
     }
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+    if super::header::receiver_may_be_registered_exotic(arr)
+        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    {
         crate::typedarray::js_typed_array_for_each(
             arr as *const crate::typedarray::TypedArrayHeader,
             callback,
@@ -323,7 +325,9 @@ pub extern "C" fn js_array_map(
     if arr.is_null() {
         return js_array_alloc(0);
     }
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+    if super::header::receiver_may_be_registered_exotic(arr)
+        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    {
         // Typed-array receiver: read elements per element-kind and return a
         // same-kind TypedArray (mirrors the sort/at/findLast delegation).
         return crate::typedarray::js_typed_array_map(
@@ -515,7 +519,9 @@ pub extern "C" fn js_array_filter(
     if arr.is_null() {
         return js_array_alloc(0);
     }
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+    if super::header::receiver_may_be_registered_exotic(arr)
+        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    {
         return crate::typedarray::js_typed_array_filter(
             arr as *const crate::typedarray::TypedArrayHeader,
             callback,
@@ -603,7 +609,9 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
     if arr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+    if super::header::receiver_may_be_registered_exotic(arr)
+        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    {
         return crate::typedarray::js_typed_array_find(
             arr as *const crate::typedarray::TypedArrayHeader,
             callback,
@@ -663,7 +671,9 @@ pub extern "C" fn js_array_findIndex(
     if arr.is_null() {
         return -1;
     }
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+    if super::header::receiver_may_be_registered_exotic(arr)
+        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    {
         return crate::typedarray::js_typed_array_find_index(
             arr as *const crate::typedarray::TypedArrayHeader,
             callback,
@@ -708,7 +718,9 @@ pub extern "C" fn js_array_find_last(
     if arr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+    if super::header::receiver_may_be_registered_exotic(arr)
+        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    {
         return crate::typedarray::js_typed_array_find_last(
             arr as *const crate::typedarray::TypedArrayHeader,
             callback,
@@ -749,7 +761,9 @@ pub extern "C" fn js_array_find_last_index(
     if arr.is_null() {
         return -1;
     }
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+    if super::header::receiver_may_be_registered_exotic(arr)
+        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    {
         let r = crate::typedarray::js_typed_array_find_last_index(
             arr as *const crate::typedarray::TypedArrayHeader,
             callback,
@@ -849,7 +863,9 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
     if arr.is_null() {
         return f64::from_bits(TAG_FALSE);
     }
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+    if super::header::receiver_may_be_registered_exotic(arr)
+        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    {
         return crate::typedarray::js_typed_array_some(
             arr as *const crate::typedarray::TypedArrayHeader,
             callback,
@@ -909,8 +925,10 @@ pub extern "C" fn js_array_some_captureless(
     if arr.is_null() {
         return f64::from_bits(TAG_FALSE);
     }
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
-        || crate::buffer::is_registered_buffer(arr as usize)
+    if super::header::receiver_may_be_registered_exotic(arr)
+        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        || super::header::receiver_may_be_registered_exotic(arr)
+            && crate::buffer::is_registered_buffer(arr as usize)
     {
         let callback = crate::closure::js_closure_alloc_singleton(callback_func);
         return js_array_some(original_arr, callback);
@@ -998,7 +1016,9 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
     if arr.is_null() {
         return f64::from_bits(TAG_TRUE);
     }
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+    if super::header::receiver_may_be_registered_exotic(arr)
+        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    {
         return crate::typedarray::js_typed_array_every(
             arr as *const crate::typedarray::TypedArrayHeader,
             callback,
@@ -1146,7 +1166,9 @@ pub extern "C" fn js_array_reduce(
     // Typed-array receiver: read elements per element-kind (raw int/float
     // storage is NOT NaN-boxed f64, so the generic ArrayHeader path below would
     // read garbage). Issue #2799.
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+    if super::header::receiver_may_be_registered_exotic(arr)
+        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    {
         return crate::typedarray::js_typed_array_reduce(
             arr as *const crate::typedarray::TypedArrayHeader,
             callback,
@@ -1429,7 +1451,9 @@ pub extern "C" fn js_validate_array_map_callback(arr: i64, cb_boxed: f64) -> i64
     if let Some(p) = resolve_callback_ptr(cb_boxed) {
         return p;
     }
-    let is_typed_array = crate::typedarray::lookup_typed_array_kind(arr as usize).is_some();
+    let is_typed_array =
+        super::header::receiver_may_be_registered_exotic(arr as *const ArrayHeader)
+            && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some();
     let rendered = if is_typed_array {
         render_callback_plain(cb_boxed)
     } else {

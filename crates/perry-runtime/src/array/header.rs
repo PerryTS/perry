@@ -950,6 +950,23 @@ pub(crate) fn array_ptr_as_proxy(arr: *const ArrayHeader) -> Option<f64> {
     None
 }
 
+/// May this receiver be a registered typed array, Buffer or native view?
+///
+/// A `GC_TYPE_ARRAY` header never is — every registration carries its own
+/// object type (`GC_TYPE_TYPED_ARRAY`, `GC_TYPE_NATIVE_TYPED_VIEW`,
+/// `GC_TYPE_BUFFER`) — so the iteration helpers need not probe the
+/// thread-local registries for one. Anything else, including a header this
+/// cannot read, may be, and keeps the probes.
+#[inline]
+pub(crate) fn receiver_may_be_registered_exotic(arr: *const ArrayHeader) -> bool {
+    unsafe {
+        match array_gc_header(arr) {
+            Some(header) => (*header).obj_type != crate::gc::GC_TYPE_ARRAY,
+            None => true,
+        }
+    }
+}
+
 /// Normalize an Array.prototype method receiver into a real ArrayHeader.
 ///
 /// `Array.prototype.<method>.call(arrayLike, ...)` lets a *generic array-like
