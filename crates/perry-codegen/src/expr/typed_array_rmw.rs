@@ -209,15 +209,22 @@ fn emit_generic_set(
     object: &Expr,
     index: &Expr,
     value: &str,
+    assignment_strict: bool,
 ) -> Result<String> {
     // Re-read the immutable reference temporaries after any allocating RHS;
     // their slots are the GC-visible source of truth.
     let object_box = lower_expr(ctx, object)?;
     let index_box = lower_expr(ctx, index)?;
+    let strict = if assignment_strict { "1" } else { "0" };
     Ok(ctx.block().call(
         DOUBLE,
-        "js_dyn_index_set",
-        &[(DOUBLE, &object_box), (DOUBLE, &index_box), (DOUBLE, value)],
+        "js_dyn_index_set_strict",
+        &[
+            (DOUBLE, &object_box),
+            (DOUBLE, &index_box),
+            (DOUBLE, value),
+            (I32, strict),
+        ],
     ))
 }
 
@@ -230,6 +237,7 @@ pub(super) fn try_lower_guarded_uint32_add(
     object: &Expr,
     index: &Expr,
     value: &Expr,
+    assignment_strict: bool,
 ) -> Result<Option<String>> {
     if !enabled() {
         return Ok(None);
@@ -334,7 +342,13 @@ pub(super) fn try_lower_guarded_uint32_add(
     let store_end = ctx.block().label.clone();
 
     ctx.current_block = set_fallback_idx;
-    let set_fallback_value = emit_generic_set(ctx, candidate.object, candidate.index, &sum)?;
+    let set_fallback_value = emit_generic_set(
+        ctx,
+        candidate.object,
+        candidate.index,
+        &sum,
+        assignment_strict,
+    )?;
     ctx.block().br(&merge_label);
     let set_fallback_end = ctx.block().label.clone();
 
@@ -344,8 +358,13 @@ pub(super) fn try_lower_guarded_uint32_add(
     // stores, and every abrupt-completion case.
     ctx.current_block = full_fallback_idx;
     let generic_sum = lower_expr(ctx, value)?;
-    let full_fallback_value =
-        emit_generic_set(ctx, candidate.object, candidate.index, &generic_sum)?;
+    let full_fallback_value = emit_generic_set(
+        ctx,
+        candidate.object,
+        candidate.index,
+        &generic_sum,
+        assignment_strict,
+    )?;
     ctx.block().br(&merge_label);
     let full_fallback_end = ctx.block().label.clone();
 

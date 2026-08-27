@@ -4,30 +4,18 @@
 //! Split out of `index_set.rs` to keep it under the 2,000-line file gate.
 
 use anyhow::Result;
-use perry_hir::{BinaryOp, Expr};
+use perry_hir::Expr;
 
-use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{
-    BoundsState, BufferAccessMode, ExpectedNativeRep, LoweredValue, MaterializationReason,
-    NativeRep, SemanticKind,
+    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
 };
-use crate::rooting;
-use crate::type_analysis::{is_array_expr, is_numeric_expr, is_string_expr, receiver_class_name};
 use crate::types::{DOUBLE, I32, I64};
 
 use super::index_set::{canonicalize_raw_f64_numeric_store_value, packed_f64_loop_fact};
-use super::index_set_typed_array::lower_inline_dyn_typed_array_set;
-use super::*;
 use super::{
-    array_kind_fact, array_store_needs_layout_note, array_store_needs_write_barrier,
-    attach_buffer_view_pointer_state_for_expr, buffer_access_materialization_reason,
-    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
-    emit_root_nanbox_store_on_block, emit_typed_feedback_register_site, emit_write_barrier,
-    expr_has_numeric_pointer_free_array_layout, int_range_expr, lower_buffer_store, lower_expr,
-    lower_expr_as_i32, lower_expr_native, lower_index_set_fast, lower_typed_array_store,
-    materialize_js_value, nanbox_pointer_inline, raw_f64_layout_fact, unbox_str_handle,
-    unbox_to_i64, BufferAccessSpec, FnCtx, PackedF64LoopFact, PackedNumericLoopKind,
-    TypedFeedbackContract, TypedFeedbackKind,
+    array_kind_fact, emit_typed_feedback_register_site, lower_expr, lower_expr_as_i32,
+    raw_f64_layout_fact, FnCtx, PackedNumericLoopKind, TypedFeedbackContract, TypedFeedbackKind,
 };
 
 fn lower_packed_f64_loop_store_value(

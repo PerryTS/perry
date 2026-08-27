@@ -1088,6 +1088,44 @@ pub(crate) fn clear_object_descriptors(obj: usize) {
     }
 }
 
+/// Move string-keyed descriptor ownership when `ArrayHeader` growth replaces
+/// one live allocation with another. Array growth is not a GC collection, so
+/// the metadata-rewrite scanner below does not run; without this explicit
+/// transfer, descriptors installed before a later grow remain keyed to the
+/// forwarding stub and disappear from reads through the canonical array head.
+pub(crate) fn transfer_descriptor_owner(old_owner: usize, new_owner: usize) {
+    if old_owner == new_owner {
+        return;
+    }
+    let st = state();
+    {
+        let mut attrs = st.descriptors.property_descriptors.borrow_mut();
+        let moved = attrs
+            .keys()
+            .filter(|(owner, _)| *owner == old_owner)
+            .cloned()
+            .collect::<Vec<_>>();
+        for old_key in moved {
+            if let Some(value) = attrs.remove(&old_key) {
+                attrs.insert((new_owner, old_key.1), value);
+            }
+        }
+    }
+    {
+        let mut accessors = st.descriptors.accessor_descriptors.borrow_mut();
+        let moved = accessors
+            .keys()
+            .filter(|(owner, _)| *owner == old_owner)
+            .cloned()
+            .collect::<Vec<_>>();
+        for old_key in moved {
+            if let Some(value) = accessors.remove(&old_key) {
+                accessors.insert((new_owner, old_key.1), value);
+            }
+        }
+    }
+}
+
 /// Rewrite a descriptor table's owner ADDRESS during the GC metadata-rewrite
 /// phase (evacuation moved the owning object), mirroring the symbol-keyed
 /// twin tables' owner rekey (`symbol/gc_roots.rs`). Outside that phase the

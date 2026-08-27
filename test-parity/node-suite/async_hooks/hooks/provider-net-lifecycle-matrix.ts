@@ -75,8 +75,12 @@ try {
       server.close((error) => (error ? reject(error) : resolve())),
     );
   }
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  for (let turn = 0; turn < 10; turn++) {
+    if (entries.length === 6 && entries.every((entry) => entry.destroy === 1)) {
+      break;
+    }
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
   hook.disable();
 }
 

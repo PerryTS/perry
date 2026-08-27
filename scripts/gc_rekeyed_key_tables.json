@@ -240,6 +240,12 @@
       "table": "WEAK_HOLDERS",
       "death": "self_pruned:prune_dead_weak_holders",
       "why": "Called directly from prune_dead_owner_side_tables_post_trace (gc/dead_owner.rs), not from fan_out; the copying path prunes inline via HolderDisposition::Drop in process_weak_targets_from_registry (weakref.rs:960-966)."
+    },
+    {
+      "site": "crates/perry-runtime/src/node_api_host/metadata.rs::scan_object_metadata_roots_mut",
+      "table": "NODE_API_OBJECT_METADATA",
+      "death": "dead_owner:prune_dead_object_meta_owners",
+      "why": "Node-API object metadata is re-keyed without marking its owner; the registered prune removes dead keys after both copying and mark/sweep traces and queues their finalizers on the owning agent."
     }
   ]
 }

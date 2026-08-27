@@ -996,6 +996,50 @@ pub(crate) unsafe fn birth_stamp_object_shape(
     }
 }
 
+/// Stamp a newborn compiled-class allocation from the ShapeId installed at
+/// module initialization, without re-canonicalizing the same shape facts.
+///
+/// A hit proves the immutable ordered-keys edge and live inline-slot bound
+/// directly from the agent-local descriptor. Canonical class keys never mutate
+/// in place: structural growth forks a new keys array and mints a new ShapeId,
+/// so exact `(ShapeId, keys pointer)` identity also carries the descriptor's
+/// logical key count. Missing worker-local ids and learned-width mismatches
+/// return `false` for the existing mint-and-validate path to handle.
+///
+/// # Safety
+///
+/// `obj` must be a freshly allocated, unpublished `ObjectHeader` and `keys`
+/// must be the module-init canonical keys pointer paired with
+/// `runtime_shape_id`. No allocation or collection may occur between this
+/// function returning `true` and initialization of the newborn's fields.
+#[inline]
+pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
+    obj: *mut crate::object::ObjectHeader,
+    runtime_shape_id: u32,
+    keys: *mut ArrayHeader,
+    live_inline_slot_count: u32,
+) -> bool {
+    if obj.is_null() {
+        return false;
+    }
+    let Some(descriptor) = shape_descriptor_by_id(runtime_shape_id) else {
+        return false;
+    };
+    if descriptor.keys != keys as u64
+        || descriptor.live_inline_slot_count != live_inline_slot_count
+        || descriptor.semantic_generation != 0
+        || descriptor.object_kind != ShapeObjectKind::Ordinary
+    {
+        return false;
+    }
+    (*obj).parent_class_id = runtime_shape_id;
+    if !crate::arena::pointer_in_nursery(obj as usize) {
+        note_old_generation_carrier(Some(descriptor));
+    }
+    debug_assert_object_shape_parity(obj);
+    true
+}
+
 /// Publish the exact descriptor for a FRESHLY ALLOCATED header. #8113: the
 /// birth live-slot bound must be supplied because no header word carries it.
 ///
@@ -1194,6 +1238,13 @@ pub(crate) unsafe fn transition_object_shape_semantics(
 /// Turn a class-expression object into a class receiver. The kind is part of
 /// the exact immutable descriptor, so it cannot alias GC layout bits and every
 /// pre-mark ShapeId guard permanently misses afterward.
+///
+/// Unlike a general semantic transition, changing `object_kind` already makes
+/// the descriptor facts distinct. Preserve the predecessor generation so
+/// repeated evaluations of the same class expression reuse one class-shaped
+/// descriptor. Minting a fresh generation here retained one descriptor per
+/// evaluation as long as their shared keys array stayed live (one million
+/// evaluations consumed hundreds of MB).
 pub(crate) unsafe fn transition_object_shape_to_class(
     obj: *mut crate::object::ObjectHeader,
 ) -> u32 {
@@ -1208,15 +1259,11 @@ pub(crate) unsafe fn transition_object_shape_to_class(
     if current.object_kind == ShapeObjectKind::Class {
         return object_shape_stamp(obj);
     }
-    let generation = SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if generation == 0 {
-        shape_id_exhausted_abort();
-    }
     let id = publish_shape_result(shape_descriptor_ensure_with_generation(
         current.keys as usize as *const ArrayHeader,
         current.logical_key_count,
         current.live_inline_slot_count,
-        generation,
+        current.semantic_generation,
         ShapeObjectKind::Class,
     ));
     (*obj).parent_class_id = id;

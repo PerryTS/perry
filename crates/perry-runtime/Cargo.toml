@@ -237,6 +237,9 @@ ohos-napi = []
 # this on only when the user's program references `WebAssembly.*`, so non-wasm
 # programs don't pay an unresolvable-symbol penalty at link time.
 wasm-host = []
+# #8523: opt-in Node-API ABI and host-core symbols. The compiler enables this
+# only for an allowlisted native-addon graph, preserving the default size gate.
+node-api-host = ["dep:hex", "dep:sha2"]
 # #6559: runtime dynamic-code evaluation — `new Function(p1, …, body)` with a
 # RUNTIME-constructed body parses the generated source with perry-parser (SWC)
 # and runs it through a scoped tree-walking interpreter (`src/dyn_eval/`).
@@ -289,6 +292,8 @@ temporal_rs = { version = "0.2.3", default-features = false, features = ["std", 
 
 serde.workspace = true
 serde_json.workspace = true
+hex = { workspace = true, optional = true }
+sha2 = { version = "0.11", optional = true }
 # TLS client identity callbacks run from the external net archive, before the
 # stdlib TLS module is necessarily linked. Keep the legacy peer-certificate
 # object builder in the runtime so that callback path has no stdlib symbol

@@ -739,6 +739,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // IndexSet dispatch tree. Routes to `js_array_set_index_or_string` for
     // arrays and `js_object_set_field_by_name` for plain objects.
     module.declare_function("js_dyn_index_set", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_dyn_index_set_strict",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I32],
+    );
     module.declare_function("js_string_to_char_array", I64, &[I64]);
     module.declare_function("js_string_repeat", I64, &[I64, DOUBLE]);
     module.declare_function("js_string_replace_string", I64, &[I64, I64, I64]);

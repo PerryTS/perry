@@ -679,6 +679,13 @@ pub(crate) extern "C" fn array_prototype_values_thunk(
     crate::array::array_values_iter(this)
 }
 
+pub(crate) extern "C" fn array_prototype_flat_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    depth: f64,
+) -> f64 {
+    crate::array::js_arraylike_flat(crate::object::js_implicit_this_get(), depth)
+}
+
 pub(crate) extern "C" fn array_prototype_pop_thunk(
     _c: *const crate::closure::ClosureHeader,
     _a: f64,

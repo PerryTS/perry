@@ -11,6 +11,45 @@ mod c3c_tests {
         crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
     }
 
+    #[test]
+    fn repeated_class_evaluations_reuse_the_class_shape() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            const CID: u32 = 0x5268;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let first = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
+            let second = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CID, 0));
+
+            let ordinary =
+                first.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj));
+            assert_eq!(
+                ordinary,
+                second.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj)),
+                "test premise: equal class evaluations start with one shape"
+            );
+
+            first.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
+                transition_object_shape_to_class(obj);
+            });
+            second.with_mut_ptr::<crate::ObjectHeader, _>(|obj| {
+                transition_object_shape_to_class(obj);
+            });
+
+            let first_class =
+                first.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj));
+            let second_class =
+                second.with_const_ptr::<crate::ObjectHeader, _>(|obj| object_shape_id(obj));
+            assert_ne!(
+                ordinary, first_class,
+                "becoming a class must invalidate guards"
+            );
+            assert_eq!(
+                first_class, second_class,
+                "equivalent class evaluations must not mint unbounded descriptors"
+            );
+        }
+    }
+
     /// #6759 C3c: ids come from the dedicated range (disjoint from real and
     /// builtin class ids), are stable per exact descriptor facts, and distinct
     /// across identities.
@@ -65,6 +104,71 @@ mod c3c_tests {
             keys,
             "the stamp and canonical keys global must describe the same shape"
         );
+    }
+
+    /// A module-init ShapeId is already a complete proof of the immutable
+    /// keys edge and live inline bound. The allocation fast path must be able
+    /// to install that proof directly on a newborn without publishing the
+    /// same facts through the reverse shape index again.
+    #[test]
+    fn preinstalled_shape_fast_path_stamps_matching_newborn() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const CID: u32 = 0x0C3C_7903;
+        let packed = b"direct_a\0direct_b";
+        let keys =
+            crate::object::js_build_class_keys_array(CID, 2, packed.as_ptr(), packed.len() as u32);
+        let shape_id = js_object_shape_id_for_keys(keys as usize as u64, 2);
+        let payload = std::mem::size_of::<crate::object::ObjectHeader>()
+            + crate::object::INLINE_SLOT_FLOOR * std::mem::size_of::<crate::value::JSValue>();
+        let obj = crate::arena::arena_alloc_gc(payload, 8, crate::gc::GC_TYPE_OBJECT)
+            as *mut crate::object::ObjectHeader;
+
+        unsafe {
+            (*obj).class_id = CID;
+            (*obj).parent_class_id = 0;
+            (*obj).meta = std::ptr::null_mut();
+            let fields = (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
+                as *mut crate::value::JSValue;
+            // GC_STORE_AUDIT(INIT): freshly allocated inline slots, filled with a
+            // non-pointer immediate before the object is reachable from anything.
+            for index in 0..crate::object::INLINE_SLOT_FLOOR {
+                std::ptr::write(fields.add(index), crate::value::JSValue::undefined());
+            }
+            crate::gc::layout_init_pointer_free(obj as *mut u8);
+
+            assert!(try_birth_stamp_preinstalled_shape(obj, shape_id, keys, 2));
+            assert_eq!((*obj).parent_class_id, shape_id);
+            assert_eq!(crate::object::object_keys_array(obj), keys);
+            debug_assert_object_shape_parity(obj);
+        }
+    }
+
+    /// Learned/hidden inline capacity can legitimately exceed the public key
+    /// count. A module-init id for the narrow shape must fail closed, and the
+    /// existing allocator fallback must publish and retain the exact wider
+    /// descriptor rather than stamping the supplied id anyway.
+    #[test]
+    fn preinstalled_shape_live_bound_mismatch_uses_exact_fallback() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const CID: u32 = 0x0C3C_7904;
+        let packed = b"wide_a\0wide_b";
+        let keys =
+            crate::object::js_build_class_keys_array(CID, 2, packed.as_ptr(), packed.len() as u32);
+        let narrow_id = js_object_shape_id_for_keys(keys as usize as u64, 2);
+
+        let obj =
+            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 3, keys, narrow_id);
+        let actual_id = unsafe { (*obj).parent_class_id };
+        assert_ne!(
+            actual_id, narrow_id,
+            "a narrow module ShapeId must not describe a wider allocation"
+        );
+        let descriptor = shape_descriptor_by_id(actual_id)
+            .expect("the widened fallback must publish an exact descriptor");
+        assert_eq!(descriptor.keys, keys as u64);
+        assert_eq!(descriptor.logical_key_count, 2);
+        assert_eq!(descriptor.live_inline_slot_count, 3);
+        unsafe { debug_assert_object_shape_parity(obj) };
     }
 
     /// #6759 C3c stamp invariant on a REAL object through the real

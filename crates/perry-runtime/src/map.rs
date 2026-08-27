@@ -124,11 +124,16 @@ pub(crate) fn test_map_side_deallocation_snapshot() -> (u64, u64) {
 struct MapSideAllocation {
     entries: *mut f64,
     capacity: usize,
+    numeric_index: Box<NumericIndex>,
 }
 
 impl MapSideAllocation {
     fn new(entries: *mut f64, capacity: usize) -> Self {
-        Self { entries, capacity }
+        Self {
+            entries,
+            capacity,
+            numeric_index: Box::new(NumericIndex::new()),
+        }
     }
 
     fn byte_len(&self) -> usize {
@@ -187,7 +192,11 @@ fn register_map(ptr: *mut MapHeader, entries: *mut f64, capacity: usize) {
             !registry.contains_key(&(ptr as usize)),
             "Map side allocation registered twice for the same header"
         );
-        registry.insert(ptr as usize, MapSideAllocation::new(entries, capacity));
+        let mut allocation = MapSideAllocation::new(entries, capacity);
+        unsafe {
+            (*ptr).numeric_index = allocation.numeric_index.as_mut();
+        }
+        registry.insert(ptr as usize, allocation);
     });
 }
 
@@ -298,6 +307,207 @@ impl PartialEq for NumericKey {
 }
 impl Eq for NumericKey {}
 
+const DENSE_NUMERIC_EMPTY: u32 = u32::MAX;
+const DENSE_NUMERIC_MIN_KEYS: usize = 8;
+const DENSE_NUMERIC_SPAN_FACTOR: usize = 4;
+const DENSE_NUMERIC_MAX_SLOTS: usize = 1 << 20;
+
+struct DenseNumericIndex {
+    base: u32,
+    slots: Vec<u32>,
+}
+
+/// Numeric Map keys always retain the hash index for complete semantics, but
+/// exact nonnegative integers also acquire a bounded range table once their
+/// observed density justifies it. Sequential IDs are common outside ECS too
+/// (database rows, handles, protocol sequence numbers), and a range lookup is
+/// just bounds-check + load instead of a hash and Swiss-table control probe.
+///
+/// The dense table is deliberately adaptive rather than key-magnitude based:
+/// a run beginning at 1_000_000 costs the same as a run beginning at zero.
+/// Sparse, fractional, negative, tagged, and very wide key sets continue to
+/// use `hashed` without allocating a range proportional to their values.
+struct NumericIndex {
+    hashed: crate::fast_hash::PtrHashMap<NumericKey, u32>,
+    dense: Option<DenseNumericIndex>,
+    dense_key_count: usize,
+}
+
+#[inline]
+fn dense_integer_key(key: NumericKey) -> Option<u32> {
+    let value = f64::from_bits(key.0);
+    if !value.is_finite() || value < 0.0 || value > u32::MAX as f64 {
+        return None;
+    }
+    let integer = value as u32;
+    (integer as f64 == value).then_some(integer)
+}
+
+impl NumericIndex {
+    fn new() -> Self {
+        Self {
+            hashed: crate::fast_hash::new_ptr_hash_map(),
+            dense: None,
+            dense_key_count: 0,
+        }
+    }
+
+    #[inline]
+    fn get(&self, key: &NumericKey) -> Option<u32> {
+        if let (Some(integer), Some(dense)) = (dense_integer_key(*key), self.dense.as_ref()) {
+            if integer >= dense.base {
+                let offset = integer as usize - dense.base as usize;
+                if offset < dense.slots.len() {
+                    let entry = dense.slots[offset];
+                    return (entry != DENSE_NUMERIC_EMPTY).then_some(entry);
+                }
+            }
+        }
+        self.hashed.get(key).copied()
+    }
+
+    #[cfg(test)]
+    fn contains_key(&self, key: &NumericKey) -> bool {
+        self.get(key).is_some()
+    }
+
+    fn insert(&mut self, key: NumericKey, entry_index: u32) {
+        let integer = dense_integer_key(key);
+        let is_new = self.hashed.insert(key, entry_index).is_none();
+        if is_new && integer.is_some() {
+            self.dense_key_count += 1;
+        }
+
+        let Some(integer) = integer else {
+            return;
+        };
+        if let Some(dense) = self.dense.as_mut() {
+            if integer >= dense.base {
+                let offset = integer as usize - dense.base as usize;
+                if offset < dense.slots.len() {
+                    dense.slots[offset] = entry_index;
+                    return;
+                }
+            }
+            self.maybe_expand_dense(integer);
+        } else {
+            self.maybe_initialize_dense();
+        }
+    }
+
+    fn remove(&mut self, key: &NumericKey) -> Option<u32> {
+        let removed = self.hashed.remove(key);
+        if removed.is_some() {
+            if let Some(integer) = dense_integer_key(*key) {
+                self.dense_key_count = self.dense_key_count.saturating_sub(1);
+                if let Some(dense) = self.dense.as_mut() {
+                    if integer >= dense.base {
+                        let offset = integer as usize - dense.base as usize;
+                        if offset < dense.slots.len() {
+                            dense.slots[offset] = DENSE_NUMERIC_EMPTY;
+                        }
+                    }
+                }
+            }
+        }
+        removed
+    }
+
+    fn clear(&mut self) {
+        self.hashed.clear();
+        self.dense = None;
+        self.dense_key_count = 0;
+    }
+
+    fn repair_entry_indices_after_delete(&mut self, deleted_index: u32) {
+        for entry_index in self.hashed.values_mut() {
+            if *entry_index > deleted_index {
+                *entry_index -= 1;
+            }
+        }
+        if let Some(dense) = self.dense.as_mut() {
+            for entry_index in &mut dense.slots {
+                if *entry_index != DENSE_NUMERIC_EMPTY && *entry_index > deleted_index {
+                    *entry_index -= 1;
+                }
+            }
+        }
+    }
+
+    fn allowed_dense_span(&self) -> usize {
+        self.dense_key_count
+            .saturating_mul(DENSE_NUMERIC_SPAN_FACTOR)
+            .clamp(32, DENSE_NUMERIC_MAX_SLOTS)
+    }
+
+    fn maybe_initialize_dense(&mut self) {
+        if self.dense_key_count < DENSE_NUMERIC_MIN_KEYS {
+            return;
+        }
+
+        let mut min_key = u32::MAX;
+        let mut max_key = 0u32;
+        for &key in self.hashed.keys() {
+            let Some(integer) = dense_integer_key(key) else {
+                continue;
+            };
+            min_key = min_key.min(integer);
+            max_key = max_key.max(integer);
+        }
+        let span = max_key as u64 - min_key as u64 + 1;
+        let allowed = self.allowed_dense_span();
+        if span > allowed as u64 {
+            return;
+        }
+
+        let target_len = (span as usize)
+            .next_power_of_two()
+            .min(allowed)
+            .max(span as usize);
+        self.rebuild_dense(min_key, target_len);
+    }
+
+    fn maybe_expand_dense(&mut self, integer: u32) {
+        let Some(dense) = self.dense.as_ref() else {
+            return;
+        };
+        let current_base = dense.base as u64;
+        let current_end = current_base + dense.slots.len() as u64;
+        let new_base = current_base.min(integer as u64);
+        let new_end = current_end.max(integer as u64 + 1);
+        let needed = (new_end - new_base) as usize;
+        let allowed = self.allowed_dense_span();
+        if needed > allowed {
+            return;
+        }
+
+        let addressable = (u32::MAX as u64 + 1 - new_base) as usize;
+        let target_len = needed
+            .max(dense.slots.len().saturating_mul(2))
+            .min(allowed)
+            .min(addressable);
+        if target_len >= needed {
+            self.rebuild_dense(new_base as u32, target_len);
+        }
+    }
+
+    fn rebuild_dense(&mut self, base: u32, len: usize) {
+        let mut slots = vec![DENSE_NUMERIC_EMPTY; len];
+        for (&key, &entry_index) in &self.hashed {
+            let Some(integer) = dense_integer_key(key) else {
+                continue;
+            };
+            if integer >= base {
+                let offset = integer as usize - base as usize;
+                if offset < slots.len() {
+                    slots[offset] = entry_index;
+                }
+            }
+        }
+        self.dense = Some(DenseNumericIndex { base, slots });
+    }
+}
+
 /// `true` if `bits` is a non-pointer JSValue (number, bool, undefined,
 /// null, or any NaN-tagged value that is NOT a string/heap pointer).
 /// We index only these in the side-table.
@@ -336,26 +546,19 @@ fn is_safe_numeric_key(bits: u64) -> bool {
     true
 }
 
-// Side-table mapping `map_ptr -> (NumericKey-bits -> entries-array-index)`.
-// O(1) `find_key_index` for numeric keys; pointer keys still take the
-// linear-scan path so they remain correct under gen-GC string forwarding.
+// O(1) index from numeric key bits to entries-array index. The owning Box is
+// kept in `MapSideAllocation`; `MapHeader::numeric_index` points directly at
+// it so a lookup does not first hash the MapHeader address through a second
+// thread-local table. The Box address stays stable when MAP_REGISTRY rehashes
+// or a moving GC rekeys the owning allocation.
 //
-// Both nesting levels use `PtrHasher` (Fibonacci-multiplicative + xorshift
-// avalanche, see `crate::fast_hash`). The xorshift step is essential here
-// because `NumericKey(u64)` holds f64 bit-patterns — small whole-number
-// EntityIds have mantissa-zero, so pure multiplicative hashing would
-// collapse hundreds of keys into bucket 0 (caught by a 2x regression
-// the first time around). With the avalanche step, even the worst-case
-// integer-f64 inputs distribute across buckets normally.
-crate::perry_thread_local! {
-    static MAP_INDEX: RefCell<
-        crate::fast_hash::PtrHashMap<usize, crate::fast_hash::PtrHashMap<NumericKey, u32>>,
-    > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
-}
+// `PtrHasher`'s xorshift avalanche is essential because `NumericKey(u64)`
+// holds f64 bit patterns: small whole-number EntityIds have mantissa-zero, so
+// pure multiplicative hashing would collapse hundreds of keys into bucket 0.
 
 // Side-table mapping `map_ptr -> (FNV-1a 64-bit content hash -> Vec<entries-array-index>)`
 // for STRING keys. Bypasses the gen-GC-stale-bits constraint that keeps
-// `MAP_INDEX` numeric-only by hashing the string's CONTENT, not its
+// the numeric index numeric-only by hashing the string's CONTENT, not its
 // pointer bits — so a forwarded heap-string and an SSO inline string
 // with the same bytes share the same bucket. Stored values are u32
 // indexes into the entries array (not pointers), which survive
@@ -471,7 +674,7 @@ fn is_ptr_index_key(bits: u64) -> bool {
 }
 
 // Side-table mapping `map_ptr -> (MapPtrKey -> entries-array-index)` for
-// pointer keys — the third index alongside `MAP_INDEX` (numeric bits) and
+// pointer keys — the third index alongside the direct numeric index and
 // `MAP_STRING_INDEX` (string content). Before #6084 object/bigint keys took
 // a full linear scan per operation (measured 1,793x slower than string keys
 // on a 20k-entry map). GC-move safety mirrors `set.rs`'s SET_INDEX: the
@@ -501,9 +704,6 @@ crate::perry_thread_local! {
 /// `processCommands` iterated `commands[i]` over an Array whose memory
 /// had been a Map a few collections earlier.
 pub fn drop_map_index(addr: usize) {
-    MAP_INDEX.with(|idx| {
-        idx.borrow_mut().remove(&addr);
-    });
     MAP_STRING_INDEX.with(|idx| {
         idx.borrow_mut().remove(&addr);
     });
@@ -533,13 +733,6 @@ pub(crate) fn map_header_moved_for_gc(old_addr: usize, new_addr: usize) {
         }
         registry.insert(new_addr, allocation);
     });
-    MAP_INDEX.with(|idx| {
-        let mut idx = idx.borrow_mut();
-        idx.remove(&new_addr);
-        if let Some(slot) = idx.remove(&old_addr) {
-            idx.insert(new_addr, slot);
-        }
-    });
     MAP_STRING_INDEX.with(|idx| {
         let mut idx = idx.borrow_mut();
         idx.remove(&new_addr);
@@ -562,9 +755,6 @@ pub(crate) unsafe fn finalize_map_side_allocation_for_gc(map: *mut MapHeader) {
     }
     let addr = map as usize;
     let allocation = MAP_REGISTRY.with(|r| r.borrow_mut().remove(&addr));
-    MAP_INDEX.with(|idx| {
-        idx.borrow_mut().remove(&addr);
-    });
     MAP_STRING_INDEX.with(|idx| {
         idx.borrow_mut().remove(&addr);
     });
@@ -579,6 +769,7 @@ pub(crate) unsafe fn finalize_map_side_allocation_for_gc(map: *mut MapHeader) {
     drop(allocation);
     // GC_STORE_AUDIT(POINTER_FREE): finalizer clears external entries side-allocation pointer after deregistration/deallocation.
     (*map).entries = std::ptr::null_mut();
+    (*map).numeric_index = std::ptr::null_mut();
     (*map).capacity = 0;
     (*map).size = 0;
 }
@@ -688,11 +879,23 @@ pub(crate) fn test_map_numeric_index_contains(map: *const MapHeader, key: f64) -
     if !is_safe_numeric_key(bits) {
         return false;
     }
-    MAP_INDEX.with(|idx| {
-        idx.borrow()
-            .get(&(map as usize))
-            .is_some_and(|slot| slot.contains_key(&NumericKey(bits)))
-    })
+    unsafe {
+        (*map)
+            .numeric_index
+            .as_ref()
+            .is_some_and(|index| index.contains_key(&NumericKey(bits)))
+    }
+}
+
+#[cfg(test)]
+fn test_map_dense_numeric_index_range(map: *const MapHeader) -> Option<(u32, usize)> {
+    unsafe {
+        (*map)
+            .numeric_index
+            .as_ref()
+            .and_then(|index| index.dense.as_ref())
+            .map(|dense| (dense.base, dense.slots.len()))
+    }
 }
 
 #[cfg(test)]
@@ -716,7 +919,6 @@ pub(crate) fn release_current_thread_map_side_allocations() {
         crate::gc::gc_note_external_side_free(allocation.byte_len());
         drop(allocation);
     }
-    MAP_INDEX.with(|idx| idx.borrow_mut().clear());
     MAP_STRING_INDEX.with(|idx| idx.borrow_mut().clear());
     MAP_PTR_INDEX.with(|idx| idx.borrow_mut().clear());
 }
@@ -834,6 +1036,8 @@ pub struct MapHeader {
     pub capacity: u32,
     /// Pointer to entries array (separately allocated)
     pub entries: *mut f64,
+    /// Direct pointer to the stable numeric-key index owned by MAP_REGISTRY.
+    numeric_index: *mut NumericIndex,
 }
 
 /// Each map entry is 16 bytes (key + value, both as f64/JSValue)
@@ -1065,17 +1269,14 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
         (*ptr).capacity = cap;
         // GC_STORE_AUDIT(INIT): map entries buffer is external storage; element stores are barriered separately.
         (*ptr).entries = entries;
+        (*ptr).numeric_index = std::ptr::null_mut();
 
         // Register in map registry for runtime type detection
         register_map(ptr, entries, cap as usize);
 
-        // Initialize / reset the O(1) lookup side-table for this address.
-        // Arena reuse may recycle a freed Map's GC slot, so a stale index
-        // entry from the prior occupant must be cleared here.
-        MAP_INDEX.with(|idx| {
-            idx.borrow_mut()
-                .insert(ptr as usize, crate::fast_hash::new_ptr_hash_map());
-        });
+        // Initialize / reset the pointer/string lookup side-tables for this
+        // address. The numeric index is owned by the registered allocation
+        // and reached directly through the header above.
         MAP_STRING_INDEX.with(|idx| {
             idx.borrow_mut()
                 .insert(ptr as usize, std::collections::HashMap::new());
@@ -1107,7 +1308,7 @@ pub extern "C" fn js_map_size(map: *const MapHeader) -> u32 {
 }
 
 /// Find the index of a key in the map, or -1 if not found.
-/// Uses the O(1) MAP_INDEX side-table; falls back to a linear scan only
+/// Uses the O(1) numeric side index; falls back to a linear scan only
 /// when no side-table entry exists (e.g. a Map produced by a path that
 /// bypassed `js_map_alloc`).
 /// Below this size, linear scan over the entries buffer beats the
@@ -1153,20 +1354,13 @@ pub(crate) unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
     // Numeric-key fast path: bits-stable values (numbers, bools,
     // undefined/null) hash by raw bits — no pointers, immune to GC moves.
     if is_safe_numeric_key(key_bits) {
-        let hit = MAP_INDEX.with(|idx| {
-            let idx = idx.borrow();
-            if let Some(slot) = idx.get(&(map as usize)) {
-                if let Some(&i) = slot.get(&NumericKey(key_bits)) {
-                    if i < size {
-                        return Some(i as i32);
-                    }
+        if let Some(index) = (*map).numeric_index.as_ref() {
+            if let Some(i) = index.get(&NumericKey(key_bits)) {
+                if i < size {
+                    return i as i32;
                 }
-                return Some(-1i32);
             }
-            None
-        });
-        if let Some(v) = hit {
-            return v;
+            return -1;
         }
     }
 
@@ -1443,7 +1637,7 @@ pub extern "C" fn js_map_set(map: *mut MapHeader, key: f64, value: f64) -> *mut 
 fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
     let key = normalize_zero(key);
     unsafe {
-        // Check if key already exists (O(1) via MAP_INDEX)
+        // Check if key already exists (O(1) via the numeric side index)
         let idx = find_key_index(map, key);
 
         if idx >= 0 {
@@ -1502,13 +1696,9 @@ fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
         // GC-rebuilt pointer index (#6084).
         let key_bits = key.to_bits();
         if is_safe_numeric_key(key_bits) {
-            MAP_INDEX.with(|idx| {
-                let mut idx = idx.borrow_mut();
-                let slot = idx
-                    .entry(map as usize)
-                    .or_insert_with(crate::fast_hash::new_ptr_hash_map);
-                slot.insert(NumericKey(key_bits), size);
-            });
+            if let Some(index) = (*map).numeric_index.as_mut() {
+                index.insert(NumericKey(key_bits), size);
+            }
         } else if is_string_like(key_bits) {
             // String key: content-hashed index bypasses the gen-GC stale-bits
             // constraint by storing entry indexes (not pointers) keyed by
@@ -1926,19 +2116,12 @@ unsafe fn repair_map_indices_after_ordered_delete(
     let map_addr = map as usize;
     let deleted_bits = deleted_key.to_bits();
 
-    MAP_INDEX.with(|indexes| {
-        let mut indexes = indexes.borrow_mut();
-        if let Some(index) = indexes.get_mut(&map_addr) {
-            if is_safe_numeric_key(deleted_bits) {
-                index.remove(&NumericKey(deleted_bits));
-            }
-            for entry_idx in index.values_mut() {
-                if *entry_idx > deleted_idx {
-                    *entry_idx -= 1;
-                }
-            }
+    if let Some(index) = (*map).numeric_index.as_mut() {
+        if is_safe_numeric_key(deleted_bits) {
+            index.remove(&NumericKey(deleted_bits));
         }
-    });
+        index.repair_entry_indices_after_delete(deleted_idx);
+    }
 
     MAP_STRING_INDEX.with(|indexes| {
         let mut indexes = indexes.borrow_mut();
@@ -2020,12 +2203,11 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
     unsafe {
         (*map).size = 0;
     }
-    MAP_INDEX.with(|idx| {
-        let mut idx = idx.borrow_mut();
-        if let Some(slot) = idx.get_mut(&(map as usize)) {
-            slot.clear();
+    unsafe {
+        if let Some(index) = (*map).numeric_index.as_mut() {
+            index.clear();
         }
-    });
+    }
     MAP_STRING_INDEX.with(|idx| {
         let mut idx = idx.borrow_mut();
         if let Some(slot) = idx.get_mut(&(map as usize)) {
@@ -2738,6 +2920,61 @@ mod tests {
         );
         assert_eq!(js_map_delete_number_key(map, boxed_string_key), 1);
         assert_eq!(js_map_has(map, boxed_string_key), 0);
+    }
+
+    #[test]
+    fn numeric_index_is_direct_and_stable_across_entries_growth() {
+        let map = js_map_alloc(4);
+        let initial_index = unsafe { (*map).numeric_index };
+        assert!(!initial_index.is_null());
+
+        for i in 0..64 {
+            js_map_set(map, i as f64, (i * 10) as f64);
+        }
+
+        assert_eq!(unsafe { (*map).numeric_index }, initial_index);
+        for i in 0..64 {
+            assert_eq!(js_map_get(map, i as f64), (i * 10) as f64);
+            assert!(test_map_numeric_index_contains(map, i as f64));
+        }
+    }
+
+    #[test]
+    fn numeric_index_adapts_to_dense_high_range_without_widening_for_sparse_keys() {
+        let map = js_map_alloc(4);
+
+        for key in 1_024..1_040 {
+            js_map_set(map, key as f64, (key * 10) as f64);
+        }
+        let (base, len) = test_map_dense_numeric_index_range(map)
+            .expect("a dense run should activate the numeric range index");
+        assert!(base <= 1_024);
+        assert!(base as usize + len > 1_039);
+        assert!(
+            len <= 64,
+            "dense range must scale with span, not key magnitude"
+        );
+
+        for key in 1_024..1_040 {
+            assert_eq!(js_map_get(map, key as f64), (key * 10) as f64);
+        }
+        assert_eq!(js_map_has(map, 1_040.0), 0);
+
+        js_map_set(map, 1_000_000.0, 77.0);
+        js_map_set(map, -3.0, 88.0);
+        js_map_set(map, 4.5, 99.0);
+        assert_eq!(js_map_get(map, 1_000_000.0), 77.0);
+        assert_eq!(js_map_get(map, -3.0), 88.0);
+        assert_eq!(js_map_get(map, 4.5), 99.0);
+        assert_eq!(
+            test_map_dense_numeric_index_range(map),
+            Some((base, len)),
+            "isolated sparse keys must stay on the hash fallback"
+        );
+
+        js_map_clear(map);
+        assert_eq!(test_map_dense_numeric_index_range(map), None);
+        assert_eq!(js_map_size(map), 0);
     }
 
     #[test]

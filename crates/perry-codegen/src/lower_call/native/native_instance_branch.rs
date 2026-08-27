@@ -290,7 +290,7 @@
         }
         let blk = ctx.block();
         let len_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
-        return Ok(blk.sitofp(I32, &len_i32, DOUBLE));
+        return Ok(blk.uitofp(I32, &len_i32, DOUBLE));
     }
 
     if module == "array" && (method == "push_single" || method == "push") {
@@ -417,7 +417,7 @@
         } else {
             blk.call(I32, "js_array_length", &[(I64, &new_handle)])
         };
-        return Ok(blk.sitofp(I32, &len_i32, DOUBLE));
+        return Ok(blk.uitofp(I32, &len_i32, DOUBLE));
     }
 
     if module == "array" && (method == "pop_back" || method == "pop") {

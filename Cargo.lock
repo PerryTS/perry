@@ -6317,6 +6317,7 @@ dependencies = [
  "encoding_rs",
  "fancy-regex",
  "gimli",
+ "hex",
  "hickory-proto",
  "hostname",
  "icu_calendar",

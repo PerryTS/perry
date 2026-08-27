@@ -11,6 +11,73 @@ use crate::commands::progress::VerboseProgress;
 use crate::OutputFormat;
 use std::collections::HashSet;
 
+#[test]
+fn approved_node_addon_is_recorded_as_a_relocatable_graph_member() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let package = dir.path().join("node_modules/demo-addon");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"demo-addon","version":"1.2.3"}"#,
+    )
+    .unwrap();
+    let addon = package.join("binding.node");
+    std::fs::copy(std::env::current_exe().unwrap(), &addon).unwrap();
+    let addon = addon.canonicalize().unwrap();
+
+    let mut denied = CompilationContext::new(dir.path().to_path_buf());
+    let error = super::native_addon::collect_or_refuse_node_addon(&mut denied, &addon)
+        .expect_err("unlisted addon must be denied");
+    assert!(error.to_string().contains("perry.nativeAddons"));
+
+    let mut allowed = CompilationContext::new(dir.path().to_path_buf());
+    allowed
+        .native_addon_packages
+        .insert("demo-addon".to_string());
+    assert!(super::native_addon::collect_or_refuse_node_addon(&mut allowed, &addon).unwrap());
+    let record = allowed
+        .native_addons
+        .get("demo-addon/binding.node")
+        .expect("recorded logical addon");
+    assert_eq!(record.package, "demo-addon");
+    assert_eq!(record.version, "1.2.3");
+    assert_eq!(record.entry_relative, std::path::Path::new("binding.node"));
+}
+
+#[test]
+fn platform_payload_inherits_only_a_declared_wrapper_opt_in() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let modules = dir.path().join("node_modules");
+    let wrapper = modules.join("@demo/addon");
+    // Exercise a non-hoisted npm layout as well as the ordinary wrapper ->
+    // optional platform dependency relationship.
+    let payload = wrapper.join("node_modules/@demo/addon-win32-x64-msvc");
+    std::fs::create_dir_all(&wrapper).unwrap();
+    std::fs::create_dir_all(&payload).unwrap();
+    std::fs::write(
+        wrapper.join("package.json"),
+        r#"{"name":"@demo/addon","optionalDependencies":{"@demo/addon-win32-x64-msvc":"1.0.0"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        payload.join("package.json"),
+        r#"{"name":"@demo/addon-win32-x64-msvc","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    let addon = payload.join("addon.node");
+    std::fs::copy(std::env::current_exe().unwrap(), &addon).unwrap();
+    let addon = addon.canonicalize().unwrap();
+
+    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+    ctx.native_addon_packages.insert("@demo/addon".to_string());
+    assert!(super::native_addon::collect_or_refuse_node_addon(&mut ctx, &addon).unwrap());
+    let record = ctx
+        .native_addons
+        .get("@demo/addon-win32-x64-msvc/addon.node")
+        .unwrap();
+    assert_eq!(record.package, "@demo/addon");
+}
+
 fn collect_entry(root: &std::path::Path, entry: &std::path::Path) -> anyhow::Result<()> {
     let mut ctx = CompilationContext::new(root.to_path_buf());
     ctx.entry_canonical = Some(entry.canonicalize().unwrap());

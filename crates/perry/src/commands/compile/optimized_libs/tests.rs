@@ -38,6 +38,11 @@ fn minimal_auto_workspace(dir: &Path) {
         &dir.join("crates/perry-stdlib/src/lib.rs"),
         b"pub fn stdlib() {}\n",
     );
+    write_file(&dir.join("crates/perry-hir/Cargo.toml"), b"[package]\n");
+    write_file(
+        &dir.join("crates/perry-hir/src/lib.rs"),
+        b"pub fn hir() {}\n",
+    );
 }
 
 #[test]
@@ -344,6 +349,30 @@ fn source_fingerprint_tracks_runtime_and_stdlib_content_not_mtimes() {
     assert_ne!(
         fp_rt, fp_std,
         "a perry-stdlib source edit must rotate the fingerprint"
+    );
+
+    write_file(
+        &dir.path().join("crates/perry-hir/tests/e2e.rs"),
+        b"#[test] fn e2e_only() {}\n",
+    );
+    assert_eq!(
+        fp_std,
+        auto_optimized_source_fingerprint(dir.path(), &[]),
+        "test-only targets do not land in the optimized runtime archive"
+    );
+
+    // Compiler/runtime contract inputs participate in perry-runtime's build
+    // id even when the runtime archive does not depend on them through Cargo.
+    // Reusing the old archive after a lowering edit therefore fails the build
+    // id check unless the auto-opt stamp rotates too.
+    write_file(
+        &dir.path().join("crates/perry-hir/src/lib.rs"),
+        b"pub fn hir_changed() {}\n",
+    );
+    assert_ne!(
+        fp_std,
+        auto_optimized_source_fingerprint(dir.path(), &[]),
+        "a compiler/runtime contract edit must rotate the fingerprint"
     );
 }
 

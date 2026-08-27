@@ -44,6 +44,7 @@ pub(super) fn lower_inline_dyn_typed_array_set(
     obj_box: &str,
     idx_d: &str,
     val_double: &str,
+    strict: bool,
 ) -> String {
     let tag_mask = crate::nanbox::i64_literal(crate::nanbox::TAG_MASK);
     let pointer_tag = crate::nanbox::POINTER_TAG_I64;
@@ -262,12 +263,18 @@ pub(super) fn lower_inline_dyn_typed_array_set(
         blk.br(&merge_label);
     }
 
-    // ---- slow: the unchanged runtime setter ----
+    // ---- slow: preserve the source function's assignment strictness ----
     ctx.current_block = slow_idx;
+    let strict = if strict { "1" } else { "0" };
     ctx.block().call(
         DOUBLE,
-        "js_dyn_index_set",
-        &[(DOUBLE, obj_box), (DOUBLE, idx_d), (DOUBLE, val_double)],
+        "js_dyn_index_set_strict",
+        &[
+            (DOUBLE, obj_box),
+            (DOUBLE, idx_d),
+            (DOUBLE, val_double),
+            (I32, strict),
+        ],
     );
     ctx.block().br(&merge_label);
 

@@ -916,11 +916,15 @@ fn test_old_page_defrag_target_gate_emits_trace() {
         "forced old-page defrag should report moved old-page bytes"
     );
     assert!(
-        trace.sweep.reusable_bytes > 0 || trace.sweep.returned_bytes > 0,
-        "forced old-page defrag should make the emptied source block reusable or returned"
+        trace.sweep.reusable_bytes > 0
+            || trace.sweep.pooled_bytes > 0
+            || trace.sweep.returned_bytes > 0,
+        "forced old-page defrag should make the emptied source block reusable, pooled, or returned"
     );
     assert!(
-        trace.old_pages.reusable_bytes > 0 || trace.old_pages.returned_bytes > 0,
+        trace.old_pages.reusable_bytes > 0
+            || trace.old_pages.pooled_bytes > 0
+            || trace.old_pages.returned_bytes > 0,
         "old-page telemetry should expose targeted source-block reclaim"
     );
     assert_eq!(

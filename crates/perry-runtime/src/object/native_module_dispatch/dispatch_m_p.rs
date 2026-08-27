@@ -710,7 +710,7 @@ pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_
         ("process", "getActiveResourcesInfo") => crate::process::js_process_active_resources_info(),
         ("process", "binding") => crate::process::js_process_binding(arg(0)),
         ("process", "_linkedBinding") => crate::process::js_process_linked_binding(arg(0)),
-        ("process", "dlopen") => crate::process::js_process_dlopen(),
+        ("process", "dlopen") => crate::process::js_process_dlopen(arg(0), arg(1), arg(2)),
         ("process", "_rawDebug") => crate::process::js_process_raw_debug(),
         ("process", "_debugProcess") => crate::process::js_process_debug_process(),
         ("process", "_debugEnd") => crate::process::js_process_debug_end(),

@@ -416,7 +416,7 @@ pub(super) unsafe fn dispatch_handle(
                             } else {
                                 f64::from_bits(crate::value::TAG_UNDEFINED)
                             };
-                            a = crate::array::js_array_push_f64(a, v);
+                            a = crate::array::js_array_push_f64_spec(a, v);
                         }
                         return Some(crate::array::js_array_length(a) as f64);
                     }

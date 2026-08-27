@@ -186,6 +186,18 @@
       "why": "Keyed by handle id; TcpStreamWrapper is Rust-owned (tokio stream + SocketAddr), no JS values."
     },
     {
+      "file": "crates/perry-runtime/src/node_api_host/loader.rs",
+      "name": "LEGACY_CAPTURE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Temporary legacy-addon registration state: a canonical Rust PathBuf, a pointer to the addon's static napi_module descriptor in the loaded native library, and counters/flags. It never stores a Perry GC-heap address."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_api_host/metadata.rs",
+      "name": "PENDING_FINALIZERS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Queue entries contain a native addon function pointer plus the addon's opaque data and hint pointers. Node-API defines those as embedder-owned native pointers; no field is a Perry GC-heap address."
+    },
+    {
       "file": "crates/perry-runtime/src/node_submodules/blob.rs",
       "name": "FILE_BLOB_STREAMS",
       "verdict": "not_a_gc_pointer",
@@ -1988,10 +2000,6 @@
     {
       "file": "crates/perry-runtime/src/gc/schedule.rs",
       "name": "SCHEDULE_NEXT_CANDIDATE_BYTES"
-    },
-    {
-      "file": "crates/perry-runtime/src/map.rs",
-      "name": "MAP_INDEX"
     },
     {
       "file": "crates/perry-runtime/src/map.rs",

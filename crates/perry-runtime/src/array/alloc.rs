@@ -176,7 +176,23 @@ pub(crate) fn js_array_alloc_with_length_exact(capacity: u32) -> *mut ArrayHeade
 pub extern "C" fn js_array_constructor_single(value: f64) -> *mut ArrayHeader {
     if let Some(number) = value_bits_to_number(value.to_bits()) {
         let length = array_length_from_number_or_throw(number);
-        let arr = js_array_alloc_with_length(length);
+        // ArrayCreate records the requested uint32 length; it does not require
+        // a dense backing store for every hole.  Allocating `new Array(2^32-1)`
+        // as one contiguous element buffer tried to reserve roughly 32 GiB and
+        // either hung or exhausted the process.  Keep ordinary-sized arrays
+        // dense, but represent a large fresh holey array exactly like a later
+        // sparse length extension: a small backing store plus the full logical
+        // length. Indexed reads already treat `index >= capacity` as a hole.
+        const MAX_FRESH_DENSE_ARRAY_LENGTH: u32 = 1_000_000;
+        let arr = if length > MAX_FRESH_DENSE_ARRAY_LENGTH {
+            let arr = js_array_alloc(0);
+            unsafe {
+                (*arr).length = length;
+            }
+            arr
+        } else {
+            js_array_alloc_with_length(length)
+        };
         if length > 0 {
             // #6011: user-facing `new Array(n)` — every slot is TAG_HOLE, so
             // the raw-f64-or-holes invariant holds by construction and the

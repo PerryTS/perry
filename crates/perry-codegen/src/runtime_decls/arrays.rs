@@ -13,7 +13,7 @@ use super::*;
 /// - `js_array_push_f64(arr, value) -> arr*` — push element, may realloc
 ///   and return a NEW pointer that the caller must use going forward
 /// - `js_array_get_f64(arr, index) -> f64` — read typed-number element
-/// - `js_array_length(arr) -> u32` — length (u32, sitofp'd to double for
+/// - `js_array_length(arr) -> u32` — length (u32, uitofp'd to double for
 ///   our number ABI)
 pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_alloc", I64, &[I32]);
@@ -43,6 +43,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_value_from_const_descriptor", DOUBLE, &[PTR, I32]);
     module.declare_function("js_array_push_f64", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_push_u31_with_length", I64, &[I64, I32, PTR]);
+    module.declare_function("js_array_push_f64_spec", I64, &[I64, DOUBLE]);
     module.declare_function("js_array_push_guard", VOID, &[I64]);
     module.declare_function("js_array_push_hole", I64, &[I64]);
     module.declare_function("js_array_numeric_push_f64_unboxed", I64, &[I64, DOUBLE]);
@@ -281,6 +282,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     );
     module.declare_function("js_arraylike_at", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_arraylike_join", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_arraylike_flat", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function(
         "js_arraylike_slice",
         DOUBLE,

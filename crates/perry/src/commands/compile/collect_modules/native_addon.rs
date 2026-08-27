@@ -10,12 +10,14 @@
 //! emitting a broken binary.
 
 use anyhow::Result;
+use object::Object;
 use std::fs;
 use std::path::PathBuf;
 
 // Parent (`collect_modules`) private imports are visible to this child module.
 use super::has_perry_native_library;
 use super::CompilationContext;
+use crate::commands::compile::NativeAddonModule;
 
 fn nearest_package_root(path: &std::path::Path) -> Option<PathBuf> {
     let mut dir = path.parent();
@@ -47,6 +49,164 @@ fn package_name_from_package_json(package_root: &std::path::Path) -> Option<Stri
         .get("name")
         .and_then(|name| name.as_str())
         .map(str::to_string)
+}
+
+fn package_identity_from_package_json(package_root: &std::path::Path) -> Option<(String, String)> {
+    let package_json = fs::read_to_string(package_root.join("package.json")).ok()?;
+    let parsed = serde_json::from_str::<serde_json::Value>(&package_json).ok()?;
+    let name = parsed.get("name")?.as_str()?.to_string();
+    let version = parsed
+        .get("version")
+        .and_then(|value| value.as_str())
+        .unwrap_or("0.0.0")
+        .to_string();
+    Some((name, version))
+}
+
+fn package_path(node_modules: &std::path::Path, name: &str) -> PathBuf {
+    name.split('/')
+        .fold(node_modules.to_path_buf(), |path, part| path.join(part))
+}
+
+/// Exact allowlisting follows the JS wrapper package through its declared
+/// platform payload dependency. This covers napi-rs layouts such as
+/// `@napi-rs/foo` -> `@napi-rs/foo-win32-x64-msvc` without letting an
+/// unrelated transitive package inherit the permission.
+fn approved_owner_package(
+    ctx: &CompilationContext,
+    package_root: &std::path::Path,
+    actual_name: &str,
+) -> Option<String> {
+    if ctx.native_addon_packages.contains(actual_name) {
+        return Some(actual_name.to_string());
+    }
+    for node_modules in package_root.ancestors().filter(|ancestor| {
+        ancestor
+            .file_name()
+            .is_some_and(|name| name == "node_modules")
+    }) {
+        for allowed in &ctx.native_addon_packages {
+            let manifest =
+                fs::read_to_string(package_path(node_modules, allowed).join("package.json"))
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+            let declares_payload = manifest.as_ref().is_some_and(|manifest| {
+                ["dependencies", "optionalDependencies"]
+                    .iter()
+                    .any(|section| {
+                        manifest
+                            .get(section)
+                            .and_then(|value| value.as_object())
+                            .is_some_and(|dependencies| dependencies.contains_key(actual_name))
+                    })
+            });
+            if declares_payload {
+                return Some(allowed.clone());
+            }
+        }
+    }
+    None
+}
+
+fn normalized_relative(path: &std::path::Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn forbidden_node_import(name: &str) -> bool {
+    let undecorated = name.trim_start_matches('_');
+    undecorated.starts_with("uv_")
+        || undecorated.starts_with("ZN2v8")
+        || undecorated.starts_with("ZN4node")
+        || name.contains("@v8@@")
+        || name.contains("@node@@")
+        || name.contains("Nan::")
+}
+
+fn validate_node_api_binary(path: &std::path::Path) -> Result<()> {
+    let bytes = fs::read(path)?;
+    let file = object::File::parse(&*bytes).map_err(|error| {
+        anyhow::anyhow!(
+            "approved Node-API addon `{}` is not a supported Mach-O, ELF, or PE binary: {error}",
+            path.display()
+        )
+    })?;
+    for import in file.imports().map_err(|error| {
+        anyhow::anyhow!("cannot inspect imports for `{}`: {error}", path.display())
+    })? {
+        let symbol = String::from_utf8_lossy(import.name());
+        if forbidden_node_import(&symbol) {
+            anyhow::bail!(
+                "approved addon `{}` imports unsupported symbol `{}`. Perry's Node-API host supports `napi_*` / `node_api_*`, not direct libuv, V8, NAN, or Node C++ APIs.",
+                path.display(),
+                symbol
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Record an approved `.node` graph member or emit the existing actionable
+/// unsupported-addon diagnostic. Returns true exactly for `.node` inputs so
+/// the caller can stop before attempting to parse the native binary.
+pub(super) fn collect_or_refuse_node_addon(
+    ctx: &mut CompilationContext,
+    canonical: &std::path::Path,
+) -> Result<bool> {
+    if canonical.extension().and_then(|ext| ext.to_str()) != Some("node") {
+        return Ok(false);
+    }
+    let package_root = nearest_package_root(canonical);
+    if package_root
+        .as_deref()
+        .is_some_and(package_is_parcel_watcher_facade)
+    {
+        return Ok(true);
+    }
+    let Some(package_root) = package_root else {
+        anyhow::bail!(
+            "`{}` is a Node native addon outside an npm package. Addons must be selected through an exact `perry.nativeAddons` package entry.",
+            canonical.display()
+        );
+    };
+    let (actual_package, version) = package_identity_from_package_json(&package_root)
+        .unwrap_or_else(|| (package_root.display().to_string(), "0.0.0".to_string()));
+    let Some(owner_package) = approved_owner_package(ctx, &package_root, &actual_package) else {
+        anyhow::bail!(
+            "`{}` is a Node native addon (`{}`).\n\
+             Perry executes `.node` / Node-API addons only when the host project lists the owning package in `perry.nativeAddons`. \
+             Add an exact `{}` entry, choose a pure JS/TS package, or replace the native boundary with a Perry native binding (`perry.nativeLibrary` / perry-ffi).",
+            actual_package,
+            canonical.display(),
+            actual_package,
+        );
+    };
+    validate_node_api_binary(canonical)?;
+    let entry_relative = canonical
+        .strip_prefix(&package_root)
+        .unwrap_or(canonical)
+        .to_path_buf();
+    let logical_id = format!(
+        "{}/{}",
+        actual_package,
+        normalized_relative(&entry_relative)
+    );
+    ctx.native_addons
+        .entry(logical_id.clone())
+        .or_insert_with(|| NativeAddonModule {
+            logical_id,
+            package: owner_package,
+            version,
+            source_path: canonical.to_path_buf(),
+            package_dir: package_root,
+            entry_relative,
+        });
+    Ok(true)
 }
 
 fn package_is_parcel_watcher_facade(package_root: &std::path::Path) -> bool {
@@ -173,32 +333,6 @@ fn package_json_dependency_uses_native_addon_loader(
 /// depends on `@napi-rs/keyring-darwin-arm64`, which contains nothing but the
 /// `.node` file and a package.json) can be reached without its root ever being
 /// classified. Guard the read itself so the diagnostic is the same either way.
-pub(super) fn refuse_node_addon_binary(canonical: &std::path::Path) -> Result<()> {
-    if canonical.extension().and_then(|ext| ext.to_str()) != Some("node") {
-        return Ok(());
-    }
-    let package_root = nearest_package_root(canonical);
-    if package_root
-        .as_deref()
-        .is_some_and(package_is_parcel_watcher_facade)
-    {
-        return Ok(());
-    }
-    let package_name = package_root
-        .and_then(|root| package_name_from_package_json(&root))
-        .unwrap_or_else(|| canonical.display().to_string());
-    anyhow::bail!(
-        "`{}` is a Node native addon (`{}`).\n\
-         Perry cannot load Node `.node` / N-API addons inside a native Perry binary. \
-         Remove `{}` from `perry.compilePackages`, choose a pure JS/TS package, \
-         or replace the native boundary with a Perry native binding \
-         (`perry.nativeLibrary` / perry-ffi).",
-        package_name,
-        canonical.display(),
-        package_name,
-    );
-}
-
 pub(super) fn refuse_compile_package_native_addon(
     ctx: &mut CompilationContext,
     canonical: &std::path::Path,
@@ -218,6 +352,11 @@ pub(super) fn refuse_compile_package_native_addon(
     if package_is_parcel_watcher_facade(&package_root) {
         return Ok(());
     }
+    if package_name_from_package_json(&package_root)
+        .is_some_and(|name| approved_owner_package(ctx, &package_root, &name).is_some())
+    {
+        return Ok(());
+    }
     let Some((marker, marker_path)) = node_addon_marker(&package_root) else {
         return Ok(());
     };
@@ -225,10 +364,10 @@ pub(super) fn refuse_compile_package_native_addon(
         .unwrap_or_else(|| package_root.display().to_string());
     anyhow::bail!(
         "package `{}` is in `perry.compilePackages` but uses a Node native addon ({}) at {}.\n\
-         Perry cannot load Node `.node` / N-API addons inside a native Perry binary. \
-         Remove `{}` from `perry.compilePackages`, choose a pure JS/TS package, \
-         or replace the native boundary with a Perry native binding \
-         (`perry.nativeLibrary` / perry-ffi).",
+         Perry loads `.node` / Node-API addons only through an explicit host policy. \
+         Add an exact `{}` entry to `perry.nativeAddons`, remove the package from \
+         `perry.compilePackages`, choose a pure JS/TS package, or replace the native \
+         boundary with a Perry native binding (`perry.nativeLibrary` / perry-ffi).",
         package_name,
         marker,
         marker_path,

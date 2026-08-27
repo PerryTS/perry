@@ -51,7 +51,9 @@ trap 'rm -rf "$TMPDIR"' EXIT
 SRC="$REPO_ROOT/test-files/test_issue_1425_gc_unsafe_zones.ts"
 BIN="$TMPDIR/issue_1425_gc_unsafe_zones"
 
-"$PERRY" compile --no-cache "$SRC" -o "$BIN" >"$TMPDIR/compile.log" 2>&1 || {
+# The auto-optimizer decides whether to compile JSON GC diagnostics while
+# building the per-program runtime, so request tracing for the compile too.
+PERRY_GC_TRACE=1 "$PERRY" compile --no-cache "$SRC" -o "$BIN" >"$TMPDIR/compile.log" 2>&1 || {
     echo "FAIL: compile failed"
     sed 's/^/    /' "$TMPDIR/compile.log" | tail -60
     exit 1

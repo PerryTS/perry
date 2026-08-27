@@ -26,6 +26,32 @@ fn test_lower_define_and_lookup_local() {
 }
 
 #[test]
+fn array_inference_is_revoked_after_plain_object_assignment() {
+    let source = r#"
+        var value = [1];
+        value.unshift(0);
+        value = { 0: 1 };
+        value.unshift(0);
+    "#;
+    let module =
+        perry_parser::parse_typescript(source, "array-reassign.js").expect("source parses");
+    let hir =
+        super::lower_module(&module, "array-reassign", "array-reassign.js").expect("source lowers");
+    let value_type = hir.init.iter().find_map(|stmt| match stmt {
+        Stmt::Let { name, ty, .. } if name == "value" => Some(ty),
+        _ => None,
+    });
+    assert_eq!(value_type, Some(&Type::Any));
+
+    let dump = format!("{hir:?}");
+    assert_eq!(
+        dump.matches("ArrayUnshift").count(),
+        1,
+        "only the call before the object reassignment may stay specialized: {dump}"
+    );
+}
+
+#[test]
 fn local_declaration_span_survives_ast_to_hir_lowering() {
     let source = "function build() {\n  const boxed = makeValue();\n  return boxed;\n}\n";
     let module = perry_parser::parse_typescript(source, "span.ts").expect("source parses");

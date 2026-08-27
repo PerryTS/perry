@@ -685,6 +685,7 @@ fn try_arraylike_receiver_method(
             | "lastIndexOf"
             | "includes"
             | "slice"
+            | "flat"
             | "at"
             | "join"
             // Generic mutators with dedicated runtime engines (#4597
@@ -724,7 +725,7 @@ fn try_arraylike_receiver_method(
     // materialize-then-call behavior. `Expr::ArrayFromArrayLikeHoley` keeps
     // absent indexed keys as holes (vs `Array.from({ length })` creating
     // present undefined slots), so the flatMap callback doesn't visit holes.
-    // Everything else (mutators, flat, etc.) bails BEFORE lowering the receiver
+    // Everything else bails BEFORE lowering the receiver
     // so unrelated shapes keep the existing member-call behavior.
     if method != "flatMap" {
         return Ok(None);

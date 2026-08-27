@@ -411,13 +411,7 @@ fn jsv_is_array(value: f64) -> bool {
 /// user closures, so a plain `function` declaration reads as a constructor,
 /// matching how Perry models user functions).
 fn is_constructor_value(value: f64) -> bool {
-    // A user `class` is an INT32-tagged class reference, not a closure pointer,
-    // so `is_callable` misses it; recognize it directly.
-    if crate::object::class_ref_id(value).is_some() {
-        return true;
-    }
-    crate::collection_iter::is_callable(value)
-        && !crate::object::builtin_closure_is_non_constructable_value(value)
+    crate::object::js_value_is_constructor(value)
 }
 
 /// Build a fresh `{value, writable, enumerable, configurable}` (all true)

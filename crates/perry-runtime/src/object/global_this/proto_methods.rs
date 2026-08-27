@@ -127,7 +127,6 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                 proto_obj,
                 &[
                     ("entries", 0),
-                    ("flat", 0),
                     ("flatMap", 1),
                     ("keys", 0),
                     ("toLocaleString", 0),
@@ -136,6 +135,12 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     ("toSpliced", 2),
                     ("with", 2),
                 ],
+            );
+            install_proto_method(
+                proto_obj,
+                "flat",
+                array_prototype_flat_thunk as *const u8,
+                0,
             );
             // Generic mutators get REAL thunks (vs the noop above) so a borrowed
             // reference works: `obj.pop = Array.prototype.pop; obj.pop()` and

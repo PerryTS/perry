@@ -409,11 +409,24 @@ pub(crate) fn lower_member_tail(
                     // `function_prototype_fallback_target`).
                     let receiver_is_regexp_ctor = property == "RegExp";
                     let receiver_is_function_ctor = property == "Function";
+                    // #5898: unknown Array statics are ordinary property reads
+                    // on the constructor object. Preserve that receiver so the
+                    // runtime can walk Array -> Function.prototype (for example
+                    // after `Function.prototype.myproperty = 1`). Known Array
+                    // statics keep the collapsed expression shape used by their
+                    // intrinsic call paths.
+                    let receiver_is_array_ctor_unknown_static = property == "Array"
+                        && !outer_static_member
+                            .map(|member| {
+                                crate::analysis::is_builtin_static_function_member(property, member)
+                            })
+                            .unwrap_or(false);
                     if !outer_is_prototype_or_proto
                         && !outer_is_constructor_property
                         && !receiver_is_namespace_value
                         && !receiver_is_regexp_ctor
                         && !receiver_is_function_ctor
+                        && !receiver_is_array_ctor_unknown_static
                         && !outer_is_websocket_static
                         && !outer_is_reified_object_static_value
                         && !outer_is_reified_builtin_static_value

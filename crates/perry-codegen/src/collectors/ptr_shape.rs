@@ -1961,34 +1961,6 @@ use numeric::{
 // `collectors/number_by_construction.rs`.
 pub(in crate::collectors) use numeric::collect_numeric_by_construction_locals as collect_numeric_by_construction_locals_for_type_analysis;
 
-/// Conservative "cannot be a BigInt" for the spec Number-path argument.
-fn expr_provably_not_bigint(e: &Expr, not_bigint_locals: &HashSet<u32>) -> bool {
-    match e {
-        Expr::Number(_)
-        | Expr::Integer(_)
-        | Expr::String(_)
-        | Expr::Bool(_)
-        | Expr::PodLayoutSizeOf { .. }
-        | Expr::PodLayoutAlignOf { .. }
-        | Expr::PodLayoutOffsetOf { .. } => true,
-        Expr::LocalGet(id) => not_bigint_locals.contains(id),
-        Expr::Unary { op, operand } => match op {
-            perry_hir::UnaryOp::Pos => true, // `+x` throws for BigInt
-            perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::BitNot => {
-                expr_provably_not_bigint(operand, not_bigint_locals)
-            }
-            _ => true, // !x, typeof x, … never produce BigInt
-        },
-        Expr::Binary { .. } => false, // handled structurally by the caller
-        _ => false,
-    }
-}
-
-// Note on Symbol operands in the either-side non-BigInt arithmetic argument:
-// ToNumber(Symbol) THROWS, so the store never completes — throw behavior is
-// identical on the guarded and bare paths, and no non-number value can reach
-// the slot through these operators.
-
 /// `--opt-report` (#6952) end-to-end tests. Kept in a sibling file for the
 /// file-size gate; still a child module, so `use super::*` reaches the
 /// collector's private items.

@@ -84,7 +84,12 @@ pub fn detach_array_buffer(addr: usize) {
     // Typed-array views (`new Float32Array(ab, ...)`) record their backing in
     // a separate side table; zero those lengths too.
     crate::typedarray_view::zero_views_of_detached_backing(addr);
-    decommit_payload_pages(buffer_data_mut(buf), capacity as usize);
+    // External ArrayBuffers borrow addon-owned memory. Detaching severs the
+    // JavaScript view but must never decommit pages which Perry did not
+    // allocate; the registered finalizer still receives the original pointer.
+    if !super::is_foreign_backed_buffer(addr) {
+        decommit_payload_pages(buffer_data_mut(buf), capacity as usize);
+    }
 }
 
 /// Release the page-aligned interior of a detached payload back to the OS.

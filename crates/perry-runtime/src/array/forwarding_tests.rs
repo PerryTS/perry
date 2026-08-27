@@ -47,6 +47,35 @@ fn growth_of_old_array_keeps_forwarding_target_out_of_copying_nursery() {
 }
 
 #[test]
+fn growth_transfers_array_descriptor_side_tables() {
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let initial = js_array_alloc_literal(1);
+    let first = js_array_grow(initial, 2);
+    crate::object::set_accessor_descriptor(
+        first as usize,
+        "1".to_string(),
+        crate::object::AccessorDescriptor { get: 42, set: 84 },
+    );
+    crate::object::set_property_attrs(
+        first as usize,
+        "1".to_string(),
+        crate::object::PropertyAttrs::new(false, false, true),
+    );
+
+    let second = js_array_grow(first, 3);
+
+    let accessor = crate::object::get_accessor_descriptor(second as usize, "1")
+        .expect("accessor descriptor must follow array growth");
+    assert_eq!(accessor.get, 42);
+    assert_eq!(accessor.set, 84);
+    let attrs = crate::object::get_property_attrs(second as usize, "1")
+        .expect("property attributes must follow array growth");
+    assert!(!attrs.writable());
+    assert!(!attrs.enumerable());
+    assert!(attrs.configurable());
+}
+
+#[test]
 fn install_array_growth_forwarding_with_installs_stub_for_injected_header() {
     // Actual low-address classification is covered by
     // value::addr_class::tests::tracked_gc_classifier_accepts_injected_low_arena_membership.

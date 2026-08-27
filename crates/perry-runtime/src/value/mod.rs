@@ -111,7 +111,9 @@ pub use dynamic_arith::{
 };
 
 // ----- Dynamic index get/set + bare-NaN check -----
-pub use dyn_index::{js_dyn_index_get, js_dyn_index_set, js_is_undefined_or_bare_nan};
+pub use dyn_index::{
+    js_dyn_index_get, js_dyn_index_set, js_dyn_index_set_strict, js_is_undefined_or_bare_nan,
+};
 
 // ----- to-string conversion helpers -----
 pub(crate) use to_string::{

@@ -15,24 +15,22 @@
 //!   * `gc_flags` = second byte, needs `GC_FLAG_ARENA` (0x02) — ~coin flip
 //!
 //! The size check rejects the observed `size ≈ 1024` corruption, but payload
-//! bytes can also encode the genuine Map total of 24. The complete fix is the
+//! bytes can also encode the genuine fixed Map total. The complete fix is the
 //! arena's allocation-authored object-start bitmap: `classify_arena` requires
 //! a candidate Map header address to be recorded there before dispatching its
 //! rewrite descriptor. Other arena types do not need to stamp the bitmap.
 
 use super::*;
 
-/// Size of `MapHeader` (and `SetHeader`): `{ size: u32, capacity: u32,
-/// entries/elements: *mut f64 }` = 16 bytes.
-const MAP_HEADER_PAYLOAD: usize = 16;
-const MAP_FIXED_TOTAL: usize = GC_HEADER_SIZE + MAP_HEADER_PAYLOAD;
+const MAP_FIXED_TOTAL: usize = GC_HEADER_SIZE + std::mem::size_of::<crate::map::MapHeader>();
+const SET_FIXED_TOTAL: usize = GC_HEADER_SIZE + std::mem::size_of::<crate::set::SetHeader>();
 
 /// Directly test that `plausible_gc_header` rejects a fabricated Map
 /// header with the ~1024-byte size that an interior arena pointer
-/// produces, while accepting a genuine Map header with size = 24.
+/// produces, while accepting a genuine fixed-size Map header.
 #[test]
 fn test_plausible_gc_header_rejects_fabricated_map_size() {
-    // A genuine Map header: obj_type = MAP, size = 24, GC_FLAG_ARENA set.
+    // A genuine Map header has the exact fixed payload size.
     let mut genuine = GcHeader {
         obj_type: GC_TYPE_MAP,
         gc_flags: GC_FLAG_ARENA,
@@ -59,18 +57,18 @@ fn test_plausible_gc_header_rejects_fabricated_map_size() {
         "fabricated Map header (size=1024) must be rejected"
     );
 
-    // Edge: size = 24 + 8 = 32 (what free-list reuse into a larger slot
+    // Edge: fixed size + 8 (what free-list reuse into a larger slot
     // would produce) must also be rejected — only the exact fixed total
     // is accepted.
     let mut wrong_size = GcHeader {
         obj_type: GC_TYPE_MAP,
         gc_flags: GC_FLAG_ARENA,
         _reserved: 0,
-        size: 32,
+        size: (MAP_FIXED_TOTAL + 8) as u32,
     };
     assert!(
         !unsafe { plausible_gc_header(&mut wrong_size as *mut GcHeader, true) },
-        "Map header with non-fixed size (32) must be rejected"
+        "Map header with non-fixed size must be rejected"
     );
 }
 
@@ -84,11 +82,11 @@ fn test_plausible_gc_header_rejects_fabricated_set_size() {
         obj_type: GC_TYPE_SET,
         gc_flags: GC_FLAG_ARENA,
         _reserved: 0,
-        size: MAP_FIXED_TOTAL as u32,
+        size: SET_FIXED_TOTAL as u32,
     };
     assert!(
         unsafe { plausible_gc_header(&mut genuine as *mut GcHeader, true) },
-        "genuine Set header (size={MAP_FIXED_TOTAL}) must be plausible"
+        "genuine Set header (size={SET_FIXED_TOTAL}) must be plausible"
     );
 
     let mut fabricated = GcHeader {
@@ -151,7 +149,7 @@ fn test_plausible_gc_header_rejects_malloc_only_type_in_arena() {
 fn test_classify_arena_rejects_interior_pointer_as_map() {
     let _guard = CopyingNurseryTestGuard::new(1);
 
-    // Allocate a genuine Map. Its GcHeader.size must be 24.
+    // Allocate a genuine Map. Its GcHeader.size must match the fixed layout.
     let map_ptr = crate::map::js_map_alloc(4) as *mut u8;
     assert!(!map_ptr.is_null(), "Map allocation must succeed");
 

@@ -173,7 +173,7 @@ pub(super) const NODE_CORE_PROCESS_ROWS: &[NativeModSig] = &[
         method: "dlopen",
         class_filter: None,
         runtime: "js_process_dlopen",
-        args: &[],
+        args: &[NA_F64, NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {

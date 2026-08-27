@@ -143,19 +143,13 @@ pub(super) fn try_process_module_methods(
                     }));
                 }
                 "dlopen" => {
-                    // #1409: process.dlopen(module, filename, flags?)
-                    // is Node's native-addon (.node) loader. Perry
-                    // statically links every dependency at compile
-                    // time — there's no dynamic loader to call.
-                    // Returning undefined is the closest no-op:
-                    // call sites that probe for the function before
-                    // attempting to load an addon (a common pattern
-                    // in optional-dep wrappers) see typeof "function"
-                    // and a "loaded" non-error, then fall back to
-                    // their pure-JS path. Real addon-loading
-                    // attempts will surface as the addon's exports
-                    // being undefined downstream.
-                    return Ok(Ok(Expr::Undefined));
+                    return Ok(Ok(Expr::NativeMethodCall {
+                        module: "process".to_string(),
+                        class_name: None,
+                        object: None,
+                        method: "dlopen".to_string(),
+                        args,
+                    }));
                 }
                 "hasUncaughtExceptionCaptureCallback" => {
                     return Ok(Ok(Expr::NativeMethodCall {

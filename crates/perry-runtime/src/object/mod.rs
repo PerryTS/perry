@@ -128,7 +128,7 @@ pub(crate) use native_module_registry::{js_nm_install_fs, js_nm_install_perf, js
 mod native_module_stream;
 pub(crate) mod native_this_alias;
 mod object_literal_ops;
-mod object_ops;
+pub(crate) mod object_ops;
 pub(crate) use object_ops::{ensure_key_in_keys_array, install_builtin_getter};
 mod object_ops_frozen;
 mod polymorphic_index;
@@ -249,8 +249,8 @@ pub(crate) use descriptor_state::{
     object_has_descriptors, object_proto_may_intercept_key, owner_may_have_descriptor_entries,
     plain_data_write_may_intercept, prune_dead_descriptor_owner_entries,
     reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
-    set_builtin_property_attrs, set_property_attrs, AccessorDescriptor, DescriptorTables,
-    PropertyAttrs,
+    set_builtin_property_attrs, set_property_attrs, transfer_descriptor_owner, AccessorDescriptor,
+    DescriptorTables, PropertyAttrs,
 };
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{

@@ -151,13 +151,14 @@ def layout_scans():
     }
 
 
-def old_page_cycle(*, reusable_bytes=128, returned_bytes=0):
+def old_page_cycle(*, reusable_bytes=128, pooled_bytes=0, returned_bytes=0):
     cycle = gc_cycle(layout_scans=layout_scans())
     cycle["old_pages"] = {
         "allocated_bytes": 0,
         "live_bytes": 0,
         "dead_bytes": 0,
         "reusable_bytes": reusable_bytes,
+        "pooled_bytes": pooled_bytes,
         "returned_bytes": returned_bytes,
         "pinned_bytes": 0,
     }
@@ -165,7 +166,7 @@ def old_page_cycle(*, reusable_bytes=128, returned_bytes=0):
         "old_page_candidate_pages": 1,
         "old_page_selected_pages": 1,
         "old_page_selected_live_bytes": 64,
-        "old_page_reclaimable_bytes": reusable_bytes + returned_bytes,
+        "old_page_reclaimable_bytes": reusable_bytes + pooled_bytes + returned_bytes,
     }
     cycle["evacuation"] = {
         "old_page_moved_bytes": 64,
@@ -598,7 +599,7 @@ class CopiedMinorFallbackReportTests(unittest.TestCase):
             1,
         )
 
-    def test_target_gates_require_old_page_reuse_or_return(self):
+    def test_target_gates_require_old_page_reuse_pool_or_return(self):
         exit_code, stderr, _ = self.run_report(
             {
                 "default_copying": [gc_cycle(layout_scans=layout_scans())],
@@ -609,15 +610,17 @@ class CopiedMinorFallbackReportTests(unittest.TestCase):
 
         self.assertNotEqual(exit_code, 0)
         self.assertIn(
-            "old_page_forced_defrag: forced old-page workload reported no reusable or returned bytes",
+            "old_page_forced_defrag: forced old-page workload reported no reusable, pooled, or returned bytes",
             stderr,
         )
 
-    def test_target_gates_accept_old_page_reuse_or_return(self):
+    def test_target_gates_accept_old_page_reuse_pool_or_return(self):
         exit_code, stderr, report = self.run_report(
             {
                 "default_copying": [gc_cycle(layout_scans=layout_scans())],
-                "old_page_forced_defrag": [old_page_cycle(returned_bytes=256)],
+                "old_page_forced_defrag": [
+                    old_page_cycle(pooled_bytes=192, returned_bytes=256)
+                ],
             },
             target=True,
         )
@@ -628,6 +631,7 @@ class CopiedMinorFallbackReportTests(unittest.TestCase):
         ]
         self.assertEqual(old_page["old_page_moved_bytes"], 64)
         self.assertEqual(old_page["reusable_bytes"], 128)
+        self.assertEqual(old_page["pooled_bytes"], 192)
         self.assertEqual(old_page["returned_bytes"], 256)
 
 

@@ -164,6 +164,39 @@ static KEYPRESS_CALLBACKS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
 /// the consumer pulls the bytes itself with `process.stdin.read()`.
 static READABLE_CALLBACKS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
 
+/// `process.stdin.on("end" | "close", …)` listeners.
+///
+/// These used to be stuffed into the single-slot readline `CLOSE_CALLBACK`
+/// ("only one terminal close listener is supported per process"), so every new
+/// registration silently CLOBBERED the previous one. Node allows any number,
+/// and real programs register several: the Claude Code bundle attaches three
+/// `stdin.on("end")` handlers, so the one that actually resolves its
+/// read-stdin promise was overwritten — the promise never settled, the loop
+/// ran out of work and the process exited 0 having printed nothing (piped
+/// stdin produced no output at all, while `printf "" | cc` worked because that
+/// path never registers a second listener).
+///
+/// A `Vec` keyed like DATA/READABLE_CALLBACKS, fired in registration order.
+static STDIN_END_CALLBACKS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
+
+/// True while at least one `process.stdin.on("readable", …)` listener is
+/// registered — Node's paused ("pull") mode, where bytes are buffered until the
+/// consumer calls `read()` rather than pushed to a `data` listener.
+///
+/// The fd-0 reader consults this the same way it consults `RAW_MODE` /
+/// `STDIN_DATA_FLOWING`. Without it, pull-mode bytes fell into the reader's
+/// final `else` branch and were queued as readline *lines* (`PENDING_LINES`),
+/// which nothing in the `read()` path ever drains — the exact hazard the
+/// `PENDING_LINES` comment above records for the `data` case (#5227), left
+/// unfixed for `readable`. Symptom: `echo hi | app` where the app uses
+/// `stdin.on("readable")` + `read()` (which is what Claude Code's `-p` stdin
+/// path does) reads nothing and the event loop parks forever waiting for input
+/// that was already consumed and discarded.
+///
+/// An `AtomicBool` rather than a `READABLE_CALLBACKS.lock()` test because the
+/// reader checks it once per byte.
+static STDIN_PULL_MODE: AtomicBool = AtomicBool::new(false);
+
 // ---------------------------------------------------------------------------
 // Main-thread-only state — callbacks are dispatched from the main thread
 // only (where the GC/runtime are safe to touch), so thread_local is correct.
@@ -224,7 +257,15 @@ fn scan_readline_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'
     // Shared cross-thread stdin listener lists. Recover from a poisoned lock so
     // a rewrite is never silently skipped (a skipped rewrite = the stale-ref
     // crash this scanner exists to prevent).
-    for cbs in [&DATA_CALLBACKS, &KEYPRESS_CALLBACKS, &READABLE_CALLBACKS] {
+    for cbs in [
+        &DATA_CALLBACKS,
+        &KEYPRESS_CALLBACKS,
+        &READABLE_CALLBACKS,
+        // #8861: the stdin `end` listener list. Its closures are reachable
+        // only from here between registration and EOF, so without this a
+        // collection in that window leaves stale pointers the pump calls.
+        &STDIN_END_CALLBACKS,
+    ] {
         let mut list = cbs.lock().unwrap_or_else(|p| p.into_inner());
         for cb in list.iter_mut() {
             visitor.visit_i64_slot(cb);
@@ -328,6 +369,7 @@ extern "C" fn stdin_on_op(name_ptr: *const u8, name_len: usize, cb: i64, _once: 
             if let Ok(mut v) = READABLE_CALLBACKS.lock() {
                 v.push(cb);
             }
+            STDIN_PULL_MODE.store(true, Ordering::Release);
         }
         "keypress" => {
             if let Ok(mut v) = KEYPRESS_CALLBACKS.lock() {
@@ -358,6 +400,9 @@ extern "C" fn stdin_off_op(name_ptr: *const u8, name_len: usize, cb: i64) {
         "readable" => {
             if let Ok(mut v) = READABLE_CALLBACKS.lock() {
                 v.retain(|r| *r != cb);
+                if v.is_empty() {
+                    STDIN_PULL_MODE.store(false, Ordering::Release);
+                }
             }
         }
         "keypress" => {
@@ -1018,7 +1063,9 @@ fn ensure_reader_started() {
                         if let Ok(mut q) = PENDING_DATA.lock() {
                             q.push(vec![byte[0]]);
                         }
-                    } else if STDIN_DATA_FLOWING.load(Ordering::Acquire) {
+                    } else if STDIN_DATA_FLOWING.load(Ordering::Acquire)
+                        || STDIN_PULL_MODE.load(Ordering::Acquire)
+                    {
                         // Cooked flowing mode (#5227): a `process.stdin.on('data')`
                         // listener is attached but raw mode is off. Deliver input
                         // as 'data' chunks (newline INCLUDED, matching Node's
@@ -1053,7 +1100,10 @@ fn ensure_reader_started() {
         // flowing mode this is the last 'data' chunk for input like
         // `printf "abc"` (no final newline); otherwise it's a final 'line'.
         if !line_buf.is_empty() && !STDIN_DESTROYED.load(Ordering::Acquire) {
-            if STDIN_DATA_FLOWING.load(Ordering::Acquire) && !RAW_MODE.load(Ordering::Acquire) {
+            if (STDIN_DATA_FLOWING.load(Ordering::Acquire)
+                || STDIN_PULL_MODE.load(Ordering::Acquire))
+                && !RAW_MODE.load(Ordering::Acquire)
+            {
                 if let Ok(mut q) = PENDING_DATA.lock() {
                     q.push(std::mem::take(&mut line_buf));
                 }
@@ -1594,13 +1644,19 @@ pub extern "C" fn js_readline_stdin_on(event_ptr: *const StringHeader, callback:
             if let Ok(mut v) = READABLE_CALLBACKS.lock() {
                 v.push(callback);
             }
+            STDIN_PULL_MODE.store(true, Ordering::Release);
             try_register_pump();
             ensure_reader_started();
         }
         "end" | "close" => {
-            // Reuse the readline close callback slot — only one terminal
-            // close listener is supported per process.
-            CLOSE_CALLBACK.with(|cb| *cb.borrow_mut() = Some(callback));
+            // Node supports many `end` listeners; keep them all (see
+            // STDIN_END_CALLBACKS). The reader must also be running or EOF is
+            // never observed for a consumer that only listens for `end`.
+            if let Ok(mut v) = STDIN_END_CALLBACKS.lock() {
+                v.push(callback);
+            }
+            try_register_pump();
+            ensure_reader_started();
         }
         _ => {}
     }
@@ -1620,6 +1676,14 @@ pub extern "C" fn js_readline_stdin_remove_listener(
         "readable" => {
             if let Ok(mut v) = READABLE_CALLBACKS.lock() {
                 v.retain(|registered| *registered != callback);
+                if v.is_empty() {
+                    STDIN_PULL_MODE.store(false, Ordering::Release);
+                }
+            }
+        }
+        "end" | "close" => {
+            if let Ok(mut v) = STDIN_END_CALLBACKS.lock() {
+                v.retain(|registered| *registered != callback);
             }
         }
         "data" => {
@@ -1635,12 +1699,6 @@ pub extern "C" fn js_readline_stdin_remove_listener(
                 v.retain(|registered| *registered != callback);
             }
         }
-        "end" | "close" => CLOSE_CALLBACK.with(|cb| {
-            let mut cb = cb.borrow_mut();
-            if *cb == Some(callback) {
-                *cb = None;
-            }
-        }),
         _ => {}
     }
     js_nanbox_pointer(STDIN_READLINE_HANDLE)
@@ -1728,215 +1786,4 @@ pub use pump::{js_readline_has_active, js_readline_process_pending};
 mod test_support;
 
 #[cfg(test)]
-mod tests {
-    use super::test_support::*;
-    use super::*;
-
-    #[test]
-    fn close_without_callbacks_is_noop() {
-        let _g = reset();
-        let h = js_readline_create_interface(0.0);
-        assert_eq!(h, STDIN_READLINE_HANDLE);
-        js_readline_close(h);
-        assert_eq!(js_readline_process_pending(), 0);
-        assert_eq!(js_readline_process_pending(), 0);
-    }
-
-    #[test]
-    fn repeated_custom_close_does_not_mutate_stdin_state() {
-        let _g = reset();
-        let handle = allocate_interface(ReadlineInterfaceState::new(
-            undefined(),
-            undefined(),
-            String::new(),
-            false,
-            true,
-        ));
-        QUESTION_CALLBACK.with(|cb| *cb.borrow_mut() = Some(123));
-
-        js_readline_close(handle);
-        assert!(!EOF_REACHED.load(Ordering::Acquire));
-        QUESTION_CALLBACK.with(|cb| assert_eq!(*cb.borrow(), Some(123)));
-
-        js_readline_close(handle);
-        assert!(!EOF_REACHED.load(Ordering::Acquire));
-        QUESTION_CALLBACK.with(|cb| assert_eq!(*cb.borrow(), Some(123)));
-    }
-
-    #[test]
-    fn injected_line_drains_via_test_helper() {
-        let _g = reset();
-        test_inject_line("hello");
-        // No callback registered → drain consumes the line silently and
-        // reports 0 callbacks fired.
-        assert_eq!(js_readline_process_pending(), 0);
-        assert_eq!(PENDING_LINES.lock().unwrap().len(), 0);
-    }
-
-    #[test]
-    fn has_active_reflects_state() {
-        let _g = reset();
-        EOF_REACHED.store(true, Ordering::Release);
-        CLOSE_FIRED.with(|f| *f.borrow_mut() = true);
-        assert_eq!(js_readline_has_active(), 0);
-        test_inject_line("x");
-        assert_eq!(js_readline_has_active(), 1);
-        PENDING_LINES.lock().unwrap().clear();
-        assert_eq!(js_readline_has_active(), 0);
-    }
-
-    #[test]
-    fn injected_chunk_drains_via_data_queue() {
-        let _g = reset();
-        test_inject_chunk(b"a");
-        // No data callback registered → drain consumes silently.
-        assert_eq!(js_readline_process_pending(), 0);
-        assert_eq!(PENDING_DATA.lock().unwrap().len(), 0);
-    }
-
-    #[test]
-    fn stdin_remove_listener_detaches_data_callback() {
-        let _g = reset();
-        let event = event_name("data");
-        // Allocate the event string before the raw callback pointer. The real
-        // JS caller roots both arguments; this unit test must not leave its
-        // freshly allocated closure unrooted across `event_name`.
-        let cb = data_counter_callback();
-        let _ = js_readline_stdin_on(event, cb);
-        let _ = js_readline_stdin_remove_listener(event, cb);
-        test_inject_chunk(b"x");
-        assert_eq!(js_readline_process_pending(), 0);
-        DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 0));
-        assert_eq!(js_readline_has_active(), 0);
-    }
-
-    #[test]
-    fn stdin_pause_resume_gates_data_dispatch() {
-        let _g = reset();
-        let event = event_name("data");
-        let cb = data_counter_callback();
-        let _ = js_readline_stdin_on(event, cb);
-        let _ = js_readline_stdin_pause();
-        test_inject_chunk(b"x");
-        assert_eq!(js_readline_process_pending(), 0);
-        assert_eq!(PENDING_DATA.lock().unwrap().len(), 1);
-        DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 0));
-
-        let _ = js_readline_stdin_resume();
-        assert_eq!(js_readline_process_pending(), 1);
-        assert_eq!(PENDING_DATA.lock().unwrap().len(), 0);
-        DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
-    }
-
-    #[test]
-    fn stdin_data_listener_flows_without_raw_mode() {
-        // #5227: a 'data' listener attached in cooked (non-raw) mode must
-        // switch stdin into flowing mode and keep the loop alive so the
-        // reader can deliver chunks — previously only raw mode did.
-        let _g = reset();
-        READER_STARTED.store(true, Ordering::Release);
-        assert!(!RAW_MODE.load(Ordering::Acquire));
-        assert!(!STDIN_DATA_FLOWING.load(Ordering::Acquire));
-
-        let event = event_name("data");
-        let cb = data_counter_callback();
-        let _ = js_readline_stdin_on(event, cb);
-        assert!(STDIN_DATA_FLOWING.load(Ordering::Acquire));
-        // Cooked-mode data listener keeps the event loop alive.
-        assert_eq!(js_readline_has_active(), 1);
-
-        // Cooked-mode chunks (delivered by the reader with the newline
-        // included) drain to the 'data' callback.
-        test_inject_chunk(b"hello world\n");
-        assert_eq!(js_readline_process_pending(), 1);
-        DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
-
-        // Removing the last data listener clears flowing mode.
-        let _ = js_readline_stdin_remove_listener(event, cb);
-        assert!(!STDIN_DATA_FLOWING.load(Ordering::Acquire));
-    }
-
-    #[test]
-    fn stdin_unref_and_destroy_release_active_state() {
-        let _g = reset();
-        READER_STARTED.store(true, Ordering::Release);
-        RAW_MODE.store(true, Ordering::Release);
-        let _ = js_readline_stdin_on(event_name("data"), data_counter_callback());
-        assert_eq!(js_readline_has_active(), 1);
-
-        let _ = js_readline_stdin_unref();
-        assert_eq!(js_readline_has_active(), 0);
-
-        let _ = js_readline_stdin_ref();
-        test_inject_chunk(b"x");
-        assert_eq!(js_readline_has_active(), 1);
-        let _ = js_readline_stdin_destroy();
-        assert_eq!(js_readline_has_active(), 0);
-        assert_eq!(PENDING_DATA.lock().unwrap().len(), 0);
-        assert!(DATA_CALLBACKS.lock().map(|v| v.is_empty()).unwrap_or(true));
-        assert!(STDIN_DESTROYED.load(Ordering::Acquire));
-    }
-
-    #[test]
-    fn split_escape_sequence_reassembles_to_single_keypress() {
-        // The raw-mode reader queues one byte per chunk, so an arrow key
-        // arrives as `\x1b`, `[`, `A` in three chunks. The pump must
-        // reassemble them into ONE 'up' keypress, not escape + [ + A.
-        let _g = reset();
-        let event = event_name("keypress");
-        let cb = keypress_recorder_callback();
-        let _ = js_readline_stdin_on(event, cb);
-        test_inject_chunk(b"\x1b");
-        test_inject_chunk(b"[");
-        test_inject_chunk(b"A");
-        let fired = js_readline_process_pending();
-        KEYPRESS_NAMES.with(|names| assert_eq!(*names.borrow(), vec!["up".to_string()]));
-        assert_eq!(fired, 1);
-    }
-
-    #[test]
-    fn bare_escape_flushes_on_next_tick() {
-        // A lone ESC can't be distinguished from the start of a sequence
-        // within one tick — it's held, then flushed as a bare 'escape'
-        // keypress on the next tick if nothing followed.
-        let _g = reset();
-        let event = event_name("keypress");
-        let cb = keypress_recorder_callback();
-        let _ = js_readline_stdin_on(event, cb);
-        test_inject_chunk(b"\x1b");
-        assert_eq!(js_readline_process_pending(), 0);
-        // The held prefix keeps the loop alive so the flush tick runs.
-        assert_eq!(js_readline_has_active(), 1);
-        assert_eq!(js_readline_process_pending(), 1);
-        KEYPRESS_NAMES.with(|names| assert_eq!(*names.borrow(), vec!["escape".to_string()]));
-    }
-
-    #[test]
-    fn readable_only_fires_with_new_chunks() {
-        // A registered 'readable' listener must not be invoked on ticks
-        // that delivered no new data (that was a per-tick JS busy loop).
-        let _g = reset();
-        let event = event_name("readable");
-        let cb = readable_counter_callback();
-        let _ = js_readline_stdin_on(event, cb);
-        assert_eq!(js_readline_process_pending(), 0);
-        assert_eq!(js_readline_process_pending(), 0);
-        test_inject_chunk(b"x");
-        assert_eq!(js_readline_process_pending(), 1);
-        DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
-        // Queue drained again → quiet ticks stay quiet.
-        assert_eq!(js_readline_process_pending(), 0);
-    }
-
-    #[test]
-    fn raw_mode_toggle_flips_atomic() {
-        let _g = reset();
-        assert!(!RAW_MODE.load(Ordering::Acquire));
-        // Truthy → enable.
-        let _ = js_readline_set_raw_mode(f64::from_bits(JSValue::bool(true).bits()));
-        assert!(RAW_MODE.load(Ordering::Acquire));
-        // Falsy → disable.
-        let _ = js_readline_set_raw_mode(f64::from_bits(JSValue::bool(false).bits()));
-        assert!(!RAW_MODE.load(Ordering::Acquire));
-    }
-}
+mod mod_tests;

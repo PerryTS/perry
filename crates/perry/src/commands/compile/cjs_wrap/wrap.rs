@@ -5,6 +5,32 @@ use super::*;
 use std::borrow::Cow;
 use std::path::Path;
 
+fn resolved_native_addon(
+    source_path: &Path,
+    specifier: &str,
+) -> Option<(std::path::PathBuf, String)> {
+    let target = super::super::resolve::resolve_relative_import_path(specifier, source_path)?;
+    if target.extension().and_then(|extension| extension.to_str()) != Some("node") {
+        return None;
+    }
+    let package_root = target
+        .ancestors()
+        .find(|directory| directory.join("package.json").is_file())?;
+    let manifest = std::fs::read_to_string(package_root.join("package.json")).ok()?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).ok()?;
+    let package = manifest.get("name")?.as_str()?;
+    let relative = target.strip_prefix(package_root).ok()?;
+    let relative = relative
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    Some((target, format!("{package}/{relative}")))
+}
+
 /// Is `name` a JS global-builtin VALUE (a constructor/namespace reachable as a
 /// bare identifier at runtime)? Used only to decide whether a CJS named export
 /// whose KEY equals such a name (`module.exports = { Error: Error }`) needs the
@@ -298,6 +324,9 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
     let mut chosen_alias_per_spec: std::collections::HashSet<String> =
         std::collections::HashSet::new();
     for (alias, spec, _) in &raw_aliases {
+        if resolved_native_addon(source_path, spec).is_some() {
+            continue;
+        }
         if !alias_is_safe(alias) {
             continue;
         }
@@ -370,6 +399,7 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         // synthetic require's `createRequire` arm instead (see `require_cases`),
         // which never references the import local.
         .filter(|(spec, _)| !builtin_requires.contains(spec))
+        .filter(|(spec, _)| resolved_native_addon(source_path, spec).is_none())
         .map(|(spec, local)| {
             // #4904: Node's underscore-prefixed internal http modules are
             // require-only re-exports of the public `http` surface
@@ -407,6 +437,15 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
         .iter()
         .zip(import_local_names.iter())
         .map(|(spec, local)| {
+            if let Some((_target, logical_id)) = resolved_native_addon(source_path, spec) {
+                let specifier =
+                    serde_json::to_string(spec).expect("native addon specifier is JSON encodable");
+                let logical_id = serde_json::to_string(&logical_id)
+                    .expect("native addon logical id is JSON encodable");
+                return format!(
+                    "        if (specifier === {specifier}) {{ const nativeModule = {{ exports: {{}} }}; process.dlopen(nativeModule, {logical_id}); return nativeModule.exports; }}"
+                );
+            }
             let resolved_target =
                 super::super::resolve::resolve_relative_import_path(spec, source_path);
             let link_child = resolved_target
@@ -539,7 +578,16 @@ pub(in crate::commands::compile) fn wrap_commonjs_with_body_offset(
 
     let require_resolve_cases = require_specs
         .iter()
-        .map(|spec| format!("        if (specifier === '{}') return '{}';", spec, spec))
+        .map(|spec| {
+            let resolved = resolved_native_addon(source_path, spec)
+                .map(|(_, logical_id)| logical_id)
+                .unwrap_or_else(|| spec.clone());
+            format!(
+                "        if (specifier === {}) return {};",
+                serde_json::to_string(spec).expect("specifier is JSON encodable"),
+                serde_json::to_string(&resolved).expect("resolved specifier is JSON encodable")
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
 

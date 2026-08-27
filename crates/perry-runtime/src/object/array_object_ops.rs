@@ -377,6 +377,22 @@ pub(crate) unsafe fn define_array_property(
     let Some(key_name) = key_name else {
         return Some(true);
     };
+    // The caller roots these values, but a root in an outer stack frame does
+    // not rewrite raw locals in this callee. Descriptor field probes and
+    // closure rebinding below allocate (and may run user code), so keep local
+    // handles as well and re-read them after every such call. Copy the key name
+    // onto the Rust heap before opening any allocation window.
+    let key_name_owned = key_name.to_string();
+    let key_name = key_name_owned.as_str();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let descriptor_handle = scope.root_nanbox_f64(descriptor_value);
+    let key_handle = scope.root_string_ptr(key_str);
+    let current_obj = || obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let current_descriptor = || descriptor_handle.get_nanbox_f64();
+    let current_descriptor_ptr = || extract_obj_ptr(current_descriptor());
+    let current_key = || key_handle.get_raw_const_ptr::<crate::StringHeader>();
+    let current_arr = || array_header_mut(current_obj());
 
     // Any explicit per-index/named/length descriptor makes the raw numeric
     // fast paths ineligible for this array — they can't see accessors or
@@ -391,14 +407,15 @@ pub(crate) unsafe fn define_array_property(
         return Some(array_set_length_from_descriptor(obj, descriptor_value));
     }
 
-    let desc_ptr = extract_obj_ptr(descriptor_value);
+    let desc_ptr = current_descriptor_ptr();
     if desc_ptr.is_null() {
         return Some(true);
     }
     let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
     // `ToPropertyDescriptor` field presence is HasProperty (own OR inherited).
-    let has_value = super::desc_has_field(descriptor_value, b"value");
-    let value_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
+    let has_value = super::desc_has_field(current_descriptor(), b"value");
+    let value_field =
+        js_object_get_field_by_name(current_descriptor_ptr() as *const ObjectHeader, value_key);
     let value = if has_value {
         f64::from_bits(value_field.bits())
     } else {
@@ -408,14 +425,14 @@ pub(crate) unsafe fn define_array_property(
     // #7548: `obj` may be a pre-grow forwarding stub whose `length`/`capacity`
     // words hold the forwarding pointer — the `index >= (*arr).length` gate
     // below and every element read/extend need the array's current home.
-    let arr = array_header_mut(obj);
+    let arr = current_arr();
 
     let read_bool = |name: &[u8]| -> Option<bool> {
-        if !super::desc_has_field(descriptor_value, name) {
+        if !super::desc_has_field(current_descriptor(), name) {
             return None;
         }
         let k = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let v = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, k);
+        let v = js_object_get_field_by_name(current_descriptor_ptr() as *const ObjectHeader, k);
         Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
     };
 
@@ -429,7 +446,7 @@ pub(crate) unsafe fn define_array_property(
             && (super::get_accessor_descriptor(obj as usize, key_name).is_some()
                 || crate::array::array_named_property_get_by_name(arr, key_name).is_some());
         let index_exists = super::canonical_array_index(key_name)
-            .map(|_| super::has_own_helpers::array_own_key_present(arr, key_str))
+            .map(|_| super::has_own_helpers::array_own_key_present(current_arr(), current_key()))
             .unwrap_or(false);
         if !named_exists && !index_exists {
             let gc = gc_header_for(obj);
@@ -443,7 +460,7 @@ pub(crate) unsafe fn define_array_property(
     }
 
     if let Some(index) = super::canonical_array_index(key_name) {
-        let exists = super::has_own_helpers::array_own_key_present(arr, key_str);
+        let exists = super::has_own_helpers::array_own_key_present(current_arr(), current_key());
 
         // Array exotic `[[DefineOwnProperty]]` (ECMA-262 10.4.2.1) step 3.b: a
         // NEW index at or beyond `length` requires extending `length`, which is
@@ -464,8 +481,8 @@ pub(crate) unsafe fn define_array_property(
         // ObjectHeader and corrupt it, so handle it here.
         let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
         let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
-        let desc_has_get = super::desc_has_field(descriptor_value, b"get");
-        let desc_has_set = super::desc_has_field(descriptor_value, b"set");
+        let desc_has_get = super::desc_has_field(current_descriptor(), b"get");
+        let desc_has_set = super::desc_has_field(current_descriptor(), b"set");
         if desc_has_get || desc_has_set {
             // ValidateAndApplyPropertyDescriptor for an existing non-configurable
             // index: reject the data→accessor switch AND a change to a
@@ -493,28 +510,43 @@ pub(crate) unsafe fn define_array_property(
                     );
                 }
             }
-            let get_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
-            let set_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, set_key);
-            let recv = crate::value::js_nanbox_pointer(obj as i64);
-            let prior = super::get_accessor_descriptor(obj as usize, key_name);
+            let get_field = js_object_get_field_by_name(
+                current_descriptor_ptr() as *const ObjectHeader,
+                get_key,
+            );
+            let get_field = scope.root_nanbox_u64(get_field.bits());
+            let set_field = js_object_get_field_by_name(
+                current_descriptor_ptr() as *const ObjectHeader,
+                set_key,
+            );
+            let set_field = scope.root_nanbox_u64(set_field.bits());
+            let prior = super::get_accessor_descriptor(current_arr() as usize, key_name);
             let get_bits = if desc_has_get {
-                if get_field.is_undefined() {
+                if crate::value::JSValue::from_bits(get_field.get_nanbox_u64()).is_undefined() {
                     0
                 } else {
-                    crate::closure::clone_closure_rebind_this(get_field.bits(), recv)
+                    crate::closure::clone_closure_rebind_this(
+                        get_field.get_nanbox_u64(),
+                        crate::value::js_nanbox_pointer(current_obj() as i64),
+                    )
                 }
             } else {
                 prior.map(|a| a.get).unwrap_or(0)
             };
+            let get_bits = scope.root_nanbox_u64(get_bits);
             let set_bits = if desc_has_set {
-                if set_field.is_undefined() {
+                if crate::value::JSValue::from_bits(set_field.get_nanbox_u64()).is_undefined() {
                     0
                 } else {
-                    crate::closure::clone_closure_rebind_this(set_field.bits(), recv)
+                    crate::closure::clone_closure_rebind_this(
+                        set_field.get_nanbox_u64(),
+                        crate::value::js_nanbox_pointer(current_obj() as i64),
+                    )
                 }
             } else {
                 prior.map(|a| a.set).unwrap_or(0)
             };
+            let set_bits = scope.root_nanbox_u64(set_bits);
             // Materialize BEFORE storing the accessor — the extend helper
             // dispatches accessor setters, so installing the accessor first
             // would turn this internal materialization into a setter call.
@@ -528,10 +560,10 @@ pub(crate) unsafe fn define_array_property(
             // not the stale `obj`. Without this, a length-extending accessor
             // (`Object.defineProperty(arr, "20", {get})` on a short array) was
             // silently dropped: `arr[20]` / `indexOf` never fired the getter.
-            let mut side_addr = obj as usize;
+            let mut side_addr = current_arr() as usize;
             if !exists {
                 let new_arr = crate::array::js_array_set_f64_extend(
-                    arr,
+                    current_arr(),
                     index,
                     f64::from_bits(crate::value::TAG_UNDEFINED),
                 );
@@ -546,8 +578,8 @@ pub(crate) unsafe fn define_array_property(
                 side_addr,
                 key_name.to_string(),
                 AccessorDescriptor {
-                    get: get_bits,
-                    set: set_bits,
+                    get: get_bits.get_nanbox_u64(),
+                    set: set_bits.get_nanbox_u64(),
                 },
             );
             // Retain existing attrs the descriptor omits when redefining; new
@@ -567,7 +599,7 @@ pub(crate) unsafe fn define_array_property(
             let configurable = read_bool(b"configurable")
                 .unwrap_or_else(|| cur.map(|a| a.configurable()).unwrap_or(false));
             set_property_attrs(
-                side_addr,
+                current_arr() as usize,
                 key_name.to_string(),
                 PropertyAttrs::new(false, enumerable, configurable),
             );

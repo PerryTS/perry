@@ -205,6 +205,12 @@ pub(crate) fn object_shift(recv: f64) -> f64 {
 /// length.
 pub(super) fn object_push(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
     let len = al_length(recv);
+    const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    if len > MAX_SAFE_INTEGER - args_len.min(MAX_SAFE_INTEGER as usize) as i64 {
+        crate::collection_iter::throw_type_error(
+            "Pushing elements would exceed the maximum safe integer length",
+        );
+    }
     for i in 0..args_len {
         al_set(recv, len + i as i64, arg_at(args_ptr, args_len, i));
     }
@@ -218,6 +224,12 @@ pub(super) fn object_push(recv: f64, args_ptr: *const f64, args_len: usize) -> f
 pub(super) fn object_unshift(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
     let len = al_length(recv);
     let count = args_len as i64;
+    const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    if len > MAX_SAFE_INTEGER - count {
+        crate::collection_iter::throw_type_error(
+            "Unshifting elements would exceed the maximum safe integer length",
+        );
+    }
     if count > 0 {
         // Move existing elements up by `count`, high index first so we don't
         // clobber not-yet-moved slots.

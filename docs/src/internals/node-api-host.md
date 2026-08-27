@@ -1,9 +1,34 @@
 # Node-API host design
 
-Status: design contract for [#8523](https://github.com/PerryTS/perry/issues/8523).
-The implementation is deliberately staged behind the completed `bun:ffi`
-callback work in #6562. This document fixes the representation, lifetime, ABI,
-loader, and shipping decisions before the first `napi_*` symbol is exported.
+Status: implemented contract for [#8523](https://github.com/PerryTS/perry/issues/8523).
+The implementation follows the completed `bun:ffi` callback work in #6562.
+This document is the representation, lifetime, ABI, loader, and shipping
+contract kept alongside the implementation and its gates.
+
+## Implementation status
+
+The optional `perry-runtime/node-api-host` feature contains the version-8 host:
+opaque handle scopes and references, GC root rewriting and weak clearing,
+object metadata/finalization, values and descriptors, native callbacks,
+buffers/views, promises, async work, threadsafe functions, cleanup hooks, and
+the authenticated module loader. The compiler enables it only after the graph
+reaches a `.node` file owned by an exact host `perry.nativeAddons` entry.
+
+Approved addons are screened for direct libuv/V8/NAN/Node C++ imports, copied
+to the relocatable `<executable>.perry-native` sidecar, hashed into its manifest
+and build cache, and loaded only after every payload hash is verified.
+`require()` and `process.dlopen()` share that authorization and cache. Linker
+exports come from the checked-in version-8 symbol inventory and are absent when
+the addon graph is empty, preserving the zero-byte default path.
+
+The integration gate compiles and executes a direct C addon, verifies its
+imports resolve from the host executable, authenticates and then deliberately
+corrupts its sidecar, and enforces both size bounds. Pinned published-package
+gates compare `@napi-rs/snappy` 1.0.2 sync/async results with Node and compare
+the real `@parcel/watcher` 2.5.1 `watcher.node` snapshot stream with Perry's
+facade. CI treats missing npm tools or network for those differentials as a
+failure; local offline runs explain their skip unless `PERRY_REQUIRE_NPM_E2E=1`
+is set.
 
 The host lets a Perry executable load a prebuilt Node-API (`.node`) addon
 without embedding Node, V8, JavaScriptCore, or another JavaScript engine. It is

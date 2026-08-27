@@ -749,3 +749,31 @@ pub(super) fn expr_numeric_by_construction(
         _ => false,
     }
 }
+
+/// Conservative "cannot be a BigInt" for the spec Number-path argument.
+pub(super) fn expr_provably_not_bigint(e: &Expr, not_bigint_locals: &HashSet<u32>) -> bool {
+    match e {
+        Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::String(_)
+        | Expr::Bool(_)
+        | Expr::PodLayoutSizeOf { .. }
+        | Expr::PodLayoutAlignOf { .. }
+        | Expr::PodLayoutOffsetOf { .. } => true,
+        Expr::LocalGet(id) => not_bigint_locals.contains(id),
+        Expr::Unary { op, operand } => match op {
+            perry_hir::UnaryOp::Pos => true, // `+x` throws for BigInt
+            perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::BitNot => {
+                expr_provably_not_bigint(operand, not_bigint_locals)
+            }
+            _ => true, // !x, typeof x, … never produce BigInt
+        },
+        Expr::Binary { .. } => false, // handled structurally by the caller
+        _ => false,
+    }
+}
+
+// Note on Symbol operands in the either-side non-BigInt arithmetic argument:
+// ToNumber(Symbol) THROWS, so the store never completes — throw behavior is
+// identical on the guarded and bare paths, and no non-number value can reach
+// the slot through these operators.

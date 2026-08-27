@@ -1249,7 +1249,7 @@ pub(crate) fn lower(
             crate::lower_array_method::emit_grow_mutator_writeback(ctx, *array_id, &new_box)?;
             let blk = ctx.block();
             let len_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
-            let len_f64 = blk.sitofp(I32, &len_i32, DOUBLE);
+            let len_f64 = blk.uitofp(I32, &len_i32, DOUBLE);
             Ok(len_f64)
         }
 

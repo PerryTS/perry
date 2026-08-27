@@ -4,6 +4,9 @@ use std::ptr;
 
 use super::*;
 
+#[path = "tests_strict_dense.rs"]
+mod strict_dense;
+
 extern "C" fn test_map_to_string(
     _closure: *const crate::closure::ClosureHeader,
     _element: f64,
@@ -496,68 +499,6 @@ fn test_array_grow_capacity() {
         crate::gc::test_layout_pointer_slot_count(arr as usize, 50),
         Some(0),
         "numeric grow path should preserve pointer-free array layout"
-    );
-}
-
-#[test]
-fn strict_dense_overwrite_preserves_numeric_and_pointer_layouts() {
-    let arr = js_array_alloc(4);
-    js_array_push_f64(arr, 10.0);
-    js_array_push_f64(arr, 20.0);
-    assert_eq!(js_array_is_numeric_f64_layout(arr), 1);
-
-    let tagged_i32 = f64::from_bits(crate::value::INT32_TAG | 33);
-    assert_eq!(
-        indexing::try_strict_dense_index_set(arr, 1, tagged_i32),
-        Some(arr)
-    );
-    assert_eq!(js_array_get_f64(arr, 1), 33.0);
-    assert_eq!(unsafe { raw_slot_bits(arr, 1) }, 33.0f64.to_bits());
-
-    let class_id = 0x0074_8693;
-    crate::object::js_register_class_parent(class_id, 0);
-    unsafe { crate::object::js_register_class_id(class_id) };
-    let class_ref = f64::from_bits(crate::value::INT32_TAG | u64::from(class_id));
-    assert_eq!(
-        indexing::try_strict_dense_index_set(arr, 1, class_ref),
-        Some(arr),
-        "a ClassRef may use the general barriered path but not the numeric path"
-    );
-    assert_eq!(js_array_get_f64(arr, 1).to_bits(), class_ref.to_bits());
-    assert_eq!(js_array_is_numeric_f64_layout(arr), 0);
-
-    let pointer_arr = js_array_alloc(2);
-    let first = boxed_pointer(crate::object::js_object_alloc(0, 0).cast());
-    let second = boxed_pointer(crate::object::js_object_alloc(0, 0).cast());
-    js_array_push_f64(pointer_arr, first);
-    assert_eq!(
-        indexing::try_strict_dense_index_set(pointer_arr, 0, second),
-        Some(pointer_arr)
-    );
-    assert_eq!(js_array_get_f64(pointer_arr, 0).to_bits(), second.to_bits());
-    assert_eq!(
-        crate::gc::test_layout_pointer_slot_count(pointer_arr as usize, 1),
-        Some(1),
-        "the resolved general path must retain the ordinary GC slot note"
-    );
-
-    let holes = js_array_alloc_with_length(2);
-    assert_eq!(
-        indexing::try_strict_dense_index_set(holes, 0, 1.0),
-        None,
-        "a hole may be intercepted by a prototype setter and is not an existing own slot"
-    );
-
-    let header = unsafe {
-        (arr as *mut u8)
-            .sub(crate::gc::GC_HEADER_SIZE)
-            .cast::<crate::gc::GcHeader>()
-    };
-    unsafe { (*header)._reserved |= crate::gc::OBJ_FLAG_FROZEN };
-    assert_eq!(
-        indexing::try_strict_dense_index_set(arr, 1, 44.0),
-        None,
-        "the fast path must leave strict frozen-array throwing to the fallback"
     );
 }
 
@@ -1292,6 +1233,37 @@ fn large_length_growth_stays_logically_sparse() {
     js_array_set_length(arr, 1.0);
     assert_eq!(js_array_length(arr), 1);
     assert_eq!(array_spec_get(arr, 0), 1.0);
+}
+
+#[test]
+fn dense_length_truncation_clears_slots_and_stale_named_indices() {
+    let mut dense = js_array_alloc(4);
+    dense = js_array_push_f64(dense, 10.0);
+    dense = js_array_push_f64(dense, 20.0);
+    dense = js_array_push_f64(dense, 30.0);
+
+    js_array_set_length(dense, 0.0);
+    assert_eq!(js_array_length(dense), 0);
+    js_array_set_length(dense, 3.0);
+    for index in 0..3 {
+        assert_eq!(
+            array_spec_get(dense, index).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+    }
+
+    // A numeric property can live in ARRAY_NAMED_PROPS after a sparse index's
+    // backing later grows past it. The dense bulk path must decline whenever
+    // that second representation is present, and the ordinary deletion walk
+    // must clear both representations.
+    let key = crate::string::js_string_from_bytes(b"2".as_ptr(), 1);
+    unsafe { array_named_property_set(dense, key, 99.0) };
+    js_array_set_length(dense, 0.0);
+    js_array_set_length(dense, 3.0);
+    assert_eq!(
+        array_spec_get(dense, 2).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
 }
 
 #[test]
