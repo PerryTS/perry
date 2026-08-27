@@ -104,6 +104,28 @@ impl Drop for PerObjectLayoutHint {
 /// thread.
 const LAYOUT_ADDR_FILTER_BITS: usize = 4096;
 const LAYOUT_ADDR_FILTER_WORDS: usize = LAYOUT_ADDR_FILTER_BITS / 64;
+
+/// Process-global, monotone union of every thread's address filter.
+///
+/// `layout_forget_object` runs on every allocation once any thread holds a
+/// per-object record, and its first real step used to be resolving this
+/// thread's hint through `_tlv_get_addr` just to consult the filter. One
+/// long-lived masked object (a test harness's callback closure, a registered
+/// listener) therefore taxed every later allocation in the program with a
+/// thread-local access — 3.4% of an allocation-heavy ECS row. Bits are set
+/// alongside the thread-local filter and never cleared: a stale bit is only a
+/// false positive that falls through to the thread-local check, whereas
+/// clearing while another thread still holds records would be a false
+/// negative and leave a stale mask on a recycled address. The filter is a
+/// 4,096-bit sketch, so saturation degrades to exactly the previous cost.
+static GLOBAL_LAYOUT_ADDR_FILTER: [std::sync::atomic::AtomicU64; LAYOUT_ADDR_FILTER_WORDS] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; LAYOUT_ADDR_FILTER_WORDS];
+
+#[inline(always)]
+pub(in crate::gc) fn global_layout_addr_filter_may_hold(user_ptr: usize) -> bool {
+    let (word, bit) = layout_addr_filter_slot(user_ptr);
+    GLOBAL_LAYOUT_ADDR_FILTER[word].load(std::sync::atomic::Ordering::Relaxed) & bit != 0
+}
 /// Rebuild the filter from the live keys once this many bits have been set
 /// since the last rebuild. Without it a workload that churns per-object
 /// records would saturate the filter and never recover; with it the false
@@ -188,6 +210,7 @@ pub(in crate::gc) fn layout_addr_filter_note(user_ptr: usize) {
     unsafe {
         (*hint.filter.get())[word] |= bit;
     }
+    GLOBAL_LAYOUT_ADDR_FILTER[word].fetch_or(bit, std::sync::atomic::Ordering::Relaxed);
     hint.sets.set(hint.sets.get().saturating_add(1));
 }
 
@@ -641,6 +664,11 @@ pub(in crate::gc) fn layout_forget_object(user_ptr: usize) {
     // one branch instead of a call. (Measured as 6% of `cycles`, whose
     // pointer-bearing shape keeps the full runtime declare.)
     if PERRY_PER_OBJECT_LAYOUTS_ANY.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        return;
+    }
+    // Process-global sketch before any thread-local access: an address no
+    // thread ever recorded needs nothing removed.
+    if !global_layout_addr_filter_may_hold(user_ptr) {
         return;
     }
     // ONE hot-slot resolution for both halves of the guard: the flag (cheap,
