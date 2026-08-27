@@ -1111,6 +1111,223 @@ pub fn run_with_parse_cache(
         }
     }
 
+    // Resolve imported and generic type-alias references in every module's
+    // type positions (`perry_hir::type_alias_resolve`). Per-module lowering
+    // only settles a non-generic, same-module alias; `import type { EntityId }
+    // from "../entity"` and `EntityId<T>` stayed `Named`/`Generic` and erased
+    // the branded-primitive shape they spell. Exported aliases are keyed by
+    // (defining path, exported name) and followed through barrels exactly like
+    // the enum fix-up above, so a local binding resolves only to the alias its
+    // import actually names. Alias bodies are closed against their own
+    // module's scope before any consumer is rewritten.
+    {
+        let mut exported_aliases: BTreeMap<(String, String), perry_hir::AliasDef> = BTreeMap::new();
+        for (path, hir_module) in &ctx.native_modules {
+            let path_str = path.to_string_lossy().to_string();
+            for alias in &hir_module.type_aliases {
+                if alias.is_exported {
+                    exported_aliases.insert(
+                        (path_str.clone(), alias.name.clone()),
+                        perry_hir::AliasDef {
+                            params: alias.type_params.clone(),
+                            ty: alias.ty.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        loop {
+            let mut new_entries: Vec<((String, String), perry_hir::AliasDef)> = Vec::new();
+            for (path, hir_module) in &ctx.native_modules {
+                let path_str = path.to_string_lossy().to_string();
+                for export in &hir_module.exports {
+                    let re_export = match export {
+                        perry_hir::Export::ExportAll { source } => Some((source.as_str(), None)),
+                        perry_hir::Export::ReExport {
+                            source,
+                            imported,
+                            exported,
+                        } => Some((
+                            source.as_str(),
+                            Some((imported.as_str(), exported.as_str())),
+                        )),
+                        _ => None,
+                    };
+                    let Some((source, names)) = re_export else {
+                        continue;
+                    };
+                    let Some((resolved_source, _)) = resolve_import(
+                        source,
+                        path,
+                        &ctx.project_root,
+                        &ctx.compile_packages,
+                        &ctx.compile_package_dirs,
+                    ) else {
+                        continue;
+                    };
+                    let source_path_str = resolved_source.to_string_lossy().to_string();
+                    for ((src_path, alias_name), def) in &exported_aliases {
+                        if src_path != &source_path_str {
+                            continue;
+                        }
+                        let (propagate, exported_name) = match names {
+                            Some((imported, exported)) => {
+                                (alias_name == imported, exported.to_string())
+                            }
+                            None => (true, alias_name.clone()),
+                        };
+                        if propagate {
+                            let key = (path_str.clone(), exported_name);
+                            if !exported_aliases.contains_key(&key)
+                                && !new_entries.iter().any(|(k, _)| k == &key)
+                            {
+                                new_entries.push((key, def.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+            if new_entries.is_empty() {
+                break;
+            }
+            for (key, def) in new_entries {
+                exported_aliases.insert(key, def);
+            }
+        }
+
+        // Per-module scope tables: own declarations plus imported bindings.
+        let mut tables: BTreeMap<PathBuf, perry_hir::AliasTable> = BTreeMap::new();
+        for (path, hir_module) in &ctx.native_modules {
+            let mut table = perry_hir::AliasTable::new();
+            for alias in &hir_module.type_aliases {
+                table.insert(
+                    alias.name.clone(),
+                    perry_hir::AliasDef {
+                        params: alias.type_params.clone(),
+                        ty: alias.ty.clone(),
+                    },
+                );
+            }
+            for import in &hir_module.imports {
+                if import.module_kind != perry_hir::ModuleKind::NativeCompiled {
+                    continue;
+                }
+                let Some(resolved_path) = &import.resolved_path else {
+                    continue;
+                };
+                for spec in &import.specifiers {
+                    let (local_name, exported_name) = match spec {
+                        perry_hir::ImportSpecifier::Named { imported, local } => {
+                            (local.clone(), imported.clone())
+                        }
+                        perry_hir::ImportSpecifier::Default { local } => {
+                            (local.clone(), local.clone())
+                        }
+                        perry_hir::ImportSpecifier::Namespace { .. } => continue,
+                    };
+                    if let Some(def) = exported_aliases.get(&(resolved_path.clone(), exported_name))
+                    {
+                        table.entry(local_name).or_insert_with(|| def.clone());
+                    }
+                }
+            }
+            if !table.is_empty() {
+                tables.insert(path.clone(), table);
+            }
+        }
+
+        // Close alias bodies in their defining scope (`ComponentId<T>` spells
+        // `EntityId<T, "component">`, which spells `number`), then refresh the
+        // imported copies. Chains are short; the bound only guards a cycle.
+        for _ in 0..8 {
+            let mut changed = false;
+            let mut closed: BTreeMap<(String, String), perry_hir::AliasDef> = BTreeMap::new();
+            for (path, hir_module) in &ctx.native_modules {
+                let Some(table) = tables.get(path) else {
+                    continue;
+                };
+                let path_str = path.to_string_lossy().to_string();
+                for alias in &hir_module.type_aliases {
+                    let Some(def) = table.get(&alias.name) else {
+                        continue;
+                    };
+                    let resolved = perry_hir::type_alias_resolve::resolve_type(&def.ty, table);
+                    if resolved != def.ty {
+                        changed = true;
+                    }
+                    closed.insert(
+                        (path_str.clone(), alias.name.clone()),
+                        perry_hir::AliasDef {
+                            params: def.params.clone(),
+                            ty: resolved,
+                        },
+                    );
+                }
+            }
+            if !changed {
+                break;
+            }
+            for (key, def) in &closed {
+                if let Some(existing) = exported_aliases.get_mut(key) {
+                    *existing = def.clone();
+                }
+            }
+            // Re-exported copies share the defining alias's body.
+            let mut by_body: Vec<((String, String), perry_hir::AliasDef)> = Vec::new();
+            for (key, def) in &exported_aliases {
+                for (ckey, cdef) in &closed {
+                    if ckey != key && def.params == cdef.params && def.ty == cdef.ty {
+                        by_body.push((key.clone(), cdef.clone()));
+                    }
+                }
+            }
+            for (key, def) in by_body {
+                exported_aliases.insert(key, def);
+            }
+            for (path, hir_module) in &ctx.native_modules {
+                let Some(table) = tables.get_mut(path) else {
+                    continue;
+                };
+                let path_str = path.to_string_lossy().to_string();
+                for alias in &hir_module.type_aliases {
+                    if let Some(def) = closed.get(&(path_str.clone(), alias.name.clone())) {
+                        table.insert(alias.name.clone(), def.clone());
+                    }
+                }
+                for import in &hir_module.imports {
+                    if import.module_kind != perry_hir::ModuleKind::NativeCompiled {
+                        continue;
+                    }
+                    let Some(resolved_path) = &import.resolved_path else {
+                        continue;
+                    };
+                    for spec in &import.specifiers {
+                        let (local_name, exported_name) = match spec {
+                            perry_hir::ImportSpecifier::Named { imported, local } => {
+                                (local.clone(), imported.clone())
+                            }
+                            perry_hir::ImportSpecifier::Default { local } => {
+                                (local.clone(), local.clone())
+                            }
+                            perry_hir::ImportSpecifier::Namespace { .. } => continue,
+                        };
+                        if let Some(def) =
+                            exported_aliases.get(&(resolved_path.clone(), exported_name))
+                        {
+                            table.insert(local_name, def.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        for (path, table) in &tables {
+            if let Some(hir_module) = ctx.native_modules.get_mut(path) {
+                perry_hir::resolve_type_aliases_in_module(hir_module, table);
+            }
+        }
+    }
+
     // Collect all non-generic type aliases from all modules.
     // These are passed to each module's compiler so type_to_abi can resolve
     // Named("BlockTag") -> Union([...]) for correct ABI types in function signatures.

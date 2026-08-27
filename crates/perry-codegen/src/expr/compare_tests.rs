@@ -559,3 +559,115 @@ fn i8_literal_writes_high_bytes_in_twos_complement() {
     assert_eq!(i8_literal(0xC3), "-61");
     assert_eq!(i8_literal(0xFF), "-1");
 }
+
+// ---------------------------------------------------------------------------
+// Dynamic-operand plain-number fast paths (#8872 follow-up).
+//
+// Two erased operands used to go straight to the runtime helper for every
+// relational and equality operator. Two ordinary doubles — the overwhelmingly
+// common dynamic shape (erased ids, PIC-loaded fields) — now decide inline
+// with the raw `fcmp`; the helper stays reachable for every other shape.
+// ---------------------------------------------------------------------------
+
+const JS_REL_GE_CALL: &str = "call double @js_rel_ge(";
+const JS_REL_LT_CALL: &str = "call double @js_rel_lt(";
+
+#[test]
+fn dynamic_relational_decides_plain_numbers_inline_and_keeps_the_helper() {
+    let ir = cmp_ir(
+        "dynrel_ge",
+        CompareOp::Ge,
+        Expr::LocalGet(X),
+        Expr::LocalGet(Y),
+    );
+    assert!(
+        ir.contains("fcmp oge double"),
+        "dynamic `>=` has no inline number arm:\n{ir}"
+    );
+    assert!(
+        ir.contains(JS_REL_GE_CALL),
+        "dynamic `>=` lost its coercing helper fallback:\n{ir}"
+    );
+    let ir = cmp_ir(
+        "dynrel_lt",
+        CompareOp::Lt,
+        Expr::LocalGet(X),
+        Expr::LocalGet(Y),
+    );
+    assert!(ir.contains("fcmp olt double"), "no inline `<` arm:\n{ir}");
+    assert!(ir.contains(JS_REL_LT_CALL), "no `<` helper fallback:\n{ir}");
+}
+
+#[test]
+fn dynamic_strict_eq_decides_plain_numbers_inline_and_keeps_js_eq() {
+    for (name, op) in [("dynseq", CompareOp::Eq), ("dynsne", CompareOp::Ne)] {
+        let ir = cmp_ir(name, op, Expr::LocalGet(X), Expr::LocalGet(Y));
+        assert!(
+            ir.contains("fcmp oeq double"),
+            "{name}: no inline number arm:\n{ir}"
+        );
+        assert!(
+            ir.contains(JS_EQ_CALL),
+            "{name}: lost the js_eq fallback:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn dynamic_loose_eq_decides_plain_numbers_inline_and_keeps_js_loose_eq() {
+    let ir = cmp_ir(
+        "dynleq",
+        CompareOp::LooseEq,
+        Expr::LocalGet(X),
+        Expr::LocalGet(Y),
+    );
+    assert!(
+        ir.contains("fcmp oeq double"),
+        "dynamic `==` has no inline number arm:\n{ir}"
+    );
+    assert!(
+        ir.contains(JS_LOOSE_EQ_CALL),
+        "dynamic `==` lost its coercing helper:\n{ir}"
+    );
+}
+
+#[test]
+fn dynamic_truthiness_decides_numbers_and_tag_singletons_inline() {
+    let ir = ir_for(
+        "dyntruthy",
+        vec![
+            Stmt::Let {
+                id: X,
+                name: "x".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            },
+            Stmt::Let {
+                id: R,
+                name: "r".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            },
+            Stmt::If {
+                // An element read of an erased local: no initializer proof can
+                // settle it, so the condition reaches the dynamic predicate.
+                condition: Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(X)),
+                    index: Box::new(Expr::Integer(0)),
+                },
+                then_branch: vec![Stmt::Expr(Expr::LocalSet(R, Box::new(Expr::Integer(1))))],
+                else_branch: None,
+            },
+        ],
+    );
+    assert!(
+        ir.contains("truthy.num") && ir.contains("fcmp one double"),
+        "dynamic truthiness has no inline number arm:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i32 @js_is_truthy("),
+        "dynamic truthiness lost the runtime predicate for strings/BigInt:\n{ir}"
+    );
+}

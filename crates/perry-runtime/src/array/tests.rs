@@ -1991,3 +1991,66 @@ fn array_prototype_method_discriminator_separates_foreign_builtins() {
         "never obtained a GC-quiet view of Array.prototype / String.prototype"
     );
 }
+
+/// The strict element-store fast lane (`try_strict_dense_number_store`) must
+/// store exactly what the general path stores, for both the NaN-boxed
+/// receiver codegen passes and a raw head, and must decline every shape it
+/// cannot prove: out-of-range indices, tagged or NaN values.
+#[test]
+fn strict_dense_number_store_fast_lane_matches_the_general_path() {
+    use super::indexing::test_strict_dense_number_store as lane;
+    unsafe {
+        let mut arr = js_array_alloc(4);
+        for i in 0..3 {
+            arr = js_array_push_f64(arr, i as f64);
+        }
+        let boxed = crate::value::js_nanbox_pointer(arr as i64).to_bits() as *mut ArrayHeader;
+
+        assert!(
+            lane(boxed, 1, 41.5),
+            "boxed receiver, plain number, in range"
+        );
+        assert_eq!(js_array_get_f64(arr, 1), 41.5);
+        assert!(lane(arr, 2, -7.0), "raw receiver");
+        assert_eq!(js_array_get_f64(arr, 2), -7.0);
+
+        // An INT32 box stores its canonical double on this raw-f64 layout.
+        let boxed_int = f64::from_bits(crate::value::INT32_TAG | 12);
+        assert!(lane(boxed, 1, boxed_int), "INT32 box is a number");
+        assert_eq!(js_array_get_f64(arr, 1).to_bits(), 12.0f64.to_bits());
+        assert!(!lane(arr, 3, 1.0), "index == length is an extension");
+        assert!(
+            !lane(arr, 0, f64::from_bits(crate::value::TAG_UNDEFINED)),
+            "tagged value"
+        );
+        assert!(
+            !lane(arr, 0, f64::NAN),
+            "NaN keeps canonicalization on the general path"
+        );
+        assert!(!lane(std::ptr::null_mut(), 0, 1.0), "null receiver");
+        assert!(
+            !lane(
+                f64::from_bits(crate::value::TAG_UNDEFINED).to_bits() as *mut ArrayHeader,
+                0,
+                1.0
+            ),
+            "non-pointer receiver"
+        );
+        assert_eq!(
+            js_array_get_f64(arr, 0),
+            0.0,
+            "declined stores leave the slot alone"
+        );
+        assert_eq!((*arr).length, 3);
+
+        // The public strict entry answers the same shape through the lane and
+        // still returns the live head.
+        let out = js_array_set_f64_extend_strict(boxed, 0, 9.0);
+        assert_eq!(out, arr);
+        assert_eq!(js_array_get_f64(arr, 0), 9.0);
+        // …and extension still goes through the general path.
+        let out = js_array_set_f64_extend_strict(boxed, 3, 3.0);
+        assert_eq!((*out).length, 4);
+        assert_eq!(js_array_get_f64(out, 3), 3.0);
+    }
+}

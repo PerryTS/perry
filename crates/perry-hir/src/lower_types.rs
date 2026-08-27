@@ -1474,6 +1474,7 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
     }
 }
 
+mod branded_intersection_tests;
 mod extract;
 mod generic_alias_specialization_tests;
 

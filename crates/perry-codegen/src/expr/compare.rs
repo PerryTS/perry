@@ -339,6 +339,85 @@ fn lower_string_literal_strict_eq(
 ///
 /// Returns an i64 holding `TAG_TRUE`/`TAG_FALSE` (or `js_eq`'s own tagged
 /// boolean), i.e. the same value the bare call produced.
+/// Quiet-NaN prefix (`0x7FF8_0000_0000_0000`) shared by every Perry NaN-box
+/// tag and by the canonical NaN itself.
+const QNAN_PREFIX_I64: &str = "9221120237041090560";
+
+/// `(bits & 0x7FF8…) != 0x7FF8…`: the operand is an ordinary IEEE double —
+/// finite, ±Infinity, or a signaling-NaN pattern no Perry encoding occupies.
+/// Every NaN-box tag (top-16 `0x7FF9`..=`0x7FFF`, sign-clear) and the quiet
+/// NaN carry the prefix, so one mask+compare separates "plain number" from
+/// "tagged or NaN" without decoding either side. Two plain numbers answer
+/// every relational and (strict or loose) equality operator with the raw
+/// `fcmp`; the helper keeps NaN, so the unordered edge never reaches the
+/// inline predicate.
+fn emit_is_plain_double(ctx: &mut FnCtx<'_>, bits: &str) -> String {
+    let blk = ctx.block();
+    let masked = blk.and(I64, bits, QNAN_PREFIX_I64);
+    blk.icmp_ne(I64, &masked, QNAN_PREFIX_I64)
+}
+
+/// Dynamic-operand comparison with an inline plain-number fast path.
+///
+/// When both NaN-boxed operands are ordinary doubles the result is
+/// `select(fcmp <pred> l, r, TAG_TRUE, TAG_FALSE)`; every other shape —
+/// strings, BigInt, objects with `valueOf`/`toString`, null/undefined/boolean
+/// coercions, NaN — takes `helper`, which owns the full ECMAScript semantics.
+/// `helper_takes_bits` selects the `(i64, i64) -> i64` helper ABI
+/// (`js_eq`, `js_loose_eq`) over the `(double, double) -> double` one
+/// (`js_rel_*`). Returns the NaN-boxed boolean as i64 bits.
+fn lower_dynamic_compare_bits(
+    ctx: &mut FnCtx<'_>,
+    l: &str,
+    r: &str,
+    pred: &str,
+    helper: &str,
+    helper_takes_bits: bool,
+) -> String {
+    let l_bits = ctx.block().bitcast_double_to_i64(l);
+    let r_bits = ctx.block().bitcast_double_to_i64(r);
+    let l_plain = emit_is_plain_double(ctx, &l_bits);
+    let r_plain = emit_is_plain_double(ctx, &r_bits);
+    let both_plain = ctx.block().and(I1, &l_plain, &r_plain);
+
+    let fast_idx = ctx.new_block("dyncmp.num");
+    let slow_idx = ctx.new_block("dyncmp.slow");
+    let merge_idx = ctx.new_block("dyncmp.merge");
+    let fast_l = ctx.block_label(fast_idx);
+    let slow_l = ctx.block_label(slow_idx);
+    let merge_l = ctx.block_label(merge_idx);
+    ctx.block().cond_br(&both_plain, &fast_l, &slow_l);
+
+    ctx.current_block = fast_idx;
+    let bit = ctx.block().fcmp(pred, l, r);
+    let fast_res = ctx.block().select(
+        I1,
+        &bit,
+        I64,
+        crate::nanbox::TAG_TRUE_I64,
+        crate::nanbox::TAG_FALSE_I64,
+    );
+    let fast_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+
+    ctx.current_block = slow_idx;
+    let slow_res = if helper_takes_bits {
+        ctx.block()
+            .call(I64, helper, &[(I64, &l_bits), (I64, &r_bits)])
+    } else {
+        let boxed = ctx
+            .block()
+            .call(DOUBLE, helper, &[(DOUBLE, l), (DOUBLE, r)]);
+        ctx.block().bitcast_double_to_i64(&boxed)
+    };
+    let slow_pred = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+
+    ctx.current_block = merge_idx;
+    ctx.block()
+        .phi(I64, &[(&fast_res, &fast_pred), (&slow_res, &slow_pred)])
+}
+
 fn lower_strict_eq_inline_any(ctx: &mut FnCtx<'_>, l: &str, r: &str) -> String {
     let l_bits = ctx.block().bitcast_double_to_i64(l);
     let r_bits = ctx.block().bitcast_double_to_i64(r);
@@ -374,10 +453,26 @@ fn lower_strict_eq_inline_any(ctx: &mut FnCtx<'_>, l: &str, r: &str) -> String {
     let same_ok = ctx.block().or(I1, &tagged, &not_nan);
     ctx.block().cond_br(&same_ok, &true_l, &slow_l);
 
-    // Different bits: only a same-tag pair whose encoding is canonical is
-    // decidable here. Pointer pairs need the runtime's allocation registries
-    // before either payload can safely be treated as a GC allocation.
+    // Different bits: two plain numbers are decided by `fcmp` (only `+0`/`-0`
+    // differ in bits yet compare equal); otherwise only a same-tag pair whose
+    // encoding is canonical is decidable here. Pointer pairs need the
+    // runtime's allocation registries before either payload can safely be
+    // treated as a GC allocation.
     ctx.current_block = diff_idx;
+    let num_idx = ctx.new_block("anyeq.num");
+    let tag_idx = ctx.new_block("anyeq.tag");
+    let num_l = ctx.block_label(num_idx);
+    let tag_l = ctx.block_label(tag_idx);
+    let l_plain = emit_is_plain_double(ctx, &l_bits);
+    let r_plain = emit_is_plain_double(ctx, &r_bits);
+    let both_plain = ctx.block().and(I1, &l_plain, &r_plain);
+    ctx.block().cond_br(&both_plain, &num_l, &tag_l);
+
+    ctx.current_block = num_idx;
+    let num_eq = ctx.block().fcmp("oeq", l, r);
+    ctx.block().cond_br(&num_eq, &true_l, &false_l);
+
+    ctx.current_block = tag_idx;
     let l_tag = ctx.block().lshr(I64, &l_bits, "48");
     let r_tag = ctx.block().lshr(I64, &r_bits, "48");
     let l_sso = ctx
@@ -985,10 +1080,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // call. Loose `==`'s cross-type coercions are not
                     // bit-decidable, so it keeps the bare call.
                     let result_bits = if matches!(op, CompareOp::LooseEq | CompareOp::LooseNe) {
-                        let blk = ctx.block();
-                        let l_bits = blk.bitcast_double_to_i64(&l);
-                        let r_bits = blk.bitcast_double_to_i64(&r);
-                        blk.call(I64, "js_loose_eq", &[(I64, &l_bits), (I64, &r_bits)])
+                        lower_dynamic_compare_bits(ctx, &l, &r, "oeq", "js_loose_eq", true)
                     } else {
                         lower_strict_eq_inline_any(ctx, &l, &r)
                     };
@@ -1162,11 +1254,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // "1"==1, false==0, etc.). Strict === already handled
                 // above by the typed fast paths.
                 if matches!(op, CompareOp::LooseEq | CompareOp::LooseNe) {
-                    let blk = ctx.block();
-                    let l_bits = blk.bitcast_double_to_i64(&l);
-                    let r_bits = blk.bitcast_double_to_i64(&r);
                     let result_bits =
-                        blk.call(I64, "js_loose_eq", &[(I64, &l_bits), (I64, &r_bits)]);
+                        lower_dynamic_compare_bits(ctx, &l, &r, "oeq", "js_loose_eq", true);
+                    let blk = ctx.block();
                     if matches!(op, CompareOp::LooseNe) {
                         let cmp = blk.icmp_eq(I64, &result_bits, crate::nanbox::TAG_TRUE_I64);
                         let inv = blk.xor(crate::types::I1, &cmp, "true");
@@ -1198,16 +1288,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     && !is_bigint_expr(ctx, left)
                     && !is_bigint_expr(ctx, right);
                 if is_relational_op && !both_numeric {
-                    let blk = ctx.block();
-                    let fname = match op {
-                        CompareOp::Lt => "js_rel_lt",
-                        CompareOp::Le => "js_rel_le",
-                        CompareOp::Gt => "js_rel_gt",
-                        CompareOp::Ge => "js_rel_ge",
+                    let (pred, fname) = match op {
+                        CompareOp::Lt => ("olt", "js_rel_lt"),
+                        CompareOp::Le => ("ole", "js_rel_le"),
+                        CompareOp::Gt => ("ogt", "js_rel_gt"),
+                        CompareOp::Ge => ("oge", "js_rel_ge"),
                         _ => unreachable!(),
                     };
-                    let res = blk.call(DOUBLE, fname, &[(DOUBLE, &l), (DOUBLE, &r)]);
-                    return Ok(res);
+                    // Two plain numbers are the overwhelmingly common dynamic
+                    // shape (erased ids, PIC-loaded fields); they take the raw
+                    // `fcmp` inline and everything else keeps the helper.
+                    let bits = lower_dynamic_compare_bits(ctx, &l, &r, pred, fname, false);
+                    return Ok(ctx.block().bitcast_i64_to_double(&bits));
                 }
                 // Strict ===/!== where the operands are NOT both certainly
                 // numeric must NOT fall to the bare fcmp tail: a declared
@@ -1217,10 +1309,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // js_eq answers correctly for every runtime shape, including
                 // the honest number-vs-object case (#3576 probe family).
                 if matches!(op, CompareOp::Eq | CompareOp::Ne) && !both_numeric {
+                    let result_bits = lower_dynamic_compare_bits(ctx, &l, &r, "oeq", "js_eq", true);
                     let blk = ctx.block();
-                    let l_bits = blk.bitcast_double_to_i64(&l);
-                    let r_bits = blk.bitcast_double_to_i64(&r);
-                    let result_bits = blk.call(I64, "js_eq", &[(I64, &l_bits), (I64, &r_bits)]);
                     if matches!(op, CompareOp::Ne) {
                         let cmp = blk.icmp_eq(I64, &result_bits, crate::nanbox::TAG_TRUE_I64);
                         let inv = blk.xor(crate::types::I1, &cmp, "true");
