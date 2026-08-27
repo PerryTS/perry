@@ -1122,6 +1122,12 @@ pub fn gc_init() {
 
 #[no_mangle]
 pub extern "C" fn js_gc_init() {
+    // #8546: this is the first runtime call of every `main` / `perry_module_init`,
+    // on the thread about to run that image's module init — so it is where the
+    // thread claims its own class-registry image before any `js_register_class_*`
+    // call lands. A host that loads several application images on several
+    // threads gets one image per thread; a plain executable gets one.
+    crate::object::class_image::enter_current_thread_image();
     // Parse LLVM stack-map metadata before the first collection. The parser
     // allocates its immutable index once; root scans themselves must remain
     // allocation-free while the collector owns the heap.

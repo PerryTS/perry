@@ -656,9 +656,11 @@ pub(crate) fn test_clear_class_side_table_roots() {
             *guard = None;
         }
     });
-    if let Ok(mut guard) = CLASS_STATIC_ACCESSORS.write() {
-        *guard = None;
-    }
+    // The static-accessor table is deliberately NOT cleared here: it holds
+    // code addresses, not heap pointers, so it is not a root, and since #8546
+    // it lives in the calling thread's class image (`object/class_image.rs`)
+    // rather than a `per_test_global!`, where a clear from a guard on another
+    // libtest thread would be the #7672 hazard this helper exists to avoid.
     NEXT_SYNTHETIC_CLASS_ID.store(0x8000_0000, std::sync::atomic::Ordering::Relaxed);
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::object::class_image::ImageTable;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
@@ -22,12 +23,14 @@ pub unsafe extern "C" fn js_register_class_id(class_id: u32) {
 /// `metatype.name` to build the module token, so the empty default name
 /// from `v8::Function::builder(...)` would collide every module under the
 /// same token. (#1021.)
-pub static CLASS_NAMES: RwLock<Option<HashMap<u32, String>>> = RwLock::new(None);
+pub static CLASS_NAMES: ImageTable<RwLock<Option<HashMap<u32, String>>>> =
+    ImageTable::new(|image| &image.names);
 /// Maps `class_id → ECMAScript constructor length` (formal parameters before
 /// the first default/rest parameter). Class refs are integer immediates rather
 /// than heap Function objects, so their own `length` property is reified from
 /// this table alongside `CLASS_NAMES`.
-pub static CLASS_LENGTHS: RwLock<Option<HashMap<u32, u32>>> = RwLock::new(None);
+pub static CLASS_LENGTHS: ImageTable<RwLock<Option<HashMap<u32, u32>>>> =
+    ImageTable::new(|image| &image.lengths);
 
 /// Register the user-visible name of a class so the V8 bridge can label
 /// the V8-side wrapper for nice `metatype.name` reads. Idempotent.
@@ -497,7 +500,8 @@ pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
 /// drizzle's `value.constructor === Object` duck checks, and the standard
 /// `({}).constructor === Object` semantics all match Node. The HIR
 /// lowering registers each anon shape's id here at module init.
-pub static ANON_SHAPE_CLASS_IDS: RwLock<Option<std::collections::HashSet<u32>>> = RwLock::new(None);
+pub static ANON_SHAPE_CLASS_IDS: ImageTable<RwLock<Option<std::collections::HashSet<u32>>>> =
+    ImageTable::new(|image| &image.anon_shape_class_ids);
 
 /// Mark `class_id` as a synthetic anon-shape class so `.constructor`
 /// reads on instances of that class return the global `Object`

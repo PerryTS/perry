@@ -1,10 +1,12 @@
 use super::*;
+use crate::object::class_image::ImageTable;
 
-/// Global registry of class IDs that extend the built-in DataView class.
-static EXTENDS_DATA_VIEW_REGISTRY: RwLock<Option<std::collections::HashSet<u32>>> =
-    RwLock::new(None);
-static EXTENDS_TYPED_ARRAY_REGISTRY: RwLock<Option<std::collections::HashSet<u32>>> =
-    RwLock::new(None);
+/// The calling image's set of class IDs that extend the built-in DataView
+/// class (#8546 — see `object/class_image.rs`).
+static EXTENDS_DATA_VIEW_REGISTRY: ImageTable<RwLock<Option<std::collections::HashSet<u32>>>> =
+    ImageTable::new(|image| &image.extends_data_view);
+static EXTENDS_TYPED_ARRAY_REGISTRY: ImageTable<RwLock<Option<std::collections::HashSet<u32>>>> =
+    ImageTable::new(|image| &image.extends_typed_array);
 
 /// Mark a user-defined class as extending the built-in DataView class.
 #[no_mangle]
