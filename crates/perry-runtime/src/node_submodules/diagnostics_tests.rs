@@ -1,9 +1,5 @@
-//! Unit tests for the node:diagnostics_channel submodule.
-//!
-//! Split out of `diagnostics.rs` to keep it under the 2,000-line file gate.
+//! Tests split out of `diagnostics.rs` for the 2,000-line file gate.
 
-// Bring `diagnostics`'s items into scope so the nested `mod tests` blocks
-// below resolve `use super::*` to them.
 #[allow(unused_imports)]
 use super::*;
 
@@ -73,64 +69,98 @@ mod tests {
 mod error_prop_order_tests {
     use super::*;
 
+    /// Allocate a REAL error. These tests used synthetic addresses
+    /// (`0x4000_1000`) back when the properties lived in a side table keyed by
+    /// an arbitrary `usize` — any integer was a valid key. The bag now hangs
+    /// off the error's own `ObjectMeta`, so a fake address is dereferenced as a
+    /// GC cell and segfaults. Storage on the object means tests need objects.
+    unsafe fn fresh_error() -> usize {
+        let msg = js_string_from_bytes(b"order".as_ptr(), 5);
+        crate::error::js_error_new_with_message(msg) as usize
+    }
+
+    fn keys_of(err: usize) -> Vec<String> {
+        error_user_props(err).into_iter().map(|(k, _)| k).collect()
+    }
+
     /// Own string keys enumerate in INSERTION order, not hash or alphabetical
-    /// order. This is observable through `Object.keys`, `for…in`, `{...err}`
-    /// and `JSON.stringify`, so a caught fs error must serialize as node's
+    /// order. Observable through `Object.keys`, `for…in`, `{...err}` and
+    /// `JSON.stringify`, so a caught fs error must serialize as node's
     /// `{"errno":…,"code":…,"syscall":…,"path":…}`.
-    ///
-    /// The store was a `HashMap` with an alphabetical `sort_by` bolted on for
-    /// determinism, which is stable but wrong: it emitted `code` before
-    /// `errno`. Reverting to any unordered container fails this test.
     #[test]
     fn user_props_enumerate_in_insertion_order() {
-        let err = 0x4000_1000usize;
-        for k in ["errno", "code", "syscall", "path"] {
-            set_error_user_prop(err, k, 1.0);
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let err = fresh_error();
+            for k in ["errno", "code", "syscall", "path"] {
+                set_error_user_prop(err, k, 1.0);
+            }
+            assert_eq!(
+                keys_of(err),
+                vec![
+                    "errno".to_string(),
+                    "code".to_string(),
+                    "syscall".to_string(),
+                    "path".to_string()
+                ],
+                "fs error fields must enumerate in node's insertion order"
+            );
         }
-        let keys: Vec<String> = error_user_props(err).into_iter().map(|(k, _)| k).collect();
-        assert_eq!(
-            keys,
-            vec![
-                "errno".to_string(),
-                "code".to_string(),
-                "syscall".to_string(),
-                "path".to_string()
-            ],
-            "fs error fields must enumerate in node's insertion order, not sorted"
-        );
     }
 
     /// Reassigning an existing key keeps its ORIGINAL position — in node,
-    /// `o.a=1; o.b=2; o.a=3` still enumerates `a,b`. An implementation that
-    /// removed-then-appended would report `b,a`.
+    /// `o.a=1; o.b=2; o.a=3` still enumerates `a,b`.
     #[test]
     fn reassignment_keeps_original_position() {
-        let err = 0x4000_2000usize;
-        set_error_user_prop(err, "a", 1.0);
-        set_error_user_prop(err, "b", 2.0);
-        set_error_user_prop(err, "a", 3.0);
-        let keys: Vec<String> = error_user_props(err).into_iter().map(|(k, _)| k).collect();
-        assert_eq!(keys, vec!["a".to_string(), "b".to_string()]);
-        assert_eq!(
-            error_user_prop(err, "a"),
-            Some(3.0),
-            "reassignment must still update the value"
-        );
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let err = fresh_error();
+            set_error_user_prop(err, "a", 1.0);
+            set_error_user_prop(err, "b", 2.0);
+            set_error_user_prop(err, "a", 3.0);
+            assert_eq!(keys_of(err), vec!["a".to_string(), "b".to_string()]);
+            assert_eq!(
+                error_user_prop(err, "a"),
+                Some(3.0),
+                "reassignment must still update the value"
+            );
+        }
     }
 
     /// Removing a key must not disturb the order of the survivors.
     #[test]
     fn removal_preserves_order_of_the_rest() {
-        let err = 0x4000_3000usize;
-        for k in ["one", "two", "three"] {
-            set_error_user_prop(err, k, 0.0);
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let err = fresh_error();
+            for k in ["one", "two", "three"] {
+                set_error_user_prop(err, k, 0.0);
+            }
+            assert!(remove_error_user_prop(err, "two"));
+            assert_eq!(keys_of(err), vec!["one".to_string(), "three".to_string()]);
+            assert!(
+                !remove_error_user_prop(err, "two"),
+                "second remove is a no-op"
+            );
         }
-        assert!(remove_error_user_prop(err, "two"));
-        let keys: Vec<String> = error_user_props(err).into_iter().map(|(k, _)| k).collect();
-        assert_eq!(keys, vec!["one".to_string(), "three".to_string()]);
-        assert!(
-            !remove_error_user_prop(err, "two"),
-            "second remove is a no-op"
-        );
+    }
+
+    /// #6759 phase 1: two errors must not share properties, even if one is
+    /// allocated at an address the other previously occupied. The old
+    /// address-keyed table could not express that; storage on the object does
+    /// so by construction.
+    #[test]
+    fn properties_belong_to_the_error_not_its_address() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let a = fresh_error();
+            let b = fresh_error();
+            set_error_user_prop(a, "code", 1.0);
+            assert_eq!(error_user_prop(a, "code"), Some(1.0));
+            assert!(
+                error_user_prop(b, "code").is_none(),
+                "a distinct error must not see another's properties"
+            );
+        }
     }
 }

@@ -78,16 +78,16 @@ fn test_dead_error_side_table_entries_cleared() {
 #[test]
 fn test_object_valued_user_prop_is_a_gc_root_and_rewrites() {
     let _guard = CopyingNurseryTestGuard::new(1);
-    // The guard clears the thread's mutable-scanner registry for isolation;
-    // this test is ABOUT the scanner, so re-register it.
-    gc_register_mutable_root_scanner(
-        crate::node_submodules::diagnostics_gc::scan_error_user_props_roots_mut,
-    );
+    // #6759 phase 1: no scanner to re-register any more. The prop's referent
+    // now hangs off the error's `ObjectMeta.expando` bag, so it is kept alive
+    // and rewritten by ORDINARY object tracing rather than by a bespoke
+    // mutable-root scanner over an address-keyed table. The guarantee this
+    // test asserts is unchanged; the mechanism providing it is simpler.
 
     let err = crate::error::js_error_new() as usize;
     js_shadow_slot_set(0, error_bits(err));
 
-    // The prop's object is reachable ONLY through the side table.
+    // The prop's object is reachable ONLY through the error's metadata bag.
     let cause = crate::object::js_object_alloc(0, 0);
     crate::node_submodules::diagnostics::set_error_user_prop(
         err,
@@ -104,8 +104,8 @@ fn test_object_valued_user_prop_is_a_gc_root_and_rewrites() {
     assert_ne!(
         prop_addr, cause as usize,
         "the object referent must have been evacuated (and the stored \
-         bits rewritten) — identical address means the scanner did not \
-         visit the slot"
+         bits rewritten) — an identical address means the expando bag's \
+         edge was not traced"
     );
     unsafe {
         let header = (prop_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;

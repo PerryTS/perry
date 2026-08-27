@@ -6,6 +6,7 @@
 //! entry point, and the replay helper invoked by the heap-class-object arm of
 //! `js_new_function_construct`.
 
+use crate::object::class_image::{ConstructorFlagTable, ConstructorTable, ImageTable};
 use std::collections::HashMap;
 use std::sync::RwLock;
 
@@ -86,7 +87,8 @@ pub extern "C" fn js_class_capture_value_for_receiver(
 /// Top-level class DECLARATIONS keep the INT32 class-ref `new` path and do not
 /// consult this table, so registering every class's constructor is
 /// behavior-neutral for them.
-pub static CLASS_CONSTRUCTORS: RwLock<Option<HashMap<u32, (usize, u32, u32)>>> = RwLock::new(None);
+pub static CLASS_CONSTRUCTORS: ImageTable<RwLock<Option<ConstructorTable>>> =
+    ImageTable::new(|image| &image.constructors);
 
 /// #1787: register a class's standalone constructor in `CLASS_CONSTRUCTORS`,
 /// keyed by the (template) class_id, so `new <classObjectValue>()` can replay
@@ -140,7 +142,8 @@ fn lookup_class_constructor(class_id: u32) -> Option<(usize, u32, u32)> {
 /// the `super(...spread)` apply path (`js_super_construct_apply`) can forward
 /// the flat spread args and let `call_vtable_method` pack the trailing slot
 /// correctly. Absent entry ⇒ neither flag (a plain fixed-arity ctor).
-static CLASS_CONSTRUCTOR_FLAGS: RwLock<Option<HashMap<u32, (bool, bool)>>> = RwLock::new(None);
+static CLASS_CONSTRUCTOR_FLAGS: ImageTable<RwLock<Option<ConstructorFlagTable>>> =
+    ImageTable::new(|image| &image.constructor_flags);
 
 /// Codegen FFI: record `(has_synthetic_arguments, has_rest)` for a class ctor.
 /// See [`CLASS_CONSTRUCTOR_FLAGS`].

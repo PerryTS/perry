@@ -1572,6 +1572,24 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             // (`new Missing()`), distinct from the TypeError produced when a
             // present binding's value is non-constructable.
             //
+            // #8882: the failure must be decided when the `new` EXECUTES, not
+            // here. Two shapes the lowering-time lookups cannot see: (1) a
+            // class declared in a function body that is lowered LATER — the
+            // CJS wrap leaves some top-level classes inside the module IIFE
+            // while hoisting their siblings, so a hoisted `LRUCache`
+            // constructor's `new SentinelNode()` (Next's `lru-cache.js`) is
+            // lowered before the `__perry_cjs_factory` body registers
+            // `SentinelNode`; (2) a global that exists only at runtime
+            // (`typeof IntersectionObserver === "function" && new
+            // IntersectionObserver(…)`). The #8643 guard lowered both to an
+            // unconditional, NAMELESS `ReferenceError: identifier is not
+            // defined`, which killed the whole application at init. Now a
+            // name declared as a class anywhere in the module keeps the
+            // late-bound by-name `Expr::New` below (codegen resolves it
+            // through the module class table, as before #8643), and any other
+            // name is read off `globalThis` when the `new` runs, throwing the
+            // spec `ReferenceError: <name> is not defined` on a true miss.
+            //
             // Consult the native-module registry under BOTH the (possibly
             // rewritten) `class_name` AND the original `source_class_name`.
             // The alias-rewrite block just above replaces `class_name` with a
@@ -1592,11 +1610,20 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 && ctx.lookup_native_module(&class_name).is_none()
                 && ctx.lookup_native_module(source_class_name).is_none()
                 && !ctx.forward_class_names.contains(source_class_name)
+                && !ctx.class_decl_names_any_depth.contains(source_class_name)
                 && !is_reified_global_builtin_constructor(&class_name)
             {
+                // Same wording as the bare-identifier arm so one grep over the
+                // compile log lists every name that will be resolved at
+                // runtime — #8882 could not be attributed from the log because
+                // the `new` path never said which identifier it gave up on.
+                eprintln!(
+                    "  Warning: unknown identifier '{source_class_name}' — assuming global; `new {source_class_name}()` resolves it by name on globalThis at runtime (ReferenceError on a miss)"
+                );
                 return Ok(Expr::NewDynamic {
-                    callee: Box::new(super::throw_reference_error_expr(
-                        "js_throw_reference_error_unresolved_get",
+                    callee: Box::new(super::unresolved_global_get_expr(
+                        source_class_name.to_string(),
+                        new_byte_offset,
                     )),
                     args,
                     byte_offset: new_byte_offset,

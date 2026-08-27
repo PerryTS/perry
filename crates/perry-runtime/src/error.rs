@@ -98,6 +98,28 @@ pub struct ErrorHeader {
     pub cause: f64,
     /// Errors array for AggregateError (raw ArrayHeader pointer or null)
     pub errors: *mut crate::array::ArrayHeader,
+    /// Per-object metadata record, or null. The same `ObjectMeta` cell an
+    /// `ObjectHeader` hangs off its own `meta` field.
+    ///
+    /// #6759 phase 1 (header unification). An `ErrorHeader` is not an
+    /// `ObjectHeader`, so before this field the only place to put anything
+    /// per-error was a side table keyed by the error's ADDRESS — and errors
+    /// accumulated seven of them, each needing its own GC rekey-on-evacuation,
+    /// finalize, dead-sweep and root-scanner hook. Giving the cell a metadata
+    /// edge is what lets those payloads move onto the object itself.
+    ///
+    /// Appended LAST on purpose: every preceding field keeps its offset, so
+    /// codegen and the `errors`-at-+48 assumption in this file's tests are
+    /// undisturbed.
+    ///
+    /// Traced and rewritten by the `GcRewriteDescriptorKind::Error` arm in
+    /// `gc/layout_slot_visit.rs`. That arm is reached by
+    /// `trace_heap_rewrite_slots`, so it is the MARK path as well as the
+    /// evacuation-rewrite path — unlike `GcLayoutSlotKind::ObjectFields`,
+    /// which delegates to the layout visitor and needed its meta edge added
+    /// there separately (#6812: a meta edge enumerated only on the rewrite
+    /// path is invisible to marking).
+    pub meta: *mut crate::object::ObjectMeta,
 }
 
 thread_local! {
@@ -247,6 +269,9 @@ unsafe fn alloc_error(
     (*ptr).stack = stack_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
     (*ptr).cause = f64::from_bits(TAG_UNDEFINED);
     (*ptr).errors = std::ptr::null_mut();
+    // No metadata record until something needs one; the GC treats a null meta
+    // edge as absent.
+    (*ptr).meta = std::ptr::null_mut();
 
     ptr
 }
@@ -1928,5 +1953,45 @@ mod tostring_tests {
             unsafe { read_string_header_owned(js_error_get_name(uri)) },
             "URIError"
         );
+    }
+}
+
+#[cfg(test)]
+mod header_unification_tests {
+    use super::*;
+
+    /// #6759 phase 1: an `ErrorHeader` owns a metadata edge, and it is
+    /// reachable through the SAME accessor an `ObjectHeader` is.
+    ///
+    /// This is the gate the rest of the migration stands on: while "does this
+    /// cell own an ObjectMeta?" had no uniform answer, per-error state had
+    /// nowhere to live but a side table keyed by the error's address.
+    #[test]
+    fn error_cell_exposes_a_meta_edge_like_an_object() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let msg = crate::string::js_string_from_bytes(b"boom".as_ptr(), 4);
+            let err = js_error_new_with_message(msg);
+            assert!(
+                (*err).meta.is_null(),
+                "a fresh error must start with no metadata record"
+            );
+            assert!(
+                crate::object::cell_has_meta_edge(err as usize),
+                "an error cell must be reachable through the uniform meta accessor"
+            );
+            let obj = crate::object::js_object_alloc(0, 0);
+            assert!(
+                crate::object::cell_has_meta_edge(obj as usize),
+                "an object cell must answer the same accessor"
+            );
+            // A cell type that has NOT been unified yet must answer `None`
+            // rather than mis-reading its own layout as a meta pointer.
+            let arr = crate::array::js_array_alloc(0);
+            assert!(
+                !crate::object::cell_has_meta_edge(arr as usize),
+                "a cell without a meta edge must report absence, not garbage"
+            );
+        }
     }
 }

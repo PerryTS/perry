@@ -816,6 +816,15 @@ pub struct LoweringContext {
     /// `lower_class_from_ast` detect that collision and allocate a fresh,
     /// uniquely-named class instead.
     pub(crate) module_class_decl_names: std::collections::HashSet<String>,
+    /// #8882: names of `class X { … }` DECLARATIONS anywhere in the module,
+    /// at any nesting depth (populated by `pre_scan_class_decl_names`).
+    /// Consulted by `lower_new`'s unresolved-constructor guard: a name that
+    /// is declared as a class somewhere in the module — typically inside a
+    /// function body lowered later, such as the CJS wrap's IIFE — keeps the
+    /// late-bound by-name construction instead of a compile-time
+    /// `ReferenceError`. Unlike `module_class_decl_names` this is NOT limited
+    /// to top level and is never used for ClassId (re)allocation.
+    pub(crate) class_decl_names_any_depth: std::collections::HashSet<String>,
     /// Counter for generating anon-class names (`__AnonShape_N`).
     // #854: initialized in `new` but unread — anon-shape classes are now named
     // by content-addressed FNV hash (see `synthesize_anon_shape_class`), not by

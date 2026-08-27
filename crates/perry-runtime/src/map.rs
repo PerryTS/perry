@@ -1094,6 +1094,15 @@ pub struct MapHeader {
     pub entries: *mut f64,
     /// Direct pointer to the stable numeric-key index owned by MAP_REGISTRY.
     numeric_index: *mut NumericIndex,
+    /// #6759 phase 1 (header unification): per-object metadata record, or
+    /// null — the same `ObjectMeta` cell an `ObjectHeader` hangs off its own
+    /// `meta` field. Appended LAST so every preceding field keeps its offset.
+    ///
+    /// Traced and rewritten by the `GcRewriteDescriptorKind::Map` arm, which
+    /// `trace_heap_rewrite_slots` drives, so listing it there makes the edge
+    /// marked as well as rewritten (#6812: an edge visited only on the rewrite
+    /// path is invisible to marking).
+    pub meta: *mut crate::object::ObjectMeta,
 }
 
 /// Each map entry is 16 bytes (key + value, both as f64/JSValue)
@@ -1326,6 +1335,10 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
         // GC_STORE_AUDIT(INIT): map entries buffer is external storage; element stores are barriered separately.
         (*ptr).entries = entries;
         (*ptr).numeric_index = std::ptr::null_mut();
+        // #6759 phase 1: the arena allocator reuses free-list memory without
+        // zeroing, so this MUST be initialised explicitly — an uninitialised
+        // meta edge is a garbage pointer the collector would follow.
+        (*ptr).meta = std::ptr::null_mut();
 
         // Register in map registry for runtime type detection
         register_map(ptr, entries, cap as usize);

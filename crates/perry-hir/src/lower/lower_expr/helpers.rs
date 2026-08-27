@@ -44,6 +44,29 @@ pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
     }
 }
 
+/// Read a compile-time-unresolved identifier off `globalThis` at runtime,
+/// throwing the spec `ReferenceError: <name> is not defined` when no such
+/// global exists (`js_global_get_or_throw_unresolved`). A global created at
+/// RUNTIME (`Function("this.y = 2")()`, a `typeof IntersectionObserver ===
+/// "function"`-guarded browser API) is invisible to compile-time resolution,
+/// so the miss must be decided when the read executes — and the message
+/// must carry the identifier (#8730, #8882). `byte_offset` localizes the
+/// error to the identifier's source position (#5253). Shared by the bare
+/// identifier arm (`arm_ident.rs`) and `lower_new`'s unresolved-constructor
+/// fallback so the two cannot drift.
+pub(crate) fn unresolved_global_get_expr(name: String, byte_offset: u32) -> Expr {
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_global_get_or_throw_unresolved".to_string(),
+            param_types: vec![Type::Any],
+            return_type: Type::Any,
+        }),
+        args: vec![Expr::String(name)],
+        type_args: Vec::new(),
+        byte_offset,
+    }
+}
+
 /// #5989: lower a strict-mode assignment to an identifier with no lexical
 /// binding. Per spec (PutValue on a reference that resolves to the global
 /// environment), an EXISTING global property is a normal property write —

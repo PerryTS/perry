@@ -168,6 +168,9 @@ pub(crate) enum GcRewriteDescriptorKind {
     NativePodView,
     /// #6759 Phase B: one traced NaN-box slot (`ObjectMeta::prototype`).
     ObjectMeta,
+    /// #6759 phase 1: a cell whose ONLY traced edge is its metadata record.
+    /// `DateCell` was `Leaf` (pointer-free) before it gained a `meta` field.
+    MetaOnly,
 }
 
 #[allow(dead_code)]
@@ -588,7 +591,7 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         "date",
         GcAllocationPolicy::Arena,
         true,
-        GcRewriteDescriptorKind::Leaf,
+        GcRewriteDescriptorKind::MetaOnly,
         GcLayoutSlotKind::None,
         // Movable (#6186, 2026-07-09 GC audit). Directly analogous to
         // `GC_TYPE_PROMISE` above: a pointer-free arena object with
@@ -607,8 +610,12 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         true,
         GcExternalBytePolicy::None,
         GcLargeObjectPolicy::NotApplicable,
-        // pointer_free: the single `ts` slot is a raw f64, never a JSValue.
-        true,
+        // pointer_free = FALSE since #6759 phase 1. The cell used to be one
+        // raw `f64` and nothing else; it now also carries a `meta` edge, so
+        // the collector must scan it. `validate_gc_type_info` enforces this
+        // pairing — a pointer-free type may not expose a rewrite descriptor —
+        // and caught the flag when it was left at `true`.
+        false,
         // `d.foo = …` expandos live in `object::exotic_expando` keyed by the
         // Date address; rekey that entry when the cell relocates (mirrors
         // Promise). Without this a moved Date loses its expando properties.
@@ -923,7 +930,8 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
                 return Err("closure rewrite descriptor must expose closure capture slots");
             }
         }
-        GcRewriteDescriptorKind::Promise
+        GcRewriteDescriptorKind::MetaOnly
+        | GcRewriteDescriptorKind::Promise
         | GcRewriteDescriptorKind::Error
         | GcRewriteDescriptorKind::Map
         | GcRewriteDescriptorKind::LazyArray

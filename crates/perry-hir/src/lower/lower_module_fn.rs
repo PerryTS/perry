@@ -908,6 +908,10 @@ pub fn lower_module_full(
     // literals, and counter vars (see `fn_ctor_env`).
     ctx.fn_ctor_env = super::fn_ctor_env::build_fn_ctor_env(ast_module);
 
+    // #8882: every class DECLARATION name at any depth, for `lower_new`'s
+    // unresolved-constructor guard (see `pre_scan/class_decl_names.rs`).
+    pre_scan_class_decl_names(ast_module, &mut ctx);
+
     // Pre-scan for WeakRef/FinalizationRegistry variable declarations so subsequent
     // method-call lowering (`x.deref()`, `x.register(...)`, `x.unregister(...)`) can
     // route via the dedicated HIR variants without relying on type inference.

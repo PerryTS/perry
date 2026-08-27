@@ -67,6 +67,7 @@ mod buffer_dispatch;
 mod class_constructors;
 mod class_gc_roots;
 mod class_handles;
+pub mod class_image;
 mod class_registry;
 pub(crate) use class_registry::scan_current_new_target_root_mut;
 mod collection_proto_thunks;
@@ -609,8 +610,10 @@ fn keys_index_insert(
 
 pub(crate) mod array_tail_transition;
 mod call_method_depth;
+mod meta_accessors;
 use call_method_depth::CallMethodDepthGuard;
 pub(crate) use call_method_depth::{call_method_depth_restore, call_method_depth_savepoint};
+pub(crate) use meta_accessors::*;
 
 /// Fast direct-mapped inline cache for class shape keys arrays.
 /// Indexed by `shape_id mod CACHE_SIZE`. Each slot stores
@@ -1641,6 +1644,21 @@ pub struct ObjectMeta {
     pub array_subclass_dense_key: u64,
     pub array_subclass_dense_slots: u64,
     pub array_subclass_dense_bounds: u64,
+    /// #6759 phase 1: named own properties for a cell that has no
+    /// `keys_array`/inline-slot layout of its own — a NaN-boxed pointer to an
+    /// ordinary object used as the property bag, or 0 when the owner has none.
+    ///
+    /// An `ErrorHeader` (and every other exotic cell) cannot store named
+    /// properties inline, which is why they lived in `ERROR_USER_PROPS`, keyed
+    /// by the owner's ADDRESS and needing four GC hooks of their own —
+    /// rekey-on-evacuation, finalize, dead-sweep and a root scanner — plus the
+    /// long-standing bug that a recycled address inherited the previous
+    /// tenant's properties.
+    ///
+    /// Hanging the bag off the metadata record instead makes it an ordinary
+    /// child edge: it moves with its owner, dies with its owner, and needs no
+    /// address bookkeeping at all.
+    pub expando: u64,
 }
 
 pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;
@@ -1689,64 +1707,70 @@ const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 /// Fetch-or-allocate the per-object meta record. Caller must have already
 /// established that `obj` is a live `GC_TYPE_OBJECT` allocation
 /// (see `prototype_chain::meta_capable_object`).
-pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMeta {
-    if !(*obj).meta.is_null() {
-        return (*obj).meta;
+/// The metadata edge of ANY cell that has one, addressed uniformly.
+///
+/// #6759 phase 1 (header unification). Cell types declare their fields
+/// independently — there is no shared header prefix — so "does this cell own an
+/// `ObjectMeta`?" had no single answer and every caller had to know it was
+/// holding an `ObjectHeader` before it could ask. That is why per-object state
+/// for the exotic types accumulated in side tables keyed by address instead:
+/// there was nowhere on the cell to put it.
+///
+/// This is the one path the migration needs. It returns `None` for a cell type
+/// that has no metadata edge yet, so callers degrade to their existing side
+/// table rather than mis-reading another layout's bytes as a pointer.
+///
+/// Every exotic cell type now answers this: Object, Error, Map, Set, RegExp,
+/// Promise and Date. Anything else (Temporal, the typed-array views) returns
+/// `None` and keeps its existing storage.
+pub(crate) unsafe fn cell_meta_slot(user_ptr: usize) -> Option<*mut *mut ObjectMeta> {
+    // Canonical validated read rather than an open-coded magnitude test:
+    // `try_read_gc_header` applies `is_plausible_heap_addr` AND rejects
+    // small-buffer slab addresses, which are heap-plausible but carry no
+    // GcHeader — reading one classifies the previous slab entry's bytes as a
+    // type tag.
+    let Some(gc_hdr) = crate::value::addr_class::try_read_gc_header(user_ptr) else {
+        return None;
+    };
+    match gc_hdr.obj_type {
+        crate::gc::GC_TYPE_OBJECT => {
+            Some(&mut (*(user_ptr as *mut ObjectHeader)).meta as *mut *mut ObjectMeta)
+        }
+        crate::gc::GC_TYPE_ERROR => {
+            Some(&mut (*(user_ptr as *mut crate::error::ErrorHeader)).meta as *mut *mut ObjectMeta)
+        }
+        crate::gc::GC_TYPE_MAP => {
+            Some(&mut (*(user_ptr as *mut crate::map::MapHeader)).meta as *mut *mut ObjectMeta)
+        }
+        crate::gc::GC_TYPE_SET => {
+            Some(&mut (*(user_ptr as *mut crate::set::SetHeader)).meta as *mut *mut ObjectMeta)
+        }
+        crate::gc::GC_TYPE_REGEXP => {
+            Some(&mut (*(user_ptr as *mut crate::regex::RegExpHeader)).meta as *mut *mut ObjectMeta)
+        }
+        crate::gc::GC_TYPE_PROMISE => {
+            Some(&mut (*(user_ptr as *mut crate::promise::Promise)).meta as *mut *mut ObjectMeta)
+        }
+        crate::gc::GC_TYPE_DATE_CELL => {
+            Some(&mut (*(user_ptr as *mut crate::date::DateCell)).meta as *mut *mut ObjectMeta)
+        }
+        // Anything still without a metadata edge answers absence rather than
+        // mis-reading its own layout as a pointer.
+        _ => None,
     }
-    // Root the owner across the allocation: `arena_alloc_gc` can trigger a
-    // copied-minor that MOVES `obj`, and the header store below must land
-    // in the live copy, not the stale from-space one. Reload through the
-    // handle after the allocation. (The fresh `meta` record itself cannot
-    // move before the store — no allocation happens in between.)
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_handle = scope.root_raw_mut_ptr(obj);
-    let meta = arena_alloc_gc(
-        std::mem::size_of::<ObjectMeta>(),
-        8,
-        crate::gc::GC_TYPE_OBJECT_META,
-    ) as *mut ObjectMeta;
-    let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-    if !(*obj).meta.is_null() {
-        // A GC-triggered re-entrant path installed one meanwhile; keep it
-        // (the fresh record above is unreferenced and dies with the cycle).
-        return (*obj).meta;
-    }
-    (*meta).prototype = 0;
-    (*meta).attr_key_bits = 0;
-    (*meta).accessor_key_bits = 0;
-    (*meta).flags = 0;
-    (*meta).spill = 0;
-    (*meta).private_evaluation_brand = 0;
-    (*meta).array_subclass_named_prefix_token = 0;
-    (*meta).array_tail_object_hot = 0;
-    (*meta).array_subclass_dense_key = 0;
-    (*meta).array_subclass_dense_slots = 0;
-    (*meta).array_subclass_dense_bounds = 0;
-    // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
-    // followed by an object-slot barrier, mirroring `set_object_keys_array`.
-    (*obj).meta = meta;
-    crate::gc::runtime_write_barrier_slot(
-        obj as usize,
-        &(*obj).meta as *const _ as usize,
-        meta as u64,
-    );
-    meta
 }
 
-/// GC slot accessor for the `meta` header edge (#6759 Phase B): a raw-pointer
-/// child slot. The GC type table calls this
-/// only for `GC_TYPE_OBJECT`; RegExp uses its dedicated slot descriptor.
-pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
-    if user_ptr == 0 {
-        return None;
-    }
-    let obj = user_ptr as *mut ObjectHeader;
-    if (*obj).meta.is_null() {
-        return None;
-    }
-    Some(&mut (*obj).meta as *mut _ as *mut u64)
+/// Does `user_ptr` name a cell that can own an `ObjectMeta`?
+pub(crate) unsafe fn cell_has_meta_edge(user_ptr: usize) -> bool {
+    cell_meta_slot(user_ptr).is_some()
 }
 
+/// Materialise the metadata record for ANY cell that has a metadata edge,
+/// allocating one on first use. `None` for a cell type not yet unified.
+///
+/// The allocation can trigger a collection that MOVES the owner, so the slot
+/// is re-resolved from the rooted address afterwards rather than reusing the
+/// pointer taken before the allocation.
 #[inline]
 unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader) {
     let live = object_live_slot_count(obj);
@@ -1875,3 +1899,63 @@ pub(super) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
 
 #[cfg(test)]
 mod tests;
+
+/// The named-property bag for a cell that has no inline slot layout of its own,
+/// creating it on first write.
+///
+/// #6759 phase 1. An `ErrorHeader` (and the other exotic cells) cannot hold
+/// named properties inline, so they lived in tables keyed by the owner's
+/// ADDRESS — `ERROR_USER_PROPS` and friends — which cost four GC hooks
+/// (rekey-on-evacuation, finalize, dead-sweep, root scanner) and carried a
+/// standing hazard: a recycled address inherits the previous tenant's
+/// properties.
+///
+/// The bag is an ordinary object hanging off `ObjectMeta.expando`, so it is an
+/// ordinary child edge — it moves with its owner, dies with its owner, and
+/// keeps ECMA-262 insertion order for free because that is what an object's
+/// `keys_array` already does.
+pub(crate) unsafe fn cell_expando_ensure(user_ptr: usize) -> Option<*mut ObjectHeader> {
+    let meta = object_meta_ensure_for_cell(user_ptr)?;
+    if (*meta).expando != 0 {
+        return Some(
+            crate::value::JSValue::from_bits((*meta).expando).as_pointer::<ObjectHeader>()
+                as *mut ObjectHeader,
+        );
+    }
+    // `js_object_alloc` allocates and can move the owner, so re-resolve the
+    // meta record from the rooted address afterwards.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_raw_mut_ptr(user_ptr as *mut u8);
+    let bag = js_object_alloc(0, 0);
+    let user_ptr = owner.get_raw_mut_ptr::<u8>() as usize;
+    let meta = object_meta_ensure_for_cell(user_ptr)?;
+    if (*meta).expando != 0 {
+        return Some(
+            crate::value::JSValue::from_bits((*meta).expando).as_pointer::<ObjectHeader>()
+                as *mut ObjectHeader,
+        );
+    }
+    let boxed = crate::value::js_nanbox_pointer(bag as i64).to_bits();
+    // GC_STORE_AUDIT(BARRIERED): metadata-record slot store + object barrier.
+    (*meta).expando = boxed;
+    crate::gc::runtime_write_barrier_slot(
+        meta as usize,
+        &(*meta).expando as *const _ as usize,
+        boxed,
+    );
+    Some(bag)
+}
+
+/// The existing bag, or `None` when the owner never took one. Never allocates,
+/// so it is safe on read paths.
+pub(crate) unsafe fn cell_expando_get(user_ptr: usize) -> Option<*mut ObjectHeader> {
+    let slot = cell_meta_slot(user_ptr)?;
+    let meta = *slot;
+    if meta.is_null() || (*meta).expando == 0 {
+        return None;
+    }
+    Some(
+        crate::value::JSValue::from_bits((*meta).expando).as_pointer::<ObjectHeader>()
+            as *mut ObjectHeader,
+    )
+}

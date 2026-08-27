@@ -647,6 +647,7 @@ fn alloc_malloc_kind_test_object(obj_type: u8) -> *mut u8 {
                         next: std::ptr::null_mut(),
                         async_id: 0,
                         trigger_async_id: 0,
+                        meta: std::ptr::null_mut(),
                     },
                 );
             }
@@ -670,6 +671,7 @@ fn alloc_malloc_kind_test_object(obj_type: u8) -> *mut u8 {
                         stack: std::ptr::null_mut(),
                         cause: 0.0,
                         errors: std::ptr::null_mut(),
+                        meta: std::ptr::null_mut(),
                     },
                 );
             }
