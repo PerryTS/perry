@@ -77,6 +77,36 @@ pub(crate) struct DescriptorTables {
     /// skip the `.to_string()` allocation required to look up a descriptor
     /// that almost never exists.
     pub(crate) property_attrs_in_use: Cell<bool>,
+    /// Owner index: `owner_addr -> that owner's descriptor keys`, mirroring
+    /// the two `(owner, key)`-keyed maps above.
+    ///
+    /// The maps stay authoritative; these only answer "which keys does THIS
+    /// owner have?" without walking every entry in the process. Before this
+    /// index, that question was answered by
+    /// `map.keys().filter(|(owner, _)| *owner == obj)` — an O(total
+    /// descriptors in the program) scan — from three places that run
+    /// constantly:
+    ///
+    ///   * `accessor_descriptor_keys_for_obj`, on the `Object.keys` /
+    ///     `getOwnPropertyNames` / `for…in` own-key path;
+    ///   * `transfer_descriptor_owner`, on every `ArrayHeader` growth;
+    ///   * `scan_descriptor_roots_mut`, on **every GC cycle**.
+    ///
+    /// Measured cost of the scan (`Object.keys` × 20 000 on a 4-key object,
+    /// while unrelated objects hold N descriptors): 26 ms at N=0 rising to
+    /// 1628 ms at N=16 000, against a flat 1-3 ms for node — i.e. the cost of
+    /// touching one small object grew with descriptors it has nothing to do
+    /// with. Profiling `claude -p` put 46.6% of main-thread samples in
+    /// shapes/descriptors, with this scan the single hottest entry by 4×.
+    ///
+    /// `owner_may_have_descriptor_entries` (the per-object `attr_key_bits` /
+    /// `accessor_key_bits` Bloom summary) already skipped the scan for owners
+    /// with *no* descriptors, which is why this was survivable — but it fails
+    /// open for a non-meta-capable owner, and any owner with a single
+    /// descriptor paid the full walk.
+    pub(crate) attr_keys_by_owner: RefCell<FastKeyHashMap<usize, Vec<String>>>,
+    /// Accessor twin of [`Self::attr_keys_by_owner`].
+    pub(crate) accessor_keys_by_owner: RefCell<FastKeyHashMap<usize, Vec<String>>>,
 }
 
 impl DescriptorTables {
@@ -86,6 +116,51 @@ impl DescriptorTables {
             accessor_descriptors: RefCell::new(new_fast_key_hash_map()),
             accessors_in_use: Cell::new(false),
             property_attrs_in_use: Cell::new(false),
+            attr_keys_by_owner: RefCell::new(new_fast_key_hash_map()),
+            accessor_keys_by_owner: RefCell::new(new_fast_key_hash_map()),
+        }
+    }
+}
+
+/// Record `key` as owned by `owner` in an owner index. Idempotent: a
+/// `defineProperty` that overwrites an existing descriptor must not push a
+/// duplicate, or the key would be reported twice by `Object.keys`.
+fn owner_index_add(index: &RefCell<FastKeyHashMap<usize, Vec<String>>>, owner: usize, key: &str) {
+    let mut idx = index.borrow_mut();
+    let keys = idx.entry(owner).or_default();
+    if !keys.iter().any(|k| k == key) {
+        keys.push(key.to_string());
+    }
+}
+
+/// Drop `key` from `owner`'s index entry, removing the entry entirely once it
+/// is empty so a dead owner leaves nothing behind for the GC scan to walk.
+fn owner_index_remove(index: &RefCell<FastKeyHashMap<usize, Vec<String>>>, owner: usize, key: &str) {
+    let mut idx = index.borrow_mut();
+    if let Some(keys) = idx.get_mut(&owner) {
+        keys.retain(|k| k != key);
+        if keys.is_empty() {
+            idx.remove(&owner);
+        }
+    }
+}
+
+/// Move an owner's whole index entry to a new address (array growth, GC
+/// evacuation). Merges into any entry already at `new_owner` rather than
+/// clobbering it — an address can be recycled by a live tenant.
+fn owner_index_transfer(
+    index: &RefCell<FastKeyHashMap<usize, Vec<String>>>,
+    old_owner: usize,
+    new_owner: usize,
+) {
+    let mut idx = index.borrow_mut();
+    let Some(moved) = idx.remove(&old_owner) else {
+        return;
+    };
+    let dest = idx.entry(new_owner).or_default();
+    for k in moved {
+        if !dest.iter().any(|existing| *existing == k) {
+            dest.push(k);
         }
     }
 }
@@ -689,6 +764,7 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     disable_inline_guards_for_descriptor_target(obj, &key);
     note_meta_descriptor_key(obj, &key, false);
+    owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
     st.descriptors
         .property_descriptors
         .borrow_mut()
@@ -707,6 +783,7 @@ pub(crate) fn clear_property_attrs(obj: usize, key: &str) {
     if !removed {
         return;
     }
+    owner_index_remove(&state().descriptors.attr_keys_by_owner, obj, key);
     super::prop_plan::prop_plan_epoch_bump();
     unsafe {
         let object = obj as *mut crate::object::ObjectHeader;
@@ -730,19 +807,42 @@ pub(crate) fn get_accessor_descriptor(obj: usize, key: &str) -> Option<AccessorD
         .copied()
 }
 
+/// Does `owner` hold ANY property (data) descriptor?
+///
+/// O(1) via the owner index. Callers on the `Object.keys` / `for…in` array
+/// path used to answer this with
+/// `property_descriptors.keys().any(|(ptr, _)| *ptr == owner)` — an O(total
+/// descriptors in the program) walk, per enumeration, to decide whether a
+/// per-index `enumerable` check was needed at all.
+pub(crate) fn owner_has_property_descriptors(owner: usize) -> bool {
+    // Cheap authoritative "no" first: the per-object Bloom summary.
+    if !owner_may_have_descriptor_entries(owner, false) {
+        return false;
+    }
+    state()
+        .descriptors
+        .attr_keys_by_owner
+        .borrow()
+        .contains_key(&owner)
+}
+
 pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
-    // #6759 Phase C2: skip the O(table-size) scan when the owner's meta
-    // summary proves it owns no accessor entries.
+    // #6759 Phase C2: skip the lookup entirely when the owner's meta summary
+    // proves it owns no accessor entries.
     if !owner_may_have_descriptor_entries(obj, true) {
         return Vec::new();
     }
+    // O(own keys) via the owner index. This used to walk every entry in
+    // `accessor_descriptors` filtering on `owner` — O(total descriptors in the
+    // program) — on the `Object.keys` / `getOwnPropertyNames` / `for…in` path.
+    // See `DescriptorTables::attr_keys_by_owner` for the measurements.
     let mut keys = state()
         .descriptors
-        .accessor_descriptors
+        .accessor_keys_by_owner
         .borrow()
-        .keys()
-        .filter_map(|(owner, key)| (*owner == obj).then(|| key.clone()))
-        .collect::<Vec<_>>();
+        .get(&obj)
+        .cloned()
+        .unwrap_or_default();
     keys.sort();
     keys
 }
@@ -885,6 +985,7 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     disable_inline_guards_for_descriptor_target(obj, &key);
     note_accessor_descriptor_key(&key);
     note_meta_descriptor_key(obj, &key, true);
+    owner_index_add(&st.descriptors.accessor_keys_by_owner, obj, &key);
     st.descriptors
         .accessor_descriptors
         .borrow_mut()
@@ -903,6 +1004,7 @@ pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {
     if !removed {
         return;
     }
+    owner_index_remove(&state().descriptors.accessor_keys_by_owner, obj, key);
     super::prop_plan::prop_plan_epoch_bump();
     unsafe {
         let object = obj as *mut crate::object::ObjectHeader;
@@ -942,6 +1044,8 @@ pub(crate) fn set_builtin_accessor_descriptor(
     note_meta_descriptor_key(obj, &key, true);
     note_meta_descriptor_key(obj, &key, false);
     let st = state();
+    owner_index_add(&st.descriptors.accessor_keys_by_owner, obj, &key);
+    owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
     st.descriptors
         .accessor_descriptors
         .borrow_mut()
@@ -972,8 +1076,9 @@ pub(crate) fn set_builtin_property_attrs(obj: usize, key: String, attrs: Propert
     note_descriptor_target(obj);
     // #6759 Phase C2: see `set_builtin_accessor_descriptor`.
     note_meta_descriptor_key(obj, &key, false);
-    state()
-        .descriptors
+    let st = state();
+    owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
+    st.descriptors
         .property_descriptors
         .borrow_mut()
         .insert((obj, key), attrs);
@@ -1057,6 +1162,18 @@ pub(crate) fn prune_dead_descriptor_owner_entries(is_dead_owner: &dyn Fn(usize) 
             m.retain(|(owner, _), _| !is_dead(*owner));
         }
     }
+    // Keep the owner index in step: a dead owner left here would keep
+    // reporting keys through `accessor_descriptor_keys_for_obj` after its
+    // entries were reaped, and would be re-walked by every later GC scan.
+    for index in [
+        &st.descriptors.attr_keys_by_owner,
+        &st.descriptors.accessor_keys_by_owner,
+    ] {
+        let mut idx = index.borrow_mut();
+        if !idx.is_empty() {
+            idx.retain(|owner, _| !is_dead(*owner));
+        }
+    }
 }
 
 /// #6710: drop every property-attr + accessor descriptor owned by `obj`.
@@ -1086,6 +1203,11 @@ pub(crate) fn clear_object_descriptors(obj: usize) {
             m.retain(|(owner, _), _| *owner != obj);
         }
     }
+    st.descriptors.attr_keys_by_owner.borrow_mut().remove(&obj);
+    st.descriptors
+        .accessor_keys_by_owner
+        .borrow_mut()
+        .remove(&obj);
 }
 
 /// Move string-keyed descriptor ownership when `ArrayHeader` growth replaces
@@ -1098,31 +1220,75 @@ pub(crate) fn transfer_descriptor_owner(old_owner: usize, new_owner: usize) {
         return;
     }
     let st = state();
+    // The owner index names exactly this owner's keys, so neither table is
+    // walked in full any more. Array growth calls this on every reallocation.
     {
-        let mut attrs = st.descriptors.property_descriptors.borrow_mut();
-        let moved = attrs
-            .keys()
-            .filter(|(owner, _)| *owner == old_owner)
+        let moved = st
+            .descriptors
+            .attr_keys_by_owner
+            .borrow()
+            .get(&old_owner)
             .cloned()
-            .collect::<Vec<_>>();
-        for old_key in moved {
-            if let Some(value) = attrs.remove(&old_key) {
-                attrs.insert((new_owner, old_key.1), value);
+            .unwrap_or_default();
+        let mut attrs = st.descriptors.property_descriptors.borrow_mut();
+        for key in moved {
+            if let Some(value) = attrs.remove(&(old_owner, key.clone())) {
+                attrs.insert((new_owner, key), value);
             }
         }
     }
     {
-        let mut accessors = st.descriptors.accessor_descriptors.borrow_mut();
-        let moved = accessors
-            .keys()
-            .filter(|(owner, _)| *owner == old_owner)
+        let moved = st
+            .descriptors
+            .accessor_keys_by_owner
+            .borrow()
+            .get(&old_owner)
             .cloned()
-            .collect::<Vec<_>>();
-        for old_key in moved {
-            if let Some(value) = accessors.remove(&old_key) {
-                accessors.insert((new_owner, old_key.1), value);
+            .unwrap_or_default();
+        let mut accessors = st.descriptors.accessor_descriptors.borrow_mut();
+        for key in moved {
+            if let Some(value) = accessors.remove(&(old_owner, key.clone())) {
+                accessors.insert((new_owner, key), value);
             }
         }
+    }
+    owner_index_transfer(&st.descriptors.attr_keys_by_owner, old_owner, new_owner);
+    owner_index_transfer(
+        &st.descriptors.accessor_keys_by_owner,
+        old_owner,
+        new_owner,
+    );
+
+    // Carry the per-object Bloom summary across too. Every descriptor read is
+    // gated on the owner's `attr_key_bits` / `accessor_key_bits`
+    // (`owner_may_have_descriptor_entries`), and a freshly grown array has a
+    // null `meta` — for which that gate answers **false**, authoritatively.
+    // Without this the entries move correctly and then read back as absent:
+    // `Object.keys` / `getOwnPropertyDescriptor` silently lose every accessor
+    // an array had before it grew. (Pre-existing: the gate sat in front of the
+    // old full-table scan as well, so the scan never ran for the new owner.)
+    //
+    // Done after the borrows above are released — `note_meta_descriptor_key`
+    // allocates via `object_meta_ensure`.
+    let moved_attr = st
+        .descriptors
+        .attr_keys_by_owner
+        .borrow()
+        .get(&new_owner)
+        .cloned()
+        .unwrap_or_default();
+    let moved_acc = st
+        .descriptors
+        .accessor_keys_by_owner
+        .borrow()
+        .get(&new_owner)
+        .cloned()
+        .unwrap_or_default();
+    for key in &moved_attr {
+        note_meta_descriptor_key(new_owner, key, false);
+    }
+    for key in &moved_acc {
+        note_meta_descriptor_key(new_owner, key, true);
     }
 }
 
@@ -1154,10 +1320,18 @@ fn rewrite_descriptor_owner(
 pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let st = state();
     {
-        let mut descriptors = st.descriptors.property_descriptors.borrow_mut();
-        let needs_rebuild = descriptors
+        // Probe DISTINCT OWNERS via the index, not every `(owner, key)` pair.
+        // This runs on every GC cycle, and since the moving young-gen scavenge
+        // became the default (#7019) that is often — so an O(total descriptors)
+        // probe here was a per-collection tax proportional to the whole
+        // program's descriptor count rather than to what actually moved.
+        let needs_rebuild = st
+            .descriptors
+            .attr_keys_by_owner
+            .borrow()
             .keys()
-            .any(|(owner, _)| rewrite_descriptor_owner(visitor, *owner) != *owner);
+            .any(|owner| rewrite_descriptor_owner(visitor, *owner) != *owner);
+        let mut descriptors = st.descriptors.property_descriptors.borrow_mut();
         if needs_rebuild {
             let old = std::mem::take(&mut *descriptors);
             for ((owner, key), attrs) in old {
@@ -1168,10 +1342,13 @@ pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
     }
 
     {
-        let mut descriptors = st.descriptors.accessor_descriptors.borrow_mut();
-        let needs_rebuild = descriptors
+        let needs_rebuild = st
+            .descriptors
+            .accessor_keys_by_owner
+            .borrow()
             .keys()
-            .any(|(owner, _)| rewrite_descriptor_owner(visitor, *owner) != *owner);
+            .any(|owner| rewrite_descriptor_owner(visitor, *owner) != *owner);
+        let mut descriptors = st.descriptors.accessor_descriptors.borrow_mut();
         if needs_rebuild {
             let old = std::mem::take(&mut *descriptors);
             for ((owner, key), mut acc) in old {
@@ -1194,6 +1371,220 @@ pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
                 }
             }
         }
+    }
+
+    // Rekey the owner index itself. Evacuation moved the owning objects, so
+    // the tables above were rebuilt under new addresses; an index still keyed
+    // by the OLD addresses would report no keys for the moved object (silently
+    // dropping its accessors from `Object.keys`) and would keep a dead address
+    // alive in every later scan. Merge on collision: an address freed by one
+    // object can be reused by another in the same cycle.
+    for index in [
+        &st.descriptors.attr_keys_by_owner,
+        &st.descriptors.accessor_keys_by_owner,
+    ] {
+        let mut idx = index.borrow_mut();
+        if idx.is_empty() {
+            continue;
+        }
+        let needs_rekey = idx
+            .keys()
+            .any(|owner| rewrite_descriptor_owner(visitor, *owner) != *owner);
+        if !needs_rekey {
+            continue;
+        }
+        let old = std::mem::take(&mut *idx);
+        for (owner, keys) in old {
+            let owner = rewrite_descriptor_owner(visitor, owner);
+            let dest = idx.entry(owner).or_default();
+            for k in keys {
+                if !dest.iter().any(|existing| *existing == k) {
+                    dest.push(k);
+                }
+            }
+        }
+    }
+}
+
+/// The owner index (`attr_keys_by_owner` / `accessor_keys_by_owner`) exists
+/// only to answer "which keys does this owner have?" without walking every
+/// descriptor in the process. It is a mirror, so the one way it can break is
+/// **drift** from the tables it mirrors — which would not crash, it would
+/// silently drop keys from `Object.keys` or resurrect deleted ones.
+///
+/// These tests therefore assert the mirror invariant directly (index ==
+/// what a full scan of the table would return) across install, redefine,
+/// delete, bulk-clear and owner-transfer.
+#[cfg(test)]
+mod owner_index_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// What the pre-index implementation would have computed: a full scan of
+    /// the table filtered by owner. The index must always agree with this.
+    fn scan_table_keys(accessor: bool, owner: usize) -> BTreeSet<String> {
+        let st = state();
+        if accessor {
+            st.descriptors
+                .accessor_descriptors
+                .borrow()
+                .keys()
+                .filter(|(o, _)| *o == owner)
+                .map(|(_, k)| k.clone())
+                .collect()
+        } else {
+            st.descriptors
+                .property_descriptors
+                .borrow()
+                .keys()
+                .filter(|(o, _)| *o == owner)
+                .map(|(_, k)| k.clone())
+                .collect()
+        }
+    }
+
+    fn index_keys(accessor: bool, owner: usize) -> BTreeSet<String> {
+        let st = state();
+        let idx = if accessor {
+            &st.descriptors.accessor_keys_by_owner
+        } else {
+            &st.descriptors.attr_keys_by_owner
+        };
+        idx.borrow()
+            .get(&owner)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    }
+
+    fn assert_mirrors(owner: usize, ctx: &str) {
+        for (accessor, label) in [(false, "property"), (true, "accessor")] {
+            assert_eq!(
+                index_keys(accessor, owner),
+                scan_table_keys(accessor, owner),
+                "{label} owner index drifted from the table it mirrors ({ctx}); \
+                 a drift here silently corrupts Object.keys / for-in output"
+            );
+        }
+    }
+
+    #[test]
+    fn index_mirrors_tables_across_install_redefine_and_delete() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let obj = crate::object::js_object_alloc(0, 0);
+        let addr = obj as usize;
+
+        set_property_attrs(addr, "a".to_string(), PropertyAttrs::new(true, true, true));
+        set_property_attrs(addr, "b".to_string(), PropertyAttrs::new(true, true, true));
+        set_accessor_descriptor(addr, "g".to_string(), AccessorDescriptor::default());
+        assert_mirrors(addr, "after installs");
+
+        // Redefining an existing key must not duplicate it — a duplicate would
+        // make `Object.keys` report the key twice.
+        set_property_attrs(addr, "a".to_string(), PropertyAttrs::new(true, true, true));
+        set_accessor_descriptor(addr, "g".to_string(), AccessorDescriptor::default());
+        assert_eq!(
+            state()
+                .descriptors
+                .attr_keys_by_owner
+                .borrow()
+                .get(&addr)
+                .map(|v| v.len()),
+            Some(2),
+            "redefining an existing descriptor must not push a duplicate key"
+        );
+        assert_mirrors(addr, "after redefine");
+
+        clear_property_attrs(addr, "a");
+        clear_accessor_descriptor(addr, "g");
+        assert_mirrors(addr, "after delete");
+
+        // Deleting the last key must drop the owner entry entirely, so a dead
+        // owner leaves nothing for later GC scans to walk.
+        clear_property_attrs(addr, "b");
+        assert!(
+            !state()
+                .descriptors
+                .attr_keys_by_owner
+                .borrow()
+                .contains_key(&addr),
+            "an owner with no remaining descriptors must be removed from the index"
+        );
+    }
+
+    #[test]
+    fn accessor_keys_for_obj_agrees_with_a_full_scan() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let obj = crate::object::js_object_alloc(0, 0);
+        let addr = obj as usize;
+        // A second owner with its own accessors: the whole point of the index
+        // is that this one's keys never leak into the first one's answer.
+        let other = crate::object::js_object_alloc(0, 0);
+        let other_addr = other as usize;
+
+        for k in ["z", "m", "a"] {
+            set_accessor_descriptor(addr, k.to_string(), AccessorDescriptor::default());
+        }
+        for k in ["zz", "mm"] {
+            set_accessor_descriptor(other_addr, k.to_string(), AccessorDescriptor::default());
+        }
+
+        let got = accessor_descriptor_keys_for_obj(addr);
+        assert_eq!(
+            got,
+            vec!["a".to_string(), "m".to_string(), "z".to_string()],
+            "keys must be sorted and scoped to the requested owner only"
+        );
+        assert_eq!(
+            got.into_iter().collect::<BTreeSet<_>>(),
+            scan_table_keys(true, addr),
+            "the index answer must equal what a full table scan would return"
+        );
+    }
+
+    #[test]
+    fn transfer_moves_both_tables_and_the_index() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let old = crate::object::js_object_alloc(0, 0) as usize;
+        let new = crate::object::js_object_alloc(0, 0) as usize;
+
+        set_property_attrs(old, "p".to_string(), PropertyAttrs::new(true, true, true));
+        set_accessor_descriptor(old, "acc".to_string(), AccessorDescriptor::default());
+
+        transfer_descriptor_owner(old, new);
+
+        assert_mirrors(old, "old owner after transfer");
+        assert_mirrors(new, "new owner after transfer");
+        assert!(
+            scan_table_keys(false, old).is_empty() && scan_table_keys(true, old).is_empty(),
+            "transfer must leave nothing behind under the old owner address"
+        );
+        assert_eq!(
+            accessor_descriptor_keys_for_obj(new),
+            vec!["acc".to_string()],
+            "accessors must be readable through the new owner address after growth"
+        );
+    }
+
+    #[test]
+    fn clear_object_descriptors_empties_the_index_too() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let obj = crate::object::js_object_alloc(0, 0) as usize;
+        // `clear_object_descriptors` early-returns unless a handle-band owner
+        // has ever taken a descriptor; set the latch so the body actually runs.
+        HANDLE_HAS_DESCRIPTORS.store(true, Ordering::Relaxed);
+
+        set_property_attrs(obj, "p".to_string(), PropertyAttrs::new(true, true, true));
+        set_accessor_descriptor(obj, "acc".to_string(), AccessorDescriptor::default());
+        assert_mirrors(obj, "before clear");
+
+        clear_object_descriptors(obj);
+        assert_mirrors(obj, "after clear");
+        assert!(
+            accessor_descriptor_keys_for_obj(obj).is_empty(),
+            "a cleared owner must report no accessor keys"
+        );
     }
 }
 

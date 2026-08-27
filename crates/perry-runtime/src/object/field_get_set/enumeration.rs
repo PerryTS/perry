@@ -1177,12 +1177,11 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 // actually has descriptor entries, so the common all-default
                 // array stays on the fast path.
                 let owner = stripped as usize;
-                let has_idx_descriptors = crate::state::state()
-                    .descriptors
-                    .property_descriptors
-                    .borrow()
-                    .keys()
-                    .any(|(ptr, _)| *ptr == owner);
+                // O(1) via the owner index. This used to walk every descriptor
+                // in the program on every `Object.keys(array)` — profiling
+                // `claude -p` put this scan at the top of self-time by 4×.
+                let has_idx_descriptors =
+                    super::super::owner_has_property_descriptors(owner);
                 let result = crate::array::js_array_alloc(length);
                 for i in 0..length {
                     if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
@@ -1253,16 +1252,11 @@ pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
         // fresh array; the fast path now mirrors it, just without the
         // per-key descriptor check.
         // #6759 Phase C2: the owner's meta summary answers "no descriptor
-        // entries at all" in two loads; the O(table-size) owner scan runs
-        // only for owners that may actually hold entries (or can't carry a
-        // meta record — the conservative arm).
-        let has_descriptors = super::super::owner_may_have_descriptor_entries(obj as usize, false)
-            && crate::state::state()
-                .descriptors
-                .property_descriptors
-                .borrow()
-                .keys()
-                .any(|(ptr, _)| *ptr == obj as usize);
+        // entries at all" in two loads (still the first check, inside
+        // `owner_has_property_descriptors`); what used to follow it was an
+        // O(table-size) owner scan for every owner that *might* hold entries,
+        // now an O(1) owner-index lookup.
+        let has_descriptors = super::super::owner_has_property_descriptors(obj as usize);
         let len = crate::array::js_array_length(keys) as usize;
         // #2438: enumerate in ECMA-262 OrdinaryOwnPropertyKeys order —
         // array-index keys first (ascending numeric), then string keys in
