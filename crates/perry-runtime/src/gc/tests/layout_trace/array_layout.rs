@@ -278,7 +278,8 @@ fn test_numeric_array_push_heap_value_transitions_and_traces() {
     let mut arr = crate::array::js_array_alloc(4);
     arr = crate::array::js_array_push_f64(arr, 1.0);
     arr = crate::array::js_array_push_f64(arr, 2.0);
-    assert_eq!(test_layout_pointer_slot_count(arr as usize, 2), Some(0));
+    arr = crate::array::js_array_push_f64(arr, 3.0);
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 3), Some(0));
 
     let child = crate::string::js_string_from_bytes(b"pushed-child".as_ptr(), 12) as *mut u8;
     let child_header = unsafe { header_from_user_ptr(child) };
@@ -287,7 +288,7 @@ fn test_numeric_array_push_heap_value_transitions_and_traces() {
 
     assert_eq!(pushed, arr, "fixture should exercise the no-grow push path");
     assert_eq!(
-        test_layout_pointer_slot_count(pushed as usize, 3),
+        test_layout_pointer_slot_count(pushed as usize, 4),
         Some(1),
         "heap writes into a numeric array must transition to a pointer-bearing layout"
     );
@@ -316,9 +317,10 @@ fn test_numeric_array_layout_metadata_matches_gc_scan_state() {
     let mut arr = crate::array::js_array_alloc(4);
     arr = crate::array::js_array_push_f64(arr, 1.0);
     arr = crate::array::js_array_push_f64(arr, 2.0);
+    arr = crate::array::js_array_push_f64(arr, 3.0);
 
     assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 1);
-    assert_numeric_array_trace_free(arr, 2);
+    assert_numeric_array_trace_free(arr, 3);
 
     let child = crate::string::js_string_from_bytes(b"layout-child".as_ptr(), 12) as *mut u8;
     let child_header = unsafe { header_from_user_ptr(child) };
@@ -326,7 +328,7 @@ fn test_numeric_array_layout_metadata_matches_gc_scan_state() {
     arr = crate::array::js_array_push_f64(arr, child_box);
 
     assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 0);
-    assert_eq!(test_layout_pointer_slot_count(arr as usize, 3), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), Some(1));
 
     clear_marks();
     clear_mark_seeds();

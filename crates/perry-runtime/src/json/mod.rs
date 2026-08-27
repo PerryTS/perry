@@ -1178,14 +1178,17 @@ mod tests {
             Some(0)
         );
 
-        let mixed_input = br#"[1,"longer",3]"#;
+        // Eight elements: the pointer lands while the live prefix is two, and
+        // only a backing store of eight or more slots is expected to fill into
+        // a mask-worthy payload; this assertion is about the pointer mask.
+        let mixed_input = br#"[1,"longer",3,4,5,6,7,8]"#;
         let mixed_text = js_string_from_bytes(mixed_input.as_ptr(), mixed_input.len() as u32);
         let mixed_value = unsafe { js_json_parse(mixed_text) };
         let mixed_arr = (mixed_value.bits() & POINTER_MASK) as *mut crate::ArrayHeader;
 
         assert_eq!(crate::array::js_array_is_numeric_f64_layout(mixed_arr), 0);
         assert_eq!(
-            crate::gc::test_layout_pointer_slot_count(mixed_arr as usize, 3),
+            crate::gc::test_layout_pointer_slot_count(mixed_arr as usize, 8),
             Some(1)
         );
     }

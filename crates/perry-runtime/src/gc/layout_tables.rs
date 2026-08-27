@@ -778,10 +778,22 @@ pub(in crate::gc) unsafe fn layout_payload_slot_count(
             let arr = user_ptr as *const crate::array::ArrayHeader;
             let length = (*arr).length as usize;
             let capacity = (*arr).capacity as usize;
-            if length > capacity || length > 16_000_000 || slot_index >= length {
+            if length > capacity || length > 16_000_000 || slot_index >= capacity {
                 usize::MAX
-            } else {
+            } else if slot_index < length {
                 length
+            } else {
+                // An append in flight: `push` notes the slot before publishing
+                // the new length, so the live prefix is `slot_index + 1`.
+                // Reporting "unknown" here minted a per-object mask for the
+                // first pointer pushed into every small pooled array (10k
+                // side-table inserts per ECS frame) that the size policy would
+                // have sent to the tag scan. A large backing store is expected
+                // to fill, and the layout state is sticky once it settles on
+                // the scan, so a capacity of eight or more counts as the size
+                // the array will reach.
+                let expected = if capacity >= 8 { capacity } else { 0 };
+                (slot_index + 1).max(expected)
             }
         }
         GC_TYPE_OBJECT => {
