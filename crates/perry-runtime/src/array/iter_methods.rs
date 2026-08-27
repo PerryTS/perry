@@ -931,19 +931,41 @@ pub extern "C" fn js_array_some_captureless(
         let rooted = RootedIterArray::new(&scope, arr);
 
         for i in 0..length as usize {
+            // One rooted resolution per element serves the presence test, the
+            // slot read and the receiver argument; the callback may move the
+            // array, so the next iteration resolves again.
+            let arr = rooted.arr();
             let element = if exotic {
-                let arr = rooted.arr();
                 if !crate::array::array_spec_has_index(arr, i as u32) {
                     continue;
                 }
                 crate::array::array_spec_get(arr, i as u32)
             } else {
-                match rooted.present(i) {
-                    Some(element) => element,
-                    None => continue,
+                if i >= (*arr).length as usize {
+                    continue;
                 }
+                let bits = *(array_elements_ptr(arr) as *const u64).add(i);
+                if bits == crate::value::TAG_HOLE {
+                    continue;
+                }
+                f64::from_bits(bits)
             };
-            let result = callback(std::ptr::null(), element, i as f64, rooted.receiver());
+            let result = callback(
+                std::ptr::null(),
+                element,
+                i as f64,
+                array_receiver_value(arr),
+            );
+            // A predicate callback answers with a boolean box almost always;
+            // decide those two bit patterns here and keep the runtime
+            // predicate for everything else.
+            let result_bits = result.to_bits();
+            if result_bits == TAG_TRUE {
+                return f64::from_bits(TAG_TRUE);
+            }
+            if result_bits == TAG_FALSE {
+                continue;
+            }
             if crate::value::js_is_truthy(result) != 0 {
                 return f64::from_bits(TAG_TRUE);
             }

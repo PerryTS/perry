@@ -118,13 +118,18 @@ const LAYOUT_ADDR_FILTER_WORDS: usize = LAYOUT_ADDR_FILTER_BITS / 64;
 /// clearing while another thread still holds records would be a false
 /// negative and leave a stale mask on a recycled address. The filter is a
 /// 4,096-bit sketch, so saturation degrades to exactly the previous cost.
-static GLOBAL_LAYOUT_ADDR_FILTER: [std::sync::atomic::AtomicU64; LAYOUT_ADDR_FILTER_WORDS] =
+/// Exported (`#[no_mangle]`) because generated code tests the sketch inline,
+/// right after `PERRY_PER_OBJECT_LAYOUTS_ANY`, before calling
+/// `js_gc_forget_object_layout` — the hash and geometry are mirrored in
+/// `perry-codegen`'s `emit_gated_forget_object_layout`.
+#[no_mangle]
+pub static PERRY_LAYOUT_ADDR_FILTER: [std::sync::atomic::AtomicU64; LAYOUT_ADDR_FILTER_WORDS] =
     [const { std::sync::atomic::AtomicU64::new(0) }; LAYOUT_ADDR_FILTER_WORDS];
 
 #[inline(always)]
 pub(in crate::gc) fn global_layout_addr_filter_may_hold(user_ptr: usize) -> bool {
     let (word, bit) = layout_addr_filter_slot(user_ptr);
-    GLOBAL_LAYOUT_ADDR_FILTER[word].load(std::sync::atomic::Ordering::Relaxed) & bit != 0
+    PERRY_LAYOUT_ADDR_FILTER[word].load(std::sync::atomic::Ordering::Relaxed) & bit != 0
 }
 /// Rebuild the filter from the live keys once this many bits have been set
 /// since the last rebuild. Without it a workload that churns per-object
@@ -210,7 +215,7 @@ pub(in crate::gc) fn layout_addr_filter_note(user_ptr: usize) {
     unsafe {
         (*hint.filter.get())[word] |= bit;
     }
-    GLOBAL_LAYOUT_ADDR_FILTER[word].fetch_or(bit, std::sync::atomic::Ordering::Relaxed);
+    PERRY_LAYOUT_ADDR_FILTER[word].fetch_or(bit, std::sync::atomic::Ordering::Relaxed);
     hint.sets.set(hint.sets.get().saturating_add(1));
 }
 
