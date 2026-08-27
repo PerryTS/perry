@@ -159,13 +159,12 @@ console.log(t.trim());
     );
 }
 
-/// Scalar replacement of a non-escaping split result must preserve the
-/// `ToString(this)` coercion used by the normal String-method lowering. This
-/// receiver is deliberately `any`-typed and numeric: treating its boxed number
-/// as a StringHeader would otherwise produce `undefined` instead of the first
-/// split component.
+/// An unproven `any` receiver must keep ordinary runtime method semantics. The
+/// genuine `any`-typed string case above exercises the runtime string arm; a
+/// numeric value has no `split` method and must throw instead of being silently
+/// coerced to a string. This is the non-string half of the #7673 dispatch gate.
 #[test]
-fn scalar_split_on_any_receiver_keeps_string_coercion() {
+fn split_on_any_numeric_receiver_throws_type_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     let entry = dir.path().join("main.ts");
     std::fs::write(
@@ -179,10 +178,31 @@ console.log(first);
     )
     .expect("write entry");
 
-    let stdout = compile_and_run(dir.path(), &entry);
-    assert_eq!(
-        stdout.trim(),
-        "1",
-        "split must coerce an any receiver to string"
+    let output = dir.path().join("main_bin");
+    let compile = Command::new(perry_bin())
+        .current_dir(dir.path())
+        .arg("compile")
+        .arg(&entry)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("run perry compile");
+    assert!(
+        compile.status.success(),
+        "perry compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&output).output().expect("run compiled binary");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        !run.status.success(),
+        "a numeric receiver must not be String-coerced (stdout: {})",
+        String::from_utf8_lossy(&run.stdout)
+    );
+    assert!(
+        stderr.contains("TypeError") && stderr.contains("split is not a function"),
+        "expected the runtime missing-method TypeError, got: {stderr}"
     );
 }
