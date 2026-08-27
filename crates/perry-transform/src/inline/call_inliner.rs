@@ -111,6 +111,87 @@ pub fn convert_returns_in_stmts(stmts: &mut Vec<Stmt>, let_id: LocalId) {
     }
 }
 
+/// A destructuring source is wrapped in the HIR-only
+/// `requireObjectCoercible(value, sourceOffset)` intrinsic. When `value` is a
+/// control-flow function call, that wrapper otherwise hides the call from the
+/// statement-level inliner. It is safe to inline through the wrapper when the
+/// callee has an unconditional trailing anonymous-record return and every
+/// other explicit return is also an anonymous record: successful evaluation
+/// can never produce null/undefined, while throws still propagate normally.
+fn returns_only_anonymous_records(function: &Function) -> bool {
+    fn inspect(stmts: &[Stmt], saw_return: &mut bool) -> bool {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Return(Some(Expr::New {
+                    class_name,
+                    cap_args_appended: 0,
+                    ..
+                })) if class_name.starts_with("__AnonShape_") => *saw_return = true,
+                Stmt::Return(_) => return false,
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    if !inspect(then_branch, saw_return)
+                        || else_branch
+                            .as_ref()
+                            .is_some_and(|branch| !inspect(branch, saw_return))
+                    {
+                        return false;
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                    if !inspect(body, saw_return) {
+                        return false;
+                    }
+                }
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    if !inspect(body, saw_return)
+                        || catch
+                            .as_ref()
+                            .is_some_and(|catch| !inspect(&catch.body, saw_return))
+                        || finally
+                            .as_ref()
+                            .is_some_and(|finally| !inspect(finally, saw_return))
+                    {
+                        return false;
+                    }
+                }
+                Stmt::Switch { cases, .. } => {
+                    if cases.iter().any(|case| !inspect(&case.body, saw_return)) {
+                        return false;
+                    }
+                }
+                Stmt::Labeled { body, .. } => {
+                    if !inspect(std::slice::from_ref(body.as_ref()), saw_return) {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+        }
+        true
+    }
+
+    if !matches!(
+        function.body.last(),
+        Some(Stmt::Return(Some(Expr::New {
+            class_name,
+            cap_args_appended: 0,
+            ..
+        }))) if class_name.starts_with("__AnonShape_")
+    ) {
+        return false;
+    }
+    let mut saw_return = false;
+    inspect(&function.body, &mut saw_return) && saw_return
+}
+
 /// Inline function and method calls in a list of statements.
 ///
 /// `enclosing_class`, when set, names the class whose method body these stmts
@@ -324,9 +405,35 @@ pub fn inline_calls_in_stmts(
                     _ => unreachable!(),
                 };
                 let mut handled = false;
-                if matches!(&init_expr, Expr::Call { .. }) {
+                let direct_call = match &init_expr {
+                    Expr::Call { .. } => Some(init_expr.clone()),
+                    Expr::NativeMethodCall {
+                        module,
+                        class_name: None,
+                        object: None,
+                        method,
+                        args,
+                    } if module == "__perry_runtime"
+                        && method == "requireObjectCoercible"
+                        && matches!(
+                            args.as_slice(),
+                            [Expr::Call { .. }, Expr::Number(_) | Expr::Integer(_)]
+                        ) =>
+                    {
+                        let call = &args[0];
+                        let eligible = matches!(
+                            call,
+                            Expr::Call { callee, .. }
+                                if matches!(callee.as_ref(), Expr::FuncRef(id)
+                                    if func_candidates.get(id).is_some_and(returns_only_anonymous_records))
+                        );
+                        eligible.then(|| call.clone())
+                    }
+                    _ => None,
+                };
+                if let Some(direct_call) = direct_call {
                     if let Some((mut inlined_stmts, _)) = try_inline_call(
-                        &init_expr,
+                        &direct_call,
                         func_candidates,
                         method_candidates,
                         local_types,

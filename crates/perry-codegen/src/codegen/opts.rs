@@ -562,6 +562,12 @@ pub struct ImportedClass {
     /// `arguments`. Unlike a user `...rest` slot, this slot receives every
     /// actual argument while the named parameters remain positional.
     pub method_has_synthetic_arguments: Vec<bool>,
+    /// Parallel to `method_names`. `true` is a producer-authored capability:
+    /// the method has no user rest parameter and observes its synthesized
+    /// `arguments` binding only through exact `.length` reads. Importers may
+    /// call the additive `$arguments_length` ABI with a scalar count instead
+    /// of allocating and filling an argument bundle.
+    pub method_arguments_length_only: Vec<bool>,
     /// Static field names defined on this class. Used to declare the foreign
     /// `@perry_static_<src>__<class>__<field>` global with external linkage
     /// so cross-module `[Parent.Symbol.X] = …` reads/writes resolve to the
@@ -839,6 +845,9 @@ pub(crate) struct CrossModuleCtx {
     /// synthetic slot receives all actual arguments rather than only the
     /// values after the visible parameters.
     pub method_has_synthetic_arguments: std::collections::HashMap<(String, String), bool>,
+    /// Producer-proved scalar-count direct-call capability for synthetic
+    /// `arguments` methods. Sparse map (only `true` entries stored).
+    pub method_arguments_length_only: std::collections::HashMap<(String, String), bool>,
     /// Per-class `keys_array` global variable names. Each entry maps
     /// `class_name → @perry_class_keys_<modprefix>__<sanitized_class>`.
     /// Built once in `compile_module` (one entry per class — local

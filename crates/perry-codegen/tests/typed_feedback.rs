@@ -1,6 +1,9 @@
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
 use perry_hir::types::{FunctionType, Type};
-use perry_hir::{BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
+use perry_hir::{
+    ArgumentsObjectMeta, BinaryOp, Class, ClassField, Expr, Function, Module, ModuleInitKind,
+    Param, Stmt,
+};
 
 /// Serializes env-mutating tests so a concurrent test never observes a
 /// half-applied variable. Mirrors the guard in `typed_shape_descriptors.rs`.
@@ -835,6 +838,132 @@ fn typed_feedback_guards_direct_class_method_specialization() {
     // the #8648 regression (3.11x on `shapes`) that #8653 reverted.
     assert!(!ir.contains("call double @js_class_field_add"));
     assert!(ir.contains("call double @js_native_call_method"));
+}
+
+#[test]
+fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
+    let mut counter = class(104, "Counter", Vec::new());
+    counter.methods.push(Function {
+        id: 8,
+        name: "count".to_string(),
+        type_params: Vec::new(),
+        params: vec![
+            param(2, "value", Type::Any),
+            Param {
+                id: 3,
+                name: "arguments".to_string(),
+                ty: Type::Any,
+                default: None,
+                decorators: Vec::new(),
+                is_rest: true,
+                arguments_object: Some(ArgumentsObjectMeta {
+                    strict: false,
+                    simple_parameters: true,
+                    mapped_parameter_ids: Vec::new(),
+                    restricted_callee: false,
+                }),
+            },
+        ],
+        return_type: Type::Number,
+        body: vec![Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(3)),
+            property: "length".to_string(),
+            byte_offset: 0,
+        }))],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    counter.methods.push(Function {
+        id: 9,
+        name: "identity".to_string(),
+        type_params: Vec::new(),
+        params: vec![Param {
+            id: 4,
+            name: "arguments".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: true,
+            arguments_object: Some(ArgumentsObjectMeta {
+                strict: false,
+                simple_parameters: true,
+                mapped_parameter_ids: Vec::new(),
+                restricted_callee: false,
+            }),
+        }],
+        return_type: Type::Any,
+        body: vec![Stmt::Return(Some(Expr::LocalGet(4)))],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    let ir = ir_for(module_with_classes(
+        "synthetic_arguments_method_guard.ts",
+        vec![counter],
+        vec![param(1, "counter", Type::Named("Counter".to_string()))],
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "count".to_string(),
+                byte_offset: 0,
+            }),
+            args: vec![Expr::Number(7.0)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))],
+    ));
+    let probe_start = ir
+        .find("define double @perry_fn_synthetic_arguments_method_guard_ts__probe")
+        .expect("probe should be emitted");
+    let probe_tail = &ir[probe_start..];
+    let probe_end = probe_tail
+        .find("\n}\n")
+        .expect("probe should have a complete definition");
+    let probe_ir = &probe_tail[..probe_end];
+
+    assert!(
+        probe_ir.contains("method_direct.inline_deref")
+            && probe_ir.contains("method_direct.fast")
+            && probe_ir.contains("method_direct.fallback"),
+        "synthetic-arguments-only methods should use the exact-shape direct guard:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains(
+            "call double @perry_method_synthetic_arguments_method_guard_ts__Counter__count$arguments_length",
+        ) && probe_ir.contains("double 1.0"),
+        "the guarded direct arm should pass the actual argument count to the additive clone:\n{probe_ir}"
+    );
+    assert!(
+        !probe_ir.contains("call i64 @js_array_alloc")
+            && !probe_ir.contains("call i64 @js_array_push_f64")
+            && !probe_ir.contains("call i64 @js_array_mark_arguments_object"),
+        "a length-only direct call must not allocate or fill an argument bundle:\n{probe_ir}"
+    );
+    assert!(
+        probe_ir.contains("call double @js_native_call_method_by_id")
+            && !probe_ir.contains("call double @js_object_get_own_field_or_undef"),
+        "a guard miss should preserve dynamic override dispatch without an eager own-property scan:\n{probe_ir}"
+    );
+    assert!(
+        ir.contains(
+            "define double @perry_method_synthetic_arguments_method_guard_ts__Counter__count$arguments_length",
+        ) && !ir.contains(
+            "perry_method_synthetic_arguments_method_guard_ts__Counter__identity$arguments_length",
+        ),
+        "only the producer-proved length-only method may publish the scalar ABI:\n{ir}"
+    );
 }
 
 #[test]

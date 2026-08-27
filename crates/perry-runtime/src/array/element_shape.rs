@@ -469,13 +469,8 @@ pub(crate) unsafe fn ensure_element_shape(arr: *mut ArrayHeader) -> Option<Eleme
 /// costs a `GC_TYPE_ARRAY` compare plus a bit test on a header word that
 /// line is about to read anyway.
 ///
-/// Three cases, each with its own named test:
+/// Two cases, each with its own named test:
 ///
-/// * **establish** — no proof yet, this store writes element 0 of an empty
-///   array, and the value is a shaped object. That is the
-///   `const rows = []; rows.push(new C(…))` construction shape, which is
-///   exactly the form the compile-time collector already admits (#7034
-///   E1/E2). Growth beyond element 0 then rides the *keep* case.
 /// * **keep** — a proof exists and the value's class matches. A contiguous
 ///   append additionally extends `verified_len`.
 /// * **clear** — anything else: a different class, a non-pointer, a
@@ -491,13 +486,12 @@ pub(crate) unsafe fn note_element_store(arr: *mut ArrayHeader, index: usize, val
         return;
     };
     if !header_has_bit(header) {
-        // Establish only from empty. Adopting a longer array here would
-        // claim a prefix was verified when it never was.
-        if index == 0 && (*arr).length == 0 && array_admits_element_proof(arr) {
-            if let Some(class_id) = element_class_of_bits(value_bits) {
-                establish(arr, class_id, 1);
-            }
-        }
+        // Proofs are established on demand by `ensure_element_shape`. Eagerly
+        // creating one here makes every homogeneous object array pay a TLS
+        // side-table insert on construction and a lookup/update on every
+        // subsequent store, even in programs whose generated code never
+        // consumes an element-shape proof. Once a consumer has requested a
+        // proof, the bit is set and the keep/clear paths below maintain it.
         return;
     }
     let Some(record) = record_for(arr as usize) else {

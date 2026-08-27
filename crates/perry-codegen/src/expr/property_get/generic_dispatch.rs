@@ -210,6 +210,19 @@ pub(crate) fn lower_generic_property_get(
     } else {
         None
     };
+    // A dynamically typed `receiver.size` can still be served without the
+    // object PIC when the live receiver is a native Map or Set. Both payloads
+    // start with the same `u32 size` field, and their distinct GcHeader kinds
+    // are checked below before the load. This is deliberately a runtime brand
+    // check rather than a TypeScript-type claim: nested structural reads such
+    // as `this.ctx.hooks.size` commonly lose their static Set type, while an
+    // erased annotation alone must never authorize a native-layout load.
+    let inline_collection_size = property == "size";
+    let collection_size_idx = if inline_collection_size {
+        Some(ctx.new_block("pget.collection_size"))
+    } else {
+        None
+    };
     // #7883: the POINTER/STRING test goes FIRST, and the two rare tags are
     // discriminated in a cold block off its false edge. The three tag classes
     // are pairwise disjoint — `is_valid` is `(tag & 0xFFFD) == 0x7FFD`, true
@@ -370,6 +383,23 @@ pub(crate) fn lower_generic_property_get(
     let gc_type_addr = ctx.block().sub(I64, &obj_handle, "8");
     let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
     let gc_type = ctx.block().load(I8, &gc_type_ptr);
+
+    // `MapHeader` and `SetHeader` both begin with `size: u32`. A native
+    // collection is not an ObjectHeader and can never hit this PIC, so split
+    // it off immediately after the already-required GC-kind load. The generic
+    // miss handler recognizes the same two kinds before ordinary object
+    // lookup; this only removes that repeated classification and call ladder.
+    if let Some(collection_idx) = collection_size_idx {
+        let collection_label = ctx.block_label(collection_idx);
+        let object_check_idx = ctx.new_block("pic.recv_object_check");
+        let object_check_label = ctx.block_label(object_check_idx);
+        let is_map = ctx.block().icmp_eq(I8, &gc_type, "8"); // GC_TYPE_MAP
+        let is_set = ctx.block().icmp_eq(I8, &gc_type, "12"); // GC_TYPE_SET
+        let is_collection = ctx.block().or(I1, &is_map, &is_set);
+        ctx.block()
+            .cond_br(&is_collection, &collection_label, &object_check_label);
+        ctx.current_block = object_check_idx;
+    }
     let is_object = ctx.block().icmp_eq(I8, &gc_type, "2");
 
     // Closures and RegExp values have distinct GC kinds. Every
@@ -678,6 +708,20 @@ pub(crate) fn lower_generic_property_get(
     let pic_end_label = ctx.block().label.clone();
     ctx.block().br(&final_merge_label);
 
+    // Native Map/Set `.size`: their common leading field was admitted only by
+    // the exact live GC-kind checks above. Keep the read inline; calling
+    // `js_map_size` / `js_set_size` would reclassify the same receiver again.
+    let collection_size_arm = if let Some(collection_idx) = collection_size_idx {
+        ctx.current_block = collection_idx;
+        let size_i32 = ctx.block().safe_load_i32_from_ptr(&obj_handle);
+        let size = ctx.block().uitofp(I32, &size_i32, DOUBLE);
+        let collection_end_label = ctx.block().label.clone();
+        ctx.block().br(&final_merge_label);
+        Some((size, collection_end_label))
+    } else {
+        None
+    };
+
     // Invalid receiver: per JS spec, `undefined` and `null`
     // throw a TypeError; other non-pointer tags (int32, bool,
     // plain f64, bigint) should auto-box and look up via the
@@ -793,6 +837,9 @@ pub(crate) fn lower_generic_property_get(
     ];
     if let Some((heap_len, heap_end_label)) = strlen_heap_arm.as_ref() {
         incoming.push((heap_len, heap_end_label));
+    }
+    if let Some((size, collection_end_label)) = collection_size_arm.as_ref() {
+        incoming.push((size, collection_end_label));
     }
     Ok(ctx.block().phi(DOUBLE, &incoming))
 }

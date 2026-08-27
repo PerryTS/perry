@@ -205,6 +205,45 @@ fn scalarize_stmts(
     region_refs: &HashSet<LocalId>,
     reference_region_counts: &HashMap<LocalId, usize>,
 ) {
+    // Early-return inlining represents a returned value as
+    //
+    //   let result = undefined;
+    //   do { ...; result = new __AnonShape(...); break; } while (false);
+    //
+    // The ordinary codegen scalar-replacement collector only sees a `New`
+    // directly in a Let initializer, so this canonical merge used to force a
+    // heap record even when every consumer merely read known fields. Promote
+    // those merge records to one mutable scalar local per field first.
+    let return_record_candidates: Vec<LocalId> = stmts
+        .windows(2)
+        .filter_map(|pair| match (&pair[0], &pair[1]) {
+            (
+                Stmt::Let {
+                    id,
+                    mutable: true,
+                    init: Some(Expr::Undefined),
+                    ..
+                },
+                Stmt::DoWhile {
+                    condition: Expr::Bool(false),
+                    ..
+                },
+            ) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    for record_id in return_record_candidates {
+        let _ = scalarize_return_record_candidate(
+            stmts,
+            record_id,
+            next_local_id,
+            source_span_remaps,
+            anon_shape_fields,
+            region_refs,
+            reference_region_counts,
+        );
+    }
+
     let candidates: Vec<LocalId> = stmts
         .iter()
         .filter_map(|stmt| match stmt {
@@ -355,6 +394,770 @@ fn scalarize_stmts(
             | Stmt::ReleaseBoxes(_) => {}
         }
     }
+}
+
+fn scalarize_return_record_candidate(
+    stmts: &mut Vec<Stmt>,
+    record_id: LocalId,
+    next_local_id: &mut LocalId,
+    source_span_remaps: &mut Vec<(LocalId, LocalId)>,
+    anon_shape_fields: &AnonShapeFields,
+    region_refs: &HashSet<LocalId>,
+    reference_region_counts: &HashMap<LocalId, usize>,
+) -> bool {
+    let own_region_reference = usize::from(region_refs.contains(&record_id));
+    if reference_region_counts
+        .get(&record_id)
+        .copied()
+        .unwrap_or_default()
+        > own_region_reference
+    {
+        return false;
+    }
+    let Some(declaration_index) = stmts.iter().position(|stmt| {
+        matches!(
+            stmt,
+            Stmt::Let {
+                id,
+                mutable: true,
+                init: Some(Expr::Undefined),
+                ..
+            } if *id == record_id
+        )
+    }) else {
+        return false;
+    };
+    let Some(Stmt::DoWhile {
+        body: merge_body,
+        condition: Expr::Bool(false),
+    }) = stmts.get(declaration_index + 1)
+    else {
+        return false;
+    };
+
+    let mut assigned_shapes = Vec::new();
+    collect_return_record_assignments(merge_body, record_id, &mut assigned_shapes);
+    if assigned_shapes.is_empty() {
+        return false;
+    }
+    let mut field_order = Vec::new();
+    let mut admitted_shapes: HashMap<String, Vec<String>> = HashMap::new();
+    for class_name in assigned_shapes {
+        let Some(fields) = anon_shape_fields.get(&class_name) else {
+            return false;
+        };
+        if fields.is_empty() {
+            return false;
+        }
+        for field in fields {
+            if !field_order.contains(field) {
+                field_order.push(field.clone());
+            }
+        }
+        admitted_shapes.insert(class_name, fields.clone());
+    }
+    if field_order.is_empty() || field_order.len() > MAX_SCALAR_AGGREGATE_FIELDS {
+        return false;
+    }
+
+    // Every exit from the synthetic do/while that reaches subsequent field
+    // reads must first write a record. `return undefined` becomes a bare
+    // Break; rejecting such a break preserves the original TypeError behavior
+    // instead of silently turning it into an all-undefined record.
+    if !merge_body_ends_with_record_assignment(merge_body, record_id, &admitted_shapes) {
+        return false;
+    }
+
+    if !return_record_stmts_are_safe(
+        merge_body,
+        record_id,
+        &admitted_shapes,
+        &field_order,
+        true,
+        false,
+    ) {
+        return false;
+    }
+    for (index, stmt) in stmts.iter().enumerate() {
+        if index == declaration_index || index == declaration_index + 1 {
+            continue;
+        }
+        if !return_record_stmts_are_safe(
+            std::slice::from_ref(stmt),
+            record_id,
+            &admitted_shapes,
+            &field_order,
+            false,
+            true,
+        ) {
+            return false;
+        }
+    }
+
+    let mut field_locals = HashMap::new();
+    let mut replacement_declarations = Vec::with_capacity(field_order.len());
+    for (index, field) in field_order.iter().enumerate() {
+        let id = *next_local_id;
+        *next_local_id = next_local_id.saturating_add(1);
+        source_span_remaps.push((record_id, id));
+        field_locals.insert(field.clone(), id);
+        replacement_declarations.push(Stmt::Let {
+            id,
+            name: format!("__perry_return_record_{record_id}_{index}"),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(Expr::Undefined),
+        });
+    }
+
+    rewrite_return_record_stmts(
+        stmts,
+        record_id,
+        &admitted_shapes,
+        &field_order,
+        &field_locals,
+    );
+    let Some(declaration_index) = stmts
+        .iter()
+        .position(|stmt| matches!(stmt, Stmt::Let { id, .. } if *id == record_id))
+    else {
+        return false;
+    };
+    stmts.splice(
+        declaration_index..=declaration_index,
+        replacement_declarations,
+    );
+    true
+}
+
+fn collect_return_record_assignments(
+    stmts: &[Stmt],
+    record_id: LocalId,
+    assigned_shapes: &mut Vec<String>,
+) {
+    for stmt in stmts {
+        if let Stmt::Expr(Expr::LocalSet(id, value)) = stmt {
+            if *id == record_id {
+                if let Expr::New { class_name, .. } = value.as_ref() {
+                    assigned_shapes.push(class_name.clone());
+                }
+            }
+        }
+        match stmt {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_return_record_assignments(then_branch, record_id, assigned_shapes);
+                if let Some(else_branch) = else_branch {
+                    collect_return_record_assignments(else_branch, record_id, assigned_shapes);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                collect_return_record_assignments(body, record_id, assigned_shapes)
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_return_record_assignments(body, record_id, assigned_shapes);
+                if let Some(catch) = catch {
+                    collect_return_record_assignments(&catch.body, record_id, assigned_shapes);
+                }
+                if let Some(finally) = finally {
+                    collect_return_record_assignments(finally, record_id, assigned_shapes);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    collect_return_record_assignments(&case.body, record_id, assigned_shapes);
+                }
+            }
+            Stmt::Labeled { body, .. } => collect_return_record_assignments(
+                std::slice::from_ref(body.as_ref()),
+                record_id,
+                assigned_shapes,
+            ),
+            _ => {}
+        }
+    }
+}
+
+fn is_return_record_assignment(
+    stmt: &Stmt,
+    record_id: LocalId,
+    admitted_shapes: &HashMap<String, Vec<String>>,
+) -> bool {
+    matches!(
+        stmt,
+        Stmt::Expr(Expr::LocalSet(id, value))
+            if *id == record_id
+                && matches!(value.as_ref(), Expr::New { class_name, .. } if admitted_shapes.contains_key(class_name))
+    )
+}
+
+fn merge_body_ends_with_record_assignment(
+    stmts: &[Stmt],
+    record_id: LocalId,
+    admitted_shapes: &HashMap<String, Vec<String>>,
+) -> bool {
+    // The wrapper's fallthrough must also be a converted return.
+    if !matches!(stmts.last(), Some(Stmt::Break))
+        || stmts.len() < 2
+        || !is_return_record_assignment(&stmts[stmts.len() - 2], record_id, admitted_shapes)
+    {
+        return false;
+    }
+
+    for (index, stmt) in stmts.iter().enumerate() {
+        match stmt {
+            Stmt::Break => {
+                if index == 0
+                    || !is_return_record_assignment(&stmts[index - 1], record_id, admitted_shapes)
+                {
+                    return false;
+                }
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                if !merge_nested_breaks_follow_assignment(then_branch, record_id, admitted_shapes)
+                    || else_branch.as_ref().is_some_and(|branch| {
+                        !merge_nested_breaks_follow_assignment(branch, record_id, admitted_shapes)
+                    })
+                {
+                    return false;
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                if !merge_nested_breaks_follow_assignment(body, record_id, admitted_shapes)
+                    || catch.as_ref().is_some_and(|catch| {
+                        !merge_nested_breaks_follow_assignment(
+                            &catch.body,
+                            record_id,
+                            admitted_shapes,
+                        )
+                    })
+                    || finally.as_ref().is_some_and(|finally| {
+                        !merge_nested_breaks_follow_assignment(finally, record_id, admitted_shapes)
+                    })
+                {
+                    return false;
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                if cases.iter().any(|case| {
+                    !merge_nested_breaks_follow_assignment(&case.body, record_id, admitted_shapes)
+                }) {
+                    return false;
+                }
+            }
+            // Breaks in a nested loop target that loop rather than this
+            // synthetic wrapper and are deliberately not inspected here.
+            _ => {}
+        }
+    }
+    true
+}
+
+fn merge_nested_breaks_follow_assignment(
+    stmts: &[Stmt],
+    record_id: LocalId,
+    admitted_shapes: &HashMap<String, Vec<String>>,
+) -> bool {
+    for (index, stmt) in stmts.iter().enumerate() {
+        match stmt {
+            Stmt::Break => {
+                if index == 0
+                    || !is_return_record_assignment(&stmts[index - 1], record_id, admitted_shapes)
+                {
+                    return false;
+                }
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                if !merge_nested_breaks_follow_assignment(then_branch, record_id, admitted_shapes)
+                    || else_branch.as_ref().is_some_and(|branch| {
+                        !merge_nested_breaks_follow_assignment(branch, record_id, admitted_shapes)
+                    })
+                {
+                    return false;
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                if !merge_nested_breaks_follow_assignment(body, record_id, admitted_shapes)
+                    || catch.as_ref().is_some_and(|catch| {
+                        !merge_nested_breaks_follow_assignment(
+                            &catch.body,
+                            record_id,
+                            admitted_shapes,
+                        )
+                    })
+                    || finally.as_ref().is_some_and(|finally| {
+                        !merge_nested_breaks_follow_assignment(finally, record_id, admitted_shapes)
+                    })
+                {
+                    return false;
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                if cases.iter().any(|case| {
+                    !merge_nested_breaks_follow_assignment(&case.body, record_id, admitted_shapes)
+                }) {
+                    return false;
+                }
+            }
+            Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => {}
+            _ => {}
+        }
+    }
+    true
+}
+
+fn return_record_stmts_are_safe(
+    stmts: &[Stmt],
+    record_id: LocalId,
+    admitted_shapes: &HashMap<String, Vec<String>>,
+    field_order: &[String],
+    allow_assignments: bool,
+    allow_reads: bool,
+) -> bool {
+    fn expr_is_safe(
+        expr: &Expr,
+        record_id: LocalId,
+        field_order: &[String],
+        allow_reads: bool,
+    ) -> bool {
+        if let Expr::PropertyGet {
+            object, property, ..
+        } = expr
+        {
+            if matches!(object.as_ref(), Expr::LocalGet(id) if *id == record_id) {
+                return allow_reads && field_order.contains(property);
+            }
+        }
+        if matches!(expr, Expr::LocalGet(id) if *id == record_id)
+            || matches!(expr, Expr::LocalSet(id, _) if *id == record_id)
+            || matches!(expr, Expr::Update { id, .. } if *id == record_id)
+        {
+            return false;
+        }
+        if let Expr::Closure { body, .. } = expr {
+            return return_record_stmts_are_safe(
+                body,
+                record_id,
+                &HashMap::new(),
+                field_order,
+                false,
+                false,
+            );
+        }
+        let mut safe = true;
+        perry_hir::walker::walk_expr_children(expr, &mut |child| {
+            if !expr_is_safe(child, record_id, field_order, allow_reads) {
+                safe = false;
+            }
+        });
+        safe
+    }
+
+    for stmt in stmts {
+        if allow_assignments && is_return_record_assignment(stmt, record_id, admitted_shapes) {
+            let Stmt::Expr(Expr::LocalSet(_, value)) = stmt else {
+                unreachable!();
+            };
+            let Expr::New { args, .. } = value.as_ref() else {
+                unreachable!();
+            };
+            if args
+                .iter()
+                .any(|arg| !expr_is_safe(arg, record_id, field_order, false))
+            {
+                return false;
+            }
+            continue;
+        }
+        let expressions_safe = match stmt {
+            Stmt::Let { init, .. } => init
+                .as_ref()
+                .is_none_or(|expr| expr_is_safe(expr, record_id, field_order, allow_reads)),
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+                expr_is_safe(expr, record_id, field_order, allow_reads)
+            }
+            Stmt::If { condition, .. }
+            | Stmt::While { condition, .. }
+            | Stmt::DoWhile { condition, .. } => {
+                expr_is_safe(condition, record_id, field_order, allow_reads)
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                ..
+            } => {
+                init.as_deref().is_none_or(|init| {
+                    return_record_stmts_are_safe(
+                        std::slice::from_ref(init),
+                        record_id,
+                        admitted_shapes,
+                        field_order,
+                        allow_assignments,
+                        allow_reads,
+                    )
+                }) && condition
+                    .as_ref()
+                    .is_none_or(|expr| expr_is_safe(expr, record_id, field_order, allow_reads))
+                    && update
+                        .as_ref()
+                        .is_none_or(|expr| expr_is_safe(expr, record_id, field_order, allow_reads))
+            }
+            Stmt::Switch { discriminant, .. } => {
+                expr_is_safe(discriminant, record_id, field_order, allow_reads)
+            }
+            Stmt::PreallocateBoxes(ids)
+            | Stmt::PreallocateTdzBoxes(ids)
+            | Stmt::ReleaseBoxes(ids) => !ids.contains(&record_id),
+            _ => true,
+        };
+        if !expressions_safe {
+            return false;
+        }
+        match stmt {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                if !return_record_stmts_are_safe(
+                    then_branch,
+                    record_id,
+                    admitted_shapes,
+                    field_order,
+                    allow_assignments,
+                    allow_reads,
+                ) || else_branch.as_ref().is_some_and(|branch| {
+                    !return_record_stmts_are_safe(
+                        branch,
+                        record_id,
+                        admitted_shapes,
+                        field_order,
+                        allow_assignments,
+                        allow_reads,
+                    )
+                }) {
+                    return false;
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                if !return_record_stmts_are_safe(
+                    body,
+                    record_id,
+                    admitted_shapes,
+                    field_order,
+                    allow_assignments,
+                    allow_reads,
+                ) {
+                    return false;
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                if !return_record_stmts_are_safe(
+                    body,
+                    record_id,
+                    admitted_shapes,
+                    field_order,
+                    allow_assignments,
+                    allow_reads,
+                ) || catch.as_ref().is_some_and(|catch| {
+                    !return_record_stmts_are_safe(
+                        &catch.body,
+                        record_id,
+                        admitted_shapes,
+                        field_order,
+                        allow_assignments,
+                        allow_reads,
+                    )
+                }) || finally.as_ref().is_some_and(|finally| {
+                    !return_record_stmts_are_safe(
+                        finally,
+                        record_id,
+                        admitted_shapes,
+                        field_order,
+                        allow_assignments,
+                        allow_reads,
+                    )
+                }) {
+                    return false;
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases {
+                    if case.test.as_ref().is_some_and(|test| {
+                        !expr_is_safe(test, record_id, field_order, allow_reads)
+                    }) || !return_record_stmts_are_safe(
+                        &case.body,
+                        record_id,
+                        admitted_shapes,
+                        field_order,
+                        allow_assignments,
+                        allow_reads,
+                    ) {
+                        return false;
+                    }
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                if !return_record_stmts_are_safe(
+                    std::slice::from_ref(body.as_ref()),
+                    record_id,
+                    admitted_shapes,
+                    field_order,
+                    allow_assignments,
+                    allow_reads,
+                ) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+fn rewrite_return_record_stmts(
+    stmts: &mut Vec<Stmt>,
+    record_id: LocalId,
+    admitted_shapes: &HashMap<String, Vec<String>>,
+    field_order: &[String],
+    field_locals: &HashMap<String, LocalId>,
+) {
+    let mut index = 0;
+    while index < stmts.len() {
+        if is_return_record_assignment(&stmts[index], record_id, admitted_shapes) {
+            let Stmt::Expr(Expr::LocalSet(_, value)) = &stmts[index] else {
+                unreachable!();
+            };
+            let Expr::New {
+                class_name, args, ..
+            } = value.as_ref()
+            else {
+                unreachable!();
+            };
+            let shape_fields = admitted_shapes
+                .get(class_name)
+                .expect("assignment shape was admitted");
+            let mut replacement = Vec::new();
+            for (argument_index, argument) in args.iter().enumerate() {
+                if let Some(field) = shape_fields.get(argument_index) {
+                    replacement.push(Stmt::Expr(Expr::LocalSet(
+                        *field_locals.get(field).expect("field local exists"),
+                        Box::new(argument.clone()),
+                    )));
+                } else {
+                    replacement.push(Stmt::Expr(argument.clone()));
+                }
+            }
+            for field in field_order {
+                if !shape_fields.contains(field) {
+                    replacement.push(Stmt::Expr(Expr::LocalSet(
+                        *field_locals.get(field).expect("field local exists"),
+                        Box::new(Expr::Undefined),
+                    )));
+                }
+            }
+            let replacement_len = replacement.len();
+            stmts.splice(index..=index, replacement);
+            index += replacement_len;
+            continue;
+        }
+
+        match &mut stmts[index] {
+            Stmt::Let { init, .. } => {
+                if let Some(expr) = init {
+                    rewrite_return_record_expr(expr, record_id, field_locals);
+                }
+            }
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+                rewrite_return_record_expr(expr, record_id, field_locals)
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                rewrite_return_record_expr(condition, record_id, field_locals);
+                rewrite_return_record_stmts(
+                    then_branch,
+                    record_id,
+                    admitted_shapes,
+                    field_order,
+                    field_locals,
+                );
+                if let Some(else_branch) = else_branch {
+                    rewrite_return_record_stmts(
+                        else_branch,
+                        record_id,
+                        admitted_shapes,
+                        field_order,
+                        field_locals,
+                    );
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                rewrite_return_record_expr(condition, record_id, field_locals);
+                rewrite_return_record_stmts(
+                    body,
+                    record_id,
+                    admitted_shapes,
+                    field_order,
+                    field_locals,
+                );
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    let mut init_stmts = vec![*init.clone()];
+                    rewrite_return_record_stmts(
+                        &mut init_stmts,
+                        record_id,
+                        admitted_shapes,
+                        field_order,
+                        field_locals,
+                    );
+                    if init_stmts.len() == 1 {
+                        **init = init_stmts.remove(0);
+                    }
+                }
+                if let Some(condition) = condition {
+                    rewrite_return_record_expr(condition, record_id, field_locals);
+                }
+                if let Some(update) = update {
+                    rewrite_return_record_expr(update, record_id, field_locals);
+                }
+                rewrite_return_record_stmts(
+                    body,
+                    record_id,
+                    admitted_shapes,
+                    field_order,
+                    field_locals,
+                );
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                rewrite_return_record_stmts(
+                    body,
+                    record_id,
+                    admitted_shapes,
+                    field_order,
+                    field_locals,
+                );
+                if let Some(catch) = catch {
+                    rewrite_return_record_stmts(
+                        &mut catch.body,
+                        record_id,
+                        admitted_shapes,
+                        field_order,
+                        field_locals,
+                    );
+                }
+                if let Some(finally) = finally {
+                    rewrite_return_record_stmts(
+                        finally,
+                        record_id,
+                        admitted_shapes,
+                        field_order,
+                        field_locals,
+                    );
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                rewrite_return_record_expr(discriminant, record_id, field_locals);
+                for case in cases {
+                    if let Some(test) = &mut case.test {
+                        rewrite_return_record_expr(test, record_id, field_locals);
+                    }
+                    rewrite_return_record_stmts(
+                        &mut case.body,
+                        record_id,
+                        admitted_shapes,
+                        field_order,
+                        field_locals,
+                    );
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                let mut body_stmts = vec![*body.clone()];
+                rewrite_return_record_stmts(
+                    &mut body_stmts,
+                    record_id,
+                    admitted_shapes,
+                    field_order,
+                    field_locals,
+                );
+                if body_stmts.len() == 1 {
+                    **body = body_stmts.remove(0);
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+}
+
+fn rewrite_return_record_expr(
+    expr: &mut Expr,
+    record_id: LocalId,
+    field_locals: &HashMap<String, LocalId>,
+) {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
+        if matches!(object.as_ref(), Expr::LocalGet(id) if *id == record_id) {
+            if let Some(field_id) = field_locals.get(property) {
+                *expr = Expr::LocalGet(*field_id);
+                return;
+            }
+        }
+    }
+    if let Expr::Closure { body, .. } = expr {
+        // Safety analysis permits closure reads only when they remain within
+        // the same HIR region; rewrite their bodies explicitly because the
+        // generic expression walker does not descend into closures.
+        rewrite_return_record_stmts(body, record_id, &HashMap::new(), &[], field_locals);
+    }
+    perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
+        rewrite_return_record_expr(child, record_id, field_locals)
+    });
 }
 
 fn element_properties(
@@ -1043,5 +1846,120 @@ mod tests {
                 }
             )
         }));
+    }
+
+    fn shape_new(name: &str, args: Vec<Expr>) -> Expr {
+        Expr::New {
+            class_name: name.to_string(),
+            args,
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }
+    }
+
+    fn returned_record_fixture(with_undefined_exit: bool, observe_identity: bool) -> Vec<Stmt> {
+        let early_exit = if with_undefined_exit {
+            vec![Stmt::Break]
+        } else {
+            vec![
+                Stmt::Expr(Expr::LocalSet(
+                    1,
+                    Box::new(shape_new("__AnonShape_short", vec![Expr::Integer(1)])),
+                )),
+                Stmt::Break,
+            ]
+        };
+        vec![
+            Stmt::Let {
+                id: 1,
+                name: "result".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            },
+            Stmt::DoWhile {
+                body: vec![
+                    Stmt::If {
+                        condition: Expr::Bool(false),
+                        then_branch: early_exit,
+                        else_branch: None,
+                    },
+                    Stmt::Expr(Expr::LocalSet(
+                        1,
+                        Box::new(shape_new(
+                            "__AnonShape_long",
+                            vec![Expr::Integer(2), Expr::Integer(7)],
+                        )),
+                    )),
+                    Stmt::Break,
+                ],
+                condition: Expr::Bool(false),
+            },
+            Stmt::Expr(if observe_identity {
+                Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(1)),
+                    right: Box::new(Expr::LocalGet(1)),
+                }
+            } else {
+                property(Expr::LocalGet(1), "detail")
+            }),
+        ]
+    }
+
+    fn scalarize_return_fixture(stmts: &mut Vec<Stmt>) -> bool {
+        let shapes = HashMap::from([
+            ("__AnonShape_short".to_string(), vec!["type".to_string()]),
+            (
+                "__AnonShape_long".to_string(),
+                vec!["type".to_string(), "detail".to_string()],
+            ),
+        ]);
+        let mut next_local_id = 100;
+        let mut source_span_remaps = Vec::new();
+        scalarize_return_record_candidate(
+            stmts,
+            1,
+            &mut next_local_id,
+            &mut source_span_remaps,
+            &shapes,
+            &HashSet::from([1]),
+            &HashMap::from([(1, 1)]),
+        )
+    }
+
+    #[test]
+    fn scalarizes_multi_shape_inlined_return_record() {
+        let mut stmts = returned_record_fixture(false, false);
+        assert!(scalarize_return_fixture(&mut stmts));
+
+        assert!(!stmts
+            .iter()
+            .any(|stmt| matches!(stmt, Stmt::Let { id: 1, .. })));
+        assert!(stmts.iter().any(|stmt| {
+            matches!(stmt, Stmt::Let { name, .. } if name == "__perry_return_record_1_0")
+        }));
+        assert!(matches!(
+            stmts.last(),
+            Some(Stmt::Expr(Expr::LocalGet(101)))
+        ));
+        let debug = format!("{stmts:?}");
+        assert!(!debug.contains("__AnonShape_"));
+        assert!(debug.contains("LocalSet(101, Undefined)"));
+    }
+
+    #[test]
+    fn undefined_exit_keeps_inlined_return_record_materialized() {
+        let mut stmts = returned_record_fixture(true, false);
+        assert!(!scalarize_return_fixture(&mut stmts));
+        assert!(format!("{stmts:?}").contains("__AnonShape_long"));
+    }
+
+    #[test]
+    fn identity_observation_keeps_inlined_return_record_materialized() {
+        let mut stmts = returned_record_fixture(false, true);
+        assert!(!scalarize_return_fixture(&mut stmts));
+        assert!(format!("{stmts:?}").contains("__AnonShape_short"));
     }
 }

@@ -1421,6 +1421,31 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 Some(Type::Union(variants)) => variants.iter().any(type_contains_map),
                 _ => false,
             };
+            // Preserve Map<K, V>'s generic arguments through the separate
+            // function/method-body for-of lowerer.  The loop body is lowered
+            // after its bindings are pre-defined, so using `Any` there makes
+            // every operation in the body permanently dynamic even though the
+            // entry reads themselves retain enough information to infer K/V.
+            // Mirrors the module-init lowerer in `lower/stmt_loops.rs`,
+            // including its narrowed `Map<K, V> | undefined` support.
+            let map_type_args: Option<Vec<Type>> = if is_iterable_map {
+                match &iterable_type {
+                    Some(Type::Generic { base, type_args }) if base == "Map" => {
+                        Some(type_args.clone())
+                    }
+                    Some(Type::Union(variants)) => {
+                        variants.iter().find_map(|variant| match variant {
+                            Type::Generic { base, type_args } if base == "Map" => {
+                                Some(type_args.clone())
+                            }
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
             // The head shapes the index fast path accepts — and why the
             // single-ident one is a correctness fix, not just a faster route —
             // live in `for_head::map_index_fast_path_head`.
@@ -1539,45 +1564,46 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             // For an identifier iterable like `for (const word of words)` where
             // `words: string[]`, extract the element type from the local's
             // declared Array<T> so the loop variable gets the right type.
-            let inferred_elem_type: Option<Type> = match &iterable_type {
-                Some(Type::Array(elem)) => Some((**elem).clone()),
-                Some(Type::Generic { base, type_args })
-                    if base == "Array" && type_args.len() == 1 =>
-                {
-                    Some(type_args[0].clone())
-                }
-                Some(Type::Generic { base, type_args })
-                    if base == "Map" && type_args.len() >= 2 =>
-                {
+            let inferred_elem_type: Option<Type> = map_type_args
+                .as_ref()
+                .filter(|type_args| type_args.len() >= 2)
+                .map(|type_args| {
                     // for-of over Map yields [K, V] tuples
-                    Some(Type::Tuple(vec![
-                        type_args[0].clone(),
-                        type_args[1].clone(),
-                    ]))
-                }
-                Some(Type::Generic { base, type_args })
-                    if base == "Set" && !type_args.is_empty() =>
-                {
-                    Some(type_args[0].clone())
-                }
-                _ => None,
-            };
+                    Type::Tuple(vec![type_args[0].clone(), type_args[1].clone()])
+                })
+                .or_else(|| match &iterable_type {
+                    Some(Type::Array(elem)) => Some((**elem).clone()),
+                    Some(Type::Generic { base, type_args })
+                        if base == "Array" && type_args.len() == 1 =>
+                    {
+                        Some(type_args[0].clone())
+                    }
+                    Some(Type::Generic { base, type_args })
+                        if base == "Set" && !type_args.is_empty() =>
+                    {
+                        Some(type_args[0].clone())
+                    }
+                    _ => None,
+                });
             // For the Map fast path the holder must be typed Map so
             // `__m.size` resolves through `is_map_expr` to `js_map_size`.
             let holder_type = if is_string_iter {
                 Type::String
             } else if map_kv_fastpath {
-                if let Some(Type::Generic { base, type_args }) = iterable_type.clone() {
-                    if base == "Map" && type_args.len() >= 2 {
-                        Type::Generic {
-                            base: "Map".to_string(),
-                            type_args,
-                        }
-                    } else {
-                        Type::Any
-                    }
-                } else {
-                    Type::Any
+                Type::Generic {
+                    base: "Map".to_string(),
+                    type_args: vec![
+                        map_type_args
+                            .as_ref()
+                            .and_then(|types| types.first())
+                            .cloned()
+                            .unwrap_or(Type::Any),
+                        map_type_args
+                            .as_ref()
+                            .and_then(|types| types.get(1))
+                            .cloned()
+                            .unwrap_or(Type::Any),
+                    ],
                 }
             } else if set_fastpath {
                 // Holder typed as Set so `__s.size` resolves through
@@ -1669,12 +1695,17 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                 // (its gate guarantees all-Ident patterns).
                                 let mut ids = Vec::new();
                                 if map_kv_fastpath {
-                                    for elem_pat in arr_pat.elems.iter().flatten() {
-                                        if let ast::Pat::Ident(ident) = elem_pat {
+                                    for (slot, elem_pat) in arr_pat.elems.iter().enumerate() {
+                                        if let Some(ast::Pat::Ident(ident)) = elem_pat {
                                             let name = ident.id.sym.to_string();
+                                            let ty = if let Type::Tuple(types) = &item_hir_type {
+                                                types.get(slot).cloned().unwrap_or(Type::Any)
+                                            } else {
+                                                Type::Any
+                                            };
                                             let id = ctx.define_local_spanned(
                                                 name.clone(),
-                                                Type::Any,
+                                                ty,
                                                 ident.id.span,
                                             );
                                             ids.push((name, id));
@@ -1785,21 +1816,35 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                         };
                                         let (name, id) = var_ids[var_idx].clone();
                                         var_idx += 1;
-                                        let init = if slot == 0 {
-                                            Expr::MapEntryKeyAt {
-                                                map: Box::new(Expr::LocalGet(arr_id)),
-                                                idx: Box::new(Expr::LocalGet(idx_id)),
-                                            }
+                                        let (ty, init) = if slot == 0 {
+                                            (
+                                                map_type_args
+                                                    .as_ref()
+                                                    .and_then(|types| types.first())
+                                                    .cloned()
+                                                    .unwrap_or(Type::Any),
+                                                Expr::MapEntryKeyAt {
+                                                    map: Box::new(Expr::LocalGet(arr_id)),
+                                                    idx: Box::new(Expr::LocalGet(idx_id)),
+                                                },
+                                            )
                                         } else {
-                                            Expr::MapEntryValueAt {
-                                                map: Box::new(Expr::LocalGet(arr_id)),
-                                                idx: Box::new(Expr::LocalGet(idx_id)),
-                                            }
+                                            (
+                                                map_type_args
+                                                    .as_ref()
+                                                    .and_then(|types| types.get(1))
+                                                    .cloned()
+                                                    .unwrap_or(Type::Any),
+                                                Expr::MapEntryValueAt {
+                                                    map: Box::new(Expr::LocalGet(arr_id)),
+                                                    idx: Box::new(Expr::LocalGet(idx_id)),
+                                                },
+                                            )
                                         };
                                         stmts.push(Stmt::Let {
                                             id,
                                             name,
-                                            ty: Type::Any,
+                                            ty,
                                             mutable: false,
                                             init: Some(init),
                                         });

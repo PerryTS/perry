@@ -19,17 +19,22 @@ fn shaped_instance() -> f64 {
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
-/// `const rows = []; rows.push(new C()); …` built through the real push
-/// funnel, so the invariant is established the way production establishes it.
+/// `const rows = []; rows.push(new C()); …` followed by the proof request an
+/// optimized production loop emits before entering its fast clone.
 fn proven_array(count: usize) -> *mut crate::array::ArrayHeader {
     let mut arr = crate::array::js_array_alloc(count as u32);
     for _ in 0..count {
         arr = crate::array::js_array_push_f64(arr, shaped_instance());
     }
+    assert_ne!(
+        crate::array::js_array_ensure_element_shape(arr),
+        0,
+        "the generated consumer must establish the invariant before the GC test starts"
+    );
     assert_eq!(
         crate::array::js_array_element_shape_class(arr),
         CLASS_ELEM as i32,
-        "the push funnel must establish the invariant before the GC test starts"
+        "the requested proof must be readable before the GC test starts"
     );
     arr
 }

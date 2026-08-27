@@ -14,7 +14,8 @@
 
 #![cfg(test)]
 
-use crate::Module;
+use crate::types::Type;
+use crate::{Module, Stmt};
 use perry_diagnostics::SourceCache;
 
 fn lower(src: &str) -> Module {
@@ -232,5 +233,85 @@ fn the_route_probe_actually_discriminates() {
     assert_ne!(
         fast, slow,
         "route probe cannot tell the two lowerings apart"
+    );
+}
+
+/// Function and method bodies use a separate statement lowerer from module
+/// initializers.  Keep the Map fast path's K/V types when pre-defining the
+/// destructured bindings there too: later expressions are lowered before the
+/// synthetic binding statements are emitted, so an `Any` placeholder turns a
+/// statically-known `Command[]#some` into dynamic property lookup and native
+/// method dispatch for the whole lifetime of the loop body.
+#[test]
+fn method_map_destructuring_preserves_key_and_value_types() {
+    fn binding_type(stmts: &[Stmt], wanted: &str) -> Option<Type> {
+        for stmt in stmts {
+            if let Stmt::Let { name, ty, .. } = stmt {
+                if name == wanted {
+                    return Some(ty.clone());
+                }
+            }
+            let found = match stmt {
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => binding_type(then_branch, wanted)
+                    .or_else(|| else_branch.as_deref().and_then(|s| binding_type(s, wanted))),
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => binding_type(body, wanted),
+                Stmt::For { init, body, .. } => init
+                    .as_deref()
+                    .and_then(|s| binding_type(std::slice::from_ref(s), wanted))
+                    .or_else(|| binding_type(body, wanted)),
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => binding_type(body, wanted)
+                    .or_else(|| catch.as_ref().and_then(|c| binding_type(&c.body, wanted)))
+                    .or_else(|| finally.as_deref().and_then(|s| binding_type(s, wanted))),
+                Stmt::Switch { cases, .. } => cases
+                    .iter()
+                    .find_map(|case| binding_type(&case.body, wanted)),
+                Stmt::Labeled { body, .. } => {
+                    binding_type(std::slice::from_ref(body.as_ref()), wanted)
+                }
+                _ => None,
+            };
+            if found.is_some() {
+                return found;
+            }
+        }
+        None
+    }
+
+    let module = lower(
+        r#"
+        class Buffer {
+            execute(entityCommands: Map<number, string[]>) {
+                for (const [entityId, commands] of entityCommands) {
+                    if (commands.some((command) => command === "destroy")) {
+                        console.log(entityId);
+                    }
+                }
+            }
+        }
+        "#,
+    );
+    let method = module
+        .classes
+        .iter()
+        .find(|class| class.name == "Buffer")
+        .and_then(|class| class.methods.iter().find(|method| method.name == "execute"))
+        .expect("Buffer.execute should be lowered");
+
+    assert_eq!(binding_type(&method.body, "entityId"), Some(Type::Number));
+    assert_eq!(
+        binding_type(&method.body, "commands"),
+        Some(Type::Array(Box::new(Type::String)))
+    );
+    assert!(
+        format!("{method:?}").contains("ArraySome"),
+        "typed commands.some should use the specialized ArraySome HIR"
     );
 }

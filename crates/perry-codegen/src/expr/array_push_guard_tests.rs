@@ -32,10 +32,13 @@ use perry_hir::{
 const GUARD_BLOCK: &str = "apush.gc_bookkeeping";
 const NOTE_CALL: &str = "call void @js_gc_note_slot_layout(";
 const ADDREF_CALL: &str = "call void @js_string_addref_if_heap_string(";
+const NUMERIC_NOTE_CALL: &str = "call void @js_array_note_numeric_write(";
 /// `ARRAY_PUSH_NUMERIC_CLEAN_I16` as it appears in the `nofwd` admission test.
 const WIDENED_ADMISSION_MASK: &str = "15367";
 /// The historical integrity mask, which the numeric push must NOT still use.
 const NARROW_INTEGRITY_MASK: &str = ", 1031";
+const POINTER_LAYOUT_BLOCK: &str = "apush.pointer_layout.bookkeeping";
+const POINTER_LAYOUT_MASK: &str = "63616";
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
@@ -334,6 +337,30 @@ fn a_pointer_push_keeps_the_historical_unguarded_shape() {
         !ir.contains(GUARD_BLOCK),
         "a `new Node()` push took the numeric guard: it would pay the \
          predicate for a test whose answer is always yes:\n{ir}"
+    );
+}
+
+#[test]
+fn a_dynamic_push_consumes_a_live_all_pointer_array_proof() {
+    let mut module = push_module(Type::Any, Expr::LocalGet(BASE_ID), Vec::new());
+    module.functions[0].params[0].ty = Type::Any;
+    let ir = ir_for(module);
+    let inbounds = inbounds_block(&ir);
+    assert!(
+        inbounds.contains(POINTER_LAYOUT_BLOCK),
+        "a dynamically typed append never emitted the live pointer/layout guard:\n{inbounds}"
+    );
+    assert!(
+        inbounds.contains(POINTER_LAYOUT_MASK),
+        "the guard does not test the complete all-pointer/raw-f64/element-shape header mask:\n{inbounds}"
+    );
+    assert!(
+        inbounds.contains(crate::nanbox::POINTER_TAG_TOP16_I64),
+        "the guard does not test the live value's exact POINTER_TAG:\n{inbounds}"
+    );
+    assert!(
+        ir.contains(NOTE_CALL) && ir.contains(ADDREF_CALL) && ir.contains(NUMERIC_NOTE_CALL),
+        "the proof-miss arm must retain every generic bookkeeping call:\n{ir}"
     );
 }
 

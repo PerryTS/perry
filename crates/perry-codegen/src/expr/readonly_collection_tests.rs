@@ -189,6 +189,7 @@ fn imported_archetype() -> ImportedClass {
         method_param_counts: Vec::new(),
         method_has_rest: Vec::new(),
         method_has_synthetic_arguments: Vec::new(),
+        method_arguments_length_only: Vec::new(),
         static_field_names: Vec::new(),
         static_method_names: Vec::new(),
         static_method_return_types: Vec::new(),

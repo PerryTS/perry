@@ -148,7 +148,8 @@ pub(super) fn i8_literal(b: u8) -> String {
 /// correctly unequal), and a heap string whose `byte_len` or whose first / last
 /// byte differs from the literal's is unequal without reading a byte the length
 /// check has not already proved the header owns. Only a same-length,
-/// same-endpoints heap string reaches `js_string_equals`.
+/// same-endpoints heap string reaches `js_string_equals`, except that a
+/// three-byte literal is settled by checking its one remaining middle byte.
 ///
 /// Returns an `i1` that is true iff the two operands are `===`.
 fn lower_string_literal_strict_eq(
@@ -171,7 +172,8 @@ fn lower_string_literal_strict_eq(
     let len_idx = ctx.new_block("streqlit.len");
     let b0_idx = (n >= 1).then(|| ctx.new_block("streqlit.b0"));
     let bl_idx = (n >= 2).then(|| ctx.new_block("streqlit.bl"));
-    let slow_idx = (n >= 3).then(|| ctx.new_block("streqlit.slow"));
+    let bm_idx = (n == 3).then(|| ctx.new_block("streqlit.bm"));
+    let slow_idx = (n >= 4).then(|| ctx.new_block("streqlit.slow"));
     let true_idx = ctx.new_block("streqlit.true");
     let false_idx = ctx.new_block("streqlit.false");
     let merge_idx = ctx.new_block("streqlit.merge");
@@ -184,6 +186,7 @@ fn lower_string_literal_strict_eq(
     let sso_l = sso_idx.map(|i| ctx.block_label(i));
     let b0_l = b0_idx.map(|i| ctx.block_label(i));
     let bl_l = bl_idx.map(|i| ctx.block_label(i));
+    let bm_l = bm_idx.map(|i| ctx.block_label(i));
     let slow_l = slow_idx.map(|i| ctx.block_label(i));
 
     // Entry: pooled-pointer identity. This is the hot true case — the value
@@ -247,11 +250,29 @@ fn lower_string_literal_strict_eq(
         let p = ctx.block().gep_inbounds(I8, &hdr_ptr, &[(I64, &off)]);
         let b = ctx.block().load(I8, &p);
         let ok = ctx.block().icmp_eq(I8, &b, &i8_literal(bytes[n - 1]));
-        let next = slow_l.clone().unwrap_or_else(|| true_l.clone());
+        let next = bm_l
+            .clone()
+            .or_else(|| slow_l.clone())
+            .unwrap_or_else(|| true_l.clone());
         ctx.block().cond_br(&ok, &next, &false_l);
     }
 
-    // Same length, same endpoints, different pointer: a real content compare.
+    // A three-byte string has exactly one byte left after the endpoint
+    // checks. Comparing it here completely decides the hot discriminant
+    // shape (`cmd.type === "set"`) without entering `js_string_equals` and
+    // its general-length `memcmp` path. The prior length check proves this
+    // byte is present in the payload.
+    if let Some(idx) = bm_idx {
+        ctx.current_block = idx;
+        let off = (STRING_HEADER_SIZE + 1).to_string();
+        let p = ctx.block().gep_inbounds(I8, &hdr_ptr, &[(I64, &off)]);
+        let b = ctx.block().load(I8, &p);
+        let ok = ctx.block().icmp_eq(I8, &b, &i8_literal(bytes[1]));
+        ctx.block().cond_br(&ok, &true_l, &false_l);
+    }
+
+    // Same length, same endpoints, different pointer: literals of four or
+    // more bytes still need a real content compare.
     // Both operands are proven heap `StringHeader*` here, so this is the narrow
     // two-pointer helper, not the generic value-equality tower.
     let slow_arm = slow_idx.map(|idx| {

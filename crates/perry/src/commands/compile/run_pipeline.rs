@@ -271,6 +271,11 @@ fn imported_class_from_hir(
                     .is_some_and(|param| param.arguments_object.is_some())
             })
             .collect(),
+        method_arguments_length_only: class
+            .methods
+            .iter()
+            .map(perry_codegen::method_supports_arguments_length_direct_abi)
+            .collect(),
         static_field_names: class
             .static_fields
             .iter()
@@ -371,6 +376,7 @@ fn imported_object_literal_from_capability(
         method_param_counts: Vec::new(),
         method_has_rest: Vec::new(),
         method_has_synthetic_arguments: Vec::new(),
+        method_arguments_length_only: Vec::new(),
         static_field_names: Vec::new(),
         static_method_names: Vec::new(),
         static_method_return_types: Vec::new(),
