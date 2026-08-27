@@ -351,7 +351,15 @@ fn cross_function_expr_is_safe(
             extern_names.push(name.clone());
             true
         }
-        Expr::GlobalGet(_) | Expr::GlobalSet(_, _) | Expr::NativeModuleRef(_) => false,
+        Expr::GlobalGet(_)
+        | Expr::GlobalSet(_, _)
+        | Expr::NativeModuleRef(_)
+        // These nodes carry source-module-relative path sets. Codegen resolves
+        // those sets through the current module's dynamic-target map, so a
+        // clone installed in an importer would silently use the wrong map and
+        // fall through to ambient require/import handling.
+        | Expr::DynamicImport { .. }
+        | Expr::WorkerNew { .. } => false,
         // Capture-free zero-argument closures are self-contained after their
         // FuncId is refreshed in the destination. This admits default thunks
         // such as `exists = () => true` without allowing a source local to

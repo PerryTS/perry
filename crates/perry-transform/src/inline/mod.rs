@@ -1254,6 +1254,49 @@ mod tests {
     }
 
     #[test]
+    fn cross_module_free_function_with_dynamic_require_is_rejected() {
+        let mut source = Module::new("/src/package/index.ts");
+        let mut loads_relative_module = function(
+            1,
+            vec![Stmt::Return(Some(Expr::DynamicImport {
+                paths: vec!["./alpha".to_string()],
+                arg: Box::new(Expr::String("./alpha".to_string())),
+                byte_offset: 0,
+                deferred_error: None,
+                synchronous: true,
+            }))],
+        );
+        loads_relative_module.name = "loadAlpha".to_string();
+        loads_relative_module.is_exported = true;
+        source.functions.push(loads_relative_module);
+        source.exported_functions.push(("loadAlpha".to_string(), 1));
+
+        assert!(gather_cross_module_functions(&source).is_empty());
+    }
+
+    #[test]
+    fn cross_module_free_function_with_worker_target_is_rejected() {
+        let mut source = Module::new("/src/package/index.ts");
+        let mut starts_relative_worker = function(
+            1,
+            vec![Stmt::Return(Some(Expr::WorkerNew {
+                paths: vec!["./worker.ts".to_string()],
+                filename: Box::new(Expr::String("./worker.ts".to_string())),
+                options: None,
+                is_eval: false,
+            }))],
+        );
+        starts_relative_worker.name = "startWorker".to_string();
+        starts_relative_worker.is_exported = true;
+        source.functions.push(starts_relative_worker);
+        source
+            .exported_functions
+            .push(("startWorker".to_string(), 1));
+
+        assert!(gather_cross_module_functions(&source).is_empty());
+    }
+
+    #[test]
     fn cross_module_runtime_import_does_not_reuse_type_only_import() {
         let mut root = function(
             1,
