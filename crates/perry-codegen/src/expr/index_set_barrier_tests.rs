@@ -481,6 +481,60 @@ fn the_guarded_property_receiver_store_follows_one_forwarding_edge_inline() {
 /// re-resolves the receiver through the tracked resolver on every call, so a
 /// pointer store into an array whose raw-f64 bits are already clear must not
 /// reach it at all.
+/// The scalar-aware layout note (`js_gc_note_slot_layout_aware`) returns
+/// without acting when the old and new values share a pointer classification,
+/// unless both are pointers and the array carries an element-shape proof. The
+/// guarded fast arm now decides that inline — the exact runtime
+/// `layout_pointer_bearing_bits` predicate on both values plus the
+/// `GC_ARRAY_ELEMENT_SHAPE` bit of the `_reserved` word `deref.live` loaded —
+/// and calls the note only from the gated `laynote` block.
+#[test]
+fn the_fast_arm_layout_note_is_gated_on_the_pointer_classification_and_shape_bit() {
+    let ir = ir();
+    let live = block_body(&ir, "idxset.recv_prop.deref.live.")
+        .expect("guarded store emits its `deref.live` block");
+    let reserved = live
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains("load i16"))
+        .and_then(|line| line.split(" = ").next())
+        .expect("`deref.live` loads the live head's `_reserved` word")
+        .to_string();
+
+    let fast = block_body(&ir, "idxset.recv_prop.fast.").expect("fast block");
+    assert!(
+        !fast.contains("js_gc_note_slot_layout_aware"),
+        "the fast arm must not call the layout note unconditionally:\n{fast}"
+    );
+    assert!(
+        fast.contains(&format!("and i16 {reserved}, 2048")),
+        "the gate must test GC_ARRAY_ELEMENT_SHAPE (0x800) on the live head's `_reserved`:\n{fast}"
+    );
+    // Exact runtime predicate, applied to both the stored and the old bits:
+    // tag test, payload test, bare-address range and alignment, selected.
+    assert!(
+        fast.matches("select i1").count() >= 2
+            && fast.matches(", 32765").count() >= 2
+            && fast.matches(", 32767").count() >= 2
+            && fast.matches(", 32762").count() >= 2
+            && fast.matches("icmp uge i64").count() >= 2
+            && fast.matches("icmp ule i64").count() >= 2
+            && fast.contains("icmp ne i1"),
+        "both values must be classified with the exact pointer-bearing predicate and compared:\n{fast}"
+    );
+    let (gate, _) = branch_into_block(&ir, "idxset.recv_prop.laynote.")
+        .expect("the layout note sits behind a conditional branch");
+    assert!(
+        gate.trim().starts_with("br i1"),
+        "gate must be a conditional branch, got `{gate}`"
+    );
+    let note = block_body(&ir, "idxset.recv_prop.laynote.").expect("the layout note block exists");
+    assert!(
+        note.contains("call void @js_gc_note_slot_layout_aware("),
+        "the note call must live inside the gated block:\n{note}"
+    );
+}
+
 #[test]
 fn the_fast_arm_numeric_note_is_gated_on_the_raw_f64_header_bits() {
     let ir = ir();

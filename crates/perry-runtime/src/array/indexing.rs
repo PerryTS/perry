@@ -2,7 +2,7 @@
 use super::indexing_support::*;
 use super::*;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::Ordering;
 
 #[path = "indexing_keyed.rs"]
 mod keyed;
@@ -23,43 +23,9 @@ const MAX_DENSE_ARRAY_GROW_LENGTH: u32 = 1_000_000;
 /// benchmark for 6 hours (Regression Check, v0.5.1129–v0.5.1150).
 const DENSE_ARRAY_GAP_LIMIT: u32 = 1024;
 
-/// A strict-mode element write (`arr[i] = v`) to a **frozen** array's existing
-/// index is `[[Set]]` on a non-writable data property with `Throw = true`
-/// (ECMA-262 §10.4.2.4 → OrdinarySetWithOwnDescriptor step 2.b.i), so it must
-/// throw a **TypeError** rather than silently no-op. Perry compiles everything
-/// strict, so the codegen `arr[i] = v` fast paths — which call these
-/// `js_array_set_f64*` helpers directly — carry the strict-`Set` contract.
-/// Matches V8's message. (test262 built-ins/Array element-write-on-frozen.)
-#[cold]
-fn throw_frozen_array_index_write(index: u32) -> ! {
-    crate::collection_iter::throw_type_error(&format!(
-        "Cannot assign to read only property '{index}' of object '[object Array]'"
-    ));
-}
-
-/// A strict-mode write that would *add* a new index to a non-extensible
-/// (frozen / sealed / preventExtensions'd) array — `arr[i] = v` with
-/// `i >= length` — is `CreateDataProperty` on a non-extensible object with
-/// `Throw = true`, so it must throw a **TypeError**. Matches V8's message.
-#[cold]
-fn throw_array_not_extensible_add(index: u32) -> ! {
-    crate::collection_iter::throw_type_error(&format!(
-        "Cannot add property {index}, object is not extensible"
-    ));
-}
-
 #[inline]
 pub(crate) fn invalidate_array_index_fast_path() {
     PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.store(1, Ordering::Relaxed);
-}
-
-/// Test-only companion to
-/// `prototype_chain::test_swap_array_static_proto_recorded`: swap the summary
-/// byte generated code reads, returning the previous value. Only for a test
-/// that knowingly set it and is putting the process back as it found it.
-#[cfg(test)]
-pub(crate) fn test_swap_array_index_fast_path_invalidated(value: u8) -> u8 {
-    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.swap(value, Ordering::Relaxed)
 }
 
 #[cfg(test)]
@@ -74,41 +40,8 @@ pub(crate) fn test_strict_dense_pointer_overwrite_hits() -> u64 {
     STRICT_DENSE_POINTER_OVERWRITE_HITS.with(std::cell::Cell::get)
 }
 
-/// Record (if `obj` is the canonical `Object.prototype`) that it now carries
-/// an indexed property. Called from the object index-write / numeric
-/// defineProperty paths; cheap (relaxed loads + compare).
-#[inline]
-pub(crate) fn note_object_prototype_index_write(obj: usize) {
-    if !OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed) && obj != 0 && obj == object_prototype_addr()
-    {
-        OBJECT_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
-        invalidate_array_index_fast_path();
-    }
-}
-
 pub(crate) fn object_prototype_has_index_flag() -> bool {
     OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
-}
-
-/// Record (if `obj` is `Array.prototype` and `sym_key` is the well-known
-/// `Symbol.iterator`) that the array iteration protocol has been tampered
-/// with. Called from the symbol-property set/delete paths.
-pub(crate) fn note_array_proto_iterator_write(obj: usize, sym_key: usize) {
-    if ARRAY_PROTO_ITERATOR_MODIFIED.load(Ordering::Relaxed) || obj == 0 || sym_key == 0 {
-        return;
-    }
-    if obj == array_prototype_addr()
-        && sym_key == crate::symbol::well_known_symbol("iterator") as usize
-    {
-        ARRAY_PROTO_ITERATOR_MODIFIED.store(true, Ordering::Relaxed);
-        // Publish to generated code. Release so a loop that observes the `1`
-        // also observes the prototype write that preceded it.
-        PERRY_ARRAY_PROTO_ITERATOR_PATCHED.store(1, Ordering::Release);
-    }
-}
-
-pub(crate) fn array_proto_iterator_modified() -> bool {
-    ARRAY_PROTO_ITERATOR_MODIFIED.load(Ordering::Relaxed)
 }
 
 /// Record (if `arr` is `Array.prototype`) that the prototype now carries an
@@ -1370,6 +1303,16 @@ pub extern "C" fn js_array_set_f64_extend_strict(
     index: u32,
     value: f64,
 ) -> *mut ArrayHeader {
+    // Two exact fast lanes, each storing only what the general path below
+    // would store and declining every shape it cannot prove. The plain-number
+    // lane (#8885) resolves the head itself, so a hit returns that head; the
+    // dense-index lane (#8876) covers the remaining in-range existing-slot
+    // stores. The #8885/#8876 composition on `main` had kept only the second,
+    // leaving the first unreachable outside its unit tests.
+    // SAFETY: the lane validates the receiver before every dereference.
+    if let Some(resolved) = unsafe { try_strict_dense_number_store(arr, index, value) } {
+        return resolved;
+    }
     if let Some(resolved) = try_strict_dense_index_set(arr, index, value) {
         return resolved;
     }

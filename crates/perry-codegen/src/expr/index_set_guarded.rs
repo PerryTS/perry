@@ -43,6 +43,10 @@ use anyhow::Result;
 use crate::nanbox::POINTER_MASK_I64;
 use crate::types::{I1, I16, I32, I64, I8};
 
+use super::write_barrier::{
+    emit_jsvalue_slot_store_deferred_layout_note_on_block, emit_layout_note_slot_aware_on_block,
+    emit_layout_pointer_bearing_check,
+};
 use super::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_scalar_aware_on_block,
     emit_write_barrier_slot_value_and_generation_tested, FnCtx,
@@ -207,7 +211,7 @@ pub(super) fn emit_guarded_inbounds_array_store(
     // stored over a pointer is exactly the store that must clear
     // `GC_ARRAY_ELEMENT_SHAPE`. Class fields have no such per-slot array
     // invariant, which is why that half of #7511's argument does not transfer.
-    let (arr_handle, element_addr, value_bits) = {
+    let (arr_handle, element_addr, value_bits, layout_note) = {
         let blk = ctx.block();
         // The live (possibly forwarded-once) head proved by `deref.live`,
         // which is this block's only predecessor.
@@ -221,20 +225,69 @@ pub(super) fn emit_guarded_inbounds_array_store(
         // in-bounds arm: the guard proved the slot holds a valid value, so the
         // scalar-aware note can skip the layout hashmap on a
         // scalar-over-scalar store (#5094).
-        let value_bits = emit_jsvalue_slot_store_scalar_aware_on_block(
-            blk,
-            &element_ptr,
-            val_double,
+        if !layout_note_needed {
+            let value_bits = emit_jsvalue_slot_store_scalar_aware_on_block(
+                blk,
+                &element_ptr,
+                val_double,
+                &arr_handle,
+                idx_i32,
+                false,
+                &arr_handle,
+                &element_addr,
+                false,
+            )
+            .unwrap_or_else(|| blk.bitcast_double_to_i64(val_double));
+            (arr_handle, element_addr, value_bits, None)
+        } else {
+            // The scalar-aware note itself, opened up: the runtime
+            // (`layout_note_slot_aware`) returns without acting when the old
+            // and new values share a pointer classification — unless both are
+            // pointers AND the array carries an element-shape proof
+            // (`GC_ARRAY_ELEMENT_SHAPE` in the `_reserved` word `deref.live`
+            // already loaded), which the pointer-over-pointer arm maintains. A
+            // classification change must always reach `layout_note_slot`.
+            // Decide that inline with the exact runtime predicate and call the
+            // note only when it has work: the ECS `ents[id] = arch` store is a
+            // pointer over a pointer into a proof-free array on every iteration.
+            let (value_bits, old_bits) = emit_jsvalue_slot_store_deferred_layout_note_on_block(
+                blk,
+                &element_ptr,
+                val_double,
+            );
+            let new_is_pointer = emit_layout_pointer_bearing_check(blk, &value_bits);
+            let old_is_pointer = emit_layout_pointer_bearing_check(blk, &old_bits);
+            let classification_changed = blk.icmp_ne(I1, &new_is_pointer, &old_is_pointer);
+            let shape_bits = blk.and(I16, &reserved, "2048"); // GC_ARRAY_ELEMENT_SHAPE
+            let has_element_shape = blk.icmp_ne(I16, &shape_bits, "0");
+            let pointer_over_pointer_noted = blk.and(I1, &new_is_pointer, &has_element_shape);
+            let note_needed = blk.or(I1, &classification_changed, &pointer_over_pointer_noted);
+            (
+                arr_handle,
+                element_addr,
+                value_bits,
+                Some((old_bits, note_needed)),
+            )
+        }
+    };
+    if let Some((old_bits, note_needed)) = layout_note {
+        let note_idx = ctx.new_block(&format!("{}.laynote", block_prefix));
+        let note_done_idx = ctx.new_block(&format!("{}.laynote.done", block_prefix));
+        let note_label = ctx.block_label(note_idx);
+        let note_done_label = ctx.block_label(note_done_idx);
+        ctx.block()
+            .cond_br(&note_needed, &note_label, &note_done_label);
+        ctx.current_block = note_idx;
+        emit_layout_note_slot_aware_on_block(
+            ctx.block(),
             &arr_handle,
             idx_i32,
-            layout_note_needed,
-            &arr_handle,
-            &element_addr,
-            false,
-        )
-        .unwrap_or_else(|| blk.bitcast_double_to_i64(val_double));
-        (arr_handle, element_addr, value_bits)
-    };
+            &value_bits,
+            &old_bits,
+        );
+        ctx.block().br(&note_done_label);
+        ctx.current_block = note_done_idx;
+    }
     if write_barrier_needed {
         // `arr_handle` is the live head `deref.live` just proved through its
         // own `obj_type == GC_TYPE_ARRAY` / `!GC_FLAG_FORWARDED` header reads,

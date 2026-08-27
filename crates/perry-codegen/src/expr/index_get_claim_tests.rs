@@ -415,6 +415,84 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
     );
 }
 
+/// The canonical-i32 arm of the same `packed[sparse[x]]` site: an erased
+/// Array declaration admits object-backed Array subclasses, so a canonical
+/// integer key must not be committed to the guarded plain-array tier — whose
+/// feedback fallback classifies the receiver out of line on every read (the
+/// 2.2× wolf-ecs regression after #8872). The element arm brands the
+/// receiver once and sends non-`GC_TYPE_ARRAY` heap pointers to the
+/// receiver-unknown numeric tiers instead.
+#[test]
+fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_tier() {
+    const SPARSE: u32 = 41;
+    let ir = ir_for(
+        "claimed_receiver_brand",
+        vec![
+            Stmt::Let {
+                id: ITEMS,
+                name: "packed".to_string(),
+                ty: Type::Array(Box::new(Type::Any)),
+                mutable: false,
+                init: Some(Expr::PropertyGet {
+                    object: Box::new(Expr::Object(vec![(
+                        "value".to_string(),
+                        Expr::Array(vec![Expr::Number(7.0)]),
+                    )])),
+                    property: "value".to_string(),
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Let {
+                id: SPARSE,
+                name: "sparse".to_string(),
+                ty: Type::Array(Box::new(Type::Any)),
+                mutable: false,
+                init: Some(Expr::PropertyGet {
+                    object: Box::new(Expr::Object(vec![(
+                        "value".to_string(),
+                        Expr::Array(vec![Expr::Number(0.0)]),
+                    )])),
+                    property: "value".to_string(),
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Let {
+                id: RESULT,
+                name: "result".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(ITEMS)),
+                    index: Box::new(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(SPARSE)),
+                        index: Box::new(Expr::Integer(0)),
+                    }),
+                }),
+            },
+        ],
+    );
+    assert!(
+        ir.contains("aidx.canonical") && ir.contains("aidx.claimed.brand"),
+        "the canonical-i32 arm must brand the claimed receiver before the plain tier:\n{ir}"
+    );
+    let brand = super::class_field_barrier_tests::block_body(&ir, "aidx.claimed.brand")
+        .expect("the brand block exists");
+    assert!(
+        brand.contains("load i8, ptr") && brand.contains("icmp eq i8") && brand.contains(", 1"),
+        "the brand block must read the GcHeader type byte and test GC_TYPE_ARRAY:\n{brand}"
+    );
+    assert!(
+        ir.contains("aidx.claimed.array") && ir.contains("aidx.dynamic.fast"),
+        "a plain Array keeps the guarded element tier:\n{ir}"
+    );
+    assert!(
+        ir.contains("aidx.claimed.other")
+            && ir.matches("arrlike.ic.family_token").count() >= 2
+            && ir.matches("tav.get.brand").count() >= 2,
+        "every other heap receiver must reach the inline typed-array and dense-subclass tiers from BOTH the canonical and the runtime-key arm:\n{ir}"
+    );
+}
+
 fn dynamic_key_read_ir(name: &str, key_type: Type) -> String {
     let param = |id, name: &str, ty| Param {
         id,

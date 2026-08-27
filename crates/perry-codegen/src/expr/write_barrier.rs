@@ -542,6 +542,37 @@ pub(crate) fn emit_jsvalue_slot_store_scalar_aware_on_block(
     )
 }
 
+/// The scalar-aware slot store with its layout note DEFERRED to the caller:
+/// loads the slot's previous value, writes the new one through the shared
+/// (audited) store, runs the string-addref demote, and returns
+/// `(value_bits, old_bits)` so the caller can decide inline whether the
+/// runtime note would act at all before calling it. The caller owns both the
+/// note and the barrier; nothing else about the store changes.
+pub(crate) fn emit_jsvalue_slot_store_deferred_layout_note_on_block(
+    blk: &mut LlBlock,
+    slot_ptr: &str,
+    value_double: &str,
+) -> (String, String) {
+    let old_double = blk.load(DOUBLE, slot_ptr);
+    let old_bits = blk.bitcast_double_to_i64(&old_double);
+    let value_bits = emit_jsvalue_slot_store_on_block_inner(
+        blk,
+        slot_ptr,
+        value_double,
+        "",
+        "",
+        true,
+        false,
+        "",
+        "",
+        false,
+        false,
+        None,
+    )
+    .unwrap_or_else(|| blk.bitcast_double_to_i64(value_double));
+    (value_bits, old_bits)
+}
+
 /// #7511 — emit the `i1` predicate "these NaN-boxed bits MAY carry a heap
 /// pointer", as a superset of every heap address the runtime can decode.
 ///
@@ -590,6 +621,36 @@ pub(crate) fn emit_may_carry_heap_pointer_check(blk: &mut LlBlock, value_bits: &
     let tagged = blk.or(I1, &is_pointer_tag, &is_string_tag);
     let tagged = blk.or(I1, &tagged, &is_bigint_tag);
     blk.or(I1, &tagged, &is_raw_addr)
+}
+
+/// The EXACT codegen mirror of `perry-runtime::gc::layout::layout_pointer_bearing_bits`
+/// (not the superset above): a `POINTER_TAG` / `STRING_TAG` / `BIGINT_TAG`
+/// value bears a pointer iff its 48-bit payload is non-zero; every other
+/// NaN-boxed tag never does; a bare value bears one iff it lies in
+/// `[0x1000, POINTER_MASK]` and is 8-byte aligned. `bits <= POINTER_MASK`
+/// already implies an all-zero top word, which is the runtime's
+/// `tag >= 0x7FF8…` rejection. Used where a store's GC layout note is skipped
+/// only when the runtime itself would return without acting, so the answer
+/// must match the runtime on every input.
+pub(crate) fn emit_layout_pointer_bearing_check(blk: &mut LlBlock, value_bits: &str) -> String {
+    use crate::nanbox::{
+        BIGINT_TAG_TOP16_I64, POINTER_MASK_I64, POINTER_TAG_TOP16_I64, STRING_TAG_TOP16_I64,
+    };
+    let top16 = blk.lshr(I64, value_bits, "48");
+    let is_pointer_tag = blk.icmp_eq(I64, &top16, POINTER_TAG_TOP16_I64);
+    let is_string_tag = blk.icmp_eq(I64, &top16, STRING_TAG_TOP16_I64);
+    let is_bigint_tag = blk.icmp_eq(I64, &top16, BIGINT_TAG_TOP16_I64);
+    let tagged = blk.or(I1, &is_pointer_tag, &is_string_tag);
+    let tagged = blk.or(I1, &tagged, &is_bigint_tag);
+    let payload = blk.and(I64, value_bits, POINTER_MASK_I64);
+    let payload_nonzero = blk.icmp_ne(I64, &payload, "0");
+    let above_floor = blk.icmp_uge(I64, value_bits, "4096");
+    let within_mask = blk.icmp_ule(I64, value_bits, POINTER_MASK_I64);
+    let low_bits = blk.and(I64, value_bits, "7");
+    let aligned = blk.icmp_eq(I64, &low_bits, "0");
+    let bare = blk.and(I1, &above_floor, &within_mask);
+    let bare = blk.and(I1, &bare, &aligned);
+    blk.select(I1, &tagged, I1, &payload_nonzero, &bare)
 }
 
 /// #7511 — a class-field JSValue slot store whose three GC-bookkeeping calls
