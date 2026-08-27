@@ -1,13 +1,12 @@
 {
   "_comment": "Files still declaring raw `thread_local!`. Every entry is a declaration that pays `_tlv_get_addr` on Darwin; the count is a ratchet, so adding one to an already-listed file fails too. New code should use `crate::perry_thread_local!` \u2014 see crates/perry-runtime/src/tls_hot.rs. Regenerate with scripts/check_thread_locals.py --update.",
-  "_hot_declarations": 261,
+  "_hot_declarations": 269,
   "files": {
     "crates/perry-runtime/src/agent.rs": 1,
     "crates/perry-runtime/src/arena/block.rs": 2,
     "crates/perry-runtime/src/arena/page_meta.rs": 2,
     "crates/perry-runtime/src/async_context.rs": 2,
     "crates/perry-runtime/src/async_hooks.rs": 3,
-    "crates/perry-runtime/src/builtins/arithmetic.rs": 1,
     "crates/perry-runtime/src/builtins/console.rs": 2,
     "crates/perry-runtime/src/builtins/formatting.rs": 5,
     "crates/perry-runtime/src/builtins/formatting/boxed_primitives.rs": 1,
@@ -31,7 +30,6 @@
     "crates/perry-runtime/src/gc/barrier/mod.rs": 2,
     "crates/perry-runtime/src/gc/barrier_arming.rs": 1,
     "crates/perry-runtime/src/gc/cycle.rs": 1,
-    "crates/perry-runtime/src/gc/dirty_page_cache.rs": 1,
     "crates/perry-runtime/src/gc/fromspace_scan.rs": 1,
     "crates/perry-runtime/src/gc/layout.rs": 1,
     "crates/perry-runtime/src/gc/layout_tables.rs": 1,
