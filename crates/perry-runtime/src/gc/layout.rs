@@ -877,6 +877,33 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
             layout_mark_unknown(parent_user as *mut u8);
             return;
         }
+        // An empty array's first pointer append is also a complete proof of
+        // the all-pointer invariant: before the caller bumps `length` the
+        // live prefix is empty, and immediately afterwards its sole element
+        // is the pointer we just classified. Publish that stronger state
+        // instead of minting a one-bit side mask (or falling back to UNKNOWN),
+        // so later pointer appends can consume the same O(1) header proof as
+        // arrays declared all-pointer by codegen.
+        //
+        // This is deliberately restricted to `length == 0`. A POINTER_FREE
+        // array with an existing numeric prefix may also receive a pointer at
+        // its append position, but that prefix does not satisfy the claim.
+        // Clear both raw-f64 flags before publishing ALL_POINTERS: the two
+        // representations are mutually exclusive, and generated append code
+        // uses their absence as part of its admission test.
+        if pointer
+            && (*header).obj_type == GC_TYPE_ARRAY
+            && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE
+        {
+            let arr = parent_user as *const crate::array::ArrayHeader;
+            if (*arr).length == 0
+                && layout_all_pointer_array_append(header, parent_user, slot_index)
+            {
+                crate::array::clear_array_numeric_layout_ptr(parent_user);
+                layout_init_all_pointer_slots(parent_user as *mut u8);
+                return;
+            }
+        }
         if !pointer && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
             return;
         }
