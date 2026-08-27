@@ -189,9 +189,12 @@ fn with_reverse<R>(
 
 /// Resolve the transition tables through an Array-subclass receiver after its
 /// first learned edge. `RuntimeState` is heap allocated and stable until this
-/// thread exits, while ObjectHeaders never cross agents (worker inputs are
+/// thread exits, and ObjectHeaders never cross agents (worker inputs are
 /// deep-copied), so the native pointer can move with ObjectMeta without GC
-/// tracing or rewriting.
+/// tracing or rewriting. The cached pointer is still validated against the
+/// CURRENT thread's tables on every use: a pump thread acting on an agent's
+/// behalf (Android's UI-thread timer pump) must never reach another thread's
+/// mutable tables through a cache the owning thread filled.
 #[inline(always)]
 fn object_hot_for_owner(
     owner: *const crate::object::ObjectHeader,
@@ -200,12 +203,12 @@ fn object_hot_for_owner(
         if !owner.is_null() {
             let meta = (*owner).meta;
             if !meta.is_null() {
+                let hot = &crate::state::state().object_hot;
                 let cached =
                     (*meta).array_tail_object_hot as usize as *const crate::object::ObjectHotTables;
-                if !cached.is_null() {
+                if std::ptr::eq(cached, hot) {
                     return &*cached;
                 }
-                let hot = &crate::state::state().object_hot;
                 // GC_STORE_AUDIT(NATIVE_POINTER): RuntimeState storage, not a
                 // managed heap edge; ObjectMeta's GC descriptors intentionally
                 // visit only prototype, spill, and private brand.
@@ -345,16 +348,24 @@ pub(crate) fn record_numeric_tail_transition(
     {
         return;
     }
-    unsafe {
-        shapes::note_cache_carrier(Some(predecessor));
-        shapes::note_cache_carrier(Some(successor));
-    }
     // A single lost edge poisons the remainder of a shrinking dense shape
     // chain: the generic fallback mints a different predecessor, after which
     // no historical edge can match. Preserve colliding entries with bounded
     // open addressing instead of overwriting one direct-mapped slot.
     let forward = with_forward_for_owner(owner, |table| unsafe { insert_forward(table, entry) });
     let reverse = with_reverse_for_owner(owner, |table| unsafe { insert_reverse(table, entry) });
+    if forward.is_none() && reverse.is_none() {
+        // Nothing references the pair: it must not claim cache ownership.
+        return;
+    }
+    // Both descriptors are now named by a live entry. The bit is recomputed
+    // from table occupancy after every full trace
+    // (`recompute_cache_carriers_after_full_trace`), so an entry that is later
+    // evicted or tombstoned releases its descriptors at the next full trace.
+    unsafe {
+        shapes::note_cache_carrier(Some(predecessor));
+        shapes::note_cache_carrier(Some(successor));
+    }
     if let Some(index) = forward {
         publish_direct_index(owner, predecessor_shape_id, Some(index), None);
     }
@@ -465,6 +476,35 @@ unsafe fn prune_table(table: *mut [ArrayTailTransitionEntry; ARRAY_TAIL_TRANSITI
         if entry.successor_shape_id != 0 && !descriptor_pair_is_exact(*entry) {
             *entry = ArrayTailTransitionEntry::TOMBSTONE;
         }
+    }
+}
+
+/// Rebuild the `cache_carrier` gate from live cache occupancy.
+///
+/// `note_cache_carrier` marks a descriptor when an entry naming it is inserted;
+/// eviction and tombstoning do not unmark it, because several entries may name
+/// the same descriptor. A full trace is the one point where the exact answer is
+/// cheap: clear every bit, then re-note the descriptors of every live entry in
+/// both tables. Between full traces the bit set is therefore a superset of the
+/// live occupancy — never a subset — which is the direction the rooting gate in
+/// `scan_shape_table_rekey_mut` requires. Mirrors
+/// `rotate_old_carrier_epoch_after_full_trace` for the other carrier class.
+pub(crate) fn recompute_cache_carriers_after_full_trace() {
+    shapes::clear_all_cache_carriers();
+    with_forward(|table| unsafe { note_live_entries(table) });
+    with_reverse(|table| unsafe { note_live_entries(table) });
+}
+
+unsafe fn note_live_entries(
+    table: *mut [ArrayTailTransitionEntry; ARRAY_TAIL_TRANSITION_CACHE_SIZE],
+) {
+    for entry in (*table).iter() {
+        // `EMPTY` and `TOMBSTONE` both carry a zero successor ShapeId.
+        if entry.successor_shape_id == 0 {
+            continue;
+        }
+        shapes::note_cache_carrier(shapes::shape_descriptor_by_id(entry.predecessor_shape_id));
+        shapes::note_cache_carrier(shapes::shape_descriptor_by_id(entry.successor_shape_id));
     }
 }
 

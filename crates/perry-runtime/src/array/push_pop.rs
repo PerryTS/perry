@@ -719,10 +719,12 @@ unsafe fn js_array_push_f64_resolved(arr: *mut ArrayHeader, value: f64) -> *mut 
 /// this entry returns the semantic push result through `new_length`, so the
 /// caller does not immediately redispatch `js_array_length` on the receiver.
 ///
-/// Every unproved receiver state retains the complete public fallback. In
-/// particular Proxy traps, descriptor mutations, Array-subclass integrity
-/// flags, and first-seen tail transitions all run the same generic algorithms
-/// as `js_array_push_f64`.
+/// Every unproved receiver state either retains the complete resolved
+/// algorithm (Array-subclass integrity flags, first-seen tail transitions,
+/// growth) or — for the receivers whose push can run user code (indexed
+/// descriptors / prototype indices, Proxy traps, foreign families) — returns
+/// null so the generated caller performs the complete public push itself.
+/// That is what keeps this symbol allocate-but-never-reenter.
 #[no_mangle]
 pub extern "C" fn js_array_push_u31_with_length(
     arr: *mut ArrayHeader,
@@ -781,24 +783,20 @@ pub extern "C" fn js_array_push_u31_with_length(
     }
 
     let cleaned = clean_arr_ptr_mut(arr);
-    if !cleaned.is_null() {
-        if crate::array::array_iteration_is_exotic(cleaned) {
-            let pushed = js_array_push_f64_spec(cleaned, number);
-            if !new_length.is_null() {
-                unsafe { *new_length = crate::array::js_array_length(pushed) };
-            }
-            return pushed;
-        }
-        let pushed = unsafe { js_array_push_f64_resolved(cleaned, number) };
-        if !new_length.is_null() {
-            unsafe { *new_length = (*pushed).length };
-        }
-        return pushed;
+    if cleaned.is_null() || crate::array::array_iteration_is_exotic(cleaned) {
+        // Not handled here. An exotic receiver (indexed descriptors, an indexed
+        // prototype property, a registered buffer / typed-array view) needs the
+        // observable `Set`, and a receiver the resolver does not own (a Proxy,
+        // a foreign family) needs the complete public push — both can run user
+        // code through accessors or traps. This entry is classified
+        // allocate-but-never-reenter in `gc_call_effects`, so it must never
+        // reach those paths; the generated caller takes its complete guarded
+        // push (`js_array_push_guard` + `js_array_push_f64`) on a null result.
+        return std::ptr::null_mut();
     }
-
-    let pushed = js_array_push_f64(arr, number);
+    let pushed = unsafe { js_array_push_f64_resolved(cleaned, number) };
     if !new_length.is_null() {
-        unsafe { *new_length = crate::array::js_array_length(pushed) };
+        unsafe { *new_length = (*pushed).length };
     }
     pushed
 }

@@ -126,13 +126,14 @@ pub(super) fn lower_symbol_then_named_property_ic(
         let key_box = ctx.block().load(DOUBLE, &key_global);
         let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
         let key_handle = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
+        let key_ptr = ctx.block().inttoptr(I64, &key_handle);
         let miss_value = ctx.block().call(
             DOUBLE,
             "js_object_get_symbol_then_field_ic_miss",
             &[
                 (DOUBLE, &base_box),
                 (DOUBLE, &symbol_box),
-                (I64, &key_handle),
+                (PTR, &key_ptr),
                 (I64, &feedback_site_id),
                 (PTR, &symbol_cache),
                 (PTR, &field_cache),

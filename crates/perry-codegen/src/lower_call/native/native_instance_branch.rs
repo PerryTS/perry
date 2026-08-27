@@ -339,10 +339,42 @@
         let orig_handle = arr_handle.clone();
         let fused_length_slot = if let Some(value) = u31_value {
             let length_slot = blk.alloca(I32);
-            arr_handle = blk.call(
+            let fast_handle = blk.call(
                 I64,
                 "js_array_push_u31_with_length",
                 &[(I64, &arr_handle), (I32, &value), (PTR, &length_slot)],
+            );
+            // The fused entry is allocate-but-never-reenter: it answers null
+            // for every receiver whose push can run user code (indexed
+            // descriptors, Proxy traps, foreign families). Those take the same
+            // complete guarded push the unfused lowering below performs.
+            let handled = blk.icmp_ne(I64, &fast_handle, "0");
+            let fast_end = blk.label.clone();
+            let generic_idx = ctx.new_block("apush.u31.generic");
+            let merge_idx = ctx.new_block("apush.u31.merge");
+            let generic_label = ctx.block_label(generic_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            ctx.block().cond_br(&handled, &merge_label, &generic_label);
+            ctx.current_block = generic_idx;
+            let generic_handle = {
+                let blk = ctx.block();
+                blk.call_void("js_array_push_guard", &[(I64, &orig_handle)]);
+                let value_double = blk.sitofp(I32, &value, DOUBLE);
+                let generic_handle = blk.call(
+                    I64,
+                    "js_array_push_f64",
+                    &[(I64, &orig_handle), (DOUBLE, &value_double)],
+                );
+                let generic_length = blk.call(I32, "js_array_length", &[(I64, &generic_handle)]);
+                blk.store(I32, &generic_length, &length_slot);
+                generic_handle
+            };
+            let generic_end = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
+            ctx.current_block = merge_idx;
+            arr_handle = ctx.block().phi(
+                I64,
+                &[(&fast_handle, &fast_end), (&generic_handle, &generic_end)],
             );
             Some(length_slot)
         } else {

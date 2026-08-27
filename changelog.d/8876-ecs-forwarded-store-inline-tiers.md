@@ -1,24 +1,18 @@
-Array/ECS performance: guarded property-receiver stores now follow one
+Array and ECS performance. Guarded property-receiver element stores follow one
 growth-forwarding edge inline (the read tier already did), so a field that
 kept a pre-grow forwarding stub (`this.ents[id] = arch`) no longer pays the
 out-of-line extend helper and allocator resolver on every store; the raw-f64
-downgrade note is gated on the header word already loaded; `typeof x ===
-"number"` decides the definitely-Number cases inline (exactly, deferring
-INT32/class refs, raw typed-array pointers and the Web Streams id band to the
-classifier); inline dynamic typed-array reads brand off the
-`GC_TYPE_TYPED_ARRAY` header instead of the evictable 64-slot kind cache;
-`js_array_get_f64` routes object-backed Array-subclass receivers to their
-dense fast read before the tracked resolver; and an `Any`-typed key that is an
-integer array index takes the inline numeric read tiers (`a[b[i]]`). The
-typed-feedback array-read fallback answers a proven dense read on an
-object-backed Array-subclass receiver before its registry probes and by-name
-key path, so the canonical-i32 element tier's guard miss on such a receiver
-no longer stringifies every index.
-
-Also carries the accumulated Array-subclass dense-tail work (validated
-prototype-override reads, pre-statepoint inlining of compact guarded
-specializations by lowered IR size) and splits six oversized source files into
-child modules.
+downgrade note is gated on the header word already loaded. `typeof x ===
+"number"` decides the definitely-Number cases inline, deferring INT32/class
+refs, raw typed-array pointers and the Web Streams id band to the classifier.
+Inline dynamic typed-array reads brand off the `GC_TYPE_TYPED_ARRAY` header
+instead of the evictable 64-slot kind cache. `js_array_get_f64` and the
+typed-feedback array-read fallback route object-backed Array-subclass
+receivers to their dense fast read before the tracked resolver and the by-name
+key path, and an `Any`-typed key that is an integer array index takes the
+inline numeric read tiers (`a[b[i]]`). Object-backed Array subclasses keep
+validated prototype-override reads, and compact guarded specializations are
+pre-statepoint inlined by lowered IR size.
 
 wolf-ecs (noctjs/ecs-benchmark) on the Mac mini reference box, versus the
 previous retained build: add/remove -18.5% (0.556 → 0.453 ms/op), entity-cycle

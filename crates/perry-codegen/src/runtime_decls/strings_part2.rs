@@ -317,7 +317,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function(
         "js_object_get_symbol_then_field_ic_miss",
         DOUBLE,
-        &[DOUBLE, DOUBLE, I64, I64, PTR, PTR],
+        &[DOUBLE, DOUBLE, PTR, I64, PTR, PTR],
     );
     module.add_external_global("PERRY_SYMBOL_PROPERTY_IC_EPOCH", I64);
     module.declare_function("js_object_create", DOUBLE, &[DOUBLE]);

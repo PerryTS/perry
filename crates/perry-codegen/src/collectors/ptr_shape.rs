@@ -1445,7 +1445,7 @@ pub(super) struct ThisFlowAnalysis<'a, 'b> {
     chain: &'b [&'a Class],
     fields: &'b HashSet<String>,
     methods: &'b HashMap<String, (String, &'a perry_hir::Function)>,
-    visited: HashSet<(String, String)>,
+    visited: HashSet<(String, String, bool)>,
     store_records: Vec<ThisStoreRecord<'a>>,
     /// `super(...)` argument lists observed in chain constructors, keyed by
     /// the PARENT (callee) class name. Feeds the parent-ctor parameter
@@ -1553,7 +1553,14 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
         func: &'a perry_hir::Function,
         allow_terminal_this_return: bool,
     ) -> bool {
-        let key = (owner.to_string(), name.to_string());
+        // Keyed by the terminal-`this`-return allowance too: the strict
+        // (`false`) vetting of a nested `this.m()` / `super.m()` edge must not
+        // be satisfied by an earlier lenient (`true`) visit of the same method.
+        let key = (
+            owner.to_string(),
+            name.to_string(),
+            allow_terminal_this_return,
+        );
         if !self.visited.insert(key) {
             return true; // already vetted (or in-progress higher up the stack)
         }

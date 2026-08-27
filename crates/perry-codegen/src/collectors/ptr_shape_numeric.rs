@@ -766,7 +766,7 @@ pub(super) fn expr_provably_not_bigint(e: &Expr, not_bigint_locals: &HashSet<u32
             perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::BitNot => {
                 expr_provably_not_bigint(operand, not_bigint_locals)
             }
-            _ => true, // !x, typeof x, … never produce BigInt
+            perry_hir::UnaryOp::Not => true, // `!x` is always a Boolean
         },
         Expr::Binary { .. } => false, // handled structurally by the caller
         _ => false,

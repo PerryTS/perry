@@ -728,7 +728,7 @@ fn local_typeof_number_literal_is_decided_inline_for_plain_doubles() {
         "the tag-range test must be the single unsigned range compare:\n{ir}"
     );
     assert!(
-        ir.contains("fcmp olt double") && ir.contains("1048576.0")
+        (ir.contains("fcmp olt double") && ir.contains("1048576.0"))
             || ir.contains("0x4130000000000000"),
         "the stream id band must be excluded inline:\n{ir}"
     );

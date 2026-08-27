@@ -746,12 +746,26 @@ fn combined_receiver_and_u31_clone_fuses_property_array_push() {
     let fast = function_body(&ir, &format!("@{combined}("));
     let generic = function_body(&ir, &format!("@{pshape}$generic("));
 
+    // The fused entry is allocate-but-never-reenter and answers null for
+    // receivers whose push can run user code; the composed clone consumes the
+    // u31 proof in that one entry on its hot path and keeps the complete
+    // guarded push only behind the null test, in `apush.u31.generic`.
+    let (hot, cold) = fast
+        .split_once("apush.u31.generic")
+        .expect("the u31 push must carry its null-result fallback block");
     assert!(
-        fast.contains("call i64 @js_array_push_u31_with_length")
-            && !fast.contains("call void @js_array_push_guard")
-            && !fast.contains("call i64 @js_array_push_f64")
-            && !fast.contains("call i32 @js_array_length"),
-        "the composed clone must consume the u31 proof in one push/length runtime entry:\n{fast}"
+        hot.contains("call i64 @js_array_push_u31_with_length")
+            && !hot.contains("call void @js_array_push_guard")
+            && !hot.contains("call i64 @js_array_push_f64")
+            && !hot.contains("call i32 @js_array_length"),
+        "the composed clone must consume the u31 proof in one push/length runtime entry on its hot path:\n{fast}"
+    );
+    assert!(
+        cold.contains("call void @js_array_push_guard")
+            && cold.contains("call i64 @js_array_push_f64")
+            && cold.contains("call i32 @js_array_length")
+            && !cold.contains("js_array_push_u31_with_length"),
+        "the null-result fallback must perform the complete guarded push:\n{fast}"
     );
     assert!(
         generic.contains("call void @js_array_push_guard")

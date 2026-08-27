@@ -600,9 +600,12 @@ pub(crate) unsafe fn note_old_generation_carrier(descriptor: Option<ShapeDescrip
     (*record).old_carrier_seen = true;
 }
 
-/// Permanently retain a descriptor while an agent-local optimization cache can
-/// reinstall its ShapeId. Cache tables live with `RuntimeState`, so this bit
-/// has the same lifetime and is reclaimed with the whole agent.
+/// Retain a descriptor while an agent-local optimization cache can reinstall
+/// its ShapeId. Cache tables live with `RuntimeState`; the bit is recomputed
+/// from live table occupancy after every full trace
+/// (`array_tail_transition::recompute_cache_carriers_after_full_trace`), so a
+/// descriptor whose last entry was evicted stops being rooted at the next full
+/// trace — the same cadence as `old_carrier`.
 #[inline]
 pub(crate) unsafe fn note_cache_carrier(descriptor: Option<ShapeDescriptor>) {
     let Some(descriptor) = descriptor else {
@@ -614,6 +617,14 @@ pub(crate) unsafe fn note_cache_carrier(descriptor: Option<ShapeDescriptor>) {
     let record = descriptor.record as *mut ShapeDescriptor;
     // GC_STORE_AUDIT(POINTER_FREE): liveness bookkeeping byte, never a heap reference.
     (*record).cache_carrier = true;
+}
+
+/// Clear every `cache_carrier` bit ahead of the post-full-trace recompute.
+pub(crate) fn clear_all_cache_carriers() {
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    for record in inner.descriptors.values_mut() {
+        record.cache_carrier = false;
+    }
 }
 
 /// Recompute the old-carrier gate from the trace that just finished.

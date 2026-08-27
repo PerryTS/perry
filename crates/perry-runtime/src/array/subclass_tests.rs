@@ -483,6 +483,92 @@ fn fused_u31_push_reports_length_for_plain_and_subclass_arrays() {
     assert_eq!(returned, obj as *mut ArrayHeader);
     assert_eq!(length, 1);
     assert_eq!(array_subclass_fast_index_get(receiver, 0), Some(42.0));
+
+    // An exotic receiver (here: a typed-array view, which `push` must answer
+    // through the observable `Set` — a non-writable `length` throws) can run
+    // user code on the complete path. The fused entry is classified
+    // allocate-but-never-reenter, so it must decline with null and leave the
+    // receiver untouched; the generated caller then performs the complete push.
+    let exotic =
+        crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT32 as i32, 4);
+    length = u32::MAX;
+    let declined = js_array_push_u31_with_length(exotic as *mut ArrayHeader, 5, &mut length);
+    assert!(
+        declined.is_null(),
+        "an exotic receiver must be declined to the caller's complete push"
+    );
+    assert_eq!(length, u32::MAX, "a declined push must not report a length");
+    assert_eq!(
+        unsafe { (*exotic).length },
+        4,
+        "a declined push must not mutate the receiver"
+    );
+}
+
+/// `cache_carrier` follows live transition-cache occupancy: an inserted edge
+/// marks both of its descriptors, and the post-full-trace recompute clears the
+/// mark once no live entry names them (eviction / tombstone / test clear).
+#[test]
+fn transition_cache_carrier_bits_follow_live_occupancy_across_full_trace_recompute() {
+    let _global = crate::gc::global_side_table_test_lock();
+    crate::object::array_tail_transition::test_clear();
+    let class_id = 0x0074_8695;
+    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
+    let obj = js_object_alloc(class_id, 2);
+    assert!(!obj.is_null());
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    crate::node_stream::js_array_subclass_init(receiver, 0.0);
+    let before = unsafe { (*obj).parent_class_id };
+    assert_eq!(
+        js_array_push_f64(obj as *mut ArrayHeader, 11.0),
+        obj as *mut ArrayHeader
+    );
+    // Pop warms the reverse edge; push it back to learn the forward edge.
+    assert_eq!(array_subclass_fast_pop(receiver), Some(11.0));
+    assert_eq!(
+        js_array_push_f64(obj as *mut ArrayHeader, 11.0),
+        obj as *mut ArrayHeader
+    );
+    let after = unsafe { (*obj).parent_class_id };
+    assert_ne!(before, after);
+    let carrier = |id: u32| {
+        crate::object::shapes::shape_descriptor_by_id(id)
+            .expect("shape exists")
+            .cache_carrier
+    };
+    assert!(
+        carrier(before) && carrier(after),
+        "descriptors named by a live transition entry must be cache carriers"
+    );
+
+    // With no live entry naming them, the recompute releases both.
+    crate::object::array_tail_transition::test_clear();
+    crate::object::array_tail_transition::recompute_cache_carriers_after_full_trace();
+    assert!(
+        !carrier(before) && !carrier(after),
+        "a full-trace recompute must release descriptors no live entry names"
+    );
+
+    // Relearning an edge marks its descriptors again, and a recompute keeps
+    // them. The cleared cache has no reverse edge for the fast pop, so the
+    // generic pop runs; it may mint a different predecessor shape, so the
+    // relearned pair is read back from the object rather than assumed.
+    assert_eq!(
+        crate::array::js_array_pop_f64(obj as *mut ArrayHeader),
+        11.0
+    );
+    let relearned_predecessor = unsafe { (*obj).parent_class_id };
+    assert_eq!(
+        js_array_push_f64(obj as *mut ArrayHeader, 11.0),
+        obj as *mut ArrayHeader
+    );
+    let relearned_successor = unsafe { (*obj).parent_class_id };
+    assert_ne!(relearned_predecessor, relearned_successor);
+    crate::object::array_tail_transition::recompute_cache_carriers_after_full_trace();
+    assert!(
+        carrier(relearned_predecessor) && carrier(relearned_successor),
+        "a recompute must keep descriptors that a live entry still names"
+    );
 }
 
 #[test]
@@ -737,7 +823,7 @@ fn empty_array_subclass_named_prefix_token_survives_warm_tail_cycle() {
 fn dense_array_subclass_tail_cache_preserves_a_1024_shape_lattice() {
     let _global = crate::gc::global_side_table_test_lock();
     crate::object::array_tail_transition::test_clear();
-    let class_id = 0x0074_865a;
+    let class_id = 0x0074_8693;
     crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
     let obj = js_object_alloc(class_id, 2);
     let receiver = crate::value::js_nanbox_pointer(obj as i64);
@@ -821,7 +907,7 @@ fn dense_array_subclass_tail_transition_edges_survive_moving_gc() {
     crate::gc::gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     crate::object::array_tail_transition::test_clear();
 
-    let class_id = 0x0074_8659;
+    let class_id = 0x0074_8694;
     crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
     let obj = js_object_alloc(class_id, 2);
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1035,6 +1121,27 @@ fn fused_ecs_guard_requires_distinct_owning_u32_columns_and_exact_entity_ids() {
         ),
         0,
         "non-Uint32 component columns must not borrow the direct clone"
+    );
+    // Columns shorter than the admitted bound: the fused loop reads every
+    // column up to that bound, so admission must be declined even though the
+    // columns agree with each other.
+    let tiny_a =
+        crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT32 as i32, 2);
+    let tiny_b =
+        crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT32 as i32, 2);
+    assert_eq!(
+        js_packed_ecs_u32_loop_guard(
+            receiver_h.get_nanbox_f64(),
+            3.0,
+            crate::value::js_nanbox_pointer(tiny_a as i64),
+            crate::value::js_nanbox_pointer(tiny_b as i64),
+            0.0,
+            0.0,
+            2,
+            facts.as_mut_ptr(),
+        ),
+        0,
+        "a column shorter than the admitted bound must decline the fused loop"
     );
     assert_eq!(
         js_packed_ecs_u32_loop_guard(

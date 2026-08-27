@@ -230,6 +230,14 @@ pub extern "C" fn js_packed_ecs_u32_loop_guard(
         common_length = Some(length);
         addresses[index] = address;
     }
+    // The admitted bound (`out[6]`, resolved for the live-length form too) is
+    // checked against the SOURCE receiver above; the fused loop also reads
+    // every column up to that bound, so a column shorter than it must decline
+    // admission rather than read past its payload.
+    let admitted_bound = unsafe { out.add(6).read() };
+    if common_length.is_some_and(|common| u64::from(common) < admitted_bound) {
+        return 0;
+    }
     unsafe {
         for (index, address) in addresses
             .iter()
