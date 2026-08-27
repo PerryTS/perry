@@ -500,18 +500,9 @@ pub(crate) unsafe fn array_named_property_get_by_name(
 /// Bulk element operations use this predicate to decline a dense-only path
 /// instead of leaving that second representation observable.
 #[inline]
-pub(crate) unsafe fn array_has_named_properties(arr: *const ArrayHeader) -> bool {
-    if !ARRAY_NAMED_PROPS_EVER.load(std::sync::atomic::Ordering::Acquire) {
-        return false;
-    }
-    let arr = clean_arr_ptr(arr);
-    if arr.is_null() {
-        return false;
-    }
-    array_has_named_properties_resolved(arr)
-}
-
-/// [`array_has_named_properties`] for a head the caller already resolved.
+/// Does this (already resolved) array head carry named properties in the
+/// side table? Answered by the monotone latch first: until some array has
+/// taken a named property, the table has always been empty.
 #[inline]
 pub(crate) unsafe fn array_has_named_properties_resolved(arr: *const ArrayHeader) -> bool {
     if !ARRAY_NAMED_PROPS_EVER.load(std::sync::atomic::Ordering::Acquire) {
