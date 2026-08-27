@@ -207,14 +207,12 @@ pub extern "C" fn js_array_get_index_or_string(arr: *const ArrayHeader, idx: f64
     // `a[{toString(){...}}]`) runs user JS, allocates and can evacuate `arr`.
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_const_ptr(arr);
-    let key = crate::value::js_jsvalue_to_string(idx);
+    let (key, arr) =
+        arr_handle.across_const::<ArrayHeader, _>(|| crate::value::js_jsvalue_to_string(idx));
     if key.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    array_get_property_by_key(
-        arr_handle.get_raw_const_ptr::<ArrayHeader>(),
-        key as *const crate::StringHeader,
-    )
+    array_get_property_by_key(arr, key as *const crate::StringHeader)
 }
 
 /// `arr[idx] = value` where idx may be a NaN-boxed string (numeric-string
@@ -279,15 +277,16 @@ pub extern "C" fn js_array_set_index_or_string(
         let scope = crate::gc::RuntimeHandleScope::new();
         let arr_handle = scope.root_raw_mut_ptr(arr);
         let value_handle = scope.root_nanbox_f64(value);
-        let key = crate::value::js_jsvalue_to_string(idx);
+        let (key, arr) =
+            arr_handle.across_mut::<ArrayHeader, _>(|| crate::value::js_jsvalue_to_string(idx));
         if !key.is_null() {
             return js_array_set_string_key(
-                arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                arr,
                 key as *const crate::StringHeader,
                 value_handle.get_nanbox_f64(),
             );
         }
-        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        return arr;
     }
     // Symbol-keyed write: store through the symbol side table (keyed by the
     // header address), exactly like a plain-object receiver. This arm used to
@@ -301,14 +300,14 @@ pub extern "C" fn js_array_set_index_or_string(
         // array), which can GC and evacuate the receiver.
         let scope = crate::gc::RuntimeHandleScope::new();
         let arr_handle = scope.root_raw_mut_ptr(arr);
-        unsafe {
+        let ((), arr) = arr_handle.across_mut::<ArrayHeader, _>(|| unsafe {
             crate::symbol::js_object_set_symbol_property(
                 crate::value::js_nanbox_pointer(arr as i64),
                 idx,
                 value,
             );
-        }
-        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        });
+        return arr;
     }
     // Fallback for a NON-numeric key: a primitive (`a[null]`, `a[undefined]`,
     // `a[true]`, `a[10n]`) or a boxed object (`a[new Number(1)]`). Per
@@ -327,15 +326,16 @@ pub extern "C" fn js_array_set_index_or_string(
         let scope = crate::gc::RuntimeHandleScope::new();
         let arr_handle = scope.root_raw_mut_ptr(arr);
         let value_handle = scope.root_nanbox_f64(value);
-        let key = crate::value::js_jsvalue_to_string(idx);
+        let (key, arr) =
+            arr_handle.across_mut::<ArrayHeader, _>(|| crate::value::js_jsvalue_to_string(idx));
         if !key.is_null() {
             return js_array_set_string_key(
-                arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
+                arr,
                 key as *const crate::StringHeader,
                 value_handle.get_nanbox_f64(),
             );
         }
-        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        return arr;
     }
     arr
 }

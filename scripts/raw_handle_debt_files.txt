@@ -47,10 +47,9 @@
 # rule above covers 84% of the crate on day one.
 #
 # Format: <count> <path>
+4 crates/perry-runtime/src/array/flat_clone.rs
 5 crates/perry-runtime/src/array/header.rs
 7 crates/perry-runtime/src/array/indexing.rs
-6 crates/perry-runtime/src/array/indexing_keyed.rs
-4 crates/perry-runtime/src/array/flat_clone.rs
 2 crates/perry-runtime/src/array/iter_methods.rs
 31 crates/perry-runtime/src/array/iterator.rs
 12 crates/perry-runtime/src/array/push_pop.rs
@@ -90,6 +89,7 @@
 4 crates/perry-runtime/src/node_submodules/mod.rs
 4 crates/perry-runtime/src/node_submodules/test.rs
 33 crates/perry-runtime/src/object/alloc.rs
+2 crates/perry-runtime/src/object/array_object_ops.rs
 2 crates/perry-runtime/src/object/bigint_dispatch.rs
 3 crates/perry-runtime/src/object/class_registry/construct.rs
 2 crates/perry-runtime/src/object/delete_rest.rs
@@ -128,6 +128,7 @@
 3 crates/perry-runtime/src/promise/rejection.rs
 3 crates/perry-runtime/src/promise/then.rs
 8 crates/perry-runtime/src/proxy.rs
+6 crates/perry-runtime/src/proxy/put_value.rs
 6 crates/perry-runtime/src/regex.rs
 19 crates/perry-runtime/src/regex/exec_array.rs
 13 crates/perry-runtime/src/regex/match_all.rs
@@ -157,5 +158,3 @@
 19 crates/perry-runtime/src/wasi.rs
 6 crates/perry-runtime/src/weakref.rs
 20 crates/perry-runtime/src/webassembly.rs
-6 crates/perry-runtime/src/proxy/put_value.rs
-2 crates/perry-runtime/src/object/array_object_ops.rs
