@@ -20,6 +20,7 @@ perry-ui-model.workspace = true
 perry-parser.workspace = true
 swc_ecma_ast.workspace = true
 swc_common.workspace = true
+swc_ecma_visit.workspace = true
 
 thiserror.workspace = true
 anyhow.workspace = true

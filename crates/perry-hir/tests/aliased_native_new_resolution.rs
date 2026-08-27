@@ -17,6 +17,7 @@ use perry_hir::lower_module;
 use perry_parser::parse_typescript_with_cache;
 
 const THROW_HELPER: &str = "js_throw_reference_error_unresolved_get";
+const GLOBAL_LOOKUP_HELPER: &str = "js_global_get_or_throw_unresolved";
 
 fn lower_debug(src: &str) -> String {
     let src = src.to_string();
@@ -92,11 +93,20 @@ fn unaliased_native_class_import_still_constructs() {
 fn genuinely_unresolved_new_still_throws() {
     // Positive control: the guard must still fire for a `new` on an identifier
     // that resolves to no binding at all — the fix must not blanket-suppress it.
+    // #8882: it now defers to a runtime `globalThis` lookup that carries the
+    // identifier (`ReferenceError: Totally_Undefined_Constructor_Xyz is not
+    // defined` on a miss) instead of the nameless throw.
     let debug = lower_debug(r#"const x = new Totally_Undefined_Constructor_Xyz();"#);
     assert!(
-        debug.contains(THROW_HELPER),
-        "a genuinely unresolved `new` must still lower to the nameless \
+        !debug.contains(THROW_HELPER),
+        "a genuinely unresolved `new` must no longer lower to the nameless \
          ReferenceError throw:\n{debug}"
+    );
+    assert!(
+        debug.contains(GLOBAL_LOOKUP_HELPER)
+            && debug.contains("\"Totally_Undefined_Constructor_Xyz\""),
+        "a genuinely unresolved `new` must lower to a named runtime global \
+         lookup:\n{debug}"
     );
 }
 
