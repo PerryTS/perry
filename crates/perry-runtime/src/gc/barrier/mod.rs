@@ -1142,6 +1142,39 @@ pub extern "C" fn js_write_barrier_slot(parent: u64, slot_addr: u64, child: u64)
     write_barrier_slot_inner(parent, slot_addr as usize, child, false);
 }
 
+/// [`js_write_barrier_slot`] for a parent the caller has ALREADY validated:
+/// `parent_user` is the raw (untagged) user pointer of a live, non-forwarded
+/// GC object whose header the emitted code dereferenced a few instructions
+/// earlier (`emit_parent_may_need_remembering_check` reads `gc_flags`).
+///
+/// Skips `decode_heap_addr(parent)` — a tag dispatch, an alignment/floor
+/// test and a page-generation classification that `write_barrier_decoded_parent`
+/// repeats one call later — and nothing else. For every parent that meets the
+/// contract the two entries decide identically: a classified arena parent
+/// reaches the same `barrier_parent_needs_remembering`, and an unregistered
+/// (`gc_malloc`) parent, which `decode_heap_addr` would have turned into a
+/// skip, is refused there instead because an inline slot never qualifies as
+/// external. On a 5k-entity ECS frame the buckets' `push` stores were
+/// classifying each old parent twice per command.
+#[no_mangle]
+pub extern "C" fn js_write_barrier_slot_validated_parent(
+    parent_user: u64,
+    slot_addr: u64,
+    child: u64,
+) {
+    let Some(child_addr) = barrier_child_prologue(child) else {
+        return;
+    };
+    if !barrier_remembering_active() {
+        return;
+    }
+    if parent_user == 0 {
+        bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerParentSkips);
+        return;
+    }
+    write_barrier_decoded_parent(parent_user as usize, slot_addr as usize, child_addr, false);
+}
+
 pub(super) fn write_barrier_slot_inner(
     parent: u64,
     slot_addr: usize,

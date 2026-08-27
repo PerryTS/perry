@@ -81,6 +81,7 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // `gc/barrier.rs`: remembered-set / incremental-marking maintenance.
         | "js_write_barrier"
         | "js_write_barrier_slot"
+        | "js_write_barrier_slot_validated_parent"
         | "js_write_barrier_root_heap_word"
         | "js_write_barrier_root_nanbox"
         // `gc/roots.rs`: registers one module-level global as a root. Audited

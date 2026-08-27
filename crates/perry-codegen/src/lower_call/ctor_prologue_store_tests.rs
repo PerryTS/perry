@@ -133,7 +133,7 @@ fn an_outlined_pointer_bearing_shape_keeps_its_write_barrier() {
     );
     assert!(
         ir.contains("ctor_prologue.barrier.maybe")
-            && ir.contains("call void @js_write_barrier_slot("),
+            && ir.contains("call void @js_write_barrier_slot"),
         "the direct pointer store must reach the ordinary write-barrier call:\n{ir}"
     );
 }

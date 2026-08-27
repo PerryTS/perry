@@ -94,7 +94,7 @@ pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("put.pic", StemKind::PointerTestedStore),
 ];
 
-const BARRIER_CALL: &str = "call void @js_write_barrier_slot(";
+const BARRIER_CALL: &str = "call void @js_write_barrier_slot";
 const INCREMENTAL_GLOBAL: &str = "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT";
 
 // ---------------------------------------------------------------------------
