@@ -288,18 +288,12 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
                     name
                 );
             }
-            return Ok(Expr::Call {
-                callee: Box::new(Expr::ExternFuncRef {
-                    name: "js_global_get_or_throw_unresolved".to_string(),
-                    param_types: vec![Type::Any],
-                    return_type: Type::Any,
-                }),
-                args: vec![Expr::String(name.clone())],
-                type_args: Vec::new(),
-                // #5253: localize the `X is not defined` ReferenceError to
-                // this identifier's source position (winston `module`).
-                byte_offset: ident.span.lo.0,
-            });
+            // #5253: localize the `X is not defined` ReferenceError to
+            // this identifier's source position (winston `module`).
+            return Ok(super::helpers::unresolved_global_get_expr(
+                name.clone(),
+                ident.span.lo.0,
+            ));
         }
         // Bare built-in constructor identifiers (`Date`, `Array`,
         // `Object`, ...) used as VALUES (not method receivers /

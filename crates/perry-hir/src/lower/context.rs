@@ -205,6 +205,7 @@ impl LoweringContext {
             class_renames: std::collections::HashMap::new(),
             next_class_rename_id: 0,
             module_class_decl_names: std::collections::HashSet::new(),
+            class_decl_names_any_depth: std::collections::HashSet::new(),
             next_anon_shape_id: 0,
             class_method_return_types: Vec::new(),
             class_captures: Vec::new(),

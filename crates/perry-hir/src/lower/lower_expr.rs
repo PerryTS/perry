@@ -42,8 +42,8 @@ pub(crate) use helpers::{
     global_script_this_enabled, is_fetch_global_value_name, is_known_global_identifier_name,
     lower_expr_with_json_parse_type_hint, native_module_binding_value, opt_call_func_nullish_guard,
     opt_call_receiver_repeatable, relower_trace, strict_global_assign_existing_or_throw,
-    throw_reference_error_expr, with_implicit_unset_let, with_set_fallback_for_ident,
-    wrap_with_gets,
+    throw_reference_error_expr, unresolved_global_get_expr, with_implicit_unset_let,
+    with_set_fallback_for_ident, wrap_with_gets,
 };
 pub(crate) use reactive_text::try_desugar_reactive_text;
 
