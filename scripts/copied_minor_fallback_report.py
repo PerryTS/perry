@@ -159,6 +159,7 @@ def empty_totals() -> dict[str, Any]:
             "checked_cycles": 0,
             "dead_bytes": 0,
             "reusable_bytes": 0,
+            "pooled_bytes": 0,
             "returned_bytes": 0,
             "candidate_pages": 0,
             "selected_pages": 0,
@@ -344,6 +345,7 @@ def add_totals(dst: dict[str, Any], src: dict[str, Any]) -> None:
         "checked_cycles",
         "dead_bytes",
         "reusable_bytes",
+        "pooled_bytes",
         "returned_bytes",
         "candidate_pages",
         "selected_pages",
@@ -447,6 +449,7 @@ def check_old_page_accounting(
     live = non_negative_int(old_pages, "live_bytes")
     dead = non_negative_int(old_pages, "dead_bytes")
     reusable = non_negative_int(old_pages, "reusable_bytes")
+    pooled = non_negative_int(old_pages, "pooled_bytes")
     returned = non_negative_int(old_pages, "returned_bytes")
     pinned = non_negative_int(old_pages, "pinned_bytes")
     if allocated > 0:
@@ -463,6 +466,7 @@ def check_old_page_accounting(
             )
     totals["old_page_accounting"]["dead_bytes"] += dead
     totals["old_page_accounting"]["reusable_bytes"] += reusable
+    totals["old_page_accounting"]["pooled_bytes"] += pooled
     totals["old_page_accounting"]["returned_bytes"] += returned
 
     candidate_pages = non_negative_int(policy, "old_page_candidate_pages")
@@ -945,9 +949,14 @@ def run_target_collector_gates(
                 errors.append(f"{name}: forced old-page workload selected no pages")
             if old_page["old_page_moved_bytes"] == 0:
                 errors.append(f"{name}: forced old-page workload moved no old-page bytes")
-            if old_page["reusable_bytes"] + old_page["returned_bytes"] == 0:
+            if (
+                old_page["reusable_bytes"]
+                + old_page["pooled_bytes"]
+                + old_page["returned_bytes"]
+                == 0
+            ):
                 errors.append(
-                    f"{name}: forced old-page workload reported no reusable or returned bytes"
+                    f"{name}: forced old-page workload reported no reusable, pooled, or returned bytes"
                 )
 
 

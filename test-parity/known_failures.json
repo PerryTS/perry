@@ -448,15 +448,6 @@
       "linux"
     ]
   },
-  "test_issue_5268_native_ctor_prototype_undefined": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_issue_538_background_tasks": {
     "issue": "8271",
     "added": "2026-08-17",
@@ -620,15 +611,6 @@
     ]
   },
   "test_issue_7981_thread_shape_stamp_parent": {
-    "issue": "8271",
-    "added": "2026-08-17",
-    "category": "untriaged",
-    "reason": "First complete parity run since 2026-07-04 (suite dark behind tag-gating + continue-on-error; #8187/#8244). Needs bisect over the six-week window. 2026-08-17 parity-debt audit (#8271).",
-    "platforms": [
-      "linux"
-    ]
-  },
-  "test_issue_806_curried_factory_extends_capture": {
     "issue": "8271",
     "added": "2026-08-17",
     "category": "untriaged",

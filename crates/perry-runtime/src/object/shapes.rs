@@ -1060,6 +1060,13 @@ pub(crate) unsafe fn transition_object_shape_semantics(
 /// Turn a class-expression object into a class receiver. The kind is part of
 /// the exact immutable descriptor, so it cannot alias GC layout bits and every
 /// pre-mark ShapeId guard permanently misses afterward.
+///
+/// Unlike a general semantic transition, changing `object_kind` already makes
+/// the descriptor facts distinct. Preserve the predecessor generation so
+/// repeated evaluations of the same class expression reuse one class-shaped
+/// descriptor. Minting a fresh generation here retained one descriptor per
+/// evaluation as long as their shared keys array stayed live (one million
+/// evaluations consumed hundreds of MB).
 pub(crate) unsafe fn transition_object_shape_to_class(
     obj: *mut crate::object::ObjectHeader,
 ) -> u32 {
@@ -1073,15 +1080,11 @@ pub(crate) unsafe fn transition_object_shape_to_class(
     if current.object_kind == ShapeObjectKind::Class {
         return object_shape_stamp(obj);
     }
-    let generation = SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if generation == 0 {
-        shape_id_exhausted_abort();
-    }
     let id = publish_shape_result(shape_descriptor_ensure_with_generation(
         current.keys as usize as *const ArrayHeader,
         current.logical_key_count,
         current.live_inline_slot_count,
-        generation,
+        current.semantic_generation,
         ShapeObjectKind::Class,
     ));
     (*obj).parent_class_id = id;

@@ -1,0 +1,1 @@
+Fix native `fs.readFile.prototype` semantics and bound class-expression shape metadata growth. Repair the release GC-evidence harness so trace-enabled runtimes and opt-in defragmentation are enabled, and count pooled source blocks as reclaimed while preserving the existing acceptance limits. Remove two stale Linux parity suppressions.
