@@ -98,12 +98,23 @@ fn resolve_type_inner(ty: &Type, table: &AliasTable, depth: usize) -> Type {
                 .collect(),
         ),
         Type::Promise(inner) => Type::Promise(Box::new(resolve_type_inner(inner, table, depth))),
-        Type::Union(types) => Type::Union(
-            types
-                .iter()
-                .map(|t| resolve_type_inner(t, table, depth))
-                .collect(),
-        ),
+        Type::Union(types) => {
+            // Two branded aliases of one primitive (`EntityId | ComponentId`)
+            // resolve to the same member; a union of identical members is
+            // that member, so the binding gets the primitive's lowering.
+            let mut resolved: Vec<Type> = Vec::with_capacity(types.len());
+            for t in types {
+                let t = resolve_type_inner(t, table, depth);
+                if !resolved.contains(&t) {
+                    resolved.push(t);
+                }
+            }
+            if resolved.len() == 1 {
+                resolved.pop().expect("one member")
+            } else {
+                Type::Union(resolved)
+            }
+        }
         Type::Function(f) => Type::Function(crate::types::FunctionType {
             params: f
                 .params
@@ -561,6 +572,28 @@ mod tests {
                 base: "Map".into(),
                 type_args: vec![Type::Number, Type::Array(Box::new(Type::Number))],
             }
+        );
+    }
+
+    #[test]
+    fn a_union_of_branded_aliases_of_one_primitive_is_that_primitive() {
+        let table = branded_table();
+        assert_eq!(
+            resolve_type(
+                &Type::Union(vec![
+                    Type::Named("EntityId".into()),
+                    Type::Named("ComponentId".into()),
+                ]),
+                &table
+            ),
+            Type::Number
+        );
+        assert_eq!(
+            resolve_type(
+                &Type::Union(vec![Type::Named("EntityId".into()), Type::Any]),
+                &table
+            ),
+            Type::Union(vec![Type::Number, Type::Any])
         );
     }
 

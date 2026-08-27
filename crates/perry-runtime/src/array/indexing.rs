@@ -234,6 +234,21 @@ pub(crate) fn array_iteration_is_exotic(arr: *const ArrayHeader) -> bool {
     // precedes every operation that could allocate or safepoint. The
     // compatible header-less receivers exited above.
     let flags = unsafe { array_object_flags_resolved(arr) };
+    unsafe { array_iteration_is_exotic_resolved(arr, flags) }
+}
+
+/// [`array_iteration_is_exotic`] for a caller that already resolved the live
+/// plain-array head, excluded Buffer/TypedArray receivers, and owns the header
+/// word: the policy tests without a second receiver resolution and registry
+/// probe (the iteration helpers call this once per invocation).
+///
+/// # Safety
+///
+/// `arr` and `flags` must satisfy [`array_object_flags_resolved`]'s contract.
+pub(crate) unsafe fn array_iteration_is_exotic_resolved(
+    arr: *const ArrayHeader,
+    flags: u16,
+) -> bool {
     if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
         return true;
     }

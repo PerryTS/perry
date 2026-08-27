@@ -920,9 +920,15 @@ pub extern "C" fn js_array_some_captureless(
         unsafe { std::mem::transmute(callback_func) };
     unsafe {
         let length = (*arr).length;
+        // SAFETY: `normalize_array_receiver` returned this live plain-array
+        // head and the registry exits above excluded Buffer/TypedArray
+        // receivers; nothing allocates before the flag read.
+        let exotic = crate::array::array_iteration_is_exotic_resolved(
+            arr,
+            crate::array::array_object_flags_resolved(arr),
+        );
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
-        let exotic = crate::array::array_iteration_is_exotic(arr);
 
         for i in 0..length as usize {
             let element = if exotic {

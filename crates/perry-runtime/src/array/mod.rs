@@ -122,11 +122,12 @@ pub use self::immutable::{
 #[cfg(test)]
 pub(crate) use self::indexing::test_keys_array_slot_fallbacks;
 pub(crate) use self::indexing::{
-    array_has_own_index, array_iteration_is_exotic, array_proto_iterator_modified,
-    array_prototype_has_index_flag, array_spec_get, array_spec_has_index, array_spec_set,
-    invalidate_array_index_fast_path, keys_array_len_capped_to_capacity, keys_array_slot,
-    note_array_proto_iterator_write, note_object_prototype_index_write,
-    object_prototype_has_index_flag, PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
+    array_has_own_index, array_iteration_is_exotic, array_iteration_is_exotic_resolved,
+    array_proto_iterator_modified, array_prototype_has_index_flag, array_spec_get,
+    array_spec_has_index, array_spec_set, invalidate_array_index_fast_path,
+    keys_array_len_capped_to_capacity, keys_array_slot, note_array_proto_iterator_write,
+    note_object_prototype_index_write, object_prototype_has_index_flag,
+    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
 };
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
