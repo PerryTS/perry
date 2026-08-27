@@ -776,3 +776,87 @@ mod descriptor_tests_8067 {
         }
     }
 }
+
+/// `ids_by_facts` moved from std's SipHash `RandomState` to `FastKeyHasher`.
+///
+/// The hazard that motivated the original "deliberately NOT a `PtrHashMap`"
+/// note is real: `PtrHasher`'s `write_*` methods OVERWRITE the accumulator, so
+/// a five-field `ShapeFacts` would collapse to its last field and every
+/// descriptor sharing that field would collide into one bucket.
+///
+/// `FastKeyHasher` avoids this by implementing only `write` — the derived
+/// `Hash`'s `write_u32`/`write_u64` calls all forward there and FOLD with
+/// FNV-1a. This test pins that property directly: vary ONE field at a time and
+/// require a distinct hash each time. It fails loudly against any hasher that
+/// overwrites instead of folding.
+#[test]
+fn shape_facts_hash_folds_every_field() {
+    use crate::fast_hash::FastKeyHasher;
+    use std::hash::{BuildHasher, Hash, Hasher};
+
+    fn h(f: &ShapeFacts) -> u64 {
+        let mut hasher = FastKeyHasher.build_hasher();
+        f.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    let base = ShapeFacts {
+        keys: 0x1111_2222_3333_4444,
+        logical_key_count: 7,
+        live_inline_slot_count: 3,
+        semantic_generation: 9,
+        object_kind: ShapeObjectKind::Ordinary,
+    };
+
+    let variants = [
+        (
+            "keys",
+            ShapeFacts {
+                keys: 0x5555_6666_7777_8888,
+                ..base
+            },
+        ),
+        (
+            "logical_key_count",
+            ShapeFacts {
+                logical_key_count: 8,
+                ..base
+            },
+        ),
+        (
+            "live_inline_slot_count",
+            ShapeFacts {
+                live_inline_slot_count: 4,
+                ..base
+            },
+        ),
+        (
+            "semantic_generation",
+            ShapeFacts {
+                semantic_generation: 10,
+                ..base
+            },
+        ),
+        (
+            "object_kind",
+            ShapeFacts {
+                object_kind: ShapeObjectKind::Class,
+                ..base
+            },
+        ),
+    ];
+
+    let base_hash = h(&base);
+    for (field, v) in &variants {
+        assert_ne!(
+            h(v),
+            base_hash,
+            "changing `{field}` alone must change the hash — a hasher that \
+             overwrites instead of folding would collapse ShapeFacts to its \
+             last field and collide every descriptor that shares it"
+        );
+    }
+
+    // Same facts must still hash the same, or lookups would miss.
+    assert_eq!(h(&base), h(&base.clone()), "hashing must be deterministic");
+}
