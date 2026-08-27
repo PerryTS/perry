@@ -77,6 +77,55 @@ fn every_stdin_end_listener_fires() {
     );
 }
 
+/// The PROVIDER path — `stdin_on_op` / `stdin_off_op` — must handle
+/// `end`/`close` too, not just the syntactic `js_readline_stdin_on` extern
+/// that `every_stdin_end_listener_fires` above covers.
+///
+/// The provider is what the stdin object's native `on`/`once`/`addListener`
+/// delegate to, i.e. every registration that is NOT codegen's literal
+/// `process.stdin.x(…)` shape: an alias, or stdin passed as a parameter.
+/// Claude Code's print-mode reader is the parameter form — `X71(process.stdin,
+/// 3000)` then `stream.once("end", …)` inside — so without these arms its
+/// `race(once("end"), timeout(3000))` can never resolve via `end` and
+/// `echo hi | claude -p …` never completes.
+///
+/// These two tests guard arms that have now been lost twice, which is why they
+/// assert the provider entry points directly rather than going through the
+/// extern.
+#[test]
+fn provider_path_registers_end_listeners() {
+    let _g = reset();
+    let a = data_counter_callback();
+    let b = data_counter_callback();
+    stdin_on_op(b"end".as_ptr(), 3, a, 0);
+    stdin_on_op(b"close".as_ptr(), 5, b, 1);
+    assert_eq!(
+        STDIN_END_CALLBACKS.lock().map(|v| v.len()).unwrap_or(0),
+        2,
+        "aliased end/close registrations must reach the end-listener list"
+    );
+    EOF_REACHED.store(true, Ordering::Release);
+    js_readline_process_pending();
+    assert_eq!(
+        DATA_COUNT.with(|n| *n.borrow()),
+        2,
+        "listeners registered through the provider must fire at EOF"
+    );
+}
+
+#[test]
+fn provider_path_removes_end_listeners() {
+    let _g = reset();
+    let cb = data_counter_callback();
+    stdin_on_op(b"end".as_ptr(), 3, cb, 0);
+    stdin_off_op(b"end".as_ptr(), 3, cb);
+    assert_eq!(
+        STDIN_END_CALLBACKS.lock().map(|v| v.len()).unwrap_or(0),
+        0,
+        "removing an aliased end listener must clear it"
+    );
+}
+
 /// An `on("readable")` listener puts stdin in paused/pull mode, where the
 /// fd-0 reader must buffer bytes for `process.stdin.read()` instead of
 /// routing them to readline's line queue (which `read()` never drains).

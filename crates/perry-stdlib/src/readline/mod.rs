@@ -376,6 +376,27 @@ extern "C" fn stdin_on_op(name_ptr: *const u8, name_len: usize, cb: i64, _once: 
                 v.push(cb);
             }
         }
+        // #8861: `end`/`close` MUST be handled here, not only in the syntactic
+        // `js_readline_stdin_on` extern.
+        //
+        // This provider is what the stdin OBJECT's native `on`/`once`/
+        // `addListener` methods delegate to — i.e. every registration that does
+        // not match codegen's literal `process.stdin.x(…)` pattern: an alias
+        // (`const s = process.stdin; s.once("end", …)`) or stdin passed as a
+        // parameter (`helper(process.stdin)`). That is exactly what Claude
+        // Code's print-mode reader does: `X71(process.stdin, 3000)`, then
+        // `stream.once("end", …)` on the parameter inside.
+        //
+        // Falling into the `_ => return` below silently discards those
+        // listeners. Node fires the direct, aliased and parameter forms alike;
+        // without this arm perry fires only the direct one, so the `end` half
+        // of the reader's `race(once("end"), timeout(3000))` can never win and
+        // `echo hi | claude -p …` never completes.
+        "end" | "close" => {
+            if let Ok(mut v) = STDIN_END_CALLBACKS.lock() {
+                v.push(cb);
+            }
+        }
         _ => return,
     }
     try_register_pump();
@@ -409,6 +430,21 @@ extern "C" fn stdin_off_op(name_ptr: *const u8, name_len: usize, cb: i64) {
             if let Ok(mut v) = KEYPRESS_CALLBACKS.lock() {
                 v.retain(|r| *r != cb);
             }
+        }
+        // Mirror of the `end`/`close` arm in `stdin_on_op`. Without it a
+        // listener registered through the provider path can be added but never
+        // removed, so `removeListener`/`off` leaks it and the pump keeps a
+        // stale callback pointer.
+        "end" | "close" => {
+            if let Ok(mut v) = STDIN_END_CALLBACKS.lock() {
+                v.retain(|r| *r != cb);
+            }
+            CLOSE_CALLBACK.with(|slot| {
+                let mut slot = slot.borrow_mut();
+                if *slot == Some(cb) {
+                    *slot = None;
+                }
+            });
         }
         _ => {}
     }
