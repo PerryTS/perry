@@ -105,20 +105,26 @@ fn process_stmts(stmts: &mut Vec<Stmt>, next_local_id: &mut LocalId) {
             i += 1;
             continue;
         };
+        // An inlined callee binds its callback parameter as a copy local
+        // (`let exists' = exists`); follow such copies so the calls through
+        // them count as calls of the closure.
+        let set = collect_aliases(&stmts[i + 1..], id);
         let mut uses = Uses::default();
         for s in &stmts[i + 1..] {
-            collect_uses_in_stmt(s, id, &mut uses);
+            collect_uses_in_stmt(s, &set, &mut uses);
         }
         if uses.other || uses.calls == 0 || uses.bad_arity {
             i += 1;
             continue;
         }
-        for s in &mut stmts[i + 1..] {
-            for_each_expr_in_stmt_mut(s, &mut |e| {
-                rewrite_calls(e, id, &params, &body_expr, next_local_id)
-            });
+        let mut tail: Vec<Stmt> = stmts.split_off(i + 1);
+        for s in tail.iter_mut() {
+            rewrite_calls_in_stmt(s, &set, &params, &body_expr, next_local_id);
         }
-        stmts.remove(i);
+        remove_alias_lets(&mut tail, &set);
+        // Drop the closure's own `let` and splice the rewritten tail back.
+        stmts.truncate(i);
+        stmts.extend(tail);
         // Do not advance: the list shifted, and the statement now at `i` may
         // itself be a candidate.
     }
@@ -184,6 +190,58 @@ fn is_trivial_expr(expr: &Expr) -> bool {
     )
 }
 
+/// `id` plus every local that is a plain copy of it (`let y = id;`,
+/// transitively), searched through nested statement lists.
+fn collect_aliases(stmts: &[Stmt], id: LocalId) -> Vec<LocalId> {
+    let mut set = vec![id];
+    loop {
+        let before = set.len();
+        for s in stmts {
+            collect_alias_lets_in_stmt(s, &mut set);
+        }
+        if set.len() == before {
+            return set;
+        }
+    }
+}
+
+fn collect_alias_lets_in_stmt(stmt: &Stmt, set: &mut Vec<LocalId>) {
+    if let Stmt::Let {
+        id,
+        init: Some(Expr::LocalGet(src)),
+        ..
+    } = stmt
+    {
+        if set.contains(src) && !set.contains(id) {
+            set.push(*id);
+        }
+    }
+    for inner in nested_stmt_lists_ref(stmt) {
+        for s in inner {
+            collect_alias_lets_in_stmt(s, set);
+        }
+    }
+}
+
+fn remove_alias_lets(stmts: &mut Vec<Stmt>, set: &[LocalId]) {
+    stmts.retain(|s| {
+        !matches!(
+            s,
+            Stmt::Let { id, init: Some(Expr::LocalGet(src)), .. }
+                if set.contains(id) && set.contains(src)
+        )
+    });
+    for s in stmts.iter_mut() {
+        remove_alias_lets_in_stmt(s, set);
+    }
+}
+
+fn remove_alias_lets_in_stmt(stmt: &mut Stmt, set: &[LocalId]) {
+    for inner in nested_stmt_lists(stmt) {
+        remove_alias_lets(inner, set);
+    }
+}
+
 #[derive(Default)]
 struct Uses {
     calls: usize,
@@ -191,55 +249,84 @@ struct Uses {
     other: bool,
 }
 
-fn collect_uses_in_stmt(stmt: &Stmt, id: LocalId, uses: &mut Uses) {
-    for_each_expr_in_stmt(stmt, &mut |e| collect_uses(e, id, uses));
+fn collect_uses_in_stmt(stmt: &Stmt, set: &[LocalId], uses: &mut Uses) {
+    // The copy that defines an alias is not a use of the closure.
+    if let Stmt::Let {
+        id,
+        init: Some(Expr::LocalGet(src)),
+        ..
+    } = stmt
+    {
+        if set.contains(id) && set.contains(src) {
+            return;
+        }
+    }
+    for_each_expr_in_stmt(stmt, &mut |e| collect_uses(e, set, uses));
     for inner in nested_stmt_lists_ref(stmt) {
         for s in inner {
-            collect_uses_in_stmt(s, id, uses);
+            collect_uses_in_stmt(s, set, uses);
         }
     }
 }
 
-fn collect_uses(expr: &Expr, id: LocalId, uses: &mut Uses) {
+fn collect_uses(expr: &Expr, set: &[LocalId], uses: &mut Uses) {
     match expr {
-        Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if *x == id) =>
+        Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)) =>
         {
             uses.calls += 1;
             if !args.iter().all(is_trivial_expr) {
                 uses.bad_arity = true;
             }
             for a in args {
-                collect_uses(a, id, uses);
+                collect_uses(a, set, uses);
             }
         }
-        Expr::LocalGet(x) if *x == id => uses.other = true,
+        Expr::LocalGet(x) if set.contains(x) => uses.other = true,
         Expr::LocalSet(x, value) => {
-            if *x == id {
+            if set.contains(x) {
                 uses.other = true;
             }
-            collect_uses(value, id, uses);
+            collect_uses(value, set, uses);
         }
         Expr::Closure { captures, body, .. } => {
-            if captures.contains(&id) {
+            if captures.iter().any(|c| set.contains(c)) {
                 uses.other = true;
             }
             for s in body {
-                collect_uses_in_stmt(s, id, uses);
+                collect_uses_in_stmt(s, set, uses);
             }
-            walk_expr_children(expr, &mut |child| collect_uses(child, id, uses));
+            walk_expr_children(expr, &mut |child| collect_uses(child, set, uses));
         }
-        _ => walk_expr_children(expr, &mut |child| collect_uses(child, id, uses)),
+        _ => walk_expr_children(expr, &mut |child| collect_uses(child, set, uses)),
+    }
+}
+
+/// Rewrite every call of `id` in `stmt`, including its nested statement lists.
+fn rewrite_calls_in_stmt(
+    stmt: &mut Stmt,
+    set: &[LocalId],
+    params: &[LocalId],
+    body_expr: &Expr,
+    next_local_id: &mut LocalId,
+) {
+    for_each_expr_in_stmt_mut(stmt, &mut |e| {
+        rewrite_calls(e, set, params, body_expr, next_local_id)
+    });
+    for inner in nested_stmt_lists(stmt) {
+        for s in inner.iter_mut() {
+            rewrite_calls_in_stmt(s, set, params, body_expr, next_local_id);
+        }
     }
 }
 
 fn rewrite_calls(
     expr: &mut Expr,
-    id: LocalId,
+    set: &[LocalId],
     params: &[LocalId],
     body_expr: &Expr,
     next_local_id: &mut LocalId,
 ) {
-    let is_target = matches!(expr, Expr::Call { callee, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if *x == id));
+    let is_target = matches!(expr, Expr::Call { callee, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)));
     if is_target {
         let Expr::Call { args, .. } = expr else {
             unreachable!()
@@ -260,20 +347,11 @@ fn rewrite_calls(
     }
     if let Expr::Closure { body, .. } = expr {
         for s in body.iter_mut() {
-            for_each_expr_in_stmt_mut(s, &mut |e| {
-                rewrite_calls(e, id, params, body_expr, next_local_id)
-            });
-            for inner in nested_stmt_lists(s) {
-                for s2 in inner.iter_mut() {
-                    for_each_expr_in_stmt_mut(s2, &mut |e| {
-                        rewrite_calls(e, id, params, body_expr, next_local_id)
-                    });
-                }
-            }
+            rewrite_calls_in_stmt(s, set, params, body_expr, next_local_id);
         }
     }
     walk_expr_children_mut(expr, &mut |child| {
-        rewrite_calls(child, id, params, body_expr, next_local_id)
+        rewrite_calls(child, set, params, body_expr, next_local_id)
     });
 }
 
@@ -683,6 +761,105 @@ mod tests {
             format!("{operand:?}"),
             format!("{:?}", this_exists(Expr::LocalGet(ENTITY)))
         );
+    }
+
+    /// The inliner wraps a callee body in `do { … } while (false)`, so the
+    /// only call usually sits in a nested statement list.
+    #[test]
+    fn rewrites_calls_inside_nested_statement_lists() {
+        let mut stmts = vec![
+            Stmt::Let {
+                id: F,
+                name: "exists".into(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(arrow(
+                    25,
+                    vec![param(P, "id")],
+                    this_exists(Expr::LocalGet(P)),
+                    true,
+                )),
+            },
+            Stmt::DoWhile {
+                body: vec![Stmt::If {
+                    condition: Expr::Unary {
+                        op: perry_hir::UnaryOp::Not,
+                        operand: Box::new(call_local(F, vec![Expr::LocalGet(ENTITY)])),
+                    },
+                    then_branch: vec![Stmt::Break],
+                    else_branch: None,
+                }],
+                condition: Expr::Bool(false),
+            },
+        ];
+        let mut next = 100;
+        process_stmts(&mut stmts, &mut next);
+        assert_eq!(stmts.len(), 1, "{stmts:?}");
+        let rendered = format!("{stmts:?}");
+        assert!(
+            !rendered.contains("LocalGet(10)"),
+            "call not rewritten: {rendered}"
+        );
+        assert!(
+            rendered.contains("\"exists\""),
+            "body not substituted: {rendered}"
+        );
+    }
+
+    /// The inliner binds the callee's callback parameter as a copy local
+    /// (`let exists' = exists`) inside its `do { … } while (false)` wrapper.
+    #[test]
+    fn follows_copy_aliases_of_the_callback_and_removes_them() {
+        const ALIAS: LocalId = 20;
+        let mut stmts = vec![
+            Stmt::Let {
+                id: F,
+                name: "exists".into(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(arrow(
+                    25,
+                    vec![param(P, "id")],
+                    this_exists(Expr::LocalGet(P)),
+                    true,
+                )),
+            },
+            guard(F, arrow(69, vec![], Expr::Bool(true), false)),
+            Stmt::DoWhile {
+                body: vec![
+                    Stmt::Let {
+                        id: ALIAS,
+                        name: "exists".into(),
+                        ty: Type::Any,
+                        mutable: false,
+                        init: Some(Expr::LocalGet(F)),
+                    },
+                    Stmt::If {
+                        condition: Expr::Unary {
+                            op: perry_hir::UnaryOp::Not,
+                            operand: Box::new(call_local(ALIAS, vec![Expr::LocalGet(ENTITY)])),
+                        },
+                        then_branch: vec![Stmt::Break],
+                        else_branch: None,
+                    },
+                ],
+                condition: Expr::Bool(false),
+            },
+        ];
+        let mut next = 100;
+        process_stmts(&mut stmts, &mut next);
+        let rendered = format!("{stmts:?}");
+        assert_eq!(stmts.len(), 1, "{rendered}");
+        assert!(!rendered.contains("LocalGet(10)"), "{rendered}");
+        assert!(
+            !rendered.contains("LocalGet(20)"),
+            "alias let/read survived: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Closure"),
+            "closure survived: {rendered}"
+        );
+        assert!(rendered.contains("\"exists\""), "{rendered}");
     }
 
     #[test]
