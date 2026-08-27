@@ -823,6 +823,78 @@ fn lower_string_strict_eq_inline(
     )
 }
 
+/// `typeof v === "number"` (or `!==`) with the definitely-a-Number cases
+/// decided inline and everything else deferred to the shared classifier.
+///
+/// The classifier answers `Number` only on its final fallthrough, after every
+/// NaN-box tag has been excluded and two raw-bit exceptions have been checked:
+/// an untagged typed-array pointer (`top16 == 0 && bits >= 0x10000`, #654) and
+/// a Web Streams handle id, which is a positive whole number inside
+/// `[STREAM_ID_BAND_START, STREAM_ID_BAND_END)` (#1545/#1650). A value is
+/// therefore a Number by construction when its top 16 bits are outside the
+/// tag range `0x7FF9..=0x7FFF` (that covers every negative double as well),
+/// it is not that raw-pointer shape, and it lies outside the stream id band.
+/// INT32-tagged values (which may be class references) and everything inside
+/// the two exception windows keep the complete classifier, so the two routes
+/// can never disagree. The inline arm is the ECS `_validID` entity-id check.
+fn lower_typeof_number_inline(ctx: &mut FnCtx<'_>, value: &str, negate: bool) -> String {
+    let fast_idx = ctx.new_block("typeof.num.fast");
+    let slow_idx = ctx.new_block("typeof.num.slow");
+    let merge_idx = ctx.new_block("typeof.num.merge");
+    let fast_label = ctx.block_label(fast_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(value);
+        let top16 = blk.lshr(I64, &bits, "48");
+        // Outside the tag range `0x7FF9..=0x7FFF` in one unsigned compare.
+        let tag_offset = blk.sub(I64, &top16, "32761");
+        let untagged = blk.icmp_ugt(I64, &tag_offset, "6");
+        // Not an untagged raw typed-array pointer.
+        let top_nonzero = blk.icmp_ne(I64, &top16, "0");
+        let below_pointer_floor = blk.icmp_ult(I64, &bits, "65536");
+        let not_raw_pointer = blk.or(I1, &top_nonzero, &below_pointer_floor);
+        // Not inside the stream handle id band (a positive whole number
+        // there is the one Number-looking value the classifier may call an
+        // object). Ordered compares are false for NaN, which is a Number.
+        let below_band = blk.fcmp("olt", value, "1048576.0");
+        let above_band = blk.fcmp("oge", value, "2097152.0");
+        let outside_band = blk.or(I1, &below_band, &above_band);
+        let is_nan = blk.fcmp("uno", value, value);
+        let nan_or_outside_band = blk.or(I1, &outside_band, &is_nan);
+        let mut definitely_number = blk.and(I1, &untagged, &not_raw_pointer);
+        definitely_number = blk.and(I1, &definitely_number, &nan_or_outside_band);
+        blk.cond_br(&definitely_number, &fast_label, &slow_label);
+    }
+    ctx.current_block = fast_idx;
+    let fast_end = {
+        let blk = ctx.block();
+        let label = blk.label.clone();
+        blk.br(&merge_label);
+        label
+    };
+    ctx.current_block = slow_idx;
+    let (slow_bit, slow_end) = {
+        let tag = ctx
+            .block()
+            .call(I32, "js_value_typeof_tag", &[(crate::types::DOUBLE, value)]);
+        let bit = if negate {
+            ctx.block().icmp_ne(I32, &tag, "3")
+        } else {
+            ctx.block().icmp_eq(I32, &tag, "3")
+        };
+        let blk = ctx.block();
+        let label = blk.label.clone();
+        blk.br(&merge_label);
+        (bit, label)
+    };
+    ctx.current_block = merge_idx;
+    let fast_bit = if negate { "false" } else { "true" };
+    ctx.block()
+        .phi(I1, &[(fast_bit, &fast_end), (&slow_bit, &slow_end)])
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Compare { op, left, right } => {
@@ -835,15 +907,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // classifier's integer result instead of materializing a
                     // heap string and entering string equality.
                     let value = lower_expr(ctx, operand)?;
-                    let tag = ctx.block().call(
-                        I32,
-                        "js_value_typeof_tag",
-                        &[(crate::types::DOUBLE, &value)],
-                    );
-                    let bit = if matches!(op, CompareOp::Ne) {
-                        ctx.block().icmp_ne(I32, &tag, &expected_tag.to_string())
+                    let bit = if expected_tag == 3 {
+                        lower_typeof_number_inline(ctx, &value, matches!(op, CompareOp::Ne))
                     } else {
-                        ctx.block().icmp_eq(I32, &tag, &expected_tag.to_string())
+                        let tag = ctx.block().call(
+                            I32,
+                            "js_value_typeof_tag",
+                            &[(crate::types::DOUBLE, &value)],
+                        );
+                        if matches!(op, CompareOp::Ne) {
+                            ctx.block().icmp_ne(I32, &tag, &expected_tag.to_string())
+                        } else {
+                            ctx.block().icmp_eq(I32, &tag, &expected_tag.to_string())
+                        }
                     };
                     let tagged = ctx.block().select(
                         I1,

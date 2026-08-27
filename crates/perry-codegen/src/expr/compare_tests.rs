@@ -661,3 +661,47 @@ fn loose_equality_against_number_keeps_coercion() {
         "dynamic == number incorrectly bypassed coercion:\n{ir}"
     );
 }
+
+/// `typeof x === "number"` decides the definitely-a-Number cases inline and
+/// keeps the integer classifier only on the slow arm: a value whose top 16
+/// bits are outside the NaN-box tag range, that is not an untagged raw
+/// typed-array pointer, and that lies outside the Web Streams id band is a
+/// Number by construction. Everything else still asks `js_value_typeof_tag`,
+/// so the two routes can never disagree.
+#[test]
+fn local_typeof_number_literal_is_decided_inline_for_plain_doubles() {
+    let ir = cmp_ir(
+        "typeof_local_eq_number_inline",
+        CompareOp::Eq,
+        Expr::TypeOf(Box::new(Expr::LocalGet(X))),
+        Expr::String("number".to_string()),
+    );
+    assert!(
+        ir.contains("typeof.num.fast") && ir.contains("typeof.num.slow"),
+        "the inline Number test must fork a fast and a slow arm:\n{ir}"
+    );
+    let slow = super::class_field_barrier_tests::block_body(&ir, "typeof.num.slow.")
+        .expect("slow arm exists");
+    assert!(
+        slow.contains("call i32 @js_value_typeof_tag("),
+        "the classifier call must live on the slow arm:\n{slow}"
+    );
+    let calls = ir.matches("call i32 @js_value_typeof_tag(").count();
+    assert_eq!(
+        calls, 1,
+        "exactly one classifier call, on the slow arm:\n{ir}"
+    );
+    assert!(
+        ir.contains("icmp ugt i64") && ir.contains(", 6\n") || ir.contains(", 6 "),
+        "the tag-range test must be the single unsigned range compare:\n{ir}"
+    );
+    assert!(
+        ir.contains("fcmp olt double") && ir.contains("1048576.0")
+            || ir.contains("0x4130000000000000"),
+        "the stream id band must be excluded inline:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i64 @js_value_typeof(") && !ir.contains("call i32 @js_string_equals("),
+        "no typeof string or string equality may be materialized:\n{ir}"
+    );
+}

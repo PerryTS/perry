@@ -28,9 +28,9 @@ use super::FnCtx;
 ///   1. receiver-is-pointer NaN-box guard,
 ///   2. a read of the process-global `PERRY_TA_VIEW_GUARD` (must be 0 → every
 ///      live typed array uses inline storage, so `data_ptr == header + 16`),
-///   3. a probe of the `PERRY_TA_KIND_CACHE` slot for the receiver address
-///      (matches the cached `(addr << 8) | tag` word; the tag is the element
-///      kind and must be a non-BigInt kind ≤ `KIND_UINT8_CLAMPED`),
+///   3. a `GC_TYPE_TYPED_ARRAY` brand read from the receiver's managed header
+///      (`obj_type == 11`) plus the element kind read from the
+///      `TypedArrayHeader` (must be a non-BigInt kind ≤ `KIND_UINT8_CLAMPED`),
 ///   4. an index validity + bounds check against the header `length`,
 ///   5. a direct per-kind element load + int↔f64 widen,
 /// and falls back to the existing `js_dyn_index_get` slow path on ANY guard
@@ -81,22 +81,46 @@ pub(super) fn lower_inline_dyn_typed_array_get(
         // view guard must be 0 (all typed arrays inline-storage)
         let vg = blk.load(I64, "@PERRY_TA_VIEW_GUARD");
         let vg_zero = blk.icmp_eq(I64, &vg, "0");
-        // cache slot = (raw >> 3) & 63
-        let slot = blk.lshr(I64, &raw, "3");
-        let slot = blk.and(I64, &slot, "63");
-        let entry_ptr = blk.gep(
-            "[64 x i64]",
-            "@PERRY_TA_KIND_CACHE",
-            &[(I64, "0"), (I64, &slot)],
-        );
-        let entry_val = blk.load(I64, &entry_ptr);
-        // addr match: (entry_val u>> 8) == raw  (also rejects empty slot = 0)
-        let entry_addr = blk.lshr(I64, &entry_val, "8");
-        let addr_match = blk.icmp_eq(I64, &entry_addr, &raw);
-        // kind = entry_val & 0xFF; loadable numeric kind = kind <= 8
-        // (KIND_INT8=0 .. KIND_UINT8_CLAMPED=8; rejects BigInt 9/10,
-        // Float16 11, and the 0xFF "not a typed array" sentinel).
-        let kind = blk.and(I64, &entry_val, "255");
+        // Heap-band magnitude before any dereference: the same floor and
+        // ceiling the guarded Array tiers apply (`is_plausible_heap_addr`).
+        let above_handle_band = blk.icmp_ugt(I64, &raw, "1048575");
+        let below_heap_limit = blk.icmp_ult(I64, &raw, "140737488355328");
+        let heap_candidate = blk.and(I1, &above_handle_band, &below_heap_limit);
+        let g0 = blk.and(I1, &is_ptr, &vg_zero);
+        blk.and(I1, &g0, &heap_candidate)
+    };
+    let brand_idx = ctx.new_block("tav.get.brand");
+    let brand_label = ctx.block_label(brand_idx);
+    ctx.block().cond_br(&entry_guard, &brand_label, &slow_label);
+
+    // ---- brand: managed-header tag + header kind -> fast | slow ----
+    //
+    // Every typed array carries a real `GC_TYPE_TYPED_ARRAY` GcHeader (the
+    // 2026-07-09 audit) whose payload starts with `TypedArrayHeader`
+    // {length u32, capacity u32, kind u8, ...}. Reading the brand and the kind
+    // from the object itself replaces the 64-slot direct-mapped
+    // `PERRY_TA_KIND_CACHE` probe, which every ordinary-array registry miss
+    // also writes NEGATIVE entries into: a hot typed array whose slot kept
+    // being evicted (the wolf-ecs archetype `mask` reads) missed this tier on
+    // every access and paid the complete dynamic read. The header tag is
+    // ABA-proof for a value held by live code: the arena rewrites `obj_type`
+    // before it hands the address out again, and a live reference keeps the
+    // typed array alive.
+    ctx.current_block = brand_idx;
+    let entry_guard = {
+        let blk = ctx.block();
+        let obj_bits = blk.bitcast_double_to_i64(obj_box);
+        let raw = blk.and(I64, &obj_bits, pointer_mask);
+        let gc_type_addr = blk.sub(I64, &raw, "8");
+        let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
+        let gc_type = blk.load(I8, &gc_type_ptr);
+        let is_typed_array = blk.icmp_eq(I8, &gc_type, "11"); // GC_TYPE_TYPED_ARRAY
+        let kind_addr = blk.add(I64, &raw, "8");
+        let kind_ptr = blk.inttoptr(I64, &kind_addr);
+        let kind_i8 = blk.load(I8, &kind_ptr);
+        let kind = blk.zext(I8, &kind_i8, I64);
+        // loadable numeric kind = kind <= 8 (KIND_INT8=0 .. KIND_UINT8_CLAMPED=8;
+        // rejects BigInt 9/10 and Float16 11).
         let kind_ok = blk.icmp_ule(I64, &kind, "8");
         // index float-range pre-checks (well-defined on NaN → false): the
         // fptosi in the load block is only reached when these hold, so its
@@ -104,9 +128,7 @@ pub(super) fn lower_inline_dyn_typed_array_get(
         let idx_ge0 = blk.fcmp("oge", idx_d, "0.0");
         let idx_lt = blk.fcmp("olt", idx_d, "4294967296.0");
         // AND-reduce all guards.
-        let g = blk.and(I1, &is_ptr, &vg_zero);
-        let g = blk.and(I1, &g, &addr_match);
-        let g = blk.and(I1, &g, &kind_ok);
+        let g = blk.and(I1, &is_typed_array, &kind_ok);
         let g = blk.and(I1, &g, &idx_ge0);
         blk.and(I1, &g, &idx_lt)
     };
@@ -118,16 +140,12 @@ pub(super) fn lower_inline_dyn_typed_array_get(
         let blk = ctx.block();
         let obj_bits = blk.bitcast_double_to_i64(obj_box);
         let raw = blk.and(I64, &obj_bits, pointer_mask);
-        // kind re-read from cache (cheap; keeps the fast block self-contained).
-        let slot = blk.lshr(I64, &raw, "3");
-        let slot = blk.and(I64, &slot, "63");
-        let entry_ptr = blk.gep(
-            "[64 x i64]",
-            "@PERRY_TA_KIND_CACHE",
-            &[(I64, "0"), (I64, &slot)],
-        );
-        let entry_val = blk.load(I64, &entry_ptr);
-        let kind = blk.and(I64, &entry_val, "255");
+        // kind re-read from the header (cheap; keeps the fast block
+        // self-contained).
+        let kind_addr = blk.add(I64, &raw, "8");
+        let kind_ptr = blk.inttoptr(I64, &kind_addr);
+        let kind_i8 = blk.load(I8, &kind_ptr);
+        let kind = blk.zext(I8, &kind_i8, I64);
         // idx is in [0, 2^32) (entry guard) so fptosi i64 is well-defined.
         let idx_i64 = blk.fptosi(DOUBLE, idx_d, I64);
         (raw, idx_i64, kind)

@@ -278,3 +278,60 @@ fn erased_symbol_annotation_does_not_bypass_runtime_validation() {
         "a TypeScript Symbol annotation without initializer provenance must not enter the exact-Symbol IC:\n{ir}"
     );
 }
+
+/// The inline dynamic typed-array read brands the receiver off its managed
+/// `GC_TYPE_TYPED_ARRAY` header and reads the element kind from the
+/// `TypedArrayHeader` itself, instead of probing the 64-slot direct-mapped
+/// `PERRY_TA_KIND_CACHE` that every ordinary-array registry miss also writes
+/// negative entries into (a hot typed array kept getting evicted and missed
+/// the tier on every access).
+#[test]
+fn unknown_numeric_read_brands_typed_arrays_off_the_header_not_the_kind_cache() {
+    let ir = ir_for(
+        "unknown_typed_array_read_brand",
+        vec![
+            Stmt::Let {
+                id: ITEMS,
+                name: "items".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::PropertyGet {
+                    object: Box::new(Expr::Object(vec![(
+                        "value".to_string(),
+                        Expr::Array(vec![Expr::Number(7.0)]),
+                    )])),
+                    property: "value".to_string(),
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Let {
+                id: RESULT,
+                name: "result".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(ITEMS)),
+                    index: Box::new(Expr::Integer(0)),
+                }),
+            },
+        ],
+    );
+    assert!(
+        ir.contains("tav.get.brand"),
+        "the inline typed-array tier must brand the receiver off its header:\n{ir}"
+    );
+    let brand = super::class_field_barrier_tests::block_body(&ir, "tav.get.brand.")
+        .expect("brand block exists");
+    assert!(
+        brand.contains("icmp eq i8") && brand.contains(", 11"),
+        "the brand block must test GC_TYPE_TYPED_ARRAY (11):\n{brand}"
+    );
+    assert!(
+        brand.contains("load i8"),
+        "the element kind must be read from the TypedArrayHeader:\n{brand}"
+    );
+    assert!(
+        !ir.contains("@PERRY_TA_KIND_CACHE"),
+        "the inline read must no longer depend on the kind cache:\n{ir}"
+    );
+}
