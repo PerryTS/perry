@@ -1062,13 +1062,18 @@ unsafe fn parallel_map_impl(array_val: f64, closure_val: f64) -> i64 {
     let mut all_results: Vec<Vec<SerializedValue>> =
         (0..chunks.len()).map(|_| Vec::new()).collect();
 
+    // #8546: workers never run module init; they dispatch through the
+    // spawning image's class tables.
+    let class_image = crate::object::class_image::current_image_handle();
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(chunks.len());
 
         for (idx, chunk) in chunks.into_iter().enumerate() {
             let captures_ref = captures_arc.clone();
+            let class_image = class_image.clone();
 
             let handle = scope.spawn(move || {
+                crate::object::class_image::adopt_image(class_image);
                 // #6185: own agent id before any allocation or enqueue, so this
                 // worker's drains can't touch the spawner's queued work (and
                 // anything it queues is tagged as its own).
@@ -1312,17 +1317,21 @@ unsafe fn parallel_filter_impl(array_val: f64, closure_val: f64) -> i64 {
     let mut all_results: Vec<Vec<SerializedValue>> =
         (0..chunks.len()).map(|_| Vec::new()).collect();
 
+    let class_image = crate::object::class_image::current_image_handle();
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(chunks.len());
 
         for (idx, chunk) in chunks.into_iter().enumerate() {
             let captures_ref = captures_arc.clone();
+            let class_image = class_image.clone();
 
             let handle = scope.spawn(move || {
-                // See parallel_map's worker: own agent (#6185) before anything
-                // can allocate or enqueue, scanner registration must precede
-                // any allocation, and the rebuilt closure must be rooted
-                // across the per-element deserialization allocations.
+                // See parallel_map's worker: adopt the spawning image (#8546),
+                // own agent (#6185) before anything can allocate or enqueue,
+                // scanner registration must precede any allocation, and the
+                // rebuilt closure must be rooted across the per-element
+                // deserialization allocations.
+                crate::object::class_image::adopt_image(class_image);
                 let worker_agent = crate::agent::enter_worker_agent();
                 crate::gc::ensure_gc_initialized();
                 let mut kept = Vec::new();
@@ -1520,10 +1529,15 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     // agent allowed to settle it. Captured here, on the spawning thread —
     // reading it inside the worker would yield the worker's own agent.
     let owner_agent = crate::agent::current_agent();
+    // #8546: the worker runs the closure body only, never module init, so its
+    // class metadata (vtables, parents, constructors, …) must be the spawning
+    // image's — captured here, adopted first thing on the worker.
+    let class_image = crate::object::class_image::current_image_handle();
 
     // ── 3. Spawn background thread ───────────────────────────────────
     ACTIVE_THREAD_JOBS.fetch_add(1, Ordering::SeqCst);
     std::thread::spawn(move || {
+        crate::object::class_image::adopt_image(class_image);
         // #6185: claim an agent id for this worker BEFORE it can allocate or
         // enqueue anything, so every pointer it puts in a global queue is
         // tagged as its own — and so its own drains skip the spawner's work.

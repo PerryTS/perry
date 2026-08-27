@@ -2,13 +2,15 @@
 //! `extends Error`, `Symbol.hasInstance` / `Symbol.toStringTag` hooks
 //! (split out of `object/mod.rs`, behavior-preserving).
 
+use crate::object::class_image::{self, ImageTable, PARENT_DENSE_CAP};
 use crate::registry_latch::RegistryLatch;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::RwLock;
 
-/// Global class registry mapping class_id -> parent_class_id for inheritance chain lookups
-pub(crate) static CLASS_REGISTRY: RwLock<Option<HashMap<u32, u32>>> = RwLock::new(None);
+/// The calling image's class registry mapping class_id -> parent_class_id for
+/// inheritance chain lookups (#8546 — see `object/class_image.rs`).
+pub(crate) static CLASS_REGISTRY: ImageTable<RwLock<Option<HashMap<u32, u32>>>> =
+    ImageTable::new(|image| &image.parents);
 
 // ============================================================================
 // Dense parent-edge table (#7769)
@@ -30,22 +32,16 @@ pub(crate) static CLASS_REGISTRY: RwLock<Option<HashMap<u32, u32>>> = RwLock::ne
 // the window (the reserved builtin bands `0xFFFF_00xx` / `0x7FFF_FFxx` and
 // the high-bit synthetic ids) keep using the map.
 //
-// The array is `.bss` (zero-fill, no file bytes) and only the pages actually
-// indexed are ever touched, so a program with 200 classes resides in one 4 KB
-// page.
+// The table is one 256 KiB zero-filled allocation per image (#8546: it lives
+// in `ClassImageTables::parent_dense`, one per hosted application), reached
+// through the same thread-local image resolution as every other class table.
+//
+// Encoding: `parent + 1` for every registered edge whose child id is
+// `< PARENT_DENSE_CAP`; `0` means "no edge registered for this child". The
+// `+1` bias is what lets a single word encode both "absent" and "present with
+// parent id 0". The one id that cannot be biased (`u32::MAX`) arms
+// [`PARENT_DENSE_INCOMPLETE`] instead of being stored.
 // ============================================================================
-
-/// Number of class ids covered by the dense parent table.
-const PARENT_DENSE_CAP: usize = 1 << 16;
-
-/// `parent + 1` for every registered edge whose child id is `< PARENT_DENSE_CAP`;
-/// `0` means "no edge registered for this child".
-///
-/// The `+1` bias is what lets a single word encode both "absent" and "present
-/// with parent id 0". The one id that cannot be biased (`u32::MAX`) arms
-/// [`PARENT_DENSE_INCOMPLETE`] instead of being stored.
-static PARENT_DENSE: [AtomicU32; PARENT_DENSE_CAP] =
-    [const { AtomicU32::new(0) }; PARENT_DENSE_CAP];
 
 /// Armed only if an in-window child id could NOT be represented densely (a
 /// `u32::MAX` parent — never produced by any id allocator, but the encoding
@@ -70,7 +66,7 @@ pub(crate) fn parent_dense_store(class_id: u32, parent_class_id: u32) {
         PARENT_DENSE_INCOMPLETE.arm();
         return;
     }
-    PARENT_DENSE[idx].store(parent_class_id.wrapping_add(1), Ordering::Release);
+    class_image::parent_dense_store(idx, parent_class_id.wrapping_add(1));
 }
 
 /// Look up parent class ID from the registry.
@@ -82,7 +78,7 @@ pub(crate) fn parent_dense_store(class_id: u32, parent_class_id: u32) {
 pub(crate) fn get_parent_class_id(class_id: u32) -> Option<u32> {
     let idx = class_id as usize;
     if idx < PARENT_DENSE_CAP {
-        let biased = PARENT_DENSE[idx].load(Ordering::Acquire);
+        let biased = class_image::parent_dense_load(idx);
         if biased != 0 {
             return Some(biased - 1);
         }
@@ -101,7 +97,8 @@ pub(crate) fn get_parent_class_id(class_id: u32) -> Option<u32> {
 /// `GlobalRequest = global.Request`. Lets the runtime dynamic-construction
 /// path (`new (classExprValue)(...)` / ClassRef `new`) attach the underlying
 /// native fetch handle, matching what the static codegen `super()` path does.
-static FETCH_PARENT_KIND: RwLock<Option<HashMap<u32, u8>>> = RwLock::new(None);
+static FETCH_PARENT_KIND: ImageTable<RwLock<Option<HashMap<u32, u8>>>> =
+    ImageTable::new(|image| &image.fetch_parent_kind);
 
 /// Idle until some class extends the global `Request`/`Response`.
 static FETCH_PARENT_LATCH: RegistryLatch = RegistryLatch::new();
@@ -152,7 +149,8 @@ fn fetch_parent_kind_slow(class_id: u32) -> Option<u8> {
 /// (`object/class_constructors.rs`), static-method lookup and vtable dispatch,
 /// so splicing the generic in between a specialization and its real base would
 /// re-run the wrong constructor. Only `instanceof` consults this one.
-static CLASS_GENERIC_ORIGIN: RwLock<Option<HashMap<u32, u32>>> = RwLock::new(None);
+static CLASS_GENERIC_ORIGIN: ImageTable<RwLock<Option<HashMap<u32, u32>>>> =
+    ImageTable::new(|image| &image.generic_origin);
 
 /// Idle until a generic class is monomorphized. `class_chain_reaches` probes
 /// this table on EVERY hop of EVERY `instanceof`, so a program with no
@@ -198,15 +196,17 @@ fn class_generic_origin_slow(class_id: u32) -> Option<u32> {
     g.as_ref()?.get(&class_id).copied()
 }
 
-/// Global registry of class IDs that extend the built-in Error class
-static EXTENDS_ERROR_REGISTRY: RwLock<Option<std::collections::HashSet<u32>>> = RwLock::new(None);
+/// The calling image's set of class IDs that extend the built-in Error class.
+static EXTENDS_ERROR_REGISTRY: ImageTable<RwLock<Option<std::collections::HashSet<u32>>>> =
+    ImageTable::new(|image| &image.extends_error);
 
 /// Per-class `Symbol.hasInstance` static hook. Maps class_id → raw function
 /// pointer with signature `extern "C" fn(value: f64) -> f64` (NaN-boxed
 /// TAG_TRUE / TAG_FALSE result). Populated at module init from
 /// `__perry_wk_hasinstance_<class>` top-level functions lifted by the HIR
 /// class lowering.
-static CLASS_HAS_INSTANCE_REGISTRY: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+static CLASS_HAS_INSTANCE_REGISTRY: ImageTable<RwLock<Option<HashMap<u32, usize>>>> =
+    ImageTable::new(|image| &image.has_instance);
 
 /// Per-class `Symbol.toStringTag` getter hook. Maps class_id → raw function
 /// pointer with signature `extern "C" fn(this: f64) -> f64` returning a
@@ -214,7 +214,8 @@ static CLASS_HAS_INSTANCE_REGISTRY: RwLock<Option<HashMap<u32, usize>>> = RwLock
 /// init from `__perry_wk_tostringtag_<class>` top-level functions lifted by
 /// the HIR class lowering. Consulted by `js_object_to_string` so
 /// `Object.prototype.toString.call(x)` returns `[object <tag>]`.
-static CLASS_TO_STRING_TAG_REGISTRY: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+static CLASS_TO_STRING_TAG_REGISTRY: ImageTable<RwLock<Option<HashMap<u32, usize>>>> =
+    ImageTable::new(|image| &image.to_string_tag);
 
 /// Idle until a class declares `static [Symbol.hasInstance]`. `js_instanceof`
 /// consults the table on every evaluation, ahead of the class-chain walk.
