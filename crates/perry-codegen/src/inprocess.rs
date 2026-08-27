@@ -676,6 +676,23 @@ fn pre_rewrite_sizes(
 /// apply, because RS4GC has already run when the attribute is stamped and
 /// nothing about GC roots changes.
 ///
+/// Calibrated on that fixture's 24 native units with `opt -time-passes` at
+/// the pinned LLVM 22.1.4 (`default<Os>` on the post-RS4GC unit; the
+/// estimate is the product as this check computes it):
+///
+/// | estimate   | allocas × instructions | TailCallElimPass          |
+/// |------------|------------------------|---------------------------|
+/// | 2.57 × 10⁸ | 400 × 642,892          | 983 s of a 1000 s pipeline |
+/// | 9.4 × 10⁷  | 335 × 281,776          | 41 s of 48 s               |
+/// | 9.4 × 10⁷  | 275 × 342,273          | 35 s of 42 s               |
+/// | 3.1 × 10⁷  | 117 × 260,888          | 1.0 s of 10 s              |
+/// | 2.3 × 10⁷  | 232 × 98,270           | 0.1 s of 4.6 s             |
+/// | 5.9 × 10⁶  | 131 × 45,038           | 1.1 s of 5.2 s             |
+///
+/// 2²⁶ (6.7 × 10⁷) sits in the knee: below it the walk costs about a
+/// second, above it tens of seconds to a quarter of an hour, and the cost
+/// grows faster than the product (the `Visited` set stops fitting in cache).
+///
 /// `PERRY_LL_TRE_MAX_ALLOCA_WALK=<n>` raises or lowers the cap; `0`/`off`
 /// disables the budget (every function keeps TRE, whatever it costs).
 const DEFAULT_TRE_MAX_ALLOCA_WALK: u64 = 1 << 26;
