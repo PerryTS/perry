@@ -710,7 +710,7 @@ pub fn error_user_props(error_ptr: usize) -> Vec<(String, f64)> {
             })
             .unwrap_or_default()
     });
-    let mut props: Vec<(String, f64)> = props
+    let props: Vec<(String, f64)> = props
         .into_iter()
         .map(|(key, value)| {
             let materialized = match value {

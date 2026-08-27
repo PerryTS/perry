@@ -1187,6 +1187,50 @@ fn fresh_class_declaration_collision_keeps_lexical_binding() {
     }));
 }
 
+/// A fresh class's end-of-body capture refresh must preserve the whole
+/// one-element shared-mutable cell, matching the initial `ClassExprFresh`
+/// snapshot. Refreshing with `cell[0]` stores the scalar value, while lifted
+/// members still read the constructor capture as `capture[0]`.
+#[test]
+fn fresh_class_refresh_keeps_shared_capture_cell_handle() {
+    let source = r#"
+        const exported = (() => {
+            let dep;
+            dep = { default: "ok" };
+            const holder = {};
+            holder.default = class {
+                read() { return dep.default; }
+            };
+            return holder.default;
+        })();
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let compact: String = format!("{:#?}", hir.init)
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+
+    let mut remainder = compact.as_str();
+    let mut refreshes = 0usize;
+    while let Some(offset) = remainder.find("RefreshClassExprCaptures{") {
+        remainder = &remainder[offset + "RefreshClassExprCaptures{".len()..];
+        let captures = remainder
+            .find("captures:[")
+            .map(|index| &remainder[index + "captures:[".len()..])
+            .expect("refresh includes a captures vector");
+        assert!(
+            captures.starts_with("LocalGet("),
+            "fresh-class refresh must carry the shared cell handle, not an indexed value: {captures}"
+        );
+        refreshes += 1;
+    }
+    assert!(
+        refreshes > 0,
+        "fixture must emit at least one fresh-class refresh"
+    );
+}
+
 /// Companion (the case the depth rule must NOT break): a module-scope `class e`
 /// and a factory-local `let e` holding a different constructor. JS says the
 /// nearer local wins, so `new e()` inside the factory must still construct the

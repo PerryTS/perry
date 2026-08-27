@@ -967,6 +967,27 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
         // Capture sites snapshot the WHOLE handle (the array). Leave the bare
         // `LocalGet(id)` capture args alone; still rewrite non-capture children.
         Expr::RegisterClassCaptures { .. } => return,
+        // Release follow-up: the end-of-body refresh for a fresh class
+        // object carries the same capture-param-ordered handles as the initial
+        // `ClassExprFresh` snapshot. A shared-mutable capture is a one-element
+        // array cell, so refreshing with `id[0]` replaces the cell with its
+        // current scalar value. The constructor still treats the refreshed
+        // slot as a cell and reads `[0]`, producing `undefined`. Preserve bare
+        // shared-cell handles in `captures`, while still rewriting the owner
+        // expression and any non-capture children normally.
+        Expr::RefreshClassExprCaptures {
+            class_value,
+            captures,
+        } => {
+            rewrite_expr(class_value, shared, index_uses);
+            for capture in captures.iter_mut() {
+                if matches!(capture, Expr::LocalGet(id) if index_uses.contains(id)) {
+                    continue;
+                }
+                rewrite_expr(capture, shared, index_uses);
+            }
+            return;
+        }
         // #6497: the per-evaluation fresh-binding path (#6470) carries the
         // same capture-param-ordered `LocalGet` args as RegisterClassCaptures
         // — they too must snapshot the WHOLE box handle. Rewriting them to
