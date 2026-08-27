@@ -416,6 +416,7 @@ pub(crate) fn set_field_by_name_object_tail(
         let is_frozen = obj_flags & crate::gc::OBJ_FLAG_FROZEN != 0;
         let is_sealed_or_no_extend =
             obj_flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0;
+        let record_array_tail = crate::array::is_array_subclass_class_id((*obj).class_id);
 
         let keys = crate::object::object_keys_array(obj);
 
@@ -577,6 +578,11 @@ pub(crate) fn set_field_by_name_object_tail(
             // fast path above instead of allocating a fresh 4-elem
             // keys_array here.
             transition_cache_insert(
+                if record_array_tail {
+                    obj as *const ObjectHeader
+                } else {
+                    std::ptr::null()
+                },
                 prev_shape_id,
                 interned_key,
                 new_keys as usize,
@@ -761,6 +767,11 @@ pub(crate) fn set_field_by_name_object_tail(
                 refresh_roots_after_alloc!();
                 mirror_class_object_static_write(obj, key, value);
                 transition_cache_insert(
+                    if record_array_tail {
+                        obj as *const ObjectHeader
+                    } else {
+                        std::ptr::null()
+                    },
                     prev_shape_id,
                     interned_key,
                     new_keys as usize,
@@ -804,6 +815,11 @@ pub(crate) fn set_field_by_name_object_tail(
             refresh_roots_after_alloc!();
             mirror_class_object_static_write(obj, key, value);
             transition_cache_insert(
+                if record_array_tail {
+                    obj as *const ObjectHeader
+                } else {
+                    std::ptr::null()
+                },
                 prev_shape_id,
                 interned_key,
                 new_keys as usize,
@@ -983,6 +999,11 @@ pub(crate) fn set_field_by_name_object_tail(
             // `transition_cache_insert`, which triggers clone-on-extend
             // on either object if someone later appends past this key.
             transition_cache_insert(
+                if record_array_tail {
+                    obj as *const ObjectHeader
+                } else {
+                    std::ptr::null()
+                },
                 prev_shape_id,
                 interned_key,
                 new_keys as usize,
@@ -1024,6 +1045,11 @@ pub(crate) fn set_field_by_name_object_tail(
         mirror_class_object_static_write(obj, key, value);
         // Record the shape transition — see above for semantics.
         transition_cache_insert(
+            if record_array_tail {
+                obj as *const ObjectHeader
+            } else {
+                std::ptr::null()
+            },
             prev_shape_id,
             interned_key,
             new_keys as usize,

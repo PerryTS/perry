@@ -5,6 +5,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 
+#[path = "tests_strict_dense.rs"]
+mod strict_dense;
+
 extern "C" fn test_map_to_string(
     _closure: *const crate::closure::ClosureHeader,
     _element: f64,

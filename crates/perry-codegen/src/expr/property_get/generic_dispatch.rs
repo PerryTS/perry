@@ -33,6 +33,10 @@ pub(crate) const PIC_WAYS: usize = 4;
 /// are worth running; `0` (fresh) and a negative megamorphic countdown
 /// both skip them. Mirrors the runtime's `PIC_WAY_STATE`.
 pub(crate) const PIC_WAY_STATE: usize = 3;
+/// Optional Array-subclass class-declared named-prefix token. A nonzero value
+/// proves the cached slot survives exact numeric-tail ShapeId transitions.
+/// Mirrors runtime `PicCache` word 2.
+pub(crate) const PIC_NAMED_PREFIX_TOKEN: usize = 2;
 
 /// Materialise the pooled property-key `StringHeader*` in the CURRENT block.
 ///
@@ -53,6 +57,28 @@ fn emit_key_handle(ctx: &mut FnCtx<'_>, key_handle_global: &str) -> String {
     let key_box = blk.load(DOUBLE, key_handle_global);
     let key_bits = blk.bitcast_double_to_i64(&key_box);
     blk.and(I64, &key_bits, POINTER_MASK_I64)
+}
+
+fn overridden_cache_name(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Option<String> {
+    let Expr::LocalGet(base_local_id) = object else {
+        return None;
+    };
+    ctx.property_get_ic_override
+        .as_ref()
+        .filter(|shared| {
+            shared.base_local_id == *base_local_id && shared.property.as_str() == property
+        })
+        .map(|shared| shared.cache_name.clone())
+}
+
+fn allocate_property_cache(ctx: &mut FnCtx<'_>) -> String {
+    let cache_site = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let cache_name = super::super::inline_cache_global_name(ctx, cache_site);
+    ctx.pending_declares
+        .push((format!("__ic_decl_{cache_site}"), DOUBLE, vec![]));
+    ctx.ic_globals.push(cache_name.clone());
+    cache_name
 }
 
 /// The generic per-site monomorphic inline-cache dispatch for `obj.property`.
@@ -108,12 +134,8 @@ pub(crate) fn lower_generic_property_get(
         // Per-site monomorphic IC cache, allocated identically to the inline path
         // (below) so the helper's `js_object_get_field_ic_miss` cache-priming is
         // unchanged.
-        let cache_site = ctx.ic_site_counter;
-        ctx.ic_site_counter += 1;
-        let cache_name = super::super::inline_cache_global_name(ctx, cache_site);
-        ctx.pending_declares
-            .push((format!("__ic_decl_{}", cache_site), DOUBLE, vec![]));
-        ctx.ic_globals.push(cache_name.clone());
+        let cache_name = overridden_cache_name(ctx, object, property)
+            .unwrap_or_else(|| allocate_property_cache(ctx));
         let cache_ref = format!("@{}", cache_name);
         let key_handle = emit_key_handle(ctx, &key_handle_global);
         let val = ctx.block().call(
@@ -294,18 +316,15 @@ pub(crate) fn lower_generic_property_get(
     }
 
     // Monomorphic inline cache. The per-site global holds an authoritative
-    // ShapeId token and its cached slot; word 2 is non-identity scratch.
+    // ShapeId token and its cached slot; word 2 optionally carries the proved
+    // Array-subclass named-prefix family token.
     // The fast path compares the receiver's discriminated ShapeId token to
     // cache[0] and, on match, loads
     // the field directly at obj+ObjectHeader::SIZE+slot*8: no function call, no hash,
     // no linear scan. On miss, calls the slow helper which does the
     // full lookup and primes the cache for next time.
-    let site_id = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let cache_name = super::super::inline_cache_global_name(ctx, site_id);
-    ctx.pending_declares
-        .push((format!("__ic_decl_{}", site_id), DOUBLE, vec![]));
-    ctx.ic_globals.push(cache_name.clone());
+    let cache_name = overridden_cache_name(ctx, object, property)
+        .unwrap_or_else(|| allocate_property_cache(ctx));
 
     // Issue #72: validate the receiver is actually a GC_TYPE_OBJECT
     // before reading its ShapeId. The receiver
@@ -348,6 +367,15 @@ pub(crate) fn lower_generic_property_get(
     // through phis (`false`/`0` on the early-exit edges, which is exactly
     // what the flat predicate computed there).
     let hit_idx = ctx.new_block("pic.hit");
+    let prefix_guard_idx = ctx.new_block("pic.prefix.guard");
+    let prefix_meta_idx = ctx.new_block("pic.prefix.meta");
+    let prefix_token_idx = ctx.new_block("pic.prefix.token");
+    let prefix_hit_idx = ctx.new_block("pic.prefix.hit");
+    let desc_classify_idx = ctx.new_block("pic.desc.classify");
+    let desc_prefix_guard_idx = ctx.new_block("pic.desc.prefix.guard");
+    let desc_prefix_meta_idx = ctx.new_block("pic.desc.prefix.meta");
+    let desc_prefix_token_idx = ctx.new_block("pic.desc.prefix.token");
+    let desc_prefix_hit_idx = ctx.new_block("pic.desc.prefix.hit");
     let miss_idx = ctx.new_block("pic.miss");
     // #7907: the two receiver-validation failures get their own landing block
     // so `pic.miss` is dominated by `pic.token`. See the comment on
@@ -356,6 +384,15 @@ pub(crate) fn lower_generic_property_get(
     let call_idx = ctx.new_block("pic.miss.call");
     let merge_idx = ctx.new_block("pic.merge");
     let hit_label = ctx.block_label(hit_idx);
+    let prefix_guard_label = ctx.block_label(prefix_guard_idx);
+    let prefix_meta_label = ctx.block_label(prefix_meta_idx);
+    let prefix_token_label = ctx.block_label(prefix_token_idx);
+    let prefix_hit_label = ctx.block_label(prefix_hit_idx);
+    let desc_classify_label = ctx.block_label(desc_classify_idx);
+    let desc_prefix_guard_label = ctx.block_label(desc_prefix_guard_idx);
+    let desc_prefix_meta_label = ctx.block_label(desc_prefix_meta_idx);
+    let desc_prefix_token_label = ctx.block_label(desc_prefix_token_idx);
+    let desc_prefix_hit_label = ctx.block_label(desc_prefix_hit_idx);
     let miss_label = ctx.block_label(miss_idx);
     let cold_label = ctx.block_label(cold_idx);
     let call_label = ctx.block_label(call_idx);
@@ -400,7 +437,7 @@ pub(crate) fn lower_generic_property_get(
             .cond_br(&is_collection, &collection_label, &object_check_label);
         ctx.current_block = object_check_idx;
     }
-    let is_object = ctx.block().icmp_eq(I8, &gc_type, "2");
+    let is_object_kind = ctx.block().icmp_eq(I8, &gc_type, "2");
 
     // Closures and RegExp values have distinct GC kinds. Every
     // `GC_TYPE_OBJECT` payload is therefore an ObjectHeader and its ShapeId is
@@ -423,7 +460,7 @@ pub(crate) fn lower_generic_property_get(
     let reserved = ctx.block().load(crate::types::I16, &reserved_ptr);
     let has_desc = ctx.block().and(crate::types::I16, &reserved, "2048"); // OBJ_FLAG_HAS_DESCRIPTORS (0x800)
     let no_desc = ctx.block().icmp_eq(crate::types::I16, &has_desc, "0");
-    let is_object = ctx.block().and(I1, &is_object, &no_desc);
+    let is_plain_object = ctx.block().and(I1, &is_object_kind, &no_desc);
 
     // #7883: first exit. The header predicates above are kept as one flat
     // `and` on purpose — they are loads from the same cache line and LLVM
@@ -438,7 +475,16 @@ pub(crate) fn lower_generic_property_get(
     // `way_hit` by construction, so consulting the ways for it was always dead
     // work, and keeping it out is what lets `pic.miss` reuse this block's
     // values instead of re-deriving them.
-    ctx.block().cond_br(&is_object, &tok_label, &cold_label);
+    ctx.block()
+        .cond_br(&is_plain_object, &tok_label, &desc_classify_label);
+
+    // A descriptor-bearing GC_TYPE_OBJECT normally goes cold. Array-subclass
+    // `length` is the important exception: runtime can prove that descriptor
+    // is unrelated to all class-declared named fields and arm word 2. Keep
+    // this classification off the ordinary descriptor-free hit path.
+    ctx.current_block = desc_classify_idx;
+    ctx.block()
+        .cond_br(&is_object_kind, &desc_prefix_guard_label, &cold_label);
     ctx.current_block = tok_idx;
 
     // The receiver token is derived solely from its authoritative ShapeId.
@@ -493,7 +539,7 @@ pub(crate) fn lower_generic_property_get(
     let token_eq = ctx.block().icmp_eq(I64, &token, &cached_token);
     let hit = ctx.block().and(I1, &token_eq, &token_nonnull);
 
-    ctx.block().cond_br(&hit, &hit_label, &miss_label);
+    ctx.block().cond_br(&hit, &hit_label, &prefix_guard_label);
 
     // `js_object_get_field_ic_miss` primes only slots below the descriptor's
     // exact `live_inline_slot_count`. ShapeIds are never reused, so an exact
@@ -518,6 +564,148 @@ pub(crate) fn lower_generic_property_get(
     let field_ptr = ctx.block().inttoptr(I64, &field_addr);
     let val_hit = ctx.block().load(DOUBLE, &field_ptr);
     let hit_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    // An object-backed Array subclass changes exact ShapeId on every numeric
+    // push/pop because its elements live in ordinary object slots. Its class-
+    // declared named prefix does not move. Runtime miss handling proves the
+    // complete registered prefix plus dense numeric suffix once and publishes
+    // a nonzero token in cache word 2 and ObjectMeta. Generic structural or
+    // descriptor transitions clear the object token; only the exact learned
+    // numeric-tail installer preserves it.
+    //
+    // Keep the ordinary miss path cheap: test the cache word first. Every
+    // non-Array-subclass site reads zero and leaves without touching the
+    // receiver's meta pointer.
+    ctx.current_block = prefix_guard_idx;
+    let cached_prefix_ptr = ctx.block().gep(
+        I64,
+        &cache_ref,
+        &[(I64, &PIC_NAMED_PREFIX_TOKEN.to_string())],
+    );
+    let cached_prefix = ctx.block().load(I64, &cached_prefix_ptr);
+    let prefix_armed = ctx.block().icmp_ne(I64, &cached_prefix, "0");
+    ctx.block()
+        .cond_br(&prefix_armed, &prefix_meta_label, &miss_label);
+
+    // ObjectHeader::meta is the final header field: offset 8 on LP64, 12 on
+    // ILP32. Load it with the target pointer width, then branch before reading
+    // ObjectMeta so a null metadata pointer remains harmless.
+    ctx.current_block = prefix_meta_idx;
+    let meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        4
+    } else {
+        8
+    };
+    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
+        - meta_ptr_size)
+        .to_string();
+    let meta_addr = ctx.block().add(I64, &obj_handle, &meta_offset);
+    let meta_slot = ctx.block().inttoptr(I64, &meta_addr);
+    let meta_load_ty = if meta_ptr_size == 4 { I32 } else { I64 };
+    let meta_raw = ctx.block().load(meta_load_ty, &meta_slot);
+    let meta = if meta_ptr_size == 4 {
+        ctx.block().zext(I32, &meta_raw, I64)
+    } else {
+        meta_raw
+    };
+    let meta_nonnull = ctx.block().icmp_ne(I64, &meta, "0");
+    ctx.block()
+        .cond_br(&meta_nonnull, &prefix_token_label, &miss_label);
+
+    ctx.current_block = prefix_token_idx;
+    let meta_ptr = ctx.block().inttoptr(I64, &meta);
+    // repr(C) ObjectMeta word 6. The first six u64 words are prototype,
+    // descriptor blooms, flags, spill, and private brand. Runtime has an
+    // offset assertion paired with the IR test below.
+    let object_prefix_ptr = ctx.block().gep(I64, &meta_ptr, &[(I64, "6")]);
+    let object_prefix = ctx.block().load(I64, &object_prefix_ptr);
+    let prefix_match = ctx.block().icmp_eq(I64, &object_prefix, &cached_prefix);
+    ctx.block()
+        .cond_br(&prefix_match, &prefix_hit_label, &miss_label);
+
+    ctx.current_block = prefix_hit_idx;
+    // The exact ShapeId guard did fail, so preserve typed-feedback accounting
+    // just like a polymorphic-way hit: the site remains structurally
+    // polymorphic even though no runtime fallback call is needed.
+    crate::expr::emit_typed_feedback_record_call(
+        ctx.block(),
+        "js_typed_feedback_record_guard_fail",
+        &[(I64, &feedback_site_id)],
+    );
+    crate::expr::emit_typed_feedback_record_call(
+        ctx.block(),
+        "js_typed_feedback_record_fallback_call",
+        &[(I64, &feedback_site_id)],
+    );
+    let prefix_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
+    let prefix_slot = ctx.block().load(I64, &prefix_slot_ptr);
+    let prefix_offset = ctx.block().shl(I64, &prefix_slot, "3");
+    let prefix_base = ctx.block().add(I64, &obj_handle, &obj_header_size);
+    let prefix_field_addr = ctx.block().add(I64, &prefix_base, &prefix_offset);
+    let prefix_field_ptr = ctx.block().inttoptr(I64, &prefix_field_addr);
+    let val_prefix = ctx.block().load(DOUBLE, &prefix_field_ptr);
+    let prefix_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    // Descriptor-bearing Array subclasses reach this duplicate of the family
+    // guard without ever entering `pic.token`: the exact raw-load PIC remains
+    // forbidden, but a runtime-proved data-only declared prefix is still safe.
+    // Every failure goes to the cold handler because the shape token values
+    // required by `pic.miss` do not dominate this path.
+    ctx.current_block = desc_prefix_guard_idx;
+    let desc_cached_prefix_ptr = ctx.block().gep(
+        I64,
+        &cache_ref,
+        &[(I64, &PIC_NAMED_PREFIX_TOKEN.to_string())],
+    );
+    let desc_cached_prefix = ctx.block().load(I64, &desc_cached_prefix_ptr);
+    let desc_prefix_armed = ctx.block().icmp_ne(I64, &desc_cached_prefix, "0");
+    ctx.block()
+        .cond_br(&desc_prefix_armed, &desc_prefix_meta_label, &cold_label);
+
+    ctx.current_block = desc_prefix_meta_idx;
+    let desc_meta_addr = ctx.block().add(I64, &obj_handle, &meta_offset);
+    let desc_meta_slot = ctx.block().inttoptr(I64, &desc_meta_addr);
+    let desc_meta_raw = ctx.block().load(meta_load_ty, &desc_meta_slot);
+    let desc_meta = if meta_ptr_size == 4 {
+        ctx.block().zext(I32, &desc_meta_raw, I64)
+    } else {
+        desc_meta_raw
+    };
+    let desc_meta_nonnull = ctx.block().icmp_ne(I64, &desc_meta, "0");
+    ctx.block()
+        .cond_br(&desc_meta_nonnull, &desc_prefix_token_label, &cold_label);
+
+    ctx.current_block = desc_prefix_token_idx;
+    let desc_meta_ptr = ctx.block().inttoptr(I64, &desc_meta);
+    let desc_object_prefix_ptr = ctx.block().gep(I64, &desc_meta_ptr, &[(I64, "6")]);
+    let desc_object_prefix = ctx.block().load(I64, &desc_object_prefix_ptr);
+    let desc_prefix_match = ctx
+        .block()
+        .icmp_eq(I64, &desc_object_prefix, &desc_cached_prefix);
+    ctx.block()
+        .cond_br(&desc_prefix_match, &desc_prefix_hit_label, &cold_label);
+
+    ctx.current_block = desc_prefix_hit_idx;
+    crate::expr::emit_typed_feedback_record_call(
+        ctx.block(),
+        "js_typed_feedback_record_guard_fail",
+        &[(I64, &feedback_site_id)],
+    );
+    crate::expr::emit_typed_feedback_record_call(
+        ctx.block(),
+        "js_typed_feedback_record_fallback_call",
+        &[(I64, &feedback_site_id)],
+    );
+    let desc_prefix_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
+    let desc_prefix_slot = ctx.block().load(I64, &desc_prefix_slot_ptr);
+    let desc_prefix_offset = ctx.block().shl(I64, &desc_prefix_slot, "3");
+    let desc_prefix_base = ctx.block().add(I64, &obj_handle, &obj_header_size);
+    let desc_prefix_field_addr = ctx.block().add(I64, &desc_prefix_base, &desc_prefix_offset);
+    let desc_prefix_field_ptr = ctx.block().inttoptr(I64, &desc_prefix_field_addr);
+    let val_desc_prefix = ctx.block().load(DOUBLE, &desc_prefix_field_ptr);
+    let desc_prefix_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
     // PIC miss on the MRU entry — before paying for the call, try the
@@ -701,6 +889,8 @@ pub(crate) fn lower_generic_property_get(
         DOUBLE,
         &[
             (&val_hit, &hit_end_label),
+            (&val_prefix, &prefix_end_label),
+            (&val_desc_prefix, &desc_prefix_end_label),
             (&val_way, &way_end_label),
             (&val_miss, &miss_end_label),
         ],

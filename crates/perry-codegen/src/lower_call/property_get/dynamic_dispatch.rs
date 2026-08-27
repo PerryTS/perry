@@ -12,6 +12,10 @@ use crate::nanbox::double_literal;
 use crate::type_analysis::receiver_class_name;
 use crate::types::{DOUBLE, I1, I32, I64};
 
+#[path = "dynamic_dispatch_tower.rs"]
+mod tower;
+use tower::{emit_tower_pshape_call, tower_pshape_route};
+
 // Reach the override-emit helpers (`pub(super)` of `lower_call`) by their
 // canonical crate-relative path.
 use crate::lower_call::method_override::{
@@ -87,122 +91,15 @@ struct TowerPshapeRoute {
     /// The `{public}$pshape` clone symbol (same `(double this, args…)` ABI as
     /// the public one — only the body's `this.field` lowering differs).
     clone_fn: String,
+    /// Receiver-safe target for the shape-miss arm. When every indexed
+    /// parameter is already proved nonnegative i32 at this call site, this is
+    /// the unshaped `$idx_u31` clone; otherwise it is the public method.
+    generic_fn: String,
     /// `@perry_class_keys_<mod>__<Class>`, holding the class's canonical
     /// keys-array pointer. A receiver still carrying it has the declared packed
     /// layout; `delete` swaps in a freshly cloned array, which is exactly what
     /// the inline compare catches.
     keys_global: String,
-}
-
-/// May this dispatch-tower case take the proven-`this` clone?
-///
-/// Three conditions, and only the FIRST two are about correctness of the
-/// *target*; the layout proof itself is emitted, not decided here.
-///
-/// 1. `owner` is `Some` — the receiver class of this case declares `property`
-///    itself, so the clone's `this` is exactly the class it was compiled for.
-/// 2. a clone was actually emitted for that pair (`pshape_methods`, already
-///    pruned of symbol collisions by `prune_colliding_clones`, #6927).
-/// 3. routing pays (`pshape_tower_routable`) — this site, unlike the two
-///    guard-dominated ones, emits its own shape re-check and must earn it.
-fn tower_pshape_route(
-    ctx: &FnCtx<'_>,
-    owner: Option<&str>,
-    property: &str,
-    fname: &str,
-) -> Option<TowerPshapeRoute> {
-    let owner = owner?;
-    // Carried forward from both existing routing sites (the #1787
-    // static-receiver bug): a `perry_static_*` target needs
-    // `js_class_static_method_call`, not a plain `call double`, and no
-    // proven-`this` clone is ever emitted for one.
-    if fname.starts_with("perry_static_") {
-        return None;
-    }
-    let key = (owner.to_string(), property.to_string());
-    if !ctx.pshape_methods.contains_key(&key) || !ctx.pshape_tower_routable.contains(&key) {
-        return None;
-    }
-    let keys_global = ctx.class_keys_globals.get(owner)?.clone();
-    Some(TowerPshapeRoute {
-        clone_fn: crate::collectors::pshape_method_name(fname),
-        keys_global,
-    })
-}
-
-/// Emit the keys-guarded diamond for one dispatch-tower case: inline shape
-/// re-check → `{public}$pshape` on a match, the unchanged public body
-/// otherwise.
-///
-/// The tower's case block proves `class_id`, which is NOT enough for the
-/// clone's bare fixed-slot accesses — `delete inst.f` compacts the packed slots
-/// while preserving `class_id`. The keys token is what closes that gap, and it
-/// has to be checked *dynamically*: the `delete` shape barrier that stands the
-/// whole analysis down is module-scoped while a receiver can be deleted from
-/// through an alias in another module (#7143), so a static proof would be
-/// exactly the wrong instrument here.
-///
-/// GC ordering invariant: `recv_handle` is the raw pointer masked out of the
-/// receiver in `idispatch.tower`, and the header loads below dereference it.
-/// That is only safe because **nothing between the mask and this point is a
-/// safepoint**: the only allocating thing a case block can emit before the call
-/// is the rest-array bundling (`js_array_alloc` / `js_array_push_f64`), and a
-/// rest-bearing method can never reach here — `collectors/proven_this.rs`
-/// rejects any method with a rest or synthesized-`arguments` parameter, so no
-/// clone exists for one and `tower_pshape_route` returns `None`. The non-rest
-/// preamble emits no instructions at all (already-lowered SSA values plus
-/// `undefined` literals). If a future change makes the case preamble allocate,
-/// this dereference must move above it — the `GC_FLAG_FORWARDED` conjunct would
-/// degrade a moved receiver to the generic path rather than misread it, but
-/// relying on that instead of on the ordering would be luck, not a proof.
-fn emit_tower_pshape_call(
-    ctx: &mut FnCtx<'_>,
-    case_no: usize,
-    route: &TowerPshapeRoute,
-    recv_handle: &str,
-    fname: &str,
-    case_arg_slices: &[(crate::types::LlvmType, &str)],
-) -> String {
-    // The global is read ONCE per function (entry-hoisted); the case block only
-    // reloads it from the stack slot, which mem2reg folds away.
-    let shape_global =
-        crate::typed_shape::shape_id_global_name_from_keys_global(&route.keys_global);
-    let shape_slot = ctx.func.entry_init_load_global(&shape_global, I32);
-    let expected_shape_id = ctx.block().load(I32, &shape_slot);
-
-    let proven_idx = ctx.new_block(&format!("idispatch.case{}.pshape", case_no));
-    let generic_idx = ctx.new_block(&format!("idispatch.case{}.generic", case_no));
-    let join_idx = ctx.new_block(&format!("idispatch.case{}.join", case_no));
-    let proven_label = ctx.block_label(proven_idx);
-    let generic_label = ctx.block_label(generic_idx);
-    let join_label = ctx.block_label(join_idx);
-
-    crate::expr::class_field_inline_guard::emit_proven_shape_recheck(
-        ctx,
-        recv_handle,
-        &expected_shape_id,
-        &proven_label,
-        &generic_label,
-    );
-
-    ctx.current_block = proven_idx;
-    let v_proven = ctx.block().call(DOUBLE, &route.clone_fn, case_arg_slices);
-    let proven_end = ctx.block().label.clone();
-    ctx.block().br(&join_label);
-
-    ctx.current_block = generic_idx;
-    let v_generic = ctx.block().call(DOUBLE, fname, case_arg_slices);
-    let generic_end = ctx.block().label.clone();
-    ctx.block().br(&join_label);
-
-    ctx.current_block = join_idx;
-    ctx.block().phi(
-        DOUBLE,
-        &[
-            (v_proven.as_str(), proven_end.as_str()),
-            (v_generic.as_str(), generic_end.as_str()),
-        ],
-    )
 }
 
 /// Build the exact direct-call ABI for one concrete method implementation.
@@ -788,13 +685,12 @@ pub(crate) fn try_lower_instance_method_call(
                     );
                     let case_arg_slices: Vec<(crate::types::LlvmType, &str)> =
                         case_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
-                    match tower_pshape_route(ctx, owner.as_deref(), property, fname) {
+                    match tower_pshape_route(ctx, owner.as_deref(), property, fname, args) {
                         Some(route) => emit_tower_pshape_call(
                             ctx,
                             case_no,
                             &route,
                             &recv_handle,
-                            fname,
                             &case_arg_slices,
                         ),
                         None => ctx.block().call(DOUBLE, fname, &case_arg_slices),
@@ -1498,8 +1394,17 @@ pub(crate) fn try_lower_instance_method_call(
                         (!crate::collectors::ptr_array_cache_fields(class, method).is_empty())
                             .then(|| crate::collectors::ptr_array_cache_method_name(&fallback_fn))
                     });
-                    let generic_target = nonnegative_index_direct_name
+                    let pshape_index_target =
+                        nonnegative_index_direct_name.as_ref().and_then(|_| {
+                            let pshape = pshape_target.as_ref()?;
+                            let params = ctx.nonnegative_index_methods.get(&typed_method_key)?;
+                            Some(crate::codegen::nonnegative_index_method_name(
+                                pshape, params,
+                            ))
+                        });
+                    let generic_target = pshape_index_target
                         .as_deref()
+                        .or(nonnegative_index_direct_name.as_deref())
                         .or(ptr_array_cache_target.as_deref())
                         .or(pshape_target.as_deref())
                         .unwrap_or(fallback_fn.as_str());
@@ -1516,6 +1421,11 @@ pub(crate) fn try_lower_instance_method_call(
                         &arg_slices,
                         args,
                     ) {
+                        super::super::method_override::publish_constructive_method_truthy(
+                            ctx,
+                            &fallback_fn,
+                            &argument_specialized,
+                        );
                         return Ok(Some(argument_specialized));
                     }
                     // Prefer the typed-receiver clone (bare gep+load field
@@ -1579,6 +1489,11 @@ pub(crate) fn try_lower_instance_method_call(
                                 (v_generic.as_str(), &generic_end),
                             ],
                         );
+                        super::super::method_override::publish_constructive_method_truthy(
+                            ctx,
+                            &fallback_fn,
+                            &merged,
+                        );
                         return Ok(Some(merged));
                     }
                     // Representation-selection Phase 5a: route to the
@@ -1588,6 +1503,11 @@ pub(crate) fn try_lower_instance_method_call(
                     // all. Same ABI, so the call is unchanged apart from the
                     // callee name.
                     let direct = ctx.block().call(DOUBLE, generic_target, &arg_slices);
+                    super::super::method_override::publish_constructive_method_truthy(
+                        ctx,
+                        &fallback_fn,
+                        &direct,
+                    );
                     return Ok(Some(direct));
                 }
                 let arguments_length_direct_fn = fallback_arguments_length_only

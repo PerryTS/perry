@@ -59,6 +59,11 @@ pub(super) fn compile_ordinary_method_artifacts(
         cross_module,
     } = c;
 
+    let guarded_index_public = typed_public_trampoline.is_none()
+        && cross_module
+            .nonnegative_index_methods
+            .contains_key(&(class.name.clone(), method.name.clone()));
+
     compile_method(
         llmod,
         class,
@@ -81,7 +86,8 @@ pub(super) fn compile_ordinary_method_artifacts(
         typed_public_trampoline,
         cross_module
             .typed_f64_receiver_methods
-            .contains_key(&(class.name.clone(), method.name.clone())),
+            .contains_key(&(class.name.clone(), method.name.clone()))
+            || guarded_index_public,
         None,
         None,
         false,
@@ -190,6 +196,9 @@ pub(super) fn compile_ordinary_method_artifacts(
         .pshape_methods
         .get(&(class.name.clone(), method.name.clone()))
     {
+        let guarded_index_pshape = cross_module
+            .nonnegative_index_methods
+            .contains_key(&(class.name.clone(), method.name.clone()));
         compile_method(
             llmod,
             class,
@@ -210,7 +219,7 @@ pub(super) fn compile_ordinary_method_artifacts(
             closure_rest_params,
             cross_module,
             None,
-            false,
+            guarded_index_pshape,
             Some(fact.clone()),
             None,
             false,

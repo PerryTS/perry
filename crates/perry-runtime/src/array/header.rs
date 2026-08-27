@@ -1663,6 +1663,26 @@ pub extern "C" fn js_array_clear_numeric_layout(arr: *mut ArrayHeader) {
 
 #[no_mangle]
 pub extern "C" fn js_array_note_numeric_write(arr: *mut ArrayHeader, value_bits: u64) {
+    // A Number never downgrades the raw-f64 layout: nothing to clear, so do
+    // not pay the receiver resolver for it.
+    if value_bits_are_numeric(value_bits) {
+        return;
+    }
+    // Exact, non-forwarded ordinary Array whose raw-f64 bits are already
+    // clear: the note is a no-op. Answer from the magnitude-checked live
+    // header probe (the same discipline as the generated guards) instead of
+    // the tracked-allocation resolver. Forwarding stubs and every other brand
+    // keep the complete resolver below.
+    let raw_bits = crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES;
+    let already_clear = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
+        .is_some_and(|header| {
+            header.obj_type == crate::gc::GC_TYPE_ARRAY
+                && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                && header._reserved & raw_bits == 0
+        });
+    if already_clear {
+        return;
+    }
     let arr = clean_arr_ptr_mut(arr);
     unsafe {
         note_array_numeric_write(arr, value_bits);

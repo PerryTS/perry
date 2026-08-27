@@ -177,6 +177,8 @@ pub(crate) use indexing::test_swap_array_index_fast_path_invalidated;
 // store needs for a `class X extends Array` receiver.
 pub(crate) use self::subclass::{
     array_object_set_length, array_subclass_fast_index_get, array_subclass_fast_length,
+    array_subclass_fast_length_with_ic, array_subclass_named_prefix_token_for_slot,
+    array_subclass_tail_descriptors_are_plain, clear_array_subclass_named_prefix_token,
     clear_packed_subclass_numeric_proof, is_array_subclass_class_id, is_array_subclass_value,
     note_array_subclass_index_write, note_packed_subclass_spill_store,
 };
@@ -196,8 +198,8 @@ pub(crate) use self::push_pop::guard_writable_length;
 pub use self::push_pop::{
     js_array_delete, js_array_grow, js_array_numeric_push_f64_unboxed, js_array_pop_f64,
     js_array_push_f64, js_array_push_f64_spec, js_array_push_hole, js_array_push_spread_f64,
-    js_array_set_length, js_array_set_length_strict, js_array_shift_f64, js_array_unshift_f64,
-    js_array_unshift_jsvalue, js_array_unshift_variadic,
+    js_array_push_u31_with_length, js_array_set_length, js_array_set_length_strict,
+    js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue, js_array_unshift_variadic,
 };
 pub use self::reduce_right::js_array_reduce_right;
 pub use self::search::{
@@ -224,10 +226,11 @@ pub(crate) use self::header::{
     buffer_receiver_as_uint8_typed_array, clean_arr_ptr, clean_arr_ptr_mut,
     clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
     mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
-    note_array_slot, note_array_slot_layout_only, rebuild_array_layout, rebuild_array_layout_exact,
-    refresh_array_numeric_layout, replay_array_growth_write_barriers, set_array_numeric_layout,
-    store_array_slot, store_array_slot_resolved, transfer_array_numeric_layout,
-    typed_array_receiver, value_bits_to_number, NumericArrayLayout, MIN_ARRAY_CAPACITY,
+    note_array_slot, note_array_slot_layout_only, note_array_slot_resolved_flags,
+    rebuild_array_layout, rebuild_array_layout_exact, refresh_array_numeric_layout,
+    replay_array_growth_write_barriers, set_array_numeric_layout, store_array_slot,
+    store_array_slot_resolved, transfer_array_numeric_layout, typed_array_receiver,
+    value_bits_to_number, NumericArrayLayout, MIN_ARRAY_CAPACITY,
 };
 
 // Sole caller is the regex-engine-gated `regex::exec_array`, so the helper and

@@ -252,6 +252,18 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
 /// lookup rather than a second `.length` implementation.
 #[no_mangle]
 pub extern "C" fn js_value_length_property_f64(value: f64) -> f64 {
+    value_length_property_with_cache(value, std::ptr::null_mut())
+}
+
+/// Property-semantic `.length` read whose Array-subclass arm primes the
+/// generated scalar IC. All non-subclass cases deliberately share the exact
+/// implementation used by `js_value_length_property_f64`.
+#[no_mangle]
+pub extern "C" fn js_value_length_property_ic_f64(value: f64, cache: *mut u64) -> f64 {
+    value_length_property_with_cache(value, cache)
+}
+
+fn value_length_property_with_cache(value: f64, cache: *mut u64) -> f64 {
     let jsval = JSValue::from_bits(value.to_bits());
     if jsval.is_undefined() || jsval.is_null() {
         crate::error::js_throw_type_error_property_access(
@@ -266,7 +278,7 @@ pub extern "C" fn js_value_length_property_f64(value: f64) -> f64 {
             crate::builtins::boxed_primitive_to_string_tag(value),
             Some("String")
         ) {
-            return js_value_length_property_f64(payload);
+            return value_length_property_with_cache(payload, cache);
         }
     }
 
@@ -275,7 +287,7 @@ pub extern "C" fn js_value_length_property_f64(value: f64) -> f64 {
         return crate::string::js_string_length(string) as f64;
     }
 
-    if let Some(length) = crate::array::array_subclass_fast_length(value) {
+    if let Some(length) = crate::array::array_subclass_fast_length_with_ic(value, cache) {
         return length;
     }
 
@@ -858,11 +870,13 @@ mod length_handle_band_tests {
 
     #[test]
     fn property_length_preserves_missing_and_non_numeric_values() {
+        let mut cache = [0_u64; 3];
         assert_eq!(
-            js_value_length_property_f64(42.0).to_bits(),
+            js_value_length_property_ic_f64(42.0, cache.as_mut_ptr()).to_bits(),
             crate::value::TAG_UNDEFINED,
             "a number has no length property"
         );
+        assert_eq!(cache, [0; 3], "a primitive must not prime the object IC");
 
         let obj = crate::object::js_object_alloc(0, 1);
         let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
@@ -872,9 +886,13 @@ mod length_handle_band_tests {
         let boxed_obj = crate::value::js_nanbox_pointer(obj as i64);
 
         assert_eq!(
-            js_value_length_property_f64(boxed_obj).to_bits(),
+            js_value_length_property_ic_f64(boxed_obj, cache.as_mut_ptr()).to_bits(),
             seven_value.to_bits(),
             "a source-level property read must not coerce its value"
+        );
+        assert_eq!(
+            cache, [0; 3],
+            "an unrelated ordinary object must retain the generic property path"
         );
     }
 

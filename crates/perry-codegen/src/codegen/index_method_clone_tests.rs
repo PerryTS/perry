@@ -10,7 +10,7 @@
 
 use crate::{compile_module, CompileOptions};
 use perry_hir::types::Type;
-use perry_hir::{Class, Expr, Function, Module, ModuleInitKind, Param, Stmt};
+use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
 
 const COLUMN_ID: u32 = 11;
 const INDEX_ID: u32 = 12;
@@ -141,6 +141,117 @@ fn reader_class() -> Class {
     }
 }
 
+fn shaped_reader_class() -> Class {
+    let mut defer = param(13, "defer", Type::Any);
+    defer.default = Some(Expr::PropertyGet {
+        object: Box::new(Expr::This),
+        property: "defaultFlag".to_string(),
+        byte_offset: 0,
+    });
+    let read = function(
+        93,
+        "read",
+        vec![param(INDEX_ID, "index", Type::Any), defer],
+        Type::Any,
+        vec![
+            Stmt::Let {
+                id: 14,
+                name: "value".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::IndexGet {
+                    object: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::This),
+                        property: "column".to_string(),
+                        byte_offset: 0,
+                    }),
+                    index: Box::new(Expr::LocalGet(INDEX_ID)),
+                }),
+            },
+            Stmt::Return(Some(Expr::This)),
+        ],
+    );
+    let mut class = reader_class();
+    class.id = 101;
+    class.name = "ShapedReader".to_string();
+    class.fields = vec![
+        ClassField {
+            name: "column".to_string(),
+            key_expr: None,
+            ty: Type::Array(Box::new(Type::Any)),
+            init: None,
+            is_private: false,
+            is_readonly: false,
+            decorators: Vec::new(),
+        },
+        ClassField {
+            name: "defaultFlag".to_string(),
+            key_expr: None,
+            ty: Type::Boolean,
+            init: None,
+            is_private: false,
+            is_readonly: false,
+            decorators: Vec::new(),
+        },
+    ];
+    class.methods = vec![read];
+    class
+}
+
+fn shaped_push_class() -> Class {
+    const OBSERVED_ID: u32 = 31;
+    let append = function(
+        94,
+        "append",
+        vec![param(INDEX_ID, "entity", Type::Any)],
+        Type::Any,
+        vec![
+            // Give the method selector a constructive nonnegative-index use;
+            // the real SparseSet method has the same proof through sparse[x].
+            Stmt::Let {
+                id: OBSERVED_ID,
+                name: "observed".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::IndexGet {
+                    object: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::This),
+                        property: "packed".to_string(),
+                        byte_offset: 0,
+                    }),
+                    index: Box::new(Expr::LocalGet(INDEX_ID)),
+                }),
+            },
+            Stmt::Expr(Expr::NativeMethodCall {
+                module: "array".to_string(),
+                class_name: None,
+                object: Some(Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::This),
+                    property: "packed".to_string(),
+                    byte_offset: 0,
+                })),
+                method: "push_single".to_string(),
+                args: vec![Expr::LocalGet(INDEX_ID)],
+            }),
+            Stmt::Return(Some(Expr::This)),
+        ],
+    );
+    let mut class = reader_class();
+    class.id = 102;
+    class.name = "PackedOwner".to_string();
+    class.fields = vec![ClassField {
+        name: "packed".to_string(),
+        key_expr: None,
+        ty: Type::Array(Box::new(Type::Any)),
+        init: None,
+        is_private: false,
+        is_readonly: false,
+        decorators: Vec::new(),
+    }];
+    class.methods = vec![append];
+    class
+}
+
 fn method_call(receiver: Expr, column: Expr, index: Expr) -> Expr {
     Expr::Call {
         callee: Box::new(Expr::PropertyGet {
@@ -230,6 +341,32 @@ fn emit() -> String {
         .expect("LLVM IR is UTF-8")
 }
 
+fn emit_shaped_reader() -> String {
+    let mut module = Module::new("shaped_index_method_clone.ts");
+    module.classes = vec![shaped_reader_class()];
+    module.init_kind = ModuleInitKind::Eager;
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".to_string(),
+        ..Default::default()
+    };
+    String::from_utf8(compile_module(&module, opts).expect("shaped reader compiles"))
+        .expect("LLVM IR is UTF-8")
+}
+
+fn emit_shaped_push() -> String {
+    let mut module = Module::new("shaped_push_method_clone.ts");
+    module.classes = vec![shaped_push_class()];
+    module.init_kind = ModuleInitKind::Eager;
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".to_string(),
+        ..Default::default()
+    };
+    String::from_utf8(compile_module(&module, opts).expect("shaped push compiles"))
+        .expect("LLVM IR is UTF-8")
+}
+
 fn emit_checked_reader() -> String {
     let mut class = reader_class();
     class.methods = vec![checked_read_method()];
@@ -242,6 +379,128 @@ fn emit_checked_reader() -> String {
         ..Default::default()
     };
     String::from_utf8(compile_module(&module, opts).expect("checked reader compiles"))
+        .expect("LLVM IR is UTF-8")
+}
+
+fn bitset_class() -> Class {
+    const MASK_ID: u32 = 61;
+    const BIT_INDEX_ID: u32 = 62;
+    let has = function(
+        97,
+        "has",
+        vec![
+            param(MASK_ID, "mask", Type::Any),
+            param(BIT_INDEX_ID, "index", Type::Any),
+        ],
+        Type::Any,
+        vec![Stmt::Return(Some(Expr::Binary {
+            op: perry_hir::BinaryOp::BitAnd,
+            left: Box::new(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(MASK_ID)),
+                index: Box::new(Expr::Unary {
+                    op: perry_hir::UnaryOp::BitNot,
+                    operand: Box::new(Expr::Unary {
+                        op: perry_hir::UnaryOp::BitNot,
+                        operand: Box::new(Expr::Binary {
+                            op: perry_hir::BinaryOp::Div,
+                            left: Box::new(Expr::LocalGet(BIT_INDEX_ID)),
+                            right: Box::new(Expr::Integer(32)),
+                        }),
+                    }),
+                }),
+            }),
+            right: Box::new(Expr::Binary {
+                op: perry_hir::BinaryOp::Shl,
+                left: Box::new(Expr::Integer(1)),
+                right: Box::new(Expr::Binary {
+                    op: perry_hir::BinaryOp::Mod,
+                    left: Box::new(Expr::LocalGet(BIT_INDEX_ID)),
+                    right: Box::new(Expr::Integer(32)),
+                }),
+            }),
+        }))],
+    );
+    let mut class = reader_class();
+    class.id = 103;
+    class.name = "Bitset".to_string();
+    class.fields.clear();
+    class.methods = vec![has];
+    class
+}
+
+fn emit_bitset() -> String {
+    let mut module = Module::new("u32_bitset_method_clone.ts");
+    module.classes = vec![bitset_class()];
+    module.init_kind = ModuleInitKind::Eager;
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".to_string(),
+        ..Default::default()
+    };
+    String::from_utf8(compile_module(&module, opts).expect("bitset method compiles"))
+        .expect("LLVM IR is UTF-8")
+}
+
+fn transition_class() -> Class {
+    const OWNER_ID: u32 = 70;
+    const TRANSITION_INDEX_ID: u32 = 71;
+    let access = || Expr::IndexGet {
+        object: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(OWNER_ID)),
+            property: "change".to_string(),
+            byte_offset: 0,
+        }),
+        index: Box::new(Expr::LocalGet(TRANSITION_INDEX_ID)),
+    };
+    let receiver = || Expr::PropertyGet {
+        object: Box::new(Expr::LocalGet(OWNER_ID)),
+        property: "change".to_string(),
+        byte_offset: 0,
+    };
+    let transition = function(
+        98,
+        "transition",
+        vec![
+            param(OWNER_ID, "owner", Type::Any),
+            param(TRANSITION_INDEX_ID, "index", Type::Any),
+        ],
+        Type::Any,
+        vec![
+            Stmt::If {
+                condition: Expr::Unary {
+                    op: perry_hir::UnaryOp::Not,
+                    operand: Box::new(access()),
+                },
+                then_branch: vec![Stmt::Expr(Expr::PutValueSet {
+                    target: Box::new(receiver()),
+                    key: Box::new(Expr::LocalGet(TRANSITION_INDEX_ID)),
+                    value: Box::new(Expr::Integer(7)),
+                    receiver: Box::new(receiver()),
+                    strict: true,
+                })],
+                else_branch: None,
+            },
+            Stmt::Return(Some(access())),
+        ],
+    );
+    let mut class = reader_class();
+    class.id = 104;
+    class.name = "TransitionCache".to_string();
+    class.fields.clear();
+    class.methods = vec![transition];
+    class
+}
+
+fn emit_transition() -> String {
+    let mut module = Module::new("cached_transition_method_clone.ts");
+    module.classes = vec![transition_class()];
+    module.init_kind = ModuleInitKind::Eager;
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        output_type: "executable".to_string(),
+        ..Default::default()
+    };
+    String::from_utf8(compile_module(&module, opts).expect("transition method compiles"))
         .expect("LLVM IR is UTF-8")
 }
 
@@ -376,6 +635,7 @@ fn proven_index_routes_to_live_clone_while_unproven_index_keeps_public_fallback(
     let clone = function_body(&ir, &format!("@{clone_symbol}("));
     let public_symbol = "perry_method_index_method_clone_ts__Reader__read";
     let public = function_body(&ir, &format!("@{public_symbol}("));
+    let generic = function_body(&ir, &format!("@{public_symbol}$generic("));
 
     assert!(
         clone.lines().next().is_some_and(|line| line.contains(" alwaysinline ")),
@@ -385,15 +645,16 @@ fn proven_index_routes_to_live_clone_while_unproven_index_keeps_public_fallback(
         public
             .lines()
             .next()
-            .is_some_and(|line| !line.contains(" alwaysinline ")),
-        "the public fallback must not consume the scoped pre-statepoint code-size budget:\n{public}"
+            .is_some_and(|line| line.contains(" alwaysinline ")),
+        "a compact guarded public entry must flatten before RS4GC so its admitted clone does not leave a second native call boundary:\n{public}"
     );
 
     assert!(
-        clone.contains("fptosi double %arg12 to i32")
+        !clone.contains("js_typed_i32_arg_to_raw")
+            && clone.contains("fptosi double")
             && clone.contains("arr.guard.deref")
             && clone.contains("call double @js_typed_feedback_array_index_get_fallback_boxed("),
-        "the clone must consume the integer proof through a guarded direct-slot tier:\n{clone}"
+        "the clone must decode the established integer proof inline and use a guarded direct-slot tier:\n{clone}"
     );
     assert!(
         !clone.contains("js_array_get_index_or_string"),
@@ -405,11 +666,22 @@ fn proven_index_routes_to_live_clone_while_unproven_index_keeps_public_fallback(
         .filter(|line| line.contains(&format!("call double @{clone_symbol}(")))
         .collect();
     assert!(
-        !clone_calls.is_empty()
-            && clone_calls
-                .iter()
-                .all(|line| line.trim_end().ends_with("double 0.0)")),
-        "every emitted body clone must route only the proven zero-index call:\n{clone_calls:#?}\n{ir}"
+        clone_calls
+            .iter()
+            .any(|line| line.trim_end().ends_with("double 0.0)")),
+        "the statically proven zero-index call must route directly to the clone:\n{clone_calls:#?}\n{ir}"
+    );
+    assert!(
+        !public.contains("js_typed_i32_arg_guard")
+            && !public.contains("js_typed_i32_arg_to_raw")
+            && public.contains("fptosi double")
+            && public.contains("-9223372036854775808")
+            && public.contains("icmp sge i32")
+            && public.contains("nonnegative_index_method.fast")
+            && public.contains("nonnegative_index_method.generic")
+            && public.contains(&format!("call double @{clone_symbol}("))
+            && public.contains(&format!("call double @{public_symbol}$generic(")),
+        "the stable public entry must guard erased live values once and preserve a generic miss:\n{public}"
     );
     let public_calls = ir
         .lines()
@@ -420,8 +692,178 @@ fn proven_index_routes_to_live_clone_while_unproven_index_keeps_public_fallback(
         "negative, fractional, and unproven Number calls must retain the public fallback:\n{ir}"
     );
     assert!(
-        public.contains("aidxkey.sso") && public.contains("js_array_get_index_or_string"),
-        "the public body must preserve arbitrary JavaScript property-key semantics:\n{public}"
+        generic.contains("aidxkey.sso") && generic.contains("js_array_get_index_or_string"),
+        "the generic miss body must preserve arbitrary JavaScript property-key semantics:\n{generic}"
+    );
+}
+
+#[test]
+fn receiver_shape_and_live_index_proofs_compose_without_losing_either_fallback() {
+    let _native = crate::codegen::helpers::NativeRootsPin::native();
+    let ir = emit_shaped_reader();
+    let public = "perry_method_shaped_index_method_clone_ts__ShapedReader__read";
+    let pshape = crate::collectors::pshape_method_name(public);
+    let pshape_generic = format!("{pshape}$generic");
+    let combined = format!("{pshape}$idx_u31_{INDEX_ID}");
+    let wrapper = function_body(&ir, &format!("@{pshape}("));
+    let generic = function_body(&ir, &format!("@{pshape_generic}("));
+    let fast = function_body(&ir, &format!("@{combined}("));
+
+    assert!(
+        wrapper
+            .lines()
+            .next()
+            .is_some_and(|line| line.starts_with("define double "))
+            && !wrapper.contains("js_typed_i32_arg_guard")
+            && !wrapper.contains("js_typed_i32_arg_to_raw")
+            && wrapper.contains("fptosi double")
+            && wrapper.contains("-9223372036854775808")
+            && wrapper.contains(&format!("call double @{combined}("))
+            && wrapper.contains(&format!("call double @{pshape_generic}(")),
+        "the published receiver-shape capability must guard the live index and retain its receiver-safe miss:\n{wrapper}"
+    );
+    assert!(
+        generic.contains("js_array_get_index_or_string")
+            && !generic.contains("js_object_get_field_by_name"),
+        "the pshape generic arm must preserve arbitrary keys without re-looking up this.column:\n{generic}"
+    );
+    assert!(
+        !fast.contains("js_array_get_index_or_string")
+            && !fast.contains("js_object_get_field_by_name")
+            && !fast.contains("js_typed_i32_arg_to_raw")
+            && fast.contains("fptosi double"),
+        "the composed clone must consume both proofs in the same body:\n{fast}"
+    );
+}
+
+#[test]
+fn combined_receiver_and_u31_clone_fuses_property_array_push() {
+    let _native = crate::codegen::helpers::NativeRootsPin::native();
+    let ir = emit_shaped_push();
+    let public = "perry_method_shaped_push_method_clone_ts__PackedOwner__append";
+    let pshape = crate::collectors::pshape_method_name(public);
+    let combined = format!("{pshape}$idx_u31_{INDEX_ID}");
+    let fast = function_body(&ir, &format!("@{combined}("));
+    let generic = function_body(&ir, &format!("@{pshape}$generic("));
+
+    // The fused entry is allocate-but-never-reenter and answers null for
+    // receivers whose push can run user code; the composed clone consumes the
+    // u31 proof in that one entry on its hot path and keeps the complete
+    // guarded push only behind the null test, in `apush.u31.generic`.
+    let (hot, cold) = fast
+        .split_once("apush.u31.generic")
+        .expect("the u31 push must carry its null-result fallback block");
+    assert!(
+        hot.contains("call i64 @js_array_push_u31_with_length")
+            && !hot.contains("call void @js_array_push_guard")
+            && !hot.contains("call i64 @js_array_push_f64")
+            && !hot.contains("call i32 @js_array_length"),
+        "the composed clone must consume the u31 proof in one push/length runtime entry on its hot path:\n{fast}"
+    );
+    assert!(
+        cold.contains("call void @js_array_push_guard")
+            && cold.contains("call i64 @js_array_push_f64")
+            && cold.contains("call i32 @js_array_length")
+            && !cold.contains("js_array_push_u31_with_length"),
+        "the null-result fallback must perform the complete guarded push:\n{fast}"
+    );
+    assert!(
+        generic.contains("call void @js_array_push_guard")
+            && generic.contains("call i64 @js_array_push_f64")
+            && generic.contains("call i32 @js_array_length")
+            && !generic.contains("js_array_push_u31_with_length"),
+        "the receiver-safe generic miss must retain arbitrary value and receiver semantics:\n{generic}"
+    );
+}
+
+#[test]
+fn u31_bitset_clone_uses_one_guarded_uint32_load_and_keeps_dynamic_miss() {
+    const BIT_INDEX_ID: u32 = 62;
+    let _native = crate::codegen::helpers::NativeRootsPin::native();
+    let class = bitset_class();
+    assert_eq!(
+        super::typed_abi::nonnegative_index_method_params(&class.methods[0]),
+        vec![BIT_INDEX_ID],
+        "the receiver mask is not itself a numeric index"
+    );
+
+    let ir = emit_bitset();
+    let public = "perry_method_u32_bitset_method_clone_ts__Bitset__has";
+    let clone = function_body(&ir, &format!("@{public}$idx_u31_{BIT_INDEX_ID}("));
+    let generic = function_body(&ir, &format!("@{public}$generic("));
+
+    assert!(
+        clone.contains("u32bitset.header")
+            && clone.contains("u32bitset.fast")
+            && clone.contains("lshr i32")
+            && clone.contains("and i32")
+            && clone.contains(", 31")
+            && clone.contains("shl i32 1")
+            && clone.contains("icmp eq i64")
+            && clone.contains(", 5")
+            && clone.contains("load i32")
+            && clone.contains("call double @js_dyn_index_get(")
+            && clone.contains("call double @js_dynamic_bitand(")
+            && !clone.contains("tav.k.i8")
+            && !clone.contains("tav.k.f64"),
+        "the u31 clone must use the monomorphic Uint32 bitset tier and a canonical miss:\n{clone}"
+    );
+    assert!(
+        generic.contains("tav.k.i8")
+            && generic.contains("tav.k.f64")
+            && generic.contains("call double @js_dynamic_bitand("),
+        "the unproven body must retain the full dynamic typed-array and BigInt behavior:\n{generic}"
+    );
+}
+
+#[test]
+fn u31_transition_clone_returns_a_proved_cached_array_hit_without_second_get() {
+    const TRANSITION_INDEX_ID: u32 = 71;
+    let _native = crate::codegen::helpers::NativeRootsPin::native();
+    let class = transition_class();
+    assert_eq!(
+        super::typed_abi::nonnegative_index_method_params(&class.methods[0]),
+        vec![TRANSITION_INDEX_ID]
+    );
+
+    let ir = emit_transition();
+    let public = "perry_method_cached_transition_method_clone_ts__TransitionCache__transition";
+    let clone = function_body(&ir, &format!("@{public}$idx_u31_{TRANSITION_INDEX_ID}("));
+    let generic = function_body(&ir, &format!("@{public}$generic("));
+
+    assert!(
+        clone.contains("cached_field_index.object_header")
+            && clone.contains("cached_field_index.prefix_token")
+            && clone.contains("cached_field_index.array_header")
+            && clone.contains("cached_field_index.array_load")
+            && clone.contains("cached_field_index.return")
+            && clone
+                .split("\ncached_field_index.return.")
+                .nth(1)
+                .and_then(|tail| tail.split("\ncached_field_index.normal.").next())
+                .is_some_and(|fast_return| fast_return.contains("ret double"))
+            && clone.contains("cached_field_index.normal")
+            && clone.contains("tav.k.i8")
+            && clone.contains("if.then"),
+        "the proved truthy hit must return directly while the complete original body remains as fallback:\n{clone}"
+    );
+    let first_cache = clone
+        .lines()
+        .find(|line| line.contains("cached_field_index") && line.contains("@perry_ic_"))
+        .or_else(|| clone.lines().find(|line| line.contains("@perry_ic_")))
+        .and_then(|line| line.split('@').nth(1))
+        .and_then(|tail| {
+            tail.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .next()
+        })
+        .unwrap_or_else(|| panic!("guard has no property cache reference:\n{clone}"));
+    assert!(
+        clone.matches(&format!("@{first_cache}")).count() >= 6,
+        "the speculative guard and original property reads must share one primed cache ({first_cache}):\n{clone}"
+    );
+    assert!(
+        !generic.contains("cached_field_index"),
+        "an unproved/negative index must retain only the original generic behavior:\n{generic}"
     );
 }
 
@@ -431,6 +873,29 @@ fn selector_rejects_mutated_defaulted_and_closure_captured_indices() {
     assert_eq!(
         super::typed_abi::nonnegative_index_method_params(&candidate),
         vec![INDEX_ID]
+    );
+
+    let mut erased = candidate.clone();
+    erased.params[1].ty = Type::Any;
+    assert_eq!(
+        super::typed_abi::nonnegative_index_method_params(&erased),
+        vec![INDEX_ID],
+        "plain JavaScript lowers entity-id parameters to Any"
+    );
+
+    let mut unknown = candidate.clone();
+    unknown.params[1].ty = Type::Unknown;
+    assert_eq!(
+        super::typed_abi::nonnegative_index_method_params(&unknown),
+        vec![INDEX_ID]
+    );
+
+    let mut unrelated_default = candidate.clone();
+    unrelated_default.params[0].default = Some(Expr::Undefined);
+    assert_eq!(
+        super::typed_abi::nonnegative_index_method_params(&unrelated_default),
+        vec![INDEX_ID],
+        "a default on an unrelated parameter does not alter the index proof"
     );
 
     let mut mutated = candidate.clone();
@@ -464,6 +929,63 @@ fn selector_rejects_mutated_defaulted_and_closure_captured_indices() {
         }),
     );
     assert!(super::typed_abi::nonnegative_index_method_params(&captured).is_empty());
+}
+
+#[test]
+fn selector_does_not_guard_an_object_whose_field_produces_the_index() {
+    const SOURCE_ID: u32 = 51;
+    const ARRAY_ID: u32 = 52;
+    const DERIVED_ID: u32 = 53;
+    let from_object = function(
+        96,
+        "fromObject",
+        vec![
+            param(SOURCE_ID, "source", Type::Any),
+            param(ARRAY_ID, "array", Type::Array(Box::new(Type::Any))),
+        ],
+        Type::Any,
+        vec![
+            Stmt::Let {
+                id: DERIVED_ID,
+                name: "derived".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(SOURCE_ID)),
+                    property: "id".to_string(),
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Return(Some(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(ARRAY_ID)),
+                index: Box::new(Expr::LocalGet(DERIVED_ID)),
+            })),
+        ],
+    );
+    assert!(
+        super::typed_abi::nonnegative_index_method_params(&from_object).is_empty(),
+        "the component-like object is a base used to obtain an index, not a numeric index argument"
+    );
+
+    let mut numeric_flow = from_object;
+    numeric_flow.name = "fromNumber".to_string();
+    numeric_flow.params[0].ty = Type::Number;
+    numeric_flow.body[0] = Stmt::Let {
+        id: DERIVED_ID,
+        name: "derived".to_string(),
+        ty: Type::Number,
+        mutable: false,
+        init: Some(Expr::Binary {
+            op: perry_hir::BinaryOp::Add,
+            left: Box::new(Expr::LocalGet(SOURCE_ID)),
+            right: Box::new(Expr::Integer(0)),
+        }),
+    };
+    assert_eq!(
+        super::typed_abi::nonnegative_index_method_params(&numeric_flow),
+        vec![SOURCE_ID],
+        "an annotated numeric parameter still propagates through arithmetic into an index"
+    );
 }
 
 #[test]

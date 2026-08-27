@@ -211,6 +211,9 @@ pub(super) fn prune_dead_owner_side_tables_post_trace(full_trace: bool) {
         // ever add notes, so without this the table's root set would grow
         // monotonically and no keys array would ever be reclaimed again.
         crate::object::shapes::rotate_old_carrier_epoch_after_full_trace();
+        // The same rule for the array-tail transition caches: their carrier
+        // bits are exact only when rebuilt from live occupancy.
+        crate::object::array_tail_transition::recompute_cache_carriers_after_full_trace();
     }
     let probe = PostTraceProbe::new(full_trace);
     fan_out(

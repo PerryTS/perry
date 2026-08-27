@@ -32,6 +32,8 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // remain here. `pub(crate) use` keeps the public surface stable so
 // existing `crate::expr::X` paths resolve unchanged.
 mod array_literal;
+mod bitset_test;
+pub(crate) use bitset_test::is_u32_bitset_test;
 mod buffer_access;
 mod buffer_views;
 mod channel;
@@ -224,6 +226,20 @@ pub(crate) struct InlineCtorReturn {
     pub is_derived: bool,
 }
 
+/// One statement-region-owned property IC shared by equivalent reads.
+///
+/// The owner emits a speculative, side-effect-free cache probe before the
+/// original statements, then leaves the original generic property reads in
+/// place as the semantic fallback. Those reads must prime the *same* cache or
+/// the speculative probe would remain cold forever. Sharing is safe only for
+/// the exact `(base local, static property name)` pair recorded here.
+#[derive(Clone)]
+pub(crate) struct PropertyGetIcOverride {
+    pub base_local_id: u32,
+    pub property: String,
+    pub cache_name: String,
+}
+
 /// Per-function codegen context. Held briefly during lowering, never stored.
 /// #8122: where an inline-`new` site gets its `<2 x i64>` header image from.
 #[derive(Clone, Debug)]
@@ -315,6 +331,18 @@ pub(crate) struct FnCtx<'a> {
     /// reading the field, because they consult it *after* lowering their
     /// operands, by which point the field has been taken again.
     pub discard_this_expr: bool,
+    /// A condition consumer is lowering a call and can consume an `i1`
+    /// truthiness result directly. Guarded user-method dispatch uses this to
+    /// keep the statically-resolved arm's constructively-Boolean result native
+    /// while applying full `js_is_truthy` semantics to the dynamic override
+    /// arm. The ordinary JSValue result remains available for every other use.
+    pub truthy_call_result_requested: bool,
+    /// `(canonical boxed result, native truthiness)` published by the
+    /// outermost call lowering that honored `truthy_call_result_requested`.
+    /// The consumer compares the boxed SSA name with the expression result,
+    /// so a nested argument/receiver call can never be mistaken for the call
+    /// whose truthiness was requested.
+    pub pending_truthy_call_result: Option<(String, String)>,
     /// HIR FuncId → LLVM function name. Resolved at the top of
     /// `compile_module` so `FuncRef(id)` calls know what to emit.
     pub func_names: &'a std::collections::HashMap<u32, String>,
@@ -1460,6 +1488,11 @@ pub(crate) struct FnCtx<'a> {
     /// global [2 x i64] zeroinitializer` for each entry.
     pub ic_globals: Vec<String>,
 
+    /// Region-scoped cache selected by a guarded statement fusion. Generic
+    /// property reads matching the exact base local and key reuse it instead
+    /// of allocating independent per-expression caches.
+    pub property_get_ic_override: Option<PropertyGetIcOverride>,
+
     /// Issue #179 typed-parse: raw rodata globals emitted by
     /// `JsonParseTyped` codegen. Each entry is the full LLVM IR line
     /// `@<name> = private unnamed_addr constant [N x i8] c"..."` to
@@ -2488,8 +2521,11 @@ mod index_get_claim_tests;
 mod masked_window;
 #[cfg(test)]
 mod null_default_numeric_add_tests;
+
 mod ptr_numarray_access;
 mod ta_param_f64_read;
+#[cfg(test)]
+mod unary_bitnot_tests;
 pub(crate) use index_get::{
     numeric_index_has_integer_array_index_proof, packed_f64_loop_index_parts,
 };
@@ -2978,16 +3014,8 @@ pub(crate) fn lower_i32_control_store_value(ctx: &mut FnCtx<'_>, value: &Expr) -
 }
 
 pub(crate) fn lower_i1_control_store_value(ctx: &mut FnCtx<'_>, value: &Expr) -> Result<String> {
-    if let Some(lowered) = lower_expr_value(ctx, value)? {
-        if matches!(lowered.rep, NativeRep::I1) {
-            return Ok(lowered.value);
-        }
-        let boxed = materialize_js_value(ctx, lowered, MaterializationReason::RuntimeApi);
-        let truthy = crate::lower_conditional::lower_truthy(ctx, &boxed, value);
-        return Ok(truthy);
-    }
-    let boxed = lower_expr(ctx, value)?;
-    Ok(crate::lower_conditional::lower_truthy(ctx, &boxed, value))
+    let (_boxed, truthy) = crate::lower_conditional::lower_expr_with_truthy(ctx, value)?;
+    Ok(truthy)
 }
 
 fn lower_async_i32_control_const_compare(

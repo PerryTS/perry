@@ -559,6 +559,306 @@ fn guarded_site_module() -> Module {
     m
 }
 
+fn guarded_boolean_site_module(boolean_body: bool) -> Module {
+    let predicate = func(
+        130,
+        "accepts",
+        vec![param(131, "value", Type::Any)],
+        // Deliberately Boolean in both variants: the negative proves codegen
+        // does not trust an erased source annotation.
+        Type::Boolean,
+        vec![Stmt::Return(Some(if boolean_body {
+            Expr::Compare {
+                op: perry_hir::CompareOp::Gt,
+                left: Box::new(Expr::LocalGet(131)),
+                right: Box::new(this_get("limit")),
+            }
+        } else {
+            Expr::Integer(1)
+        }))],
+    );
+    let mut m = Module::new(if boolean_body {
+        "guarded_boolean_result.ts"
+    } else {
+        "guarded_lying_boolean_result.ts"
+    });
+    m.classes = vec![class(
+        104,
+        "Predicate",
+        vec![field("limit", Type::Number)],
+        vec![predicate],
+    )];
+    m.functions = vec![func(
+        132,
+        "probeBoolean",
+        vec![
+            param(133, "predicate", Type::Named("Predicate".to_string())),
+            param(134, "value", Type::Any),
+        ],
+        Type::Number,
+        vec![
+            Stmt::If {
+                condition: call(Expr::LocalGet(133), "accepts", vec![Expr::LocalGet(134)]),
+                then_branch: vec![Stmt::Return(Some(Expr::Integer(1)))],
+                else_branch: None,
+            },
+            Stmt::Return(Some(Expr::Integer(0))),
+        ],
+    )];
+    m.init_kind = ModuleInitKind::Eager;
+    m
+}
+
+fn bitset_truthiness_site_module(proven_index: bool) -> Module {
+    const MASK_ID: u32 = 141;
+    const INDEX_ID: u32 = 142;
+    const RECEIVER_ID: u32 = 144;
+    const CALLER_MASK_ID: u32 = 145;
+    const CALLER_INDEX_ID: u32 = 146;
+
+    let bitset_test = Expr::Binary {
+        op: BinaryOp::BitAnd,
+        left: Box::new(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(MASK_ID)),
+            index: Box::new(Expr::Unary {
+                op: perry_hir::UnaryOp::BitNot,
+                operand: Box::new(Expr::Unary {
+                    op: perry_hir::UnaryOp::BitNot,
+                    operand: Box::new(Expr::Binary {
+                        op: BinaryOp::Div,
+                        left: Box::new(Expr::LocalGet(INDEX_ID)),
+                        right: Box::new(Expr::Integer(32)),
+                    }),
+                }),
+            }),
+        }),
+        right: Box::new(Expr::Binary {
+            op: BinaryOp::Shl,
+            left: Box::new(Expr::Integer(1)),
+            right: Box::new(Expr::Binary {
+                op: BinaryOp::Mod,
+                left: Box::new(Expr::LocalGet(INDEX_ID)),
+                right: Box::new(Expr::Integer(32)),
+            }),
+        }),
+    };
+    let has = func(
+        140,
+        "has",
+        vec![
+            param(MASK_ID, "mask", Type::Any),
+            param(INDEX_ID, "index", Type::Any),
+        ],
+        Type::Any,
+        vec![Stmt::Return(Some(bitset_test))],
+    );
+    let call_index = if proven_index {
+        Expr::Integer(7)
+    } else {
+        Expr::LocalGet(CALLER_INDEX_ID)
+    };
+    let mut caller_params = vec![
+        param(RECEIVER_ID, "set", Type::Named("Bitset".to_string())),
+        param(CALLER_MASK_ID, "mask", Type::Any),
+    ];
+    if !proven_index {
+        caller_params.push(param(CALLER_INDEX_ID, "index", Type::Any));
+    }
+    let caller = func(
+        143,
+        "probeBitset",
+        caller_params,
+        Type::Number,
+        vec![
+            Stmt::If {
+                condition: call(
+                    Expr::LocalGet(RECEIVER_ID),
+                    "has",
+                    vec![Expr::LocalGet(CALLER_MASK_ID), call_index],
+                ),
+                then_branch: vec![Stmt::Return(Some(Expr::Integer(1)))],
+                else_branch: None,
+            },
+            Stmt::Return(Some(Expr::Integer(0))),
+        ],
+    );
+
+    let mut m = Module::new(if proven_index {
+        "guarded_bitset_truthiness.ts"
+    } else {
+        "guarded_unproven_bitset_truthiness.ts"
+    });
+    m.classes = vec![class(139, "Bitset", Vec::new(), vec![has])];
+    m.functions = vec![caller];
+    m.init_kind = ModuleInitKind::Eager;
+    m
+}
+
+/// A condition may consume a constructively-Boolean direct method result as
+/// `i1`, but only inside the guarded static arm. The dynamic override arm must
+/// retain total JavaScript truthiness because an own/prototype replacement can
+/// return any value at runtime.
+#[test]
+fn guarded_boolean_method_truthiness_is_native_only_on_the_proven_arm() {
+    let ir = emit(&guarded_boolean_site_module(true), false);
+    let probe = function_body(&ir, "__probeBoolean(");
+    let bs = blocks(&probe);
+    let fast = bs
+        .iter()
+        .find(|(_, body)| {
+            body.iter().any(|line| {
+                line.contains("call double @")
+                    && line.contains("__accepts")
+                    && !line.contains("js_native_call_method")
+            })
+        })
+        .unwrap_or_else(|| panic!("no guarded direct predicate arm in:\n{probe}"));
+    assert!(
+        fast.1.iter().any(|line| line.contains("icmp eq i64")),
+        "the proven Boolean arm boxed its return and called the total predicate:\n{probe}"
+    );
+    assert!(
+        !fast.1.iter().any(|line| line.contains("@js_is_truthy(")),
+        "the proven Boolean arm still calls js_is_truthy:\n{probe}"
+    );
+    let fallback = bs
+        .iter()
+        .find(|(_, body)| {
+            body.iter()
+                .any(|line| line.contains("@js_native_call_method_by_id("))
+        })
+        .unwrap_or_else(|| panic!("no dynamic override fallback in:\n{probe}"));
+    assert!(
+        fallback
+            .1
+            .iter()
+            .any(|line| line.contains("@js_is_truthy(")),
+        "the arbitrary override result was not tested with full JS truthiness:\n{probe}"
+    );
+    assert!(
+        bs.iter()
+            .any(|(_, body)| body.iter().any(|line| line.contains(" = phi i1 "))),
+        "the guarded Boolean and dynamic truthiness arms do not merge natively:\n{probe}"
+    );
+    let merge = bs
+        .iter()
+        .find(|(label, _)| label.starts_with("method_direct.merge"))
+        .unwrap_or_else(|| panic!("no guarded method merge in:\n{probe}"));
+    assert!(
+        merge
+            .1
+            .iter()
+            .any(|line| line.contains(" = phi double ")),
+        "truthiness publication replaced the override's actual JS value instead of merging it in parallel:\n{probe}"
+    );
+}
+
+/// The canonical ECS bitset method can publish Number truthiness when its body
+/// was resolved. The dynamic override remains unconstrained.
+#[test]
+fn guarded_bitset_method_truthiness_uses_raw_number_only_on_the_proven_arm() {
+    let ir = emit(&bitset_truthiness_site_module(true), false);
+    let probe = function_body(&ir, "__probeBitset(");
+    let bs = blocks(&probe);
+    let fast = bs
+        .iter()
+        .find(|(_, body)| {
+            body.iter().any(|line| {
+                line.contains("call double @")
+                    && line.contains("__has")
+                    && line.contains("$idx_u31_")
+            })
+        })
+        .unwrap_or_else(|| panic!("no guarded indexed bitset arm in:\n{probe}"));
+    assert!(
+        fast.1.iter().any(|line| line.contains("fcmp one double")),
+        "the exact Number result still used total JS truthiness:\n{probe}"
+    );
+    assert!(
+        !fast.1.iter().any(|line| line.contains("@js_is_truthy(")),
+        "the proven Number arm still calls js_is_truthy:\n{probe}"
+    );
+    let fallback = bs
+        .iter()
+        .find(|(_, body)| {
+            body.iter()
+                .any(|line| line.contains("@js_native_call_method_by_id("))
+        })
+        .unwrap_or_else(|| panic!("no dynamic bitset override fallback in:\n{probe}"));
+    assert!(
+        fallback
+            .1
+            .iter()
+            .any(|line| line.contains("@js_is_truthy(")),
+        "the arbitrary bitset override skipped full JavaScript truthiness:\n{probe}"
+    );
+    let merge = bs
+        .iter()
+        .find(|(label, _)| label.starts_with("method_direct.merge"))
+        .unwrap_or_else(|| panic!("no guarded bitset merge in:\n{probe}"));
+    assert!(
+        merge.1.iter().any(|line| line.contains(" = phi double "))
+            && merge.1.iter().any(|line| line.contains(" = phi i1 ")),
+        "the bitset value and truthiness were not merged independently:\n{probe}"
+    );
+}
+
+/// The result-kind proof does not require the native-index lowering proof: for
+/// an arbitrary index the canonical source expression still either returns a
+/// Number or throws.
+#[test]
+fn unproven_bitset_index_still_has_raw_number_truthiness() {
+    let ir = emit(&bitset_truthiness_site_module(false), false);
+    let probe = function_body(&ir, "__probeBitset(");
+    assert!(
+        probe.contains("@js_is_truthy("),
+        "the arbitrary dynamic override skipped total JavaScript truthiness:\n{probe}"
+    );
+    assert!(
+        probe.contains("fcmp one double"),
+        "the canonical bitset result lost its input-independent Number proof:\n{probe}"
+    );
+}
+
+/// A generic bitwise method is not enough. Keep using total truthiness unless
+/// the full Number-or-throw bitset tree matched structurally.
+#[test]
+fn noncanonical_bitwise_method_does_not_gain_raw_number_truthiness() {
+    let mut module = bitset_truthiness_site_module(true);
+    module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::Binary {
+        op: BinaryOp::BitAnd,
+        left: Box::new(Expr::LocalGet(141)),
+        right: Box::new(Expr::LocalGet(142)),
+    }))];
+    let ir = emit(&module, false);
+    let probe = function_body(&ir, "__probeBitset(");
+    assert!(
+        probe.contains("@js_is_truthy("),
+        "a noncanonical bitwise return bypassed total JavaScript truthiness:\n{probe}"
+    );
+    assert!(
+        !probe.contains("fcmp one double"),
+        "an arbitrary bitwise return was mistaken for the canonical bitset test:\n{probe}"
+    );
+}
+
+/// The constructive proof, not `: boolean`, licenses the direct tag test.
+#[test]
+fn erased_boolean_return_annotation_does_not_license_a_native_result() {
+    let ir = emit(&guarded_boolean_site_module(false), false);
+    let probe = function_body(&ir, "__probeBoolean(");
+    let dynamic_call = probe
+        .find("@js_native_call_method_by_id(")
+        .unwrap_or_else(|| panic!("no guarded method fallback in:\n{probe}"));
+    let truthy = probe
+        .rfind("@js_is_truthy(")
+        .unwrap_or_else(|| panic!("lying Boolean annotation bypassed js_is_truthy:\n{probe}"));
+    assert!(
+        dynamic_call < truthy,
+        "an annotation-only Boolean result was canonicalized before the guard merge:\n{probe}"
+    );
+}
+
 /// Regression: a method with NO eligible typed clone routes to its clone.
 ///
 /// This half was already true before #7128 and is kept as the control — if it
@@ -981,6 +1281,45 @@ fn tower_site_module() -> Module {
     m
 }
 
+/// The same interface-dispatch shape with an indexed method. The literal
+/// argument supplies the nonnegative-i32 proof while the receiver stays
+/// runtime-typed, matching `this._ent[id].sset.add(id)` in wolf-ecs.
+fn indexed_tower_site_module() -> Module {
+    const INDEX_ID: u32 = 83;
+    let mut row = row_class();
+    row.fields.push(array_field("values"));
+    row.methods.push(func(
+        99,
+        "lookup",
+        vec![param(INDEX_ID, "index", Type::Any)],
+        Type::Any,
+        vec![Stmt::Return(Some(Expr::Binary {
+            op: BinaryOp::Add,
+            left: Box::new(Expr::IndexGet {
+                object: Box::new(this_get("values")),
+                index: Box::new(Expr::LocalGet(INDEX_ID)),
+            }),
+            right: Box::new(this_get("id")),
+        }))],
+    ));
+
+    let mut module = Module::new("pshape_index_tower.ts");
+    module.classes = vec![row];
+    module.functions = vec![func(
+        1,
+        "probeIndex",
+        vec![param(2, "row", Type::Named("Shaped".to_string()))],
+        Type::Any,
+        vec![Stmt::Return(Some(call(
+            Expr::LocalGet(2),
+            "lookup",
+            vec![Expr::Integer(0)],
+        )))],
+    )];
+    module.init_kind = ModuleInitKind::Eager;
+    module
+}
+
 /// Split rendered IR into `(label, body_lines)` — block labels render
 /// unindented and colon-terminated, every instruction is indented.
 fn blocks(ir: &str) -> Vec<(String, Vec<&str>)> {
@@ -1037,6 +1376,28 @@ fn tower_case_routes_to_proven_this_clone() {
         "the dispatch tower's case proves the receiver's class_id; under an \
          inline keys check it must route to the proven-`this` clone instead of \
          the guard-ridden public body. defined={defs:?} called={calls:?}"
+    );
+}
+
+#[test]
+fn tower_case_composes_receiver_shape_and_proven_index_clones() {
+    const INDEX_ID: u32 = 83;
+    let ir = emit(&indexed_tower_site_module(), false);
+    let caller = function_body(&ir, "__probeIndex(");
+    let public = "perry_method_pshape_index_tower_ts__Row__lookup";
+    let indexed = format!("{public}$idx_u31_{INDEX_ID}");
+    let shaped = format!("{public}$pshape");
+    let combined = format!("{shaped}$idx_u31_{INDEX_ID}");
+
+    assert!(
+        caller.contains(&format!("call double @{combined}("))
+            && caller.contains(&format!("call double @{indexed}(")),
+        "the shape hit must consume both proofs and the shape miss must retain the index proof:\n{caller}"
+    );
+    assert!(
+        !caller.contains(&format!("call double @{shaped}("))
+            && !caller.contains(&format!("call double @{public}(")),
+        "a proven index must not be re-guarded by either public tower target:\n{caller}"
     );
 }
 

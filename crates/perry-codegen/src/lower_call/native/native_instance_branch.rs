@@ -304,21 +304,90 @@
         // call (~50-100 cycles) per push. With amortized doubling, real
         // reallocs are O(log N) of the total pushes — guarding the
         // writeback elides the overhead on the 99.9% no-realloc path.
+        // A combined receiver-shape + nonnegative-index clone gives the ECS
+        // `this.packed.push(x)` kernel two constructive facts the ordinary
+        // native call cannot use: `x` already has a raw i32 slot, and the
+        // receiver field read is guarded by the clone's exact `this` shape.
+        // Route only that narrow form to the fused runtime entry. All other
+        // calls retain the boxed-value push loop below.
+        let u31_param = match (args, recv) {
+            (
+                [Expr::LocalGet(id)],
+                Expr::PropertyGet {
+                    object: obj_expr, ..
+                },
+            ) if ctx.proven_this.is_some()
+                && matches!(obj_expr.as_ref(), Expr::This)
+                && ctx.spec_i32_params.contains(id)
+                && ctx.i32_counter_slots.contains_key(id) => Some(*id),
+            _ => None,
+        };
+        let u31_value = if let Some(id) = u31_param {
+            Some(lower_expr_as_i32(ctx, &Expr::LocalGet(id))?)
+        } else {
+            None
+        };
         let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-        for a in args {
-            lowered.push(lower_expr(ctx, a)?);
+        if u31_value.is_none() {
+            for a in args {
+                lowered.push(lower_expr(ctx, a)?);
+            }
         }
         let arr_box = lower_expr(ctx, recv)?;
         let blk = ctx.block();
         let mut arr_handle = unbox_to_i64(blk, &arr_box);
         let orig_handle = arr_handle.clone();
-        // Spec §23.1.3.21: Set(O,"length",…,true) fires unconditionally — guard
-        // even when args is empty so frozen / non-writable-length throw correctly.
-        blk.call_void("js_array_push_guard", &[(I64, &arr_handle)]);
-        for v in &lowered {
-            let blk = ctx.block();
-            arr_handle = blk.call(I64, "js_array_push_f64", &[(I64, &arr_handle), (DOUBLE, v)]);
-        }
+        let fused_length_slot = if let Some(value) = u31_value {
+            let length_slot = blk.alloca(I32);
+            let fast_handle = blk.call(
+                I64,
+                "js_array_push_u31_with_length",
+                &[(I64, &arr_handle), (I32, &value), (PTR, &length_slot)],
+            );
+            // The fused entry is allocate-but-never-reenter: it answers null
+            // for every receiver whose push can run user code (indexed
+            // descriptors, Proxy traps, foreign families). Those take the same
+            // complete guarded push the unfused lowering below performs.
+            let handled = blk.icmp_ne(I64, &fast_handle, "0");
+            let fast_end = blk.label.clone();
+            let generic_idx = ctx.new_block("apush.u31.generic");
+            let merge_idx = ctx.new_block("apush.u31.merge");
+            let generic_label = ctx.block_label(generic_idx);
+            let merge_label = ctx.block_label(merge_idx);
+            ctx.block().cond_br(&handled, &merge_label, &generic_label);
+            ctx.current_block = generic_idx;
+            let generic_handle = {
+                let blk = ctx.block();
+                blk.call_void("js_array_push_guard", &[(I64, &orig_handle)]);
+                let value_double = blk.sitofp(I32, &value, DOUBLE);
+                let generic_handle = blk.call(
+                    I64,
+                    "js_array_push_f64",
+                    &[(I64, &orig_handle), (DOUBLE, &value_double)],
+                );
+                let generic_length = blk.call(I32, "js_array_length", &[(I64, &generic_handle)]);
+                blk.store(I32, &generic_length, &length_slot);
+                generic_handle
+            };
+            let generic_end = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
+            ctx.current_block = merge_idx;
+            arr_handle = ctx.block().phi(
+                I64,
+                &[(&fast_handle, &fast_end), (&generic_handle, &generic_end)],
+            );
+            Some(length_slot)
+        } else {
+            // Spec §23.1.3.21: Set(O,"length",…,true) fires unconditionally — guard
+            // even when args is empty so frozen / non-writable-length throw correctly.
+            blk.call_void("js_array_push_guard", &[(I64, &arr_handle)]);
+            for v in &lowered {
+                let blk = ctx.block();
+                arr_handle =
+                    blk.call(I64, "js_array_push_f64", &[(I64, &arr_handle), (DOUBLE, v)]);
+            }
+            None
+        };
         let blk = ctx.block();
         let new_handle = arr_handle;
         let new_box = nanbox_pointer_inline(blk, &new_handle);
@@ -375,7 +444,11 @@
             ctx.current_block = merge_idx;
         }
         let blk = ctx.block();
-        let len_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
+        let len_i32 = if let Some(length_slot) = fused_length_slot {
+            blk.load(I32, &length_slot)
+        } else {
+            blk.call(I32, "js_array_length", &[(I64, &new_handle)])
+        };
         return Ok(blk.uitofp(I32, &len_i32, DOUBLE));
     }
 

@@ -509,3 +509,22 @@ fn js_typed_array_index_get_dynamic_still_reads_a_uint8array_buffer_owner() {
     assert_eq!(js_typed_array_index_get_dynamic(recv, 2.0), 7.0);
     assert!(is_undefined(js_typed_array_index_get_dynamic(recv, 3.0)));
 }
+
+/// The generic Array element read routes a registered %TypedArray% receiver
+/// off its managed header tag BEFORE the tracked-allocation resolver (which
+/// can only miss for a typed array), and answers exactly what the typed read
+/// answers: the lane value in range, `undefined` out of range.
+#[test]
+fn generic_array_element_read_dispatches_a_typed_array_off_its_header_tag() {
+    let ta = typed(crate::typedarray::KIND_UINT32, &[7.0, 9.0, 4_000_000_000.0]);
+    let as_array = ta as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_get_f64(as_array, 0), 7.0);
+    assert_eq!(crate::array::js_array_get_f64(as_array, 1), 9.0);
+    assert_eq!(crate::array::js_array_get_f64(as_array, 2), 4_000_000_000.0);
+    assert!(is_undefined(crate::array::js_array_get_f64(as_array, 3)));
+    // The NaN-boxed form generated code hands the helper must agree.
+    let boxed = (crate::value::POINTER_TAG | (ta as u64 & POINTER_MASK))
+        as *const crate::array::ArrayHeader;
+    assert_eq!(crate::array::js_array_get_f64(boxed, 1), 9.0);
+    assert!(is_undefined(crate::array::js_array_get_f64(boxed, 3)));
+}

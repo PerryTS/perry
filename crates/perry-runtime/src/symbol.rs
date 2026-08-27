@@ -55,8 +55,11 @@ pub use properties::{
 };
 
 // Symbol-keyed property reads.
-pub use get::js_object_get_symbol_property;
 pub(crate) use get::{has_own_symbol_property, inherited_symbol_property, own_symbol_property};
+pub use get::{
+    js_object_get_symbol_property, js_object_get_symbol_property_ic_miss,
+    js_object_get_symbol_then_field_ic_miss,
+};
 
 // Iterator protocol, getOwnPropertySymbols, ToPrimitive.
 pub(crate) use iterator::class_ref_resolves_iterator;
@@ -83,6 +86,7 @@ pub(crate) use gc_roots::{
 use crate::string::StringHeader;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 // NaN-boxing tags (must match value.rs)
@@ -90,6 +94,22 @@ const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+
+/// Invalidates generated weak Symbol-property inline caches.
+///
+/// The caches deliberately hold raw NaN-boxed bits without registering them as
+/// roots: making a receiver/value reachable only through an optimization cache
+/// survive collection would change WeakRef/finalization behavior. Every
+/// symbol-data mutation and every completed collection advances this epoch, so
+/// cached raw addresses are observed only while the heap and the corresponding
+/// own data property are unchanged.
+#[no_mangle]
+pub static PERRY_SYMBOL_PROPERTY_IC_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+#[inline]
+pub(crate) fn symbol_property_ic_epoch_bump() {
+    PERRY_SYMBOL_PROPERTY_IC_EPOCH.fetch_add(1, Ordering::Release);
+}
 
 /// Magic number distinguishing SymbolHeader from other GC_TYPE_STRING objects.
 /// Placed at offset 0 so `js_is_symbol` can cheaply detect symbols.
@@ -824,12 +844,14 @@ pub(crate) fn store_object_symbol_property_root(
                 entry.1 = value_bits;
                 drop(guard);
                 publish_symbol_side_table_root_edges(sym_key, value_bits);
+                symbol_property_ic_epoch_bump();
                 return false;
             }
         }
         entries.push((sym_key, value_bits));
     }
     publish_symbol_side_table_root_edges(sym_key, value_bits);
+    symbol_property_ic_epoch_bump();
     true
 }
 

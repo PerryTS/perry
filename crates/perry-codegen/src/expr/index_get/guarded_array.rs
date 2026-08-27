@@ -74,6 +74,18 @@ pub(super) fn lower_guarded_array_index_get(
     );
     let fast_idx = ctx.new_block(&format!("{}.fast", block_prefix));
     let fallback_idx = ctx.new_block(&format!("{}.fallback", block_prefix));
+    // A non-negative ordinary-array index at or above `length` has no own
+    // element: defining an array-index property would have raised `length`.
+    // Once the same structural checks used by the raw-load tier have also
+    // proved that there are no indexed descriptors and no indexed prototype
+    // properties, that result is `undefined` without consulting the generic
+    // polymorphic getter. Sparse-set membership tests hit exactly this arm for
+    // absent ids, so keep it separate from the in-bounds raw-load block.
+    let inline_oob_idx = if !typed_feedback_emission_enabled() {
+        Some(ctx.new_block(&format!("{}.guard.oob", block_prefix)))
+    } else {
+        None
+    };
     let merge_idx = ctx.new_block(&format!("{}.merge", block_prefix));
     let fast_label = ctx.block_label(fast_idx);
     let fallback_label = ctx.block_label(fallback_idx);
@@ -114,6 +126,8 @@ pub(super) fn lower_guarded_array_index_get(
             Some(idx) => ctx.block_label(idx),
             None => fallback_label.clone(),
         };
+        let range_idx = ctx.new_block(&format!("{}.guard.range", block_prefix));
+        let range_label = ctx.block_label(range_idx);
         {
             let blk = ctx.block();
             let arr_bits = blk.bitcast_double_to_i64(arr_box);
@@ -167,7 +181,7 @@ pub(super) fn lower_guarded_array_index_get(
         };
 
         ctx.current_block = live_deref_idx;
-        {
+        let (index_in_bounds, reserved) = {
             let blk = ctx.block();
             let live_gc_type_addr = blk.sub(I64, &live_handle, "8");
             let live_gc_type_ptr = blk.inttoptr(I64, &live_gc_type_addr);
@@ -200,14 +214,29 @@ pub(super) fn lower_guarded_array_index_get(
             let capacity_sane = blk.icmp_ule(I32, &capacity, "16000000");
             let length_within_capacity = blk.icmp_ule(I32, &length, &capacity);
 
-            let mut guard_ok = blk.and(I1, &is_array, &not_forwarded);
-            guard_ok = blk.and(I1, &guard_ok, &no_descriptors);
-            guard_ok = blk.and(I1, &guard_ok, &default_prototype_chain);
-            guard_ok = blk.and(I1, &guard_ok, &index_nonnegative);
-            guard_ok = blk.and(I1, &guard_ok, &index_in_bounds);
-            guard_ok = blk.and(I1, &guard_ok, &length_sane);
-            guard_ok = blk.and(I1, &guard_ok, &capacity_sane);
-            guard_ok = blk.and(I1, &guard_ok, &length_within_capacity);
+            let mut structural_ok = blk.and(I1, &is_array, &not_forwarded);
+            structural_ok = blk.and(I1, &structural_ok, &no_descriptors);
+            structural_ok = blk.and(I1, &structural_ok, &default_prototype_chain);
+            structural_ok = blk.and(I1, &structural_ok, &index_nonnegative);
+            structural_ok = blk.and(I1, &structural_ok, &length_sane);
+            structural_ok = blk.and(I1, &structural_ok, &capacity_sane);
+            structural_ok = blk.and(I1, &structural_ok, &length_within_capacity);
+            blk.cond_br(&structural_ok, &range_label, &guard_fail_label);
+
+            // `index_in_bounds` and `reserved` dominate the range block. The
+            // former selects raw load versus the proven-absent result; the
+            // latter carries the optional numeric-layout proof below.
+            (index_in_bounds, reserved)
+        };
+
+        let numeric_in_bounds_idx = require_numeric_layout
+            .then(|| ctx.new_block(&format!("{}.guard.numeric_in_bounds", block_prefix)));
+        let numeric_in_bounds_label = numeric_in_bounds_idx.map(|idx| ctx.block_label(idx));
+        let oob_label = ctx.block_label(inline_oob_idx.expect("normal-build OOB block"));
+        ctx.current_block = range_idx;
+        {
+            let blk = ctx.block();
+            let mut in_bounds_ok = index_in_bounds.clone();
             if require_numeric_layout {
                 // Dense raw-f64 proof: every slot in [0, length) holds
                 // canonical raw f64 bits (GC_ARRAY_RAW_F64_LAYOUT, 0x80).
@@ -229,10 +258,26 @@ pub(super) fn lower_guarded_array_index_get(
                 };
                 let raw_bits = blk.and(I16, &reserved, raw_mask);
                 let is_raw = blk.icmp_ne(I16, &raw_bits, "0");
-                guard_ok = blk.and(I1, &guard_ok, &is_raw);
+                in_bounds_ok = blk.and(I1, &in_bounds_ok, &is_raw);
             }
-            inline_fast_handle = Some((live_handle, blk.label.clone()));
-            blk.cond_br(&guard_ok, &fast_label, &guard_fail_label);
+            if require_numeric_layout {
+                // An in-bounds array without the requested numeric layout must
+                // still visit the cold rebuilding guard. OOB needs no element
+                // layout at all and can return directly.
+                let in_bounds_idx = numeric_in_bounds_idx.expect("numeric in-bounds block");
+                let in_bounds_label = numeric_in_bounds_label
+                    .as_deref()
+                    .expect("numeric in-bounds label");
+                blk.cond_br(&index_in_bounds, &in_bounds_label, &oob_label);
+
+                ctx.current_block = in_bounds_idx;
+                ctx.block()
+                    .cond_br(&in_bounds_ok, &fast_label, &guard_fail_label);
+                inline_fast_handle = Some((live_handle, ctx.block().label.clone()));
+            } else {
+                inline_fast_handle = Some((live_handle, blk.label.clone()));
+                blk.cond_br(&in_bounds_ok, &fast_label, &oob_label);
+            }
         }
 
         if let Some(cold_idx) = cold_guard_idx {
@@ -295,6 +340,20 @@ pub(super) fn lower_guarded_array_index_get(
         };
         ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
     }
+
+    let inline_oob = inline_oob_idx.map(|oob_idx| {
+        ctx.current_block = oob_idx;
+        let value = if require_numeric_layout && coerce_numeric_fallback {
+            // This is ToNumber(undefined), matching the boxed fallback.
+            "0x7FF8000000000000".to_string()
+        } else {
+            ctx.block()
+                .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64)
+        };
+        let end_label = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+        (value, end_label)
+    });
 
     ctx.current_block = fallback_idx;
     // Materialize the f64 index only here (cold path) so the int→fp conversion
@@ -443,13 +502,14 @@ pub(super) fn lower_guarded_array_index_get(
     }
 
     ctx.current_block = merge_idx;
-    Ok(ctx.block().phi(
-        DOUBLE,
-        &[
-            (&fast_val, &fast_end_label),
-            (&fallback_val, &fallback_end_label),
-        ],
-    ))
+    let mut incoming: Vec<(&str, &str)> = vec![
+        (fast_val.as_str(), fast_end_label.as_str()),
+        (fallback_val.as_str(), fallback_end_label.as_str()),
+    ];
+    if let Some((oob_value, oob_end_label)) = inline_oob.as_ref() {
+        incoming.push((oob_value.as_str(), oob_end_label.as_str()));
+    }
+    Ok(ctx.block().phi(DOUBLE, &incoming))
 }
 
 pub(super) fn packed_f64_loop_fact(

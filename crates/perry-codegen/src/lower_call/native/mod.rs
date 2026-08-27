@@ -27,7 +27,8 @@ use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
 use crate::expr::{
-    emit_root_nanbox_store_on_block, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx,
+    emit_root_nanbox_store_on_block, lower_expr, lower_expr_as_i32, nanbox_pointer_inline,
+    unbox_to_i64, FnCtx,
 };
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::types::{DOUBLE, I32, I64, PTR};

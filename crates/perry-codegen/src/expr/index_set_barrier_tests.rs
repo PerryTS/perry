@@ -377,3 +377,150 @@ fn the_gated_element_store_still_reaches_the_barrier_call() {
          exist — the remembered set's arming protocol reads this:\n{ir}"
     );
 }
+
+/// The guarded diamond has two mutually exclusive store owners:
+///
+/// - its inline arm writes the slot itself and must emit the precise slot
+///   barrier asserted above;
+/// - its slow arm calls `js_typed_feedback_array_set_f64_extend`, whose every
+///   successful pointer-bearing destination is barriered inside the runtime.
+///
+/// Re-adding a bare parent/child barrier after the helper is correct but
+/// duplicates receiver/child decoding on every slow pointer overwrite. This
+/// pins that ownership boundary while also proving the fixture reaches both
+/// tiers rather than passing because it stopped emitting an array setter.
+#[test]
+fn runtime_array_setter_is_not_followed_by_a_duplicate_opaque_barrier() {
+    assert_default_barrier_env_not_disabled();
+    let ir = ir();
+    assert!(
+        ir.contains("call i64 @js_typed_feedback_array_set_f64_extend("),
+        "fixture no longer reaches the runtime array-set fallback:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call void @js_write_barrier("),
+        "the runtime array setter already barriers its destination slot; the \
+         generated opaque wrapper repeats that work:\n{ir}"
+    );
+    let barrier_body = numbered_barrier_block_body(&ir)
+        .unwrap_or_else(|| panic!("inline store lost `{BARRIER_BLOCK}<N>`:\n{ir}"));
+    assert!(
+        barrier_body.contains(BARRIER_CALL),
+        "removing the slow helper's duplicate barrier must not remove the \
+         inline store's precise slot barrier:\n{barrier_body}"
+    );
+}
+
+/// The guarded property-receiver store follows ONE growth-forwarding edge
+/// inline, exactly like the guarded read tier, instead of failing its
+/// `!GC_FLAG_FORWARDED` test and going out of line on every store.
+///
+/// `this.vals[i] = v` has no writeback slot: once `vals` has grown past its
+/// initial capacity the object field keeps the pre-grow stub forever, so the
+/// old guard rejected the receiver on EVERY later store and the whole store
+/// paid the extend helper plus the allocator/registry forwarding resolver
+/// (the wolf-ecs `_ent`/`_updateTo`/`sparse` hot path). The heal is pinned
+/// three ways: the `deref` block selects the forwarding target, the selected
+/// live head is re-validated in `deref.live`, and the fast arm's element
+/// address is derived from that live head rather than from the original box.
+#[test]
+fn the_guarded_property_receiver_store_follows_one_forwarding_edge_inline() {
+    let ir = ir();
+    let deref =
+        block_body(&ir, "idxset.recv_prop.deref.").expect("guarded store emits its `deref` block");
+    let live = block_body(&ir, "idxset.recv_prop.deref.live.")
+        .expect("guarded store emits its `deref.live` block");
+    let fast =
+        block_body(&ir, "idxset.recv_prop.fast.").expect("guarded store emits its `fast` block");
+
+    // (1) `deref` reads the stub's first payload word and selects it as the
+    // live handle when the header says ARRAY + FORWARDED.
+    let select_line = deref
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains("select i1") && line.contains("i64"))
+        .expect("`deref` selects between the forwarding target and the receiver");
+    let live_handle = select_line
+        .split(" = ")
+        .next()
+        .expect("select defines a register")
+        .to_string();
+    let target = operand(select_line, 2).expect("select's taken operand");
+    let target_def = def_of(&deref, &target).expect("forwarding target is defined in `deref`");
+    assert!(
+        target_def.contains("load i64"),
+        "the forwarding target must be the stub's first payload word, got `{target_def}`"
+    );
+    assert!(
+        deref.contains("br i1") && deref.contains("idxset.recv_prop.deref.live."),
+        "`deref` must branch into `deref.live` after the heap-band test of the live handle"
+    );
+
+    // (2) `deref.live` re-reads the ARRAY brand and the FORWARDED bit from the
+    // LIVE handle (not from the original box) before admitting the fast arm.
+    assert!(
+        live.contains(&format!("sub i64 {live_handle}, 8"))
+            && live.contains(&format!("sub i64 {live_handle}, 7")),
+        "`deref.live` must re-validate the header of the selected live head"
+    );
+    assert!(
+        live.contains("idxset.recv_prop.fast."),
+        "`deref.live` is the fast arm's predecessor"
+    );
+
+    // (3) The fast arm's element address is computed from the live head.
+    assert!(
+        fast.contains(&format!("add i64 {live_handle}, ")),
+        "the fast arm must address the element relative to the live head, not the stub"
+    );
+}
+
+/// The fast arm's raw-f64 downgrade note is gated on the live head's
+/// `_reserved` word rather than called unconditionally: `js_array_note_numeric_write`
+/// is exactly "clear the raw-f64 bits if the value is not a Number", and it
+/// re-resolves the receiver through the tracked resolver on every call, so a
+/// pointer store into an array whose raw-f64 bits are already clear must not
+/// reach it at all.
+#[test]
+fn the_fast_arm_numeric_note_is_gated_on_the_raw_f64_header_bits() {
+    let ir = ir();
+    let live = block_body(&ir, "idxset.recv_prop.deref.live.")
+        .expect("guarded store emits its `deref.live` block");
+    let reserved_line = live
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains("load i16"))
+        .expect("`deref.live` loads the live head's `_reserved` word");
+    let reserved = reserved_line
+        .split(" = ")
+        .next()
+        .expect("load defines a register")
+        .to_string();
+
+    let (gate, gate_body) = branch_into_block(&ir, "idxset.recv_prop.numnote.")
+        .expect("the numeric note sits behind a conditional branch");
+    let cond = operand(&gate, 0).expect("cond_br has a condition");
+    let cond_def = def_of(&gate_body, &cond).expect("gate condition is defined in its block");
+    assert!(
+        cond_def.contains("icmp ne i16"),
+        "gate must test the raw-f64 bits for non-zero, got `{cond_def}`"
+    );
+    let masked = operand(cond_def, 0).expect("icmp operand");
+    let masked_def = def_of(&gate_body, &masked).expect("masked bits are defined in the block");
+    assert!(
+        masked_def.contains(&format!("and i16 {reserved}, 4224")),
+        "gate must mask GC_ARRAY_RAW_F64_LAYOUT|GC_ARRAY_RAW_F64_HOLES (0x1080) out of the \\
+         live head's `_reserved`, got `{masked_def}`"
+    );
+
+    let note = block_body(&ir, "idxset.recv_prop.numnote.").expect("the numeric note block exists");
+    assert!(
+        note.contains("call void @js_array_note_numeric_write("),
+        "the note call must live inside the gated block:\n{note}"
+    );
+    let fast = block_body(&ir, "idxset.recv_prop.fast.").expect("fast block");
+    assert!(
+        !fast.contains("js_array_note_numeric_write"),
+        "the fast arm must not call the note unconditionally:\n{fast}"
+    );
+}

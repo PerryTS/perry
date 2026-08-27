@@ -294,8 +294,9 @@ pub(crate) use ic_miss::{
 };
 pub use ic_miss::{
     js_class_field_add, js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
-    js_object_get_field_ic_miss, js_object_set_field_by_property_id, js_private_brand_add,
-    js_private_brand_check, js_private_field_add, js_private_guard, PicCache, PIC_CACHE_WORDS,
+    js_object_get_field_ic, js_object_get_field_ic_miss, js_object_set_field_by_property_id,
+    js_private_brand_add, js_private_brand_check, js_private_field_add, js_private_guard, PicCache,
+    PIC_CACHE_WORDS,
 };
 
 #[cfg(test)]

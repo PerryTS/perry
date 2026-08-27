@@ -1445,7 +1445,7 @@ pub(super) struct ThisFlowAnalysis<'a, 'b> {
     chain: &'b [&'a Class],
     fields: &'b HashSet<String>,
     methods: &'b HashMap<String, (String, &'a perry_hir::Function)>,
-    visited: HashSet<(String, String)>,
+    visited: HashSet<(String, String, bool)>,
     store_records: Vec<ThisStoreRecord<'a>>,
     /// `super(...)` argument lists observed in chain constructors, keyed by
     /// the PARENT (callee) class name. Feeds the parent-ctor parameter
@@ -1521,7 +1521,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
         }
         for class in self.chain {
             if let Some(ctor) = &class.constructor {
-                if !self.function_this_safe(&class.name, "constructor", ctor) {
+                if !self.function_this_safe(&class.name, "constructor", ctor, false) {
                     return false;
                 }
             }
@@ -1530,7 +1530,20 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
     }
 
     pub(super) fn method_safe(&mut self, owner: &str, func: &'a perry_hir::Function) -> bool {
-        self.function_this_safe(owner, &func.name, func)
+        self.function_this_safe(owner, &func.name, func, false)
+    }
+
+    /// Phase 5a root-method variant: `return this` is safe only as the final
+    /// statement of the method whose receiver was already guarded. It creates
+    /// no alias until every specialized field access has completed. Nested
+    /// methods continue through [`Self::method_safe`] and may not return the
+    /// receiver, preserving Phase 3b's no-escape contract.
+    pub(super) fn method_safe_with_terminal_this_return(
+        &mut self,
+        owner: &str,
+        func: &'a perry_hir::Function,
+    ) -> bool {
+        self.function_this_safe(owner, &func.name, func, true)
     }
 
     fn function_this_safe(
@@ -1538,8 +1551,16 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
         owner: &str,
         name: &str,
         func: &'a perry_hir::Function,
+        allow_terminal_this_return: bool,
     ) -> bool {
-        let key = (owner.to_string(), name.to_string());
+        // Keyed by the terminal-`this`-return allowance too: the strict
+        // (`false`) vetting of a nested `this.m()` / `super.m()` edge must not
+        // be satisfied by an earlier lenient (`true`) visit of the same method.
+        let key = (
+            owner.to_string(),
+            name.to_string(),
+            allow_terminal_this_return,
+        );
         if !self.visited.insert(key) {
             return true; // already vetted (or in-progress higher up the stack)
         }
@@ -1552,11 +1573,14 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
         let param_ids: Vec<u32> = func.params.iter().map(|p| p.id).collect();
         let ctx = (owner.to_string(), name.to_string(), param_ids);
         let mut safe = true;
-        for s in &func.body {
+        for (index, s) in func.body.iter().enumerate() {
             if !safe {
                 break;
             }
-            safe &= self.stmt_this_safe(s, &ctx);
+            let terminal_this_return = allow_terminal_this_return
+                && index + 1 == func.body.len()
+                && matches!(s, Stmt::Return(Some(Expr::This)));
+            safe &= terminal_this_return || self.stmt_this_safe(s, &ctx);
         }
         safe
     }
@@ -1731,7 +1755,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                     return false;
                 };
                 self.internally_invoked.insert(property.clone());
-                if !self.function_this_safe(&owner, property, func) {
+                if !self.function_this_safe(&owner, property, func, false) {
                     return false;
                 }
                 args.iter()
@@ -1761,7 +1785,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                     return false;
                 };
                 self.internally_invoked.insert(method.clone());
-                if !self.function_this_safe(&owner, method, func) {
+                if !self.function_this_safe(&owner, method, func, false) {
                     return false;
                 }
                 args.iter()
@@ -1943,34 +1967,6 @@ use numeric::{
 // #8105: the same locals fixpoint, consumed outside the `Ptr<Shape>` pass by
 // `collectors/number_by_construction.rs`.
 pub(in crate::collectors) use numeric::collect_numeric_by_construction_locals as collect_numeric_by_construction_locals_for_type_analysis;
-
-/// Conservative "cannot be a BigInt" for the spec Number-path argument.
-fn expr_provably_not_bigint(e: &Expr, not_bigint_locals: &HashSet<u32>) -> bool {
-    match e {
-        Expr::Number(_)
-        | Expr::Integer(_)
-        | Expr::String(_)
-        | Expr::Bool(_)
-        | Expr::PodLayoutSizeOf { .. }
-        | Expr::PodLayoutAlignOf { .. }
-        | Expr::PodLayoutOffsetOf { .. } => true,
-        Expr::LocalGet(id) => not_bigint_locals.contains(id),
-        Expr::Unary { op, operand } => match op {
-            perry_hir::UnaryOp::Pos => true, // `+x` throws for BigInt
-            perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::BitNot => {
-                expr_provably_not_bigint(operand, not_bigint_locals)
-            }
-            _ => true, // !x, typeof x, … never produce BigInt
-        },
-        Expr::Binary { .. } => false, // handled structurally by the caller
-        _ => false,
-    }
-}
-
-// Note on Symbol operands in the either-side non-BigInt arithmetic argument:
-// ToNumber(Symbol) THROWS, so the store never completes — throw behavior is
-// identical on the guarded and bare paths, and no non-number value can reach
-// the slot through these operators.
 
 /// `--opt-report` (#6952) end-to-end tests. Kept in a sibling file for the
 /// file-size gate; still a child module, so `use super::*` reaches the

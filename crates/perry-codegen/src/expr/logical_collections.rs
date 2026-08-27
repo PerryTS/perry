@@ -871,10 +871,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // a NaN-tagged TAG_TRUE/TAG_FALSE so console.log prints
         // "true"/"false" via the runtime's NaN-tag dispatch.
         Expr::BooleanCoerce(operand) => {
-            let v = lower_expr(ctx, operand)?;
+            let (_v, bit) = crate::lower_conditional::lower_expr_with_truthy(ctx, operand)?;
             let blk = ctx.block();
-            let i32_v = blk.call(I32, "js_is_truthy", &[(DOUBLE, &v)]);
-            let bit = blk.icmp_ne(I32, &i32_v, "0");
             let tagged = blk.select(
                 crate::types::I1,
                 &bit,

@@ -111,6 +111,13 @@ const MAX_VERIFIED_LEN: usize = 16_000_000;
 struct ElementShapeRecord {
     /// `ObjectHeader::class_id` shared by every element in `[0, length)`.
     class_id: u32,
+    /// One exact ordinary-object ShapeId already validated by the complete
+    /// classifier. Most homogeneous arrays also have a homogeneous exact
+    /// shape, so matching stores can validate two scalar object-header words
+    /// without probing the global shape table. A same-class value with a
+    /// different shape still takes the complete classifier below; this word
+    /// narrows no existing class-level proof.
+    ordinary_shape_id: u32,
     /// The `length` this record was verified against. A query requires the
     /// array's current `length` to still equal it, so every length-changing
     /// mutation invalidates the proof without needing its own call site.
@@ -124,7 +131,11 @@ struct ElementShapeRecord {
     epoch: u64,
     /// `CLASS_SHAPE_GENERATION` at install time. A prototype write bumps the
     /// global and retires every record at once.
-    generation: u64,
+    /// Low-width snapshot keeps this hot side-table record at its original
+    /// 24-byte size after adding `ordinary_shape_id`. Once the global counter
+    /// exceeds `u32`, proofs simply stop establishing/fail closed; observable
+    /// array behavior still uses the generic path.
+    generation: u32,
 }
 
 /// What a query hands back. Deliberately not the raw record: `generation` is
@@ -145,6 +156,18 @@ crate::perry_thread_local! {
     /// on the thread that allocated it.
     static ELEMENT_SHAPES: RefCell<crate::fast_hash::PtrHashMap<usize, ElementShapeRecord>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static ARRAY_SUBCLASS_PREFIX_STORE_HITS: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+pub(crate) fn test_array_subclass_prefix_store_hits() -> u64 {
+    ARRAY_SUBCLASS_PREFIX_STORE_HITS.with(std::cell::Cell::get)
 }
 
 // #7946: all three counters are `per_test_global!`, so a test build gives each
@@ -237,8 +260,11 @@ pub(crate) fn invalidate_all_element_shapes() {
 /// garbage that could compare equal across unrelated arrays. Requiring the
 /// authoritative object kind/marker and a nonzero class id keeps every
 /// accepted value a genuine shaped instance.
+/// Complete shaped-object classifier used to establish an exact fast
+/// identity. The header is validated once; after that, the descriptor probe
+/// supplies the authoritative ordinary-vs-class-object distinction.
 #[inline]
-pub(crate) fn element_class_of_bits(value_bits: u64) -> Option<u32> {
+fn element_identity_of_bits(value_bits: u64) -> Option<(u32, u32)> {
     if value_bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
         return None;
     }
@@ -251,19 +277,87 @@ pub(crate) fn element_class_of_bits(value_bits: u64) -> Option<u32> {
         let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
             return None;
         };
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
             return None;
         }
         let obj = addr as *const crate::object::ObjectHeader;
-        if !crate::object::object_is_regular(obj) {
+        let shape_id = (*obj).parent_class_id;
+        if !crate::object::shapes::shape_descriptor_by_id(shape_id).is_some_and(|shape| {
+            shape.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary
+        }) {
             return None;
         }
         let class_id = (*obj).class_id;
         if class_id == 0 {
             return None;
         }
-        Some(class_id)
+        Some((class_id, shape_id))
     }
+}
+
+/// Validate a value against an established class proof. Exact-shape matches
+/// need no descriptor-table lookup because `ordinary_shape_id` was admitted
+/// only by [`element_identity_of_bits`] and ShapeIds are never reused. A
+/// different shape keeps the historical same-class behavior by running the
+/// complete classifier.
+#[inline]
+fn element_matches_record(value_bits: u64, record: ElementShapeRecord) -> bool {
+    if value_bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+        return false;
+    }
+    let addr = (value_bits & crate::value::POINTER_MASK) as usize;
+    unsafe {
+        let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+            return false;
+        };
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return false;
+        }
+        let obj = addr as *const crate::object::ObjectHeader;
+        if (*obj).class_id != record.class_id {
+            return false;
+        }
+        if (*obj).parent_class_id == record.ordinary_shape_id {
+            #[cfg(test)]
+            EXACT_SHAPE_STORE_HITS.with(|hits| hits.set(hits.get().wrapping_add(1)));
+            return true;
+        }
+        // Object-backed Array subclasses publish a move-stable, class-wide
+        // ordinary-prefix proof precisely because their numeric tail mints a
+        // different ShapeId on every push/pop. Once present, that token is a
+        // stronger ordinary-instance discriminator than another global
+        // ShapeId-kind lookup. It is cleared before every generic semantic or
+        // structural transition; exact numeric-tail transitions are its only
+        // preserving publisher.
+        if crate::array::subclass::array_subclass_named_prefix_token_matches_class(
+            obj,
+            record.class_id,
+        ) {
+            #[cfg(test)]
+            ARRAY_SUBCLASS_PREFIX_STORE_HITS.with(|hits| hits.set(hits.get().wrapping_add(1)));
+            return true;
+        }
+        element_identity_of_validated_object(obj)
+            .is_some_and(|identity| identity.0 == record.class_id)
+    }
+}
+
+#[inline]
+unsafe fn element_identity_of_validated_object(
+    obj: *const crate::object::ObjectHeader,
+) -> Option<(u32, u32)> {
+    let shape_id = (*obj).parent_class_id;
+    if crate::object::shapes::shape_object_kind_by_id(shape_id)
+        != Some(crate::object::shapes::ShapeObjectKind::Ordinary)
+    {
+        return None;
+    }
+    let class_id = (*obj).class_id;
+    (class_id != 0).then_some((class_id, shape_id))
 }
 
 #[inline]
@@ -350,38 +444,29 @@ pub(crate) fn forget_element_shape(user_ptr: usize) {
 /// defence against address recycling: a survivor record — left by a
 /// fail-closed transfer, a dead array whose prune has not run yet — can never
 /// donate its identity to the array established here next.
-unsafe fn establish(arr: *mut ArrayHeader, class_id: u32, verified_len: u32) {
+unsafe fn establish(
+    arr: *mut ArrayHeader,
+    class_id: u32,
+    ordinary_shape_id: u32,
+    verified_len: u32,
+) {
     let Some(header) = array_gc_header(arr) else {
+        return;
+    };
+    let Ok(generation) = u32::try_from(class_shape_generation()) else {
         return;
     };
     let record = ElementShapeRecord {
         class_id,
+        ordinary_shape_id,
         verified_len,
         epoch: ELEMENT_SHAPE_PROOF_SEQ.fetch_add(1, Ordering::Relaxed),
-        generation: class_shape_generation(),
+        generation,
     };
     ELEMENT_SHAPES.with(|m| {
         m.borrow_mut().insert(arr as usize, record);
     });
     set_bit(header);
-}
-
-/// **Keep** an existing proof while extending its verified prefix. The
-/// identity is carried unchanged — a consumer that pinned it stays valid,
-/// which is the point: appending a matching element does not retire anything.
-unsafe fn extend_verified_len(arr: *mut ArrayHeader, record: ElementShapeRecord, new_len: u32) {
-    if array_gc_header(arr).is_none() {
-        return;
-    }
-    ELEMENT_SHAPES.with(|m| {
-        m.borrow_mut().insert(
-            arr as usize,
-            ElementShapeRecord {
-                verified_len: new_len,
-                ..record
-            },
-        );
-    });
 }
 
 /// The O(1) query: does `arr` still carry a homogeneous element-shape proof?
@@ -404,7 +489,7 @@ pub(crate) unsafe fn element_shape_proof(arr: *const ArrayHeader) -> Option<Elem
         bump_epoch();
         return None;
     };
-    if record.generation != class_shape_generation()
+    if u64::from(record.generation) != class_shape_generation()
         || record.verified_len != (*arr).length
         || !array_admits_element_proof(arr)
     {
@@ -445,13 +530,24 @@ pub(crate) unsafe fn ensure_element_shape(arr: *mut ArrayHeader) -> Option<Eleme
         return None;
     }
     let elements = array_elements_ptr(arr);
-    let class_id = element_class_of_bits(*elements)?;
+    let (class_id, ordinary_shape_id) = element_identity_of_bits(*elements)?;
     for i in 1..length {
-        if element_class_of_bits(*elements.add(i)) != Some(class_id) {
+        let bits = *elements.add(i);
+        let Ok(generation) = u32::try_from(class_shape_generation()) else {
+            return None;
+        };
+        let record = ElementShapeRecord {
+            class_id,
+            ordinary_shape_id,
+            verified_len: length as u32,
+            epoch: 0,
+            generation,
+        };
+        if !element_matches_record(bits, record) {
             return None;
         }
     }
-    establish(arr, class_id, length as u32);
+    establish(arr, class_id, ordinary_shape_id, length as u32);
     element_shape_proof(arr)
 }
 
@@ -481,11 +577,13 @@ pub(crate) unsafe fn ensure_element_shape(arr: *mut ArrayHeader) -> Option<Eleme
 /// `arr` must already be forwarding-resolved; `layout_note_slot` chases the
 /// chain before calling.
 #[inline]
-pub(crate) unsafe fn note_element_store(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
-    let Some(header) = array_gc_header(arr) else {
-        return;
-    };
-    if !header_has_bit(header) {
+unsafe fn note_element_store_with_bit(
+    arr: *mut ArrayHeader,
+    index: usize,
+    value_bits: u64,
+    has_element_shape: bool,
+) {
+    if !has_element_shape {
         // Proofs are established on demand by `ensure_element_shape`. Eagerly
         // creating one here makes every homogeneous object array pay a TLS
         // side-table insert on construction and a lookup/update on every
@@ -503,15 +601,51 @@ pub(crate) unsafe fn note_element_store(arr: *mut ArrayHeader, index: usize, val
         clear_element_shape(arr);
         return;
     }
-    if element_class_of_bits(value_bits) != Some(record.class_id) {
+    if !element_matches_record(value_bits, record) {
         clear_element_shape(arr);
         return;
     }
     if index == record.verified_len as usize {
         // Contiguous append. Callers bump `length` immediately after the
         // store, so the record leads it for exactly the store's duration.
-        extend_verified_len(arr, record, record.verified_len.saturating_add(1));
+        ELEMENT_SHAPES.with(|m| {
+            m.borrow_mut().insert(
+                arr as usize,
+                ElementShapeRecord {
+                    verified_len: record.verified_len.saturating_add(1),
+                    ..record
+                },
+            );
+        });
     }
+}
+
+#[inline]
+pub(crate) unsafe fn note_element_store(arr: *mut ArrayHeader, index: usize, value_bits: u64) {
+    let Some(header) = array_gc_header(arr) else {
+        return;
+    };
+    note_element_store_with_bit(arr, index, value_bits, header_has_bit(header));
+}
+
+/// [`note_element_store`] for an already-resolved plain Array whose current
+/// `_reserved` word was read by the caller's receiver guard. This avoids a
+/// second parent-header classification on existing-slot pointer overwrites;
+/// all record matching, retirement, and exact-shape adaptation is identical.
+///
+/// # Safety
+///
+/// `arr` must be a live, forwarding-resolved `GC_TYPE_ARRAY`, and `flags`
+/// must be its current preceding `GcHeader::_reserved` word with no
+/// intervening safepoint.
+#[inline]
+pub(crate) unsafe fn note_element_store_resolved_flags(
+    arr: *mut ArrayHeader,
+    index: usize,
+    value_bits: u64,
+    flags: u16,
+) {
+    note_element_store_with_bit(arr, index, value_bits, flags & GC_ARRAY_ELEMENT_SHAPE != 0);
 }
 
 /// Move the record when the array's storage moves — growth forwarding, a
@@ -644,6 +778,16 @@ pub(crate) fn test_element_shape_record_exists(owner: usize) -> bool {
 #[cfg(test)]
 pub(crate) fn test_clear_element_shape_table() {
     ELEMENT_SHAPES.with(|m| m.borrow_mut().clear());
+}
+
+#[cfg(test)]
+thread_local! {
+    static EXACT_SHAPE_STORE_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_exact_shape_store_hits() -> u64 {
+    EXACT_SHAPE_STORE_HITS.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]

@@ -31,12 +31,13 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::native_value::{
     BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
 };
+use crate::rooting;
 use crate::type_analysis::{
     is_array_expr, is_map_expr, is_numeric_typed_array_class, is_set_expr, is_string_expr,
     is_url_search_params_expr, is_url_search_params_subclass_expr, receiver_class_name,
     receiver_is_error_type,
 };
-use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 use super::property_get_names::{
     is_headers_method_name, is_http_agent_method_name, is_http_client_request_method_name,
@@ -46,6 +47,9 @@ use super::property_get_names::{
 pub(crate) mod generic_dispatch;
 mod globalget;
 mod helpers;
+
+mod composed_ics;
+use composed_ics::{emit_array_subclass_length_ic, lower_symbol_then_named_property_ic};
 #[cfg(test)]
 mod tests;
 
@@ -103,9 +107,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // to be recorded where the alias is created rather than where it is used.
     // `MutableAlias` is exactly what this is.
     if let Expr::PropertyGet {
-        object, property, ..
+        object,
+        property,
+        byte_offset,
     } = expr
     {
+        if let Expr::IndexGet {
+            object: base,
+            index: symbol,
+        } = object.as_ref()
+        {
+            if super::compare::is_proven_symbol_expr(ctx, symbol) {
+                return lower_symbol_then_named_property_ic(
+                    ctx,
+                    base,
+                    symbol,
+                    property,
+                    *byte_offset,
+                );
+            }
+        }
         // Direct-call-only synthetic `arguments` clone: producer analysis
         // proved that this exact `.length` form is the binding's sole use, and
         // the caller placed the already boxed actual-argument count in its
@@ -597,13 +618,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // a missing property, preserves a non-numeric property value, and
             // throws for a nullish receiver.
             ctx.current_block = slow_idx;
-            let slow_len = ctx.block().call(
-                DOUBLE,
-                "js_value_length_property_f64",
-                &[(DOUBLE, &recv_box)],
+            let (slow_len, slow_pred_label) = emit_array_subclass_length_ic(
+                ctx,
+                &recv_box,
+                &recv_bits,
+                &recv_handle,
+                &merge_label,
             );
-            let slow_pred_label = ctx.block().label.clone();
-            ctx.block().br(&merge_label);
 
             ctx.current_block = merge_idx;
             Ok(ctx.block().phi(

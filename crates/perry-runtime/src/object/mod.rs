@@ -443,6 +443,12 @@ pub(crate) struct ObjectHotTables {
     /// and keys_array == null.
     pub(crate) shape_inline_cache:
         std::cell::UnsafeCell<[ShapeCacheEntry; SHAPE_INLINE_CACHE_SIZE]>,
+    /// Pointer-free direct cache for immutable ShapeId object-kind facts.
+    /// ShapeIds are monotone and never reused; descriptor retirement clears a
+    /// matching entry. Keeping this beside the other per-agent shape tables
+    /// avoids borrowing the descriptor HashMap on repeated regular-object
+    /// checks (notably homogeneous Array element stores).
+    pub(crate) shape_kind_cache: std::cell::UnsafeCell<Box<[u64]>>,
     /// Overflow map for shape_ids that collide in the inline cache. Values
     /// are `(keys_array, runtime_shape_id)` — see [`ShapeCacheEntry`].
     pub(crate) shape_cache_overflow: RefCell<HashMap<u32, (*mut ArrayHeader, u32)>>,
@@ -452,6 +458,18 @@ pub(crate) struct ObjectHotTables {
     /// TLS layout when this lived in a `thread_local!`, and keeping it
     /// boxed inside the heap-allocated `RuntimeState` preserves that.
     pub(crate) transition_cache: std::cell::UnsafeCell<Box<[TransitionEntry]>>,
+    /// Bidirectional index over learned sequential numeric property appends.
+    /// Array-subclass `push`/`pop` uses it to restore an exact historical
+    /// ShapeId without cloning or compacting the ordered-keys array.
+    pub(crate) array_tail_forward:
+        std::cell::UnsafeCell<Box<[array_tail_transition::ArrayTailTransitionEntry]>>,
+    pub(crate) array_tail_reverse:
+        std::cell::UnsafeCell<Box<[array_tail_transition::ArrayTailTransitionEntry]>>,
+    /// Exact-ShapeId -> authoritative forward/reverse table indices. This is
+    /// an accelerator only: collisions and stale indices revalidate the full
+    /// entry and fall back to the complete open-addressed tables.
+    pub(crate) array_tail_direct:
+        std::cell::UnsafeCell<Box<[array_tail_transition::ArrayTailDirectIndex]>>,
 }
 
 impl ObjectHotTables {
@@ -466,6 +484,9 @@ impl ObjectHotTables {
                     keys_array: std::ptr::null_mut(),
                 }; SHAPE_INLINE_CACHE_SIZE],
             ),
+            shape_kind_cache: std::cell::UnsafeCell::new(
+                vec![0; shapes::SHAPE_KIND_CACHE_SIZE].into_boxed_slice(),
+            ),
             shape_cache_overflow: RefCell::new(HashMap::new()),
             transition_cache: std::cell::UnsafeCell::new(
                 vec![
@@ -478,6 +499,27 @@ impl ObjectHotTables {
                         target_len: 0,
                     };
                     TRANSITION_CACHE_SIZE
+                ]
+                .into_boxed_slice(),
+            ),
+            array_tail_forward: std::cell::UnsafeCell::new(
+                vec![
+                    array_tail_transition::ArrayTailTransitionEntry::EMPTY;
+                    array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE
+                ]
+                .into_boxed_slice(),
+            ),
+            array_tail_reverse: std::cell::UnsafeCell::new(
+                vec![
+                    array_tail_transition::ArrayTailTransitionEntry::EMPTY;
+                    array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE
+                ]
+                .into_boxed_slice(),
+            ),
+            array_tail_direct: std::cell::UnsafeCell::new(
+                vec![
+                    array_tail_transition::ArrayTailDirectIndex::EMPTY;
+                    array_tail_transition::ARRAY_TAIL_TRANSITION_CACHE_SIZE
                 ]
                 .into_boxed_slice(),
             ),
@@ -565,6 +607,7 @@ fn keys_index_insert(
     shapes::shape_note_append(keys, new_count, key_hash, slot);
 }
 
+pub(crate) mod array_tail_transition;
 mod call_method_depth;
 use call_method_depth::CallMethodDepthGuard;
 pub(crate) use call_method_depth::{call_method_depth_restore, call_method_depth_savepoint};
@@ -907,6 +950,7 @@ unsafe fn transition_cache_stamp_shape_shared(next_keys: usize) -> bool {
 }
 
 fn transition_cache_insert(
+    array_tail_owner: *const ObjectHeader,
     prev_shape_id: u32,
     interned_key: *const crate::StringHeader,
     next_keys: usize,
@@ -940,6 +984,16 @@ fn transition_cache_insert(
         entry.slot_idx = slot_idx;
         entry.target_len = target_len;
     });
+    if !array_tail_owner.is_null() {
+        array_tail_transition::record_numeric_tail_transition(
+            array_tail_owner,
+            prev_shape_id,
+            target_shape_id,
+            interned_key,
+            next_keys,
+            slot_idx,
+        );
+    }
     // Small dynamic shapes are stabilized eagerly because otherwise
     // the original builder can grow the cached target in place and
     // force future lookups to reject it. Large one-off dictionaries
@@ -981,6 +1035,7 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
             }
         }
     });
+    array_tail_transition::scan_roots_mut(visitor);
 }
 
 /// #8192: death pruning for the transition cache.
@@ -1023,6 +1078,7 @@ pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) 
             }
         }
     });
+    array_tail_transition::prune_invalid_entries();
 }
 
 #[cfg(test)]
@@ -1552,6 +1608,39 @@ pub struct ObjectMeta {
     /// property: private branding must not consume a user field slot, alter
     /// the ShapeId/key order, or become visible to enumeration.
     pub private_evaluation_brand: u64,
+    /// Exact class-declared named-prefix identity for an Array-subclass
+    /// receiver. Numeric tail mutations change the ordinary ShapeId on every
+    /// push/pop even though the named slots before that tail remain fixed.
+    /// Property-read PICs may use this nonzero scalar as a second identity
+    /// only after `array_subclass_named_prefix_token` has proved the current
+    /// keys against the class's registered allocation keys. Generic shape or
+    /// semantic transitions clear it; the exact learned numeric-tail
+    /// transition is the only publisher that deliberately preserves it.
+    pub array_subclass_named_prefix_token: u64,
+    /// Native pointer to this receiver's per-thread [`ObjectHotTables`].
+    /// Array-subclass tail transitions are agent-local: their ShapeIds and
+    /// rooted key arrays belong to the same thread that owns the object. Once
+    /// a transition is learned, caching that stable heap allocation here lets
+    /// every later push/pop reach the full historical shape lattice without a
+    /// Darwin TLS/TSD lookup first.
+    ///
+    /// This is NOT a managed-heap edge and the ObjectMeta slot visitors must
+    /// deliberately ignore it. Perry workers deep-copy values into independent
+    /// arenas rather than sharing ObjectHeaders, so an object cannot carry the
+    /// pointer into another agent. The RuntimeState allocation outlives every
+    /// object in that thread.
+    pub array_tail_object_hot: u64,
+    /// Move-stable, receiver-local cache of the Array-subclass dense layout.
+    /// `array_subclass_dense_key` is `(class_id << 32) | ShapeId`; the two
+    /// payload words use the same packing as `array::subclass`'s global
+    /// collision cache. They contain scalar slot indices only, never managed
+    /// pointers. A generic semantic/structural mutation publishes a new
+    /// ShapeId before it becomes observable, so a stale payload misses by key
+    /// without a pointer-side-table invalidation walk. Exact learned numeric
+    /// tail transitions update these words directly.
+    pub array_subclass_dense_key: u64,
+    pub array_subclass_dense_slots: u64,
+    pub array_subclass_dense_bounds: u64,
 }
 
 pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;
@@ -1572,8 +1661,8 @@ pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     };
     header.obj_type == crate::gc::GC_TYPE_OBJECT
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && shapes::object_shape_descriptor(obj)
-            .is_some_and(|shape| shape.object_kind == shapes::ShapeObjectKind::Ordinary)
+        && shapes::shape_object_kind_by_id((*obj).parent_class_id)
+            == Some(shapes::ShapeObjectKind::Ordinary)
 }
 
 #[inline]
@@ -1593,6 +1682,8 @@ pub(crate) unsafe fn object_is_shaped(obj: *const ObjectHeader) -> bool {
 // ObjectMeta record and buffer elements one word past the ArrayHeader. Keep
 // codegen and these structs in lock-step.
 const _: () = assert!(std::mem::offset_of!(ObjectMeta, spill) == 32);
+const _: () = assert!(std::mem::offset_of!(ObjectMeta, array_subclass_named_prefix_token) == 48);
+const _: () = assert!(std::mem::offset_of!(ObjectMeta, array_tail_object_hot) == 56);
 const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 
 /// Fetch-or-allocate the per-object meta record. Caller must have already
@@ -1626,6 +1717,11 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     (*meta).flags = 0;
     (*meta).spill = 0;
     (*meta).private_evaluation_brand = 0;
+    (*meta).array_subclass_named_prefix_token = 0;
+    (*meta).array_tail_object_hot = 0;
+    (*meta).array_subclass_dense_key = 0;
+    (*meta).array_subclass_dense_slots = 0;
+    (*meta).array_subclass_dense_bounds = 0;
     // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
     // followed by an object-slot barrier, mirroring `set_object_keys_array`.
     (*obj).meta = meta;

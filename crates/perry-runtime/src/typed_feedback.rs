@@ -2082,6 +2082,20 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         return f64::from_bits(TAG_UNDEFINED);
     }
 
+    // #8876: an object-backed `class X extends Array` instance carries
+    // `GC_TYPE_OBJECT`, so the guarded element tier rejects it and every
+    // canonical index on such a receiver lands here. Answer the proven dense
+    // subclass read first — the registry probes below cannot classify it, and
+    // the `GC_TYPE_OBJECT` arm stringifies the index into a by-name lookup
+    // (wolf-ecs `packed[sparse[x]]` on an `Archetype` paid `from_utf8` +
+    // string allocation per read). A receiver without a dense proof keeps the
+    // established path.
+    if let Some(index) = finite_nonnegative_u32_index(index) {
+        if let Some(value) = crate::array::array_subclass_fast_index_get(receiver, index) {
+            return value;
+        }
+    }
+
     if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
         return crate::typedarray::js_typed_array_index_get_dynamic(
             raw_addr as *const crate::typedarray::TypedArrayHeader,

@@ -92,6 +92,90 @@ pub(super) fn compile_indexed_method_clones(
         )
     })?;
 
+    if cross_module
+        .guarded_falsy_field_default_methods
+        .contains_key(&(class.name.clone(), method.name.clone()))
+    {
+        compile_method(
+            llmod,
+            class,
+            method,
+            func_names,
+            strings,
+            classes,
+            methods,
+            module_globals,
+            module_global_types,
+            import_function_prefixes,
+            enums,
+            static_field_globals,
+            class_ids,
+            func_signatures,
+            func_synthetic_arguments,
+            module_boxed_vars,
+            closure_rest_params,
+            cross_module,
+            None,
+            false,
+            None,
+            Some(nonnegative_index_params),
+            false,
+            false,
+            true,
+            false,
+        )
+        .with_context(|| {
+            format!(
+                "lowering guarded false-field-default indexed clone '{}::{}'",
+                class.name, method.name
+            )
+        })?;
+    }
+
+    // Compose the exact receiver-shape and nonnegative-index facts in one
+    // body. The externally published proven-receiver wrapper is emitted with
+    // the receiver-shaped generic body below; it guards the live index and
+    // routes here without giving up fixed receiver-field offsets.
+    if let Some(fact) = cross_module
+        .pshape_methods
+        .get(&(class.name.clone(), method.name.clone()))
+    {
+        compile_method(
+            llmod,
+            class,
+            method,
+            func_names,
+            strings,
+            classes,
+            methods,
+            module_globals,
+            module_global_types,
+            import_function_prefixes,
+            enums,
+            static_field_globals,
+            class_ids,
+            func_signatures,
+            func_synthetic_arguments,
+            module_boxed_vars,
+            closure_rest_params,
+            cross_module,
+            None,
+            false,
+            Some(fact.clone()),
+            Some(nonnegative_index_params),
+            false,
+            false,
+            false,
+            false,
+        )
+        .with_context(|| {
+            format!(
+                "lowering receiver-shaped nonnegative-index clone '{}::{}'",
+                class.name, method.name
+            )
+        })?;
+    }
+
     if super::typed_abi::nonnegative_index_fast_array_params(method, nonnegative_index_params)
         .is_empty()
     {

@@ -28,9 +28,9 @@ use super::FnCtx;
 ///   1. receiver-is-pointer NaN-box guard,
 ///   2. a read of the process-global `PERRY_TA_VIEW_GUARD` (must be 0 → every
 ///      live typed array uses inline storage, so `data_ptr == header + 16`),
-///   3. a probe of the `PERRY_TA_KIND_CACHE` slot for the receiver address
-///      (matches the cached `(addr << 8) | tag` word; the tag is the element
-///      kind and must be a non-BigInt kind ≤ `KIND_UINT8_CLAMPED`),
+///   3. a `GC_TYPE_TYPED_ARRAY` brand read from the receiver's managed header
+///      (`obj_type == 11`) plus the element kind read from the
+///      `TypedArrayHeader` (must be a non-BigInt kind ≤ `KIND_UINT8_CLAMPED`),
 ///   4. an index validity + bounds check against the header `length`,
 ///   5. a direct per-kind element load + int↔f64 widen,
 /// and falls back to the existing `js_dyn_index_get` slow path on ANY guard
@@ -81,22 +81,46 @@ pub(super) fn lower_inline_dyn_typed_array_get(
         // view guard must be 0 (all typed arrays inline-storage)
         let vg = blk.load(I64, "@PERRY_TA_VIEW_GUARD");
         let vg_zero = blk.icmp_eq(I64, &vg, "0");
-        // cache slot = (raw >> 3) & 63
-        let slot = blk.lshr(I64, &raw, "3");
-        let slot = blk.and(I64, &slot, "63");
-        let entry_ptr = blk.gep(
-            "[64 x i64]",
-            "@PERRY_TA_KIND_CACHE",
-            &[(I64, "0"), (I64, &slot)],
-        );
-        let entry_val = blk.load(I64, &entry_ptr);
-        // addr match: (entry_val u>> 8) == raw  (also rejects empty slot = 0)
-        let entry_addr = blk.lshr(I64, &entry_val, "8");
-        let addr_match = blk.icmp_eq(I64, &entry_addr, &raw);
-        // kind = entry_val & 0xFF; loadable numeric kind = kind <= 8
-        // (KIND_INT8=0 .. KIND_UINT8_CLAMPED=8; rejects BigInt 9/10,
-        // Float16 11, and the 0xFF "not a typed array" sentinel).
-        let kind = blk.and(I64, &entry_val, "255");
+        // Heap-band magnitude before any dereference: the same floor and
+        // ceiling the guarded Array tiers apply (`is_plausible_heap_addr`).
+        let above_handle_band = blk.icmp_ugt(I64, &raw, "1048575");
+        let below_heap_limit = blk.icmp_ult(I64, &raw, "140737488355328");
+        let heap_candidate = blk.and(I1, &above_handle_band, &below_heap_limit);
+        let g0 = blk.and(I1, &is_ptr, &vg_zero);
+        blk.and(I1, &g0, &heap_candidate)
+    };
+    let brand_idx = ctx.new_block("tav.get.brand");
+    let brand_label = ctx.block_label(brand_idx);
+    ctx.block().cond_br(&entry_guard, &brand_label, &slow_label);
+
+    // ---- brand: managed-header tag + header kind -> fast | slow ----
+    //
+    // Every typed array carries a real `GC_TYPE_TYPED_ARRAY` GcHeader (the
+    // 2026-07-09 audit) whose payload starts with `TypedArrayHeader`
+    // {length u32, capacity u32, kind u8, ...}. Reading the brand and the kind
+    // from the object itself replaces the 64-slot direct-mapped
+    // `PERRY_TA_KIND_CACHE` probe, which every ordinary-array registry miss
+    // also writes NEGATIVE entries into: a hot typed array whose slot kept
+    // being evicted (the wolf-ecs archetype `mask` reads) missed this tier on
+    // every access and paid the complete dynamic read. The header tag is
+    // ABA-proof for a value held by live code: the arena rewrites `obj_type`
+    // before it hands the address out again, and a live reference keeps the
+    // typed array alive.
+    ctx.current_block = brand_idx;
+    let entry_guard = {
+        let blk = ctx.block();
+        let obj_bits = blk.bitcast_double_to_i64(obj_box);
+        let raw = blk.and(I64, &obj_bits, pointer_mask);
+        let gc_type_addr = blk.sub(I64, &raw, "8");
+        let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
+        let gc_type = blk.load(I8, &gc_type_ptr);
+        let is_typed_array = blk.icmp_eq(I8, &gc_type, "11"); // GC_TYPE_TYPED_ARRAY
+        let kind_addr = blk.add(I64, &raw, "8");
+        let kind_ptr = blk.inttoptr(I64, &kind_addr);
+        let kind_i8 = blk.load(I8, &kind_ptr);
+        let kind = blk.zext(I8, &kind_i8, I64);
+        // loadable numeric kind = kind <= 8 (KIND_INT8=0 .. KIND_UINT8_CLAMPED=8;
+        // rejects BigInt 9/10 and Float16 11).
         let kind_ok = blk.icmp_ule(I64, &kind, "8");
         // index float-range pre-checks (well-defined on NaN → false): the
         // fptosi in the load block is only reached when these hold, so its
@@ -104,9 +128,7 @@ pub(super) fn lower_inline_dyn_typed_array_get(
         let idx_ge0 = blk.fcmp("oge", idx_d, "0.0");
         let idx_lt = blk.fcmp("olt", idx_d, "4294967296.0");
         // AND-reduce all guards.
-        let g = blk.and(I1, &is_ptr, &vg_zero);
-        let g = blk.and(I1, &g, &addr_match);
-        let g = blk.and(I1, &g, &kind_ok);
+        let g = blk.and(I1, &is_typed_array, &kind_ok);
         let g = blk.and(I1, &g, &idx_ge0);
         blk.and(I1, &g, &idx_lt)
     };
@@ -118,16 +140,12 @@ pub(super) fn lower_inline_dyn_typed_array_get(
         let blk = ctx.block();
         let obj_bits = blk.bitcast_double_to_i64(obj_box);
         let raw = blk.and(I64, &obj_bits, pointer_mask);
-        // kind re-read from cache (cheap; keeps the fast block self-contained).
-        let slot = blk.lshr(I64, &raw, "3");
-        let slot = blk.and(I64, &slot, "63");
-        let entry_ptr = blk.gep(
-            "[64 x i64]",
-            "@PERRY_TA_KIND_CACHE",
-            &[(I64, "0"), (I64, &slot)],
-        );
-        let entry_val = blk.load(I64, &entry_ptr);
-        let kind = blk.and(I64, &entry_val, "255");
+        // kind re-read from the header (cheap; keeps the fast block
+        // self-contained).
+        let kind_addr = blk.add(I64, &raw, "8");
+        let kind_ptr = blk.inttoptr(I64, &kind_addr);
+        let kind_i8 = blk.load(I8, &kind_ptr);
+        let kind = blk.zext(I8, &kind_i8, I64);
         // idx is in [0, 2^32) (entry guard) so fptosi i64 is well-defined.
         let idx_i64 = blk.fptosi(DOUBLE, idx_d, I64);
         (raw, idx_i64, kind)
@@ -325,19 +343,53 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let cache_ref = format!("@{cache_name}");
 
     let object_header_idx = ctx.new_block("arrlike.ic.header");
+    let object_brand_idx = ctx.new_block("arrlike.ic.brand");
+    let object_array_guard_idx = ctx.new_block("arrlike.ic.array_guard");
+    let object_array_load_idx = ctx.new_block("arrlike.ic.array_load");
+    let object_shape_idx = ctx.new_block("arrlike.ic.shape");
+    let object_identity_idx = ctx.new_block("arrlike.ic.identity");
+    let object_exact_idx = ctx.new_block("arrlike.ic.exact");
+    let object_family_meta_idx = ctx.new_block("arrlike.ic.family_meta");
+    let object_family_token_idx = ctx.new_block("arrlike.ic.family_token");
     let object_bounds_idx = ctx.new_block("arrlike.ic.bounds");
+    let object_length_inline_idx = ctx.new_block("arrlike.ic.length_inline");
+    let object_length_spill_meta_idx = ctx.new_block("arrlike.ic.length_spill_meta");
+    let object_length_spill_ptr_idx = ctx.new_block("arrlike.ic.length_spill_ptr");
+    let object_length_spill_load_idx = ctx.new_block("arrlike.ic.length_spill_load");
+    let object_range_idx = ctx.new_block("arrlike.ic.range");
     let object_inline_idx = ctx.new_block("arrlike.ic.inline");
     let object_spill_idx = ctx.new_block("arrlike.ic.spill");
     let object_spill_ptr_idx = ctx.new_block("arrlike.ic.spill_ptr");
     let object_spill_load_idx = ctx.new_block("arrlike.ic.spill_load");
     let object_miss_idx = ctx.new_block("arrlike.ic.miss");
     let object_header_label = ctx.block_label(object_header_idx);
+    let object_brand_label = ctx.block_label(object_brand_idx);
+    let object_array_guard_label = ctx.block_label(object_array_guard_idx);
+    let object_array_load_label = ctx.block_label(object_array_load_idx);
+    let object_shape_label = ctx.block_label(object_shape_idx);
+    let object_identity_label = ctx.block_label(object_identity_idx);
+    let object_exact_label = ctx.block_label(object_exact_idx);
+    let object_family_meta_label = ctx.block_label(object_family_meta_idx);
+    let object_family_token_label = ctx.block_label(object_family_token_idx);
     let object_bounds_label = ctx.block_label(object_bounds_idx);
+    let object_length_inline_label = ctx.block_label(object_length_inline_idx);
+    let object_length_spill_meta_label = ctx.block_label(object_length_spill_meta_idx);
+    let object_length_spill_ptr_label = ctx.block_label(object_length_spill_ptr_idx);
+    let object_length_spill_load_label = ctx.block_label(object_length_spill_load_idx);
+    let object_range_label = ctx.block_label(object_range_idx);
     let object_inline_label = ctx.block_label(object_inline_idx);
     let object_spill_label = ctx.block_label(object_spill_idx);
     let object_spill_ptr_label = ctx.block_label(object_spill_ptr_idx);
     let object_spill_load_label = ctx.block_label(object_spill_load_idx);
     let object_miss_label = ctx.block_label(object_miss_idx);
+    let meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        4
+    } else {
+        8
+    };
+    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
+        - meta_ptr_size)
+        .to_string();
 
     // Reject every non-pointer / handle-band / noncanonical-index case before
     // touching a managed header. The miss helper retains full ToPropertyKey,
@@ -364,9 +416,11 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     ctx.block()
         .cond_br(&object_entry_ok, &object_header_label, &object_miss_label);
 
-    // Exact class + semantic ShapeId identity. The runtime primes only a
-    // prototype-unmodified dense Array-subclass shape with no relevant
-    // accessors, and publishes no heap pointer in this cache.
+    // One validated managed header feeds two tiers: a direct ordinary-Array
+    // load and the Array-subclass shape/family IC.  The old miss path handled
+    // only the latter, so every unknown-receiver plain Array read immediately
+    // called the full polymorphic dispatcher despite having all guard inputs
+    // available here.
     ctx.current_block = object_header_idx;
     let object_idx_i64 = ctx.block().fptosi(DOUBLE, idx_d, I64);
     let object_idx_back = ctx.block().sitofp(I64, &object_idx_i64, DOUBLE);
@@ -374,12 +428,96 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let gc_type_addr = ctx.block().sub(I64, &object_raw, "8");
     let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
     let gc_type = ctx.block().load(I8, &gc_type_ptr);
-    let is_object = ctx.block().icmp_eq(I8, &gc_type, "2");
+    let is_array = ctx.block().icmp_eq(I8, &gc_type, "1");
     let gc_flags_addr = ctx.block().sub(I64, &object_raw, "7");
     let gc_flags_ptr = ctx.block().inttoptr(I64, &gc_flags_addr);
     let gc_flags = ctx.block().load(I8, &gc_flags_ptr);
-    let forwarded = ctx.block().and(I8, &gc_flags, "1");
+    let forwarded = ctx.block().and(I8, &gc_flags, "128");
     let not_forwarded = ctx.block().icmp_eq(I8, &forwarded, "0");
+    let header_ok = ctx.block().and(I1, &object_idx_is_int, &not_forwarded);
+    ctx.block()
+        .cond_br(&header_ok, &object_brand_label, &object_miss_label);
+
+    ctx.current_block = object_brand_idx;
+    ctx.block()
+        .cond_br(&is_array, &object_array_guard_label, &object_shape_label);
+
+    // Ordinary Array: the receiver tag and forwarding state were checked in
+    // the predecessor.  Reject descriptors or any process-wide prototype
+    // invalidation, then prove a dense in-capacity index before loading the
+    // raw JSValue.  A hole is exposed as `undefined`, exactly like the guarded
+    // statically-Array tier.  Every exotic/OOB case retains the unchanged
+    // boxed dispatcher.
+    ctx.current_block = object_array_guard_idx;
+    let array_reserved_addr = ctx.block().sub(I64, &object_raw, "6");
+    let array_reserved_ptr = ctx.block().inttoptr(I64, &array_reserved_addr);
+    let array_reserved = ctx.block().load(I16, &array_reserved_ptr);
+    let array_descriptor_bits = ctx.block().and(I16, &array_reserved, "1024");
+    let array_no_descriptors = ctx.block().icmp_eq(I16, &array_descriptor_bits, "0");
+    let array_invalidated = ctx
+        .block()
+        .load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+    let array_default_prototypes = ctx.block().icmp_eq(I8, &array_invalidated, "0");
+    let array_ptr = ctx.block().inttoptr(I64, &object_raw);
+    let array_length = ctx.block().load(I32, &array_ptr);
+    let array_capacity_addr = ctx.block().add(I64, &object_raw, "4");
+    let array_capacity_ptr = ctx.block().inttoptr(I64, &array_capacity_addr);
+    let array_capacity = ctx.block().load(I32, &array_capacity_ptr);
+    let array_length_i64 = ctx.block().zext(I32, &array_length, I64);
+    let array_capacity_i64 = ctx.block().zext(I32, &array_capacity, I64);
+    let array_index_in_bounds = ctx
+        .block()
+        .icmp_ult(I64, &object_idx_i64, &array_length_i64);
+    let array_length_within_capacity =
+        ctx.block()
+            .icmp_ule(I64, &array_length_i64, &array_capacity_i64);
+    let array_guard_ok = ctx
+        .block()
+        .and(I1, &array_no_descriptors, &array_default_prototypes);
+    let array_guard_ok = ctx.block().and(I1, &array_guard_ok, &array_index_in_bounds);
+    let array_guard_ok = ctx
+        .block()
+        .and(I1, &array_guard_ok, &array_length_within_capacity);
+    ctx.block().cond_br(
+        &array_guard_ok,
+        &object_array_load_label,
+        &object_miss_label,
+    );
+
+    ctx.current_block = object_array_load_idx;
+    let array_element_word = ctx.block().add(I64, &object_idx_i64, "1");
+    let array_element_ptr =
+        ctx.block()
+            .gep_inbounds(I64, &array_ptr, &[(I64, &array_element_word)]);
+    let array_raw = ctx.block().load(DOUBLE, &array_element_ptr);
+    let array_raw_bits = ctx.block().bitcast_double_to_i64(&array_raw);
+    let array_is_hole = ctx
+        .block()
+        .icmp_eq(I64, &array_raw_bits, crate::nanbox::TAG_HOLE_I64);
+    let array_undefined = ctx
+        .block()
+        .bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
+    let array_value = ctx
+        .block()
+        .select(I1, &array_is_hole, DOUBLE, &array_undefined, &array_raw);
+    let array_value = if coerce_slow_to_number {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &array_value)])
+    } else {
+        array_value
+    };
+    let array_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+    kind_incoming.push((array_value, array_end_label));
+
+    // The runtime publishes either an exact `(class, ShapeId)` identity or a
+    // high-bit Array-subclass dense-tail family token.  The latter lives in
+    // ObjectMeta and survives only the exact learned numeric push/pop edges;
+    // every generic structural or descriptor mutation retires it before the
+    // mutation is observable.  This lets lifecycle-heavy subclasses traverse
+    // a thousand historical tail shapes without thrashing a monomorphic IC.
+    ctx.current_block = object_shape_idx;
+    let is_object = ctx.block().icmp_eq(I8, &gc_type, "2");
     let object_ptr = ctx.block().inttoptr(I64, &object_raw);
     let class_id = ctx.block().load(I32, &object_ptr);
     let shape_addr = ctx.block().add(I64, &object_raw, "4");
@@ -391,18 +529,59 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let live_key = ctx.block().or(I64, &class_high, &shape64);
     let cached_key_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
     let cached_key = ctx.block().load(I64, &cached_key_ptr);
-    let key_matches = ctx.block().icmp_eq(I64, &live_key, &cached_key);
     let key_nonzero = ctx.block().icmp_ne(I64, &cached_key, "0");
-    let object_ok = ctx.block().and(I1, &object_idx_is_int, &is_object);
-    let object_ok = ctx.block().and(I1, &object_ok, &not_forwarded);
-    let object_ok = ctx.block().and(I1, &object_ok, &key_matches);
-    let object_ok = ctx.block().and(I1, &object_ok, &key_nonzero);
+    let object_ok = ctx.block().and(I1, &is_object, &key_nonzero);
     ctx.block()
-        .cond_br(&object_ok, &object_bounds_label, &object_miss_label);
+        .cond_br(&object_ok, &object_identity_label, &object_miss_label);
 
-    // The exact shape proves the cached length slot is live and inline. Check
-    // its current value and the proved dense prefix on every hit; growing
-    // `length` without creating properties therefore cannot expose holes.
+    ctx.current_block = object_identity_idx;
+    let family_token_bit = crate::nanbox::i64_literal(1u64 << 63);
+    let family_bits = ctx.block().and(I64, &cached_key, &family_token_bit);
+    let is_family = ctx.block().icmp_ne(I64, &family_bits, "0");
+    ctx.block()
+        .cond_br(&is_family, &object_family_meta_label, &object_exact_label);
+
+    ctx.current_block = object_exact_idx;
+    let key_matches = ctx.block().icmp_eq(I64, &live_key, &cached_key);
+    ctx.block()
+        .cond_br(&key_matches, &object_bounds_label, &object_miss_label);
+
+    ctx.current_block = object_family_meta_idx;
+    let family_meta_addr = ctx.block().add(I64, &object_raw, &meta_offset);
+    let family_meta_slot_ptr = ctx.block().inttoptr(I64, &family_meta_addr);
+    let family_meta_loaded = ctx.block().load(
+        if meta_ptr_size == 4 { I32 } else { I64 },
+        &family_meta_slot_ptr,
+    );
+    let family_meta_i64 = if meta_ptr_size == 4 {
+        ctx.block().zext(I32, &family_meta_loaded, I64)
+    } else {
+        family_meta_loaded
+    };
+    let family_has_meta = ctx.block().icmp_ne(I64, &family_meta_i64, "0");
+    ctx.block().cond_br(
+        &family_has_meta,
+        &object_family_token_label,
+        &object_miss_label,
+    );
+
+    ctx.current_block = object_family_token_idx;
+    let family_meta_ptr = ctx.block().inttoptr(I64, &family_meta_i64);
+    // repr(C) ObjectMeta word 6 is the move-stable Array-subclass named-prefix
+    // token.  The dense-tail miss helper only publishes it after proving that
+    // the canonical numeric suffix immediately follows that prefix.
+    let family_token_ptr = ctx.block().gep(I64, &family_meta_ptr, &[(I64, "6")]);
+    let live_family_token = ctx.block().load(I64, &family_token_ptr);
+    let family_matches = ctx.block().icmp_eq(I64, &live_family_token, &cached_key);
+    ctx.block()
+        .cond_br(&family_matches, &object_bounds_label, &object_miss_label);
+
+    // The exact shape or family token proves the cached slots.  `length` may
+    // itself be in ObjectMeta::spill (wolf-ecs Archetype has four declared
+    // fields before Array-subclass init installs it), so split its load just
+    // like the element load below.  Check the live value against the admitted
+    // dense-prefix high-water mark on every hit; a generic length-only grow
+    // therefore cannot expose holes through this tier.
     ctx.current_block = object_bounds_idx;
     let length_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
     let length_slot = ctx.block().load(I64, &length_slot_ptr);
@@ -414,11 +593,83 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let inline_bound = ctx.block().load(I64, &inline_bound_ptr);
     let object_header_size =
         crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let length_is_inline = ctx.block().icmp_ult(I64, &length_slot, &inline_bound);
+    ctx.block().cond_br(
+        &length_is_inline,
+        &object_length_inline_label,
+        &object_length_spill_meta_label,
+    );
+
+    ctx.current_block = object_length_inline_idx;
     let length_bytes = ctx.block().shl(I64, &length_slot, "3");
     let length_offset = ctx.block().add(I64, &length_bytes, &object_header_size);
     let length_addr = ctx.block().add(I64, &object_raw, &length_offset);
     let length_ptr = ctx.block().inttoptr(I64, &length_addr);
-    let live_length = ctx.block().load(DOUBLE, &length_ptr);
+    let inline_length = ctx.block().load(DOUBLE, &length_ptr);
+    let inline_length_end = ctx.block().label.clone();
+    ctx.block().br(&object_range_label);
+
+    ctx.current_block = object_length_spill_meta_idx;
+    let length_meta_addr = ctx.block().add(I64, &object_raw, &meta_offset);
+    let length_meta_slot_ptr = ctx.block().inttoptr(I64, &length_meta_addr);
+    let length_meta_loaded = ctx.block().load(
+        if meta_ptr_size == 4 { I32 } else { I64 },
+        &length_meta_slot_ptr,
+    );
+    let length_meta_i64 = if meta_ptr_size == 4 {
+        ctx.block().zext(I32, &length_meta_loaded, I64)
+    } else {
+        length_meta_loaded
+    };
+    let length_has_meta = ctx.block().icmp_ne(I64, &length_meta_i64, "0");
+    ctx.block().cond_br(
+        &length_has_meta,
+        &object_length_spill_ptr_label,
+        &object_miss_label,
+    );
+
+    ctx.current_block = object_length_spill_ptr_idx;
+    let length_meta_ptr = ctx.block().inttoptr(I64, &length_meta_i64);
+    let length_spill_slot_ptr = ctx.block().gep(I64, &length_meta_ptr, &[(I64, "4")]);
+    let length_spill_i64 = ctx.block().load(I64, &length_spill_slot_ptr);
+    let length_has_spill = ctx.block().icmp_ne(I64, &length_spill_i64, "0");
+    let safe_length_spill_i64 = ctx.block().select(
+        I1,
+        &length_has_spill,
+        I64,
+        &length_spill_i64,
+        &length_meta_i64,
+    );
+    let length_spill_ptr = ctx.block().inttoptr(I64, &safe_length_spill_i64);
+    let length_spill_len = ctx.block().load(I32, &length_spill_ptr);
+    let length_spill_len_i64 = ctx.block().zext(I32, &length_spill_len, I64);
+    let length_in_spill = ctx
+        .block()
+        .icmp_ult(I64, &length_slot, &length_spill_len_i64);
+    let length_spill_ok = ctx.block().and(I1, &length_has_spill, &length_in_spill);
+    ctx.block().cond_br(
+        &length_spill_ok,
+        &object_length_spill_load_label,
+        &object_miss_label,
+    );
+
+    ctx.current_block = object_length_spill_load_idx;
+    let length_element_word = ctx.block().add(I64, &length_slot, "1");
+    let length_element_ptr =
+        ctx.block()
+            .gep_inbounds(I64, &length_spill_ptr, &[(I64, &length_element_word)]);
+    let spilled_length = ctx.block().load(DOUBLE, &length_element_ptr);
+    let spilled_length_end = ctx.block().label.clone();
+    ctx.block().br(&object_range_label);
+
+    ctx.current_block = object_range_idx;
+    let live_length = ctx.block().phi(
+        DOUBLE,
+        &[
+            (&inline_length, &inline_length_end),
+            (&spilled_length, &spilled_length_end),
+        ],
+    );
     let below_length = ctx.block().fcmp("olt", idx_d, &live_length);
     let below_prefix = ctx.block().icmp_ult(I64, &object_idx_i64, &dense_prefix);
     let in_dense_range = ctx.block().and(I1, &below_length, &below_prefix);
@@ -454,14 +705,6 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     // spill Array. Reload both moving pointers from the live receiver; the IC
     // itself contains only scalar offsets.
     ctx.current_block = object_spill_idx;
-    let meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-        4
-    } else {
-        8
-    };
-    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
-        - meta_ptr_size)
-        .to_string();
     let meta_addr = ctx.block().add(I64, &object_raw, &meta_offset);
     let meta_slot_ptr = ctx.block().inttoptr(I64, &meta_addr);
     let meta_loaded = ctx

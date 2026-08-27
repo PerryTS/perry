@@ -1028,6 +1028,14 @@ pub(crate) struct CrossModuleCtx {
     /// JSValue ABI and performs the bit-exact guard before entering the clone;
     /// every other runtime value falls through to the ordinary body.
     pub guarded_undefined_method_params: std::collections::HashMap<(String, String), usize>,
+    /// Indexed methods with one private omitted-argument/false-field clone.
+    /// The public index wrapper proves exact `undefined`, receiver class and
+    /// ShapeId, ordinary packed layout, and the live field's canonical-false
+    /// bits before skipping the default prologue and its falsy branch.
+    pub guarded_falsy_field_default_methods: std::collections::HashMap<
+        (String, String),
+        super::param_guard::GuardedFalsyFieldDefaultMethodCandidate,
+    >,
     /// Representation-selection Phase 5a: `(class, method)` pairs that have a
     /// generated proven-`this` clone (`collectors/proven_this.rs`). Local keys
     /// come from body analysis; imported keys come from an explicit capability

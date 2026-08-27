@@ -147,4 +147,5 @@ pub use dynamic_array::{
 pub use dynamic_object::{
     js_collection_method_dispatch, js_dynamic_object_get_property, js_dynamic_object_keys,
     js_get_property, js_value_length_f64, js_value_length_property_f64,
+    js_value_length_property_ic_f64,
 };

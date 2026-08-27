@@ -32,7 +32,8 @@ handle-floor | crates/perry-runtime/src/array/concat_reverse.rs | 1
 handle-floor | crates/perry-runtime/src/array/flat_clone.rs | 4
 handle-floor | crates/perry-runtime/src/array/generic.rs | 4
 handle-floor | crates/perry-runtime/src/array/header.rs | 3
-handle-floor | crates/perry-runtime/src/array/indexing.rs | 4
+handle-floor | crates/perry-runtime/src/array/indexing.rs | 3
+handle-floor | crates/perry-runtime/src/array/indexing_keyed.rs | 1
 handle-floor | crates/perry-runtime/src/array/iter_object.rs | 1
 handle-floor | crates/perry-runtime/src/array/iterator.rs | 2
 handle-floor | crates/perry-runtime/src/array/push_pop.rs | 1
@@ -117,7 +118,7 @@ handle-floor | crates/perry-runtime/src/object/field_get_set/get_field_by_name_t
 handle-floor | crates/perry-runtime/src/object/field_get_set/has_property.rs | 2
 handle-floor | crates/perry-runtime/src/object/field_get_set/ic_miss.rs | 4
 handle-floor | crates/perry-runtime/src/object/field_set_by_name.rs | 1
-handle-floor | crates/perry-runtime/src/object/field_set_by_name/fast_paths.rs | 3
+handle-floor | crates/perry-runtime/src/object/field_set_by_name/fast_paths.rs | 2
 handle-floor | crates/perry-runtime/src/object/field_set_by_name/tail.rs | 6
 handle-floor | crates/perry-runtime/src/object/field_set_by_name/write_helpers.rs | 1
 handle-floor | crates/perry-runtime/src/object/global_this/array_error.rs | 1

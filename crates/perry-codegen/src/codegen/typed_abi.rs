@@ -75,6 +75,72 @@ impl TypedParamRep {
     }
 }
 
+/// Inline the exact contract of runtime `js_typed_i32_arg_guard` and return
+/// both its predicate and the decoded signed lane.
+///
+/// Typed/nonnegative method dispatch is itself hot enough that two leaf calls
+/// (guard, then conversion) dominate small bodies such as ECS `SparseSet.has`.
+/// Keep the proof in generated IR so LLVM can reuse `raw` for the subsequent
+/// nonnegative test and specialized call.  The safe-value select is
+/// load-bearing: `fptosi` is poison for tagged NaNs, infinities, and
+/// out-of-range doubles even when a later select would choose the tagged arm.
+pub(crate) fn emit_typed_i32_guard_and_raw(
+    blk: &mut crate::block::LlBlock,
+    value: &str,
+) -> (String, String) {
+    use crate::types::{DOUBLE, I1, I32, I64};
+
+    let bits = blk.bitcast_double_to_i64(value);
+    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
+    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
+    let is_tagged = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
+
+    // JSValue::is_number: Perry-owned tags occupy positive-qNaN top words
+    // 0x7ff9..=0x7fff.  Everything outside that interval (including negative
+    // IEEE values and canonical 0x7ff8 NaNs) remains a Number.
+    let top16 = blk.lshr(I64, &bits, "48");
+    let below_tag_band = blk.icmp_ult(I64, &top16, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
+    let above_tag_band = blk.icmp_ugt(I64, &top16, crate::nanbox::STRING_TAG_TOP16_I64);
+    let is_plain_number = blk.or(I1, &below_tag_band, &above_tag_band);
+    let above_min = blk.fcmp("oge", value, "-2147483648.0");
+    let below_max = blk.fcmp("ole", value, "2147483647.0");
+    let in_range = blk.and(I1, &above_min, &below_max);
+    let plain_candidate = blk.and(I1, &is_plain_number, &in_range);
+
+    // Never feed a rejected/tagged bit pattern to fptosi.
+    let safe_plain = blk.select(I1, &plain_candidate, DOUBLE, value, "0.0");
+    let plain_raw = blk.fptosi(DOUBLE, &safe_plain, I32);
+    let roundtrip = blk.sitofp(I32, &plain_raw, DOUBLE);
+    let integral = blk.fcmp("oeq", &roundtrip, value);
+    let not_negative_zero = blk.icmp_ne(I64, &bits, "-9223372036854775808");
+    let plain_ok = blk.and(I1, &plain_candidate, &integral);
+    let plain_ok = blk.and(I1, &plain_ok, &not_negative_zero);
+    let admitted = blk.or(I1, &is_tagged, &plain_ok);
+
+    let tagged_raw = blk.trunc(I64, &bits, I32);
+    let raw = blk.select(I1, &is_tagged, I32, &tagged_raw, &plain_raw);
+    (admitted, raw)
+}
+
+/// Decode a value after an enclosing entry guard has established the contract
+/// above.  The select again shields `fptosi` from canonical INT32 NaN-boxes;
+/// no range/integrality work is repeated in the specialized body.
+pub(crate) fn emit_typed_i32_raw_assuming_guarded(
+    blk: &mut crate::block::LlBlock,
+    value: &str,
+) -> String {
+    use crate::types::{DOUBLE, I1, I32, I64};
+
+    let bits = blk.bitcast_double_to_i64(value);
+    let int32_identity_mask = crate::nanbox::i64_literal(!crate::nanbox::INT32_MASK);
+    let tagged_identity = blk.and(I64, &bits, &int32_identity_mask);
+    let is_tagged = blk.icmp_eq(I64, &tagged_identity, crate::nanbox::INT32_TAG_I64);
+    let safe_plain = blk.select(I1, &is_tagged, DOUBLE, "0.0", value);
+    let plain_raw = blk.fptosi(DOUBLE, &safe_plain, I32);
+    let tagged_raw = blk.trunc(I64, &bits, I32);
+    blk.select(I1, &is_tagged, I32, &tagged_raw, &plain_raw)
+}
+
 pub(crate) fn typed_param_rep_for_type(ty: &Type) -> Option<TypedParamRep> {
     if matches!(ty, Type::Int32) {
         Some(TypedParamRep::I32)
@@ -459,11 +525,25 @@ pub(crate) fn nonnegative_index_fast_array_method_name(
     format!("{generic_name}$idx_fast_array_u31_{suffix}")
 }
 
-/// Select a deliberately small method family for call-site-proven index
-/// specialization. Source `number` annotations nominate candidates but never
-/// license the clone: routing requires a separate nonnegative-i32 proof at the
-/// concrete call site, and every other caller keeps the public boxed body.
+/// Select a deliberately small method family for guarded index
+/// specialization. Source `number`/`Int32` annotations nominate transitive
+/// numeric flows; erased `Any`/`Unknown` JavaScript parameters must occur in an
+/// index expression directly, so an object whose field produces an index is
+/// not mistaken for the index itself. These facts only nominate candidates:
+/// direct routing requires a separate nonnegative-i32 proof, while the stable
+/// public entry validates erased arguments at runtime and sends every miss to
+/// the unchanged boxed body.
 pub(crate) fn nonnegative_index_method_params(method: &Function) -> Vec<u32> {
+    let direct_index_used = crate::collectors::collect_direct_index_used_locals(&method.body);
+    let index_used = crate::collectors::collect_index_used_locals(&method.body);
+    nonnegative_index_method_params_from_uses(method, &direct_index_used, &index_used)
+}
+
+fn nonnegative_index_method_params_from_uses(
+    method: &Function,
+    direct_index_used: &HashSet<u32>,
+    index_used: &HashSet<u32>,
+) -> Vec<u32> {
     if method.is_async
         || method.is_generator
         || method.was_plain_async
@@ -471,19 +551,26 @@ pub(crate) fn nonnegative_index_method_params(method: &Function) -> Vec<u32> {
         || method
             .params
             .iter()
-            .any(|p| p.default.is_some() || p.is_rest || p.arguments_object.is_some())
+            .any(|p| p.is_rest || p.arguments_object.is_some())
     {
         return Vec::new();
     }
 
-    let index_used = crate::collectors::collect_index_used_locals(&method.body);
     let reassigned = crate::collectors::reassigned_locals(&method.body);
     let closure_referenced = crate::expr::collect_closure_referenced_locals(&method.body);
     method
         .params
         .iter()
         .filter(|param| {
-            matches!(param.ty, Type::Number | Type::Int32)
+            let eligible_type = matches!(
+                param.ty,
+                Type::Number | Type::Int32 | Type::Any | Type::Unknown
+            );
+            let credible_numeric_flow = direct_index_used.contains(&param.id)
+                || matches!(param.ty, Type::Number | Type::Int32);
+            eligible_type
+                && credible_numeric_flow
+                && param.default.is_none()
                 && index_used.contains(&param.id)
                 && !reassigned.contains(&param.id)
                 && !closure_referenced.contains(&param.id)

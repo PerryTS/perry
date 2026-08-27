@@ -28,7 +28,7 @@ use crate::native_value::{
 };
 use crate::rooting;
 use crate::type_analysis::{is_array_expr, is_numeric_expr, is_string_expr, receiver_class_name};
-use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 use super::{
     array_kind_fact, attach_buffer_view_pointer_state_for_expr,
@@ -47,6 +47,70 @@ use guarded_array::{
     lower_guarded_array_index_get, lower_packed_f64_loop_index_get, packed_f64_loop_fact,
 };
 use inline_dyn_typed_array::lower_inline_dyn_typed_array_get;
+
+/// Emit a weak monomorphic IC for an exact own Symbol-keyed data property.
+///
+/// The cache stores raw bits, not roots.  Its epoch is advanced by every
+/// Symbol-property mutation and completed GC, so a moved/reclaimed receiver or
+/// value cannot hit and the cache cannot keep otherwise-dead objects alive.
+pub(crate) fn lower_symbol_property_get_ic(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    sym_box: &str,
+) -> String {
+    let site_id = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let cache_name = super::inline_cache_global_name(ctx, site_id);
+    ctx.ic_globals.push(cache_name.clone());
+    let cache_ref = format!("@{cache_name}");
+
+    let hit_idx = ctx.new_block("symic.hit");
+    let miss_idx = ctx.new_block("symic.miss");
+    let merge_idx = ctx.new_block("symic.merge");
+    let hit_label = ctx.block_label(hit_idx);
+    let miss_label = ctx.block_label(miss_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    let epoch = ctx
+        .block()
+        .load_atomic_acquire(I64, "@PERRY_SYMBOL_PROPERTY_IC_EPOCH", 8);
+    let cached_epoch_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
+    let cached_epoch = ctx.block().load_atomic_acquire(I64, &cached_epoch_ptr, 8);
+    let epoch_matches = ctx.block().icmp_eq(I64, &epoch, &cached_epoch);
+    let obj_bits = ctx.block().bitcast_double_to_i64(obj_box);
+    let cached_obj_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
+    let cached_obj = ctx.block().load(I64, &cached_obj_ptr);
+    let obj_matches = ctx.block().icmp_eq(I64, &obj_bits, &cached_obj);
+    let sym_bits = ctx.block().bitcast_double_to_i64(sym_box);
+    let cached_sym_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "2")]);
+    let cached_sym = ctx.block().load(I64, &cached_sym_ptr);
+    let sym_matches = ctx.block().icmp_eq(I64, &sym_bits, &cached_sym);
+    let identity_matches = ctx.block().and(I1, &obj_matches, &sym_matches);
+    let hit = ctx.block().and(I1, &epoch_matches, &identity_matches);
+    ctx.block().cond_br(&hit, &hit_label, &miss_label);
+
+    ctx.current_block = hit_idx;
+    let cached_value_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "3")]);
+    let cached_value_bits = ctx.block().load(I64, &cached_value_ptr);
+    let cached_value = ctx.block().bitcast_i64_to_double(&cached_value_bits);
+    let hit_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = miss_idx;
+    let miss_value = ctx.block().call(
+        DOUBLE,
+        "js_object_get_symbol_property_ic_miss",
+        &[(DOUBLE, obj_box), (DOUBLE, sym_box), (PTR, &cache_ref)],
+    );
+    let miss_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    ctx.block().phi(
+        DOUBLE,
+        &[(&cached_value, &hit_end), (&miss_value, &miss_end)],
+    )
+}
 
 /// #7494: deliberately `static_type_of`, not `receiver_class_name`.
 ///
@@ -417,7 +481,46 @@ fn lower_claimable_array_string_key_get(
     let string_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
+    // A dynamic key that is an integer-valued double in `[0, 2^32)` IS an
+    // array index, so the receiver-unknown numeric tiers apply to it exactly
+    // as they do to a statically proven index: the inline typed-array read,
+    // then the dense Array-subclass `arrlike.ic` shape cache, then the
+    // complete `js_packed_arraylike_index_get` → `js_dyn_index_get`
+    // dispatcher. Before this, an `Any`-typed key (`packed[sparse[x]]` in the
+    // wolf-ecs SparseSet, `a[b[i]]` in general) always took the out-of-line
+    // `js_array_get_index_or_string` route below. Fractional, negative, NaN
+    // and out-of-range keys keep that route unchanged; `-0` round-trips to
+    // index 0, which is what ToPropertyKey gives it too.
+    let int_idx = ctx.new_block("aidxkey.int");
+    let int_label = ctx.block_label(int_idx);
+    let generic_idx = ctx.new_block("aidxkey.generic");
+    let generic_label = ctx.block_label(generic_idx);
     ctx.current_block = array_idx;
+    {
+        let blk = ctx.block();
+        let nonnegative = blk.fcmp("oge", idx_double, "0.0");
+        let below_limit = blk.fcmp("olt", idx_double, "4294967296.0");
+        let in_range = blk.and(I1, &nonnegative, &below_limit);
+        blk.cond_br(&in_range, &int_label, &generic_label);
+    }
+    ctx.current_block = int_idx;
+    let int_label_checked = ctx.new_block("aidxkey.int.exact");
+    let int_label_checked_label = ctx.block_label(int_label_checked);
+    {
+        let blk = ctx.block();
+        // In range, so `fptosi` is well-defined; the round trip rejects
+        // fractional keys.
+        let idx_i64 = blk.fptosi(DOUBLE, idx_double, I64);
+        let idx_back = blk.sitofp(I64, &idx_i64, DOUBLE);
+        let is_integer = blk.fcmp("oeq", &idx_back, idx_double);
+        blk.cond_br(&is_integer, &int_label_checked_label, &generic_label);
+    }
+    ctx.current_block = int_label_checked;
+    let index_value = lower_inline_dyn_typed_array_get(ctx, arr_box, idx_double, false);
+    let index_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = generic_idx;
     let arr_handle = unbox_to_i64(ctx.block(), arr_box);
     let array_value = ctx.block().call(
         DOUBLE,
@@ -430,7 +533,11 @@ fn lower_claimable_array_string_key_get(
     ctx.current_block = merge_idx;
     ctx.block().phi(
         DOUBLE,
-        &[(&string_value, &string_end), (&array_value, &array_end)],
+        &[
+            (&string_value, &string_end),
+            (&index_value, &index_end),
+            (&array_value, &array_end),
+        ],
     )
 }
 
@@ -760,7 +867,8 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     let index_is_static_string_or_symbol = matches!(
         index.as_ref(),
         Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
-    ) || is_string_expr(ctx, index);
+    ) || is_string_expr(ctx, index)
+        || super::compare::is_proven_symbol_expr(ctx, index);
     if index_is_static_string_or_symbol {
         return Ok(None);
     }
@@ -1036,18 +1144,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // symbol keys to the symbol-property resolver (mirrors the array
                 // path), which exposes `@@toStringTag` (`safe-stable-stringify`)
                 // and `@@iterator`.
-                if matches!(index.as_ref(), Expr::SymbolFor(_)) {
+                if super::compare::is_proven_symbol_expr(ctx, index) {
                     // #7640 section B (MEDIUM): `Expr::SymbolFor` lowers to a
                     // real `js_symbol_for` call, which INTERNS — it allocates a
                     // SymbolHeader on first use — so the receiver was live
                     // across an allocation.
                     return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
                         let (obj_box, key_box) = (vals[0].clone(), vals[1].clone());
-                        Ok(ctx.block().call(
-                            DOUBLE,
-                            "js_object_get_symbol_property",
-                            &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
-                        ))
+                        Ok(lower_symbol_property_get_ic(ctx, &obj_box, &key_box))
                     });
                 }
                 // #2063 / fractional numeric keys: only proven integer element
@@ -1349,7 +1453,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let index_is_static_string_or_symbol = matches!(
                 index.as_ref(),
                 Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
-            ) || is_string_expr(ctx, index);
+            ) || is_string_expr(ctx, index)
+                || super::compare::is_proven_symbol_expr(ctx, index);
             // #7854 recovered a receiver's declared array type for a LOCAL
             // (`const names = e.names`), never for the read used directly as a
             // receiver (`e.vals[i]`, `p.toks[p.pos]`) — the HIR types a
@@ -1402,18 +1507,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // value yields a garbage index (returned a number). Route symbol
                 // keys to the symbol-property resolver, which exposes the array
                 // iterator for `Symbol.iterator`.
-                if matches!(index.as_ref(), Expr::SymbolFor(_)) {
+                if super::compare::is_proven_symbol_expr(ctx, index) {
                     // #7640 section B (MEDIUM): `Expr::SymbolFor` lowers to a
                     // real `js_symbol_for` call, which INTERNS — it allocates a
                     // SymbolHeader on first use — so the receiver was live
                     // across an allocation.
                     return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
                         let (obj_box, key_box) = (vals[0].clone(), vals[1].clone());
-                        Ok(ctx.block().call(
-                            DOUBLE,
-                            "js_object_get_symbol_property",
-                            &[(DOUBLE, &obj_box), (DOUBLE, &key_box)],
-                        ))
+                        Ok(lower_symbol_property_get_ic(ctx, &obj_box, &key_box))
                     });
                 }
                 if !is_numeric_expr(ctx, index) {
@@ -1688,6 +1789,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let obj_box =
                     ctx.block()
                         .call(DOUBLE, "js_require_object_coercible", &[(DOUBLE, &obj_box)]);
+                if super::compare::is_proven_symbol_expr(ctx, index) {
+                    return Ok(lower_symbol_property_get_ic(ctx, &obj_box, &idx_box));
+                }
                 let blk = ctx.block();
                 let obj_bits = blk.bitcast_double_to_i64(&obj_box);
                 let obj_handle =
@@ -1707,11 +1811,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ctx.block().cond_br(&is_sym_bit, &sym_lbl, &nonsym_lbl);
                 // Symbol key → side-table get.
                 ctx.current_block = sym_idx;
-                let v_sym = ctx.block().call(
-                    DOUBLE,
-                    "js_object_get_symbol_property",
-                    &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
-                );
+                let v_sym = lower_symbol_property_get_ic(ctx, &obj_box, &idx_box);
                 let sym_end_lbl = ctx.block().label.clone();
                 ctx.block().br(&merge_lbl);
                 // Not a symbol → recompute idx_bits in this block.
