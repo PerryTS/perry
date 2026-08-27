@@ -70,7 +70,30 @@ impl<'s> RootedIterArray<'s> {
     fn arr(&self) -> *const ArrayHeader {
         let rooted =
             (self.handle.get_nanbox_u64() & crate::value::POINTER_MASK) as *const ArrayHeader;
-        let live = clean_arr_ptr(rooted);
+        // `RootedIterArray` is private and every constructor call receives the
+        // non-null, genuine Array result of `normalize_array_receiver` after
+        // Buffer/TypedArray dispatch.  The handle is then either rewritten by
+        // moving GC to another live Array or still points at an Array-growth
+        // forwarding stub.  Therefore the ordinary (non-forwarded) case can
+        // read its already-proved header directly instead of re-entering
+        // `clean_arr_ptr`'s allocator/registry ownership classifier for every
+        // callback argument and element access.
+        //
+        // Growth is the exceptional case that a GC root cannot heal itself:
+        // `js_array_grow` leaves aliases pointing at the old stub.  Keep the
+        // full resolver there so forwarding-chain validation and compression
+        // retain their existing corruption defenses.
+        let live = unsafe {
+            let header =
+                (rooted as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*header).obj_type == crate::gc::GC_TYPE_ARRAY
+                && (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            {
+                rooted
+            } else {
+                clean_arr_ptr(rooted)
+            }
+        };
         if live != rooted {
             // Array growth and moving GC leave forwarding stubs behind. Keep
             // the root current so subsequent loop iterations do not inspect
