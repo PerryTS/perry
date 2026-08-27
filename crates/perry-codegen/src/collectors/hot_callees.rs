@@ -64,6 +64,29 @@ const INDIRECT_CLOSURE_ALLOC_SITE_BUDGET: u32 = 8;
 const TINY_METHOD_MAX_STMTS: usize = 2;
 const TINY_METHOD_ALLOC_SITE_BUDGET: u32 = 8;
 
+/// The receiver-binding local `perry-transform`'s `field_push_local_bind`
+/// pass introduces when it expands one `this.f.push(v)` statement into four
+/// (`let __push_recv_old = this.f; let __push_recv = old; push; if (moved)
+/// this.f = __push_recv`). For the tiny-method budget above that is still the
+/// ONE statement the author wrote: the pass exists so the push takes the
+/// inline append, and a command-buffer method that is exactly
+/// `this.commands.push({ ... })` must not lose its allocation kernel to the
+/// rewrite that made its push cheaper. Kept in sync by name with the pass
+/// (`field_push_local_bind.rs`); the test below pins the shape.
+const FIELD_PUSH_RECEIVER_OLD_NAME: &str = "__push_recv_old";
+
+/// Statement count for the tiny-method rule: each field-push expansion
+/// counts as the single statement it came from.
+fn tiny_method_stmt_count(body: &[Stmt]) -> usize {
+    let expansions = body
+        .iter()
+        .filter(
+            |stmt| matches!(stmt, Stmt::Let { name, .. } if name == FIELD_PUSH_RECEIVER_OLD_NAME),
+        )
+        .count();
+    body.len().saturating_sub(3 * expansions)
+}
+
 /// Collect the set of `FuncId`s eligible for `inlinehint`: those with ≥1 direct
 /// call site inside a loop AND at most `max_call_sites` total direct call sites
 /// across the whole module (`init` + every function + every executable
@@ -245,7 +268,7 @@ pub fn collect_alloc_hot_functions(hir: &Module) -> HashSet<u32> {
     let mut tiny_method_sites: HashMap<u32, u32> = HashMap::new();
     for class in &hir.classes {
         for method in &class.methods {
-            if method.body.len() > TINY_METHOD_MAX_STMTS {
+            if tiny_method_stmt_count(&method.body) > TINY_METHOD_MAX_STMTS {
                 continue;
             }
             // Count into a scratch map because the ownership-aware walker also
@@ -830,6 +853,123 @@ mod recursion_participant_tests {
             type_args: Vec::new(),
             byte_offset: 0,
         }))
+    }
+
+    fn new_expr() -> Expr {
+        Expr::New {
+            class_name: "Command".to_string(),
+            args: Vec::new(),
+            cap_args_appended: 0,
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }
+    }
+
+    /// `this.commands.push({ ... })` after `field_push_local_bind` expanded it.
+    fn expanded_field_push(old_id: u32, recv_id: u32) -> Vec<Stmt> {
+        vec![
+            Stmt::Let {
+                id: old_id,
+                name: FIELD_PUSH_RECEIVER_OLD_NAME.to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::PropertyGet {
+                    object: Box::new(Expr::This),
+                    property: "commands".to_string(),
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Let {
+                id: recv_id,
+                name: "__push_recv".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::LocalGet(old_id)),
+            },
+            Stmt::Expr(Expr::ArrayPush {
+                array_id: recv_id,
+                value: Box::new(new_expr()),
+            }),
+            Stmt::If {
+                condition: Expr::Compare {
+                    op: perry_hir::CompareOp::Ne,
+                    left: Box::new(Expr::LocalGet(recv_id)),
+                    right: Box::new(Expr::LocalGet(old_id)),
+                },
+                then_branch: vec![Stmt::Expr(Expr::PropertySet {
+                    object: Box::new(Expr::This),
+                    property: "commands".to_string(),
+                    value: Box::new(Expr::LocalGet(recv_id)),
+                })],
+                else_branch: None,
+            },
+        ]
+    }
+
+    fn class_with_method(method: Function) -> perry_hir::Class {
+        perry_hir::Class {
+            id: 1,
+            name: "CommandBuffer".to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields: Vec::new(),
+            constructor: None,
+            methods: vec![method],
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            computed_members: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+            is_nested: false,
+            alloc_width_hint: 0,
+            specialized_from: None,
+        }
+    }
+
+    /// Rule 4 must see through `field_push_local_bind`'s expansion: a method
+    /// that was `this.commands.push({ ... })` is still a tiny allocation
+    /// kernel after the pass rewrote its push, while four genuinely separate
+    /// statements still exceed the budget.
+    #[test]
+    fn tiny_method_rule_counts_a_field_push_expansion_as_one_statement() {
+        let mut module = Module::new("buffer.ts");
+        module
+            .classes
+            .push(class_with_method(func(11, expanded_field_push(100, 101))));
+        let mut plain = expanded_field_push(200, 201);
+        // Same four statements, but the first is an ordinary local: not an
+        // expansion, so the method is four statements long.
+        if let Stmt::Let { name, .. } = &mut plain[0] {
+            *name = "old".to_string();
+        }
+        module.classes.push(class_with_method(func(12, plain)));
+
+        assert_eq!(
+            tiny_method_stmt_count(&module.classes[0].methods[0].body),
+            1
+        );
+        assert_eq!(
+            tiny_method_stmt_count(&module.classes[1].methods[0].body),
+            4
+        );
+        let hot = collect_alloc_hot_functions(&module);
+        assert!(
+            hot.contains(&11),
+            "the expanded field push is still a tiny kernel: {hot:?}"
+        );
+        assert!(
+            !hot.contains(&12),
+            "four unrelated statements are not: {hot:?}"
+        );
     }
 
     #[test]
