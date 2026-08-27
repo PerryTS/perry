@@ -112,6 +112,54 @@ fn declaring_at_allocation_clears_the_raw_f64_layout_the_allocator_published() {
     }
 }
 
+#[test]
+fn first_pointer_append_promotes_an_empty_array_to_all_pointer_layout() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let arr = crate::array::js_array_alloc(4);
+    let child = fresh_string(b"first_pointer_append");
+    let arr = crate::array::js_array_push_f64(arr, f64::from_bits(string_bits(child)));
+    unsafe {
+        assert_eq!((*arr).length, 1, "the witness append must be live");
+        assert!(
+            codegen_would_take_the_elided_store(arr),
+            "an empty array's first pointer append proves the complete live \
+             prefix is all-pointer and must clear the raw-f64 claim"
+        );
+        assert_eq!(
+            test_heap_child_slot_count(arr as *mut u8),
+            1,
+            "the promoted layout must expose the appended child to the collector"
+        );
+    }
+}
+
+#[test]
+fn later_non_pointer_append_revokes_automatic_all_pointer_layout() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let arr = crate::array::js_array_alloc(4);
+    let child = fresh_string(b"pointer_then_number");
+    let arr = crate::array::js_array_push_f64(arr, f64::from_bits(string_bits(child)));
+    unsafe {
+        assert!(codegen_would_take_the_elided_store(arr));
+    }
+
+    let arr = crate::array::js_array_push_f64(arr, 1.0);
+    unsafe {
+        assert_eq!((*arr).length, 2);
+        assert!(
+            !codegen_would_take_the_elided_store(arr),
+            "a non-pointer append must retire the automatically established \
+             all-pointer proof before generated code can consume it"
+        );
+        assert_eq!(
+            test_heap_child_slot_count(arr as *mut u8),
+            2,
+            "revocation may conservatively scan the mixed live prefix, but \
+             it must not lose either initialized slot"
+        );
+    }
+}
+
 /// The runtime CAN revoke the declaration behind codegen's back, and this is
 /// the cheapest live demonstration of it: `js_array_is_numeric_f64_layout` on a
 /// still-EMPTY declared array verifies vacuously and re-publishes the array as

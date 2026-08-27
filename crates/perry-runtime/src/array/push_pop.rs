@@ -707,12 +707,9 @@ unsafe fn js_array_push_f64_resolved(arr: *mut ArrayHeader, value: f64) -> *mut 
         return js_array_push_f64_grow(arr, length, value);
     }
 
-    let value = canonicalize_array_numeric_store_value_from_flags(flags, value);
-    let value_bits = value.to_bits();
-    let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-    // GC_STORE_AUDIT(BARRIERED): push slot is immediately recorded via note_array_slot.
-    ptr::write(elements_ptr.add(length as usize), value);
-    note_array_slot(arr, length as usize, value_bits);
+    // GC_STORE_AUDIT(BARRIERED): the resolved store performs the layout
+    // note and write barrier as part of the slot write.
+    store_array_slot_resolved(arr, length as usize, value, flags);
     (*arr).length = length + 1;
     arr
 }
@@ -932,13 +929,12 @@ unsafe fn js_array_push_f64_grow(
     let value_handle = scope.root_nanbox_f64(value);
 
     let arr = js_array_grow(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), length + 1);
-    let value = canonicalize_array_numeric_store_value(arr, value_handle.get_nanbox_f64());
-    let value_bits = value.to_bits();
-
-    let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-    // GC_STORE_AUDIT(BARRIERED): grown push slot is immediately recorded via note_array_slot.
-    ptr::write(elements_ptr.add(length as usize), value);
-    note_array_slot(arr, length as usize, value_bits);
+    // SAFETY: `js_array_grow` returns the resolved live array head and no
+    // safepoint intervenes before the flag read/store.
+    let flags = array_object_flags_resolved(arr);
+    // GC_STORE_AUDIT(BARRIERED): the resolved store performs the layout note
+    // and write barrier as part of the slot write.
+    store_array_slot_resolved(arr, length as usize, value_handle.get_nanbox_f64(), flags);
     (*arr).length = length + 1;
     arr
 }

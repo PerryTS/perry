@@ -64,10 +64,6 @@ pub(crate) fn is_native_module_constructor_export(module: &str, property: &str) 
         "crypto.KeyObject" => property == "from",
         "dns" | "dns/promises" => property == "getServers",
         "events" => property == "once",
-        // Node's callback-style fs helpers are callable but not constructors.
-        // Keep this exact: class exports such as ReadStream/WriteStream must
-        // still materialize a real prototype for userland subclassing.
-        "fs" => property == "readFile",
         "http" => property == "setMaxIdleHTTPParsers",
         "inspector" => matches!(property, "close" | "url"),
         "inspector.DOMStorage" => matches!(
@@ -199,8 +195,8 @@ mod tests {
     use super::is_native_module_constructor_export;
 
     #[test]
-    fn fs_read_file_is_not_a_constructor_but_stream_classes_are() {
-        assert!(!is_native_module_constructor_export("fs", "readFile"));
+    fn fs_read_file_and_stream_classes_expose_prototypes() {
+        assert!(is_native_module_constructor_export("fs", "readFile"));
         assert!(is_native_module_constructor_export("fs", "ReadStream"));
         assert!(is_native_module_constructor_export(
             "node:fs",

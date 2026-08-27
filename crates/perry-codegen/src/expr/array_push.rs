@@ -144,6 +144,91 @@ fn guarded_numeric_add_push_candidate(ctx: &FnCtx<'_>, value: &Expr) -> bool {
 /// `0x0407 | 0x3800` == `0x3C07` == 15367.
 const ARRAY_PUSH_NUMERIC_CLEAN_I16: &str = "15367";
 
+/// Header admission mask for the dynamic pointer-append bookkeeping fast arm.
+///
+/// A generic value cannot use #7469's static all-pointer-array tier, but its
+/// live bits can still prove `POINTER_TAG` at the store. When the receiver also
+/// carries `SIDE_MASK | ALL_POINTERS`, with both raw-f64 flags and the optional
+/// homogeneous element-shape proof clear, the three generic calls are dead:
+///
+/// * a `POINTER_TAG` value is not a heap string, so no string addref is needed;
+/// * appending it preserves the all-pointer GC layout;
+/// * both raw-f64 flags are already clear, so the numeric-layout note is a
+///   no-op.
+///
+/// `0xF880` is `LAYOUT_STATE_MASK | ALL_POINTERS | RAW_F64_HOLES |
+/// ELEMENT_SHAPE | RAW_F64_LAYOUT`; the admitted value is exactly
+/// `SIDE_MASK | ALL_POINTERS` (`0xA000`). Integrity and prototype cleanliness
+/// are checked by the enclosing `apush.nofwd` block as before.
+const ARRAY_PUSH_POINTER_LAYOUT_MASK_I16: &str = "63616";
+const ARRAY_PUSH_POINTER_LAYOUT_EXPECT_I16: &str = "40960";
+
+/// Store a dynamically typed append value and bypass redundant bookkeeping
+/// when the value and receiver's live header jointly prove the pointer-only
+/// case. The write barrier is intentionally not handled here: an all-pointer
+/// layout says which slots the collector scans, not that an old parent cannot
+/// receive a young child, so the caller retains its generation-tested barrier.
+#[allow(clippy::too_many_arguments)]
+fn emit_dynamic_pointer_push_store(
+    ctx: &mut FnCtx<'_>,
+    arr_handle: &str,
+    value_double: &str,
+    value_bits_override: Option<&str>,
+    object_flags: &str,
+    string_addref_needed: bool,
+    layout_note_needed: bool,
+) -> (String, String, String) {
+    let (length, element_addr, value_bits) = {
+        let blk = ctx.block();
+        let length = blk.safe_load_i32_from_ptr(arr_handle);
+        let length_i64 = blk.zext(I32, &length, I64);
+        let byte_offset = blk.shl(I64, &length_i64, "3");
+        let with_header = blk.add(I64, &byte_offset, "8");
+        let element_addr = blk.add(I64, arr_handle, &with_header);
+        let element_ptr = blk.inttoptr(I64, &element_addr);
+        // GC_STORE_AUDIT(BARRIERED): the common store remains unconditional;
+        // only proven no-op bookkeeping is bypassed below, and the caller
+        // still emits the generation-tested write barrier.
+        blk.store(DOUBLE, value_double, &element_ptr);
+        let value_bits = value_bits_override
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| blk.bitcast_double_to_i64(value_double));
+        (length, element_addr, value_bits)
+    };
+
+    let bookkeeping_idx = ctx.new_block("apush.pointer_layout.bookkeeping");
+    let done_idx = ctx.new_block("apush.pointer_layout.done");
+    let bookkeeping_label = ctx.block_label(bookkeeping_idx);
+    let done_label = ctx.block_label(done_idx);
+    {
+        let blk = ctx.block();
+        let top16 = blk.lshr(I64, &value_bits, "48");
+        let is_object_pointer = blk.icmp_eq(I64, &top16, crate::nanbox::POINTER_TAG_TOP16_I64);
+        let proof_bits = blk.and(I16, object_flags, ARRAY_PUSH_POINTER_LAYOUT_MASK_I16);
+        let pointer_layout = blk.icmp_eq(I16, &proof_bits, ARRAY_PUSH_POINTER_LAYOUT_EXPECT_I16);
+        let fast = blk.and(I1, &is_object_pointer, &pointer_layout);
+        blk.cond_br(&fast, &done_label, &bookkeeping_label);
+    }
+
+    ctx.current_block = bookkeeping_idx;
+    {
+        let blk = ctx.block();
+        if string_addref_needed {
+            blk.call_void("js_string_addref_if_heap_string", &[(DOUBLE, value_double)]);
+        }
+        if layout_note_needed {
+            emit_layout_note_slot_on_block(blk, arr_handle, &length, &value_bits);
+        }
+        // This helper is selected only for a value whose static construction
+        // cannot prove numeric. The generic path therefore carried this note
+        // before, and still does whenever the joint live proof fails.
+        emit_array_numeric_write_note_on_block(blk, arr_handle, &value_bits);
+        blk.br(&done_label);
+    }
+    ctx.current_block = done_idx;
+    (length, element_addr, value_bits)
+}
+
 /// #7839 — the inline array append's GC bookkeeping behind ONE live test.
 ///
 /// The `apush.inbounds` store used to pay `js_string_addref_if_heap_string` +
@@ -897,12 +982,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                 // the GcHeader `_reserved` u16 at `arr - 6` (obj_type u8 at -8,
                 // gc_flags u8 at -7, `_reserved` u16 at -6): mask
                 // FROZEN|SEALED|NO_EXTEND|ARRAY_DESCRIPTORS = 0x407.
+                let live_object_flags: String;
                 ctx.current_block = nofwd_idx;
                 {
                     let blk = ctx.block();
                     let flags_addr = blk.sub(I64, &arr_handle, "6");
                     let flags_ptr = blk.inttoptr(I64, &flags_addr);
                     let obj_flags = blk.load(I16, &flags_ptr);
+                    live_object_flags = obj_flags.clone();
                     let clean = if declared_all_pointer {
                         // #7469 — the elided-bookkeeping admission test. Same
                         // `_reserved` load, same one `and` + one `icmp` as the
@@ -996,6 +1083,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                 // between the store and the barrier would run with the
                 // old→young edge unrecorded. The block is split here rather
                 // than the call being sunk to the end of the block.
+                let dynamic_pointer_bookkeeping =
+                    !declared_all_pointer && !value_is_statically_numeric && layout_note_needed;
                 let (length, element_addr, barrier_value_bits) = if guarded_numeric_bookkeeping {
                     emit_numeric_push_store_pointer_tested(
                         ctx,
@@ -1005,6 +1094,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
                         string_addref_needed,
                         layout_note_needed,
                         write_barrier_needed,
+                    )
+                } else if dynamic_pointer_bookkeeping {
+                    let (length, element_addr, value_bits) = emit_dynamic_pointer_push_store(
+                        ctx,
+                        &arr_handle,
+                        &v,
+                        v_bits.as_deref(),
+                        &live_object_flags,
+                        string_addref_needed,
+                        layout_note_needed,
+                    );
+                    (
+                        length,
+                        element_addr,
+                        write_barrier_needed.then_some(value_bits),
                     )
                 } else {
                     let blk = ctx.block();

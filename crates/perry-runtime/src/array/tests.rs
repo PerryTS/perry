@@ -1,6 +1,7 @@
 //! Unit tests.
 
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 
@@ -14,6 +15,27 @@ extern "C" fn test_map_to_string(
 ) -> f64 {
     let str_ptr = crate::string::js_string_from_bytes(b"mapped".as_ptr(), 6);
     f64::from_bits(crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK))
+}
+
+static DIRECT_SOME_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+extern "C" fn direct_some_is_two(
+    closure: *const crate::closure::ClosureHeader,
+    element: f64,
+    index: f64,
+    _array: f64,
+) -> f64 {
+    assert!(
+        closure.is_null(),
+        "captureless callbacks need no environment"
+    );
+    DIRECT_SOME_CALLS.fetch_add(1, Ordering::Relaxed);
+    let matches = element == 2.0 && index == 1.0;
+    f64::from_bits(if matches {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
 }
 
 fn gc_collection_count_for_tests() -> u64 {
@@ -138,6 +160,19 @@ fn test_array_alloc_and_access() {
 
     // Out of bounds returns TAG_UNDEFINED (JS spec: arr[OOB] === undefined)
     assert_eq!(js_array_get_f64(arr, 5).to_bits(), 0x7FFC_0000_0000_0001u64);
+}
+
+#[test]
+fn captureless_some_calls_the_body_directly_and_short_circuits() {
+    let mut arr = js_array_alloc(3);
+    arr = js_array_push_f64(arr, 1.0);
+    arr = js_array_push_f64(arr, 2.0);
+    arr = js_array_push_f64(arr, 3.0);
+    DIRECT_SOME_CALLS.store(0, Ordering::Relaxed);
+
+    let answer = js_array_some_captureless(arr, direct_some_is_two as *const u8);
+    assert_eq!(answer.to_bits(), crate::value::TAG_TRUE);
+    assert_eq!(DIRECT_SOME_CALLS.load(Ordering::Relaxed), 2);
 }
 
 #[test]

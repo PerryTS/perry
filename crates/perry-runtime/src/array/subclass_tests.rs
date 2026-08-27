@@ -626,10 +626,12 @@ fn plain_array_element_shape_consumes_array_subclass_prefix_proof() {
 
     let mut owners = js_array_alloc(1);
     owners = js_array_push_f64(owners, receiver);
+    // Proofs are demand-driven: a consumer requests the enclosing array's
+    // class proof, then the keep/clear paths maintain it across stores.
     assert_eq!(
-        crate::array::js_array_element_shape_class(owners),
+        crate::array::js_array_ensure_element_shape(owners),
         class_id as i32,
-        "the enclosing plain array should establish a class proof"
+        "the enclosing plain array should prove a class invariant on request"
     );
 
     let original_shape = unsafe { (*obj).parent_class_id };

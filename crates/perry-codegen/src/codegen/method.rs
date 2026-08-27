@@ -76,6 +76,13 @@ pub(super) fn compile_method(
                 method.name
             )
         })?;
+    let arguments_length_clone = method.params.last().is_some_and(|param| {
+        matches!(
+            &param.ty,
+            perry_hir::types::Type::Named(name)
+                if name == super::arguments::SYNTHETIC_ARGUMENTS_LENGTH_TYPE
+        )
+    });
     // Representation-selection Phase 5a: the proven-`this` clone is a SECOND,
     // additive body compiled from the same HIR through the same statement
     // lowerer. It never replaces the public symbol and never participates in
@@ -95,14 +102,15 @@ pub(super) fn compile_method(
                 .get(&(class.name.clone(), method.name.clone()))
         })
         .flatten();
-    let guarded_undefined_param = (!is_index_clone && !ptr_array_cache_clone && !pshape_arg_clone)
-        .then(|| {
-            cross_module
-                .guarded_undefined_method_params
-                .get(&(class.name.clone(), method.name.clone()))
-                .copied()
-        })
-        .flatten();
+    let guarded_undefined_param =
+        (!arguments_length_clone && !is_index_clone && !ptr_array_cache_clone && !pshape_arg_clone)
+            .then(|| {
+                cross_module
+                    .guarded_undefined_method_params
+                    .get(&(class.name.clone(), method.name.clone()))
+                    .copied()
+            })
+            .flatten();
     let guarded_falsy_field_default = cross_module
         .guarded_falsy_field_default_methods
         .get(&(class.name.clone(), method.name.clone()))
@@ -131,7 +139,9 @@ pub(super) fn compile_method(
     debug_assert!(!pshape_arg_clone || !ptr_array_cache_clone);
     debug_assert!(!pshape_arg_clone || typed_public_trampoline.is_none());
     debug_assert!(!pshape_arg_clone || !force_generic_body);
-    let family_name = if pshape_arg_clone {
+    let family_name = if arguments_length_clone {
+        super::arguments::arguments_length_method_name(&public_llvm_name)
+    } else if pshape_arg_clone {
         crate::collectors::pshape_args_method_name(&public_llvm_name)
     } else if ptr_array_cache_clone {
         crate::collectors::ptr_array_cache_method_name(&public_llvm_name)
@@ -140,7 +150,9 @@ pub(super) fn compile_method(
     } else {
         public_llvm_name.clone()
     };
-    let llvm_name = if fast_array_handle_clone {
+    let llvm_name = if arguments_length_clone {
+        family_name.clone()
+    } else if fast_array_handle_clone {
         crate::codegen::nonnegative_index_fast_array_method_name(
             &public_llvm_name,
             nonnegative_index_params.expect("fast-array clone has index parameters"),
@@ -207,6 +219,13 @@ pub(super) fn compile_method(
     if is_index_clone {
         lf.pre_statepoint_inline = true;
     }
+    // #8872: methods participate in the same allocation-hot analysis as
+    // functions and closures.  This must be set before the entry block exists
+    // because `lower_call/new_alloc.rs` consults it while lowering each `new`
+    // site.  Previously `collect_alloc_hot_functions` could discover a method
+    // FuncId, but method codegen silently discarded the result, leaving tiny
+    // cross-module allocation kernels on the outlined runtime allocator.
+    lf.alloc_hot = cross_module.alloc_hot_functions.contains(&method.id);
 
     // A false-field-default clone is entered only after its public wrapper
     // proved the omitted argument, exact receiver layout, and live false slot.
@@ -493,6 +512,7 @@ pub(super) fn compile_method(
         method_param_counts: &cross_module.method_param_counts,
         method_has_rest: &cross_module.method_has_rest,
         method_has_synthetic_arguments: &cross_module.method_has_synthetic_arguments,
+        method_arguments_length_only: &cross_module.method_arguments_length_only,
         imported_func_return_types: &cross_module.imported_func_return_types,
         ffi_signatures: &cross_module.ffi_signatures,
         ffi_aliases: &cross_module.ffi_aliases,
@@ -1294,7 +1314,8 @@ pub(super) fn compile_method(
     // twice.
     if let Some(param_index) = guarded_undefined_param.filter(|_| !guarded_undefined_clone) {
         emit_guarded_undefined(llmod, method, &family_name, &llvm_name, param_index);
-    } else if !is_index_clone
+    } else if !arguments_length_clone
+        && !is_index_clone
         && !guarded_undefined_clone
         && !pshape_arg_clone
         && !ptr_array_cache_clone
@@ -1618,6 +1639,7 @@ pub(super) fn compile_static_method(
         method_param_counts: &cross_module.method_param_counts,
         method_has_rest: &cross_module.method_has_rest,
         method_has_synthetic_arguments: &cross_module.method_has_synthetic_arguments,
+        method_arguments_length_only: &cross_module.method_arguments_length_only,
         imported_func_return_types: &cross_module.imported_func_return_types,
         ffi_signatures: &cross_module.ffi_signatures,
         ffi_aliases: &cross_module.ffi_aliases,

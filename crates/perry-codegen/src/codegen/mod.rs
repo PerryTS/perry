@@ -1551,6 +1551,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         std::collections::HashMap::new();
     let mut method_has_synthetic_arguments: std::collections::HashMap<(String, String), bool> =
         std::collections::HashMap::new();
+    let mut method_arguments_length_only: std::collections::HashMap<(String, String), bool> =
+        std::collections::HashMap::new();
     for cls in &hir.classes {
         for m in &cls.methods {
             let key = (cls.name.clone(), m.name.clone());
@@ -1563,7 +1565,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 .last()
                 .is_some_and(|param| param.arguments_object.is_some())
             {
-                method_has_synthetic_arguments.insert(key, true);
+                method_has_synthetic_arguments.insert(key.clone(), true);
+            }
+            if arguments::method_supports_arguments_length_direct_abi(m) {
+                method_arguments_length_only.insert(key, true);
             }
         }
         // Issue #894: track static methods too. Effect's `static pipe()` /
@@ -1621,6 +1626,18 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 method_has_synthetic_arguments.insert((ic.name.clone(), mname.clone()), true);
                 if effective_name != ic.name {
                     method_has_synthetic_arguments
+                        .insert((effective_name.clone(), mname.clone()), true);
+                }
+            }
+            if ic
+                .method_arguments_length_only
+                .get(i)
+                .copied()
+                .unwrap_or(false)
+            {
+                method_arguments_length_only.insert((ic.name.clone(), mname.clone()), true);
+                if effective_name != ic.name {
+                    method_arguments_length_only
                         .insert((effective_name.clone(), mname.clone()), true);
                 }
             }
@@ -2364,6 +2381,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         method_param_counts,
         method_has_rest,
         method_has_synthetic_arguments,
+        method_arguments_length_only,
         class_keys_globals: class_keys_globals_map,
         class_field_counts: class_field_counts_map,
         class_init_chains: class_init_chains_map,

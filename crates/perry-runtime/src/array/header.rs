@@ -1077,17 +1077,8 @@ pub(crate) unsafe fn canonicalize_array_numeric_store_bits(
     value_bits
 }
 
-#[inline]
-pub(crate) unsafe fn canonicalize_array_numeric_store_value(
-    arr: *mut ArrayHeader,
-    value: f64,
-) -> f64 {
-    f64::from_bits(canonicalize_array_numeric_store_bits(arr, value.to_bits()))
-}
-
 /// Canonicalize a store using the flag word read from an already-resolved
-/// array. This is the no-second-classification twin of
-/// [`canonicalize_array_numeric_store_value`].
+/// array, avoiding a second ownership/forwarding classification.
 #[inline(always)]
 pub(crate) fn canonicalize_array_numeric_store_value_from_flags(flags: u16, value: f64) -> f64 {
     let raw_layout = crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES;

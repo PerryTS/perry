@@ -360,6 +360,7 @@ fn key_stable_for_nested_type_hashmap_order() {
         method_param_counts: vec![],
         method_has_rest: vec![],
         method_has_synthetic_arguments: vec![],
+        method_arguments_length_only: vec![],
         static_method_names: vec![],
         static_method_return_types: vec![],
         static_method_param_counts: vec![],
@@ -419,6 +420,7 @@ fn key_changes_with_imported_class_signature() {
         method_param_counts: vec![0],
         method_has_rest: vec![false],
         method_has_synthetic_arguments: vec![false],
+        method_arguments_length_only: vec![false],
         static_method_names: vec![],
         static_method_return_types: vec![],
         static_method_param_counts: vec![],
@@ -451,6 +453,7 @@ fn key_changes_with_imported_class_signature() {
         method_param_counts: vec![0],
         method_has_rest: vec![false],
         method_has_synthetic_arguments: vec![false],
+        method_arguments_length_only: vec![false],
         static_method_names: vec![],
         static_method_return_types: vec![],
         static_method_param_counts: vec![],
@@ -491,6 +494,7 @@ fn key_changes_with_imported_class_codegen_surface() {
         method_param_counts: vec![1],
         method_has_rest: vec![false],
         method_has_synthetic_arguments: vec![false],
+        method_arguments_length_only: vec![false],
         static_method_names: vec!["make".into()],
         static_method_return_types: vec![perry_hir::types::Type::Number],
         static_method_param_counts: vec![1],
@@ -529,6 +533,10 @@ fn key_changes_with_imported_class_codegen_surface() {
 
     let mut changed = base.clone();
     changed.method_has_synthetic_arguments = vec![true];
+    assert_ne!(base_key, key_for(changed));
+
+    let mut changed = base.clone();
+    changed.method_arguments_length_only = vec![true];
     assert_ne!(base_key, key_for(changed));
 
     let mut changed = base.clone();

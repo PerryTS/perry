@@ -11,7 +11,8 @@
 //! the other shape: bundle from argument 0 and mark the array.
 //!
 //! This is an IR-census test on the CALL SITE, which is where the defect lived.
-//! Both halves matter and both are asserted:
+//! For methods which need the materialized object, both halves matter and both
+//! are asserted:
 //!
 //!   * the array is filled from argument 0 (three `js_array_push_f64` into the
 //!     bundle for a three-argument call to a two-parameter method), and
@@ -246,11 +247,20 @@ fn pushes_of(ir: &str, literal: &str) -> usize {
         .count()
 }
 
-/// The regression. Three args, two declared params, body reads `arguments`:
+/// The regression. Three args, two declared params, body reads `arguments[0]`:
 /// all three must be pushed into the bundle, and the bundle must be marked.
+///
+/// The index read deliberately prevents the length-only direct ABI from
+/// scalarizing the object. This continues to cover the materialized path which
+/// originally lost the first two arguments in #8040.
 #[test]
 fn a_class_method_reading_arguments_is_handed_every_passed_argument() {
-    let ir = emit(&module_with_tail(synthetic_arguments_param()));
+    let mut module = module_with_tail(synthetic_arguments_param());
+    module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::IndexGet {
+        object: Box::new(Expr::LocalGet(TAIL_ID)),
+        index: Box::new(Expr::Integer(0)),
+    }))];
+    let ir = emit(&module);
 
     assert!(
         ir.contains(MARK),
@@ -279,6 +289,35 @@ fn a_class_method_reading_arguments_is_handed_every_passed_argument() {
                 .count(),
         );
     }
+}
+
+/// A method which observes only `arguments.length` has an additive, guarded
+/// direct ABI. It receives the actual count as a scalar while the registered
+/// public method retains the ordinary arguments-object ABI for dynamic calls.
+#[test]
+fn a_length_only_class_method_direct_call_passes_the_scalar_count() {
+    let ir = emit(&module_with_tail(synthetic_arguments_param()));
+
+    assert!(
+        ir.contains(
+            "call double @perry_method_class_method_arguments_ts__T__m$arguments_length(\
+             double"
+        ) && ir.contains("double 1.0, double 2.0, double 3.0)"),
+        "the guarded direct path should call the length-only clone with the \
+         three-argument count in its trailing slot:\n{ir}"
+    );
+    assert!(
+        !ir.contains(MARK)
+            && !ir.contains("call i64 @js_array_alloc(")
+            && !ir.contains("call i64 @js_array_push_f64("),
+        "the length-only direct call should not materialize an arguments \
+         object:\n{ir}"
+    );
+    assert!(
+        ir.contains("ptrtoint ptr @perry_method_class_method_arguments_ts__T__m to i64"),
+        "runtime registration must continue to publish the public method, \
+         never the scalar-only clone:\n{ir}"
+    );
 }
 
 /// The safety half: a real `...rest` with no `arguments` read keeps the old

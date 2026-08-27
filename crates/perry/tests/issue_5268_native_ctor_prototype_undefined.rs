@@ -24,9 +24,9 @@
 //! `Object.create(undefined)` / `Object.setPrototypeOf(x, undefined)` then hit
 //! the spec TypeError. Fix: recognize constructor-cased bound-native exports
 //! (leading uppercase, not flagged non-constructable) and let the
-//! synthetic-class path materialize a stable `.prototype` object — while
-//! keeping non-constructor exports (`fs.readFile`, …) at `prototype ===
-//! undefined`, matching Node's built-in non-constructor functions.
+//! synthetic-class path materialize a stable `.prototype` object. Node also
+//! exposes a real prototype on callback-style JavaScript wrapper exports such
+//! as `fs.readFile`, despite the lower-case export name.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -97,13 +97,13 @@ const prototype: any = { child() { return null; } };
 Object.setPrototypeOf(prototype, (EventEmitter as any).prototype);
 console.log("setproto:", true);
 
-// Non-constructor native exports keep prototype === undefined (no spurious
-// synthesis), matching Node's built-in non-constructor functions.
-console.log("nonctor:", (fs as any).readFile.prototype === undefined);
+// Node's callback-style JavaScript wrapper exports also expose a prototype.
+const readFileProto = (fs as any).readFile.prototype;
+console.log("readFile:", typeof readFileProto === "object" && readFileProto !== null);
 "#,
     );
     assert_eq!(
         stdout,
-        "rs: true\nws: true\nee: true\ncreate: true\nchain: true\nsetproto: true\nnonctor: true\n"
+        "rs: true\nws: true\nee: true\ncreate: true\nchain: true\nsetproto: true\nreadFile: true\n"
     );
 }

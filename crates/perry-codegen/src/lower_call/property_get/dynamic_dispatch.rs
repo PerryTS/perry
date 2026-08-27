@@ -12,6 +12,10 @@ use crate::nanbox::double_literal;
 use crate::type_analysis::receiver_class_name;
 use crate::types::{DOUBLE, I1, I32, I64};
 
+#[path = "dynamic_dispatch_tower.rs"]
+mod tower;
+use tower::{emit_tower_pshape_call, tower_pshape_route};
+
 // Reach the override-emit helpers (`pub(super)` of `lower_call`) by their
 // canonical crate-relative path.
 use crate::lower_call::method_override::{
@@ -98,149 +102,6 @@ struct TowerPshapeRoute {
     keys_global: String,
 }
 
-/// May this dispatch-tower case take the proven-`this` clone?
-///
-/// Three conditions, and only the FIRST two are about correctness of the
-/// *target*; the layout proof itself is emitted, not decided here.
-///
-/// 1. `owner` is `Some` — the receiver class of this case declares `property`
-///    itself, so the clone's `this` is exactly the class it was compiled for.
-/// 2. a clone was actually emitted for that pair (`pshape_methods`, already
-///    pruned of symbol collisions by `prune_colliding_clones`, #6927).
-/// 3. routing pays (`pshape_tower_routable`) — this site, unlike the two
-///    guard-dominated ones, emits its own shape re-check and must earn it.
-fn tower_pshape_route(
-    ctx: &FnCtx<'_>,
-    owner: Option<&str>,
-    property: &str,
-    fname: &str,
-    args: &[Expr],
-) -> Option<TowerPshapeRoute> {
-    let owner = owner?;
-    // Carried forward from both existing routing sites (the #1787
-    // static-receiver bug): a `perry_static_*` target needs
-    // `js_class_static_method_call`, not a plain `call double`, and no
-    // proven-`this` clone is ever emitted for one.
-    if fname.starts_with("perry_static_") {
-        return None;
-    }
-    let key = (owner.to_string(), property.to_string());
-    if !ctx.pshape_methods.contains_key(&key) || !ctx.pshape_tower_routable.contains(&key) {
-        return None;
-    }
-    let keys_global = ctx.class_keys_globals.get(owner)?.clone();
-    let index_params = ctx.nonnegative_index_methods.get(&key);
-    let index_proven = index_params.is_some_and(|params| {
-        let Some(method) = ctx
-            .classes
-            .get(owner)
-            .and_then(|class| class.methods.iter().find(|method| method.name == property))
-        else {
-            return false;
-        };
-        args.len() == method.params.len()
-            && params.iter().all(|id| {
-                method
-                    .params
-                    .iter()
-                    .position(|param| param.id == *id)
-                    .and_then(|position| args.get(position))
-                    .is_some_and(|arg| {
-                        crate::expr::numeric_index_has_integer_array_index_proof(ctx, arg)
-                    })
-            })
-    });
-    let pshape_fn = crate::collectors::pshape_method_name(fname);
-    let (clone_fn, generic_fn) = if index_proven {
-        let params = index_params.expect("proved indexed tower method remains registered");
-        (
-            crate::codegen::nonnegative_index_method_name(&pshape_fn, params),
-            crate::codegen::nonnegative_index_method_name(fname, params),
-        )
-    } else {
-        (pshape_fn, fname.to_string())
-    };
-    Some(TowerPshapeRoute {
-        clone_fn,
-        generic_fn,
-        keys_global,
-    })
-}
-
-/// Emit the keys-guarded diamond for one dispatch-tower case: inline shape
-/// re-check → `{public}$pshape` on a match, the unchanged public body
-/// otherwise.
-///
-/// The tower's case block proves `class_id`, which is NOT enough for the
-/// clone's bare fixed-slot accesses — `delete inst.f` compacts the packed slots
-/// while preserving `class_id`. The keys token is what closes that gap, and it
-/// has to be checked *dynamically*: the `delete` shape barrier that stands the
-/// whole analysis down is module-scoped while a receiver can be deleted from
-/// through an alias in another module (#7143), so a static proof would be
-/// exactly the wrong instrument here.
-///
-/// GC ordering invariant: `recv_handle` is the raw pointer masked out of the
-/// receiver in `idispatch.tower`, and the header loads below dereference it.
-/// That is only safe because **nothing between the mask and this point is a
-/// safepoint**: the only allocating thing a case block can emit before the call
-/// is the rest-array bundling (`js_array_alloc` / `js_array_push_f64`), and a
-/// rest-bearing method can never reach here — `collectors/proven_this.rs`
-/// rejects any method with a rest or synthesized-`arguments` parameter, so no
-/// clone exists for one and `tower_pshape_route` returns `None`. The non-rest
-/// preamble emits no instructions at all (already-lowered SSA values plus
-/// `undefined` literals). If a future change makes the case preamble allocate,
-/// this dereference must move above it — the `GC_FLAG_FORWARDED` conjunct would
-/// degrade a moved receiver to the generic path rather than misread it, but
-/// relying on that instead of on the ordering would be luck, not a proof.
-fn emit_tower_pshape_call(
-    ctx: &mut FnCtx<'_>,
-    case_no: usize,
-    route: &TowerPshapeRoute,
-    recv_handle: &str,
-    case_arg_slices: &[(crate::types::LlvmType, &str)],
-) -> String {
-    // The global is read ONCE per function (entry-hoisted); the case block only
-    // reloads it from the stack slot, which mem2reg folds away.
-    let shape_global =
-        crate::typed_shape::shape_id_global_name_from_keys_global(&route.keys_global);
-    let shape_slot = ctx.func.entry_init_load_global(&shape_global, I32);
-    let expected_shape_id = ctx.block().load(I32, &shape_slot);
-
-    let proven_idx = ctx.new_block(&format!("idispatch.case{}.pshape", case_no));
-    let generic_idx = ctx.new_block(&format!("idispatch.case{}.generic", case_no));
-    let join_idx = ctx.new_block(&format!("idispatch.case{}.join", case_no));
-    let proven_label = ctx.block_label(proven_idx);
-    let generic_label = ctx.block_label(generic_idx);
-    let join_label = ctx.block_label(join_idx);
-
-    crate::expr::class_field_inline_guard::emit_proven_shape_recheck(
-        ctx,
-        recv_handle,
-        &expected_shape_id,
-        &proven_label,
-        &generic_label,
-    );
-
-    ctx.current_block = proven_idx;
-    let v_proven = ctx.block().call(DOUBLE, &route.clone_fn, case_arg_slices);
-    let proven_end = ctx.block().label.clone();
-    ctx.block().br(&join_label);
-
-    ctx.current_block = generic_idx;
-    let v_generic = ctx.block().call(DOUBLE, &route.generic_fn, case_arg_slices);
-    let generic_end = ctx.block().label.clone();
-    ctx.block().br(&join_label);
-
-    ctx.current_block = join_idx;
-    ctx.block().phi(
-        DOUBLE,
-        &[
-            (v_proven.as_str(), proven_end.as_str()),
-            (v_generic.as_str(), generic_end.as_str()),
-        ],
-    )
-}
-
 /// Build the exact direct-call ABI for one concrete method implementation.
 /// Virtual towers cannot share this vector: sibling overrides may disagree on
 /// declared arity, user rest, or the compiler-synthesized `arguments` slot.
@@ -258,6 +119,7 @@ fn build_direct_method_args(
     has_rest: bool,
     has_synthetic_arguments: bool,
     has_user_rest: bool,
+    arguments_length_only: bool,
     declared_count: usize,
     undefined_lit: &str,
 ) -> Vec<String> {
@@ -288,7 +150,10 @@ fn build_direct_method_args(
         if has_user_rest || !has_synthetic_arguments {
             bundles.push((fixed_user, false));
         }
-        if has_synthetic_arguments {
+        if has_synthetic_arguments && arguments_length_only {
+            debug_assert!(!has_user_rest);
+            direct_args.push(double_literal(user_args.len() as f64));
+        } else if has_synthetic_arguments {
             bundles.push((0, true));
         }
         for (from, mark) in bundles {
@@ -814,6 +679,7 @@ pub(crate) fn try_lower_instance_method_call(
                         impl_has_rest,
                         impl_has_synth,
                         impl_has_user_rest,
+                        false,
                         impl_decl_count,
                         &undefined_lit,
                     );
@@ -1055,6 +921,10 @@ pub(crate) fn try_lower_instance_method_call(
             // read off the body the fallback call reaches.
             let fallback_has_user_rest =
                 crate::codegen::arguments::method_has_user_rest(ctx, &fallback_key.0, property);
+            let fallback_arguments_length_only = matches!(
+                ctx.method_arguments_length_only.get(&fallback_key),
+                Some(&true)
+            );
             // Keep the maximum declared arity only for selecting safe
             // shape-guarded/typed fast-path arms below. Direct calls no longer
             // share an ABI vector: the fallback and each virtual override are
@@ -1115,18 +985,19 @@ pub(crate) fn try_lower_instance_method_call(
                 )?));
             }
             let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let fallback_args = build_direct_method_args(
+            let direct_args = build_direct_method_args(
                 ctx,
                 &recv_box,
                 &fallback_user_args,
                 fallback_has_rest,
                 fallback_has_synthetic_arguments,
                 fallback_has_user_rest,
+                fallback_arguments_length_only,
                 fallback_decl_count,
                 &undefined_lit,
             );
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
-                fallback_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
+                direct_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
             // Arms for the shape-guarded direct call: every class in
             // `class_name`'s subclass closure, paired with the body `property`
@@ -1216,8 +1087,25 @@ pub(crate) fn try_lower_instance_method_call(
             if subclass_arms.len() > MAX_SUBCLASS_DISPATCH_ARMS {
                 subclass_arms.clear();
             }
+            // This ABI belongs to one producer-proved body. A subclass arm may
+            // resolve to a different implementation, so let it take the raw
+            // dynamic fallback instead of sharing the scalar-count vector.
+            if fallback_arguments_length_only {
+                subclass_arms.clear();
+            }
 
-            if !fallback_has_rest {
+            // A synthesized `arguments` slot is rest-shaped in the HIR, but
+            // it does not prevent a same-class guarded direct call.  The
+            // concrete ABI vector above already contains the correctly marked
+            // argument bundle, while the guard's miss path deliberately takes
+            // the original flat user arguments through
+            // `js_native_call_method_by_id` so an own override receives normal
+            // JavaScript call arguments.  Keep genuine user-rest methods and
+            // all mixed user-rest + `arguments` methods on the established
+            // dynamic path; their direct-call specialization remains a
+            // separate ABI problem.
+            let synth_arguments_only = fallback_has_synthetic_arguments && !fallback_has_user_rest;
+            if !fallback_has_rest || synth_arguments_only {
                 let typed_method_key = (class_name.clone(), property.to_string());
                 let typed_formal_count = ctx
                     .method_param_counts
@@ -1471,6 +1359,11 @@ pub(crate) fn try_lower_instance_method_call(
                     .unwrap_or(false);
                 if ptr_shape_receiver && !fallback_fn.starts_with("perry_static_") {
                     ctx.note_ptr_shape_consumed(object, "ptr_shape_method");
+                    if fallback_arguments_length_only {
+                        let target =
+                            crate::codegen::arguments::arguments_length_method_name(&fallback_fn);
+                        return Ok(Some(ctx.block().call(DOUBLE, &target, &arg_slices)));
+                    }
                     // Representation-selection Phase 5a: the proven-`this`
                     // clone, when one was emitted. Hoisted above the
                     // typed-receiver branch because BOTH exits of this block
@@ -1617,27 +1510,76 @@ pub(crate) fn try_lower_instance_method_call(
                     );
                     return Ok(Some(direct));
                 }
+                let arguments_length_direct_fn = fallback_arguments_length_only
+                    .then(|| crate::codegen::arguments::arguments_length_method_name(&fallback_fn));
                 if let Some(guarded) = emit_guarded_direct_method_call(
                     ctx,
                     &recv_box,
                     &class_name,
                     property,
                     &fallback_fn,
+                    arguments_length_direct_fn.as_deref(),
                     &arg_slices,
                     args,
                     &fallback_user_args,
-                    nonnegative_index_direct_name.as_deref(),
-                    typed_direct,
-                    typed_receiver_direct,
-                    typed_i32_direct,
-                    typed_i1_direct,
-                    typed_string_direct,
+                    if fallback_arguments_length_only {
+                        None
+                    } else {
+                        nonnegative_index_direct_name.as_deref()
+                    },
+                    if fallback_arguments_length_only {
+                        None
+                    } else {
+                        typed_direct
+                    },
+                    if fallback_arguments_length_only {
+                        None
+                    } else {
+                        typed_receiver_direct
+                    },
+                    if fallback_arguments_length_only {
+                        None
+                    } else {
+                        typed_i32_direct
+                    },
+                    if fallback_arguments_length_only {
+                        None
+                    } else {
+                        typed_i1_direct
+                    },
+                    if fallback_arguments_length_only {
+                        None
+                    } else {
+                        typed_string_direct
+                    },
                     shape_only_guard,
                     &subclass_arms,
                 ) {
                     return Ok(Some(guarded));
                 }
             }
+
+            // No direct/proven route consumed the scalar ABI. Materialize the
+            // marked public Arguments bundle only for the established
+            // own-override/static paths below.
+            drop(arg_slices);
+            let fallback_args = if fallback_arguments_length_only {
+                build_direct_method_args(
+                    ctx,
+                    &recv_box,
+                    &fallback_user_args,
+                    fallback_has_rest,
+                    fallback_has_synthetic_arguments,
+                    fallback_has_user_rest,
+                    false,
+                    fallback_decl_count,
+                    &undefined_lit,
+                )
+            } else {
+                direct_args
+            };
+            let arg_slices: Vec<(crate::types::LlvmType, &str)> =
+                fallback_args.iter().map(|s| (DOUBLE, s.as_str())).collect();
 
             if overrides.is_empty() {
                 // Issue #620: before falling through to the static method,
@@ -1771,6 +1713,7 @@ pub(crate) fn try_lower_instance_method_call(
                     has_rest,
                     has_synthetic_arguments,
                     has_user_rest,
+                    false,
                     declared_count,
                     &undefined_lit,
                 );

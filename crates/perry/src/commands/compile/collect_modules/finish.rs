@@ -49,6 +49,8 @@ pub(crate) fn collect_module_finish(
         });
         let mut extra_methods: std::collections::HashMap<(String, String), MethodCandidate> =
             std::collections::HashMap::new();
+        let mut extra_functions: std::collections::HashMap<(String, String), FunctionCandidate> =
+            std::collections::HashMap::new();
         if std::env::var("PERRY_INLINE_DEBUG").is_ok() {
             eprintln!(
                 "[INLINE-DRIVER] processing {}: prior modules={:?}",
@@ -70,7 +72,7 @@ pub(crate) fn collect_module_finish(
             );
         }
         if enable_cross_module_inline {
-            for prior_module in ctx.native_modules.values() {
+            for (prior_path, prior_module) in &ctx.native_modules {
                 // The strict harvester rejects ExternFuncRef-using methods.
                 // The loose variant records each required extern name;
                 // `inline_functions` filters by destination imports.
@@ -83,6 +85,88 @@ pub(crate) fn collect_module_finish(
                 }
                 for (k, v) in gather_cross_module_methods(prior_module) {
                     extra_methods.entry(k).or_insert(v);
+                }
+                let source_path = prior_path.to_string_lossy().into_owned();
+                for (exported, candidate) in gather_cross_module_functions(prior_module) {
+                    extra_functions
+                        .entry((source_path.clone(), exported))
+                        .or_insert(candidate);
+                }
+            }
+
+            // Publish candidates through ordinary re-export barrels. A HIR
+            // ReExport/ExportAll edge is not also an Import entry, so resolve
+            // its source with the compile driver's canonical resolver (the
+            // same path identity used by module collection and codegen).
+            // A bounded fixpoint mirrors ESM's transitive named/export-star
+            // surface without weakening identity matching to a bare name.
+            let reexport_surfaces: Vec<_> = ctx
+                .native_modules
+                .iter()
+                .map(|(path, module)| {
+                    (
+                        path.clone(),
+                        path.to_string_lossy().into_owned(),
+                        module.exports.clone(),
+                    )
+                })
+                .collect();
+            for _ in 0..=reexport_surfaces.len() {
+                let mut additions = Vec::new();
+                for (prior_path, barrel_path, exports) in &reexport_surfaces {
+                    for export in exports {
+                        match export {
+                            perry_hir::Export::ReExport {
+                                source,
+                                imported,
+                                exported,
+                            } => {
+                                let Some((resolved, perry_hir::ModuleKind::NativeCompiled)) =
+                                    cached_resolve_import(source, prior_path, ctx)
+                                else {
+                                    continue;
+                                };
+                                let resolved = resolved.to_string_lossy().into_owned();
+                                if let Some(candidate) =
+                                    extra_functions.get(&(resolved, imported.clone()))
+                                {
+                                    additions.push((
+                                        (barrel_path.clone(), exported.clone()),
+                                        candidate.clone(),
+                                    ));
+                                }
+                            }
+                            perry_hir::Export::ExportAll { source } => {
+                                let Some((resolved, perry_hir::ModuleKind::NativeCompiled)) =
+                                    cached_resolve_import(source, prior_path, ctx)
+                                else {
+                                    continue;
+                                };
+                                let resolved = resolved.to_string_lossy().into_owned();
+                                for ((candidate_path, exported), candidate) in &extra_functions {
+                                    if candidate_path == &resolved && exported != "default" {
+                                        additions.push((
+                                            (barrel_path.clone(), exported.clone()),
+                                            candidate.clone(),
+                                        ));
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                let mut changed = false;
+                for (key, candidate) in additions {
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        extra_functions.entry(key)
+                    {
+                        entry.insert(candidate);
+                        changed = true;
+                    }
+                }
+                if !changed {
+                    break;
                 }
             }
         }
@@ -151,6 +235,7 @@ pub(crate) fn collect_module_finish(
         inline_functions(
             &mut hir_module,
             &extra_methods,
+            &extra_functions,
             &extra_class_fields,
             &extra_anon_classes,
         );

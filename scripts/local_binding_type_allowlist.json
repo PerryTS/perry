@@ -178,6 +178,14 @@
       "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
     },
     {
+      "path": "crates/perry-codegen/src/expr/property_get.rs",
+      "function": "lower",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The hint only recognizes the compiler-private synthetic arguments-length marker type; that binding exists solely in direct-call-only clones whose caller materialized the boxed actual-argument count, and the public method retains ordinary Arguments semantics."
+    },
+    {
       "path": "crates/perry-codegen/src/expr/property_set.rs",
       "function": "guarded_declared_class_store_candidate",
       "access": "local_type_hint",

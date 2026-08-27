@@ -127,6 +127,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
             }
         }
+        // Direct-call-only synthetic `arguments` clone: producer analysis
+        // proved that this exact `.length` form is the binding's sole use, and
+        // the caller placed the already boxed actual-argument count in its
+        // trailing slot. The public method retains normal Arguments semantics.
+        if property == "length"
+            && matches!(
+                object.as_ref(),
+                Expr::LocalGet(id)
+                    if matches!(
+                        ctx.local_type_hint(id),
+                        Some(perry_hir::types::Type::Named(name))
+                            if name == crate::codegen::arguments::SYNTHETIC_ARGUMENTS_LENGTH_TYPE
+                    )
+            )
+        {
+            return lower_expr(ctx, object);
+        }
         if property == "buffer" {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if ctx.buffer_view_slots.contains_key(id) {

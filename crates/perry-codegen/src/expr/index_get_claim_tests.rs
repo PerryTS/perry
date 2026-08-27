@@ -5,12 +5,14 @@
 //! must keep the guarded array tier whose receiver checks make that claim safe.
 
 use crate::temp_root_coverage::main_ir_for as ir_for;
+use crate::{compile_module, CompileOptions};
 use perry_hir::types::Type;
-use perry_hir::{BinaryOp, Expr, Stmt};
+use perry_hir::{BinaryOp, Expr, Function, Module, Param, Stmt};
 
 const ITEMS: u32 = 1;
 const RESULT: u32 = 2;
 const SYMBOL: u32 = 3;
+const KEY: u32 = 4;
 
 fn declared_array_read_ir(name: &str, index: Expr) -> String {
     ir_for(
@@ -410,5 +412,88 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
     assert!(
         ir.contains("call double @js_array_get_index_or_string("),
         "non-index keys must keep the complete key route:\n{ir}"
+    );
+}
+
+fn dynamic_key_read_ir(name: &str, key_type: Type) -> String {
+    let param = |id, name: &str, ty| Param {
+        id,
+        name: name.to_string(),
+        ty,
+        default: None,
+        decorators: Vec::new(),
+        is_rest: false,
+        arguments_object: None,
+    };
+    let mut module = Module::new(name);
+    module.functions.push(Function {
+        id: 10,
+        name: "read".to_string(),
+        type_params: Vec::new(),
+        params: vec![
+            param(ITEMS, "items", Type::Array(Box::new(Type::Any))),
+            param(KEY, "key", key_type),
+        ],
+        return_type: Type::Any,
+        body: vec![Stmt::Return(Some(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(ITEMS)),
+            index: Box::new(Expr::LocalGet(KEY)),
+        }))],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    String::from_utf8(
+        compile_module(
+            &module,
+            CompileOptions {
+                emit_ir_only: true,
+                ..Default::default()
+            },
+        )
+        .expect("dynamic key fixture compiles"),
+    )
+    .expect("LLVM IR is UTF-8")
+}
+
+#[test]
+fn dynamic_number_key_splits_canonical_indices_from_exact_property_keys() {
+    // A number parameter has no compile-time integral/range proof.
+    let ir = dynamic_key_read_ir("declared_array_dynamic_number_key.ts", Type::Number);
+
+    assert!(
+        ir.contains("aidx.canonical") && ir.contains("aidx.dynamic.guard.deref"),
+        "the runtime-proven canonical-index guarded tier was not emitted:\n{ir}"
+    );
+    assert!(
+        ir.contains("aidx.runtime_key")
+            && ir.contains("call double @js_array_get_index_or_string("),
+        "the exact noncanonical property-key fallback disappeared:\n{ir}"
+    );
+    assert!(
+        ir.contains("select i1") && ir.contains("fptosi double"),
+        "the poison-safe range sanitization before fptosi was not emitted:\n{ir}"
+    );
+}
+
+#[test]
+fn generic_key_recovers_numeric_elements_without_losing_claim_safe_fallback() {
+    let ir = dynamic_key_read_ir("declared_array_generic_key.ts", Type::Any);
+
+    assert!(
+        ir.contains("aidx.canonical") && ir.contains("aidx.dynamic.guard.deref"),
+        "the generic key's runtime-proven numeric tier was not emitted:\n{ir}"
+    );
+    assert!(
+        ir.contains("aidx.runtime_key")
+            && ir.contains("aidxkey.sso")
+            && ir.contains("call double @js_string_index_get_boxed(")
+            && ir.contains("call double @js_array_get_index_or_string("),
+        "the generic key lost its exact boxed-receiver fallback:\n{ir}"
     );
 }

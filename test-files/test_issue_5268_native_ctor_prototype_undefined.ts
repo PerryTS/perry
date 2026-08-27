@@ -42,6 +42,10 @@ const prototype: any = { child() { return null; } };
 Object.setPrototypeOf(prototype, (EventEmitter as any).prototype);
 console.log("setPrototypeOf(obj, EventEmitter.prototype) ok:", true);
 
-// 4. Non-constructor native exports keep `prototype === undefined`, matching
-//    Node's built-in non-constructor functions (no spurious synthesis).
-console.log("fs.readFile.prototype is undefined:", (fs as any).readFile.prototype === undefined);
+// 4. Node also exposes a real prototype on callback-style JavaScript wrapper
+//    exports such as fs.readFile, despite the lower-case export name.
+const readFileProto = (fs as any).readFile.prototype;
+console.log(
+  "fs.readFile.prototype is object:",
+  typeof readFileProto === "object" && readFileProto !== null,
+);

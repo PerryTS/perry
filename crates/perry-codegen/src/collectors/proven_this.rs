@@ -815,15 +815,16 @@ mod tests {
         // Naming + emission + the two proven call sites. `string_pool.rs`
         // (which emits `js_register_class_method`) is deliberately ABSENT:
         // the vtable must only ever hold the public symbol.
-        let allowed: [&str; 8] = [
-            "collectors/proven_this.rs",                   // this test
-            "collectors/proven_this_routing_tests.rs",     // routing IR ratchet
-            "codegen/guarded_undefined_method_tests.rs",   // wrapper IR assertions
-            "codegen/typed_abi.rs",                        // name helper
-            "codegen/method.rs",                           // clone emission
-            "codegen/artifacts.rs",                        // emission driver
-            "lower_call/method_override.rs",               // guarded fast-arm routing
-            "lower_call/property_get/dynamic_dispatch.rs", // guard-free routing
+        let allowed: [&str; 9] = [
+            "collectors/proven_this.rs",                         // this test
+            "collectors/proven_this_routing_tests.rs",           // routing IR ratchet
+            "codegen/guarded_undefined_method_tests.rs",         // wrapper IR assertions
+            "codegen/typed_abi.rs",                              // name helper
+            "codegen/method.rs",                                 // clone emission
+            "codegen/artifacts.rs",                              // emission driver
+            "lower_call/method_override.rs",                     // guarded fast-arm routing
+            "lower_call/property_get/dynamic_dispatch.rs",       // guard-free routing
+            "lower_call/property_get/dynamic_dispatch_tower.rs", // its tower-of-pshape helpers
         ];
         let mut offenders: Vec<String> = Vec::new();
         fn visit(

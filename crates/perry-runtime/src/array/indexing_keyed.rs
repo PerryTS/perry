@@ -360,7 +360,12 @@ pub extern "C" fn js_array_set_index_or_string_strict(
         // store, so ToString it and re-parse.
         let index = canonical_index_of_set_key(idx);
         if let Some(i) = index {
-            array_strict_index_write_guard(arr, i);
+            // The non-strict dispatcher would parse the same key again and
+            // then enter the extend helper after a separate strict guard. The
+            // canonical index is already proved here, so use the fused strict
+            // element path and share one receiver resolution across policy
+            // and store.
+            return js_array_set_f64_extend_strict(arr, i, value);
         }
     }
     js_array_set_index_or_string(arr, idx, value)

@@ -7,9 +7,9 @@
 use anyhow::{anyhow, Result};
 use perry_hir::ModuleKind;
 use perry_transform::{
-    gather_cross_module_anon_classes, gather_cross_module_methods,
+    gather_cross_module_anon_classes, gather_cross_module_functions, gather_cross_module_methods,
     gather_cross_module_methods_with_extern_imports, inline_finally_into_returns, inline_functions,
-    transform_async_to_generator, transform_generators, MethodCandidate,
+    transform_async_to_generator, transform_generators, FunctionCandidate, MethodCandidate,
 };
 use std::collections::HashSet;
 use std::fs;

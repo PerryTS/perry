@@ -358,6 +358,26 @@ fn strict_eq_against_a_string_literal_emits_the_inline_dispatch_and_no_js_eq_cal
         !ir.contains(JS_EQ_CALL),
         "js_eq call survived the inline literal dispatch:\n{ir}"
     );
+    assert!(
+        ir.contains("streqlit.bm"),
+        "three-byte literal did not compare its remaining middle byte inline:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_string_equals("),
+        "three-byte literal retained the full string-equality helper:\n{ir}"
+    );
+}
+
+#[test]
+fn longer_string_literal_keeps_the_full_content_fallback() {
+    let ir = cmp_ir(
+        "streq_long_lit",
+        CompareOp::Eq,
+        Expr::LocalGet(X),
+        Expr::String("destroy".to_string()),
+    );
+    assert!(ir.contains("streqlit.slow"), "{ir}");
+    assert!(ir.contains("call i32 @js_string_equals("), "{ir}");
 }
 
 #[test]

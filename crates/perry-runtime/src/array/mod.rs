@@ -19,6 +19,7 @@ mod iter_object;
 mod iterator;
 mod join;
 mod jsvalue_api;
+mod numeric_range;
 mod prototype_addr;
 mod push_pop;
 mod reduce_right;
@@ -130,18 +131,17 @@ pub(crate) use self::indexing::{
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
     js_array_get_index_or_string, js_array_get_length, js_array_length,
-    js_array_numeric_get_f64_unboxed, js_array_numeric_range_add, js_array_numeric_range_add_len,
-    js_array_numeric_set_f64_unboxed, js_array_set_f64, js_array_set_f64_extend,
-    js_array_set_f64_extend_strict, js_array_set_f64_unchecked, js_array_set_index_or_string,
-    js_array_set_index_or_string_strict, js_array_set_string_key,
+    js_array_numeric_get_f64_unboxed, js_array_numeric_set_f64_unboxed, js_array_set_f64,
+    js_array_set_f64_extend, js_array_set_f64_extend_strict, js_array_set_f64_unchecked,
+    js_array_set_index_or_string, js_array_set_index_or_string_strict, js_array_set_string_key,
 };
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
 pub use self::iter_methods::{
     js_array_at, js_array_every, js_array_filter, js_array_find, js_array_findIndex,
     js_array_find_last, js_array_find_last_index, js_array_flatMap, js_array_forEach, js_array_map,
-    js_array_map_discard, js_array_reduce, js_array_some, js_array_to_locale_string,
-    js_validate_array_callback, js_validate_array_map_callback,
+    js_array_map_discard, js_array_reduce, js_array_some, js_array_some_captureless,
+    js_array_to_locale_string, js_validate_array_callback, js_validate_array_map_callback,
 };
 pub use self::iter_object::{
     arguments_values_iter, array_entries_iter, array_keys_iter, array_values_iter,
@@ -154,6 +154,7 @@ pub use self::iterator::{
     js_array_spread_append, js_for_of_to_array, js_get_async_iterator, js_iterator_to_array,
 };
 pub use self::join::{js_array_join, js_array_join_value};
+pub use self::numeric_range::{js_array_numeric_range_add, js_array_numeric_range_add_len};
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
     array_prototype_addr, object_prototype_addr, object_prototype_addr_matches,
@@ -222,15 +223,14 @@ pub(crate) use self::header::{
     array_named_property_set, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
     array_numeric_raw_f64_set_inbounds, array_object_flags, array_object_flags_from_tag,
     array_object_flags_resolved, array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
-    buffer_receiver_as_uint8_typed_array, canonicalize_array_numeric_store_value,
-    canonicalize_array_numeric_store_value_from_flags, clean_arr_ptr, clean_arr_ptr_mut,
+    buffer_receiver_as_uint8_typed_array, clean_arr_ptr, clean_arr_ptr_mut,
     clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
     mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
     note_array_slot, note_array_slot_layout_only, note_array_slot_resolved_flags,
     rebuild_array_layout, rebuild_array_layout_exact, refresh_array_numeric_layout,
     replay_array_growth_write_barriers, set_array_numeric_layout, store_array_slot,
-    transfer_array_numeric_layout, typed_array_receiver, value_bits_to_number, NumericArrayLayout,
-    MIN_ARRAY_CAPACITY,
+    store_array_slot_resolved, transfer_array_numeric_layout, typed_array_receiver,
+    value_bits_to_number, NumericArrayLayout, MIN_ARRAY_CAPACITY,
 };
 
 // Sole caller is the regex-engine-gated `regex::exec_array`, so the helper and

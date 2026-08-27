@@ -1088,6 +1088,7 @@ pub(super) fn compile_closure(
         method_param_counts: &cross_module.method_param_counts,
         method_has_rest: &cross_module.method_has_rest,
         method_has_synthetic_arguments: &cross_module.method_has_synthetic_arguments,
+        method_arguments_length_only: &cross_module.method_arguments_length_only,
         imported_func_return_types: &cross_module.imported_func_return_types,
         ffi_signatures: &cross_module.ffi_signatures,
         ffi_aliases: &cross_module.ffi_aliases,

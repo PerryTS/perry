@@ -819,3 +819,44 @@ fn generic_non_length_read_keeps_the_whole_tower() {
         "a non-`length` SSO read must still call the by-name helper:\n{ir}"
     );
 }
+
+/// A dynamically typed `.size` read must recognize native Map/Set receivers
+/// by their live GC kinds before entering the object-only PIC. This covers
+/// nested structural reads such as `this.ctx.hooks.size` without trusting an
+/// erased TypeScript annotation as a native-layout proof.
+#[test]
+fn generic_size_read_serves_native_collections_inline() {
+    let ir = emit_read("size");
+    let collection = ir
+        .find("\npget.collection_size")
+        .unwrap_or_else(|| panic!("expected a native collection size block:\n{ir}"));
+    let collection_body = &ir[collection..];
+    let collection_end = collection_body[1..]
+        .find("\n\n")
+        .map(|i| i + 1)
+        .unwrap_or(collection_body.len());
+    let collection_body = &collection_body[..collection_end];
+
+    assert!(
+        ir.contains("icmp eq i8") && ir.contains(", 8") && ir.contains(", 12"),
+        "the collection arm must be guarded by GC_TYPE_MAP and GC_TYPE_SET:\n{ir}"
+    );
+    assert!(
+        collection_body.contains("load i32") && collection_body.contains("uitofp i32"),
+        "the branded collection arm must load the shared leading size field inline:\n\
+         {collection_body}"
+    );
+    assert!(
+        ir.contains("@perry_ic_") && ir.contains("js_object_get_field_ic_miss"),
+        "non-collection receivers must retain the generic property tower:\n{ir}"
+    );
+}
+
+#[test]
+fn generic_non_size_read_has_no_collection_layout_load() {
+    let ir = emit_read("other");
+    assert!(
+        !ir.contains("pget.collection_size") && !ir.contains("pic.recv_object_check"),
+        "only `.size` may grow the native collection fast path:\n{ir}"
+    );
+}

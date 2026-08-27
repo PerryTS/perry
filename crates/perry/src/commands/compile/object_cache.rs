@@ -615,6 +615,14 @@ fn compute_object_cache_key_with_env(
                     .collect::<Vec<_>>()
                     .join(","),
             );
+            buf.push_str(":method_arguments_length_only=");
+            buf.push_str(
+                &c.method_arguments_length_only
+                    .iter()
+                    .map(|b| if *b { "1" } else { "0" })
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
             buf.push_str(":static_fields=");
             buf.push_str(&c.static_field_names.join(","));
             buf.push_str(":static_methods=");

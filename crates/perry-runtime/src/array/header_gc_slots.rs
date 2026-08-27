@@ -64,6 +64,40 @@ pub(crate) unsafe fn note_array_slot_resolved_flags(
     crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
 }
 
+/// Store and record one element on an array whose live head and header flags
+/// the caller has already resolved.
+///
+/// The ordinary [`note_array_slot`] entry point must rediscover the numeric
+/// layout through `clean_arr_ptr`. Hot array writers have already paid that
+/// ownership/forwarding proof and have the same header word in hand for their
+/// frozen/descriptor checks. Reusing it here avoids reclassifying the same
+/// pointer while preserving the numeric-layout note, GC layout note, and write
+/// barrier as one indivisible store protocol.
+///
+/// # Safety
+///
+/// `arr` must be the non-null result of `clean_arr_ptr_mut`, and `flags` must
+/// have been read from that exact live head with no intervening Perry
+/// allocation or safepoint.
+#[inline]
+pub(crate) unsafe fn store_array_slot_resolved(
+    arr: *mut ArrayHeader,
+    index: usize,
+    value: f64,
+    flags: u16,
+) -> u64 {
+    let value = canonicalize_array_numeric_store_value_from_flags(flags, value);
+    let value_bits = value.to_bits();
+    // GC_STORE_AUDIT(BARRIERED): the layout note and runtime_write_barrier_slot
+    // below cover this resolved-head slot write.
+    std::ptr::write(array_elements_ptr(arr).add(index), value_bits);
+    note_array_numeric_index_write(arr, index, value_bits);
+    crate::gc::layout_note_slot(arr as usize, index, value_bits);
+    let slot = array_elements_ptr(arr).add(index) as usize;
+    crate::gc::runtime_write_barrier_slot(arr as usize, slot, value_bits);
+    value_bits
+}
+
 #[inline]
 pub(crate) unsafe fn note_array_slot_layout_only(
     arr: *mut ArrayHeader,
