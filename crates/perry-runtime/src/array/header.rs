@@ -638,6 +638,41 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
     if !crate::value::addr_class::is_plausible_heap_addr(cleaned as usize) {
         return std::ptr::null();
     }
+    // Fast lane for the overwhelmingly common receiver: a live plain array on
+    // a page the arena owns. The tracked-header classifier below re-derives
+    // page ownership, type-table membership, size and storage consistency on
+    // every call, and every runtime array entry point (push, pop, length,
+    // some, length assignment, …) funnels through here — it was the largest
+    // runtime leaf on the ECS command path. The cached generation classifier
+    // is the same page-ownership answer the write barrier relies on; with an
+    // in-band, aligned address on an owned page, the header's type, forwarding
+    // and arena bits settle the ordinary case. Forwarded stubs, lazy arrays,
+    // malloc-backed objects, registered buffers/typed arrays and any
+    // inconsistent header keep the full resolver.
+    {
+        let addr = cleaned as usize;
+        if addr >= crate::gc::GC_HEADER_SIZE
+            && addr % std::mem::align_of::<crate::gc::GcHeader>() == 0
+            && !matches!(
+                crate::arena::classify_heap_generation(addr),
+                crate::arena::HeapGeneration::Unknown
+            )
+        {
+            // SAFETY: the address is on an arena page this process owns and
+            // is header-aligned; the header word precedes every arena block.
+            let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            let (obj_type, gc_flags) = unsafe { ((*header).obj_type, (*header).gc_flags) };
+            if obj_type == crate::gc::GC_TYPE_ARRAY
+                && gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                && gc_flags & crate::gc::GC_FLAG_ARENA != 0
+            {
+                let hdr = unsafe { &*cleaned };
+                if hdr.length <= hdr.capacity && hdr.length <= 100_000_000 {
+                    return cleaned;
+                }
+            }
+        }
+    }
     // Issue #233: follow GC_FLAG_FORWARDED forwarding chains. When
     // an array grows (js_array_grow) we install a forwarding pointer
     // at the OLD location so any stale reference — e.g. an async

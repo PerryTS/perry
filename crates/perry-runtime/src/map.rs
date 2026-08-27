@@ -1943,13 +1943,13 @@ unsafe fn heal_forwarded_array_value(
     if raw < crate::gc::GC_HEADER_SIZE
         || raw % std::mem::align_of::<crate::gc::GcHeader>() != 0
         || !crate::value::addr_class::is_plausible_heap_addr(raw)
-        || matches!(
-            crate::arena::classify_heap_generation(raw),
-            crate::arena::HeapGeneration::Unknown
-        )
     {
         return value;
     }
+    // A POINTER_TAG value in a Map entry was stored by the runtime and is kept
+    // alive by the entry itself, so its header can be read after the band
+    // check, exactly as codegen's inline array guards read it. Only the
+    // forwarding bit is decided here; the full resolver validates the target.
     let header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
     if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
         || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
