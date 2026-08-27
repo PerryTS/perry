@@ -647,6 +647,47 @@ static KEEP_ARRAY_LENGTH: extern "C" fn(*const ArrayHeader) -> u32 = js_array_le
 
 #[no_mangle]
 pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
+    // Fast lane: a live plain array on an arena page. Every dynamic `.length`
+    // read and every native push lowering (which re-reads the length for the
+    // result) lands here; the proxy, Set/Map, object and subclass arms below
+    // all begin with probes this receiver cannot satisfy. A proxy id sits in
+    // the handle band and a Set/Map/object header has another type, so the
+    // lane's own checks exclude them.
+    {
+        let bits = arr as u64;
+        let top16 = bits >> 48;
+        let raw = if top16 >= 0x7FF8 {
+            if top16 == (crate::value::POINTER_TAG >> 48) {
+                (bits & crate::value::POINTER_MASK) as usize
+            } else {
+                0
+            }
+        } else {
+            bits as usize
+        };
+        if raw >= crate::gc::GC_HEADER_SIZE
+            && raw % std::mem::align_of::<crate::gc::GcHeader>() == 0
+            && crate::value::addr_class::is_plausible_heap_addr(raw)
+            && !matches!(
+                crate::arena::classify_heap_generation(raw),
+                crate::arena::HeapGeneration::Unknown
+            )
+        {
+            // SAFETY: owned arena page, header-aligned; the header word
+            // precedes every arena block.
+            let header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            let (obj_type, gc_flags) = unsafe { ((*header).obj_type, (*header).gc_flags) };
+            if obj_type == crate::gc::GC_TYPE_ARRAY
+                && gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                && gc_flags & crate::gc::GC_FLAG_ARENA != 0
+            {
+                let hdr = unsafe { &*(raw as *const ArrayHeader) };
+                if hdr.length <= hdr.capacity {
+                    return hdr.length;
+                }
+            }
+        }
+    }
     // #5135: a Proxy typed (statically) as an array (immer drafts) reaches here
     // with the masked proxy id. Read `length` through the proxy `get` trap
     // rather than deref-ing the id as an `ArrayHeader`.

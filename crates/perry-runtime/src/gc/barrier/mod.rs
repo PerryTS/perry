@@ -1325,7 +1325,7 @@ pub(super) fn write_barrier_decoded_parent(
     let inserted = if external_slot {
         remember_old_to_young_external_slot(parent_addr, slot_addr)
     } else {
-        remember_old_to_young_slot(parent_addr, slot_addr)
+        remember_old_to_young_inline_slot(parent_addr, slot_addr)
     };
     if inserted {
         bump_write_barrier_trace_counter(BarrierTraceCounter::NewInserts);
@@ -1637,6 +1637,19 @@ pub(super) fn decode_heap_addr(bits: u64) -> usize {
         // young-gen pointers.
         0
     }
+}
+
+/// [`remember_old_to_young_slot`] for a slot INSIDE the parent's own block.
+/// `barrier_parent_needs_remembering` has just classified the parent as Old,
+/// and an inline slot lies in the same allocation, so its page is on the same
+/// registered Old range: the slot's own classification would answer the
+/// same thing and was one of three page lookups per old→young store.
+#[inline]
+pub(super) fn remember_old_to_young_inline_slot(parent_addr: usize, slot_addr: usize) -> bool {
+    if slot_addr != 0 && slot_addr >= parent_addr {
+        return mark_dirty_old_page(crate::arena::generation_page_for_addr(slot_addr));
+    }
+    remember_old_to_young_slot(parent_addr, slot_addr)
 }
 
 pub(super) fn remember_old_to_young_slot(parent_addr: usize, slot_addr: usize) -> bool {
