@@ -9,7 +9,11 @@ classifier); inline dynamic typed-array reads brand off the
 `GC_TYPE_TYPED_ARRAY` header instead of the evictable 64-slot kind cache;
 `js_array_get_f64` routes object-backed Array-subclass receivers to their
 dense fast read before the tracked resolver; and an `Any`-typed key that is an
-integer array index takes the inline numeric read tiers (`a[b[i]]`).
+integer array index takes the inline numeric read tiers (`a[b[i]]`). The
+typed-feedback array-read fallback answers a proven dense read on an
+object-backed Array-subclass receiver before its registry probes and by-name
+key path, so the canonical-i32 element tier's guard miss on such a receiver
+no longer stringifies every index.
 
 Also carries the accumulated Array-subclass dense-tail work (validated
 prototype-override reads, pre-statepoint inlining of compact guarded

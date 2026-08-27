@@ -477,6 +477,53 @@ fn typed_feedback_array_get_guard_failure_uses_jsvalue_object_fallback() {
 }
 
 #[test]
+fn typed_feedback_array_get_fallback_reads_an_object_backed_array_subclass_densely() {
+    let _guard = typed_feedback_test_lock();
+    reset_typed_feedback_for_tests();
+    register(26, TypedFeedbackSiteKind::ArrayElement, "packed[i]");
+
+    // `class X extends Array` — the receiver carries GC_TYPE_OBJECT, so the
+    // guarded element tier rejects it and every canonical index lands in the
+    // fallback. #8876: the fallback answers the proven dense subclass read
+    // instead of stringifying the index into an `obj["1"]` by-name lookup.
+    const CLASS_ID_ARRAY: u32 = 0xFFFF_0024;
+    let class_id = 0x0074_8656;
+    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
+    let obj = crate::object::js_object_alloc(class_id, 2);
+    assert!(!obj.is_null());
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    crate::node_stream::js_array_subclass_init(receiver, 0.0);
+    for (index, value) in [11.0, 22.0, 33.0].into_iter().enumerate() {
+        crate::object::js_object_set_index_polymorphic(obj as i64, index as f64, value);
+    }
+
+    let guard = js_typed_feedback_plain_array_index_get_guard(26, receiver, 1, 3);
+    assert_eq!(
+        guard, 0,
+        "an object-backed subclass must fail the plain-array guard"
+    );
+    assert_eq!(
+        crate::array::array_subclass_fast_index_get(receiver, 1),
+        Some(22.0),
+        "fixture must carry a dense subclass proof"
+    );
+
+    let actual = js_typed_feedback_array_index_get_fallback_boxed(26, receiver, 1.0);
+    assert_eq!(actual.to_bits(), 22.0f64.to_bits());
+    let boxed_index = f64::from_bits(crate::value::JSValue::int32(2).bits());
+    let actual = js_typed_feedback_array_index_get_fallback_boxed(26, receiver, boxed_index);
+    assert_eq!(actual.to_bits(), 33.0f64.to_bits());
+
+    // Past the dense tail the established by-name path still answers.
+    let missing = js_typed_feedback_array_index_get_fallback_boxed(26, receiver, 7.0);
+    assert_eq!(missing.to_bits(), crate::value::TAG_UNDEFINED);
+
+    let site = &typed_feedback_snapshot().sites[0];
+    assert_eq!(site.guard_failures, 1);
+    assert_eq!(site.fallback_calls, 3);
+}
+
+#[test]
 fn typed_feedback_non_bounded_array_set_guard_failure_uses_jsvalue_object_fallback() {
     let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
