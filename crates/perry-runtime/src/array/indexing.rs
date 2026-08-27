@@ -873,6 +873,19 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         );
     }
 
+    // An ordinary-object receiver (the object-backed `class X extends Array`
+    // instance — the wolf-ecs `Archetype` behind `packed[sparse[x]]`) can
+    // never be an `ArrayHeader`, so `clean_arr_ptr`'s tracked-allocation
+    // resolver is a guaranteed miss for it. Ask the exact dense-subclass
+    // proof first; it re-validates the object header itself. Every rejected
+    // case (holes, descriptors, prototype overrides, spilled/unknown layouts)
+    // still reaches the complete resolver and spec-generic `Get` below.
+    if receiver_tag.0 == crate::gc::GC_TYPE_OBJECT {
+        if let Some(value) = crate::array::subclass::array_subclass_fast_index_get_raw(arr, index) {
+            return value;
+        }
+    }
+
     let cleaned = clean_arr_ptr(arr);
     if cleaned.is_null() {
         // #7574: `a[i]` on a `class X extends Array` instance held in a
