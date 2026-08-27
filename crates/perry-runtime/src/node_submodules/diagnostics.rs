@@ -590,34 +590,6 @@ pub enum ErrUserProp {
     Bits(u64),
 }
 
-thread_local! {
-    /// User-assigned own properties on `Error` objects, keyed by the error
-    /// object pointer.
-    ///
-    /// `ErrorHeader` is a fixed `#[repr(C)]` struct with no overflow-field
-    /// region, so a plain `err.foo = bar` had nowhere to land: the object
-    /// setter dropped it and the getter returned `undefined`. That broke
-    /// Node parity — e.g. `assert.throws(fn, { code })` could not read a
-    /// user-assigned `.code` (#2014). This side table gives errors arbitrary
-    /// string/primitive own properties. Stale entries after a GC move of the
-    /// error are harmless (same model as the message-keyed tables above): a
-    /// lookup at the new address simply misses.
-    /// Insertion-ORDERED per error: a `Vec`, not a `HashMap`.
-    ///
-    /// ECMA-262 enumerates an object's own string keys in insertion order, and
-    /// that order is observable through `Object.keys`, `for…in`, `{...err}` and
-    /// `JSON.stringify`. Backed by a `HashMap` this list came out in hash order,
-    /// so `error_user_props` sorted it alphabetically to at least be
-    /// deterministic — which is stable but still not node's order. A caught fs
-    /// error serialized as `{"code":…,"errno":…,"path":…,"syscall":…}` where
-    /// node writes `{"errno":…,"code":…,"syscall":…,"path":…}`.
-    ///
-    /// An error carries a handful of properties, so a linear scan is cheaper
-    /// than hashing and the order falls out for free.
-    pub(crate) static ERROR_USER_PROPS: RefCell<HashMap<usize, Vec<(String, ErrUserProp)>>> =
-        RefCell::new(HashMap::new());
-}
-
 unsafe fn error_user_prop_string(value: f64) -> String {
     let ptr = crate::value::js_jsvalue_to_string(value);
     if ptr.is_null() {
@@ -635,21 +607,18 @@ pub fn set_error_user_prop(error_ptr: usize, key: &str, value: f64) {
     if error_ptr == 0 {
         return;
     }
-    let stored = if JSValue::from_bits(value.to_bits()).is_any_string() {
-        ErrUserProp::Str(unsafe { error_user_prop_string(value) })
-    } else {
-        ErrUserProp::Bits(value.to_bits())
-    };
-    ERROR_USER_PROPS.with(|m| {
-        let mut map = m.borrow_mut();
-        let props = map.entry(error_ptr).or_default();
-        // Reassigning an existing key keeps its original position — `o.a=1;
-        // o.b=2; o.a=3` still enumerates `a,b` in node.
-        match props.iter_mut().find(|(k, _)| k == key) {
-            Some(slot) => slot.1 = stored,
-            None => props.push((key.to_string(), stored)),
-        }
-    });
+    // #6759 phase 1: the property bag now hangs off the error's own metadata
+    // record instead of a table keyed by its address, so it moves with the
+    // error, dies with it, and cannot be inherited by a later tenant of a
+    // recycled address. Insertion order comes free from the bag object's
+    // `keys_array`.
+    unsafe {
+        let Some(bag) = crate::object::cell_expando_ensure(error_ptr) else {
+            return;
+        };
+        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        crate::object::js_object_set_field_by_name(bag, key_ptr, value);
+    }
 }
 
 /// Look up a user-assigned own property on an `Error` object, materialising it
@@ -659,17 +628,23 @@ pub fn error_user_prop(error_ptr: usize, key: &str) -> Option<f64> {
     if error_ptr == 0 {
         return None;
     }
-    ERROR_USER_PROPS.with(|m| {
-        m.borrow().get(&error_ptr).and_then(|props| {
-            props.iter().find(|(k, _)| k == key).map(|(_, v)| match v {
-                ErrUserProp::Str(s) => {
-                    let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                    f64::from_bits(crate::js_nanbox_string(ptr as i64).to_bits())
-                }
-                ErrUserProp::Bits(b) => f64::from_bits(*b),
-            })
-        })
-    })
+    unsafe {
+        let bag = crate::object::cell_expando_get(error_ptr)?;
+        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        // Distinguish "absent" from "present and undefined": a bare get would
+        // return `undefined` for both, and the caller uses `None` to mean the
+        // error has no such own property at all.
+        let key_boxed = f64::from_bits(crate::js_nanbox_string(key_ptr as i64).to_bits());
+        if !crate::object::obj_value_has_own_key(
+            crate::value::js_nanbox_pointer(bag as i64),
+            key_boxed,
+        ) {
+            return None;
+        }
+        Some(f64::from_bits(
+            crate::object::js_object_get_field_by_name(bag, key_ptr).bits(),
+        ))
+    }
 }
 
 /// Remove a user-assigned own property from an Error object. Returns true
@@ -679,18 +654,21 @@ pub fn remove_error_user_prop(error_ptr: usize, key: &str) -> bool {
     if error_ptr == 0 {
         return false;
     }
-    ERROR_USER_PROPS.with(|m| {
-        m.borrow_mut()
-            .get_mut(&error_ptr)
-            .map(|props| match props.iter().position(|(k, _)| k == key) {
-                Some(i) => {
-                    props.remove(i);
-                    true
-                }
-                None => false,
-            })
-            .unwrap_or(false)
-    })
+    unsafe {
+        let Some(bag) = crate::object::cell_expando_get(error_ptr) else {
+            return false;
+        };
+        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        let key_boxed = f64::from_bits(crate::js_nanbox_string(key_ptr as i64).to_bits());
+        if !crate::object::obj_value_has_own_key(
+            crate::value::js_nanbox_pointer(bag as i64),
+            key_boxed,
+        ) {
+            return false;
+        }
+        crate::object::js_object_delete_field(bag, key_ptr);
+        true
+    }
 }
 
 /// Return user-assigned own properties on an Error object as materialized JS
@@ -699,33 +677,34 @@ pub fn error_user_props(error_ptr: usize) -> Vec<(String, f64)> {
     if error_ptr == 0 {
         return Vec::new();
     }
-    let props: Vec<(String, ErrUserProp)> = ERROR_USER_PROPS.with(|m| {
-        m.borrow()
-            .get(&error_ptr)
-            .map(|props| {
-                props
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    });
-    let mut props: Vec<(String, f64)> = props
-        .into_iter()
-        .map(|(key, value)| {
-            let materialized = match value {
-                ErrUserProp::Str(s) => {
-                    let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                    f64::from_bits(crate::js_nanbox_string(ptr as i64).to_bits())
-                }
-                ErrUserProp::Bits(bits) => f64::from_bits(bits),
-            };
-            (key, materialized)
-        })
-        .collect();
-    // No sort: the Vec is already in insertion order, which is the order
-    // ECMA-262 specifies and node emits.
-    props
+    unsafe {
+        let Some(bag) = crate::object::cell_expando_get(error_ptr) else {
+            return Vec::new();
+        };
+        // The bag is an ordinary object, so its `keys_array` already holds the
+        // keys in ECMA-262 insertion order — no sort, and no ordering of our
+        // own to keep in step with node's.
+        let keys = crate::object::object_keys_array(bag);
+        if keys.is_null() {
+            return Vec::new();
+        }
+        let len = (*keys).length as usize;
+        let mut out = Vec::with_capacity(len);
+        for i in 0..len {
+            let key_val = crate::array::js_array_get_f64(keys, i as u32);
+            let name_ptr = crate::value::js_jsvalue_to_string(key_val);
+            if name_ptr.is_null() {
+                continue;
+            }
+            let name = error_user_prop_string(f64::from_bits(
+                crate::js_nanbox_string(name_ptr as i64).to_bits(),
+            ));
+            let value =
+                f64::from_bits(crate::object::js_object_get_field_by_name(bag, name_ptr).bits());
+            out.push((name, value));
+        }
+        out
+    }
 }
 
 pub(crate) fn throw_invalid_arg() -> ! {
@@ -1961,5 +1940,163 @@ pub(crate) fn ensure_diag_noop_closure() -> *mut ClosureHeader {
 }
 
 #[cfg(test)]
-#[path = "diagnostics_tests.rs"]
-mod diagnostics_tests;
+mod tests {
+    use super::*;
+
+    fn inactive_state() -> DiagChannelState {
+        DiagChannelState {
+            name: 0.0,
+            obj: std::ptr::null_mut(),
+            subscribers: Vec::new(),
+            stores: Vec::new(),
+        }
+    }
+
+    // #1309: crossing the soft cap evicts a batch of the oldest inactive
+    // channels so the live-channel map stays bounded.
+    #[test]
+    fn diag_channels_capped_by_evicting_inactive() {
+        DIAG_CHANNELS.with(|m| m.borrow_mut().clear());
+        DIAG_CHANNEL_BY_KEY.with(|m| m.borrow_mut().clear());
+        for _ in 0..DIAG_CHANNEL_SOFT_CAP + 100 {
+            let id = next_diag_id();
+            DIAG_CHANNELS.with(|m| {
+                m.borrow_mut().insert(id, inactive_state());
+            });
+        }
+        evict_inactive_diag_channels_if_needed();
+        let len = DIAG_CHANNELS.with(|m| m.borrow().len());
+        assert!(len <= DIAG_CHANNEL_SOFT_CAP, "expected <= cap, got {len}");
+        assert!(
+            len >= DIAG_CHANNEL_SOFT_CAP - DIAG_CHANNEL_EVICT_BATCH,
+            "should evict at most one batch, got {len}"
+        );
+        DIAG_CHANNELS.with(|m| m.borrow_mut().clear());
+    }
+
+    // #1309: a subscribed (active) channel is never evicted, even when the
+    // map is over the cap.
+    #[test]
+    fn active_diag_channel_survives_eviction() {
+        DIAG_CHANNELS.with(|m| m.borrow_mut().clear());
+        DIAG_CHANNEL_BY_KEY.with(|m| m.borrow_mut().clear());
+        let active_id = next_diag_id();
+        DIAG_CHANNELS.with(|m| {
+            let mut s = inactive_state();
+            s.subscribers.push(1.0);
+            m.borrow_mut().insert(active_id, s);
+        });
+        for _ in 0..DIAG_CHANNEL_SOFT_CAP + 100 {
+            let id = next_diag_id();
+            DIAG_CHANNELS.with(|m| {
+                m.borrow_mut().insert(id, inactive_state());
+            });
+        }
+        evict_inactive_diag_channels_if_needed();
+        assert!(
+            DIAG_CHANNELS.with(|m| m.borrow().contains_key(&active_id)),
+            "subscribed channel must not be evicted"
+        );
+        DIAG_CHANNELS.with(|m| m.borrow_mut().clear());
+    }
+}
+
+#[cfg(test)]
+mod error_prop_order_tests {
+    use super::*;
+
+    /// Allocate a REAL error. These tests used synthetic addresses
+    /// (`0x4000_1000`) back when the properties lived in a side table keyed by
+    /// an arbitrary `usize` — any integer was a valid key. The bag now hangs
+    /// off the error's own `ObjectMeta`, so a fake address is dereferenced as a
+    /// GC cell and segfaults. Storage on the object means tests need objects.
+    unsafe fn fresh_error() -> usize {
+        let msg = js_string_from_bytes(b"order".as_ptr(), 5);
+        crate::error::js_error_new_with_message(msg) as usize
+    }
+
+    fn keys_of(err: usize) -> Vec<String> {
+        error_user_props(err).into_iter().map(|(k, _)| k).collect()
+    }
+
+    /// Own string keys enumerate in INSERTION order, not hash or alphabetical
+    /// order. Observable through `Object.keys`, `for…in`, `{...err}` and
+    /// `JSON.stringify`, so a caught fs error must serialize as node's
+    /// `{"errno":…,"code":…,"syscall":…,"path":…}`.
+    #[test]
+    fn user_props_enumerate_in_insertion_order() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let err = fresh_error();
+            for k in ["errno", "code", "syscall", "path"] {
+                set_error_user_prop(err, k, 1.0);
+            }
+            assert_eq!(
+                keys_of(err),
+                vec![
+                    "errno".to_string(),
+                    "code".to_string(),
+                    "syscall".to_string(),
+                    "path".to_string()
+                ],
+                "fs error fields must enumerate in node's insertion order"
+            );
+        }
+    }
+
+    /// Reassigning an existing key keeps its ORIGINAL position — in node,
+    /// `o.a=1; o.b=2; o.a=3` still enumerates `a,b`.
+    #[test]
+    fn reassignment_keeps_original_position() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let err = fresh_error();
+            set_error_user_prop(err, "a", 1.0);
+            set_error_user_prop(err, "b", 2.0);
+            set_error_user_prop(err, "a", 3.0);
+            assert_eq!(keys_of(err), vec!["a".to_string(), "b".to_string()]);
+            assert_eq!(
+                error_user_prop(err, "a"),
+                Some(3.0),
+                "reassignment must still update the value"
+            );
+        }
+    }
+
+    /// Removing a key must not disturb the order of the survivors.
+    #[test]
+    fn removal_preserves_order_of_the_rest() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let err = fresh_error();
+            for k in ["one", "two", "three"] {
+                set_error_user_prop(err, k, 0.0);
+            }
+            assert!(remove_error_user_prop(err, "two"));
+            assert_eq!(keys_of(err), vec!["one".to_string(), "three".to_string()]);
+            assert!(
+                !remove_error_user_prop(err, "two"),
+                "second remove is a no-op"
+            );
+        }
+    }
+
+    /// #6759 phase 1: two errors must not share properties, even if one is
+    /// allocated at an address the other previously occupied. The old
+    /// address-keyed table could not express that; storage on the object does
+    /// so by construction.
+    #[test]
+    fn properties_belong_to_the_error_not_its_address() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let a = fresh_error();
+            let b = fresh_error();
+            set_error_user_prop(a, "code", 1.0);
+            assert_eq!(error_user_prop(a, "code"), Some(1.0));
+            assert!(
+                error_user_prop(b, "code").is_none(),
+                "a distinct error must not see another's properties"
+            );
+        }
+    }
+}

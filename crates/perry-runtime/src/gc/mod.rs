@@ -875,10 +875,6 @@ pub fn gc_init() {
     reg_scanner!(crate::object::shapes::scan_shape_table_rekey_mut);
     reg_scanner!(crate::proxy::scan_proxy_roots_mut);
     // Object/string-valued `err.<prop> = v` user props live as raw bits in
-    // ERROR_USER_PROPS — invisible to GC without this scanner (collectable
-    // while reachable; stale addresses after a move). The address KEYS are
-    // maintained by the ErrorSideTables move/finalize hooks.
-    reg_scanner!(crate::node_submodules::diagnostics_gc::scan_error_user_props_roots_mut,);
     reg_scanner!(exception_mutable_root_scanner);
     reg_scanner!(async_context_mutable_root_scanner);
     reg_scanner!(async_hooks_mutable_root_scanner);

@@ -548,6 +548,17 @@ pub struct Promise {
     pub(crate) async_id: u64,
     /// async_hooks triggerAsyncId captured at Promise creation.
     pub(crate) trigger_async_id: u64,
+    /// #6759 phase 1 (header unification): per-object metadata record, or
+    /// null. Appended LAST so every preceding field keeps its offset.
+    ///
+    /// Every Promise is written through [`Promise::new`], so initialising it
+    /// there covers all allocation paths — which matters because neither
+    /// `gc_malloc` nor the arena zeroes reused memory.
+    ///
+    /// Traced and rewritten by the `GcRewriteDescriptorKind::Promise` arm,
+    /// which `trace_heap_rewrite_slots` drives, so the edge is marked as well
+    /// as rewritten (#6812).
+    pub(crate) meta: *mut crate::object::ObjectMeta,
 }
 
 impl Promise {
@@ -561,6 +572,7 @@ impl Promise {
             next: ptr::null_mut(),
             async_id: 0,
             trigger_async_id: 0,
+            meta: ptr::null_mut(),
         }
     }
 }

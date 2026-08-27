@@ -523,6 +523,12 @@ pub struct SetHeader {
     pub capacity: u32,
     /// Pointer to elements array (separately allocated)
     pub elements: *mut f64,
+    /// #6759 phase 1 (header unification): per-object metadata record, or
+    /// null. Appended LAST so every preceding field keeps its offset. Traced
+    /// and rewritten by the `GcRewriteDescriptorKind::Set` arm, which
+    /// `trace_heap_rewrite_slots` drives — so the edge is marked, not merely
+    /// rewritten (#6812).
+    pub meta: *mut crate::object::ObjectMeta,
 }
 
 /// Each set element is 8 bytes (f64/JSValue)
@@ -856,6 +862,9 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
         (*ptr).capacity = cap;
         // GC_STORE_AUDIT(INIT): set elements buffer is external storage; element stores are barriered separately.
         (*ptr).elements = elements;
+        // The arena allocator reuses free-list memory without zeroing, so an
+        // uninitialised meta edge would be a garbage pointer the GC follows.
+        (*ptr).meta = std::ptr::null_mut();
 
         // Register in set registry for runtime type detection
         register_set(ptr, elements, cap as usize);
@@ -2523,6 +2532,7 @@ mod tests {
             size: 1,
             capacity: 4,
             elements: std::ptr::null_mut(),
+            meta: std::ptr::null_mut(),
         };
 
         let cases: &[(&str, *mut f64)] = &[

@@ -193,6 +193,8 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
                 &mut (*promise).on_rejected as *mut _ as *mut u64,
             ));
             visit(fixed_slot(&mut (*promise).next as *mut _ as *mut u64));
+            // #6759 phase 1: the metadata edge (MARK path as well as rewrite).
+            visit(fixed_slot(&mut (*promise).meta as *mut _ as *mut u64));
         }
         GcRewriteDescriptorKind::Error => {
             let error = user_ptr as *mut crate::error::ErrorHeader;
@@ -201,6 +203,11 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             visit(fixed_slot(&mut (*error).stack as *mut _ as *mut u64));
             visit(fixed_slot(&mut (*error).cause as *mut f64 as *mut u64));
             visit(fixed_slot(&mut (*error).errors as *mut _ as *mut u64));
+            // #6759 phase 1: the metadata edge. This arm is reached by
+            // `trace_heap_rewrite_slots`, so visiting the slot here both MARKS
+            // the meta record (keeping it, and anything reachable only through
+            // it, alive) and rewrites the edge when evacuation moves it.
+            visit(fixed_slot(&mut (*error).meta as *mut _ as *mut u64));
         }
         GcRewriteDescriptorKind::Map => {
             let map = user_ptr as *mut crate::map::MapHeader;
@@ -241,6 +248,11 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
                 range: HeapSlotRange::new((*map).entries as *mut u64, size as usize * 2),
                 layout_kind: None,
             });
+            // #6759 phase 1: the metadata edge. This arm is the MARK path as
+            // well as the rewrite path (`trace_heap_rewrite_slots` drives it),
+            // so visiting here keeps the record — and anything reachable only
+            // through it — alive.
+            visit(fixed_slot(&mut (*map).meta as *mut _ as *mut u64));
         }
         GcRewriteDescriptorKind::Set => {
             let set = user_ptr as *mut crate::set::SetHeader;
@@ -250,6 +262,8 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
                     layout_kind: None,
                 });
             }
+            // #6759 phase 1: the metadata edge (MARK path as well as rewrite).
+            visit(fixed_slot(&mut (*set).meta as *mut _ as *mut u64));
         }
         GcRewriteDescriptorKind::LazyArray => {
             let lazy = user_ptr as *mut crate::json_tape::LazyArrayHeader;
@@ -307,11 +321,24 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             // #6812: the object-owned overflow buffer is a raw-pointer child
             // edge (0 = none), traced and rewritten exactly like `prototype`.
             visit(fixed_slot(&mut (*meta).spill as *mut u64));
+            // #6759 phase 1: the named-property bag for a cell with no inline
+            // slot layout (an Error, say). Reachable ONLY through this record,
+            // so an unvisited edge here collects a live object's own
+            // properties — the same shape as the spill hazard above (#6812).
+            visit(fixed_slot(&mut (*meta).expando as *mut u64));
             // A fresh class object stored as an instance's private evaluation
             // brand is a NaN-boxed child edge and moves with the meta record.
             visit(fixed_slot(
                 &mut (*meta).private_evaluation_brand as *mut u64,
             ));
+        }
+        GcRewriteDescriptorKind::MetaOnly => {
+            // #6759 phase 1: the cell's only traced edge is its metadata
+            // record. Reached by `trace_heap_rewrite_slots`, so this is the
+            // MARK path as well as the rewrite path.
+            if let Some(slot) = crate::object::cell_meta_slot(user_ptr as usize) {
+                visit(fixed_slot(slot as *mut u64));
+            }
         }
         GcRewriteDescriptorKind::Leaf => {}
     }

@@ -3,8 +3,8 @@
 //! `ErrUserProp` stay there.
 
 use super::diagnostics::{
-    ErrUserProp, ERROR_MESSAGE_CODES, ERROR_MESSAGE_DESTS, ERROR_MESSAGE_ERRNOS,
-    ERROR_MESSAGE_HOSTNAMES, ERROR_MESSAGE_PATHS, ERROR_MESSAGE_SYSCALLS, ERROR_USER_PROPS,
+    ERROR_MESSAGE_CODES, ERROR_MESSAGE_DESTS, ERROR_MESSAGE_ERRNOS, ERROR_MESSAGE_HOSTNAMES,
+    ERROR_MESSAGE_PATHS, ERROR_MESSAGE_SYSCALLS,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -43,7 +43,6 @@ pub(crate) fn error_side_tables_owner_moved(old_user: usize, new_user: usize) {
     ERROR_MESSAGE_PATHS.with(|m| rekey(m, old_user, new_user));
     ERROR_MESSAGE_DESTS.with(|m| rekey(m, old_user, new_user));
     ERROR_MESSAGE_HOSTNAMES.with(|m| rekey(m, old_user, new_user));
-    ERROR_USER_PROPS.with(|m| rekey(m, old_user, new_user));
 }
 
 /// Drop a dead error's entries from every side table so a fresh error
@@ -67,9 +66,6 @@ pub(crate) fn error_side_tables_clear_dead(user_ptr: usize) {
         m.borrow_mut().remove(&user_ptr);
     });
     ERROR_MESSAGE_HOSTNAMES.with(|m| {
-        m.borrow_mut().remove(&user_ptr);
-    });
-    ERROR_USER_PROPS.with(|m| {
         m.borrow_mut().remove(&user_ptr);
     });
     // 2026-07-09 GC audit wave 2: the DOMException brand set is address-
@@ -117,27 +113,7 @@ pub(crate) fn finalize_dead_copied_minor_from_space_errors() {
     collect(ERROR_MESSAGE_PATHS.with(|m| m.borrow().keys().copied().collect()));
     collect(ERROR_MESSAGE_DESTS.with(|m| m.borrow().keys().copied().collect()));
     collect(ERROR_MESSAGE_HOSTNAMES.with(|m| m.borrow().keys().copied().collect()));
-    collect(ERROR_USER_PROPS.with(|m| m.borrow().keys().copied().collect()));
     for addr in dead {
         error_side_tables_clear_dead(addr);
     }
-}
-
-/// Registered mutable-root scanner: object/string-valued user props
-/// (`ErrUserProp::Bits` holding a heap-tagged value) were INVISIBLE to GC —
-/// an `err.cause = {...}` object was collectable while still reachable
-/// through the error. Visit each as a mutable root so the referent stays
-/// live and a moved referent's address is rewritten in place.
-/// (`visit_nanbox_u64_slot` is tag-aware: numeric/boolean bits are left
-/// untouched.)
-pub(crate) fn scan_error_user_props_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    ERROR_USER_PROPS.with(|m| {
-        for props in m.borrow_mut().values_mut() {
-            for (_, v) in props.iter_mut() {
-                if let ErrUserProp::Bits(bits) = v {
-                    visitor.visit_nanbox_u64_slot(bits);
-                }
-            }
-        }
-    });
 }

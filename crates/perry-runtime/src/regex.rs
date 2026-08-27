@@ -213,6 +213,9 @@ pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *
             std::mem::align_of::<RegExpHeader>(),
             crate::gc::GC_TYPE_REGEXP,
         ) as *mut RegExpHeader;
+        // Neither `gc_malloc` nor the arena zeroes reused memory, so this
+        // must be set explicitly or the GC follows a garbage pointer.
+        (*ptr).meta = std::ptr::null_mut();
         (*ptr).regex_ptr = std::ptr::null_mut();
         (*ptr).pattern_ptr = std::ptr::null();
         (*ptr).flags_ptr = std::ptr::null();
@@ -546,6 +549,15 @@ pub struct RegExpHeader {
     /// or null for the ordinary linear/fancy paths. Like `fancy_ptr`, this
     /// survives cache eviction and duplicate statically-linked runtime copies.
     pub repeat_matcher_ptr: *const (),
+    /// #6759 phase 1 (header unification): per-object metadata record, or
+    /// null. Appended LAST so `regex_gc_slot_ptrs`' adjacency assertion on
+    /// `pattern_ptr`/`flags_ptr` and every other offset are undisturbed.
+    ///
+    /// RegExp's rewrite descriptor DELEGATES to the layout visitor, so unlike
+    /// Error/Map/Set the edge belongs in `gc_child_slots`
+    /// (`GcLayoutSlotKind::RegExpFields`) — that is the marking path here.
+    /// #6812 is precisely the bug of putting it in the wrong one.
+    pub meta: *mut crate::object::ObjectMeta,
 }
 
 /// Self-identifying sentinel stamped into every `RegExpHeader.magic` by
@@ -929,6 +941,9 @@ pub extern "C" fn js_regexp_new(
         // #7341: same re-read for the flags, for the same reason.
         let canonical_flags_ptr = flags_root.get_raw_const_ptr::<StringHeader>();
 
+        // Neither `gc_malloc` nor the arena zeroes reused memory, so this
+        // must be set explicitly or the GC follows a garbage pointer.
+        (*ptr).meta = std::ptr::null_mut();
         (*ptr).regex_ptr = regex_ptr;
         (*ptr).pattern_ptr = pattern;
         (*ptr).flags_ptr = canonical_flags_ptr;

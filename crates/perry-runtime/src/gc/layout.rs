@@ -1731,6 +1731,10 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
                 Some(last_index_slot),
                 HeapSlotRange::new(pattern_slot, slot_count),
             )
+            // #6759 phase 1: the metadata edge. RegExp reaches marking through
+            // THIS iterator (its rewrite arm delegates here), so the edge has
+            // to be enumerated at this point, not in the rewrite match.
+            .with_meta_slot(crate::object::cell_meta_slot(user_ptr as usize).map(|s| s as *mut u64))
         }
         GcLayoutSlotKind::ObjectMeta => {
             // Prototype and the private-evaluation brand are explicit prefix

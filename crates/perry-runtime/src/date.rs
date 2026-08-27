@@ -25,6 +25,12 @@ const NANBOX_PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 #[repr(C)]
 pub struct DateCell {
     pub ts: f64,
+    /// #6759 phase 1 (header unification): per-object metadata record, or null.
+    ///
+    /// Adding this made `DateCell` non-pointer-free, so its GC type entry moved
+    /// from `GcRewriteDescriptorKind::Leaf` (a no-op arm) to `MetaOnly` and its
+    /// `pointer_free` flag to `false` — a cell with a pointer must be scanned.
+    pub meta: *mut crate::object::ObjectMeta,
 }
 
 /// Allocate a fresh Date cell holding `ts` and return it as a NaN-boxed
@@ -41,6 +47,11 @@ pub fn alloc_date_cell(ts: f64) -> f64 {
             crate::gc::GC_TYPE_DATE_CELL,
         ) as *mut DateCell;
         (*ptr).ts = ts;
+        // MUST be explicit: the arena reuses free-list memory without zeroing,
+        // and since #6759 phase 1 this cell is no longer pointer-free — the
+        // collector now scans this slot, so leftover bytes would be followed
+        // as a pointer.
+        (*ptr).meta = std::ptr::null_mut();
         // A previous (collected) Date at this address may have left expando
         // properties in the side table; a fresh Date must start clean.
         crate::object::exotic_expando::expando_clear_on_alloc(ptr as usize);

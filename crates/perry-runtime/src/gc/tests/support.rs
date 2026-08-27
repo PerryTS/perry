@@ -71,6 +71,7 @@ pub(super) unsafe fn alloc_old_test_promise() -> *mut crate::promise::Promise {
             next: std::ptr::null_mut(),
             async_id: 0,
             trigger_async_id: 0,
+            meta: std::ptr::null_mut(),
         },
     );
     ptr
@@ -93,6 +94,7 @@ pub(super) unsafe fn alloc_old_test_error() -> *mut crate::error::ErrorHeader {
             stack: std::ptr::null_mut(),
             cause: f64::from_bits(crate::value::TAG_UNDEFINED),
             errors: std::ptr::null_mut(),
+            meta: std::ptr::null_mut(),
         },
     );
     ptr
@@ -789,6 +791,7 @@ pub(super) fn allocate_dead_malloc_churn_headers(per_type: usize) -> Vec<usize> 
                     next: std::ptr::null_mut(),
                     async_id: 0,
                     trigger_async_id: 0,
+                    meta: std::ptr::null_mut(),
                 },
             );
             headers.push(header_from_user_ptr(ptr as *const u8) as usize);
