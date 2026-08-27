@@ -45,6 +45,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // one setting re-lowers must not be served from a build another kept on
     // statepoints.
     "PERRY_LL_RS4GC_MAX_INSTRS",
+    // #8883: the alloca-walk budget above which a function is stamped
+    // `disable-tail-calls` before the optimizer. It changes the generated
+    // code of the functions it trips on, so it is a cache input.
+    "PERRY_LL_TRE_MAX_ALLOCA_WALK",
     // #8583: the relocation estimate above which a function spills its GC roots
     // to a shadow frame. It changes which functions carry statepoints, so it
     // changes the generated code and must be a cache input.
