@@ -102,6 +102,54 @@ pub(crate) fn io_error_errno(err: &std::io::Error) -> i32 {
     }
 }
 
+/// Attach Node's fs diagnostic fields to `err_ptr` as **own properties of the
+/// error object**.
+///
+/// These used to be registered in six side tables keyed by the MESSAGE
+/// STRING's address (`register_error_code_pub` and friends), which produced two
+/// defects:
+///
+/// * **Wrong error.** Any `new Error(m)` built from the same message text
+///   inherited the unrelated fs error's fields — `new Error(e.message).code`
+///   returned `ENOENT` where node returns `undefined`, along with `.syscall`,
+///   `.errno` and `.path`. Metadata belonged to the string, not the throw.
+/// * **Invisible to reflection.** In node these are ordinary own properties:
+///   `Object.keys(e)` is `code,errno,path,syscall`, and `JSON.stringify(e)` and
+///   `{...e}` carry them. Served from a side table behind property *getters*
+///   they were absent from all of it — perry returned `{}` for both, so any
+///   code that logs or serialises an fs error silently lost every field.
+///
+/// Keying on the error object fixes both at once, and each field then reaches
+/// reflection through the same path a user assignment does.
+unsafe fn attach_fs_error_props(
+    err_ptr: *mut crate::error::ErrorHeader,
+    code: &str,
+    errno: i32,
+    syscall: &str,
+    path: Option<&str>,
+    dest: Option<&str>,
+) {
+    use crate::node_submodules::set_error_user_prop;
+    let owner = err_ptr as usize;
+    let put_str = |key: &str, s: &str| {
+        let boxed = js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        set_error_user_prop(owner, key, crate::value::js_nanbox_string(boxed as i64));
+    };
+    // Insertion order is observable — `Object.keys`, `for…in`, `{...err}` and
+    // `JSON.stringify` all report it — so install these in the same order
+    // node's `uvException` does: errno, code, syscall, path, dest.
+    // `errno` is numeric in node (-2 for ENOENT), not a string.
+    set_error_user_prop(owner, "errno", errno as f64);
+    put_str("code", code);
+    put_str("syscall", syscall);
+    if let Some(p) = path {
+        put_str("path", p);
+    }
+    if let Some(d) = dest {
+        put_str("dest", d);
+    }
+}
+
 pub(crate) unsafe fn build_fs_error_value(
     err: &std::io::Error,
     syscall: &'static str,
@@ -112,13 +160,7 @@ pub(crate) unsafe fn build_fs_error_value(
     let msg = format!("{}: {}, {} '{}'", code, err, syscall, path);
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    // Register code/syscall/path in the per-message side tables so the
-    // `.code`, `.syscall`, `.path` property getters in `field_get_set`
-    // surface Node-compatible values on caught errors.
-    crate::node_submodules::register_error_code_pub(msg_ptr, code);
-    crate::node_submodules::register_error_errno(msg_ptr, errno);
-    crate::node_submodules::register_error_syscall(msg_ptr, syscall);
-    crate::node_submodules::register_error_path(msg_ptr, path.to_string());
+    attach_fs_error_props(err_ptr, code, errno, syscall, Some(path), None);
     crate::value::js_nanbox_pointer(err_ptr as i64)
 }
 
@@ -136,11 +178,7 @@ pub(crate) unsafe fn build_fs_error_value_with_dest(
     let msg = format!("{}: {}, {} '{}' -> '{}'", code, err, syscall, path, dest);
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    crate::node_submodules::register_error_code_pub(msg_ptr, code);
-    crate::node_submodules::register_error_errno(msg_ptr, errno);
-    crate::node_submodules::register_error_syscall(msg_ptr, syscall);
-    crate::node_submodules::register_error_path(msg_ptr, path.to_string());
-    crate::node_submodules::register_error_dest(msg_ptr, dest.to_string());
+    attach_fs_error_props(err_ptr, code, errno, syscall, Some(path), Some(dest));
     crate::value::js_nanbox_pointer(err_ptr as i64)
 }
 
@@ -153,9 +191,7 @@ pub(crate) unsafe fn build_fs_error_value_no_path(
     let msg = format!("{}: {}, {}", code, err, syscall);
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    crate::node_submodules::register_error_code_pub(msg_ptr, code);
-    crate::node_submodules::register_error_errno(msg_ptr, errno);
-    crate::node_submodules::register_error_syscall(msg_ptr, syscall);
+    attach_fs_error_props(err_ptr, code, errno, syscall, None, None);
     crate::value::js_nanbox_pointer(err_ptr as i64)
 }
 

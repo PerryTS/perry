@@ -133,7 +133,7 @@ pub(crate) fn finalize_dead_copied_minor_from_space_errors() {
 pub(crate) fn scan_error_user_props_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     ERROR_USER_PROPS.with(|m| {
         for props in m.borrow_mut().values_mut() {
-            for v in props.values_mut() {
+            for (_, v) in props.iter_mut() {
                 if let ErrUserProp::Bits(bits) = v {
                     visitor.visit_nanbox_u64_slot(bits);
                 }
