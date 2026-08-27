@@ -384,7 +384,46 @@ fn lower_claimable_array_string_key_get(
     let string_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
+    // A dynamic key that is an integer-valued double in `[0, 2^32)` IS an
+    // array index, so the receiver-unknown numeric tiers apply to it exactly
+    // as they do to a statically proven index: the inline typed-array read,
+    // then the dense Array-subclass `arrlike.ic` shape cache, then the
+    // complete `js_packed_arraylike_index_get` → `js_dyn_index_get`
+    // dispatcher. Before this, an `Any`-typed key (`packed[sparse[x]]` in the
+    // wolf-ecs SparseSet, `a[b[i]]` in general) always took the out-of-line
+    // `js_array_get_index_or_string` route below. Fractional, negative, NaN
+    // and out-of-range keys keep that route unchanged; `-0` round-trips to
+    // index 0, which is what ToPropertyKey gives it too.
+    let int_idx = ctx.new_block("aidxkey.int");
+    let int_label = ctx.block_label(int_idx);
+    let generic_idx = ctx.new_block("aidxkey.generic");
+    let generic_label = ctx.block_label(generic_idx);
     ctx.current_block = array_idx;
+    {
+        let blk = ctx.block();
+        let nonnegative = blk.fcmp("oge", idx_double, "0.0");
+        let below_limit = blk.fcmp("olt", idx_double, "4294967296.0");
+        let in_range = blk.and(I1, &nonnegative, &below_limit);
+        blk.cond_br(&in_range, &int_label, &generic_label);
+    }
+    ctx.current_block = int_idx;
+    let int_label_checked = ctx.new_block("aidxkey.int.exact");
+    let int_label_checked_label = ctx.block_label(int_label_checked);
+    {
+        let blk = ctx.block();
+        // In range, so `fptosi` is well-defined; the round trip rejects
+        // fractional keys.
+        let idx_i64 = blk.fptosi(DOUBLE, idx_double, I64);
+        let idx_back = blk.sitofp(I64, &idx_i64, DOUBLE);
+        let is_integer = blk.fcmp("oeq", &idx_back, idx_double);
+        blk.cond_br(&is_integer, &int_label_checked_label, &generic_label);
+    }
+    ctx.current_block = int_label_checked;
+    let index_value = lower_inline_dyn_typed_array_get(ctx, arr_box, idx_double, false);
+    let index_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = generic_idx;
     let arr_handle = unbox_to_i64(ctx.block(), arr_box);
     let array_value = ctx.block().call(
         DOUBLE,
@@ -397,7 +436,11 @@ fn lower_claimable_array_string_key_get(
     ctx.current_block = merge_idx;
     ctx.block().phi(
         DOUBLE,
-        &[(&string_value, &string_end), (&array_value, &array_end)],
+        &[
+            (&string_value, &string_end),
+            (&index_value, &index_end),
+            (&array_value, &array_end),
+        ],
     )
 }
 

@@ -335,3 +335,80 @@ fn unknown_numeric_read_brands_typed_arrays_off_the_header_not_the_kind_cache() 
         "the inline read must no longer depend on the kind cache:\n{ir}"
     );
 }
+
+/// An `Any`-typed dynamic key (`packed[sparse[x]]`, `a[b[i]]`) on a
+/// declared-array receiver is tested inline for "integer-valued double in
+/// [0, 2^32)"; a hit takes the same receiver-unknown numeric tiers a
+/// statically proven index takes (inline typed-array read → dense
+/// Array-subclass `arrlike.ic` → complete dispatcher), while every other key
+/// keeps the out-of-line `js_array_get_index_or_string` route.
+#[test]
+fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
+    const SPARSE: u32 = 41;
+    let ir = ir_for(
+        "any_key_index_read",
+        vec![
+            Stmt::Let {
+                id: ITEMS,
+                name: "packed".to_string(),
+                ty: Type::Array(Box::new(Type::Any)),
+                mutable: false,
+                init: Some(Expr::PropertyGet {
+                    object: Box::new(Expr::Object(vec![(
+                        "value".to_string(),
+                        Expr::Array(vec![Expr::Number(7.0)]),
+                    )])),
+                    property: "value".to_string(),
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Let {
+                id: SPARSE,
+                name: "sparse".to_string(),
+                ty: Type::Array(Box::new(Type::Any)),
+                mutable: false,
+                init: Some(Expr::PropertyGet {
+                    object: Box::new(Expr::Object(vec![(
+                        "value".to_string(),
+                        Expr::Array(vec![Expr::Number(0.0)]),
+                    )])),
+                    property: "value".to_string(),
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Let {
+                id: RESULT,
+                name: "result".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(ITEMS)),
+                    index: Box::new(Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(SPARSE)),
+                        index: Box::new(Expr::Integer(0)),
+                    }),
+                }),
+            },
+        ],
+    );
+    assert!(
+        ir.contains("aidxkey.int.exact") && ir.contains("aidxkey.generic"),
+        "the dynamic key must be classified inline before choosing a route:\n{ir}"
+    );
+    let exact = super::class_field_barrier_tests::block_body(&ir, "aidxkey.int.")
+        .expect("the range-checked key block exists");
+    assert!(
+        exact.contains("fptosi double")
+            && exact.contains("sitofp i64")
+            && exact.contains("fcmp oeq"),
+        "the integer test must be the fptosi/sitofp round trip:\n{exact}"
+    );
+    assert!(
+        ir.contains("tav.get.brand") && ir.contains("arrlike.ic.family_token"),
+        "an integer key must reach the inline typed-array and dense-subclass tiers:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_array_get_index_or_string("),
+        "non-index keys must keep the complete key route:\n{ir}"
+    );
+}
