@@ -1336,10 +1336,7 @@ pub fn try_lower_func_ref_call(
         let generic_body_name = crate::codegen::generic_function_body_name(&fname);
         let mut guard: Option<String> = None;
         for (value, rep) in lowered.iter().zip(typed_i1_param_reps.iter()) {
-            let raw = ctx
-                .block()
-                .call(I32, rep.guard_fn(), &[(DOUBLE, value.as_str())]);
-            let ok = ctx.block().icmp_ne(I32, &raw, "0");
+            let ok = crate::codegen::emit_typed_arg_guard(ctx.block(), *rep, value.as_str());
             guard = Some(match guard {
                 Some(prev) => ctx.block().and(I1, &prev, &ok),
                 None => ok,
@@ -1362,8 +1359,7 @@ pub fn try_lower_func_ref_call(
         for (value, rep) in lowered.iter().zip(typed_i1_param_reps.iter()) {
             typed_args_storage.push(match rep {
                 crate::codegen::TypedParamRep::F64 => {
-                    ctx.block()
-                        .call(DOUBLE, rep.unbox_fn(), &[(DOUBLE, value.as_str())])
+                    crate::codegen::emit_typed_arg_to_raw(ctx.block(), *rep, value.as_str())
                 }
                 crate::codegen::TypedParamRep::I32 => {
                     ctx.block()

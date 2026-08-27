@@ -1145,10 +1145,7 @@ pub(super) fn try_lower_scalar_replaced_method_call(
     let guard_values = collect_guard_local_values(ctx, &arg_plans)?;
     let mut guard: Option<String> = None;
     for (_, value) in &guard_values {
-        let raw = ctx
-            .block()
-            .call(I32, "js_typed_f64_arg_guard", &[(DOUBLE, value.as_str())]);
-        let ok = ctx.block().icmp_ne(I32, &raw, "0");
+        let ok = crate::codegen::emit_typed_f64_guard(ctx.block(), value.as_str());
         guard = Some(match guard {
             Some(prev) => ctx.block().and(I1, &prev, &ok),
             None => ok,
@@ -1172,11 +1169,7 @@ pub(super) fn try_lower_scalar_replaced_method_call(
     for (id, value) in &guard_values {
         raw_locals.insert(
             *id,
-            ctx.block().call(
-                DOUBLE,
-                "js_typed_f64_arg_to_raw",
-                &[(DOUBLE, value.as_str())],
-            ),
+            crate::codegen::emit_typed_f64_to_raw_guarded(ctx.block(), value.as_str()),
         );
     }
     let mut fast_args = Vec::with_capacity(args.len());
