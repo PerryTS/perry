@@ -1675,39 +1675,119 @@ pub(crate) fn prune_dead_shape_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
 /// pointer-keyed slot indices. Mark/copy mode does not root anything; live
 /// object scans provide descriptor reachability, and post-copy rewrite follows
 /// only forwarding records those live edges already created.
+
+crate::perry_thread_local! {
+    /// Scratch memo for [`scan_shape_table_rekey_mut`]'s per-address probe,
+    /// reused across collections so the scan allocates nothing.
+    static PROBE_MEMO: std::cell::RefCell<std::collections::HashMap<(usize, bool), (bool, usize)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Per-descriptor bookkeeping after its keys address has been probed.
+///
+/// Lifted out of `scan_shape_table_rekey_mut`'s loop so the memoised path and
+/// the probing path cannot drift apart — the probe is what is deduplicated,
+/// never the bookkeeping, which still runs once per descriptor.
+#[inline]
+fn record_shape_scan_outcome(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    id: &u32,
+    descriptor: &mut ShapeDescriptor,
+    addr: usize,
+    moved: bool,
+    dead_descriptor_ids: &mut Vec<u32>,
+    descriptor_rekeys: &mut Vec<u32>,
+) {
+    // Validate the POST-visit address. A stale shape key can follow the
+    // forwarding record of the non-array tenant that recycled its address;
+    // checking only an unmoved old address misses that case.
+    if visitor.is_metadata_rewrite_phase() && shape_keys_address_is_recycled(addr) {
+        dead_descriptor_ids.push(*id);
+    } else if moved {
+        descriptor.keys = addr as u64;
+    }
+    // A live-object edge can rewrite the boxed `keys` slot before this metadata
+    // pass. Comparing against the address represented in the reverse maps
+    // catches both that ordering and a move observed here.
+    if descriptor.keys != descriptor.indexed_keys {
+        descriptor_rekeys.push(*id);
+    }
+}
+
 pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    // TEMPORARY (#6759 phase 2 measurement): this scanner is 53.3% of all
+    // root-scanner time on `claude -p`. Report what it is actually walking so
+    // the fix targets the real term instead of a guess.
     let mut descriptor_rekeys: Vec<u32> = Vec::new();
     let mut dead_descriptor_ids: Vec<u32> = Vec::new();
-    for (id, descriptor) in inner.descriptors.iter_mut() {
-        let mut addr = descriptor.keys as usize;
-        // #8112 ephemeron gate. A shape with an OLD carrier is rooted here:
-        // the minor that has to keep its keys array alive never enumerates the
-        // object that carries it. A shape with only young carriers is NOT —
-        // those receivers are traced, and each one emits the edge itself, so
-        // rooting them from the table would make every keys array ever minted
-        // immortal and turn `prune_dead_shape_keys`'s "is the keys array
-        // dead?" into a question it asks of itself.
-        let moved = if descriptor.old_carrier || descriptor.cache_carrier {
-            visitor.visit_usize_slot(&mut addr)
-        } else {
-            visitor.visit_metadata_usize_slot(&mut addr)
-        };
-        // Validate the POST-visit address. A stale shape key can follow the
-        // forwarding record of the non-array tenant that recycled its address;
-        // checking only an unmoved old address misses that case.
-        if visitor.is_metadata_rewrite_phase() && shape_keys_address_is_recycled(addr) {
-            dead_descriptor_ids.push(*id);
-        } else if moved {
-            descriptor.keys = addr as u64;
+
+    // #6759 phase 2: probe each distinct keys-array address ONCE.
+    //
+    // The per-descriptor probe is the expensive part of this scanner — 89.6% of
+    // its time is the rewrite phase, and each probe runs
+    // `classify_heap_space_in_range` and then reads the GC header at a
+    // scattered address (two likely cache misses). Shapes share keys arrays at
+    // a measured, stable 2.5:1, so the unmemoised loop paid that ~2.5 times per
+    // distinct address.
+    //
+    // Memoising is sound by construction: the same addresses are visited, just
+    // once each, and forwarding is a pure function of the address within one
+    // pass. Carriers take a different visit (`visit_usize_slot`, which MARKS in
+    // mark modes) than non-carriers, so the carrier flag is part of the key —
+    // otherwise a non-carrier hit could satisfy a carrier's marking duty.
+    // Reused across collections rather than allocated per scan: at ~300k
+    // entries a fresh map every GC is exactly the kind of churn the
+    // memory-parity work is trying to remove. `clear()` keeps the capacity.
+    PROBE_MEMO.with(|memo| {
+        let mut probe_memo = memo.borrow_mut();
+        probe_memo.clear();
+
+        for (id, descriptor) in inner.descriptors.iter_mut() {
+            let mut addr = descriptor.keys as usize;
+            // #8112 ephemeron gate. A shape with an OLD carrier is rooted here:
+            // the minor that has to keep its keys array alive never enumerates the
+            // object that carries it. A shape with only young carriers is NOT —
+            // those receivers are traced, and each one emits the edge itself, so
+            // rooting them from the table would make every keys array ever minted
+            // immortal and turn `prune_dead_shape_keys`'s "is the keys array
+            // dead?" into a question it asks of itself.
+            let is_carrier = descriptor.old_carrier || descriptor.cache_carrier;
+            let memo_key = (addr, is_carrier);
+            if let Some(&(prev_moved, prev_addr)) = probe_memo.get(&memo_key) {
+                // Already probed this exact (address, carrier-duty) pair in this
+                // pass — reuse the answer instead of paying the walk again.
+                let moved = prev_moved;
+                addr = prev_addr;
+                record_shape_scan_outcome(
+                    visitor,
+                    id,
+                    descriptor,
+                    addr,
+                    moved,
+                    &mut dead_descriptor_ids,
+                    &mut descriptor_rekeys,
+                );
+                continue;
+            }
+            let probe_addr = addr;
+            let moved = if is_carrier {
+                visitor.visit_usize_slot(&mut addr)
+            } else {
+                visitor.visit_metadata_usize_slot(&mut addr)
+            };
+            probe_memo.insert((probe_addr, is_carrier), (moved, addr));
+            record_shape_scan_outcome(
+                visitor,
+                id,
+                descriptor,
+                addr,
+                moved,
+                &mut dead_descriptor_ids,
+                &mut descriptor_rekeys,
+            );
         }
-        // A live-object edge can rewrite the boxed `keys` slot before this
-        // metadata pass. Comparing against the address represented in the
-        // reverse maps catches both that ordering and a move observed here.
-        if descriptor.keys != descriptor.indexed_keys {
-            descriptor_rekeys.push(*id);
-        }
-    }
+    });
     // Remove descriptors whose keys array was recycled.
     if !dead_descriptor_ids.is_empty() {
         for id in &dead_descriptor_ids {
