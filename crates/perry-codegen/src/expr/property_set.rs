@@ -761,8 +761,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // every local source: an erased non-string annotation is
                     // not proof that the current value cannot be a string.
                     if matches!(&**value, Expr::LocalGet(_)) {
-                        ctx.block()
-                            .call_void("js_string_addref_if_heap_string", &[(DOUBLE, &val_double)]);
+                        super::helpers::emit_string_addref_if_heap_string(ctx, &val_double);
                     }
                     let lowered_js = LoweredValue {
                         semantic: SemanticKind::JsValue,
@@ -840,10 +839,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // self-append doesn't mutate it in-place and corrupt the
                         // field.
                         if matches!(&**value, Expr::LocalGet(_)) {
-                            ctx.block().call_void(
-                                "js_string_addref_if_heap_string",
-                                &[(DOUBLE, &val_double)],
-                            );
+                            super::helpers::emit_string_addref_if_heap_string(ctx, &val_double);
                         }
                         let lowered_js = LoweredValue {
                             semantic: SemanticKind::JsValue,

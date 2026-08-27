@@ -72,8 +72,7 @@ fn demote_extracted_string_binding(ctx: &mut FnCtx<'_>, id: u32, value: &str) {
         || (ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id))
         || ctx.module_globals.contains_key(&id);
     if persistent_binding && matches!(ctx.local_type_hint(&id), Some(HirType::String)) {
-        ctx.block()
-            .call_void("js_string_addref_if_heap_string", &[(DOUBLE, value)]);
+        super::helpers::emit_string_addref_if_heap_string(ctx, value);
     }
 }
 
@@ -734,8 +733,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // variables as LocalSet, making that gap observable as the saved
             // string growing in place with its boxed accumulator (#8432).
             if matches!(value.as_ref(), Expr::LocalGet(source_id) if source_id != id) {
-                ctx.block()
-                    .call_void("js_string_addref_if_heap_string", &[(DOUBLE, &v)]);
+                super::helpers::emit_string_addref_if_heap_string(ctx, &v);
             }
             // Closure captures first (write through the runtime), then
             // locals, then module globals.
