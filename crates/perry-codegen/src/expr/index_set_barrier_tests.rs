@@ -410,3 +410,67 @@ fn runtime_array_setter_is_not_followed_by_a_duplicate_opaque_barrier() {
          inline store's precise slot barrier:\n{barrier_body}"
     );
 }
+
+/// The guarded property-receiver store follows ONE growth-forwarding edge
+/// inline, exactly like the guarded read tier, instead of failing its
+/// `!GC_FLAG_FORWARDED` test and going out of line on every store.
+///
+/// `this.vals[i] = v` has no writeback slot: once `vals` has grown past its
+/// initial capacity the object field keeps the pre-grow stub forever, so the
+/// old guard rejected the receiver on EVERY later store and the whole store
+/// paid the extend helper plus the allocator/registry forwarding resolver
+/// (the wolf-ecs `_ent`/`_updateTo`/`sparse` hot path). The heal is pinned
+/// three ways: the `deref` block selects the forwarding target, the selected
+/// live head is re-validated in `deref.live`, and the fast arm's element
+/// address is derived from that live head rather than from the original box.
+#[test]
+fn the_guarded_property_receiver_store_follows_one_forwarding_edge_inline() {
+    let ir = ir();
+    let deref =
+        block_body(&ir, "idxset.recv_prop.deref.").expect("guarded store emits its `deref` block");
+    let live = block_body(&ir, "idxset.recv_prop.deref.live.")
+        .expect("guarded store emits its `deref.live` block");
+    let fast =
+        block_body(&ir, "idxset.recv_prop.fast.").expect("guarded store emits its `fast` block");
+
+    // (1) `deref` reads the stub's first payload word and selects it as the
+    // live handle when the header says ARRAY + FORWARDED.
+    let select_line = deref
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains("select i1") && line.contains("i64"))
+        .expect("`deref` selects between the forwarding target and the receiver");
+    let live_handle = select_line
+        .split(" = ")
+        .next()
+        .expect("select defines a register")
+        .to_string();
+    let target = operand(select_line, 2).expect("select's taken operand");
+    let target_def = def_of(&deref, &target).expect("forwarding target is defined in `deref`");
+    assert!(
+        target_def.contains("load i64"),
+        "the forwarding target must be the stub's first payload word, got `{target_def}`"
+    );
+    assert!(
+        deref.contains("br i1") && deref.contains("idxset.recv_prop.deref.live."),
+        "`deref` must branch into `deref.live` after the heap-band test of the live handle"
+    );
+
+    // (2) `deref.live` re-reads the ARRAY brand and the FORWARDED bit from the
+    // LIVE handle (not from the original box) before admitting the fast arm.
+    assert!(
+        live.contains(&format!("sub i64 {live_handle}, 8"))
+            && live.contains(&format!("sub i64 {live_handle}, 7")),
+        "`deref.live` must re-validate the header of the selected live head"
+    );
+    assert!(
+        live.contains("idxset.recv_prop.fast."),
+        "`deref.live` is the fast arm's predecessor"
+    );
+
+    // (3) The fast arm's element address is computed from the live head.
+    assert!(
+        fast.contains(&format!("add i64 {live_handle}, ")),
+        "the fast arm must address the element relative to the live head, not the stub"
+    );
+}

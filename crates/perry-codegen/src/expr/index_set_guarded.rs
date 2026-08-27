@@ -94,10 +94,56 @@ pub(super) fn emit_guarded_inbounds_array_store(
     }
 
     ctx.current_block = deref_idx;
-    {
+    let live_deref_idx = ctx.new_block(&format!("{}.deref.live", block_prefix));
+    let live_deref_label = ctx.block_label(live_deref_idx);
+    let live_handle = {
         let blk = ctx.block();
         let arr_bits = blk.bitcast_double_to_i64(arr_box);
         let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+
+        let gc_type_addr = blk.sub(I64, &arr_handle, "8");
+        let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
+        let gc_type = blk.load(I8, &gc_type_ptr);
+        let is_array = blk.icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
+
+        let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
+        let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
+        let gc_flags = blk.load(I8, &gc_flags_ptr);
+        let forwarded_bits = blk.and(I8, &gc_flags, "128");
+        let is_forwarded = blk.icmp_ne(I8, &forwarded_bits, "0");
+
+        // Array growth (and GC evacuation) leave the live user address in the
+        // first payload word of a forwarded array stub. Follow one edge inline
+        // and re-brand/re-check the destination below, exactly as the guarded
+        // read tier does. This matters most for receivers that are NOT stack
+        // locals: `this.vals[i] = v` has no writeback slot, so once the array
+        // has grown past its initial capacity the object field keeps the
+        // pre-grow stub forever. Before this the stub failed `not_forwarded`
+        // on EVERY later store and the whole store went out of line through
+        // the extend helper and the allocator/registry resolver (the ECS
+        // add/remove hot path: `this._ent[id] = arch`, `this.sparse[x] = n`).
+        // Longer or corrupt chains still take the slow arm.
+        let original_arr_ptr = blk.inttoptr(I64, &arr_handle);
+        let forwarding_target = blk.load(I64, &original_arr_ptr);
+        let follow_forwarding = blk.and(I1, &is_array, &is_forwarded);
+        let live_handle = blk.select(I1, &follow_forwarding, I64, &forwarding_target, &arr_handle);
+
+        let live_top = blk.lshr(I64, &live_handle, "48");
+        let live_top_clear = blk.icmp_eq(I64, &live_top, "0");
+        let live_above_handle_band = blk.icmp_ugt(I64, &live_handle, "1048575");
+        let live_below_heap_limit = blk.icmp_ult(I64, &live_handle, "140737488355328");
+        let mut live_heap_candidate = blk.and(I1, &live_top_clear, &live_above_handle_band);
+        live_heap_candidate = blk.and(I1, &live_heap_candidate, &live_below_heap_limit);
+        // A forwarding word is not trusted until its address is in the heap
+        // band: never read the destination header speculatively.
+        blk.cond_br(&live_heap_candidate, &live_deref_label, &slow_label);
+        live_handle
+    };
+
+    ctx.current_block = live_deref_idx;
+    {
+        let blk = ctx.block();
+        let arr_handle = live_handle.clone();
 
         let gc_type_addr = blk.sub(I64, &arr_handle, "8");
         let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
@@ -160,8 +206,9 @@ pub(super) fn emit_guarded_inbounds_array_store(
     // invariant, which is why that half of #7511's argument does not transfer.
     let (arr_handle, element_addr, value_bits) = {
         let blk = ctx.block();
-        let arr_bits = blk.bitcast_double_to_i64(arr_box);
-        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+        // The live (possibly forwarded-once) head proved by `deref.live`,
+        // which is this block's only predecessor.
+        let arr_handle = live_handle.clone();
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");
         let with_header = blk.add(I64, &byte_offset, "8");
@@ -186,10 +233,10 @@ pub(super) fn emit_guarded_inbounds_array_store(
         (arr_handle, element_addr, value_bits)
     };
     if write_barrier_needed {
-        // `arr_handle` reached this block through the guard's own
-        // `obj_type == GC_TYPE_ARRAY` / `!GC_FLAG_FORWARDED` header reads, so
-        // it is a live, non-forwarded GC array user pointer — the precondition
-        // for reading its header byte. (LLVM CSEs that byte load with the
+        // `arr_handle` is the live head `deref.live` just proved through its
+        // own `obj_type == GC_TYPE_ARRAY` / `!GC_FLAG_FORWARDED` header reads,
+        // so it is a live, non-forwarded GC array user pointer — the
+        // precondition for reading its header byte. (LLVM CSEs that byte load with the
         // guard's, so the gate costs the test and the branch, not a reload.)
         emit_write_barrier_slot_value_and_generation_tested(
             ctx,
