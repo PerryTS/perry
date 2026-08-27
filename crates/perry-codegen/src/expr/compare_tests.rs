@@ -318,8 +318,20 @@ fn strict_eq_reuses_a_non_pointer_left_operand_across_an_allocating_right_operan
             },
         ],
     );
-    let left = call_operand_of(&ir, "js_eq", 0);
-    let right = call_operand_of(&ir, "js_eq", 1);
+    // A proven-Number left operand lowers the whole comparison inline: every
+    // non-Number NaN-box reads as a NaN double, so `fcmp oeq` answers `false`
+    // for the object exactly as `js_eq` would, and no helper call remains.
+    assert!(
+        !ir.contains("@js_eq(") && !ir.contains("@js_strict_eq("),
+        "a proven-Number left operand must not pay a runtime equality call:\n{ir}"
+    );
+    let fcmp = ir
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains("fcmp oeq double"))
+        .unwrap_or_else(|| panic!("no inline numeric strict-equality compare in:\n{ir}"));
+    let left = super::class_field_barrier_tests::operand(fcmp, 1).expect("fcmp left operand");
+    let right = super::class_field_barrier_tests::operand(fcmp, 2).expect("fcmp right operand");
     let left_producer = producer_line(&ir, &left);
     let right_producer = producer_line(&ir, &right);
     assert!(
