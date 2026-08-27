@@ -102,6 +102,7 @@
 9 crates/perry-runtime/src/object/global_this/populate.rs
 5 crates/perry-runtime/src/object/global_this_webassembly.rs
 3 crates/perry-runtime/src/object/mod.rs
+2 crates/perry-runtime/src/object/meta_accessors.rs
 3 crates/perry-runtime/src/object/namespace_create.rs
 1 crates/perry-runtime/src/object/native_call_method/object_proto.rs
 4 crates/perry-runtime/src/object/native_call_method/primitive_methods.rs
