@@ -35,13 +35,19 @@ fn push(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
     js_array_push_f64(arr, value)
 }
 
-/// `const rows = []; rows.push(new C())` — the construction shape the
-/// compile-time collector already admits (#7034 E1/E2), and the one the
-/// measured kernel uses.
+/// Build the construction shape admitted by the compile-time collector, then
+/// request the proof its generated preheader would consume. Most tests below
+/// need a proven fixture; the demand-driven lifecycle itself has a dedicated
+/// test.
 fn built_from_pushes(class_id: u32, count: usize) -> *mut ArrayHeader {
     let mut arr = js_array_alloc(count as u32);
     for _ in 0..count {
         arr = push(arr, instance(class_id));
+    }
+    if count != 0 {
+        let established = unsafe { ensure_element_shape(arr) }
+            .expect("the homogeneous fixture must prove on demand");
+        assert_eq!(established.class_id, class_id);
     }
     arr
 }
@@ -55,12 +61,23 @@ fn proof(arr: *mut ArrayHeader) -> Option<ElementShapeProof> {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn first_push_of_a_shaped_object_into_an_empty_array_sets_the_invariant() {
+fn pushes_do_not_create_an_unrequested_element_shape_proof() {
     let _serialized = test_serialize();
-    let arr = built_from_pushes(CLASS_A, 1);
-    let proof = proof(arr).expect("first shaped push must establish the invariant");
-    assert_eq!(proof.class_id, CLASS_A);
-    assert_eq!(proof.verified_len, 1);
+    let mut arr = js_array_alloc(8);
+    for _ in 0..8 {
+        arr = push(arr, instance(CLASS_A));
+    }
+    assert!(
+        proof(arr).is_none(),
+        "stores must not create an unused proof"
+    );
+    unsafe { assert!(!test_element_shape_bit_set(arr)) };
+    assert!(!test_element_shape_record_exists(arr as usize));
+
+    let requested = unsafe { ensure_element_shape(arr) }
+        .expect("a consumer must still be able to prove the homogeneous array");
+    assert_eq!(requested.class_id, CLASS_A);
+    assert_eq!(requested.verified_len, 8);
     unsafe { assert!(test_element_shape_bit_set(arr)) };
     assert!(test_element_shape_record_exists(arr as usize));
 }
@@ -68,7 +85,10 @@ fn first_push_of_a_shaped_object_into_an_empty_array_sets_the_invariant() {
 #[test]
 fn matching_pushes_extend_the_verified_prefix() {
     let _serialized = test_serialize();
-    let arr = built_from_pushes(CLASS_A, 8);
+    let mut arr = built_from_pushes(CLASS_A, 1);
+    for _ in 1..8 {
+        arr = push(arr, instance(CLASS_A));
+    }
     let proof = proof(arr).expect("homogeneous pushes must keep the invariant");
     assert_eq!(proof.class_id, CLASS_A);
     assert_eq!(proof.verified_len, 8);

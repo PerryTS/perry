@@ -53,15 +53,15 @@ fn instance(class_id: u32) -> f64 {
     crate::value::js_nanbox_pointer(obj as i64)
 }
 
-/// `const rows = []; rows.push(new C())` — the construction shape the measured
-/// kernel uses, and the one `note_element_store` establishes from.
+/// `const rows = []; rows.push(new C())` followed by the proof request an
+/// optimized loop emits in its preheader.
 fn shaped(count: usize) -> *mut ArrayHeader {
     let mut arr = js_array_alloc(count as u32);
     for _ in 0..count {
         arr = js_array_push_f64(arr, instance(CLASS_A));
     }
     assert!(
-        unsafe { element_shape_proof(arr) }.is_some(),
+        unsafe { ensure_element_shape(arr) }.is_some(),
         "fixture must start proven, or every verdict below is vacuous"
     );
     arr
@@ -394,16 +394,12 @@ fn matrix_length_truncate_and_extend_revoke() {
 // ---------------------------------------------------------------------------
 // BUILDERS — the "rebuild regains it" half of self-healing
 //
-// Array *builders* split across the two funnels (audited for #7480): the
-// per-element ones (`JSON.parse`, the #7539 tape materialiser, most of the
-// `Array.from` family, the concat fallback) reach `layout_note_slot` and so
-// **establish** as they fill; the bulk-copy ones (dense spread, the concat fast
-// path, `Array.from` on a jsvalue) `ptr::copy` and then `rebuild_array_layout_
-// exact`, which leaves the result deliberately **unproven**.
-//
-// Both are correct — the rule is that a builder may leave a result unproven,
-// but must never leave it proven at the WRONG class. These tests pin exactly
-// that, and pin that the unproven case heals on the first `ensure`.
+// Array builders deliberately leave their result unproven. Creating and
+// maintaining a side-table proof during every per-element fill taxes programs
+// that never emit an element-shape consumer. Bulk-copy builders already had
+// this lifecycle; per-element builders now match it. The rule is that a
+// builder starts unproven, proves on the first `ensure`, and must never report
+// the wrong class.
 // ---------------------------------------------------------------------------
 
 /// `[...arr]` — the bulk-copy builder. The clone is a fresh allocation that
@@ -458,18 +454,20 @@ fn matrix_a_revoked_array_regains_the_invariant_when_rebuilt() {
     );
 
     // Rebuild it the way user code does — every element replaced by a shaped
-    // instance — and the invariant comes back on its own.
+    // instance. It remains unproven until a consumer asks, then self-heals.
     let mut rebuilt = js_array_alloc(4);
     for _ in 0..4 {
         rebuilt = js_array_push_f64(rebuilt, instance(CLASS_A));
     }
-    let healed = proof(rebuilt).expect("a rebuilt homogeneous array is proven again");
+    assert!(proof(rebuilt).is_none());
+    let healed = unsafe { ensure_element_shape(rebuilt) }
+        .expect("a rebuilt homogeneous array proves on demand");
     assert_eq!(healed.class_id, CLASS_A);
     assert_eq!(healed.verified_len, 4);
 }
 
-/// `Array.from`-family builder that fills per element: it reaches
-/// `layout_note_slot`, so a homogeneous source establishes as it fills.
+/// `Array.from`-family builder that fills per element: it stays unproven until
+/// a generated consumer requests its shape.
 #[test]
 fn matrix_from_values_builder_establishes_or_heals_but_never_lies() {
     let _serialized = test_serialize();
