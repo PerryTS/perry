@@ -5,11 +5,11 @@ fn test_trace_object_uses_pointer_layout_mask() {
     clear_marks();
     clear_mark_seeds();
 
-    let numeric = crate::object::js_object_alloc(0, 3);
+    let numeric = crate::object::js_object_alloc(0, 8);
     crate::object::js_object_set_field(numeric, 0, crate::value::JSValue::number(1.0));
     crate::object::js_object_set_field(numeric, 1, crate::value::JSValue::number(2.0));
     crate::object::js_object_set_field(numeric, 2, crate::value::JSValue::bool(false));
-    assert_eq!(test_layout_pointer_slot_count(numeric as usize, 3), Some(0));
+    assert_eq!(test_layout_pointer_slot_count(numeric as usize, 8), Some(0));
     assert_eq!(test_heap_child_slot_count(numeric as *mut u8), 0);
 
     let valid_ptrs = build_valid_pointer_set();
@@ -25,11 +25,11 @@ fn test_trace_object_uses_pointer_layout_mask() {
 
     let child = crate::string::js_string_from_bytes(b"object-child".as_ptr(), 12);
     let child_header = unsafe { header_from_user_ptr(child as *mut u8) };
-    let mixed = crate::object::js_object_alloc(0, 3);
+    let mixed = crate::object::js_object_alloc(0, 8);
     crate::object::js_object_set_field(mixed, 0, crate::value::JSValue::number(1.0));
     crate::object::js_object_set_field(mixed, 1, crate::value::JSValue::string_ptr(child));
     crate::object::js_object_set_field(mixed, 2, crate::value::JSValue::number(3.0));
-    assert_eq!(test_layout_pointer_slot_count(mixed as usize, 3), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(mixed as usize, 8), Some(1));
 
     let valid_ptrs = build_valid_pointer_set();
     assert!(try_mark_value(
@@ -134,11 +134,11 @@ fn test_trace_closure_uses_pointer_layout_mask() {
     clear_marks();
     clear_mark_seeds();
 
-    let numeric = crate::closure::js_closure_alloc(layout_mask_test_closure as *const u8, 3);
+    let numeric = crate::closure::js_closure_alloc(layout_mask_test_closure as *const u8, 8);
     crate::closure::js_closure_set_capture_f64(numeric, 0, 1.0);
     crate::closure::js_closure_set_capture_f64(numeric, 1, 2.0);
     crate::closure::js_closure_set_capture_ptr(numeric, 2, 7);
-    assert_eq!(test_layout_pointer_slot_count(numeric as usize, 3), Some(0));
+    assert_eq!(test_layout_pointer_slot_count(numeric as usize, 8), Some(0));
     assert_eq!(test_heap_child_slot_count(numeric as *mut u8), 0);
 
     let valid_ptrs = build_valid_pointer_set();
@@ -154,7 +154,7 @@ fn test_trace_closure_uses_pointer_layout_mask() {
 
     let child = crate::string::js_string_from_bytes(b"closure-child".as_ptr(), 13) as *mut u8;
     let child_header = unsafe { header_from_user_ptr(child) };
-    let mixed = crate::closure::js_closure_alloc(layout_mask_test_closure as *const u8, 3);
+    let mixed = crate::closure::js_closure_alloc(layout_mask_test_closure as *const u8, 8);
     crate::closure::js_closure_set_capture_f64(mixed, 0, 1.0);
     crate::closure::js_closure_set_capture_f64(
         mixed,
@@ -162,7 +162,7 @@ fn test_trace_closure_uses_pointer_layout_mask() {
         f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
     );
     crate::closure::js_closure_set_capture_ptr(mixed, 2, 7);
-    assert_eq!(test_layout_pointer_slot_count(mixed as usize, 3), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(mixed as usize, 8), Some(1));
 
     let valid_ptrs = build_valid_pointer_set();
     assert!(try_mark_value(

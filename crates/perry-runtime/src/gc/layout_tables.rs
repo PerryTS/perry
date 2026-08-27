@@ -404,6 +404,39 @@ pub(in crate::gc) fn layout_mask_min_slots() -> usize {
 /// bounds the extra trace work and changes the fewest layout preconditions.
 pub(in crate::gc) const DEFAULT_MASK_MIN_SLOTS: usize = 4;
 
+/// Objects and closures take the scan below EIGHT slots (2026-08-27).
+///
+/// The array threshold above was tuned on long-lived arrays. Small records
+/// are different: a four-to-seven-slot object literal or iterator backing
+/// with one pointer field — the shape of every command record and every
+/// `for…of` iterator on the `codehz/ecs` sync path — minted and dropped a
+/// per-object mask on EVERY allocation and death (35k side-table inserts per
+/// frame), which saturated the address filters and kept
+/// `layout_forget_object` on the thread-local slow path for every later
+/// allocation in the program. `PERRY_LAYOUT_MASK_MIN_SLOTS=8` measured +5.9%
+/// (5/5 pairs) and `=16` +6.1% on that row; a mask on a record that small can
+/// skip at most a handful of tag checks per scan, which never repays a hash
+/// insert and remove per object lifetime.
+/// `PERRY_LAYOUT_OBJECT_MASK_MIN_SLOTS` overrides it for bisection.
+pub(in crate::gc) const DEFAULT_OBJECT_MASK_MIN_SLOTS: usize = 8;
+
+#[inline(always)]
+pub(in crate::gc) fn layout_object_mask_min_slots() -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(usize::MAX);
+    match N.load(Ordering::Relaxed) {
+        usize::MAX => {
+            let v = std::env::var("PERRY_LAYOUT_OBJECT_MASK_MIN_SLOTS")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(DEFAULT_OBJECT_MASK_MIN_SLOTS);
+            N.store(v, Ordering::Relaxed);
+            v
+        }
+        v => v,
+    }
+}
+
 /// True when either per-object side table may hold an entry. `false` is a
 /// proof of emptiness (see [`PER_OBJECT_LAYOUTS_NONEMPTY`]); `true` is only a
 /// hint, so every caller still has to handle a miss.
@@ -770,5 +803,10 @@ pub(in crate::gc) unsafe fn layout_prefers_scan_over_mask(
     user_ptr: usize,
     slot_index: usize,
 ) -> bool {
-    layout_payload_slot_count(header, user_ptr, slot_index) < layout_mask_min_slots()
+    let min_slots = if (*header).obj_type == GC_TYPE_ARRAY {
+        layout_mask_min_slots()
+    } else {
+        layout_object_mask_min_slots()
+    };
+    layout_payload_slot_count(header, user_ptr, slot_index) < min_slots
 }
