@@ -10,7 +10,9 @@ use super::*;
 #[test]
 fn strict_dense_pointer_overwrite_lane_matches_the_general_path() {
     use super::indexing::test_strict_dense_pointer_overwrite as lane;
-    unsafe {
+    // The helpers below are already `unsafe fn`s called from an unsafe context
+    // higher up, so this block is redundant and `-D unused-unsafe` rejects it.
+    {
         let objects: Vec<f64> = (0..4)
             .map(|_| {
                 let obj = crate::arena::arena_alloc_gc(40, 8, crate::gc::GC_TYPE_OBJECT);
