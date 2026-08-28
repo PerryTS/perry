@@ -35,7 +35,7 @@ use std::collections::HashMap;
 pub(crate) struct ShapeIndex {
     /// Key count covered by `slots`. Longer live array ⟹ catch up
     /// incrementally (append-only while shared); shorter ⟹ a delete
-    /// compacted it — drop and rebuild on next lookup.
+    /// compacted it — drop and rebuild on next lookup_ways.
     indexed_len: u32,
     /// FNV-1a content hash of key bytes → candidate slots (collisions
     /// resolved by the per-hit content validation).
@@ -201,7 +201,7 @@ struct ShapeTableInner {
     /// #8125: `PtrHashMap`, not the SipHash default.
     ///
     /// This is the map `shape_descriptor_by_id` probes, and that probe is the
-    /// single hottest runtime lookup in the object model: `object_is_regular`
+    /// single hottest runtime lookup_ways in the object model: `object_is_regular`
     /// runs it once per array element-shape test (3 M times on the `retain`
     /// bench, 20 M on `churn`) and, since #8113 deleted
     /// `ObjectHeader::field_count`, `object_live_slot_count` runs it on every
@@ -233,7 +233,7 @@ struct ShapeTableInner {
     /// `RandomState` here made this the only SipHash map left on the shape
     /// path. Profiling `claude -p` showed `RandomState::hash_one` at 17
     /// self-samples inside `shapes::` alone (57 across the process) — pure
-    /// hashing overhead on a lookup that runs on every descriptor
+    /// hashing overhead on a lookup_ways that runs on every descriptor
     /// install/retire.
     ///
     /// `FastKeyHasher` is the right third option: it implements only `write`,
@@ -251,7 +251,7 @@ struct ShapeTableInner {
     ids_by_keys: crate::fast_hash::PtrHashMap<u64, Vec<u32>>,
 }
 
-/// Ways in the direct-mapped shape-descriptor lookup cache. Power of two so
+/// Ways in the direct-mapped shape-descriptor lookup_ways cache. Power of two so
 /// the index is a mask. 256 x 16 bytes = 4 KiB per thread.
 const SHAPE_LOOKUP_WAYS: usize = 256;
 
@@ -274,7 +274,7 @@ pub(crate) struct ShapeTable {
     /// in place (`old_carrier`, `cache_carrier`, `keys` after evacuation), and a
     /// cached copy would go quietly stale. Holding the address means a hit
     /// always reads current data.
-    lookup: [ShapeLookupWay; SHAPE_LOOKUP_WAYS],
+    lookup_ways: [ShapeLookupWay; SHAPE_LOOKUP_WAYS],
     /// Bumped whenever a record's ADDRESS can change under an id that is still
     /// in use: removal, and the one insert path that can replace an existing id
     /// with a fresh `Box`. A fresh-id insert cannot invalidate an existing way,
@@ -286,7 +286,7 @@ pub(crate) struct ShapeTable {
 impl ShapeTable {
     pub(crate) fn new() -> Self {
         ShapeTable {
-            lookup: std::array::from_fn(|_| std::cell::Cell::new((0, 0, 0))),
+            lookup_ways: std::array::from_fn(|_| std::cell::Cell::new((0, 0, 0))),
             lookup_epoch: std::cell::Cell::new(1),
             inner: RefCell::new(ShapeTableInner {
                 indices: crate::fast_hash::new_ptr_hash_map(),
@@ -575,7 +575,7 @@ pub(crate) fn shape_descriptor_by_id(shape_id: u32) -> Option<ShapeDescriptor> {
     }
     let table = &crate::state::state().shapes;
     let epoch = table.lookup_epoch.get();
-    let way = &table.lookup[(shape_id as usize) & (SHAPE_LOOKUP_WAYS - 1)];
+    let way = &table.lookup_ways[(shape_id as usize) & (SHAPE_LOOKUP_WAYS - 1)];
 
     // Hit: mask, compare, deref. No RefCell borrow, no hash probe.
     let (cached_id, record, cached_epoch) = way.get();
@@ -595,7 +595,7 @@ pub(crate) fn shape_descriptor_by_id(shape_id: u32) -> Option<ShapeDescriptor> {
     Some(lift_descriptor(record))
 }
 
-/// Invalidate the whole lookup cache.
+/// Invalidate the whole lookup_ways cache.
 ///
 /// Called where a record's ADDRESS can change while its id stays in use:
 /// removal, and the insert path that can replace an existing id with a fresh
@@ -611,7 +611,7 @@ fn invalidate_shape_lookup_cache() {
 }
 
 /// Immutable ordinary-vs-class fact with a pointer-free, per-agent direct
-/// cache. The first observation remains the authoritative descriptor lookup;
+/// cache. The first observation remains the authoritative descriptor lookup_ways;
 /// subsequent observations avoid the hot ShapeId HashMap borrow.
 #[inline]
 pub(crate) fn shape_object_kind_by_id(shape_id: u32) -> Option<ShapeObjectKind> {
@@ -791,7 +791,7 @@ fn install_external_shape_id(
     // id canonical for subsequent births in this agent.
     //
     // This is the one insert that can REPLACE a live id with a fresh box, so
-    // the lookup cache has to be invalidated here (the fresh-id insert in
+    // the lookup_ways cache has to be invalidated here (the fresh-id insert in
     // `intern_shape_descriptor` cannot, and deliberately does not).
     invalidate_shape_lookup_cache();
     inner.descriptors.insert(id, box_descriptor(descriptor));
@@ -940,7 +940,7 @@ unsafe fn install_cached_object_shape_version_impl(
     }
 
     // Debug/test builds verify the cache-to-table invariant before trusting
-    // the constant-time release publication. This lookup is compiled out of
+    // the constant-time release publication. This lookup_ways is compiled out of
     // optimized release builds, where full-GC pruning validates both ShapeIds
     // and the cache's rooted target edge keeps its descriptor live.
     #[cfg(debug_assertions)]
@@ -1024,7 +1024,7 @@ pub(crate) unsafe fn stamp_object_shape(
         lineage.object_kind,
     ));
     if id != (*obj).parent_class_id {
-        // Read-side lookup also calls `stamp_object_shape` to populate its
+        // Read-side lookup_ways also calls `stamp_object_shape` to populate its
         // field cache. Preserve a proved Array-subclass prefix when that call
         // merely republishes the exact current descriptor; retire it only for
         // an actual structural identity change.
@@ -1638,7 +1638,7 @@ pub(crate) fn shape_note_append(
 }
 
 /// Back-fill a linear-scan hit (no-op when the shape has no entry — the
-/// next lookup builds it wholesale at the caller's threshold).
+/// next lookup_ways builds it wholesale at the caller's threshold).
 pub(crate) fn shape_note_hit(keys: *const ArrayHeader, key_hash: u64, slot: u32) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     if let Some(shape) = inner.indices.get_mut(&(keys as usize)) {
@@ -1703,7 +1703,7 @@ fn shape_keys_address_is_recycled(addr: usize) -> bool {
 /// keys array is dead. A live object has already traced its authoritative
 /// header edge and synchronized the descriptor named by its ShapeId, so a
 /// descriptor removed here cannot be named by a live object. Correctness fails
-/// closed on a missing lookup, independently of pruning.
+/// closed on a missing lookup_ways, independently of pruning.
 pub(crate) fn prune_dead_shape_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     // A shape keys entry is keyed by the address of its keys array — a
@@ -1837,7 +1837,12 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
                 continue;
             }
             let probe_addr = addr;
-            let moved = if is_carrier {
+            // Written out rather than reusing `is_carrier` on purpose: the
+            // census gate (`scripts/shape_descriptor_census.py`) pins this exact
+            // two-armed expression so that a sabotage which widens the gate or
+            // swaps the arms is red, and its own self-test sabotages this very
+            // literal. `is_carrier` above is the same predicate, and keys the memo.
+            let moved = if descriptor.old_carrier || descriptor.cache_carrier {
                 visitor.visit_usize_slot(&mut addr)
             } else {
                 visitor.visit_metadata_usize_slot(&mut addr)
@@ -1912,130 +1917,13 @@ thread_local! {
     static RECYCLED_KEYS_CHECK_SUPPRESSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
+/// Test-only helpers for the shape table, in a sibling file (see the cap note there).
 #[cfg(test)]
-#[inline]
-pub(crate) fn test_keys_edge_suppressed() -> bool {
-    KEYS_EDGE_SUPPRESSED.with(std::cell::Cell::get)
-}
-
-/// RAII guard so a panicking fixture cannot leave a suppression on for the
-/// next test on this thread.
-#[cfg(test)]
-pub(crate) struct TestKeysEdgeSuppression {
-    edge: bool,
-}
+#[path = "shapes_test_support.rs"]
+mod shapes_test_support;
 
 #[cfg(test)]
-impl TestKeysEdgeSuppression {
-    /// Drop the only edge. Nothing roots or rewrites the keys array.
-    pub(crate) fn without_descriptor_edge() -> Self {
-        Self {
-            edge: KEYS_EDGE_SUPPRESSED.with(|c| c.replace(true)),
-        }
-    }
-}
-
-#[cfg(test)]
-impl Drop for TestKeysEdgeSuppression {
-    fn drop(&mut self) {
-        KEYS_EDGE_SUPPRESSED.with(|c| c.set(self.edge));
-    }
-}
-
-/// Test-only sabotage of the recycled-address type check. Keeping this scoped
-/// and unshipped lets the regression fixture prove its detector would fail if
-/// both prune and metadata rewrite trusted the replacement tenant.
-#[cfg(test)]
-pub(crate) struct TestRecycledKeysCheckSuppression {
-    previous: bool,
-}
-
-#[cfg(test)]
-impl TestRecycledKeysCheckSuppression {
-    pub(crate) fn new() -> Self {
-        Self {
-            previous: RECYCLED_KEYS_CHECK_SUPPRESSED.with(|cell| cell.replace(true)),
-        }
-    }
-}
-
-#[cfg(test)]
-impl Drop for TestRecycledKeysCheckSuppression {
-    fn drop(&mut self) {
-        RECYCLED_KEYS_CHECK_SUPPRESSED.with(|cell| cell.set(self.previous));
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn test_shape_entry_exists(keys_id: usize) -> bool {
-    crate::state::state()
-        .shapes
-        .inner
-        .borrow()
-        .indices
-        .get(&keys_id)
-        .is_some()
-}
-
-#[cfg(test)]
-pub(crate) fn test_shape_descriptor_count() -> usize {
-    crate::state::state()
-        .shapes
-        .inner
-        .borrow()
-        .descriptors
-        .len()
-}
-
-#[cfg(test)]
-pub(crate) fn test_clear_shape_table() {
-    let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    inner.indices.clear();
-    inner.descriptors.clear();
-    inner.ids_by_facts.clear();
-    inner.ids_by_keys.clear();
-    drop(inner);
-    clear_shape_object_kind_cache();
-}
-
-#[cfg(test)]
-pub(crate) fn test_drop_shape_descriptors(keys_id: usize) {
-    let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    let stale = inner
-        .ids_by_keys
-        .remove(&(keys_id as u64))
-        .unwrap_or_default();
-    for id in stale {
-        remove_descriptor_and_reverse_indices(&mut inner, id);
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_shape_entry(keys_id: usize) {
-    crate::state::state()
-        .shapes
-        .inner
-        .borrow_mut()
-        .indices
-        .insert(
-            keys_id,
-            ShapeIndex {
-                indexed_len: 0,
-                slots: HashMap::new(),
-            },
-        );
-    let _ = shape_descriptor_ensure(keys_id as *const ArrayHeader, 0, 0)
-        .expect("test shape id range unexpectedly exhausted");
-}
-
-#[cfg(test)]
-pub(crate) fn test_shape_id_for_keys(keys_id: usize) -> Option<u32> {
-    let inner = crate::state::state().shapes.inner.borrow();
-    inner
-        .ids_by_keys
-        .get(&(keys_id as u64))
-        .and_then(|ids| ids.first().copied())
-}
+pub(crate) use shapes_test_support::*;
 
 /// The shape-table unit suites, in a sibling file: `shapes.rs` sits close to
 /// the repo's 2000-line-per-file cap and #8112 added the descriptor record's
