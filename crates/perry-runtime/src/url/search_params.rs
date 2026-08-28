@@ -70,6 +70,30 @@ pub(crate) fn url_search_params_backing_of(object: f64) -> Option<*mut ObjectHea
     if obj.is_null() {
         return None;
     }
+    // Only an ORDINARY object can carry the named backing field, so every
+    // other pointer receiver is decided here — before the handle scope and
+    // the key-string allocation below.
+    //
+    // This probe sits on two type-erased hot paths: `js_get_iterator` (every
+    // `for…of` over a pointer value reaches it before the collection arms)
+    // and the generic `js_native_call_method` dispatch. Both hand it Maps,
+    // Sets, arrays, closures and Date cells, none of which have named fields
+    // at all — and each such call was allocating a heap string for the key,
+    // rooting the receiver across it, and running a full by-name lookup only
+    // to return `None`. On a 4k-entity ECS archetype-migration frame that was
+    // ~14% of GetIterator and ~16% of native method dispatch.
+    //
+    // The gate is the same one `shape_is_url_search_params` already applies a
+    // few lines below, for the same reason (#5964: a Date cell read at
+    // `ObjectHeader` offsets faults). A `class X extends URLSearchParams`
+    // instance — the #6710 case this function exists for — IS an ordinary
+    // object, so it still reaches the lookup.
+    // SAFETY: `try_read_gc_header` classifies the address before reading, and
+    // rejects handles, slab buffers and anything without a plausible header.
+    match unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) } {
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+        _ => return None,
+    }
     // Root `obj` across the (heap-allocating) key string so a GC evacuation
     // mid-allocation can't leave it dangling before the field read.
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1232,4 +1256,48 @@ pub(crate) fn url_search_params_method_value(obj: *const ObjectHeader, name: &st
         crate::value::js_nanbox_pointer(obj as i64),
     );
     Some(crate::value::js_nanbox_pointer(closure as i64))
+}
+
+#[cfg(test)]
+mod backing_probe_gate_tests {
+    use super::*;
+
+    /// The backing probe must decide non-object receivers from the GC header
+    /// alone. It sits on `js_get_iterator` and the generic method-dispatch
+    /// path, where the receiver is type-erased and is usually a collection;
+    /// without the gate each of those calls allocated a key string and ran a
+    /// by-name lookup only to return `None`.
+    ///
+    /// Asserted through the public entry points rather than by counting
+    /// allocations: a Map and a Set are exactly the receivers the hot paths
+    /// hand it, and both must answer `None` while a genuine backing-carrying
+    /// object still answers `Some`.
+    #[test]
+    fn backing_probe_declines_non_object_receivers() {
+        let map = crate::map::js_map_alloc(4);
+        let map_value = crate::value::js_nanbox_pointer(map as i64);
+        assert!(
+            url_search_params_backing_of(map_value).is_none(),
+            "a Map cannot carry a named backing field"
+        );
+
+        let set = crate::set::js_set_alloc(4);
+        let set_value = crate::value::js_nanbox_pointer(set as i64);
+        assert!(
+            url_search_params_backing_of(set_value).is_none(),
+            "a Set cannot carry a named backing field"
+        );
+
+        // A plain object without the field is still decided correctly (it
+        // passes the header gate and fails the field lookup).
+        let plain = crate::object::js_object_alloc(0, 0);
+        let plain_value = crate::value::js_nanbox_pointer(plain as i64);
+        assert!(
+            url_search_params_backing_of(plain_value).is_none(),
+            "an ordinary object without the backing field answers None"
+        );
+
+        // Non-pointer receivers stay rejected by the tag test above the gate.
+        assert!(url_search_params_backing_of(1.0).is_none());
+    }
 }
