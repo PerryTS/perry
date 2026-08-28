@@ -336,6 +336,30 @@ fn rebuild_set_index(set: *mut SetHeader) {
     }
 }
 
+/// Repair `SET_INDEX` after an ordered delete compacted the elements buffer.
+///
+/// Removes the deleted value's entry and decrements every stored offset that
+/// sat after it. Equivalent to rebuilding the table from the compacted buffer
+/// — the offsets are exactly what a rebuild would produce — but it re-hashes
+/// nothing, which is what made the rebuild quadratic when a Set is emptied.
+unsafe fn repair_set_index_after_ordered_delete(
+    set: *mut SetHeader,
+    deleted_value: f64,
+    deleted_idx: u32,
+) {
+    SET_INDEX.with(|idx| {
+        let mut idx = idx.borrow_mut();
+        if let Some(map) = idx.get_mut(&(set as usize)) {
+            map.remove(&JSValueKey(deleted_value));
+            for entry_idx in map.values_mut() {
+                if *entry_idx > deleted_idx {
+                    *entry_idx -= 1;
+                }
+            }
+        }
+    });
+}
+
 pub(crate) fn rebuild_set_index_for_gc(set: *mut SetHeader) {
     rebuild_set_index(set);
 }
@@ -1303,27 +1327,45 @@ pub extern "C" fn js_set_delete(set: *mut SetHeader, value: f64) -> i32 {
 
         let size = (*set).size;
         let elements = elements_ptr_mut(set);
+        let deleted_value = ptr::read(elements.add(idx as usize));
 
         // #2831: preserve insertion order. The previous swap-remove moved
         // the last element into the hole, reordering iteration. Shift every
         // element after `idx` down by one slot instead so survivors keep
         // their relative order (and a delete-then-re-add appends at the end).
-        for i in (idx as usize)..(size as usize - 1) {
-            let next_value = ptr::read(elements.add(i + 1));
-            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): Set compaction stores through the shared external-slot helper.
-            crate::gc::runtime_store_external_jsvalue_slot(
+        //
+        // One overlap-safe move plus a single dirty-span barrier, matching
+        // `map::delete_entry_at_index`. The previous form issued a full
+        // barriered store PER shifted element, so emptying an N-element Set
+        // cost N^2 barrier entries; the span records the same old->young
+        // contract for the moved slots' new addresses in one call. No new
+        // parent -> child edge is created — every moved value was already in
+        // this Set.
+        let moved = size as usize - idx as usize - 1;
+        if moved > 0 {
+            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): ordered compaction is followed by a dirty-span barrier for every moved slot.
+            ptr::copy(
+                elements.add(idx as usize + 1),
+                elements.add(idx as usize),
+                moved,
+            );
+            crate::gc::runtime_write_barrier_external_slot_span(
                 set as usize,
-                elements.add(i) as usize,
-                next_value.to_bits(),
+                elements.add(idx as usize) as usize,
+                moved,
             );
         }
 
         (*set).size = size - 1;
 
-        // The shift changes the stored index of every surviving element at
-        // or after `idx`, so rebuild the O(1) lookup index from the
-        // compacted buffer.
-        rebuild_set_index(set);
+        // The shift decrements the stored index of every surviving element
+        // after `idx`. Repair those offsets in place instead of clearing the
+        // table and re-hashing every survivor: `rebuild_set_index` re-inserted
+        // all N elements on EVERY delete, so emptying an N-element Set hashed
+        // O(N^2) times. Removing one key and decrementing later offsets is a
+        // cache-linear pass that re-hashes nothing — the same repair
+        // `map::repair_map_indices_after_ordered_delete` already does.
+        repair_set_index_after_ordered_delete(set, deleted_value, idx as u32);
         1
     }
 }
@@ -2668,5 +2710,83 @@ mod tests {
                 "elements={label} must be rejected by the tripwire, got {got:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod ordered_delete_repair_tests {
+    use super::*;
+
+    /// Insertion order must survive a delete from the middle, and every
+    /// surviving element must still be findable afterwards — i.e. the repaired
+    /// index must agree with the compacted buffer exactly as a full rebuild
+    /// would. Deletes from the front, middle and back are all exercised
+    /// because each moves a different number of slots.
+    #[test]
+    fn ordered_delete_preserves_order_and_repairs_the_index() {
+        let set = js_set_alloc(8);
+        for v in [10.0f64, 20.0, 30.0, 40.0, 50.0] {
+            js_set_add(set, v);
+        }
+
+        // middle
+        assert_eq!(js_set_delete(set, 30.0), 1);
+        // front
+        assert_eq!(js_set_delete(set, 10.0), 1);
+        // back
+        assert_eq!(js_set_delete(set, 50.0), 1);
+
+        unsafe {
+            assert_eq!((*set).size, 2, "three of five removed");
+            let elements = elements_ptr(set);
+            assert_eq!(
+                ptr::read(elements),
+                20.0,
+                "survivors keep insertion order after compaction"
+            );
+            assert_eq!(ptr::read(elements.add(1)), 40.0);
+        }
+
+        // The repaired index must still resolve every survivor, and must not
+        // resolve anything removed.
+        assert_eq!(js_set_has(set, 20.0), 1);
+        assert_eq!(js_set_has(set, 40.0), 1);
+        for gone in [10.0f64, 30.0, 50.0] {
+            assert_eq!(js_set_has(set, gone), 0, "{gone} was deleted");
+        }
+
+        // A re-add appends at the end (delete-then-re-add ordering, #2831).
+        js_set_add(set, 30.0);
+        unsafe {
+            let elements = elements_ptr(set);
+            assert_eq!(ptr::read(elements.add(2)), 30.0);
+        }
+        assert_eq!(js_set_has(set, 30.0), 1);
+    }
+
+    /// Emptying a Set one element at a time must leave a consistent, empty
+    /// structure — the case whose per-delete rebuild was quadratic.
+    #[test]
+    fn emptying_a_set_leaves_it_consistent() {
+        let set = js_set_alloc(16);
+        for i in 0..64 {
+            js_set_add(set, i as f64);
+        }
+        for i in 0..64 {
+            assert_eq!(js_set_delete(set, i as f64), 1, "element {i} deletes once");
+            assert_eq!(js_set_delete(set, i as f64), 0, "and only once");
+        }
+        unsafe {
+            assert_eq!((*set).size, 0);
+        }
+        for i in 0..64 {
+            assert_eq!(js_set_has(set, i as f64), 0);
+        }
+        js_set_add(set, 7.0);
+        assert_eq!(
+            js_set_has(set, 7.0),
+            1,
+            "the emptied Set still accepts adds"
+        );
     }
 }
