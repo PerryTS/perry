@@ -581,6 +581,18 @@ fn a_field_push_writes_the_field_back_on_a_handle_bits_change_behind_a_plain_obj
         body.contains("class_field_set.fast") && body.contains("@js_class_field_set_fallback("),
         "the write-back arm must be the class-field store:\n{body}"
     );
+    // Between the header gate and the store: `this.items` is re-read and its
+    // bits compared with the captured head, so an argument that assigned the
+    // field (`this.items.push(this.reset())`) keeps its assignment.
+    assert!(
+        body.contains("apush.field.still_held"),
+        "the field-still-held gate must exist:\n{body}"
+    );
+    let bits_compares = body.matches("icmp eq i64 %").count();
+    assert!(
+        bits_compares >= 2,
+        "both the local and the field are compared against the captured bits ({bits_compares}):\n{body}"
+    );
     assert!(
         body.contains("icmp eq i64 %"),
         "the decision must be a handle-bits compare, not a JS equality:\n{body}"

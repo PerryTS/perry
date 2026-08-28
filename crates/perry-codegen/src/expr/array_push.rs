@@ -677,13 +677,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> 
     Ok(result)
 }
 
-/// The write-back half of [`lower`]: `if (bits(local) != before &&
-/// this is a plain object) this.<field> = local`, as an ordinary
-/// `PropertySet` lowering (class-field IC, barrier and layout note included)
-/// behind two inline tests. The header test is what makes the repair
-/// unobservable: it runs only on a `GC_TYPE_OBJECT` receiver with none of
-/// [`FIELD_WRITEBACK_BLOCKING_FLAGS_I16`] set, i.e. a plain data-property
-/// store of the very object the field already names.
+/// The write-back half of [`lower`]: `if (bits(local) != before && this is
+/// a plain object && bits(this.<field>) == before) this.<field> = local`, as
+/// an ordinary `PropertySet` lowering (class-field IC, barrier and layout
+/// note included) behind three inline tests, all off the hot path (the
+/// first fails whenever the append did not re-allocate). The header test is
+/// what makes the repair unobservable: it runs only on a `GC_TYPE_OBJECT`
+/// receiver with none of [`FIELD_WRITEBACK_BLOCKING_FLAGS_I16`] set, i.e. a
+/// plain data-property store. The field test is what makes it a REPAIR and
+/// not a store: the receiver was read before the argument was evaluated
+/// (`let __push_recv = this.f` precedes the push), so an argument that
+/// assigns `this.f` itself — `this.f.push(this.reset())` — must win, and it
+/// does, because the field then no longer holds the captured head. (A
+/// collection that already rewrote the field to the moved array fails the
+/// same test and skips a store that would have been redundant.)
 fn emit_field_push_writeback(
     ctx: &mut FnCtx<'_>,
     array_id: u32,
@@ -694,9 +701,11 @@ fn emit_field_push_writeback(
     let this_box = lower_expr(ctx, &Expr::This)?;
 
     let deref_idx = ctx.new_block("apush.field.deref");
+    let field_idx = ctx.new_block("apush.field.still_held");
     let store_idx = ctx.new_block("apush.field.writeback");
     let done_idx = ctx.new_block("apush.field.done");
     let deref_label = ctx.block_label(deref_idx);
+    let field_label = ctx.block_label(field_idx);
     let store_label = ctx.block_label(store_idx);
     let done_label = ctx.block_label(done_idx);
 
@@ -729,8 +738,24 @@ fn emit_field_push_writeback(
         let reserved = blk.load(I16, &res_ptr);
         let blocking = blk.and(I16, &reserved, FIELD_WRITEBACK_BLOCKING_FLAGS_I16);
         let plain = blk.icmp_eq(I16, &blocking, "0");
-        let store_ok = blk.and(I1, &is_object, &plain);
-        blk.cond_br(&store_ok, &store_label, &done_label);
+        let plain_object = blk.and(I1, &is_object, &plain);
+        blk.cond_br(&plain_object, &field_label, &done_label);
+    }
+
+    ctx.current_block = field_idx;
+    let field_box = lower_expr(
+        ctx,
+        &Expr::PropertyGet {
+            object: Box::new(Expr::This),
+            property: field.to_string(),
+            byte_offset: 0,
+        },
+    )?;
+    {
+        let blk = ctx.block();
+        let field_bits = blk.bitcast_double_to_i64(&field_box);
+        let still_held = blk.icmp_eq(I64, &field_bits, before_bits);
+        blk.cond_br(&still_held, &store_label, &done_label);
     }
 
     ctx.current_block = store_idx;

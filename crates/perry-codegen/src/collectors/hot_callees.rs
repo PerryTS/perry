@@ -76,11 +76,36 @@ const TINY_METHOD_ALLOC_SITE_BUDGET: u32 = 8;
 const FIELD_PUSH_RECEIVER_NAME: &str = "__push_recv";
 
 /// Statement count for the tiny-method rule: each field-push expansion
-/// counts as the single statement it came from.
+/// counts as the single statement it came from. An expansion is the COMPLETE
+/// shape the pass emits — the receiver `let` immediately followed by the
+/// `ArrayPush` on that local carrying the same field as its write-back — so
+/// an author's own local that happens to be named `__push_recv` does not
+/// shrink the count.
 fn tiny_method_stmt_count(body: &[Stmt]) -> usize {
     let expansions = body
-        .iter()
-        .filter(|stmt| matches!(stmt, Stmt::Let { name, .. } if name == FIELD_PUSH_RECEIVER_NAME))
+        .windows(2)
+        .filter(|pair| {
+            matches!(
+                pair,
+                [
+                    Stmt::Let {
+                        id,
+                        name,
+                        mutable: true,
+                        init: Some(Expr::PropertyGet { object, property, .. }),
+                        ..
+                    },
+                    Stmt::Expr(Expr::ArrayPush {
+                        array_id,
+                        field_writeback: Some(field),
+                        ..
+                    }),
+                ] if name == FIELD_PUSH_RECEIVER_NAME
+                    && array_id == id
+                    && matches!(object.as_ref(), Expr::This)
+                    && field == property
+            )
+        })
         .count();
     body.len().saturating_sub(expansions)
 }
@@ -935,6 +960,21 @@ mod recursion_participant_tests {
             *name = "old".to_string();
         }
         module.classes.push(class_with_method(func(13, plain)));
+        // An author's own local named like the receiver, followed by an
+        // unrelated statement: no expansion, two statements.
+        let mut collision = expanded_field_push(401);
+        collision[1] = Stmt::Expr(new_expr());
+        module.classes.push(class_with_method(func(14, collision)));
+        // The receiver `let` followed by a push WITHOUT a write-back target
+        // (an ordinary local push that merely shares the name): two.
+        let mut no_target = expanded_field_push(501);
+        if let Stmt::Expr(Expr::ArrayPush {
+            field_writeback, ..
+        }) = &mut no_target[1]
+        {
+            *field_writeback = None;
+        }
+        module.classes.push(class_with_method(func(15, no_target)));
 
         assert_eq!(
             tiny_method_stmt_count(&module.classes[0].methods[0].body),
@@ -946,6 +986,14 @@ mod recursion_participant_tests {
         );
         assert_eq!(
             tiny_method_stmt_count(&module.classes[2].methods[0].body),
+            2
+        );
+        assert_eq!(
+            tiny_method_stmt_count(&module.classes[3].methods[0].body),
+            2
+        );
+        assert_eq!(
+            tiny_method_stmt_count(&module.classes[4].methods[0].body),
             2
         );
         let hot = collect_alloc_hot_functions(&module);
