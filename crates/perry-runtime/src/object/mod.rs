@@ -1611,6 +1611,15 @@ pub struct ObjectMeta {
     /// child edge: it moves with its owner, dies with its owner, and needs no
     /// address bookkeeping at all.
     pub expando: u64,
+    /// Elements backing store of a `class X extends Array` instance: a
+    /// `GC_TYPE_ARRAY` (`*mut ArrayHeader` bits, 0 = none) holding the
+    /// instance's indexed elements and `length`, exactly as a plain Array
+    /// does — so `push`/`pop`/`obj[i]` are element operations instead of
+    /// property-shape transitions (`array/subclass_elements.rs`). A traced
+    /// child edge exactly like `spill`: lives and moves with this record.
+    /// Installed by `js_array_subclass_init` under
+    /// `array_subclass_elements_enabled()`; never present otherwise.
+    pub elements: u64,
 }
 
 pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;

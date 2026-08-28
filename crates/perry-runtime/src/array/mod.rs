@@ -29,6 +29,7 @@ mod sort;
 mod species;
 mod splice_slice;
 mod subclass;
+pub(crate) mod subclass_elements;
 
 #[cfg(test)]
 mod collection_tag_tests;
@@ -40,6 +41,8 @@ mod push_pop_tests;
 mod spread_dense_tests;
 #[cfg(test)]
 mod strict_store_tests;
+#[cfg(test)]
+mod subclass_elements_tests;
 #[cfg(test)]
 mod subclass_tests;
 #[cfg(test)]

@@ -1437,6 +1437,9 @@ pub(crate) struct HeapChildSlotIterator {
     /// #6812: second prefix — the object's `meta` header edge. Kept
     /// separate from `prefix_slot` so payload indices stay mask-aligned.
     pub(super) meta_slot: Option<*mut u64>,
+    /// A second explicit meta edge — the Array-subclass `elements` store at
+    /// the end of the `ObjectMeta` record — read exactly like `meta_slot`.
+    pub(super) meta_slot2: Option<*mut u64>,
     pub(super) payload: HeapSlotRange,
     pub(super) selection: HeapPayloadSlotSelection,
     /// #8122: the receiver's `ShapeDescriptor`, resolved ONCE by
@@ -1452,6 +1455,7 @@ impl HeapChildSlotIterator {
         Self {
             prefix_slot: None,
             meta_slot: None,
+            meta_slot2: None,
             payload: HeapSlotRange::new(std::ptr::null_mut(), 0),
             selection: HeapPayloadSlotSelection::Empty,
             object_shape: None,
@@ -1467,6 +1471,7 @@ impl HeapChildSlotIterator {
         Self {
             prefix_slot,
             meta_slot: None,
+            meta_slot2: None,
             payload,
             selection,
             object_shape: None,
@@ -1487,6 +1492,7 @@ impl HeapChildSlotIterator {
         Self {
             prefix_slot,
             meta_slot: None,
+            meta_slot2: None,
             payload,
             selection,
             object_shape,
@@ -1498,8 +1504,17 @@ impl HeapChildSlotIterator {
         self
     }
 
+    pub(super) fn with_meta_slot2(mut self, slot: Option<*mut u64>) -> Self {
+        self.meta_slot2 = slot;
+        self
+    }
+
     pub(super) fn take_meta_child_slot(&mut self) -> Option<*mut u64> {
         self.meta_slot.take()
+    }
+
+    pub(super) fn take_meta_child_slot2(&mut self) -> Option<*mut u64> {
+        self.meta_slot2.take()
     }
 
     pub(super) fn take_prefix_child_slot(&mut self) -> Option<*mut u64> {
@@ -1547,6 +1562,9 @@ impl Iterator for HeapChildSlotIterator {
             return Some(HeapChildSlot::Child(slot, HeapChildSlotReadKind::Prefix));
         }
         if let Some(slot) = self.meta_slot.take() {
+            return Some(HeapChildSlot::Child(slot, HeapChildSlotReadKind::Prefix));
+        }
+        if let Some(slot) = self.meta_slot2.take() {
             return Some(HeapChildSlot::Child(slot, HeapChildSlotReadKind::Prefix));
         }
         match &mut self.selection {
@@ -1746,7 +1764,13 @@ pub(super) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSlotItera
             let proto_slot = Some(&mut (*meta).prototype as *mut u64);
             let brand_slot = Some(&mut (*meta).private_evaluation_brand as *mut u64);
             let range = HeapSlotRange::new(&mut (*meta).spill as *mut u64, 1);
-            HeapChildSlotIterator::new(header, proto_slot, range).with_meta_slot(brand_slot)
+            // The Array-subclass elements store is a raw-pointer child edge
+            // (0 = none) exactly like `spill`; it sits at the end of the
+            // record, so it is enumerated as a second explicit meta edge.
+            let elements_slot = Some(&mut (*meta).elements as *mut u64);
+            HeapChildSlotIterator::new(header, proto_slot, range)
+                .with_meta_slot(brand_slot)
+                .with_meta_slot2(elements_slot)
         }
         GcLayoutSlotKind::ClosureCaptures => {
             let closure = user_ptr as *mut crate::closure::ClosureHeader;

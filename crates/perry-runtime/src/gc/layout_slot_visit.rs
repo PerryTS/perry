@@ -75,6 +75,9 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
     if let Some(slot) = child_slots.take_meta_child_slot() {
         visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
     }
+    if let Some(slot) = child_slots.take_meta_child_slot2() {
+        visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
+    }
 
     match child_slots.payload_scan() {
         HeapPayloadSlotScan::Empty => {}
@@ -326,6 +329,9 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             // so an unvisited edge here collects a live object's own
             // properties — the same shape as the spill hazard above (#6812).
             visit(fixed_slot(&mut (*meta).expando as *mut u64));
+            // The Array-subclass elements store (0 = none): a raw-pointer child
+            // edge traced and rewritten exactly like `spill`.
+            visit(fixed_slot(&mut (*meta).elements as *mut u64));
             // A fresh class object stored as an instance's private evaluation
             // brand is a NaN-boxed child edge and moves with the meta record.
             visit(fixed_slot(

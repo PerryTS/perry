@@ -194,6 +194,21 @@ pub extern "C" fn js_array_subclass_init(this: f64, n: f64) -> f64 {
             n.floor().min(MAX_SAFE_INTEGER)
         }
     };
+    if crate::array::subclass_elements::array_subclass_elements_enabled() {
+        // Elements-backed instance: `length` and the indices live in the
+        // store, never as shape-carried properties.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let this_root = scope.root_nanbox_f64(this);
+        unsafe {
+            crate::array::subclass_elements::install_elements(obj, len.min(u32::MAX as f64) as u32)
+        };
+        let this = this_root.get_nanbox_f64();
+        let obj = raw_ptr_from_value(this) as *mut ObjectHeader;
+        crate::closure::js_register_closure_arity(ns_array_fill as *const u8, 1);
+        let methods: [(&str, StubFn); 1] = [("fill", super::cast1(ns_array_fill))];
+        install_methods_on_existing_object(obj, this, &methods, &[]);
+        return this;
+    }
     let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
     js_object_set_field_by_name(obj, length_key, len);
     crate::closure::js_register_closure_arity(ns_array_fill as *const u8, 1);
