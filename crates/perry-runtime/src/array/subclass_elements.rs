@@ -717,8 +717,7 @@ pub(super) fn elements_pop(receiver: &ValidatedObjectReceiver) -> Option<f64> {
 /// `elements` must be a live store address read from the meta slot.
 #[inline]
 unsafe fn plain_store_flags(elements: *mut ArrayHeader) -> Option<u16> {
-    let header =
-        &*((elements as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+    let header = crate::value::addr_class::try_read_gc_header(elements as usize)?;
     if header.obj_type != crate::gc::GC_TYPE_ARRAY
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {

@@ -597,9 +597,8 @@ pub(crate) fn lower_generic_property_get(
     } else {
         8
     };
-    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
-        - meta_ptr_size)
-        .to_string();
+    let meta_offset =
+        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
     let meta_addr = ctx.block().add(I64, &obj_handle, &meta_offset);
     let meta_slot = ctx.block().inttoptr(I64, &meta_addr);
     let meta_load_ty = if meta_ptr_size == 4 { I32 } else { I64 };

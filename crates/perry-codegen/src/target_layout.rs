@@ -88,6 +88,18 @@ pub fn object_header_size_bytes(_target_triple: &str) -> u64 {
     16
 }
 
+/// Byte offset of `ObjectHeader::meta` — the last word of the header — for
+/// the target.
+///
+/// The metadata pointer is the entry point to `ObjectMeta` (the prototype
+/// override, the spill buffer, the Array-subclass elements store), and several
+/// inline tiers load it. Keeping the derivation in one place also keeps the
+/// object-header-size callsite census stable as tiers are added.
+pub fn object_meta_slot_offset_bytes(target_triple: &str) -> u64 {
+    let pointer_size = if target_is_ilp32(target_triple) { 4 } else { 8 };
+    object_header_size_bytes(target_triple) - pointer_size
+}
+
 /// `std::mem::size_of::<perry_runtime::closure::ClosureHeader>()` for the
 /// target.
 ///

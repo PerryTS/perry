@@ -43,13 +43,8 @@ const MAX_FAST_LENGTH_I32: &str = "100000000";
 /// Lower `recv.pop()` for an Array-admitted receiver: the inline tier above
 /// with `js_array_pop_f64` behind it. Returns the popped element (boxed).
 pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> String {
-    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
-        - if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-            4
-        } else {
-            8
-        })
-    .to_string();
+    let meta_offset =
+        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
     let hdr_idx = ctx.new_block("apop.hdr");
     // An elements-backed Array subclass (`ObjectMeta.elements`, word 12) pops
     // from its store: the header gate resolves the payload and the same
