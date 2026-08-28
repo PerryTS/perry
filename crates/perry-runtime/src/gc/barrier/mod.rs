@@ -990,13 +990,21 @@ fn incremental_mark_barrier_value_with_valid_ptrs(
     true
 }
 
+#[inline(always)]
 pub(super) fn incremental_mark_barrier_value(value_bits: u64) -> bool {
     // #7469: the overwhelmingly common case is "no cycle anywhere", and
     // proving it must not cost a thread-local resolution — this runs on every
-    // heap-pointer store in compiled code.
+    // heap-pointer store in compiled code. Inlined into every entry point so
+    // that proof is one static load and a branch there, not a call.
     if incremental_mark_barrier_globally_idle() {
         return false;
     }
+    incremental_mark_barrier_value_active(value_bits)
+}
+
+/// [`incremental_mark_barrier_value`] once a cycle is known to be active.
+#[inline(never)]
+fn incremental_mark_barrier_value_active(value_bits: u64) -> bool {
     let ptr = hot_incremental_mark_valid_ptrs().get();
     if ptr.is_null() {
         return false;
@@ -1211,6 +1219,7 @@ pub(super) fn barrier_parent_addr_is_dereferenceable(parent_addr: usize) -> bool
 /// `*mut ArrayHeader` / `*mut ObjectHeader` / … rather than from JS value
 /// bits.
 #[inline]
+#[inline(never)]
 pub(super) fn write_barrier_decoded_parent(
     parent_addr: usize,
     slot_addr: usize,
@@ -1230,13 +1239,7 @@ pub(super) fn write_barrier_decoded_parent(
     // which is the whole cost of the barrier on the second and third push into
     // the same bucket, or on every push into a large array whose tail sits on
     // one page.
-    if !external_slot
-        && slot_addr != 0
-        && slot_addr >= parent_addr
-        && super::dirty_page_cache::dirty_old_page_already_marked(
-            crate::arena::generation_page_for_addr(slot_addr),
-        )
-    {
+    if !external_slot && inline_slot_store_on_cached_dirty_page(parent_addr, slot_addr) {
         bump_write_barrier_trace_counter(BarrierTraceCounter::DirtyPageCacheHits);
         return;
     }
@@ -1535,7 +1538,7 @@ pub(super) fn malloc_gc_parent_addr(parent_addr: usize) -> bool {
 /// Accepts POINTER_TAG / STRING_TAG / BIGINT_TAG / SHORT_STRING_TAG;
 /// SHORT_STRING values return 0 because they're inline data, not
 /// heap pointers.
-#[inline]
+#[inline(always)]
 pub(super) fn decode_heap_addr(bits: u64) -> usize {
     let tag = bits & TAG_MASK;
     if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
@@ -1547,19 +1550,13 @@ pub(super) fn decode_heap_addr(bits: u64) -> usize {
         // high bits and is rejected here without paying the page-map
         // classification, which dominated tight numeric store loops. Only
         // the (rare) subnormal doubles whose bits look address-shaped fall
-        // through to the authoritative arena lookup.
+        // through to the authoritative arena lookup — out of line, so the
+        // tag test above inlines into every barrier entry as a leaf.
         let addr = bits as usize;
         if (bits >> 48) != 0 || addr < 0x10000 || addr & 0x7 != 0 {
             return 0;
         }
-        if matches!(
-            crate::arena::classify_heap_generation(addr),
-            crate::arena::HeapGeneration::Unknown
-        ) {
-            0
-        } else {
-            addr
-        }
+        decode_raw_pointer_candidate(addr)
     } else {
         // SHORT_STRING_TAG (0x7FF9), INT32_TAG (0x7FFE),
         // primitive (0x7FFC), JS_HANDLE (0x7FFB) — none are
@@ -1931,6 +1928,7 @@ pub(super) fn remembered_dirty_page_count() -> usize {
     })
 }
 
+mod leaf;
 /// Gen-GC Phase C: read the current remembered set size — used
 /// by tests and `PERRY_GC_DIAG=1` output to confirm barrier
 /// activity. Returns 0 in Phase C1 since no codegen-emitted
@@ -1939,6 +1937,7 @@ pub(super) fn remembered_dirty_page_count() -> usize {
 // module purely for the 2000-line file-size gate; same module tree, same
 // visibility semantics (the statics they read are pub(super)/pub(crate)).
 mod maintenance;
+pub(super) use leaf::{decode_raw_pointer_candidate, inline_slot_store_on_cached_dirty_page};
 
 pub(super) use super::barrier_store::{barrier_child_prologue, barrier_remembering_active};
 pub use maintenance::*;
