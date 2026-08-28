@@ -54,32 +54,109 @@ pub type AliasTable = BTreeMap<String, AliasDef>;
 /// must terminate rather than hang the compiler.
 const MAX_DEPTH: usize = 8;
 
+/// Bound on alias bodies expanded by one [`resolve_type`] call.
+///
+/// `MAX_DEPTH` bounds one path, but it does not bound the size of the tree
+/// formed when an alias body mentions several aliases at every level. In
+/// particular, recursive discriminated unions such as `Node` can mention
+/// `Node` five times in one body: expanding to depth eight builds the full
+/// branching tree before discovering that the alias is still unresolved.
+/// Keep the pass conservative once the ordinary few-alias workload is far
+/// behind us instead of allowing source-sized branching factors to multiply.
+const MAX_ALIAS_EXPANSIONS: usize = 256;
+
+struct ResolveState {
+    /// Alias names on the current expansion path. A repeated name is a
+    /// recursive structural alias, so that edge must retain its spelling.
+    active_aliases: Vec<String>,
+    expansions: usize,
+    max_expansions: usize,
+    budget_exhausted: bool,
+}
+
+impl ResolveState {
+    fn new(max_expansions: usize) -> Self {
+        Self {
+            active_aliases: Vec::new(),
+            expansions: 0,
+            max_expansions,
+            budget_exhausted: false,
+        }
+    }
+
+    fn begin_alias(&mut self, name: &str) -> bool {
+        if self.active_aliases.iter().any(|active| active == name) {
+            return false;
+        }
+        if self.expansions >= self.max_expansions {
+            self.budget_exhausted = true;
+            return false;
+        }
+        self.expansions += 1;
+        self.active_aliases.push(name.to_string());
+        true
+    }
+
+    fn end_alias(&mut self, name: &str) {
+        let active = self
+            .active_aliases
+            .pop()
+            .expect("an alias expansion must have an active path entry");
+        debug_assert_eq!(active, name);
+    }
+}
+
 /// Resolve every alias reference inside `ty` against `table`.
 ///
 /// Returns `ty` unchanged (structurally) where nothing resolves. A reference
 /// whose instantiated body still carries a `TypeVar` or an unresolved alias
 /// reference is left as written.
 pub fn resolve_type(ty: &Type, table: &AliasTable) -> Type {
-    resolve_type_inner(ty, table, 0)
+    resolve_type_with_budget(ty, table, MAX_ALIAS_EXPANSIONS)
 }
 
-fn resolve_type_inner(ty: &Type, table: &AliasTable, depth: usize) -> Type {
+fn resolve_type_with_budget(ty: &Type, table: &AliasTable, max_expansions: usize) -> Type {
+    let mut state = ResolveState::new(max_expansions);
+    let resolved = resolve_type_inner(ty, table, 0, &mut state);
+    if state.budget_exhausted {
+        // Structural fields use hash maps, so keeping a partially resolved
+        // result here would make the chosen fields depend on iteration order.
+        // Conservatively retain the whole input when the backstop is reached.
+        ty.clone()
+    } else {
+        resolved
+    }
+}
+
+fn resolve_type_inner(
+    ty: &Type,
+    table: &AliasTable,
+    depth: usize,
+    state: &mut ResolveState,
+) -> Type {
     if depth > MAX_DEPTH {
         return ty.clone();
     }
     match ty {
         Type::Named(name) => match table.get(name) {
-            Some(def) => instantiate(def, &[], table, depth).unwrap_or_else(|| ty.clone()),
+            Some(def) if state.begin_alias(name) => {
+                let resolved = instantiate(def, &[], table, depth, state);
+                state.end_alias(name);
+                resolved.unwrap_or_else(|| ty.clone())
+            }
             None => ty.clone(),
+            Some(_) => ty.clone(),
         },
         Type::Generic { base, type_args } => {
             let args: Vec<Type> = type_args
                 .iter()
-                .map(|t| resolve_type_inner(t, table, depth))
+                .map(|t| resolve_type_inner(t, table, depth, state))
                 .collect();
             match table.get(base) {
-                Some(def) => {
-                    instantiate(def, &args, table, depth).unwrap_or_else(|| Type::Generic {
+                Some(def) if state.begin_alias(base) => {
+                    let resolved = instantiate(def, &args, table, depth, state);
+                    state.end_alias(base);
+                    resolved.unwrap_or_else(|| Type::Generic {
                         base: base.clone(),
                         type_args: args,
                     })
@@ -88,23 +165,29 @@ fn resolve_type_inner(ty: &Type, table: &AliasTable, depth: usize) -> Type {
                     base: base.clone(),
                     type_args: args,
                 },
+                Some(_) => Type::Generic {
+                    base: base.clone(),
+                    type_args: args,
+                },
             }
         }
-        Type::Array(elem) => Type::Array(Box::new(resolve_type_inner(elem, table, depth))),
+        Type::Array(elem) => Type::Array(Box::new(resolve_type_inner(elem, table, depth, state))),
         Type::Tuple(elems) => Type::Tuple(
             elems
                 .iter()
-                .map(|e| resolve_type_inner(e, table, depth))
+                .map(|e| resolve_type_inner(e, table, depth, state))
                 .collect(),
         ),
-        Type::Promise(inner) => Type::Promise(Box::new(resolve_type_inner(inner, table, depth))),
+        Type::Promise(inner) => {
+            Type::Promise(Box::new(resolve_type_inner(inner, table, depth, state)))
+        }
         Type::Union(types) => {
             // Two branded aliases of one primitive (`EntityId | ComponentId`)
             // resolve to the same member; a union of identical members is
             // that member, so the binding gets the primitive's lowering.
             let mut resolved: Vec<Type> = Vec::with_capacity(types.len());
             for t in types {
-                let t = resolve_type_inner(t, table, depth);
+                let t = resolve_type_inner(t, table, depth, state);
                 if !resolved.contains(&t) {
                     resolved.push(t);
                 }
@@ -119,9 +202,9 @@ fn resolve_type_inner(ty: &Type, table: &AliasTable, depth: usize) -> Type {
             params: f
                 .params
                 .iter()
-                .map(|(n, t, opt)| (n.clone(), resolve_type_inner(t, table, depth), *opt))
+                .map(|(n, t, opt)| (n.clone(), resolve_type_inner(t, table, depth, state), *opt))
                 .collect(),
-            return_type: Box::new(resolve_type_inner(&f.return_type, table, depth)),
+            return_type: Box::new(resolve_type_inner(&f.return_type, table, depth, state)),
             is_async: f.is_async,
             is_generator: f.is_generator,
         }),
@@ -134,7 +217,7 @@ fn resolve_type_inner(ty: &Type, table: &AliasTable, depth: usize) -> Type {
                     (
                         k.clone(),
                         PropertyInfo {
-                            ty: resolve_type_inner(&p.ty, table, depth),
+                            ty: resolve_type_inner(&p.ty, table, depth, state),
                             optional: p.optional,
                             readonly: p.readonly,
                         },
@@ -145,7 +228,7 @@ fn resolve_type_inner(ty: &Type, table: &AliasTable, depth: usize) -> Type {
             index_signature: obj
                 .index_signature
                 .as_ref()
-                .map(|t| Box::new(resolve_type_inner(t, table, depth))),
+                .map(|t| Box::new(resolve_type_inner(t, table, depth, state))),
         }),
         _ => ty.clone(),
     }
@@ -155,7 +238,13 @@ fn resolve_type_inner(ty: &Type, table: &AliasTable, depth: usize) -> Type {
 /// parameter default, else `Any`) and resolve the body. `None` when the result
 /// is not closed — it still mentions a type variable or an alias the table
 /// cannot resolve — so the caller keeps the original reference.
-fn instantiate(def: &AliasDef, args: &[Type], table: &AliasTable, depth: usize) -> Option<Type> {
+fn instantiate(
+    def: &AliasDef,
+    args: &[Type],
+    table: &AliasTable,
+    depth: usize,
+    state: &mut ResolveState,
+) -> Option<Type> {
     let body = if def.params.is_empty() {
         def.ty.clone()
     } else {
@@ -170,7 +259,7 @@ fn instantiate(def: &AliasDef, args: &[Type], table: &AliasTable, depth: usize) 
         }
         substitute_type_deep(&def.ty, &subs)
     };
-    let resolved = resolve_type_inner(&body, table, depth + 1);
+    let resolved = resolve_type_inner(&body, table, depth + 1, state);
     if type_is_closed(&resolved, table) {
         Some(resolved)
     } else {
@@ -643,6 +732,87 @@ mod tests {
         assert_eq!(
             resolve_type(&Type::Named("A".into()), &table),
             Type::Named("A".into())
+        );
+    }
+
+    /// #8913: the allocation-point GC fixture declares a recursive `Node`
+    /// discriminated union with five `Node` children across its variants.
+    /// The old depth-only guard expanded the full five-way tree through depth
+    /// eight for every type position, keeping compile-smoke and two Full CI
+    /// shards in this pass until their hard timeouts. One active-alias check
+    /// must cut every recursive edge during the first body expansion.
+    #[test]
+    fn recursive_structural_alias_is_cut_before_it_can_branch() {
+        let mut properties = HashMap::new();
+        for name in ["left", "right", "cond", "then", "alt"] {
+            properties.insert(
+                name.to_string(),
+                PropertyInfo {
+                    ty: Type::Named("Node".into()),
+                    optional: false,
+                    readonly: false,
+                },
+            );
+        }
+        let mut table = AliasTable::new();
+        table.insert(
+            "Node".into(),
+            AliasDef {
+                params: vec![],
+                ty: Type::Object(ObjectType {
+                    name: None,
+                    properties,
+                    property_order: None,
+                    index_signature: None,
+                }),
+            },
+        );
+
+        let node = Type::Named("Node".into());
+        let mut state = ResolveState::new(MAX_ALIAS_EXPANSIONS);
+        assert_eq!(
+            resolve_type_inner(&node, &table, 0, &mut state),
+            node,
+            "a recursive structural alias must remain conservatively unresolved"
+        );
+        assert_eq!(
+            state.expansions, 1,
+            "the recursive body must be visited once, not expanded into a depth-limited tree"
+        );
+    }
+
+    #[test]
+    fn alias_expansion_budget_is_a_hard_backstop() {
+        let mut table = AliasTable::new();
+        table.insert(
+            "Leaf".into(),
+            AliasDef {
+                params: vec![],
+                ty: Type::Number,
+            },
+        );
+        let mut properties = HashMap::new();
+        for name in ["a", "b", "c"] {
+            properties.insert(
+                name.to_string(),
+                PropertyInfo {
+                    ty: Type::Named("Leaf".into()),
+                    optional: false,
+                    readonly: false,
+                },
+            );
+        }
+        let object = Type::Object(ObjectType {
+            name: None,
+            properties,
+            property_order: None,
+            index_signature: None,
+        });
+
+        assert_eq!(
+            resolve_type_with_budget(&object, &table, 2),
+            object,
+            "exhausting the budget must retain the whole input, not an iteration-order-dependent partial result"
         );
     }
 
