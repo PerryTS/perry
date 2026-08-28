@@ -535,6 +535,7 @@ const KEYS_INDEX_THRESHOLD: u32 = 32;
 
 #[path = "keys_lookup.rs"]
 mod keys_lookup;
+pub(crate) mod read_stub;
 pub(crate) use keys_lookup::*;
 
 pub(crate) mod array_tail_transition;

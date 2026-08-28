@@ -111,6 +111,55 @@ pub extern "C" fn js_object_get_field_by_name(
             }
         }
     }
+    // Megamorphic read stub. Primed below once the lane has proved this
+    // receiver ordinary, so a hit only has to re-prove the properties that can
+    // change: heap-object type, not forwarded, no blocking flags, a real class
+    // id, and the receiver's CURRENT shape token. The token pins the exact key
+    // set and order, so a match means the cached slot still names this key; a
+    // stale entry misses rather than resolving to the wrong property.
+    //
+    // Sits after the process.env and Proxy arms above, which have their own
+    // semantics and must keep them, and before the lane's guard chain plus the
+    // read-plan probe — which is what a hit is here to skip. The plan's epoch
+    // is bumped by the collector at loop-poll cadence, so on a steady read loop
+    // it is repeatedly cold and falls through to a shape-index hash lookup.
+    unsafe {
+        if let Some(key_bits) = super::super::read_stub::read_stub_key_bits(key) {
+            let addr = obj as usize;
+            if let Some(gc) = crate::value::addr_class::try_read_gc_header(addr) {
+                const STUB_BLOCKING: u16 =
+                    crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+                if gc.obj_type == crate::gc::GC_TYPE_OBJECT
+                    && gc.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                    && gc._reserved & STUB_BLOCKING == 0
+                {
+                    let o = addr as *const ObjectHeader;
+                    let class_id = (*o).class_id;
+                    if class_id != 0
+                        && class_id != super::super::native_module::NATIVE_MODULE_CLASS_ID
+                    {
+                        if let Some(token) = super::super::read_stub::receiver_shape_token(o) {
+                            if let Some(slot) =
+                                super::super::read_stub::read_stub_probe(token, key_bits)
+                            {
+                                let live = crate::object::object_live_slot_count(o);
+                                let limit =
+                                    std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR as u32);
+                                if slot < limit {
+                                    return super::accessors::js_object_get_field(o, slot);
+                                }
+                                if let Some(bits) = super::super::overflow_get(addr, slot as usize)
+                                {
+                                    return JSValue::from_bits(bits);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // FAST LANE (store-plan-cache follow-up): resolve an OWN data field on a
     // provably-plain arena class instance with no rooting scope, no
     // exotic-registry probes, and no key hashing. Every gate proves a property
@@ -179,6 +228,7 @@ pub extern "C" fn js_object_get_field_by_name(
                                 keys as usize,
                                 key as usize,
                             ) {
+                                prime_read_stub(o, key, idx);
                                 return if (idx as usize) < alloc_limit {
                                     super::accessors::js_object_get_field(o, idx)
                                 } else {
@@ -214,6 +264,7 @@ pub extern "C" fn js_object_get_field_by_name(
                                         key,
                                     ) {
                                         let i = i as usize;
+                                        prime_read_stub(o, key, i as u32);
                                         super::super::prop_plan::read_plan_record(
                                             keys as usize,
                                             key as usize,
@@ -1695,6 +1746,22 @@ mod null_key_guard_5972 {
                 crate::value::TAG_UNDEFINED,
                 "null key should miss → undefined"
             );
+        }
+    }
+}
+
+/// Record `(shape token, key content) -> slot` for the megamorphic read stub.
+///
+/// Only called from inside the fast lane, i.e. once the receiver has already
+/// been proved an ordinary shaped heap object with a resolvable own slot, so
+/// the stub never learns an entry for a receiver whose reads have other
+/// semantics. Keys that cannot be represented as content bits are skipped by
+/// `read_stub_key_bits`.
+#[inline]
+fn prime_read_stub(obj: *const ObjectHeader, key: *const crate::StringHeader, slot: u32) {
+    if let Some(key_bits) = super::super::read_stub::read_stub_key_bits(key) {
+        if let Some(token) = unsafe { super::super::read_stub::receiver_shape_token(obj) } {
+            super::super::read_stub::read_stub_insert(token, key_bits, slot);
         }
     }
 }
