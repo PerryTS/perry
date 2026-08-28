@@ -7,10 +7,11 @@ Perry widgets can compile to watchOS WidgetKit complications using `--target wat
 > `Widget({...})` shape is verified against the codegen. The actual
 > `--target watchos-widget` / `--target watchos-widget-simulator` cross-compile
 > is wired in `crates/perry/src/commands/compile.rs` (emits through the
-> WidgetKit Swift emitter) but the doc-tests harness can't drive it yet —
-> each cross-target requires `--app-bundle-id` not yet surfaced through the
-> harness ([#194](https://github.com/PerryTS/perry/issues/194)) plus a
-> watchOS SDK from Xcode. Build with the `perry` CLI to validate end-to-end.
+> WidgetKit Swift emitter). The doc-tests harness now supplies
+> `--app-bundle-id` from a `// widget-bundle-id:` banner
+> ([#194](https://github.com/PerryTS/perry/issues/194)); an end-to-end watchOS
+> build additionally requires the watchOS SDK from Xcode. The shared snippet
+> on this page currently requests the host compile/link check only.
 
 ## Accessory Families
 

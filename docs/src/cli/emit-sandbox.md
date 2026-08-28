@@ -24,9 +24,10 @@ Apply at run time:
 sandbox-exec -f myapp.sandbox myapp
 ```
 
-Linux `seccomp` BPF + landlock, Windows AppContainer, and per-API
-HIR-driven refinement are tracked as
-[#506](https://github.com/PerryTS/perry/issues/506) follow-ups.
+Closed issue [#506](https://github.com/PerryTS/perry/issues/506) delivered this
+macOS MVP. Linux `seccomp` + landlock, Windows AppContainer, and per-API
+HIR-driven refinement remain unsupported follow-up work; #506 is the design
+and implementation record, not an open tracker for those platforms.
 
 ## Enabling
 
@@ -62,8 +63,9 @@ hunting through Perry docs.
 
 ## Composition with `--lockdown`
 
-When the `--lockdown` mode (#496) lands, it will default
-`--emit-sandbox` on. For now they're orthogonal.
+`--lockdown` (#496) is implemented, but it is intentionally orthogonal to
+profile emission: it does not imply `--emit-sandbox`. Enable both flags when
+you want compile-time surface refusal and the macOS kernel profile.
 
 ## What's NOT covered (MVP)
 
@@ -78,6 +80,6 @@ When the `--lockdown` mode (#496) lands, it will default
 
 ## See also
 
-- [`#506`](https://github.com/PerryTS/perry/issues/506) — design discussion + tracker.
+- [`#506`](https://github.com/PerryTS/perry/issues/506) — closed design and macOS MVP implementation record.
 - The wider supply-chain hardening series
   ([`#495`–`#506`](https://github.com/PerryTS/perry/issues?q=is%3Aissue+label%3Aenhancement+security)).

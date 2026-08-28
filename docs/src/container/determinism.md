@@ -163,7 +163,7 @@ The actual support matrix at v0.5.374:
 | `linux_capabilities` | Native | Native | Native | Native |
 | `read_only_rootfs` | Native | Native | Native | Native |
 | `run_as_user` | Native | Native | Native | Native |
-| `network_alias` | Native | Native | Native (≥0.12) | Native |
+| `network_alias` | Native | Native | **Unsupported** | Native |
 | `user_defined_bridge` | Native | Native | Partial *(needs `container system start`)* | Native |
 | `internal_network` | Native | Native | **Unsupported** | Native |
 | `ipc_namespace_share` | Native | Native | **Unsupported** | Native |
@@ -191,7 +191,7 @@ impl CliProtocol for AppleContainerProtocol {
 
 ### 2. Spec normalization — drop unsupported fields before emit
 
-[`CliBackend::run_with_security`](https://github.com/perry-ts/perry/blob/main/crates/perry-container-compose/src/backend.rs)
+[`CliBackend::run_with_security`](https://github.com/PerryTS/perry/blob/main/crates/perry-container-compose/src/backend.rs)
 runs the normaliser **before** the protocol's `run_args()`:
 
 ```rust
@@ -244,7 +244,7 @@ across backends." Default is `Lenient` for ergonomics.
 
 ## The conformance test suite
 
-[`tests/conformance.rs`](https://github.com/perry-ts/perry/blob/main/crates/perry-container-compose/tests/conformance.rs)
+[`tests/conformance.rs`](https://github.com/PerryTS/perry/blob/main/crates/perry-container-compose/tests/conformance.rs)
 runs the **same questions against all four protocols** (19 tests).
 Three categories:
 
@@ -307,9 +307,11 @@ Given the same `ComposeSpec`:
 
 - **Same names** — project-namespaced container/volume/network names are
   computed at the engine layer above protocols, so they're invariant.
-- **Same DNS** — service-key cross-container resolution via
-  `--network-alias` works identically on Docker / Podman / Lima /
-  apple ≥ 0.12.
+- **Same DNS on capable backends** — service-key cross-container resolution
+  via `--network-alias` works identically on Docker, Podman, and Lima.
+  `apple/container` does not expose network aliases, so Perry warns and drops
+  them (or rejects the plan in strict mode); use an explicit `container_name`
+  when the same compose file must also run there.
 - **Same labels** — `perry.compose.project` + `perry.compose.spec_hash`
   on every container, so cleanup-by-project + spec-drift detection
   work uniformly.
@@ -347,9 +349,8 @@ gaps as test failures rather than runtime surprises in user code.
 
 ## Further reading
 
-- [SPEC.md §18](https://github.com/perry-ts/perry/blob/main/SPEC.md) —
-  canonical specification of the determinism architecture.
-- [`crates/perry-container-compose/src/capabilities.rs`](https://github.com/perry-ts/perry/blob/main/crates/perry-container-compose/src/capabilities.rs) —
+- [Container overview](overview.md) — public API and backend selection.
+- [`crates/perry-container-compose/src/capabilities.rs`](https://github.com/PerryTS/perry/blob/main/crates/perry-container-compose/src/capabilities.rs) —
   full source.
-- [`crates/perry-container-compose/tests/conformance.rs`](https://github.com/perry-ts/perry/blob/main/crates/perry-container-compose/tests/conformance.rs) —
+- [`crates/perry-container-compose/tests/conformance.rs`](https://github.com/PerryTS/perry/blob/main/crates/perry-container-compose/tests/conformance.rs) —
   the 19-test suite.

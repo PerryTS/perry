@@ -1,5 +1,10 @@
 # VSCode Compilation Feasibility Study - Experimental Results
 
+> **Historical experiment (2026-01-20).** “Current main” below refers to the
+> checkout used for that experiment, not today's compiler. Reproduce the study
+> against a pinned VS Code revision before drawing a current compatibility
+> conclusion.
+
 ## Summary
 
 **Date:** 2026-01-20

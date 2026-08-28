@@ -1,10 +1,18 @@
 # Native Library Implementations
 
+> **Historical package snapshot.** This standalone inventory predates the
+> manifest-driven native-binding system and is not maintained as a current
+> compatibility contract. Use
+> [`src/native-libraries/overview.md`](src/native-libraries/overview.md),
+> [`src/native-libraries/zero-config-and-faithfulness.md`](src/native-libraries/zero-config-and-faithfulness.md),
+> and the generated [`src/api/reference.md`](src/api/reference.md).
+
 Perry provides native Rust implementations of popular npm packages. When you import these packages in your TypeScript code, they are compiled directly to native code using high-performance Rust crates - no Node.js runtime required.
 
 ## Overview
 
-**27 npm packages** are supported with native implementations, organized by category:
+At the time of this snapshot, **27 npm packages** were documented with native
+implementations, organized by category:
 
 ### Database & Storage
 | npm Package | Rust Backend | Description |

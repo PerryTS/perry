@@ -4,32 +4,34 @@ Perry natively implements common utility packages.
 
 ## lodash
 
-The `lodash` runtime functions are partially implemented (see
-`crates/perry-stdlib/src/lodash.rs`) but the user-facing dispatch from
-`import _ from "lodash"; _.chunk(...)` is not wired into the LLVM backend
-yet. Track the follow-up at issue #200.
+Perry wires a focused lodash subset through **named imports**. Supported
+operations include `chunk`, `compact`, `drop`, `first`/`head`, `last`,
+`flatten`, `uniq`, `reverse`, `take`, `camelCase`, `kebabCase`, `snakeCase`,
+`clamp`, `range`, `times`, `size`, `tail`, `sum`, `mean`, `sumBy`, `meanBy`,
+`max`, `min`, `maxBy`, `minBy`, and `inRange`.
 
-```text
-import _ from "lodash";
+Use named imports: the default-import receiver form (`import _ from "lodash";
+_.chunk(...)`) is not routed to these native signatures because it would pass
+the module object as an extra receiver argument.
 
-_.chunk([1, 2, 3, 4, 5], 2);     // [[1,2], [3,4], [5]]
-_.uniq([1, 2, 2, 3, 3]);          // [1, 2, 3]
-_.groupBy(users, "role");
-_.sortBy(users, ["name"]);
-_.cloneDeep(obj);
-_.merge(defaults, overrides);
-_.debounce(fn, 300);
-_.throttle(fn, 100);
+```typescript,no-test
+import { chunk, uniq, range, sum, camelCase } from "lodash";
+
+chunk([1, 2, 3, 4, 5], 2); // [[1,2], [3,4], [5]]
+uniq([1, 2, 2, 3, 3]);      // [1, 2, 3]
+range(0, 5, 1);              // [0, 1, 2, 3, 4]
+sum([2, 3, 4]);              // 9
+camelCase("hello world");    // "helloWorld"
 ```
 
 ## dayjs
 
-`dayjs` runtime functions are declared (`js_dayjs_now`, `js_dayjs_format`,
-`js_dayjs_add`, etc.) but the user-facing dispatch from
-`import dayjs from "dayjs"; dayjs()` chained methods is not wired into the
-LLVM backend yet. Track the follow-up at issue #200.
+The default and named `dayjs` factories and their native instance-method
+dispatch are wired. The supported surface includes formatting, component
+getters, `valueOf`, `unix`, `toISOString`, `add`, `subtract`, `startOf`,
+`endOf`, comparisons, validation, and `diff`.
 
-```text
+```typescript,no-test
 import dayjs from "dayjs";
 
 const now = dayjs();
@@ -43,10 +45,11 @@ console.log(`${diff} days until end of year`);
 
 ## moment
 
-Same status as `dayjs` — the runtime functions exist but the dispatch path
-is not wired yet.
+`moment` uses the same native handle model as `dayjs`. Its factory and instance
+methods are wired, including formatting, date component getters, arithmetic,
+comparisons, `diff`, `clone`, `fromNow`, and `toDate`.
 
-```text
+```typescript,no-test
 import moment from "moment";
 
 const now = moment();
@@ -63,12 +66,29 @@ console.log(moment("2025-01-01").isBefore(now));
 
 ## nanoid
 
-The default-length `nanoid()` call is wired. The custom-length form
-`nanoid(10)` has a runtime function (`js_nanoid_sized`) but no dispatch
-yet — track at issue #200.
+Both `nanoid()` and `nanoid(length)` route through the native sized entry point;
+an omitted length uses nanoid's 21-character default.
 
 ```typescript
 {{#include ../../examples/stdlib/utilities/snippets.ts:nanoid}}
+```
+
+## slugify
+
+Both the single-argument form and the replacement/options overload route to
+the native implementation. The supported options are `replacement`, `lower`,
+`strict`, and `trim`; `remove`, `locale`, `extend`, and the complete upstream
+character map remain outside the current faithfulness boundary.
+
+```typescript,no-test
+import slugify from "slugify";
+
+slugify("Hello World!", { lower: true }); // "hello-world"
+slugify("foo bar", "_");                 // "foo_bar"
+```
+
+```typescript
+{{#include ../../examples/stdlib/utilities/snippets.ts:slugify}}
 ```
 
 ## validator

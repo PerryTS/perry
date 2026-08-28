@@ -90,8 +90,9 @@ scaffolded Android app:
   delivered even if the process has since exited. Timing is *inexact*
   (exact alarms need the `SCHEDULE_EXACT_ALARM` special permission on
   Android 12+), and repeating intervals under 60 seconds are clamped to 60
-  seconds by the OS. Location triggers are not wired
-  ([#96](https://github.com/PerryTS/perry/issues/96) follow-up).
+  seconds by the OS. Android location triggers are not wired; closed
+  [#96](https://github.com/PerryTS/perry/issues/96) implemented interval and
+  calendar scheduling and explicitly left Android geofencing out of scope.
 - `notificationCancel(id)` cancels the pending alarm *and* removes an
   already-delivered banner with that id from the shade.
 - `notificationOnTap(cb)` fires while the app process is alive (the tap

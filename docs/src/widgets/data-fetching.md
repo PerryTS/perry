@@ -13,9 +13,10 @@ The `provider` function is the heart of a dynamic widget. It fetches data, trans
 > are provided by the platform-specific glue (`AppGroupBridge.swift`,
 > `Bridge.kt`) for `--target ios-widget`/`android-widget`/`watchos-widget`/
 > `wearos-tile` and don't link on the host LLVM target. The cross-compile
-> targets themselves still aren't driven by the doc-tests harness — each
-> needs `--app-bundle-id` and a platform SDK
-> ([#194](https://github.com/PerryTS/perry/issues/194)).
+> targets can be driven by the harness with its `// widget-bundle-id:` banner
+> ([#194](https://github.com/PerryTS/perry/issues/194)). This page's shared
+> snippet requests only the host compile/link check; target execution remains
+> conditional on an available Xcode or Android SDK.
 
 ## Provider Lifecycle
 

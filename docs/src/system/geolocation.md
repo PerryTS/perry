@@ -148,5 +148,5 @@ const buf = await sharp(pickedPath)
   .toBuffer();
 ```
 
-See [Other Modules](../stdlib/other.md#sharp) for the full `sharp`
+See [Other Modules](../stdlib/other.md#sharp-image-processing) for the full `sharp`
 surface.

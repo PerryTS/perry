@@ -1,5 +1,9 @@
 # Audit document: lazy `JSON.parse` for Perry
 
+> **Internal audit snapshot (2026-05-21).** Source paths and measurements below
+> describe that revision. Re-audit them against current `main` before using
+> this file as an implementation plan or performance claim.
+
 **Scope:** Perry versions 0.5.203–0.5.211
 **Subsystem:** `crates/perry-runtime/src/json.rs`, `crates/perry-runtime/src/json_tape.rs`,
 `crates/perry-runtime/src/array.rs` (lazy-aware dispatch), `crates/perry-runtime/src/gc.rs`

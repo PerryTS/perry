@@ -1,5 +1,16 @@
 # In-process LLVM backend experiment (`exp/llvm-inprocess`)
 
+> **Historical experiment record.** The opening status, measurements, and
+> adoption proposal below describe the experimental branch. Current Perry
+> builds the `llvm-inprocess` feature by default and selects the in-process
+> LLVM 22 backend when `PERRY_LLVM_INPROCESS` is unset. The environment switch
+> remains a backend-bisection control (`0`/`off` for external clang, `1` for
+> legacy in-process text transport, `native` for native construction, and
+> `diff` for comparison); do not infer today's default from the old opt-in
+> wording below. See
+> [`src/getting-started/installation.md`](src/getting-started/installation.md)
+> and [`src/contributing/building.md`](src/contributing/building.md).
+
 **Status: native construction COMPLETE, opt-in, validated on macOS/arm64
 and Linux/x86_64.** Under
 `PERRY_LLVM_INPROCESS=native` (with the `llvm-inprocess` cargo feature),

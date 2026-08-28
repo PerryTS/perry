@@ -31,7 +31,7 @@ This pattern combines several production-grade primitives:
 
 | Primitive | What it does |
 |---|---|
-| `container_name: 'app-db'` | Forces a stable container name so docker's embedded DNS resolves `app-db` to the postgres container's IP. **See the [DNS gotcha below](#cross-service-dns-gotcha).** |
+| `container_name: 'app-db'` | Forces a stable container name so docker's embedded DNS resolves `app-db` to the postgres container's IP. **See the [DNS gotcha below](#cross-service-dns).** |
 | `healthcheck: { test: [...], interval, retries, start_period }` | Per-service liveness probe. Compose-spec § service.healthcheck shape — Perry's engine honors it for `depends_on` gating. |
 | `depends_on: { db: { condition: 'service_healthy' } }` | Holds the dependent service back until the dependency reports healthy. Three valid conditions: `service_started`, `service_healthy`, `service_completed_successfully`. |
 | `networks: { ..., internal: true }` | Marks the network as internal-only — postgres is unreachable from the host or from sibling stacks. See [Networking](./networking.md). |

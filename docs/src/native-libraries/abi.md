@@ -1,7 +1,7 @@
 # `perry-ffi` — the stable ABI for native bindings
 
 This page documents the contract between native bindings packages
-(`perryts/mysql2-bindings`, `@perry/iroh`, `perry-ext-dotenv`, …) and
+(`@perryts/iroh`, `@perryts/tursodb`, `perry-ext-dotenv`, …) and
 the Perry runtime they execute inside.
 
 > **New here?** Start with [Native Bindings — Overview](overview.md)
@@ -9,44 +9,40 @@ the Perry runtime they execute inside.
 > [Authoring Guide](authoring-guide.md) for the step-by-step. This page
 > is reference-grade detail.
 
-It is intentionally short. The whole point of the contract is
-*minimum surface area* — every helper added is a forever
-commitment, and Perry's internals (string layout, NaN-boxing tags,
-GC) are free to change underneath as long as this surface holds.
+`perry-ffi` is deliberately smaller and more stable than
+`perry-runtime`. It owns the public ABI types and helpers that wrapper
+crates use while leaving runtime internals—field offsets, allocator
+hooks, and NaN-boxing implementation details—free to change.
 
-## Versioning
+## Versioning and dependency setup
 
 `perry-ffi` ships its own semver, currently tracking Perry's minor:
-`perry-ffi = "0.5"` for Perry `0.5.x`.
-
-**v0.5.x consumption (current)**: until the v0.6.0 type-source-of-truth
-refactor lands, `perry-ffi` re-exports a handful of types from
-`perry-runtime` (`StringHeader`, `ArrayHeader`, `ObjectHeader`,
-`BigIntHeader`, `BufferHeader`, `ClosureHeader`, `Promise`). That
-makes it un-publishable to crates.io as-is — `perry-runtime` is a
-private dep and not something we want on crates.io. Wrappers
-depend on `perry-ffi` via the git URL while we're in the v0.5.x
-cycle:
+the `0.5.x` ABI accompanies Perry `0.5.x`. The crate is not currently
+available from crates.io: publication is blocked on publishing its optional
+`perry-runtime` dependency and that dependency's workspace chain first.
+External wrappers therefore use the repository dependency emitted by
+`perry native init`:
 
 ```toml
 [dependencies]
 perry-ffi = { git = "https://github.com/PerryTS/perry", branch = "main" }
 ```
 
-`PerryTS/tursodb-bindings` and `PerryTS/iroh-bindings` ship this
-shape and `cargo build` against the live `main` branch.
+For a released wrapper, pin a tested Perry tag or commit instead of allowing
+an unreviewed `main` update to change the build underneath the release.
 
-**v0.6.0 plan (deferred)**: invert the type ownership so `perry-ffi`
-becomes the source of truth — it defines `#[repr(C)]` versions of
-the ABI types itself, exposes opaque pointers for `Promise` /
-`ClosureHeader` (which have private state), and `perry-runtime`
-imports the types from `perry-ffi`. At that point `perry-ffi` has
-zero `perry-runtime` deps and can publish to crates.io as
-`perry-ffi = "0.6"` — wrappers switch to `cargo add perry-ffi`.
-Tracked under [#466 Phase 1] as a v0.6.0 followup; the v0.5.x
-git-URL approach is supported and tested end-to-end in the meantime.
+The crate defines its own `#[repr(C)]` ABI types, including
+`StringHeader`, `ArrayHeader`, `ObjectHeader`, `BigIntHeader`,
+`BufferHeader`, `ClosureHeader`, `Promise`, and
+`NativeAsyncCompletion`. Do not import those types from
+`perry-runtime`.
 
-A wrapper's `package.json` declares the ABI it was built against:
+The optional `runtime-link` feature is for wrapper tests that need the
+Perry runtime's symbol implementations in their test binary. External
+wrappers should normally leave it disabled: Perry links the runtime archive
+when it builds the final application.
+
+A wrapper's `package.json` declares the ABI range it was built against:
 
 ```json
 {
@@ -59,18 +55,29 @@ A wrapper's `package.json` declares the ABI it was built against:
 }
 ```
 
-The Perry compiler refuses to load a wrapper whose declared
-`abiVersion` doesn't satisfy the bundled `perry-ffi`'s semver range
-(strict enforcement lands under issue [#466 Phase 2]). Backwards-
-incompatible changes to anything in this document bump perry-ffi's
-*major* version — independent of `perry-runtime` semver.
+Perry validates this range when it resolves the package. An invalid
+range or a range that excludes Perry's bundled `perry-ffi` version is
+a compilation error. During the `0.5.x` cycle only, omitting
+`abiVersion` emits a warning and continues; from `0.6.0`, omission is
+also an error. A backwards-incompatible change to this ABI requires a
+major `perry-ffi` version change, independently of `perry-runtime`.
 
-## Surface (v0.5.x)
+## Current surface (`0.5.x`)
 
-The current surface is *deliberately minimal* — just enough to port
-the simplest remaining stdlib wrappers (`dotenv`, `nanoid`, `uuid`).
-It will grow as real wrappers demand it; we'd rather under-design
-and add than commit to a helper we later regret.
+The table below groups the main public APIs. The
+[`perry-ffi` exports][ffi-src] and their Rust documentation are the
+source of truth for exact signatures and safety requirements.
+
+| Area | Public surface |
+| --- | --- |
+| Strings and bytes | `JsString`, `alloc_string`, `read_string`, `alloc_bytes`, `read_bytes` |
+| JavaScript values | `JsValue`, its value constants and conversions, `alloc_object`, `alloc_null_proto_object`, `build_object_shape` |
+| Arrays and objects | `js_array_alloc/get/length/push/set`, `js_object_alloc_with_shape/get_field/set_field`, `object_field_by_name` |
+| Closures | `JsClosure::call0` through `call4`, `alloc_closure`, capture accessors, arity registration |
+| Buffers and BigInts | `alloc_buffer`, `read_buffer_bytes`, `alloc_bigint_from_str`, `read_bigint_limbs` |
+| Async work | `JsPromise`, `JsNativeAsyncCompletion`, `spawn_async`, `spawn_blocking`, `spawn_blocking_with_reactor`, `run_pending` |
+| Native state and GC | The typed handle registry, mutable root scanners, and `TransientRootScope` |
+| Errors and integration | Error/warning helpers, `json_stringify`, auxiliary event-pump hooks, and `RawNetVtable` registration |
 
 ### Strings
 
@@ -85,22 +92,19 @@ impl JsString {
     pub fn as_raw(self) -> *mut StringHeader;
     pub fn is_null(self) -> bool;
 }
-
-pub use perry_runtime::StringHeader; // for `*mut StringHeader` in extern "C" sigs
 ```
 
-`alloc_string` allocates a fresh string in the runtime's arena.
-The handle is owned by the runtime — Perry's GC reclaims it once
-no live references remain, including references held by JS code
-your function returned the handle to.
+`alloc_string` copies UTF-8 into a new runtime-owned string.
+`read_string` returns `None` for a null handle or invalid UTF-8. The
+returned bytes are borrowed from the runtime arena; do not free them or
+retain a raw pointer beyond the lifetime guaranteed by the calling
+context.
 
-`read_string` borrows the underlying UTF-8 bytes for the duration
-of the FFI call. Returns `None` on a null handle or invalid UTF-8.
+Use `perry_ffi::StringHeader` in exported signatures:
 
-`StringHeader` is re-exported as the canonical type for `extern "C"`
-return / parameter types — wrappers should write
-`pub extern "C" fn js_my_module_thing() -> *mut perry_ffi::StringHeader`,
-not import `StringHeader` from `perry-runtime` directly.
+```rust
+pub extern "C" fn js_my_module_thing() -> *mut perry_ffi::StringHeader
+```
 
 ### Async promise rejection
 
@@ -111,27 +115,31 @@ JavaScript `Error` allocated on the runtime's main thread. Its `.message` and
 reject with an arbitrary JavaScript value. Use `JsPromise::reject_with` to
 construct a structured rejection value safely on the main thread.
 
-### What's NOT in v0.5
+### ABI boundaries and thread safety
 
-These will land as real wrappers force them, tracked under
-[#466 Phase 1]'s "Open questions":
+- Use the exported constructors, accessors, and `JsValue` conversions.
+  Do not depend on private runtime field offsets or hard-code pointer
+  tags.
+- JavaScript heap allocation is tied to Perry's main-thread arena. If
+  worker-thread work must produce an object, array, or other complex
+  `JsValue`, carry plain `Send` data back and construct the value with
+  `JsPromise::resolve_with` on the main thread.
+- Register native values that retain JavaScript references with the
+  handle/root-scanner APIs. Use `TransientRootScope` for temporary
+  values that must survive an allocation or collection point.
+- Respect the `unsafe` contracts on raw pointer constructors and FFI
+  entry points. `perry-ffi` stabilizes the interface; it cannot prove
+  that a caller supplied a live pointer of the declared type.
+- Keep `runtime-link` out of production wrapper dependencies unless
+  the crate genuinely needs a Cargo-level `perry-runtime` link. It is
+  normally enabled only in wrapper tests.
 
-- Array allocation / read (`alloc_array`, `read_array`).
-- Object field get / set.
-- Closure invocation helpers.
-- NaN-boxing constants (undefined / null / true / false).
-- Async runtime sharing (`spawn_async`, `block_on`).
-- BigInt allocation.
-
-If your wrapper needs one of these today, add it to perry-ffi in
-the same PR that ports the wrapper. Treat this document as the
-review gate: any addition needs a one-line entry above and a
-unit test in `crates/perry-ffi/src/lib.rs`.
+Any new ABI helper should be documented and covered by a focused test
+in `crates/perry-ffi` in the same change.
 
 ## Reference example: `perry-ext-dotenv`
 
-The smallest stdlib wrapper Perry ships is the acceptance test for
-the surface above. Its full FFI surface is two functions:
+The smallest in-tree wrapper demonstrates string input and output:
 
 ```rust
 use perry_ffi::{alloc_string, read_string, JsString, StringHeader};
@@ -159,29 +167,25 @@ pub unsafe extern "C" fn js_dotenv_parse(
 }
 ```
 
-Source: [`crates/perry-ext-dotenv/src/lib.rs`][src].
+Source: [`crates/perry-ext-dotenv/src/lib.rs`][dotenv-src]. The crate's
+normal dependency is `perry-ffi`; its dev-dependency enables
+`runtime-link` so the FFI round-trip test can link runtime symbols.
 
-It depends only on `perry-ffi` and `serde_json`. Zero references to
-`perry-runtime` internals. That's the bar for every wrapper that
-moves out of `perry-stdlib` over the course of #466 Phase 5.
+## Tooling and implementation status
 
-## Followup roadmap
+The native-library work tracked by [#466] has landed:
 
-- [#466 Phase 2] freezes the `perry.nativeLibrary` manifest spec and
-  enforces `abiVersion` at resolve time.
-- [#466 Phase 3] adds `perry native init/validate/prebuild` for
-  scaffolding new wrapper packages.
-- [#466 Phase 4] adds the well-known bindings table so `import
-  'dotenv'` resolves to `perry-ext-dotenv` automatically — until it
-  lands, `import 'dotenv'` continues to bind to the
-  `perry-stdlib` copy.
-- [#466 Phase 5] ports the rest of the wrappers in size order. Ordinary
-  source packages can subsequently retire those wrappers; `slugify` did so
-  under #5716 once its installed upstream package passed source parity.
+- manifests declare their native functions and ABI version;
+- incompatible declared ABI ranges are rejected during resolution;
+- `perry native init`, `perry native validate`, and
+  `perry native list` provide authoring and inspection workflows;
+- the well-known bindings table routes supported package imports; and
+- wrappers can depend on the repository's stable `perry-ffi` API instead of
+  `perry-runtime` internals.
 
-[#466 Phase 1]: https://github.com/PerryTS/perry/issues/466
-[#466 Phase 2]: https://github.com/PerryTS/perry/issues/466
-[#466 Phase 3]: https://github.com/PerryTS/perry/issues/466
-[#466 Phase 4]: https://github.com/PerryTS/perry/issues/466
-[#466 Phase 5]: https://github.com/PerryTS/perry/issues/466
-[src]: https://github.com/PerryTS/perry/blob/main/crates/perry-ext-dotenv/src/lib.rs
+Issue #466 is retained as the historical design record. Open a new
+issue for a missing ABI helper or a new native-library capability.
+
+[#466]: https://github.com/PerryTS/perry/issues/466
+[ffi-src]: https://github.com/PerryTS/perry/blob/main/crates/perry-ffi/src/lib.rs
+[dotenv-src]: https://github.com/PerryTS/perry/blob/main/crates/perry-ext-dotenv/src/lib.rs

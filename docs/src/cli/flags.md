@@ -1,6 +1,8 @@
 # Compiler Flags
 
-Complete reference for all Perry CLI flags.
+Reference for the public `perry compile` flags plus Perry's global flags. The
+installed binary remains authoritative for feature-gated commands; use
+`perry --help` and `perry <command> --help` to inspect that exact build.
 
 ## Global Flags
 
@@ -29,6 +31,11 @@ Use `--target` to cross-compile:
 | `ios` | iOS Device | ARM64 device binary |
 | `visionos-simulator` | visionOS Simulator | Apple Vision Pro simulator build |
 | `visionos` | visionOS Device | Apple Vision Pro device build |
+| `macos` | macOS | Native macOS app bundle/build |
+| `tvos` | tvOS Device | ARM64 Apple TV app |
+| `tvos-simulator` | tvOS Simulator | Apple TV simulator app |
+| `watchos` | watchOS Device | Apple Watch app |
+| `watchos-simulator` | watchOS Simulator | Apple Watch simulator app |
 | `android` | Android | ARM64 device build |
 | `android-x86_64` | Android | x86_64 emulator/device build |
 | `ios-widget` | iOS Widget | WidgetKit extension (requires `--app-bundle-id`) |
@@ -37,6 +44,9 @@ Use `--target` to cross-compile:
 | `watchos-widget-simulator` | watchOS Widget (Sim) | Widget for watchOS simulator |
 | `android-widget` | Android Widget | Android App Widget (AppWidgetProvider) |
 | `wearos-tile` | Wear OS Tile | Wear OS Tile (TileService) |
+| `wearos` | Wear OS App | ARM64 Wear OS application shared library |
+| `harmonyos` | HarmonyOS NEXT | ARM64 OHOS HAP/native library |
+| `harmonyos-simulator` | HarmonyOS Simulator | x86_64 OHOS simulator output |
 | `wasm` | WebAssembly | Self-contained HTML with WASM or raw `.wasm` binary |
 | `web` | Web | Outputs HTML file with JS |
 | `windows` | Windows | Win32/GDI executable for the native Windows host architecture; x64 when cross-compiling from another OS |
@@ -44,6 +54,10 @@ Use `--target` to cross-compile:
 | `windows-aarch64` | Windows ARM64 | Explicit ARM64 MSVC target (`windows-arm64` is accepted as an alias) |
 | `windows-winui` | Windows (Fluent) | Opt-in WinUI 3 / Fluent backend for core Perry controls. Requires the Windows App SDK 2.0 runtime; see [Windows](../platforms/windows.md#winui-3-fluent-target). |
 | `linux` | Linux | GTK4 executable |
+| `linux-x86_64` | Linux x64 (glibc) | Explicit x86_64 GNU target |
+| `linux-aarch64` (`linux-arm64`) | Linux arm64 (glibc) | Explicit aarch64 GNU target |
+| `linux-musl` (`linux-x86_64-musl`) | Linux x64 (musl) | Fully static headless/server target |
+| `linux-aarch64-musl` | Linux arm64 (musl) | Fully static headless/server target |
 
 ## Output Types
 
@@ -53,6 +67,24 @@ Use `--output-type` to change what's produced:
 |------|-------------|
 | `executable` | Standalone binary (default) |
 | `dylib` | Shared library (`.dylib`/`.so`) for [plugins](../plugins/overview.md) |
+| `staticlib` | Static archive (`.a`/`.lib`) exposing `perry_module_init` for a native host |
+
+## General Build and Platform Flags
+
+| Flag | Description |
+|---|---|
+| `-o, --output <PATH>` | Output executable, bundle, shared library, archive, or object path. |
+| `--libc glibc\|musl` | Select Linux libc/linkage; `musl` upgrades the corresponding Linux target to a fully static headless build. |
+| `--app-bundle-id <ID>` | Bundle identifier required by home-screen widget targets. |
+| `--bundle-extensions <DIR>` | Discover and statically bundle native extension packages from a directory. |
+| `--type-check` | Run the native TypeScript checker (`@typescript/native-preview`) before codegen. |
+| `--min-windows-version 7\|8\|10` | Set the Windows PE compatibility floor; ignored for non-Windows targets. |
+| `--windows-subsystem auto\|console\|windows` | Select the Windows PE subsystem instead of relying on import-based auto detection. |
+| `--skip-swift-build` | For Apple widget targets, emit SwiftUI source and metadata without invoking `swiftc`. |
+| `--p12-keystore <PATH>` / `--p12-password <VALUE>` | Select HarmonyOS HAP signing material. Prefer the corresponding environment/config sources for secrets. |
+| `--harmonyos-cert <PATH>` | HarmonyOS application certificate chain. |
+| `--harmonyos-profile <PATH>` | HarmonyOS signed provisioning profile. |
+| `--harmonyos-key-alias <NAME>` | HarmonyOS keystore alias; defaults to `debugKey`. |
 
 ## Embedding Assets
 
@@ -144,6 +176,12 @@ the generating asset module where applicable.
 | `--no-link` | Produce `.o` object file(s) only, skip linking. The objects are written to `-o` — verbatim for a single-module program, otherwise into `-o`'s directory under module-derived names, since one `-o` cannot name several files. With no `-o` they land in the current directory. Each path is printed as `Wrote object file: <path>` |
 | `--no-codegen` | Skip the `package.json` `perry.codegen` build-time steps (also `PERRY_SKIP_CODEGEN=1`). See [Project Configuration](../getting-started/project-config.md) |
 | `--keep-intermediates` | Keep `.o` and `.asm` intermediate files |
+| `--debug-symbols` | Retain symbols/DWARF (and emit a Windows PDB) instead of stripping the result. |
+| `--no-cache` | Disable the per-module object cache for this build; also `PERRY_NO_CACHE=1`. |
+| `--cache-dir <PATH>` | Override the machine-local cache root; see [Cache Directory](cache-dir.md). |
+| `--verify-native-regions` | Run native-representation lowering invariants and force codegen instead of cache reuse. |
+| `--disable-buffer-fast-path` | Disable native Buffer/Uint8Array load/store lowering for A/B diagnosis. |
+| `--explain-lowering` | Emit a type-lowering evidence report; implies native-region verification. |
 | `--opt-report[=json]` | Report which values Perry could **not** statically type, why, and whether you can fix it. Text by default; `--opt-report=json` emits a stable schema for tooling. Also settable via `PERRY_OPT_REPORT=1` |
 | `--statepoint-report[=json]` | Report native-stack GC root pressure: calls with live roots, audited non-collecting calls omitted, relocations, plain-map fallbacks, and live-root widths. Research-only; requires `PERRY_RS4GC=1`, the one native-root backend (the plain stack-map and explicit-bridge modes it also named are gone) |
 
@@ -221,6 +259,10 @@ silently regressing to zero.
 |------|-------------|
 | `--minify` | Minify and obfuscate output (auto-enabled for `--target web`) |
 | `--march <CPU>` | CPU baseline for the generated machine code: an LLVM CPU name (`x86-64-v2`, `x86-64-v3`, `znver2`, `apple-m1`, …), `native` (tune to the build machine — the default for host builds), or `generic` (the target architecture's portable baseline — the default for cross builds). Pin this when the binary runs on other machines: a host-native build on an AVX-512 box otherwise SIGILLs on older x86-64 CPUs. Also settable via `PERRY_TARGET_CPU` or perry.toml `[build] march`; `[build] native_tuning = false` is shorthand for `generic`. Applies to app code and the auto-optimized runtime/stdlib rebuild. |
+| `--features <LIST>` | Define comma-separated compile-time `__feature_NAME__` constants for dead-code elimination. |
+| `--no-auto-optimize` | Use the prebuilt full runtime/stdlib instead of rebuilding the smallest reachable feature set. |
+| `--fast-math` | Permit floating-point reassociation; see [Fast-math](fast-math.md). |
+| `--fp-contract off\|on\|fast` | Control fused multiply-add contraction separately from reassociation. |
 
 Minification strips comments, collapses whitespace, and mangles local variable/parameter/non-exported function names for smaller output.
 
@@ -258,6 +300,10 @@ shrink less, proportionally.
 | `--type-check` | Enable type checking via tsgo IPC |
 | `--strict-eval` | Fail the build if any runtime-unknown `eval(...)` / `new Function(<dynamic body>)` site is reachable. By default such a site is compiled to a deferred runtime error (throws only if reached) and a compile-time notice is printed. Also settable via `perry.eval = "error"` / `perry.strict = true` (package.json or perry.toml). `PERRY_ALLOW_EVAL=1` forces it off. See [Limitations](../language/limitations.md#no-eval-or-dynamic-code). |
 | `--strict-dynamic-import` | Fail the build if a dynamic `import(...)` has a runtime-computed (non-resolvable) specifier. By default such a site is compiled to a rejected `Promise` that throws a descriptive `Error` only if reached, and is listed in the same end-of-build notice as deferred eval sites. Also settable via `perry.dynamicImport = "error"` / `perry.strict = true` (package.json or perry.toml). `PERRY_ALLOW_EVAL=1` forces it off. Resolvable forms (string literals, ternaries of resolvable arms, template literals over const locals, finite union-typed params, glob) are unaffected. See [Limitations](../language/limitations.md#no-eval-or-dynamic-code). |
+| `--strict-unimplemented` | Fail at compile time when a recognized but unimplemented Node/stdlib API is referenced instead of emitting a deferred runtime error. |
+| `--emit-attest` | Emit `<binary>.attest.json`; see [Binary attestation](emit-attest.md). |
+| `--emit-sandbox` | Emit the platform sandbox sidecar; see [Sandbox profiles](emit-sandbox.md). |
+| `--lockdown` | Refuse reachable arbitrary-code-execution surfaces; see [Lockdown](lockdown.md). |
 
 ## Environment Variables
 

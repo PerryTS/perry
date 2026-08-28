@@ -165,4 +165,5 @@ for full parameter documentation. Summary:
 | `isPlaying(handle)` / `getDuration(sound)` / `getPosition(playback)` | Introspection. |
 | `onEnded(playback, cb)` / `onLoaded(sound, cb)` | Lifecycle callbacks. |
 
-Tracked in issue [#1867](https://github.com/PerryTS/perry/issues/1867).
+Implemented through closed issue
+[#1867](https://github.com/PerryTS/perry/issues/1867).

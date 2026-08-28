@@ -2,49 +2,53 @@
 
 ## Prerequisites
 
-Perry compiles TypeScript to native binaries by linking with your system's C toolchain, so every install path needs a linker:
+Perry compiles TypeScript to native binaries by linking with your system's C
+toolchain, so every install path needs a linker:
 
 - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
-- **Linux**: `gcc` or `clang` for linking, plus **clang ≥ 15** for codegen — see your distro below
+- **Linux**: `gcc` or `clang` for linking — see your distro below
 - **Windows**: LLVM (`winget install LLVM.LLVM`) + `perry setup windows` (lightweight, ~1.5 GB, no Visual Studio needed), or MSVC Build Tools with the "Desktop development with C++" workload — see the [Windows platform guide](../platforms/windows.md) for both options
 
-> **clang ≥ 15 on Linux.** Perry's LLVM backend emits opaque-pointer IR (`ptr`) and compiles it with `clang -c`. clang 14 and older reject it with `error: expected type`. Ubuntu 22.04's default `clang` is 14 — install a newer one (`sudo apt install clang-15`) and point Perry at it if it isn't the default: `export PERRY_LLVM_CLANG=/usr/bin/clang-15`. Ubuntu 24.04, Debian 13, Fedora 39+ and Arch all ship a new enough clang.
+Perry's shipped compiler uses its in-process LLVM 22 backend for normal
+codegen; it does not shell out to a host `clang -c`. A matching external clang
+is needed only for specialized paths that say so explicitly, such as Windows
+host `--embed`, or when deliberately selecting the external backend for
+bisection (for example `PERRY_LLVM_INPROCESS=0` or a build without the default
+`llvm-inprocess` feature).
 
-Linux C toolchain by distribution. Each line installs **both** the linker
-toolchain and `clang` — Perry needs the linker to produce the executable and
-clang to compile the LLVM IR it emits, so installing only `gcc`/`build-essential`
-leaves you with a working linker and a compiler that can't run codegen:
+Linux linker toolchain by distribution:
 
 ```bash
 # Debian / Ubuntu / Pop!_OS / Mint
-sudo apt install build-essential clang
+sudo apt install build-essential
 
 # Arch / Manjaro / CachyOS / EndeavourOS
-sudo pacman -S base-devel gcc clang
+sudo pacman -S base-devel gcc
 
 # Fedora / RHEL / CentOS Stream
-sudo dnf install gcc gcc-c++ glibc-devel clang
+sudo dnf install gcc gcc-c++ glibc-devel
 
 # openSUSE
-sudo zypper install -t pattern devel_basis && sudo zypper install clang
+sudo zypper install -t pattern devel_basis
 
 # Alpine / musl-based
-sudo apk add build-base clang
+sudo apk add build-base
 
 # Void Linux
-sudo xbps-install -S base-devel clang
+sudo xbps-install -S base-devel
 ```
 
-Run `perry doctor` afterwards — it prints the clang it resolved (or tells you
-how to point `PERRY_LLVM_CLANG` at one).
+Run `perry doctor` afterwards to verify the linker and platform tools. It may
+also report an optional external clang used by the specialized paths above.
 
-The source install additionally needs the **Rust toolchain** via [rustup](https://rustup.rs/).
+A source build has additional Rust, LLVM 22, and libclang prerequisites; see
+[Building from Source](../contributing/building.md) before running Cargo.
 
 ## Install Perry
 
 ### npm / npx (recommended — any platform)
 
-Perry ships as a prebuilt-binary npm package. This is the fastest way to get started and the only path that covers all seven supported platforms (macOS arm64/x64, Linux x64/arm64 glibc + musl, Windows x64) with a single command:
+Perry ships as a prebuilt-binary npm package. This is the fastest way to get started and the only path that covers all seven host binary variants (macOS arm64/x64, Linux x64/arm64 glibc + musl, Windows x64) with a single command:
 
 ```bash
 # Project-local (pins Perry's version alongside your deps)
@@ -107,6 +111,10 @@ sudo apt update && sudo apt install perry
 ```
 
 ### From Source
+
+Install the prerequisites in [Building from Source](../contributing/building.md)
+first. In particular, the default compiler build requires the LLVM 22
+development archive; installing Rust alone is not sufficient.
 
 ```bash
 git clone https://github.com/PerryTS/perry.git

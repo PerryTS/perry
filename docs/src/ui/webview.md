@@ -5,7 +5,8 @@
 on Linux, `android.webkit.WebView` on Android, and a sandboxed
 `<iframe>` on the web target. Use it for OAuth / payment flows, embedded
 admin pages, help / docs viewers, or any "show this URL as part of my
-app" surface. (Tracked under issue #658.)
+app" surface. The cross-platform implementation shipped under closed issue
+#658.
 
 ```ts
 {{#include ../../examples/ui/webview/snippets.ts:imports}}

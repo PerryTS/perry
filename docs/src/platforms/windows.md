@@ -122,14 +122,16 @@ The linker couldn't find the Windows SDK libraries. Perry probes the registry (`
 
 MSVC `link.exe` shells out to the Windows SDK's `mt.exe` to embed the UI visual-styles manifest, and `mt.exe` isn't normally on `PATH` outside a `vcvars64.bat` shell. Perry locates the SDK `bin` directory and puts it on the linker's `PATH` automatically (issue #6023), so you shouldn't see this error anymore. If `mt.exe` isn't installed anywhere, Perry skips the manifest embed with a warning instead of failing — common controls render in the classic (unthemed) look until you install the Windows 10/11 SDK. `lld-link` (Option A) never needs `mt.exe`.
 
-### `--staticlib` / `--dylib` each need one tool from the *other* toolchain
+### Library outputs work with either toolchain
 
-The two toolchain options currently cover plain `.exe` builds equally, but the library output modes each depend on a tool the other option provides:
+The lightweight LLVM and full MSVC options both cover executable and library
+outputs:
 
-- `--staticlib` archives with MSVC `lib.exe`. Option A (LLVM + `perry setup windows`) alone doesn't include it — install the MSVC Build Tools (Option B).
-- `--dylib` links with LLVM `lld-link`; MSVC `link.exe` can't produce Perry's plugin DLLs (it reports success without writing the DLL under `/FORCE:UNRESOLVED`). Option B alone doesn't include it — `winget install LLVM.LLVM`.
-
-A fix removing this cross-dependency is in flight; until it lands, the workaround is to install the missing half.
+- `--staticlib` prefers MSVC `lib.exe`, then LLVM `llvm-lib`, then
+  `llvm-ar --format=coff`.
+- `--dylib` prefers LLVM `lld-link` and falls back to MSVC `link.exe`.
+  Perry verifies that the linker actually wrote the DLL; older MSVC toolsets
+  that silently omit it produce an actionable error recommending `lld-link`.
 
 ### SmartScreen blocks a downloaded `perry.exe`
 

@@ -2,7 +2,12 @@
 
 Perry widgets compile from a single TypeScript source to four platforms. The same `Widget({...})` declaration produces native code for each target.
 
-> **Status:** this page has no TypeScript fences (only target-flag tables and shell build commands), so the doc-tests harness has nothing to run here. The `--target` flags listed below are all wired in `crates/perry/src/commands/compile.rs`, but the harness still can't exercise them end-to-end — each requires `--app-bundle-id` and a platform SDK (Xcode, Android NDK).
+> **Status:** this page has no TypeScript fences (only target-flag tables and
+> shell build commands), so the doc-tests harness has nothing to run here. The
+> `--target` flags listed below are wired in the compiler. Example files can
+> provide the required bundle id with the harness's `// widget-bundle-id:`
+> banner; end-to-end target coverage also requires the matching Xcode or
+> Android SDK on the CI host.
 
 ## Target Flags
 

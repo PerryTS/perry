@@ -1,6 +1,6 @@
 # Hooks & Events
 
-> **Status: wired** ([#189](https://github.com/PerryTS/perry/issues/189) closed). `api.registerHook`, `api.on`, `emitHook`, `emitEvent`, `invokeTool` all dispatch to `crates/perry-runtime/src/plugin.rs`. Snippets below are compile-link verified against [`docs/examples/plugins/{plugin,host}_snippets.ts`](https://github.com/PerryTS/perry/blob/main/docs/examples/plugins/).
+> **Status: wired** ([#189](https://github.com/PerryTS/perry/issues/189) closed). `api.registerHook`, `api.on`, `emitHook`, `emitEvent`, `invokeTool` all dispatch to `crates/perry-runtime/src/plugin.rs`. Snippets below are compile-link verified against [`docs/examples/plugins/{plugin,host}_snippets.ts`](https://github.com/PerryTS/perry/tree/main/docs/examples/plugins).
 
 Perry plugins communicate through hooks, events, and tools.
 

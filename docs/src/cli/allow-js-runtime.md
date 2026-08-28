@@ -73,11 +73,10 @@ someone tries to merge an opt-in by accident.
 
 ## Lockdown mode
 
-This refusal will be part of the deny-set for the upcoming
-`--lockdown` compile flag (issue
-[`#496`](https://github.com/PerryTS/perry/issues/496)). In lockdown
-mode, no opt-in is honored — the build always refuses
-`perry-jsruntime` linkage.
+This refusal is part of the deny-set for the implemented `--lockdown` compile
+flag (closed issue
+[`#496`](https://github.com/PerryTS/perry/issues/496)). In lockdown mode, no
+opt-in is honored — the build always refuses `perry-jsruntime` linkage.
 
 ## See also
 

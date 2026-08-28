@@ -1,5 +1,10 @@
 # Android Crash Fix — Perry v0.4.26–v0.4.29
 
+> **Historical incident record.** This documents the v0.4.26–v0.4.29 Android
+> crash and its fix; it is not current Android setup guidance. See
+> [`src/platforms/android.md`](src/platforms/android.md) for the maintained
+> platform documentation.
+
 ## Summary
 
 Android UI apps crashed with `SIGSEGV at getLevelInfo+44` when accessing module-level arrays from UI pump tick callbacks. The root cause was the perry-native thread's arena being freed after `main()` returned.

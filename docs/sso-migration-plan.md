@@ -1,7 +1,10 @@
 # Plan: Small String Optimization (SSO) rollout
 
-**Status:** infrastructure landed in v0.5.213. No creation sites migrated yet —
-see "Why infrastructure-only first" below.
+> **Historical rollout log.** The original opening status (“infrastructure
+> only”) stopped being true as the later entries in this same document landed:
+> JSON creation sites began emitting SSO in v0.5.216, and current source has
+> substantially broader SSO-aware consumers. Preserve the sequence as design
+> history, but use the runtime/codegen source and current tests for coverage.
 
 **Goal:** strings of length 0..=5 bytes encode inline in the NaN-boxed f64
 payload (48 bits: 8-bit length + 5 bytes of data + the SHORT_STRING_TAG

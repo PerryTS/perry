@@ -1,5 +1,12 @@
 # Cross-Platform Development Guide
 
+> **Historical snapshot (v0.2.77).** This file is retained for early Docker
+> and CI context; it is not the current installation or release runbook. Use
+> [`src/getting-started/installation.md`](src/getting-started/installation.md),
+> [`src/contributing/building.md`](src/contributing/building.md), and
+> [`src/contributing/releasing.md`](src/contributing/releasing.md) for current
+> toolchains and platform coverage.
+
 This guide covers how to develop Perry on macOS while compiling and deploying to Linux/Ubuntu targets.
 
 ## Quick Start

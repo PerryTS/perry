@@ -7,8 +7,11 @@ Define home screen widgets using the `Widget()` function.
 > [`docs/examples/widgets/snippets.ts`](https://github.com/PerryTS/perry/blob/main/docs/examples/widgets/snippets.ts),
 > so the API shapes are verified against the codegen. The actual cross-compile
 > targets (`--target ios-widget`/`android-widget`/`watchos-widget`/`wearos-tile`)
-> still aren't driven by the doc-tests harness — each requires `--app-bundle-id`
-> and a platform SDK ([#194](https://github.com/PerryTS/perry/issues/194)).
+> can be driven by the doc-tests harness with a `// widget-bundle-id:` banner
+> ([#194](https://github.com/PerryTS/perry/issues/194)). These shared snippets
+> do not request those targets, so their regular CI coverage remains the host
+> compile/link path; SDK-backed target coverage runs only where the required
+> Xcode or Android toolchain is installed.
 > For the canonical end-to-end shape see
 > [`examples/widget_demo.ts`](https://github.com/PerryTS/perry/blob/main/examples/widget_demo.ts).
 > Fragments below that show partial syntax (just the `entryFields` object,
@@ -101,11 +104,11 @@ The `provider` field defines a timeline provider that fetches data for the widge
 {{#include ../../examples/widgets/snippets.ts:stock-widget}}
 ```
 
-> Note: the chain-style modifiers (`.font("title").color("green")`) parse but
-> are dropped at HIR-lowering time — see
-> [#195](https://github.com/PerryTS/perry/issues/195). The verified extract
-> above uses the inline-options form `Text("...", { font: "title" })`, which is
-> what actually round-trips through the widget codegen.
+> Note: chain-style modifiers (`.font("title").color("green")`) are rejected
+> with a compile-time diagnostic so styling cannot disappear silently; this
+> behavior closed [#195](https://github.com/PerryTS/perry/issues/195). The
+> verified extract uses the supported inline-options form
+> `Text("...", { font: "title" })`.
 
 ### Placeholder Data
 

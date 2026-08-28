@@ -7,7 +7,7 @@ This document is **not Perry-specific** — it does not say which APIs Perry imp
 ## Versions referenced
 
 - **Node.js** — 22 LTS / 24 current (some 26-current APIs marked in Notes).
-- **Bun** — 1.3.x. Bun's compatibility status is sourced from <https://bun.sh/docs/runtime/nodejs-apis> and the per-API Bun docs at <https://bun.sh/docs/api/>.
+- **Bun** — 1.3.x. Bun's compatibility status is sourced from <https://bun.sh/docs/runtime/nodejs-compat> and the [Bun API reference](https://bun.sh/reference/bun).
 
 ## Legend
 
@@ -43,7 +43,7 @@ The reference is split into three parts in this single file:
 
 ## Node.js + Bun Runtime API Parity Inventory — Part 1
 
-Bun column reflects [bun.sh/docs/runtime/nodejs-apis](https://bun.sh/docs/runtime/nodejs-apis) (Node v23 baseline). Marks: ✓ supported, ✗ not implemented, ⚠ partial / documented gap.
+Bun column reflects [Bun's Node.js compatibility page](https://bun.sh/docs/runtime/nodejs-compat) (Node v23 baseline). Marks: ✓ supported, ✗ not implemented, ⚠ partial / documented gap.
 
 ---
 
@@ -1761,7 +1761,7 @@ Available via `require('node:stream/consumers')`. Functions to consume Readable 
 ## Node.js + Bun Runtime API Surface — Parity Inventory (Part 2)
 
 Leaf-level inventory of Node.js native modules NOT covered in Part 1.
-Bun column reflects status as documented at https://bun.sh/docs/runtime/nodejs-apis (compatibility with Node.js v23).
+Bun column reflects status as documented at https://bun.sh/docs/runtime/nodejs-compat (compatibility with Node.js v23).
 
 Legend: ✓ supported · ✗ not supported · ⚠ partial/with caveats
 

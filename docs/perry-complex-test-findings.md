@@ -1,5 +1,11 @@
 # Perry Complex TypeScript Stress Test Findings
 
+> **Historical test snapshot (2026-02-16).** The five `test_complex_*` files
+> named below have since been removed or replaced and these pass/fail counts
+> must not be used as current compatibility evidence. Current behavioral
+> coverage lives in the registered gap/parity suites and
+> [`src/testing/test-registration.md`](src/testing/test-registration.md).
+
 Date: February 16, 2026
 
 ## Summary

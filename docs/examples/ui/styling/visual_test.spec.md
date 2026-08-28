@@ -63,10 +63,8 @@ width and corner-radius:
 | 3 | `heavy` | thick red | square | bold red outline, sharp 90° corners |
 | 4 | `pill` | thin gray | very rounded | nearly pill-shaped, hairline outline |
 
-**Windows note:** issue [#210](https://github.com/PerryTS/perry/issues/210) — borders are stub-with-state on Windows
-(FFI accepts the params, no paint pass). Cells 1-4 may render as
-plain text labels with no visible border on Windows until #210
-lands. **GTK4:** all 4 should render correctly.
+All four borders should render on every backend. Windows paints the stored
+border state through its child-window paint subclass; GTK4 uses CSS.
 
 ### 3. Padding
 
@@ -98,9 +96,7 @@ shadow path isn't wired.
 | 2 | `hard` | black | 0 | (4, 4) | sharp dark offset to bottom-right of light-gray box |
 | 3 | `blue` | blue | 16 | (0, 6) | soft blue glow below light-gray box |
 
-**Windows note:** issue [#210](https://github.com/PerryTS/perry/issues/210) — shadow is stub-with-state on
-Windows. Cells 1-3 will look like plain white boxes with no shadow
-until #210 lands. **Android:** shadow direction may differ from
+**Android:** shadow direction may differ from
 iOS/macOS (Android's elevation derives direction from device-level
 light source, not the offset; the offset is intentionally ignored —
 same shadow color/blur should appear under all 3 cells).
@@ -126,9 +122,9 @@ Four `#3B82F6` blue labels at decreasing opacity:
 | 3 | `50` | 0.5 | half-transparent, washed-out blue |
 | 4 | `25` | 0.25 | very faint, almost ghosted |
 
-**GTK4 / Windows:** opacity is wired on GTK4 (real `Widget::set_opacity`)
-but stub-with-state on Windows ([#210](https://github.com/PerryTS/perry/issues/210)) — Windows cells 2-4
-will all render at full opacity until #210 lands.
+**GTK4 / Windows:** opacity is wired on both platforms (`Widget::set_opacity`
+on GTK4 and layered-window alpha on Windows). Cells 2-4 should be visibly
+fainter on each.
 
 ### 7. Typography
 
@@ -144,9 +140,8 @@ Seven text labels in a row, all black text, demonstrating font axes:
 | 6 | `18pt` | larger | visibly larger than cell 1 |
 | 7 | `mono` | monospaced | distinctive monospace glyph shapes |
 
-**Windows:** text decoration is stub-with-state ([#210](https://github.com/PerryTS/perry/issues/210)) — cells 3
-and 4 will render as plain "under" / "strike" without the line
-decoration until #210 lands.
+**Windows:** text decoration is applied through the Text widget's Win32 font;
+cells 3 and 4 should show the underline and strikeout.
 
 ### 8. Buttons
 
@@ -224,15 +219,14 @@ something else entirely, the runtime path is broken.
 
 ## Per-platform expected status
 
-Platform → Expected sections rendering correctly, given the matrix
-state at v0.5.310+:
+Platform → expected sections, based on the current generated styling matrix:
 
-| Platform | Sections expected fully ✓ | Sections expected ✗ (with reason) |
+| Platform | Sections expected fully ✓ | Known platform differences |
 |----------|--------------------------|-----------------------------------|
 | **macOS / iOS / tvOS / visionOS / watchOS** | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 | none |
 | **Android** | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13 | 11 (no SF Symbols), 4 (shadow direction may differ — offset ignored on Android by design) |
-| **GTK4** | 1, 2, 3, 5, 6, 7, 9, 10, 12, 13 | 4 (some cells may be flat — depends on GTK theme), 8 (cell 3 outlined button may not show border due to [#202](https://github.com/PerryTS/perry/issues/202) `widget.on_click` etc gaps), 11 (no SF Symbols) |
-| **Windows** | 1, 3, 5, 7 (cells 1, 2, 5, 6, 7), 9, 10, 12 (cell 1), 13 cell 1 | 2 (border stubs), 4 (shadow stubs), 6 (opacity stubs), 7 cells 3-4 (text decoration stubs), 8 cell 3 (border stub) — all blocked by [#210](https://github.com/PerryTS/perry/issues/210) |
+| **GTK4** | 1, 2, 3, 5, 6, 7, 8, 9, 10, 12, 13 | 4 (exact shadow appearance can depend on GTK theme), 11 (no SF Symbols) |
+| **Windows** | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13 | 11 (no SF Symbols) |
 | **Web** | 1, 2, 3, 4, 5, 6, 7, 9, 10, 12, 13 | 11 (no SF Symbols, fallback may show empty boxes) |
 
 ## When something fails
@@ -244,6 +238,6 @@ the matrix says it should:
    inspect `docs/src/ui/styling-matrix.md` for the relevant prop row.
 2. If matrix says `Wired` but visual fails → file a new issue
    referencing this spec section + the platform.
-3. If matrix says `Stub` (Windows deferred-paint family) → expected,
-   tracked in [#210](https://github.com/PerryTS/perry/issues/210).
-4. If matrix says `Missing` (GTK4 4 rows) → expected, tracked in [#202](https://github.com/PerryTS/perry/issues/202).
+3. If the matrix says `Stub` or `Missing`, document the limitation beside the
+   affected cell and link its active tracker. The current matrix has no such
+   styling cells.

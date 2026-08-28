@@ -172,7 +172,8 @@ calling code. Implementation detail varies:
   `main()`. Lock-screen integration (`@ohos.multimedia.avsession`) is
   a follow-up — the runtime queues now-playing metadata via
   `drainNowPlaying` but the ArkTS-side AVSession dispatch is a no-op
-  beyond a hilog line for now (tracked under issue #369).
+  beyond a hilog line for now. Closed issue #369 delivered the HarmonyOS
+  AVPlayer bridge; it is not an open tracker for AVSession support.
 
 ## Now Playing on Apple platforms
 

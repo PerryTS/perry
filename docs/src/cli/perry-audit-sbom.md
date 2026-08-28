@@ -85,12 +85,13 @@ capability a dependency reaches surfaces as added lines.
 
 Scope of this first cut (MVP):
 
-- **Literal `fetch` / `http.get` URLs** — covered separately by
-  [`#502`](https://github.com/PerryTS/perry/issues/502) which the
-  manifest will graft onto under a `literal_hosts` key.
-- **Native-library symbol references** (FFI registry) — tracked in
-  the perry-codegen FFI registry and will graft onto the manifest
-  under a `native_symbols` key.
+- **Literal `fetch` / `http.get` URLs** — the compiler can enforce these through
+  [`allowedHosts`](allowed-hosts.md), implemented by closed issue
+  [`#502`](https://github.com/PerryTS/perry/issues/502), but audit manifest v1
+  does not project them into a `literal_hosts` field.
+- **Native-library symbol references** (FFI registry) — the registry exists in
+  codegen, but audit manifest v1 does not project it into a `native_symbols`
+  field.
 - **`perry audit --sbom --diff`** — the bytes-deterministic JSON
   shape already enables the diff workflow via plain `diff` /
   `git diff`; a built-in `--diff` is a follow-up that picks a

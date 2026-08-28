@@ -1,0 +1,72 @@
+name: Docs checks
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "scripts/check_docs.py"
+      - "crates/perry-doc-tests/**"
+      - ".github/workflows/docs-check.yml"
+      - ".github/workflows/docs.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "scripts/check_docs.py"
+      - "crates/perry-doc-tests/**"
+      - ".github/workflows/docs-check.yml"
+      - ".github/workflows/docs.yml"
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MDBOOK_VERSION: v0.5.4
+
+jobs:
+  build-and-freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install mdBook and gettext tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext
+          mkdir -p "$HOME/.cargo/bin"
+          curl -sSL "https://github.com/rust-lang/mdBook/releases/download/${MDBOOK_VERSION}/mdbook-${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$HOME/.cargo/bin"
+          cargo install mdbook-i18n-helpers --locked --version 0.4.0
+      - name: Check navigation, local links, anchors, and includes
+        run: python3 scripts/check_docs.py
+      - name: Check TypeScript fences
+        run: cargo run --release --quiet -p perry-doc-tests -- --lint docs/src
+      - name: Check gettext catalogs are current
+        run: |
+          ./docs/i18n.sh extract
+          ./docs/i18n.sh sync
+          git diff --exit-code -- docs/po
+          for catalog in docs/po/*.po; do
+            msgfmt --check --check-format --statistics --output-file=/dev/null "$catalog"
+          done
+      - name: Build English and all translations
+        run: ./docs/i18n.sh build-all
+
+  external-links:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install lychee
+        run: cargo install lychee --locked --version 0.24.2
+      - name: Check external links
+        run: >-
+          lychee
+          --no-progress
+          --max-retries 3
+          --accept 200..=399,403,429
+          --exclude 'https://www.npmjs.com/'
+          --exclude 'https://xtermjs.org/'
+          'docs/src/**/*.md'
+          'docs/*.md'

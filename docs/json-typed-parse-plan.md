@@ -1,5 +1,9 @@
 # Plan: schema-directed + lazy JSON parsing
 
+> **Archival planning record (2026-04-24).** This is not a current status page
+> or source of truth. Validate every unchecked phase against the present JSON
+> parser and benchmark suite before resuming work from it.
+
 **Context:** `docs/memory-perf-roadmap.md` tier 1 is landed — Perry beats Node on
 both time and RSS on `bench_json_roundtrip` (373 ms / 144 MB vs 385 ms /
 188 MB). Bun is still ~1.5× ahead on both (250 ms / 83 MB). The remaining

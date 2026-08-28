@@ -204,7 +204,7 @@ constructor-injection and route-metadata canaries, but it is not full
 Angular, NestJS, or TypeORM compatibility. The Path-B option of
 recognizing `@Component` / `@Controller` / `@Entity` at the compiler
 level (analogous to Angular Ivy's AOT step) is reserved for if and when
-a concrete port needs it — see [issue #581][issue-581] for the tracking
+a concrete port needs it — see closed [issue #581][issue-581] for the design
 discussion. For now, the recommendation is the same: drop the decorator
 where possible, write the equivalent explicit construction, register
 routes or schema as plain function calls / module-level constants.

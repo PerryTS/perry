@@ -13,10 +13,16 @@
   non-standard location set `LIBCLANG_PATH` to the directory holding
   `libclang.so`; if bindgen then reports `'stdarg.h' file not found`, also set
   `BINDGEN_EXTRA_CLANG_ARGS="-isystem <clang-resource-dir>/include"`.
-- **clang ≥ 15** — required by Perry's LLVM backend at *compile* time (it emits
-  opaque-pointer IR and runs `clang -c` on it), independent of the linker
-  above. See the [installation guide](../getting-started/installation.md);
-  `perry doctor` reports which clang it resolved.
+- **LLVM 22 development files** — required by Perry's default in-process
+  codegen backend. `llvm-config --version` must report LLVM 22. If
+  `llvm-config` is not on `PATH`, set `LLVM_SYS_221_PREFIX` to the LLVM 22
+  prefix. On Windows this variable is mandatory and must point at the
+  extracted LLVM 22 development archive used by the build.
+
+An external clang is not part of the normal in-process codegen path. Install a
+matching clang only when working on a path that explicitly invokes it (for
+example Windows host `--embed`) or when building with
+`--no-default-features` to bisect the textual-IR backend.
 
 ## Build
 

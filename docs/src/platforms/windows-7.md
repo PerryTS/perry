@@ -120,4 +120,4 @@ There's no substitute for actually launching the binary. Microsoft's free Win7 e
 
 ## Issue tracking
 
-This feature lands as the resolution to [#303](https://github.com/PerryTS/perry/issues/303). If you hit a Win7-specific failure that isn't covered here, please file a follow-up referencing this page so we can extend the audit.
+This feature landed as the resolution to closed issue [#303](https://github.com/PerryTS/perry/issues/303). If you hit a Win7-specific failure that isn't covered here, please file a follow-up referencing this page so we can extend the audit.

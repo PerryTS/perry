@@ -11,7 +11,7 @@ For the architectural picture this fits into, see
 - A Rust crate you want to expose to TypeScript (e.g. `pdfium-render`,
   `image`, your own internal library).
 - Rust toolchain installed.
-- `perry` on your `PATH` (the [`perry native`](../cli/native.md)
+- `perry` on your `PATH` (the [`perry native`](../cli/commands.md#native)
   subcommand ships with the install).
 - A GitHub account if you want the prebuild release-CI scaffold to
   Just Work.

@@ -20,12 +20,23 @@ require() {
 extract() {
   require mdbook
   require mdbook-xgettext
-  rm -rf /tmp/perry-i18n-extract
+  local extract_dir
+  extract_dir=$(mktemp -d "${TMPDIR:-/tmp}/perry-i18n-extract.XXXXXX")
+  trap 'rm -rf -- "$extract_dir"' RETURN
   MDBOOK_OUTPUT__XGETTEXT__POT_FILE=messages.pot \
-    mdbook build -d /tmp/perry-i18n-extract >/dev/null
+    mdbook build -d "$extract_dir" >/dev/null
   mkdir -p po
-  cp /tmp/perry-i18n-extract/xgettext/messages.pot po/messages.pot
-  rm -rf /tmp/perry-i18n-extract
+  cp "$extract_dir/xgettext/messages.pot" po/messages.pot
+  # mdbook-xgettext records the current time, which would make a clean
+  # extract look dirty forever. Normalize the generated-only header so CI's
+  # freshness diff reflects source changes, not wall-clock time.
+  sed \
+    -e 's/^"POT-Creation-Date: .*\\n"$/"POT-Creation-Date: 1970-01-01T00:00:00+00:00\\n"/' \
+    -e '/^#:/ s|\\|/|g' \
+    po/messages.pot > po/messages.pot.tmp
+  mv po/messages.pot.tmp po/messages.pot
+  rm -rf -- "$extract_dir"
+  trap - RETURN
   echo "wrote po/messages.pot"
 }
 

@@ -239,9 +239,11 @@ SAB.
 
 ## WebAssembly (#6558)
 
-Perry ships **no WebAssembly engine** in the default build. The current
-policy: **WASM-dependent features degrade gracefully**; full support is
-tracked in [#6558](https://github.com/PerryTS/perry/issues/6558).
+Perry ships **no WebAssembly engine** in the default build. The adopted
+policy is that **WASM-dependent features degrade gracefully**. Closed issue
+[#6558](https://github.com/PerryTS/perry/issues/6558) records that decision and
+the per-module replacement policy; it is not an active promise to add a full
+engine to the default binary.
 
 The `WebAssembly` global is spec-shaped — every standard member exists with
 the correct type and arity — and fails cleanly rather than crashing:

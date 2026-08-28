@@ -158,7 +158,7 @@ open counter.html
 
 ## Example: Real-World App (Mango MongoDB GUI)
 
-The [Mango](https://github.com/PerryTS/mango) MongoDB GUI — 50 modules, 998 functions, classes, async functions, fetch with custom headers, the Hone code editor — compiles to a single 4 MB HTML file via `--target web` and renders its full UI (welcome screen, query view, edit view) in the browser. SQLite-backed connection storage gracefully degrades to an in-memory transient store on web; the rest of the app works the same as the native version.
+The [Mango](https://github.com/MangoQuery/app) MongoDB GUI — 50 modules, 998 functions, classes, async functions, fetch with custom headers, the Hone code editor — compiles to a single 4 MB HTML file via `--target web` and renders its full UI (welcome screen, query view, edit view) in the browser. SQLite-backed connection storage gracefully degrades to an in-memory transient store on web; the rest of the app works the same as the native version.
 
 ## Next Steps
 

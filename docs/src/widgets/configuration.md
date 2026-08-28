@@ -9,10 +9,10 @@ Perry widgets support user-configurable parameters. On iOS/watchOS, these compil
 > `parse_config_params` in `crates/perry-hir/src/lower.rs`. The shorter
 > fragments lower on the page (just a `provider:` body, just a `config:`
 > object) are rendered as plain text — they're not standalone declarations.
-> The cross-compile targets themselves (`--target ios-widget`/
-> `android-widget`/`watchos-widget`/`wearos-tile`) still aren't driven by
-> the doc-tests harness — each needs `--app-bundle-id` and a platform SDK
-> ([#194](https://github.com/PerryTS/perry/issues/194)).
+> The doc-tests harness can pass the required bundle id through its
+> `// widget-bundle-id:` banner ([#194](https://github.com/PerryTS/perry/issues/194)).
+> This page's shared snippet requests only the host compile/link check; actual
+> widget-target runs remain conditional on an available Xcode or Android SDK.
 
 ## Defining Config Fields
 

@@ -6,7 +6,7 @@ a working production-quality deployment of [Forgejo](https://forgejo.org/)
 `data.forgejo.org` registry. The example was driven end-to-end against
 live Docker; the patterns here are what survived.
 
-The full source is at [`example-code/forgejo-deployment/main.ts`](https://github.com/PerryTS/perry/tree/main/example-code/forgejo-deployment/main.ts).
+The full source is at [`example-code/forgejo-deployment/main.ts`](https://github.com/PerryTS/perry/blob/main/example-code/forgejo-deployment/main.ts).
 This page documents the *patterns*, not every line.
 
 ## Lifecycle: `up + verify + exit 0` then a separate `--down`
@@ -76,11 +76,11 @@ that split.
 
 ## Stable container names for cross-service DNS
 
-Perry's compose engine creates each container with a `{md5}-{random}`
-derived name and doesn't yet register the service KEY (`db`,
-`forgejo`) as a network alias. So
-`FORGEJO__database__HOST: 'db:5432'` would fail name resolution at
-runtime. The Forgejo example pins explicit `container_name` values:
+Perry's Docker, Podman, and Lima backends register each compose service key
+(`db`, `forgejo`) as a network alias. Apple's `container` CLI does not expose
+that capability, so `FORGEJO__database__HOST: 'db:5432'` is not portable to
+that backend. The Forgejo example pins explicit `container_name` values so the
+same spec works everywhere:
 
 ```typescript,no-test
 const dbHostname      = "forgejo-db";
@@ -103,9 +103,8 @@ services: {
 },
 ```
 
-See [Networking → Cross-service DNS](./networking.md#cross-service-dns)
-for the full backstory and why this is the workaround until
-service-key network-alias support lands.
+See [Networking → Cross-service DNS](./networking.md#cross-service-dns) for the
+backend-specific behavior and strict-mode handling.
 
 ## OpenSSH on :22 + `START_SSH_SERVER=false`
 

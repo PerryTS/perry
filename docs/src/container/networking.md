@@ -64,39 +64,32 @@ postgres is invisible to anything not on `app-db-net`.
 
 ## Cross-service DNS
 
-Within a user-defined bridge network, docker's embedded DNS resolves
-container names to IP addresses. So if a service's `container_name` is
-`forgejo-db`, sibling containers on the same network can connect to it
-as `forgejo-db:5432`.
-
-> ⚠️ **Important:** Perry's compose engine generates per-service
-> container names of the form `{md5(image)[0..8]}-{random_hex8}` by
-> default. It does **not** (yet) register the service KEY (`db`, `api`,
-> …) as a network alias the way `docker compose` does. So a config
-> like:
+Within a user-defined bridge network, the backend's embedded DNS resolves
+container names and registered aliases to IP addresses. Perry registers each
+compose service key (`db`, `api`, …) as a network alias on Docker, Podman, and
+Lima, so sibling services can use ordinary compose-style hostnames:
 >
 > ```typescript,no-test
 > api: {
 >   image: "myapp/api",
 >   environment: {
->     DATABASE_URL: "postgres://user:pw@db:5432/app",  // ❌ "db" doesn't resolve
+>     DATABASE_URL: "postgres://user:pw@db:5432/app",
 >   },
 > }
 > ```
->
-> will fail at runtime with `dial tcp: lookup db on 127.0.0.11:53: no
-> such host`. **Until service-key network aliasing lands, set
-> `container_name` explicitly** and use those names in sibling URLs:
+
+`apple/container` does not expose network aliases. Perry therefore drops this
+capability with an explicit warning (or rejects the compose plan in strict
+enforcement mode). For portable service discovery that must also work with the
+Apple backend, set `container_name` explicitly and use that name in sibling
+URLs:
 
 ```typescript
 {{#include ../../examples/stdlib/container/snippets.ts:container-name-dns}}
 ```
 
-The Forgejo example uses this pattern (`container_name: 'forgejo-db'` +
-`FORGEJO__database__HOST: 'forgejo-db:5432'`). It's a documented
-workaround that keeps user code idiomatic; replacing
-`container_name` with service-key alias registration is a planned
-runtime change that will not require any user-facing API change.
+The Forgejo example uses this portable pattern (`container_name:
+'forgejo-db'` + `FORGEJO__database__HOST: 'forgejo-db:5432'`).
 
 ## Port mapping
 

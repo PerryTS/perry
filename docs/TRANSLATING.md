@@ -5,9 +5,17 @@ The Perry documentation is internationalized via [`mdbook-i18n-helpers`](https:/
 Site layout:
 
 - English: `https://docs.perryts.com/`
-- Other languages: `https://docs.perryts.com/<lang>/` (currently `/de/`, `/ja/`, `/ko/`, `/zh-CN/`)
+- Other languages: `https://docs.perryts.com/<lang>/` — currently German
+  (`de`), Spanish (`es`), French (`fr`), Indonesian (`id`), Italian (`it`),
+  Japanese (`ja`), Korean (`ko`), Thai (`th`), Vietnamese (`vi`), and
+  Simplified Chinese (`zh-CN`).
 
-The current `.po` files include a seed translation of the sidebar navigation, the introduction page, and the Getting Started chapter headings. Everything beyond that falls through to English until translators fill in more `msgstr` entries.
+The current catalogs contain a translation for every source message. Much of
+that coverage was generated automatically and has not been reviewed by a
+native speaker, so complete coverage is not a guarantee of publication-ready
+language. Review prose for technical meaning and natural phrasing rather than
+treating a non-empty `msgstr` as automatically approved. Future source edits
+can introduce empty, fuzzy, or missing entries; those fall back to English.
 
 ## Translating an existing language
 
@@ -21,6 +29,8 @@ Notes:
 - Markdown formatting in the source is preserved by gettext — translate the prose, keep `**bold**`, `[links](...)`, and code spans intact.
 - Code blocks are extracted as their own entries; usually leave them as-is unless you're translating an inline comment.
 - Entries marked `#, fuzzy` mean the English source changed since the translation was written. Review, fix the `msgstr`, and remove the `#, fuzzy` line.
+- Update `PO-Revision-Date` and `Last-Translator` when a human reviews a
+  catalog. Do not replace reviewed prose with bulk machine output.
 
 ## Adding a new language
 
@@ -44,3 +54,8 @@ When the English source changes, the `.po` files need to be re-synced so transla
 ```
 
 `sync` preserves existing translations, adds new entries with empty `msgstr`, and marks edited entries `#, fuzzy` for review. Commit the updated `.pot` and `.po` files alongside the English changes.
+
+Before committing, run `./docs/i18n.sh build-all`. CI repeats extraction and
+sync in a clean checkout and fails if either command changes the committed
+catalogs, so adding or renaming a chapter without refreshing gettext cannot
+silently ship an English-only translated page.

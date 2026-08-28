@@ -324,8 +324,8 @@ in their Perry program.
 - **`perry-ffi`** semver: tracks Perry's minor today (`perry-ffi = "0.5"`
   for Perry `0.5.x`). Backwards-incompatible changes to anything
   documented in [`abi.md`](abi.md) bump perry-ffi *major* —
-  independent of `perry-runtime`. Wrappers depend on `perry-ffi = "0.5"`
-  and stay buildable across Perry's `0.5.x` releases.
+  independent of `perry-runtime`. Wrappers declare ABI `0.5` and use a tested
+  Perry `0.5.x` revision of the crate; see [Consumption today](#consumption-today-v05x).
 - **Manifest spec v1**: locked at `abiVersion: "0.5"`; missing field
   is warning-only in v0.5.x, hard error from v0.6.0. Schema changes
   bump the spec version (`v2`) and ship alongside a new manifest
@@ -335,19 +335,22 @@ in their Perry program.
 
 ## Consumption today (v0.5.x)
 
-Until the v0.6.0 type-source-of-truth refactor lands, `perry-ffi` is
-**not yet on crates.io**. External wrappers depend on it via git URL:
+`perry-ffi` owns its public ABI types, but it is not currently available from
+crates.io. Publishing it requires publishing the optional `perry-runtime`
+dependency and its workspace dependency chain first. External wrappers use
+the repository dependency that `perry native init` emits:
 
 ```toml
 [dependencies]
 perry-ffi = { git = "https://github.com/PerryTS/perry", branch = "main" }
 ```
 
-`PerryTS/tursodb-bindings` and `PerryTS/iroh-bindings` use this shape
-and `cargo build` against live `main`. The git-URL approach is the
-**supported** consumption mechanism for the v0.5.x cycle; the v0.6.0
-plan inverts type ownership so `perry-ffi` becomes the source of
-truth and can publish to crates.io as `perry-ffi = "0.6"`.
+Pin a tested Perry tag or commit for a released wrapper rather than following
+`main` indefinitely. Leave the optional `runtime-link` feature off in a
+production wrapper. It is primarily for wrapper test binaries that need Cargo
+to pull in the runtime symbol provider; Perry supplies the runtime archive at
+an application's final link step. See
+[`abi.md`](abi.md#versioning-and-dependency-setup) for the exact contract.
 
 ## Limits
 

@@ -218,16 +218,14 @@ Per-prop, per-platform support is tracked in the
 `crates/perry-ui/src/styling_matrix.rs` and CI-checked against each
 backend's `lib.rs` exports on every PR.
 
-Current state (issue [#185](https://github.com/PerryTS/perry/issues/185)):
-
-| Platform | Wired | Stub | Missing |
-|---|---|---|---|
-| macOS / iOS / tvOS / visionOS / watchOS / Android / Web | **43/43** | 0 | 0 |
-| GTK4 (Linux) | 39/43 | 0 | 4 |
-| Windows | 38/43 | 5 | 0 |
-
-- **GTK4** has 4 styling props (`widget.on_click`, `button.content_tint_color`, `button.image_position`, `stack.detaches_hidden`) that need a Linux contributor — tracked in issue [#202](https://github.com/PerryTS/perry/issues/202). Inline `style: {...}` calls referencing only the wired props compile and run cleanly today; the missing props silently no-op until that issue lands.
-- **Windows** has 5 props in a "deferred-paint family" (`shadow`, `opacity`, `border_color`, `border_width`, `text.decoration`) where the FFI symbol exists and stores the requested params, but a custom `WM_PAINT` rendering pass is needed to make them visible — tracked in issue [#210](https://github.com/PerryTS/perry/issues/210). User code authoring inline styles compiles and links cleanly on Windows; the visual rendering catches up when that issue lands.
+The generated summary is the source of truth. It currently reports all 47
+tracked properties wired, with zero stubs or missing exports, on macOS, iOS,
+tvOS, visionOS, watchOS, Android, GTK4, Windows, and Web. The GTK4 and Windows
+closure work is recorded in closed issues
+[#202](https://github.com/PerryTS/perry/issues/202) and
+[#210](https://github.com/PerryTS/perry/issues/210). Do not copy the counts
+into another hand-maintained table; consult the matrix so the documentation
+cannot drift from the backend inventory.
 
 ## Next Steps
 

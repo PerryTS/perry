@@ -43,6 +43,7 @@
 - [Widgets](ui/widgets.md)
 - [Layout](ui/layout.md)
 - [Styling](ui/styling.md)
+  - [Styling Support Matrix](ui/styling-matrix.md)
 - [State Management](ui/state.md)
 - [Events](ui/events.md)
 - [Canvas](ui/canvas.md)
@@ -103,6 +104,7 @@
 - [Volumes](container/volumes.md)
 - [Security](container/security.md)
 - [Production Patterns](container/production-patterns.md)
+- [Determinism Across Backends](container/determinism.md)
 
 # Internationalization
 
@@ -159,6 +161,7 @@
 
 - [Commands](cli/commands.md)
 - [Compiler Flags](cli/flags.md)
+- [Cache Directory](cli/cache-dir.md)
 - [Fast-math (`--fast-math`)](cli/fast-math.md)
 - [Dynamic Stdlib Dispatch](cli/dynamic-dispatch.md)
 - [JS Runtime Opt-In](cli/allow-js-runtime.md)

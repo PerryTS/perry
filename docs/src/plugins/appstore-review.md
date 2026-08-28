@@ -72,11 +72,18 @@ The function only triggers the prompt. It does not:
 
 ### iOS
 
-Uses [`SKStoreReviewController.requestReview(in:)`](https://developer.apple.com/documentation/storekit/skstorereviewcontroller/requestreview(in:)) from StoreKit.
+The current extension uses
+[`SKStoreReviewController.requestReview(in:)`](https://developer.apple.com/documentation/storekit/skstorereviewcontroller/requestreview(in:))
+for its broad deployment-target compatibility. Apple now deprecates that API
+in favor of
+[`AppStore.requestReview(in:)`](https://developer.apple.com/documentation/storekit/appstore/requestreview(in:)-1q8qs).
+Treat the legacy call as a compatibility implementation detail; new extension
+releases should move to `AppStore.requestReview(in:)` when their minimum OS
+allows it.
 
 | Detail | Value |
 |--------|-------|
-| Native API | `SKStoreReviewController.requestReview(in: UIWindowScene)` |
+| Native API | Compatibility path: deprecated `SKStoreReviewController.requestReview(in:)`; preferred modern API: `AppStore.requestReview(in:)` |
 | Minimum iOS version | 14.0 |
 | Framework | StoreKit |
 | Thread | Dispatched to main thread automatically |
@@ -92,7 +99,7 @@ Uses the same StoreKit API. Shares the iOS native crate (both compile from `crat
 
 | Detail | Value |
 |--------|-------|
-| Native API | `SKStoreReviewController.requestReview()` |
+| Native API | Compatibility path: deprecated `SKStoreReviewController.requestReview()`; prefer StoreKit's current `AppStore`/environment review action where available |
 | Minimum macOS version | 13.0 |
 | Framework | StoreKit |
 | Throttling | Same as iOS — system-controlled |

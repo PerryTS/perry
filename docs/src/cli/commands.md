@@ -1,6 +1,37 @@
 # CLI Commands
 
-Perry provides 11 commands for compiling, checking, running, publishing, and managing your projects.
+The default Perry build provides 22 top-level commands for compiling, checking,
+running, publishing, security, package management, and project tooling.
+
+## Command index
+
+| Command | Purpose |
+|---|---|
+| `compile` (`build`) | Compile TypeScript to a native target. |
+| `check` | Check Perry compatibility without producing a binary. |
+| `init` | Initialize a Perry project. |
+| `install` | Install npm dependencies behind Perry's malware-scan gate. |
+| `doctor` | Diagnose the host toolchain and configuration. |
+| `explain` | Explain a Perry diagnostic code. |
+| `publish` | Build, sign, package, and publish an app. |
+| `setup` | Configure platform credentials and SDK support. |
+| `update` | Check for and install Perry updates. |
+| `audit` | Scan source and emit security/SBOM information. |
+| `verify` | Verify a binary or attestation. |
+| `run` | Compile and run in one step. |
+| `dev` | Watch, rebuild, and relaunch on changes. |
+| `i18n` | Extract and manage application locales. |
+| `login` | Authenticate a Perry account through GitHub OAuth. |
+| `appstore` | Manage App Store release notes and metadata. |
+| `types` | Generate TypeScript declarations for Perry built-ins. |
+| `cache` | Inspect or clear Perry's on-disk cache. |
+| `updater` | Generate keys and sign or verify updater payloads. |
+| `native` | Scaffold, validate, and list native bindings. |
+| `widget` | Scaffold and integrate home-screen widget targets. |
+| `lock` | Create or verify the native-library supply-chain lockfile. |
+
+The sections below cover the most common workflows. For every option and
+feature-gated subcommand in the installed binary, use `perry <command> --help`.
 
 See also: [perry.toml Reference](perry-toml.md) for project configuration.
 
@@ -132,11 +163,13 @@ perry dev src/app.ts -o build/dev-app        # override output path
 | Initial build (cold — runtime + stdlib rebuilt by auto-optimize) | ~15 s |
 | Post-edit rebuild (hot libs cached on disk) | **~330 ms** |
 
-The speedup on hot rebuilds comes from Perry's existing auto-optimize library cache. Multi-module projects will still recompile every changed module on each save — see the V2 note below for planned incremental work.
+The speedup on hot rebuilds comes from Perry's auto-optimize library cache and
+the per-module object cache. In a multi-module project, unchanged modules reuse
+cached object bytes while changed modules are parsed and compiled again. See
+[Cache Directory](cache-dir.md) for placement, invalidation, and CI guidance.
 
 **Not yet in scope (V2+):**
 - In-memory AST cache (reuse SWC parses across rebuilds).
-- Per-module `.o` cache on disk (only re-codegen the changed module).
 - State preservation across rebuilds / HMR — "fast restart" is the honest target.
 
 ## check
@@ -352,7 +385,9 @@ perry native init my-bindings \
 Creates a directory with:
 
 - `package.json` (`perry.nativeLibrary` block: `abiVersion` + `functions[]` + per-target build config)
-- `Cargo.toml` (depends on `perry-ffi` via git URL until v0.6.0 publishes it to crates.io)
+- `Cargo.toml` (depends on `perry-ffi` through the Perry repository because the
+  crate is not currently available from crates.io; pin a tested tag or commit
+  before releasing your wrapper)
 - `src/lib.rs` (one example `#[no_mangle] pub extern "C" fn js_<name>_hello`)
 - `src/index.ts` (TypeScript surface user code imports)
 - `README.md`, `LICENSE`, `.gitignore`

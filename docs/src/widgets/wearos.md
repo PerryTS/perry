@@ -8,10 +8,11 @@ For full **Wear OS apps** (not glanceable Tiles), see [Wear OS](../platforms/wea
 > target via [`docs/examples/widgets/snippets.ts`](https://github.com/PerryTS/perry/blob/main/docs/examples/widgets/snippets.ts), so the
 > `Widget({...})` shape is verified against the codegen.
 > `--target wearos-tile` itself is wired through `crates/perry-codegen-wear-tiles`
-> but the doc-tests harness can't drive that cross-target yet —
-> `--app-bundle-id` plumbing is still pending ([#194](https://github.com/PerryTS/perry/issues/194))
-> and you'll need an Android NDK + Wear OS Gradle deps. Build with
-> the `perry` CLI to validate end-to-end.
+> and the doc-tests harness can supply `--app-bundle-id` from its
+> `// widget-bundle-id:` banner ([#194](https://github.com/PerryTS/perry/issues/194)).
+> An end-to-end target build still needs an Android NDK and the Wear OS Gradle
+> dependencies. The shared snippet on this page requests the host
+> compile/link check only.
 
 ## Concepts
 

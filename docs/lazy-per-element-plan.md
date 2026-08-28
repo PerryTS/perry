@@ -1,5 +1,9 @@
 # Plan: per-element sparse materialization for lazy JSON
 
+> **Archival planning record (2026-04-24).** This document preserves the
+> original design sequence; it does not assert which phases are present on
+> current `main`. Re-audit source and benchmarks before implementation work.
+
 **Context:** v0.5.203–207 landed the tape-based lazy `JSON.parse` path
 (`PERRY_JSON_TAPE=1` env + `@perry-lazy` JSDoc pragma). The honest
 v0.5.206 characterization still stands: lazy wins ~5× on

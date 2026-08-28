@@ -15,8 +15,8 @@ after = ["links"]
 default-theme = "light"
 preferred-dark-theme = "ayu"
 site-url = "https://docs.perryts.com/"
-git-repository-url = "https://github.com/skelpo/perry"
-edit-url-template = "https://github.com/skelpo/perry/edit/main/docs/src/{path}"
+git-repository-url = "https://github.com/PerryTS/perry"
+edit-url-template = "https://github.com/PerryTS/perry/edit/main/docs/src/{path}"
 additional-js = ["theme/language-switcher.js"]
 
 [output.html.search]

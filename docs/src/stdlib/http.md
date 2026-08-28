@@ -146,7 +146,8 @@ serve({ fetch: app.fetch, port: 3000 }, (info) => {
 
 It translates each Fastify request into a Web `Request`, awaits `app.fetch`,
 and copies the `Response`'s status / headers / body back onto the reply.
-Requires Perry ≥ 0.5.1027 (`Request.headers`, #1649). Tracked at #1654.
+Requires Perry ≥ 0.5.1027 (`Request.headers`, #1649). The adapter shipped
+under closed issue #1654.
 
 ## Fastify Server
 

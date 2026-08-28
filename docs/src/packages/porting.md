@@ -1,6 +1,6 @@
 # Porting npm Packages
 
-> **Status: experimental.** This guide — and the [`port-npm-to-perry` skill](https://github.com/PerryTS/perry/tree/main/.claude/skills/port-npm-to-perry) that ships alongside it — is a first pass at systematizing what Perry contributors have been doing ad-hoc. Results will vary by package. Feedback at [issue #115](https://github.com/PerryTS/perry/issues/115).
+> **Status: experimental.** This guide — and the [`port-npm-to-perry` skill](https://github.com/PerryTS/perry/tree/main/.claude/skills/port-npm-to-perry) that ships alongside it — is a first pass at systematizing what Perry contributors have been doing ad-hoc. Results will vary by package. Open a [new issue](https://github.com/PerryTS/perry/issues/new) for current failures; closed [#115](https://github.com/PerryTS/perry/issues/115) is the original design record.
 
 Perry compiles a practical subset of TypeScript. Most pure TS/JS packages can be pulled into a native compile via `perry.compilePackages`, but some will need small patches to avoid the constructs Perry doesn't support. This page is a field guide for doing that port — by hand, or by driving a coding agent with the prompt template below.
 
@@ -61,7 +61,9 @@ These work end-to-end via `compilePackages` with no patches required:
   Enough for testing and edge-runtime deploys (CF Workers / Vercel Edge /
   Lambda / Deno Deploy). See [HTTP & Networking → Hono](../stdlib/http.md#hono).
   Long-lived HTTP server deployment via `@hono/node-server` or hand-rolled
-  `node:http` is currently blocked on [#589](https://github.com/PerryTS/perry/issues/589).
+  `node:http` works for long-lived native servers; the old Web Fetch/HTTP link
+  gap was closed in [#589](https://github.com/PerryTS/perry/issues/589). See
+  [HTTP & Networking → Hono](../stdlib/http.md#hono).
   Closed via issues #421 / #486 / #487 / #577.
 - **`@bradenmacdonald/s3-lite-client`** — pure-TS AWS S3 / S3-compatible
   storage client (R2, MinIO, B2, Spaces, Supabase, LocalStack). Full SigV4
@@ -207,4 +209,9 @@ This is intentionally an agent-agnostic prompt — it'll work with any competent
 
 ## Giving feedback
 
-This whole workflow is experimental. If a port fails in a way that feels like Perry should handle it — or if the guide misses a common gap — please comment on [issue #115](https://github.com/PerryTS/perry/issues/115) so we can iterate.
+This whole workflow is experimental. If a port fails in a way that feels like
+Perry should handle it — or if the guide misses a common gap — open a
+[new Perry issue](https://github.com/PerryTS/perry/issues/new) with the package,
+version, smallest failing import, and compiler diagnostic. Closed issue
+[#115](https://github.com/PerryTS/perry/issues/115) remains the original design
+record for this workflow.

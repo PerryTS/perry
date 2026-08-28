@@ -478,13 +478,15 @@ archive directly; Perry does **not** embed the `.framework` into
 `<app>.app/Frameworks/` or add an `@executable_path/Frameworks`
 rpath. A dynamic framework would link but fail to load at runtime.
 Vendor a statically-linked `.framework` (or a `.xcframework` slice
-containing a static Mach-O). Embedding dynamic frameworks +
-resource bundles is tracked as future work (#1304).
+containing a static Mach-O). Embedding dynamic frameworks and their resource
+bundles remains unsupported. Closed issue #1304 implemented the optional
+static-framework link path described above; it does not track dynamic
+embedding.
 
 ## Resolution
 
-1. The user writes `import { foo } from "@perry/iroh"`.
-2. Perry resolves `@perry/iroh` against `node_modules/`. If a
+1. The user writes `import { foo } from "@perryts/iroh"`.
+2. Perry resolves `@perryts/iroh` against `node_modules/`. If a
    matching directory has a `perry.nativeLibrary` manifest in its
    `package.json`, **this file's spec applies** and the wrapper is
    used.
@@ -502,12 +504,12 @@ a beta version.
 
 ## Reference example
 
-Minimal — three FFI functions, two targets. Matches the
+Illustrative minimal package—three FFI functions, two targets. It matches the
 `perry-ext-dotenv` shape:
 
 ```json
 {
-  "name": "@perry/dotenv",
+  "name": "@perryts/dotenv",
   "version": "0.5.0",
   "perry": {
     "nativeLibrary": {
@@ -542,8 +544,9 @@ they move in lockstep:
   begin.
 
 Anything not documented on this page (custom keys, undocumented
-`returns` values) is **unsupported** and may break between releases.
-File a request under [#466] and we'll consider adding it to v1.
+`returns` values) is **unsupported** and may break between releases. Open a
+[new Perry issue](https://github.com/PerryTS/perry/issues/new) for an addition;
+closed [#466] remains the v1 design record.
 
 [#222]: https://github.com/PerryTS/perry/issues/222
 [#466]: https://github.com/PerryTS/perry/issues/466

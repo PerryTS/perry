@@ -1,5 +1,10 @@
 # Stack-map GC experiment
 
+> **Historical experiment.** The production GC/rooting source of truth is the
+> maintained material under `docs/src/internals/`; the explicit statepoint
+> follow-up is recorded in `statepoint-gc-experiment.md`. Do not treat this
+> experiment's interim decisions as current architecture.
+
 Date: 2026-07-31
 
 Branch: `exp/stackmap-viability`

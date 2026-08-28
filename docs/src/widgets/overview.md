@@ -8,10 +8,12 @@ Perry can compile TypeScript widget declarations to native widget extensions acr
 > the WidgetKit emitter). The snippets on the widget docs pages compile-link
 > cleanly on the host LLVM target — `Widget({...})` lowers to a no-op there —
 > and CI verifies that via [`docs/examples/widgets/snippets.ts`](https://github.com/PerryTS/perry/blob/main/docs/examples/widgets/snippets.ts).
-> What CI **cannot** do today is drive the actual cross-compile targets
-> (`--target ios-widget`, `--target android-widget`, etc.) because each
-> requires an `--app-bundle-id` not yet surfaced through the doc-tests
-> harness — tracked in [#194](https://github.com/PerryTS/perry/issues/194).
+> The doc-tests harness accepts a `// widget-bundle-id:` banner and passes it
+> through as `--app-bundle-id`; that plumbing closed
+> [#194](https://github.com/PerryTS/perry/issues/194). The shared snippets on
+> these pages currently exercise the host compile/link path, while
+> `_smoketest_bundleid.ts` exercises the banner. A target is compiled
+> end-to-end only on a CI host where its Xcode or Android SDK is available.
 > For a working end-to-end reference see [`examples/widget_demo.ts`](https://github.com/PerryTS/perry/blob/main/examples/widget_demo.ts).
 
 ## What Are Widgets?
