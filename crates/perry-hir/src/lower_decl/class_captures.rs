@@ -552,13 +552,30 @@ pub fn synthesize_class_captures(
     // (#5437). So stash EARLY for intra-ctor method calls AND re-stash at
     // the end / before returns so post-`super()` mutations still win in the
     // final state. The assignments are idempotent.
-    let super_pos = ctor
-        .body
-        .iter()
-        .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))));
-    let early_insert_at = super_pos.map(|p| p + 1).unwrap_or(rebind_count);
-    for (i, stmt) in assignment_stmts.iter().cloned().enumerate() {
-        ctor.body.insert(early_insert_at + i, stmt);
+    //
+    // In a DERIVED ctor the early stash must sit past the statement that
+    // completes `super()`, whatever shape that call takes. #8630's derived
+    // `this` TDZ (`check_derived_this_initialized`) throws on every `this`
+    // access before `super()` returns, so a stash placed ahead of the call is
+    // no longer a silent write onto the pre-allocated receiver but a
+    // `ReferenceError: Must call super constructor …` at every construction.
+    // Only a call written as its own statement used to be found; minified
+    // bundles fold it into a comma sequence (`super(a), this.x = b, …` —
+    // Next's `AppRouteRouteModule`), an `if (super(), …)` test or a `try`,
+    // all of which landed the stash at constructor entry (#8546 follow-up).
+    let early_insert_at = if has_heritage {
+        // No direct `super()` anywhere in the body (a closure calls it, or a
+        // value-bearing `return` takes the override path): there is no point
+        // at which `this` is known to be bound, so skip the early stash. The
+        // end-of-body and before-`return` stashes below still run.
+        early_capture_stash_slot(&mut ctor.body)
+    } else {
+        Some(rebind_count)
+    };
+    if let Some(early_insert_at) = early_insert_at {
+        for (i, stmt) in assignment_stmts.iter().cloned().enumerate() {
+            ctor.body.insert(early_insert_at + i, stmt);
+        }
     }
     insert_stashes_before_returns(&mut ctor.body, &assignment_stmts);
     for stmt in assignment_stmts {
@@ -587,6 +604,136 @@ pub fn synthesize_class_captures(
     //    `LocalGet(outer_id)` per captured outer id at every
     //    construction site.
     ctx.register_class_captures(name.to_string(), captures_vec);
+}
+
+/// Where the early `this.__perry_cap_* = param` stashes go in a DERIVED
+/// constructor: the index just past the statement that completes `super()`.
+///
+/// Three shapes, in order of preference:
+///
+/// 1. `super(…);` as its own statement — right after it.
+/// 2. A statement whose expression is a comma sequence that STARTS with
+///    `super(…)` (`super(a), this.x = b, …`, the minifier's form): the
+///    sequence is split so the call becomes its own statement, then as (1).
+///    Sound because a statement discards the sequence's value and the
+///    remaining operands still evaluate in order, after the call.
+/// 3. Any other statement that contains a direct `super(…)` (an `if` test, a
+///    `try` body, `_this = super()`): right after that whole statement. `this`
+///    is bound by then; the end-of-body stash still captures later mutations.
+///
+/// `None` when the body has no direct `super()` call.
+fn early_capture_stash_slot(body: &mut Vec<Stmt>) -> Option<usize> {
+    if let Some(p) = body
+        .iter()
+        .position(|s| matches!(s, Stmt::Expr(e) if is_super_call(e)))
+    {
+        return Some(p + 1);
+    }
+    let leading_super_seq = body.iter().position(|s| {
+        matches!(s, Stmt::Expr(Expr::Sequence(items)) if items.first().is_some_and(is_super_call))
+    });
+    if let Some(p) = leading_super_seq {
+        let Stmt::Expr(Expr::Sequence(mut items)) = body.remove(p) else {
+            unreachable!("position matched a leading-super sequence statement");
+        };
+        let call = items.remove(0);
+        body.insert(p, Stmt::Expr(call));
+        match items.len() {
+            0 => {}
+            1 => body.insert(p + 1, Stmt::Expr(items.pop().expect("one operand"))),
+            _ => body.insert(p + 1, Stmt::Expr(Expr::Sequence(items))),
+        }
+        return Some(p + 1);
+    }
+    body.iter()
+        .position(stmt_has_direct_super_call)
+        .map(|p| p + 1)
+}
+
+fn is_super_call(expr: &Expr) -> bool {
+    matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_))
+}
+
+/// True when `expr` is or contains a `super(…)` call outside nested closures
+/// (`walk_expr_children` does not descend into `Expr::Closure` bodies, which
+/// is the right scope: a closure's `super()` runs when the closure does).
+fn expr_has_direct_super_call(expr: &Expr) -> bool {
+    if is_super_call(expr) {
+        return true;
+    }
+    let mut found = false;
+    crate::walker::walk_expr_children(expr, &mut |child| {
+        if !found && expr_has_direct_super_call(child) {
+            found = true;
+        }
+    });
+    found
+}
+
+fn stmts_have_direct_super_call(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(stmt_has_direct_super_call)
+}
+
+fn stmt_has_direct_super_call(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Expr(e) | Stmt::Throw(e) => expr_has_direct_super_call(e),
+        Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_has_direct_super_call),
+        Stmt::Return(e) => e.as_ref().is_some_and(expr_has_direct_super_call),
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_has_direct_super_call(condition)
+                || stmts_have_direct_super_call(then_branch)
+                || else_branch
+                    .as_deref()
+                    .is_some_and(stmts_have_direct_super_call)
+        }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            expr_has_direct_super_call(condition) || stmts_have_direct_super_call(body)
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_deref().is_some_and(stmt_has_direct_super_call)
+                || condition.as_ref().is_some_and(expr_has_direct_super_call)
+                || update.as_ref().is_some_and(expr_has_direct_super_call)
+                || stmts_have_direct_super_call(body)
+        }
+        Stmt::Labeled { body, .. } => stmt_has_direct_super_call(body),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            stmts_have_direct_super_call(body)
+                || catch
+                    .as_ref()
+                    .is_some_and(|c| stmts_have_direct_super_call(&c.body))
+                || finally.as_deref().is_some_and(stmts_have_direct_super_call)
+        }
+        Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            expr_has_direct_super_call(discriminant)
+                || cases.iter().any(|case| {
+                    case.test.as_ref().is_some_and(expr_has_direct_super_call)
+                        || stmts_have_direct_super_call(&case.body)
+                })
+        }
+        Stmt::Break
+        | Stmt::Continue
+        | Stmt::LabeledBreak(_)
+        | Stmt::LabeledContinue(_)
+        | Stmt::PreallocateBoxes(_)
+        | Stmt::PreallocateTdzBoxes(_)
+        | Stmt::ReleaseBoxes(_) => false,
+    }
 }
 
 /// Recursively insert `stashes` immediately before every `Stmt::Return` in
