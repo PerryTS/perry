@@ -187,6 +187,7 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
                 body: vec![Stmt::Expr(Expr::ArrayPush {
                     array_id: ARRAY_ID,
                     value: Box::new(value),
+                    field_writeback: None,
                 })],
             },
         ],
@@ -402,6 +403,7 @@ fn element_read_push_module() -> Module {
             object: Box::new(Expr::LocalGet(ARRAY_ID)),
             index: Box::new(Expr::LocalGet(COUNTER_ID)),
         }),
+        field_writeback: None,
     });
     m
 }
@@ -480,5 +482,126 @@ fn a_metadata_selected_add_keeps_the_runtime_number_guard() {
     assert!(
         !generic.contains(GUARD_BLOCK),
         "metadata alone must not reach the pointer-only inline bookkeeping guard:\n{generic}"
+    );
+}
+
+/// `class Buffer { items: number[]; add() { this.items.push(1) } }` as
+/// `perry-transform::field_push_local_bind` leaves it: the receiver local plus
+/// an `ArrayPush` that carries the field to write back.
+fn field_push_module(field_writeback: Option<String>) -> Module {
+    const RECV_ID: u32 = 40;
+    let method = Function {
+        id: 710,
+        name: "add".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Void,
+        body: vec![
+            Stmt::Let {
+                id: RECV_ID,
+                name: "__push_recv".to_string(),
+                ty: Type::Array(Box::new(Type::Number)),
+                mutable: true,
+                init: Some(Expr::PropertyGet {
+                    object: Box::new(Expr::This),
+                    property: "items".to_string(),
+                    byte_offset: 0,
+                }),
+            },
+            Stmt::Expr(Expr::ArrayPush {
+                array_id: RECV_ID,
+                value: Box::new(Expr::Number(1.0)),
+                field_writeback,
+            }),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+    let mut class = node_class();
+    class.id = 405;
+    class.name = "Buffer".to_string();
+    class.fields = vec![ClassField {
+        name: "items".to_string(),
+        key_expr: None,
+        ty: Type::Array(Box::new(Type::Number)),
+        init: None,
+        is_private: false,
+        is_readonly: false,
+        decorators: Vec::new(),
+    }];
+    class.methods = vec![method];
+    let mut m = Module::new("array_push_field_writeback.ts");
+    m.classes = vec![class];
+    m.init = vec![Stmt::Expr(Expr::New {
+        class_name: "Buffer".to_string(),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+        cap_args_appended: 0,
+    })];
+    m.init_kind = ModuleInitKind::Eager;
+    m
+}
+
+/// #8897: the field write-back after `this.items.push(v)` must be decided on
+/// the receiver local's HANDLE BITS, not on JS equality — equality sees
+/// through the growth-forwarding stub a re-allocating append leaves behind,
+/// so a `!==` guard never fired and the field kept the stub. The IR must
+/// contain the bits compare, the plain-object header gate (the repair is
+/// skipped on frozen / sealed / descriptor-bearing receivers rather than
+/// throwing), and the field store behind it; a push without a write-back
+/// target must emit none of it.
+#[test]
+fn a_field_push_writes_the_field_back_on_a_handle_bits_change_behind_a_plain_object_gate() {
+    let ir = ir_for(field_push_module(Some("items".to_string())));
+    let body = function_body(&ir, "add");
+    assert!(
+        body.contains("apush.field.writeback"),
+        "the write-back arm must exist:\n{body}"
+    );
+    let deref = super::class_field_barrier_tests::block_body(body, "apush.field.deref")
+        .expect("the header gate block is defined");
+    assert!(
+        deref.contains("and i16 %") && deref.contains(", 2055"),
+        "the gate must test the frozen/sealed/no-extend/descriptor flags in one mask:\n{deref}"
+    );
+    assert!(
+        deref.contains("icmp eq i8 %") && deref.contains(", 2\n"),
+        "the gate must require a GC_TYPE_OBJECT receiver:\n{deref}"
+    );
+    // The store arm is the ordinary class-field set: the inline IC store
+    // with its barrier, and the descriptor-aware runtime fallback behind it.
+    assert!(
+        body.contains("class_field_set.fast") && body.contains("@js_class_field_set_fallback("),
+        "the write-back arm must be the class-field store:\n{body}"
+    );
+    // Between the header gate and the store: `this.items` is re-read and its
+    // bits compared with the captured head, so an argument that assigned the
+    // field (`this.items.push(this.reset())`) keeps its assignment.
+    assert!(
+        body.contains("apush.field.still_held"),
+        "the field-still-held gate must exist:\n{body}"
+    );
+    let bits_compares = body.matches("icmp eq i64 %").count();
+    assert!(
+        bits_compares >= 2,
+        "both the local and the field are compared against the captured bits ({bits_compares}):\n{body}"
+    );
+    assert!(
+        body.contains("icmp eq i64 %"),
+        "the decision must be a handle-bits compare, not a JS equality:\n{body}"
+    );
+
+    let plain = ir_for(field_push_module(None));
+    let plain_body = function_body(&plain, "add");
+    assert!(
+        !plain_body.contains("apush.field.") && !plain_body.contains("class_field_set."),
+        "a push with no write-back target must emit neither the field arm nor a field store"
     );
 }

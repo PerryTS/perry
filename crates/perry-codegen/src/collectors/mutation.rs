@@ -377,7 +377,9 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
         Expr::Object(props) => props.iter().any(|(_, v)| expr_has_mutation(v, id)),
         Expr::Closure { body, .. } => has_any_mutation(body, id),
         Expr::Sequence(es) => es.iter().any(|e| expr_has_mutation(e, id)),
-        Expr::ArrayPush { array_id, value } => *array_id == id || expr_has_mutation(value, id),
+        Expr::ArrayPush {
+            array_id, value, ..
+        } => *array_id == id || expr_has_mutation(value, id),
         Expr::ArraySplice {
             array_id,
             start,

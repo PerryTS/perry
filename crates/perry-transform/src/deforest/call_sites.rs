@@ -356,7 +356,9 @@ fn match_consume_loop(
     // Match either ArrayPush { array: LocalGet(outer), value: IndexGet { ... } }
     // OR Call { callee: PropertyGet { LocalGet(outer), "push" }, args: [IndexGet...] }
     match push_call {
-        Expr::ArrayPush { array_id, value } => {
+        Expr::ArrayPush {
+            array_id, value, ..
+        } => {
             if !is_index_get_of(value, child_id, j_id) {
                 return None;
             }

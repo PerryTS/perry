@@ -102,6 +102,49 @@ fn inline_slot_store_onto_the_cached_dirty_page_is_a_cache_hit() {
     reset_remembered_set();
 }
 
+/// The same cache hit through the validated-parent entry codegen calls: the
+/// hoisted `inline_slot_store_on_cached_dirty_page` test answers before the
+/// outlined barrier body is entered — still one remembered page, and a child
+/// the classifier would reject still returns through the cache.
+#[test]
+fn validated_parent_entry_answers_a_cached_dirty_page_store_before_the_body() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+
+    let young = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
+    let (old_obj, fields) = unsafe { alloc_old_test_object(2) };
+    let child_bits = ptr_bits(young);
+    unsafe {
+        *fields = child_bits;
+        *fields.add(1) = child_bits;
+    }
+    let page = crate::arena::generation_page_for_addr(fields as usize);
+    assert!(!old_page_dirty_for(page));
+
+    crate::gc::barrier_store::js_write_barrier_slot_validated_parent(
+        old_obj as u64,
+        fields as u64,
+        child_bits,
+    );
+    assert_eq!(remembered_dirty_page_count(), 1);
+    assert!(old_page_dirty_for(page));
+
+    let old_child = crate::arena::arena_alloc_gc_old(40, 8, GC_TYPE_OBJECT) as usize;
+    crate::gc::barrier_store::js_write_barrier_slot_validated_parent(
+        old_obj as u64,
+        (fields as usize + 8) as u64,
+        ptr_bits(old_child),
+    );
+    assert_eq!(
+        remembered_dirty_page_count(),
+        1,
+        "a store onto the cached dirty page through the validated-parent entry adds no record"
+    );
+    assert!(old_page_dirty_for(page));
+
+    reset_remembered_set();
+}
+
 /// The validated-parent entry codegen takes behind its `GC_FLAG_TENURED` gate
 /// must remember exactly what the tag-dispatching entry remembers.
 #[test]

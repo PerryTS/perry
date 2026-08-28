@@ -635,9 +635,149 @@ fn lower_array_push_spread_spec_order(
     })
 }
 
+/// Flags in the object's `GcHeader::_reserved` word any of which takes the
+/// receiver off the plain-data-property path: `OBJ_FLAG_FROZEN` (0x01),
+/// `OBJ_FLAG_SEALED` (0x02), `OBJ_FLAG_NO_EXTEND` (0x04) and
+/// `OBJ_FLAG_HAS_DESCRIPTORS` (0x800). The field write-back below is a
+/// repair, not a user store: on such a receiver it is skipped rather than
+/// risk a throw or an accessor, and the field keeps working through the
+/// forwarding stub as it always did.
+const FIELD_WRITEBACK_BLOCKING_FLAGS_I16: &str = "2055";
+const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
+const HANDLE_BAND_TOP: &str = "1048575"; // 0x0FFFFF — objects are above
+const HANDLE_MASK_48: &str = "281474976710655"; // 0x0000_FFFF_FFFF_FFFF
+const GC_TYPE_OBJECT_I8: &str = "2";
+
+/// `Expr::ArrayPush`. When `field_writeback` names a class field (the
+/// `perry-transform::field_push_local_bind` expansion of `this.f.push(v)`),
+/// the append is followed by the field write-back the HIR cannot express:
+/// the receiver local's HANDLE BITS are compared before and after the push
+/// and, when they differ, `this.f` is re-pointed at the local. A JS-level
+/// `!==` cannot do this — a growing append leaves the old head forwarding to
+/// the new one and equality sees through forwarding (#8897), so the field
+/// would keep the stub and every later `this.f.length` / `this.f[i]` would
+/// take the dynamic property path.
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Result<String> {
+    let Expr::ArrayPush {
+        array_id,
+        field_writeback: Some(field),
+        ..
+    } = expr
+    else {
+        return lower_inner(ctx, expr, value_discarded);
+    };
+    // The bits BEFORE the append, held as an integer, never a pointer: a
+    // collection inside the push may move the array and refresh the rooted
+    // local, and stale bits then compare unequal — the conservative
+    // direction (one redundant re-point of the same object).
+    let before_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
+    let before_bits = ctx.block().bitcast_double_to_i64(&before_box);
+    let result = lower_inner(ctx, expr, value_discarded)?;
+    emit_field_push_writeback(ctx, *array_id, field, &before_bits)?;
+    Ok(result)
+}
+
+/// The write-back half of [`lower`]: `if (bits(local) != before && this is
+/// a plain object && bits(this.<field>) == before) this.<field> = local`, as
+/// an ordinary `PropertySet` lowering (class-field IC, barrier and layout
+/// note included) behind three inline tests, all off the hot path (the
+/// first fails whenever the append did not re-allocate). The header test is
+/// what makes the repair unobservable: it runs only on a `GC_TYPE_OBJECT`
+/// receiver with none of [`FIELD_WRITEBACK_BLOCKING_FLAGS_I16`] set, i.e. a
+/// plain data-property store. The field test is what makes it a REPAIR and
+/// not a store: the receiver was read before the argument was evaluated
+/// (`let __push_recv = this.f` precedes the push), so an argument that
+/// assigns `this.f` itself — `this.f.push(this.reset())` — must win, and it
+/// does, because the field then no longer holds the captured head. (A
+/// collection that already rewrote the field to the moved array fails the
+/// same test and skips a store that would have been redundant.)
+fn emit_field_push_writeback(
+    ctx: &mut FnCtx<'_>,
+    array_id: u32,
+    field: &str,
+    before_bits: &str,
+) -> Result<()> {
+    let after_box = lower_expr(ctx, &Expr::LocalGet(array_id))?;
+    let this_box = lower_expr(ctx, &Expr::This)?;
+
+    let deref_idx = ctx.new_block("apush.field.deref");
+    let field_idx = ctx.new_block("apush.field.still_held");
+    let store_idx = ctx.new_block("apush.field.writeback");
+    let done_idx = ctx.new_block("apush.field.done");
+    let deref_label = ctx.block_label(deref_idx);
+    let field_label = ctx.block_label(field_idx);
+    let store_label = ctx.block_label(store_idx);
+    let done_label = ctx.block_label(done_idx);
+
+    {
+        let blk = ctx.block();
+        let after_bits = blk.bitcast_double_to_i64(&after_box);
+        let same = blk.icmp_eq(I64, &after_bits, before_bits);
+        let this_bits = blk.bitcast_double_to_i64(&this_box);
+        let tag = blk.lshr(I64, &this_bits, "48");
+        let is_ptr = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
+        let handle = blk.and(I64, &this_bits, HANDLE_MASK_48);
+        let above_band = blk.icmp_ugt(I64, &handle, HANDLE_BAND_TOP);
+        let ptr_ok = blk.and(I1, &is_ptr, &above_band);
+        let moved = blk.icmp_eq(I1, &same, "false");
+        let deref = blk.and(I1, &moved, &ptr_ok);
+        blk.cond_br(&deref, &deref_label, &done_label);
+    }
+
+    ctx.current_block = deref_idx;
+    {
+        let blk = ctx.block();
+        let this_bits = blk.bitcast_double_to_i64(&this_box);
+        let handle = blk.and(I64, &this_bits, HANDLE_MASK_48);
+        let obj_ptr = blk.inttoptr(I64, &handle);
+        // GcHeader precedes the object: obj_type @-8 (i8), _reserved @-6 (i16).
+        let gtype_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
+        let gtype = blk.load(I8, &gtype_ptr);
+        let is_object = blk.icmp_eq(I8, &gtype, GC_TYPE_OBJECT_I8);
+        let res_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-6")]);
+        let reserved = blk.load(I16, &res_ptr);
+        let blocking = blk.and(I16, &reserved, FIELD_WRITEBACK_BLOCKING_FLAGS_I16);
+        let plain = blk.icmp_eq(I16, &blocking, "0");
+        let plain_object = blk.and(I1, &is_object, &plain);
+        blk.cond_br(&plain_object, &field_label, &done_label);
+    }
+
+    ctx.current_block = field_idx;
+    let field_box = lower_expr(
+        ctx,
+        &Expr::PropertyGet {
+            object: Box::new(Expr::This),
+            property: field.to_string(),
+            byte_offset: 0,
+        },
+    )?;
+    {
+        let blk = ctx.block();
+        let field_bits = blk.bitcast_double_to_i64(&field_box);
+        let still_held = blk.icmp_eq(I64, &field_bits, before_bits);
+        blk.cond_br(&still_held, &store_label, &done_label);
+    }
+
+    ctx.current_block = store_idx;
+    lower_expr(
+        ctx,
+        &Expr::PropertySet {
+            object: Box::new(Expr::This),
+            property: field.to_string(),
+            value: Box::new(Expr::LocalGet(array_id)),
+        },
+    )?;
+    ctx.block().br(&done_label);
+
+    ctx.current_block = done_idx;
+    Ok(())
+}
+
+fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Result<String> {
     match expr {
-        Expr::ArrayPush { array_id, value } => {
+        Expr::ArrayPush {
+            array_id, value, ..
+        } => {
             // Resolve the array storage in priority order: closure
             // capture (slot in the closure header), local alloca slot,
             // module-level global. The realloc-pointer write-back must
@@ -1318,6 +1458,7 @@ mod receiver_order_tests {
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 0,
                     value: Box::new(value),
+                    field_writeback: None,
                 }),
                 Stmt::Return(Some(Expr::LocalGet(0))),
             ],
@@ -1466,6 +1607,7 @@ mod parent_gate_tests {
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 0,
                     value: Box::new(Expr::Object(vec![("v".to_string(), Expr::Number(1.0))])),
+                    field_writeback: None,
                 }),
                 Stmt::Return(Some(Expr::LocalGet(0))),
             ],

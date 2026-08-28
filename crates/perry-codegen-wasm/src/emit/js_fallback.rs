@@ -617,7 +617,9 @@ impl WasmModuleEmitter {
                     obj, k, val, val
                 )
             }
-            Expr::ArrayPush { array_id, value } => {
+            Expr::ArrayPush {
+                array_id, value, ..
+            } => {
                 let arr = locals
                     .get(array_id)
                     .cloned()

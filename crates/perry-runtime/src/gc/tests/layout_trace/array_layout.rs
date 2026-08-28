@@ -304,6 +304,13 @@ fn test_truncate_to_zero_keeps_the_layout_the_history_predicts() {
         0,
         "and must not claim a raw-f64 layout it will never use"
     );
+    // The re-arm goes straight to `layout_init_all_pointer_slots` now (no
+    // zero-slot rebuild first): the same end state — no per-object record of
+    // either kind — reached in one registry pass.
+    assert!(
+        !crate::gc::layout_tables::test_per_object_layout_present(bucket as usize),
+        "an emptied all-pointer bucket holds no per-object layout record"
+    );
     // A non-pointer store into the emptied bucket still demotes the claim.
     bucket = crate::array::js_array_push_f64(bucket, 7.0);
     let demoted = unsafe { crate::array::array_object_flags_resolved(bucket) };

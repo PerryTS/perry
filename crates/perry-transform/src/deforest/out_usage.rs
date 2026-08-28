@@ -5,7 +5,7 @@ use super::*;
 
 /// Walks an HIR subtree looking for unsafe uses of a target local.
 /// "Safe" uses are limited to:
-/// - `out.push(value)` — both as `Expr::ArrayPush { array: LocalGet(out), value }`
+/// - `out.push(value)` — both as `Expr::ArrayPush { array: LocalGet(out), value, ..  }`
 ///   and as a generic `Expr::Call { callee: PropertyGet { LocalGet(out), "push" } }`.
 /// - `out[index]` reads (Expr::IndexGet) — they don't escape the
 ///   array, and the rewrite doesn't change their semantics.
@@ -123,7 +123,9 @@ impl OutUsageAnalyzer {
         // below (which would otherwise flag the LocalGet(out) inside
         // them as unsafe).
         match e {
-            Expr::ArrayPush { array_id, value } if *array_id == self.out_id => {
+            Expr::ArrayPush {
+                array_id, value, ..
+            } if *array_id == self.out_id => {
                 // Safe: out.push(v). Visit only `value`.
                 self.visit_expr(value);
                 return;

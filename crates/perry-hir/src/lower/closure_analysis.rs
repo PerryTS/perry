@@ -1416,7 +1416,9 @@ fn collect_closure_assigned_in_body_expr(
         }
         // Array mutation methods may reallocate the array pointer, so they
         // count as assignments to the array_id for mutable-capture widening.
-        Expr::ArrayPush { array_id, value }
+        Expr::ArrayPush {
+            array_id, value, ..
+        }
         | Expr::ArrayUnshift { array_id, value }
         | Expr::ArrayPushSpread {
             array_id,

@@ -31,7 +31,7 @@
 //!   carry elisions (`[,,]` — holes that read back as `undefined`), and
 //!   admitting one buys nothing that the pushes below do not.
 //! * **E2 — element provenance.** Every write into `A` is
-//!   `Expr::ArrayPush { array_id: A }` whose value is `new C(...)` — inline,
+//!   `Expr::ArrayPush { array_id: A, ..  }` whose value is `new C(...)` — inline,
 //!   or a local bound by exactly one `Let { init: New { C } }` and pushed
 //!   exactly once. `Expr::New` covers closed object literals too
 //!   (`__AnonShape_…`), so records qualify. Perry class constructors cannot
@@ -1066,7 +1066,9 @@ impl<'a> ArrayWalk<'a> {
                 self.walk_expr(object);
             }
             // E2: the one admitted write.
-            Expr::ArrayPush { array_id, value } => {
+            Expr::ArrayPush {
+                array_id, value, ..
+            } => {
                 if let Some(root) = self.root_of(*array_id) {
                     let site = match value.as_ref() {
                         Expr::New { class_name, .. } => PushValue::Fresh(class_name.clone()),

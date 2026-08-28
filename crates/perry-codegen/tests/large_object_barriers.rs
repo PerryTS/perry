@@ -180,6 +180,7 @@ fn module_with_large_local_array_push(element_count: usize) -> Module {
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 2,
                     value: Box::new(Expr::LocalGet(1)),
+                    field_writeback: None,
                 }),
                 Stmt::Return(Some(Expr::LocalGet(2))),
             ],

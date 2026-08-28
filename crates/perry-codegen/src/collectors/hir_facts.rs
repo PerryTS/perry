@@ -1191,7 +1191,9 @@ impl ArrayFactCollector {
 
     fn collect_expr(&mut self, expr: &Expr) {
         match expr {
-            Expr::ArrayPush { array_id, value } => {
+            Expr::ArrayPush {
+                array_id, value, ..
+            } => {
                 let value_kind = if expr_is_i32_shaped(value) {
                     ArrayKindFact::PackedI32
                 } else if expr_is_numeric_shaped(value) {
@@ -2297,6 +2299,7 @@ mod tests {
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 2,
                     value: Box::new(Expr::Integer(4)),
+                    field_writeback: None,
                 }),
             ],
             &HashSet::new(),

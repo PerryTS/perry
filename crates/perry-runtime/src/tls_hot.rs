@@ -153,11 +153,38 @@ pub(crate) struct HotTls {
     pub(crate) learned_inline_fields: *mut u8,
     // gc/roots/temp_roots.rs
     pub(crate) temp_roots: *mut u8,
+    // ------------------------------------------------------------------
+    // Inline hot VALUES. A named pointer field and a generic slot both cost
+    // TSD base → `HotTls` → slot pointer → value; a value that lives here is
+    // one dependent load shorter (TSD base → `HotTls` → value), and on the
+    // hottest probes — the write barrier's dirty-page cache on every
+    // remembered store, the prototype rows on every indexed array write, the
+    // box-pointer caches on every boxed-local read — that load was the
+    // measurable part. Only small `Copy` values with a `const` initial state
+    // belong here; anything needing `Drop` stays a slot.
+    // ------------------------------------------------------------------
+    /// `gc::dirty_page_cache` — the one-entry dirty-page cache
+    /// (`usize::MAX` = nothing cached).
+    pub(crate) last_dirty_old_page: Cell<usize>,
+    /// `array::prototype_addr` — this thread's memoized intrinsic prototype
+    /// addresses, `usize::MAX` = not yet computed. Rewritten by the
+    /// collector's root scan like the slot it replaced.
+    pub(crate) prototype_addrs: [Cell<usize>; INLINE_PROTOTYPE_ADDR_ROWS],
+    /// `box` — direct-mapped positive caches over the three box registries.
+    pub(crate) box_ptr_cache: [Cell<usize>; INLINE_BOX_PTR_CACHE_SLOTS],
+    pub(crate) i32_box_ptr_cache: [Cell<usize>; INLINE_BOX_PTR_CACHE_SLOTS],
+    pub(crate) bool_box_ptr_cache: [Cell<usize>; INLINE_BOX_PTR_CACHE_SLOTS],
     /// Generic slots, one per [`crate::perry_thread_local`] declaration that
     /// this thread has resolved at least once. Last, so the named fields above
     /// keep their small fixed offsets.
     slots: [Cell<*mut u8>; HOT_SLOT_CAPACITY],
 }
+
+/// Rows of [`HotTls::prototype_addrs`]; `array::prototype_addr` sizes its
+/// builtin-name table from this.
+pub(crate) const INLINE_PROTOTYPE_ADDR_ROWS: usize = 2;
+/// Slots of each [`HotTls`] box-pointer cache; `box` indexes with this.
+pub(crate) const INLINE_BOX_PTR_CACHE_SLOTS: usize = 8;
 
 impl HotTls {
     /// Read a claimed slot. `idx` must have passed the `< HOT_SLOT_CAPACITY`
@@ -195,6 +222,11 @@ impl HotTls {
         shape_install_memo: std::ptr::null_mut(),
         learned_inline_fields: std::ptr::null_mut(),
         temp_roots: std::ptr::null_mut(),
+        last_dirty_old_page: Cell::new(usize::MAX),
+        prototype_addrs: [const { Cell::new(usize::MAX) }; INLINE_PROTOTYPE_ADDR_ROWS],
+        box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],
+        i32_box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],
+        bool_box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],
         slots: [const { Cell::new(std::ptr::null_mut()) }; HOT_SLOT_CAPACITY],
     };
 }

@@ -348,7 +348,9 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(index, out);
             walk(value, out);
         }
-        Expr::ArrayPush { array_id, value } => {
+        Expr::ArrayPush {
+            array_id, value, ..
+        } => {
             out.insert(*array_id);
             walk(value, out);
         }

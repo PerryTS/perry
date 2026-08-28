@@ -377,6 +377,59 @@ fn collect_archive_global_symbols_by_member(
     )))
 }
 
+fn parse_nm_archive_map(
+    stdout: &str,
+) -> std::collections::HashMap<String, std::collections::HashSet<String>> {
+    let mut in_map = false;
+    let mut by_member: std::collections::HashMap<String, std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed == "Archive map" {
+            in_map = true;
+            continue;
+        }
+        if !in_map {
+            continue;
+        }
+        if trimmed.is_empty() {
+            break;
+        }
+        // Symbol names never contain spaces; the member path after the FIRST
+        // " in " may (so split from the left).
+        if let Some((symbol, member)) = trimmed.split_once(" in ") {
+            by_member
+                .entry(member.to_string())
+                .or_default()
+                .insert(symbol.to_string());
+        }
+    }
+    by_member
+}
+
+/// Per-member symbols the archive index says the linker can actually load.
+/// Falls back to the members' extern-defined symbols only when the archive has
+/// no index at all, matching [`collect_archive_global_symbols_flat`]'s legacy
+/// behavior for index-less COFF/ELF archives.
+fn collect_archive_provided_symbols_by_member(
+    llvm_nm: &Path,
+    archive: &Path,
+) -> Option<std::collections::HashMap<String, std::collections::HashSet<String>>> {
+    let out = Command::new(llvm_nm)
+        .arg("--print-armap")
+        .arg(archive)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let indexed = parse_nm_archive_map(&String::from_utf8_lossy(&out.stdout));
+    if !indexed.is_empty() {
+        return Some(indexed);
+    }
+    collect_archive_global_symbols_by_member(llvm_nm, archive)
+}
+
 /// Flat union of every symbol defined anywhere in the archive.
 fn collect_archive_symbols_flat(
     llvm_nm: &Path,
@@ -407,54 +460,8 @@ fn collect_archive_global_symbols_flat(
     llvm_nm: &Path,
     archive: &Path,
 ) -> std::collections::HashSet<String> {
-    let out = match Command::new(llvm_nm)
-        .arg("--print-armap")
-        .arg(archive)
-        .output()
-    {
-        Ok(out) if out.status.success() => out,
-        _ => return Default::default(),
-    };
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let mut in_map = false;
-    let mut symbols: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for line in stdout.lines() {
-        let trimmed = line.trim_end();
-        if trimmed == "Archive map" {
-            in_map = true;
-            continue;
-        }
-        if !in_map {
-            continue;
-        }
-        if trimmed.is_empty() {
-            break;
-        }
-        // Symbol names never contain spaces; the member path after the FIRST
-        // " in " may (so split from the left).
-        if let Some((symbol, _member)) = trimmed.split_once(" in ") {
-            symbols.insert(symbol.to_string());
-        }
-    }
-    if !symbols.is_empty() {
-        return symbols;
-    }
-
-    // No index (or an empty one): fall back to the members' extern-defined
-    // symbols. An index-less archive is not really linkable on ld64 anyway,
-    // but the COFF/ELF paths tolerate it and over-counting here only makes
-    // the dedup more aggressive on a shape we cannot reason about.
-    let out = match Command::new(llvm_nm)
-        .arg("--defined-only")
-        .arg("--extern-only")
-        .arg("--format=bsd")
-        .arg(archive)
-        .output()
-    {
-        Ok(out) if out.status.success() => out,
-        _ => return Default::default(),
-    };
-    parse_nm_archive_output(&String::from_utf8_lossy(&out.stdout))
+    collect_archive_provided_symbols_by_member(llvm_nm, archive)
+        .unwrap_or_default()
         .into_values()
         .flatten()
         .collect()
@@ -1552,9 +1559,10 @@ pub(super) fn dedup_ui_lib_against_linked_libs(
 /// first-definition-wins warnings.
 ///
 /// This applies the SAME two safety rules as
-/// `strip_bundled_runtime_from_well_known_lib` (stdlib bundles the identical
-/// codegen unit; no OTHER kept member depends on a symbol only the
-/// duplicate-candidate provides) to EVERY member, not just `perry_runtime-`
+/// `strip_bundled_runtime_from_well_known_lib` (stdlib bundles a name-matched
+/// codegen unit whose archive-index exports cover the replacement; no OTHER
+/// kept member depends on a symbol only the duplicate-candidate provides) to
+/// EVERY member, not just `perry_runtime-`
 /// ones — a naive one-shot widening is NOT safe (candidates can depend on
 /// EACH OTHER, e.g. `hyper_util`'s object referencing a symbol only
 /// `tokio`'s object defines, both bundled in the same well-known lib and
@@ -1564,8 +1572,8 @@ pub(super) fn dedup_ui_lib_against_linked_libs(
 /// "undefined symbol references from every member NOT currently marked for
 /// removal" against the SHRINKING kept-set, and protects (un-marks) any
 /// still-marked candidate whose defined symbols are needed by that kept-set
-/// and aren't covered by stdlib. Repeats until no candidate is newly
-/// protected in a round. Verified safe against the `issue_5920_wrapper_
+/// and aren't covered by its matched stdlib member. Repeats until no candidate
+/// is newly protected in a round. Verified safe against the `issue_5920_wrapper_
 /// bundled_runtime_async_starvation` regression test (that test requires
 /// `PERRY_LLVM_OBJCOPY`/`PERRY_LLVM_NM`/`PERRY_LLVM_AR` — or `llvm-objcopy`/
 /// `llvm-nm`/`llvm-ar` on `PATH` — to actually exercise the strip-dedup
@@ -1647,12 +1655,36 @@ pub(super) fn strip_bundled_shared_deps_from_well_known_lib(
         .ok_or_else(|| anyhow::anyhow!("failed to inspect defined symbols of {lib_name}"))?;
     let undefined_by_member = collect_archive_undefined_by_member(&nm, &abs_lib)
         .ok_or_else(|| anyhow::anyhow!("failed to inspect undefined symbols of {lib_name}"))?;
-    let stdlib_defined = collect_archive_global_symbols_flat(&nm, &abs_stdlib);
-    if stdlib_defined.is_empty() {
+    let stdlib_defined_by_member = collect_archive_provided_symbols_by_member(&nm, &abs_stdlib)
+        .ok_or_else(|| anyhow::anyhow!("failed to inspect stdlib archive index"))?;
+    if stdlib_defined_by_member.is_empty() {
         return Err(anyhow::anyhow!(
             "failed to inspect stdlib symbols (empty set)"
         ));
     }
+    // A matching member NAME is only a coarse codegen-unit identity. The
+    // staticlib wrapper's feature-dependent LTO can retain a different export
+    // surface in that unit. In #8930 the reported bundled-streams build left
+    // libperry_ext_http needing SenderTask::notify without a usable definition
+    // in the matched stdlib unit. Record what that matching member can actually
+    // provide so the fixed-point check never substitutes an unrelated
+    // archive-wide export.
+    let replacement_defined_by_candidate: std::collections::HashMap<
+        String,
+        std::collections::HashSet<String>,
+    > = candidates
+        .iter()
+        .map(|candidate| {
+            let defined = stdlib_members
+                .iter()
+                .filter(|member| member.contains(candidate.as_str()))
+                .filter_map(|member| stdlib_defined_by_member.get(member))
+                .flatten()
+                .cloned()
+                .collect();
+            (candidate.clone(), defined)
+        })
+        .collect();
     // Fixed-point loop: start by assuming every candidate is removable, then
     // repeatedly protect (un-mark) any candidate whose symbols are still
     // needed by the current kept-set (members - to_remove), until a round
@@ -1661,7 +1693,7 @@ pub(super) fn strip_bundled_shared_deps_from_well_known_lib(
         &candidates,
         &defined_by_member,
         &undefined_by_member,
-        &stdlib_defined,
+        &replacement_defined_by_candidate,
     );
     if to_remove.is_empty() {
         return Ok(lib_path.clone());
@@ -1721,7 +1753,10 @@ fn shared_dep_members_to_remove(
     candidates: &std::collections::BTreeSet<String>,
     defined_by_member: &std::collections::HashMap<String, std::collections::HashSet<String>>,
     undefined_by_member: &std::collections::HashMap<String, std::collections::HashSet<String>>,
-    stdlib_defined: &std::collections::HashSet<String>,
+    replacement_defined_by_candidate: &std::collections::HashMap<
+        String,
+        std::collections::HashSet<String>,
+    >,
 ) -> std::collections::BTreeSet<String> {
     let empty = std::collections::HashSet::new();
     let mut to_remove = candidates.clone();
@@ -1734,9 +1769,10 @@ fn shared_dep_members_to_remove(
         let mut protected_this_round = false;
         for c in to_remove.clone().iter() {
             let defined = defined_by_member.get(c).unwrap_or(&empty);
+            let replacement_defined = replacement_defined_by_candidate.get(c).unwrap_or(&empty);
             let still_needed = kept_undefined.iter().any(|s| {
                 defined.contains(*s)
-                    && (!stdlib_defined.contains(*s) || requires_bundled_native_companion(s))
+                    && (!replacement_defined.contains(*s) || requires_bundled_native_companion(s))
             });
             if still_needed {
                 to_remove.remove(c);

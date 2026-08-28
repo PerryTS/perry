@@ -473,6 +473,7 @@ fn apush_ir() -> String {
             Stmt::Expr(Expr::ArrayPush {
                 array_id: ARR_ID,
                 value: Box::new(Expr::Object(vec![("v".to_string(), Expr::Number(1.0))])),
+                field_writeback: None,
             }),
             Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
         ],

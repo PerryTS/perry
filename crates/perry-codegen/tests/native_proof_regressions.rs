@@ -6620,6 +6620,7 @@ fn artifact_records_array_push_value_bits_before_slot_store() {
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 1,
                 value: Box::new(local(2)),
+                field_writeback: None,
             }),
             Stmt::Return(Some(int(0))),
         ],

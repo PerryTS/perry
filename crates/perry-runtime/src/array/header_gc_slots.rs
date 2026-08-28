@@ -170,6 +170,17 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
     let was_all_pointer = super::header::array_object_flags_resolved(arr)
         & (crate::gc::GC_LAYOUT_STATE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS)
         == (crate::gc::GC_LAYOUT_SIDE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS);
+    if length == 0 && was_all_pointer {
+        // The branch below re-arms the all-pointer claim, and
+        // `layout_init_all_pointer_slots` already does everything the
+        // zero-slot rebuild would have done first — clears the typed-intact
+        // bit and forgets both per-object record kinds
+        // (`layout_forget_object`) before setting the state — so the rebuild
+        // was a second pass over the same registries for every
+        // `pooled.length = 0`. Skip straight to the re-arm.
+        crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
+        return;
+    }
     crate::gc::layout_rebuild_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
     if length == 0 {
         // `layout_rebuild_from_slots` just left the head POINTER_FREE with its

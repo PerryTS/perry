@@ -924,6 +924,17 @@ pub fn run_with_parse_cache(
 
     let i18n_table = apply_i18n_pass(&mut ctx, i18n_config.as_ref(), &i18n_translations, format);
 
+    // Module-level const literals fold into their reads only now, after the
+    // whole transform phase: every cross-module harvest has been taken from
+    // the unfolded bodies, so no inlining decision moves, while the typed-ABI
+    // clone rules and the lowering see the literal (a one-line predicate
+    // comparing against an `export const` earns its typed clone). This runs
+    // before the HIR trace and before the object-cache fingerprint, so both
+    // describe exactly what codegen consumes.
+    for hir_module in ctx.native_modules.values_mut() {
+        perry_transform::module_const_fold::run(hir_module);
+    }
+
     if trace_hir {
         dump_hir_for_debug(&ctx, args.focus.as_deref());
     }

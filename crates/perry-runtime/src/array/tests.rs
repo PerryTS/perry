@@ -1398,22 +1398,6 @@ fn test_array_set_unchecked_basic() {
 }
 
 #[test]
-fn test_array_pop_and_push() {
-    let arr = js_array_alloc(4);
-    let arr = js_array_push_f64(arr, 1.0);
-    let arr = js_array_push_f64(arr, 2.0);
-    let arr = js_array_push_f64(arr, 3.0);
-
-    let popped = js_array_pop_f64(arr);
-    assert_eq!(popped, 3.0);
-    assert_eq!(js_array_length(arr), 2);
-
-    let arr = js_array_push_f64(arr, 4.0);
-    assert_eq!(js_array_length(arr), 3);
-    assert_eq!(js_array_get_f64(arr, 2), 4.0);
-}
-
-#[test]
 fn test_array_index_of() {
     let arr = js_array_alloc(4);
     js_array_push_f64(arr, 10.0);

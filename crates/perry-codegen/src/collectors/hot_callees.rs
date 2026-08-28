@@ -65,26 +65,49 @@ const TINY_METHOD_MAX_STMTS: usize = 2;
 const TINY_METHOD_ALLOC_SITE_BUDGET: u32 = 8;
 
 /// The receiver-binding local `perry-transform`'s `field_push_local_bind`
-/// pass introduces when it expands one `this.f.push(v)` statement into four
-/// (`let __push_recv_old = this.f; let __push_recv = old; push; if (moved)
-/// this.f = __push_recv`). For the tiny-method budget above that is still the
-/// ONE statement the author wrote: the pass exists so the push takes the
+/// pass introduces when it expands one `this.f.push(v)` statement into two
+/// (`let __push_recv = this.f; push` — the write-back rides on the
+/// `ArrayPush` node itself). For the tiny-method budget above that is still
+/// the ONE statement the author wrote: the pass exists so the push takes the
 /// inline append, and a command-buffer method that is exactly
 /// `this.commands.push({ ... })` must not lose its allocation kernel to the
 /// rewrite that made its push cheaper. Kept in sync by name with the pass
 /// (`field_push_local_bind.rs`); the test below pins the shape.
-const FIELD_PUSH_RECEIVER_OLD_NAME: &str = "__push_recv_old";
+const FIELD_PUSH_RECEIVER_NAME: &str = "__push_recv";
 
 /// Statement count for the tiny-method rule: each field-push expansion
-/// counts as the single statement it came from.
+/// counts as the single statement it came from. An expansion is the COMPLETE
+/// shape the pass emits — the receiver `let` immediately followed by the
+/// `ArrayPush` on that local carrying the same field as its write-back — so
+/// an author's own local that happens to be named `__push_recv` does not
+/// shrink the count.
 fn tiny_method_stmt_count(body: &[Stmt]) -> usize {
     let expansions = body
-        .iter()
-        .filter(
-            |stmt| matches!(stmt, Stmt::Let { name, .. } if name == FIELD_PUSH_RECEIVER_OLD_NAME),
-        )
+        .windows(2)
+        .filter(|pair| {
+            matches!(
+                pair,
+                [
+                    Stmt::Let {
+                        id,
+                        name,
+                        mutable: true,
+                        init: Some(Expr::PropertyGet { object, property, .. }),
+                        ..
+                    },
+                    Stmt::Expr(Expr::ArrayPush {
+                        array_id,
+                        field_writeback: Some(field),
+                        ..
+                    }),
+                ] if name == FIELD_PUSH_RECEIVER_NAME
+                    && array_id == id
+                    && matches!(object.as_ref(), Expr::This)
+                    && field == property
+            )
+        })
         .count();
-    body.len().saturating_sub(3 * expansions)
+    body.len().saturating_sub(expansions)
 }
 
 /// Collect the set of `FuncId`s eligible for `inlinehint`: those with ≥1 direct
@@ -866,43 +889,24 @@ mod recursion_participant_tests {
     }
 
     /// `this.commands.push({ ... })` after `field_push_local_bind` expanded it.
-    fn expanded_field_push(old_id: u32, recv_id: u32) -> Vec<Stmt> {
+    fn expanded_field_push(recv_id: u32) -> Vec<Stmt> {
         vec![
             Stmt::Let {
-                id: old_id,
-                name: FIELD_PUSH_RECEIVER_OLD_NAME.to_string(),
+                id: recv_id,
+                name: FIELD_PUSH_RECEIVER_NAME.to_string(),
                 ty: Type::Any,
-                mutable: false,
+                mutable: true,
                 init: Some(Expr::PropertyGet {
                     object: Box::new(Expr::This),
                     property: "commands".to_string(),
                     byte_offset: 0,
                 }),
             },
-            Stmt::Let {
-                id: recv_id,
-                name: "__push_recv".to_string(),
-                ty: Type::Any,
-                mutable: true,
-                init: Some(Expr::LocalGet(old_id)),
-            },
             Stmt::Expr(Expr::ArrayPush {
                 array_id: recv_id,
                 value: Box::new(new_expr()),
+                field_writeback: Some("commands".to_string()),
             }),
-            Stmt::If {
-                condition: Expr::Compare {
-                    op: perry_hir::CompareOp::Ne,
-                    left: Box::new(Expr::LocalGet(recv_id)),
-                    right: Box::new(Expr::LocalGet(old_id)),
-                },
-                then_branch: vec![Stmt::Expr(Expr::PropertySet {
-                    object: Box::new(Expr::This),
-                    property: "commands".to_string(),
-                    value: Box::new(Expr::LocalGet(recv_id)),
-                })],
-                else_branch: None,
-            },
         ]
     }
 
@@ -944,14 +948,33 @@ mod recursion_participant_tests {
         let mut module = Module::new("buffer.ts");
         module
             .classes
-            .push(class_with_method(func(11, expanded_field_push(100, 101))));
-        let mut plain = expanded_field_push(200, 201);
-        // Same four statements, but the first is an ordinary local: not an
-        // expansion, so the method is four statements long.
+            .push(class_with_method(func(11, expanded_field_push(101))));
+        // Two copies back to back: two authored statements, not one.
+        let mut two = expanded_field_push(201);
+        two.extend(expanded_field_push(202));
+        module.classes.push(class_with_method(func(12, two)));
+        // The same two statements, but the local is an ordinary one: not an
+        // expansion, so the method is two statements long.
+        let mut plain = expanded_field_push(301);
         if let Stmt::Let { name, .. } = &mut plain[0] {
             *name = "old".to_string();
         }
-        module.classes.push(class_with_method(func(12, plain)));
+        module.classes.push(class_with_method(func(13, plain)));
+        // An author's own local named like the receiver, followed by an
+        // unrelated statement: no expansion, two statements.
+        let mut collision = expanded_field_push(401);
+        collision[1] = Stmt::Expr(new_expr());
+        module.classes.push(class_with_method(func(14, collision)));
+        // The receiver `let` followed by a push WITHOUT a write-back target
+        // (an ordinary local push that merely shares the name): two.
+        let mut no_target = expanded_field_push(501);
+        if let Stmt::Expr(Expr::ArrayPush {
+            field_writeback, ..
+        }) = &mut no_target[1]
+        {
+            *field_writeback = None;
+        }
+        module.classes.push(class_with_method(func(15, no_target)));
 
         assert_eq!(
             tiny_method_stmt_count(&module.classes[0].methods[0].body),
@@ -959,16 +982,24 @@ mod recursion_participant_tests {
         );
         assert_eq!(
             tiny_method_stmt_count(&module.classes[1].methods[0].body),
-            4
+            2
+        );
+        assert_eq!(
+            tiny_method_stmt_count(&module.classes[2].methods[0].body),
+            2
+        );
+        assert_eq!(
+            tiny_method_stmt_count(&module.classes[3].methods[0].body),
+            2
+        );
+        assert_eq!(
+            tiny_method_stmt_count(&module.classes[4].methods[0].body),
+            2
         );
         let hot = collect_alloc_hot_functions(&module);
         assert!(
             hot.contains(&11),
             "the expanded field push is still a tiny kernel: {hot:?}"
-        );
-        assert!(
-            !hot.contains(&12),
-            "four unrelated statements are not: {hot:?}"
         );
     }
 

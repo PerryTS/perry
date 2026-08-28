@@ -6,6 +6,16 @@
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+/// Resolve a raw array head a generated loop re-read from its root after a
+/// callback returned: the callback may have grown the array, leaving the root
+/// on a forwarding stub. Pure `clean_arr_ptr`; null for anything that is not
+/// an array. Generated `some` loops call this only when the re-read head's
+/// header carries `GC_FLAG_FORWARDED`.
+#[no_mangle]
+pub extern "C" fn js_array_live_head(arr: i64) -> i64 {
+    clean_arr_ptr(arr as *const ArrayHeader) as i64
+}
+
 /// A strict-mode element write (`arr[i] = v`) to a **frozen** array's existing
 /// index is `[[Set]]` on a non-writable data property with `Throw = true`
 /// (ECMA-262 §10.4.2.4 → OrdinarySetWithOwnDescriptor step 2.b.i), so it must

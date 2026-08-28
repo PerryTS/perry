@@ -207,6 +207,15 @@ pub extern "C" fn js_write_barrier_slot_validated_parent(
         bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerParentSkips);
         return;
     }
+    // Leaf exit for the common repeated store into one old page — see
+    // `inline_slot_store_on_cached_dirty_page`.
+    if super::barrier::inline_slot_store_on_cached_dirty_page(
+        parent_user as usize,
+        slot_addr as usize,
+    ) {
+        bump_write_barrier_trace_counter(BarrierTraceCounter::DirtyPageCacheHits);
+        return;
+    }
     write_barrier_decoded_parent(parent_user as usize, slot_addr as usize, child_addr, false);
 }
 

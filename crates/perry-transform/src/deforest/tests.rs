@@ -23,6 +23,7 @@ fn detects_simple_producer() {
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 10,
                 value: Box::new(Expr::Integer(1)),
+                field_writeback: None,
             }),
             Stmt::Return(Some(Expr::LocalGet(10))),
         ],
@@ -104,6 +105,7 @@ fn synthetic_out_params_are_assigned_by_function_id() {
     first.body[1] = Stmt::Expr(Expr::ArrayPush {
         array_id: 20,
         value: Box::new(Expr::Integer(1)),
+        field_writeback: None,
     });
     first.body[2] = Stmt::Return(Some(Expr::LocalGet(20)));
 
@@ -869,6 +871,7 @@ fn the_recursive_fuse_inside_a_producer_body_counts() {
                     object: Box::new(Expr::LocalGet(40)),
                     index: Box::new(Expr::LocalGet(41)),
                 }),
+                field_writeback: None,
             })],
         },
     );
@@ -956,6 +959,7 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
                         object: Box::new(Expr::LocalGet(child)),
                         index: Box::new(Expr::LocalGet(j)),
                     }),
+                    field_writeback: None,
                 })],
             },
             Stmt::Return(Some(Expr::Integer(0))),
@@ -989,6 +993,7 @@ fn make_simple_producer() -> Function {
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 10,
                 value: Box::new(Expr::Integer(1)),
+                field_writeback: None,
             }),
             Stmt::Return(Some(Expr::LocalGet(10))),
         ],

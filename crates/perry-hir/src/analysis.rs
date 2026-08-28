@@ -359,7 +359,9 @@ pub(crate) fn collect_assigned_locals_expr(expr: &Expr, assigned: &mut Vec<Local
             return;
         }
         // Array methods - push/unshift may reassign the array pointer
-        Expr::ArrayPush { array_id, value }
+        Expr::ArrayPush {
+            array_id, value, ..
+        }
         | Expr::ArrayUnshift { array_id, value }
         | Expr::ArrayPushSpread {
             array_id,
@@ -564,7 +566,7 @@ pub fn replace_this_in_stmts(stmts: &mut Vec<Stmt>, this_id: LocalId) {
 
 /// Issue #212: rewrite every `LocalGet(old_id)` / `LocalSet(old_id, _)` /
 /// `Update { id: old_id, .. }` reference (plus the LocalId fields baked
-/// into specialized HIR variants like `Expr::ArrayPush { array_id }` and
+/// into specialized HIR variants like `Expr::ArrayPush { array_id, ..  }` and
 /// the `captures` / `mutable_captures` lists on `Expr::Closure`) where
 /// `old_id` appears as a key in `map`, replacing it with the corresponding
 /// `new_id`. Used by `lower_class_decl` to remap captured outer-fn

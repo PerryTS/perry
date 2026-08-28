@@ -1291,7 +1291,9 @@ impl<'a> UseWalk<'a> {
             // are bounded by `collectors/ptr_shape_elements.rs` exactly as
             // rule 2 bounds an object local's, so no alias escapes the region.
             // Any other array, any other value shape, keeps today's escape.
-            Expr::ArrayPush { array_id, value } => {
+            Expr::ArrayPush {
+                array_id, value, ..
+            } => {
                 self.disq(*array_id, report::ESC_CONTAINER_MUTATOR);
                 // #7770: record the provenance argument list for the
                 // group-wide numeric proof. Only pushes into a PROVEN array

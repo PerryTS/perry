@@ -974,7 +974,9 @@ fn refresh_in_expr(
             lookup(remap, id);
             return;
         }
-        Expr::ArrayPush { array_id, value } => {
+        Expr::ArrayPush {
+            array_id, value, ..
+        } => {
             lookup(remap, array_id);
             refresh_in_expr(value, remap, next_id, next_func_id);
             return;
@@ -1623,6 +1625,7 @@ mod tests {
                     is_async: false,
                     is_generator: false,
                 }),
+                field_writeback: None,
             }),
         ];
         let f = make_for(i, 0, 3, body, CompareOp::Lt);

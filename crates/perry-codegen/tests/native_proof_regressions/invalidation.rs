@@ -702,6 +702,7 @@ fn local_array_alias_push_blocks_length_and_bounds_proofs() {
     let body = aliased_array_loop(Expr::ArrayPush {
         array_id: 2,
         value: Box::new(int(1)),
+        field_writeback: None,
     });
 
     let ir = compile_ir("array_alias_push_blocks_loop_proof.ts", body);
@@ -766,6 +767,7 @@ fn indirect_array_alias_from_container_blocks_length_and_bounds_proofs() {
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 6,
                     value: Box::new(int(1)),
+                    field_writeback: None,
                 }),
                 array_set(1, local(2), local(2)),
             ],
@@ -1017,6 +1019,7 @@ fn loop_local_array_alias_blocks_length_and_bounds_proofs() {
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 3,
                     value: Box::new(int(1)),
+                    field_writeback: None,
                 }),
                 array_set(1, local(2), local(2)),
             ],
@@ -1041,6 +1044,7 @@ fn loop_local_array_alias_push_blocks_packed_f64_loop_and_artifacts() {
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 2,
                     value: Box::new(int(4)),
+                    field_writeback: None,
                 }),
                 Stmt::Expr(Expr::LocalSet(
                     3,
@@ -1071,6 +1075,7 @@ fn loop_local_array_alias_push_blocks_packed_i32_loop_and_artifacts() {
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 2,
                     value: Box::new(int(4)),
+                    field_writeback: None,
                 }),
                 Stmt::Expr(Expr::LocalSet(
                     3,
@@ -1102,6 +1107,7 @@ fn loop_local_array_alias_push_blocks_packed_u32_loop_and_artifacts() {
                 Stmt::Expr(Expr::ArrayPush {
                     array_id: 2,
                     value: Box::new(int(5)),
+                    field_writeback: None,
                 }),
                 Stmt::Expr(Expr::LocalSet(
                     3,

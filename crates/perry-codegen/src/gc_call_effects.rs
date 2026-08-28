@@ -157,6 +157,9 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // side-table remove `layout_init_pointer_free` already does on every
         // allocation. No Perry allocation, no re-entry into generated code.
         | "js_array_declare_all_pointer_elements"
+        // `clean_arr_ptr` on a raw head: reads headers and the forwarding
+        // registry, allocates nothing, never re-enters generated code.
+        | "js_array_live_head"
         // TLS dynamic-call context only. #8596 adds the `_get` reader — a bare
         // `IMPLICIT_THIS.with(|c| f64::from_bits(c.get()))` (`object/this_binding.rs`),
         // the exact shape of the already-admitted `_set` and `js_new_target_get`.

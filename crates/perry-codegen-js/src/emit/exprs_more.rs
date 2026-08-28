@@ -103,7 +103,9 @@ impl JsEmitter {
             }
 
             // --- Array methods ---
-            Expr::ArrayPush { array_id, value } => {
+            Expr::ArrayPush {
+                array_id, value, ..
+            } => {
                 let name = self.get_local_name(*array_id);
                 let _ = write!(self.output, "{}.push(", name);
                 self.emit_expr(value);

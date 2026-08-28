@@ -112,6 +112,7 @@ fn module_with_callback(declare_source_array_param: bool) -> Module {
                 byte_offset: 0,
                 cap_args_appended: 0,
             }),
+            field_writeback: None,
         }),
         Stmt::Expr(Expr::ArrayForEach {
             array: Box::new(Expr::LocalGet(ARRAY_ID)),
@@ -213,6 +214,19 @@ fn captureless_inline_some_passes_the_callback_body_directly() {
         ir.contains("call double @js_array_some_captureless")
             && ir.contains("ptr @perry_closure_array_some_captureless_ts__99"),
         "a captureless inline arrow should pass its body symbol directly:\n{ir}"
+    );
+    // The admitted receiver runs the loop inline: the arrow's body is a direct
+    // call (a null closure, then as many of element/index/receiver as it
+    // declares — one here), a hole skips, a `true` result exits without a
+    // truthiness call, and the runtime helper above is only the fallback.
+    assert!(
+        ir.contains("some.inline.loop")
+            && ir.contains(
+                "call double @perry_closure_array_some_captureless_ts__99(i64 0, double "
+            )
+            && ir.contains("call i64 @js_array_live_head(")
+            && ir.contains("call i32 @js_is_truthy("),
+        "the captureless some loop should run inline with the direct body call:\n{ir}"
     );
     assert!(
         !ir.contains("call i64 @js_closure_alloc_singleton")

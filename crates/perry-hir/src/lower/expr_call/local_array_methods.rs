@@ -395,6 +395,7 @@ pub(super) fn try_local_array_methods(
                                             stmts.push(Expr::ArrayPush {
                                                 array_id,
                                                 value: Box::new(arg),
+                                                field_writeback: None,
                                             });
                                         }
                                     }
@@ -404,6 +405,7 @@ pub(super) fn try_local_array_methods(
                                         return Ok(Ok(Expr::ArrayPush {
                                             array_id,
                                             value: Box::new(args.into_iter().next().unwrap()),
+                                            field_writeback: None,
                                         }));
                                     }
                                     let mut stmts: Vec<Expr> = Vec::with_capacity(args.len());
@@ -411,6 +413,7 @@ pub(super) fn try_local_array_methods(
                                         stmts.push(Expr::ArrayPush {
                                             array_id,
                                             value: Box::new(a),
+                                            field_writeback: None,
                                         });
                                     }
                                     return Ok(Ok(Expr::Sequence(stmts)));

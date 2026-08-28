@@ -124,48 +124,58 @@ crate::perry_thread_local! {
 /// re-reads the same handful of boxes (`__gen_state`, `__gen_done`,
 /// `__gen_executing`, plus the activation's body locals) on every step, and
 /// activations run one at a time.
-const BOX_PTR_CACHE_SLOTS: usize = 8;
+const BOX_PTR_CACHE_SLOTS: usize = crate::tls_hot::INLINE_BOX_PTR_CACHE_SLOTS;
 
-type BoxPtrCache = crate::tls_hot::HotKey<[std::cell::Cell<usize>; BOX_PTR_CACHE_SLOTS]>;
+type BoxPtrCache = [std::cell::Cell<usize>; BOX_PTR_CACHE_SLOTS];
 
-crate::perry_thread_local! {
-    /// Direct-mapped **positive** cache over `BOX_REGISTRY`.
-    ///
-    /// `js_box_get`/`js_box_set` validate their operand against the registry on
-    /// every access (perry#4898), and that hash probe is the single largest leaf
-    /// in Perry's async machinery — the transform boxes every body local of an
-    /// `async` function, so a state machine pays one probe per local read and
-    /// one per write. Measured on a promise-only kernel (24 000 activations,
-    /// 48 000 awaits): `is_registered_{,i32_,bool_}box_ptr` were 8.2 % + 5.9 %
-    /// + 5.5 % of leaf samples.
-    ///
-    /// ## Why caching only positives is sound
-    ///
-    /// Box-cell memory is **never returned to the allocator**: an address
-    /// minted by `js_*box_alloc*` is a box cell for the life of the thread —
-    /// live in the registry, or (since the #7933 follow-up) parked in the
-    /// release quarantine/free pool, but never recycled into a non-box
-    /// allocation. `js_*box_release` removes a cell from the registry AND
-    /// evicts it from this cache (`box_ptr_cache_evict`), so a cache hit
-    /// still implies "currently registered": the only writer that removes a
-    /// registry entry clears the matching cache slot in the same call, on
-    /// the same thread. A hit is therefore exactly as authoritative as the
-    /// probe it replaces.
-    ///
-    /// A **negative** cache would NOT be sound — an address that is not a box
-    /// today can be minted as one tomorrow — so a miss always falls through to
-    /// the hash set, and only a confirmed positive is recorded. That keeps the
-    /// perry#4898 rejection (a read-only `__TEXT.__cstring` address that passes
-    /// every structural check) exactly as strict as before.
-    ///
-    /// Thread-local like the registry it fronts: a box minted on another thread
-    /// is not in this thread's registry, and never enters this thread's cache.
-    static BOX_PTR_CACHE: [std::cell::Cell<usize>; BOX_PTR_CACHE_SLOTS] =
-        const { [const { std::cell::Cell::new(0) }; BOX_PTR_CACHE_SLOTS] };
-    static I32_BOX_PTR_CACHE: [std::cell::Cell<usize>; BOX_PTR_CACHE_SLOTS] =
-        const { [const { std::cell::Cell::new(0) }; BOX_PTR_CACHE_SLOTS] };
-    static BOOL_BOX_PTR_CACHE: [std::cell::Cell<usize>; BOX_PTR_CACHE_SLOTS] =
-        const { [const { std::cell::Cell::new(0) }; BOX_PTR_CACHE_SLOTS] };
+/// Direct-mapped **positive** cache over `BOX_REGISTRY`.
+///
+/// `js_box_get`/`js_box_set` validate their operand against the registry on
+/// every access (perry#4898), and that hash probe is the single largest leaf
+/// in Perry's async machinery — the transform boxes every body local of an
+/// `async` function, so a state machine pays one probe per local read and
+/// one per write. Measured on a promise-only kernel (24 000 activations,
+/// 48 000 awaits): `is_registered_{,i32_,bool_}box_ptr` were 8.2 % + 5.9 %
+/// + 5.5 % of leaf samples.
+///
+/// ## Why caching only positives is sound
+///
+/// Box-cell memory is **never returned to the allocator**: an address
+/// minted by `js_*box_alloc*` is a box cell for the life of the thread —
+/// live in the registry, or (since the #7933 follow-up) parked in the
+/// release quarantine/free pool, but never recycled into a non-box
+/// allocation. `js_*box_release` removes a cell from the registry AND
+/// evicts it from this cache (`box_ptr_cache_evict`), so a cache hit
+/// still implies "currently registered": the only writer that removes a
+/// registry entry clears the matching cache slot in the same call, on
+/// the same thread. A hit is therefore exactly as authoritative as the
+/// probe it replaces.
+///
+/// A **negative** cache would NOT be sound — an address that is not a box
+/// today can be minted as one tomorrow — so a miss always falls through to
+/// the hash set, and only a confirmed positive is recorded. That keeps the
+/// perry#4898 rejection (a read-only `__TEXT.__cstring` address that passes
+/// every structural check) exactly as strict as before.
+///
+/// Thread-local like the registry it fronts: a box minted on another thread
+/// is not in this thread's registry, and never enters this thread's cache.
+///
+/// The three caches live INLINE in this thread's [`crate::tls_hot::HotTls`]:
+/// a boxed-local read probes one on every access, and a generic hot slot
+/// cost one more dependent load than the value itself.
+#[inline(always)]
+fn box_ptr_cache() -> &'static BoxPtrCache {
+    &crate::tls_hot::hot().box_ptr_cache
+}
+
+#[inline(always)]
+fn i32_box_ptr_cache() -> &'static BoxPtrCache {
+    &crate::tls_hot::hot().i32_box_ptr_cache
+}
+
+#[inline(always)]
+fn bool_box_ptr_cache() -> &'static BoxPtrCache {
+    &crate::tls_hot::hot().bool_box_ptr_cache
 }
 
 crate::perry_thread_local! {
@@ -428,7 +438,7 @@ fn publish_box_cell(addr: usize, tag: usize) {
             BOX_REGISTRY.with(|r| {
                 r.borrow_mut().remove(&addr);
             });
-            box_ptr_cache_evict(&BOX_PTR_CACHE, addr);
+            box_ptr_cache_evict(box_ptr_cache(), addr);
             unsafe { (*(addr as *mut Box)).value = crate::value::TAG_UNDEFINED };
             push_free_cell(addr, &BOX_FREE_HEAD);
         }
@@ -436,7 +446,7 @@ fn publish_box_cell(addr: usize, tag: usize) {
             I32_BOX_REGISTRY.with(|r| {
                 r.borrow_mut().remove(&addr);
             });
-            box_ptr_cache_evict(&I32_BOX_PTR_CACHE, addr);
+            box_ptr_cache_evict(i32_box_ptr_cache(), addr);
             unsafe { (*(addr as *mut I32Box)).value = -1 };
             push_free_cell(addr, &I32_BOX_FREE_HEAD);
         }
@@ -444,7 +454,7 @@ fn publish_box_cell(addr: usize, tag: usize) {
             BOOL_BOX_REGISTRY.with(|r| {
                 r.borrow_mut().remove(&addr);
             });
-            box_ptr_cache_evict(&BOOL_BOX_PTR_CACHE, addr);
+            box_ptr_cache_evict(bool_box_ptr_cache(), addr);
             unsafe { (*(addr as *mut BoolBox)).value = true };
             push_free_cell(addr, &BOOL_BOX_FREE_HEAD);
         }
@@ -628,13 +638,13 @@ fn box_ptr_cache_index(addr: usize) -> usize {
 }
 
 #[inline(always)]
-fn box_ptr_cache_hit(cache: &'static BoxPtrCache, addr: usize) -> bool {
-    cache.with(|slots| slots[box_ptr_cache_index(addr)].get() == addr)
+fn box_ptr_cache_hit(cache: &BoxPtrCache, addr: usize) -> bool {
+    cache[box_ptr_cache_index(addr)].get() == addr
 }
 
 #[inline(always)]
-fn box_ptr_cache_record(cache: &'static BoxPtrCache, addr: usize) {
-    cache.with(|slots| slots[box_ptr_cache_index(addr)].set(addr));
+fn box_ptr_cache_record(cache: &BoxPtrCache, addr: usize) {
+    cache[box_ptr_cache_index(addr)].set(addr);
 }
 
 /// Evict `addr` from its direct-mapped cache slot if it currently occupies
@@ -643,13 +653,11 @@ fn box_ptr_cache_record(cache: &'static BoxPtrCache, addr: usize) {
 /// every `js_box_get`/`js_box_set` on a parked address falling through to
 /// the registry probe and missing.
 #[inline(always)]
-fn box_ptr_cache_evict(cache: &'static BoxPtrCache, addr: usize) {
-    cache.with(|slots| {
-        let slot = &slots[box_ptr_cache_index(addr)];
-        if slot.get() == addr {
-            slot.set(0);
-        }
-    });
+fn box_ptr_cache_evict(cache: &BoxPtrCache, addr: usize) {
+    let slot = &cache[box_ptr_cache_index(addr)];
+    if slot.get() == addr {
+        slot.set(0);
+    }
 }
 
 /// Allocate a new box with an initial JSValue bit pattern.
@@ -671,7 +679,7 @@ pub extern "C" fn js_box_alloc_bits(initial_bits: i64) -> *mut Box {
         BOX_REGISTRY.with(|r| {
             r.borrow_mut().insert(addr);
         });
-        box_ptr_cache_record(&BOX_PTR_CACHE, addr);
+        box_ptr_cache_record(box_ptr_cache(), addr);
         return ptr;
     }
     unsafe {
@@ -690,7 +698,7 @@ pub extern "C" fn js_box_alloc_bits(initial_bits: i64) -> *mut Box {
         BOX_REGISTRY.with(|r| {
             r.borrow_mut().insert(ptr as usize);
         });
-        box_ptr_cache_record(&BOX_PTR_CACHE, ptr as usize);
+        box_ptr_cache_record(box_ptr_cache(), ptr as usize);
         ptr
     }
 }
@@ -715,7 +723,7 @@ pub extern "C" fn js_i32_box_alloc(initial_value: i32) -> *mut I32Box {
         I32_BOX_REGISTRY.with(|r| {
             r.borrow_mut().insert(addr);
         });
-        box_ptr_cache_record(&I32_BOX_PTR_CACHE, addr);
+        box_ptr_cache_record(i32_box_ptr_cache(), addr);
         return ptr;
     }
     unsafe {
@@ -731,7 +739,7 @@ pub extern "C" fn js_i32_box_alloc(initial_value: i32) -> *mut I32Box {
         I32_BOX_REGISTRY.with(|r| {
             r.borrow_mut().insert(ptr as usize);
         });
-        box_ptr_cache_record(&I32_BOX_PTR_CACHE, ptr as usize);
+        box_ptr_cache_record(i32_box_ptr_cache(), ptr as usize);
         ptr
     }
 }
@@ -750,7 +758,7 @@ pub extern "C" fn js_bool_box_alloc(initial_value: i32) -> *mut BoolBox {
         BOOL_BOX_REGISTRY.with(|r| {
             r.borrow_mut().insert(addr);
         });
-        box_ptr_cache_record(&BOOL_BOX_PTR_CACHE, addr);
+        box_ptr_cache_record(bool_box_ptr_cache(), addr);
         return ptr;
     }
     unsafe {
@@ -766,7 +774,7 @@ pub extern "C" fn js_bool_box_alloc(initial_value: i32) -> *mut BoolBox {
         BOOL_BOX_REGISTRY.with(|r| {
             r.borrow_mut().insert(ptr as usize);
         });
-        box_ptr_cache_record(&BOOL_BOX_PTR_CACHE, ptr as usize);
+        box_ptr_cache_record(bool_box_ptr_cache(), ptr as usize);
         ptr
     }
 }
@@ -808,7 +816,7 @@ pub extern "C" fn js_box_release(ptr: *mut Box) {
     if !was_registered {
         return;
     }
-    box_ptr_cache_evict(&BOX_PTR_CACHE, addr);
+    box_ptr_cache_evict(box_ptr_cache(), addr);
     unsafe {
         // Cleared BEFORE parking: a parked cell must read as `undefined`
         // through any stale path, and must retain nothing for the GC (the
@@ -852,7 +860,7 @@ pub extern "C" fn js_i32_box_release(ptr: *mut I32Box) {
     if !was_registered {
         return;
     }
-    box_ptr_cache_evict(&I32_BOX_PTR_CACHE, addr);
+    box_ptr_cache_evict(i32_box_ptr_cache(), addr);
     unsafe {
         (*ptr).value = -1;
     }
@@ -894,7 +902,7 @@ pub extern "C" fn js_bool_box_release(ptr: *mut BoolBox) {
     if !was_registered {
         return;
     }
-    box_ptr_cache_evict(&BOOL_BOX_PTR_CACHE, addr);
+    box_ptr_cache_evict(bool_box_ptr_cache(), addr);
     unsafe {
         (*ptr).value = true;
     }
@@ -1272,12 +1280,12 @@ fn is_registered_box_ptr(ptr: *mut Box) -> bool {
         return false;
     }
     let addr = ptr as usize;
-    if box_ptr_cache_hit(&BOX_PTR_CACHE, addr) {
+    if box_ptr_cache_hit(box_ptr_cache(), addr) {
         return true;
     }
     let present = BOX_REGISTRY.with(|r| r.borrow().contains(&addr));
     if present {
-        box_ptr_cache_record(&BOX_PTR_CACHE, addr);
+        box_ptr_cache_record(box_ptr_cache(), addr);
     }
     present
 }
@@ -1319,12 +1327,12 @@ fn is_registered_i32_box_ptr(ptr: *mut I32Box) -> bool {
         return false;
     }
     let addr = ptr as usize;
-    if box_ptr_cache_hit(&I32_BOX_PTR_CACHE, addr) {
+    if box_ptr_cache_hit(i32_box_ptr_cache(), addr) {
         return true;
     }
     let present = I32_BOX_REGISTRY.with(|r| r.borrow().contains(&addr));
     if present {
-        box_ptr_cache_record(&I32_BOX_PTR_CACHE, addr);
+        box_ptr_cache_record(i32_box_ptr_cache(), addr);
     }
     present
 }
@@ -1335,12 +1343,12 @@ fn is_registered_bool_box_ptr(ptr: *mut BoolBox) -> bool {
         return false;
     }
     let addr = ptr as usize;
-    if box_ptr_cache_hit(&BOOL_BOX_PTR_CACHE, addr) {
+    if box_ptr_cache_hit(bool_box_ptr_cache(), addr) {
         return true;
     }
     let present = BOOL_BOX_REGISTRY.with(|r| r.borrow().contains(&addr));
     if present {
-        box_ptr_cache_record(&BOOL_BOX_PTR_CACHE, addr);
+        box_ptr_cache_record(bool_box_ptr_cache(), addr);
     }
     present
 }
@@ -1423,12 +1431,10 @@ pub(crate) fn test_clear_box_registry() {
     // only for tests — and it must drop the caches for the same reason a single
     // release evicts one slot: otherwise a later test would see a stale "yes"
     // for an address this call just un-registered.
-    for cache in [&BOX_PTR_CACHE, &I32_BOX_PTR_CACHE, &BOOL_BOX_PTR_CACHE] {
-        cache.with(|slots| {
-            for slot in slots {
-                slot.set(0);
-            }
-        });
+    for cache in [box_ptr_cache(), i32_box_ptr_cache(), bool_box_ptr_cache()] {
+        for slot in cache {
+            slot.set(0);
+        }
     }
 }
 

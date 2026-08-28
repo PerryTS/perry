@@ -529,7 +529,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
     }
 }
 
-fn for_each_expr_in_stmt_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Expr)) {
+pub(crate) fn for_each_expr_in_stmt_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Expr)) {
     match stmt {
         Stmt::Let { init, .. } => {
             if let Some(e) = init {
