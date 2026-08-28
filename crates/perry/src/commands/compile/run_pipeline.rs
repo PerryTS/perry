@@ -6830,7 +6830,14 @@ pub fn run_with_parse_cache(
             // everything in the plugin itself.
             cmd.arg("/defaultlib:libcmt");
         } else {
-            cmd.arg("-o").arg(&exe_path);
+            // Linux also needs the system libraries the executable link has
+            // always carried (`-lm -lpthread -ldl`): LLVM lowers the math
+            // intrinsics in generated closures to libm calls, and glibc's
+            // `floor`/`log10` live in libm.so, so a real-app ELF dylib link
+            // failed with `undefined reference to 'floor'` (#8942). They go
+            // AFTER the objects — GNU ld only resolves what precedes a `-l`.
+            // macOS gets libm through the implicit `-lSystem`.
+            link::push_unix_dylib_output(&mut cmd, is_linux, &exe_path);
         }
 
         let status = tool_output::run_internal_tool(&mut cmd, verbose)?;
