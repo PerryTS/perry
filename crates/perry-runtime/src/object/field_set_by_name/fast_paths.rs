@@ -111,13 +111,15 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
         if key_count > 4096 {
             return false;
         }
-        for i in 0..key_count {
-            let kv = crate::array::js_array_get(keys, i as u32);
-            if crate::string::js_string_key_matches(kv, key) {
-                super::prop_plan::read_plan_record(keys_addr, key_addr, i as u32);
-                own_idx = Some(i as u32);
-                break;
-            }
+        // The write twin of the read lane's resolver: shape hash index first,
+        // raw dense-slot scan as its own fallback. The open-coded walk this
+        // replaces ran `js_array_get` (which additionally probes for per-index
+        // accessors) plus a string compare per key, in full, every time the
+        // epoch-guarded read plan was flushed — the same miss-path cost #8936
+        // and #8950 removed from their sides of the property paths.
+        own_idx = crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key);
+        if let Some(i) = own_idx {
+            super::prop_plan::read_plan_record(keys_addr, key_addr, i);
         }
     }
     let Some(idx) = own_idx else {

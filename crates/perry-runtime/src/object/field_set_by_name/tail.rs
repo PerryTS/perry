@@ -856,7 +856,13 @@ pub(crate) fn set_field_by_name_object_tail(
             return;
         }
 
-        for i in 0..key_count {
+        // #8936/#8950's resolver narrows the candidate to one slot via the
+        // shape hash index instead of walking every key (and probing each for
+        // per-index accessors via `js_array_get`); the original match below
+        // still gates the hit, so this cannot widen what is accepted.
+        for i in crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key)
+            .map(|v| v as usize)
+        {
             let key_val = crate::array::js_array_get(keys, i as u32);
             // #1781: SSO-aware match — keys are stored as either a
             // STRING_TAG pointer OR a SHORT_STRING_TAG inline value for
