@@ -1693,6 +1693,100 @@ fn test_live_symbol_accessor_owner_survives_full_gc() {
     js_shadow_slot_set(0, 0);
 }
 
+// --- per-object layout tables (LAYOUT_SLOT_MASKS + TYPED_LAYOUTS) -----------
+//
+// The inline allocator's forget probe is gated on
+// `PERRY_YOUNG_LAYOUT_RECORDS`: the count of records keyed by an address the
+// nursery could hand out again. These pin the two halves of that contract —
+// a dead nursery owner's record is pruned by the copied-minor pass (so it can
+// never be inherited), and the count returns to zero once no nursery-keyed
+// record remains, while a live old-page record keeps the armed flag without
+// re-opening the probe.
+
+fn young_layout_records() -> u32 {
+    crate::gc::layout_tables::test_young_layout_records()
+}
+
+unsafe fn install_typed_record(addr: usize) {
+    let pointer_mask = [0b10u64];
+    crate::gc::js_gc_init_typed_shape_layout(
+        addr as u64,
+        2,
+        std::ptr::null(),
+        0,
+        pointer_mask.as_ptr(),
+        pointer_mask.len() as u32,
+    );
+}
+
+#[test]
+fn test_dead_nursery_owner_layout_record_pruned_on_copied_minor_and_young_count_drops() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let before = young_layout_records();
+    let (obj, _) = unsafe { alloc_nursery_test_object(2) };
+    let addr = obj as usize;
+    unsafe { install_typed_record(addr) };
+    assert!(
+        crate::gc::layout_tables::test_per_object_layout_present(addr),
+        "premise: the nursery owner carries a typed record"
+    );
+    assert!(
+        young_layout_records() > before,
+        "a fresh nursery-keyed record must count as young until a collection proves otherwise"
+    );
+    js_shadow_slot_set(0, 0);
+
+    let _ = gc_collect_minor();
+
+    assert!(
+        !crate::gc::layout_tables::test_per_object_layout_present(addr),
+        "dead from-space owner's per-object record must be pruned by the copied-minor pass"
+    );
+    assert_eq!(
+        young_layout_records(),
+        before,
+        "after the prune no nursery-keyed record remains, so the inline allocator's gate must read zero"
+    );
+}
+
+#[test]
+fn test_live_old_owner_layout_record_keeps_flag_armed_but_not_young() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let before = young_layout_records();
+    let addr = unsafe {
+        let shape_id = crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, 2)
+            .expect("shape id range exhausted in a test fixture");
+        let obj = gc_malloc(
+            std::mem::size_of::<crate::object::ObjectHeader>() + 2 * 8,
+            GC_TYPE_OBJECT,
+        ) as *mut crate::object::ObjectHeader;
+        (*obj).class_id = 0;
+        (*obj).parent_class_id = shape_id;
+        (*obj).meta = std::ptr::null_mut();
+        let fields =
+            (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *mut u64;
+        *fields = 0;
+        *fields.add(1) = 0;
+        obj as usize
+    };
+    unsafe { install_typed_record(addr) };
+    assert!(
+        crate::gc::layout_tables::test_per_object_layout_present(addr),
+        "premise: the malloc'd owner carries a typed record"
+    );
+    assert_ne!(
+        crate::gc::layout_tables::test_per_object_layout_armed_threads(),
+        0,
+        "a live record keeps the armed-thread count non-zero"
+    );
+    assert_eq!(
+        young_layout_records(),
+        before,
+        "a record on a gc_malloc page is not one the bump allocator can recycle"
+    );
+    crate::gc::layout_clear_for_ptr(addr);
+}
+
 /// #6759 phase 1: an `ErrorHeader`'s metadata edge must be ENUMERATED by the
 /// slot visitor that drives tracing.
 ///

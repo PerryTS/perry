@@ -1671,11 +1671,6 @@ pub(crate) fn prune_dead_shape_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
     }
 }
 
-/// Metadata-only forwarding repair for the weak descriptor table and
-/// pointer-keyed slot indices. Mark/copy mode does not root anything; live
-/// object scans provide descriptor reachability, and post-copy rewrite follows
-/// only forwarding records those live edges already created.
-
 crate::perry_thread_local! {
     /// Scratch memo for [`scan_shape_table_rekey_mut`]'s per-address probe,
     /// reused across collections so the scan allocates nothing.
@@ -1714,6 +1709,10 @@ fn record_shape_scan_outcome(
     }
 }
 
+/// Metadata-only forwarding repair for the weak descriptor table and
+/// pointer-keyed slot indices. Mark/copy mode does not root anything; live
+/// object scans provide descriptor reachability, and post-copy rewrite follows
+/// only forwarding records those live edges already created.
 pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     // TEMPORARY (#6759 phase 2 measurement): this scanner is 53.3% of all
