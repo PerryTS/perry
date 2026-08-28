@@ -786,7 +786,46 @@ pub extern "C" fn js_set_find_value_index(set_boxed: f64, value: f64) -> f64 {
 #[used]
 static KEEP_SET_FIND_VALUE_INDEX: extern "C" fn(f64, f64) -> f64 = js_set_find_value_index;
 
+/// Members of a set this small are found faster by reading them than by
+/// hashing into the side-table twice (set address, then value).
+const SMALL_SET_SCAN_MAX: u32 = 8;
+
+/// The lookup a hot `Set.has` / `Set.add` does on a small set of numbers,
+/// with nothing else in the frame: a plain (untagged, non-NaN, non-zero)
+/// number against the elements by bit identity. `elements[0..size)` is exactly
+/// the membership (`delete` compacts, `add` normalises `-0`), and no tagged
+/// value equals a number, so a bit match is a hit and a full scan is a miss.
+/// Everything else — larger sets, tagged / zero / NaN values, every string —
+/// is [`find_value_index_cold`]'s, through the exact side-table.
+#[inline(always)]
+unsafe fn find_value_index_hot(set: *const SetHeader, value: f64) -> Option<i32> {
+    let bits = value.to_bits();
+    if !crate::map::is_plain_nonzero_number_bits(bits) {
+        return None;
+    }
+    let size = (*set).size;
+    if size > SMALL_SET_SCAN_MAX {
+        return None;
+    }
+    let elements = elements_ptr(set);
+    for i in 0..size {
+        if ptr::read(elements.add(i as usize)).to_bits() == bits {
+            return Some(i as i32);
+        }
+    }
+    Some(-1)
+}
+
+#[inline(always)]
 pub(crate) unsafe fn find_value_index(set: *const SetHeader, value: f64) -> i32 {
+    if let Some(index) = find_value_index_hot(set, value) {
+        return index;
+    }
+    find_value_index_cold(set, value)
+}
+
+#[inline(never)]
+unsafe fn find_value_index_cold(set: *const SetHeader, value: f64) -> i32 {
     SET_INDEX.with(|idx| {
         let idx = idx.borrow();
         if let Some(map) = idx.get(&(set as usize)) {
@@ -2065,6 +2104,49 @@ mod tests {
             let size = (*set).size as usize;
             (0..size).map(|i| *(elements_ptr(set).add(i))).collect()
         }
+    }
+
+    #[test]
+    fn small_set_scan_lane_agrees_with_the_side_table_on_every_value_shape() {
+        let set = js_set_alloc(4);
+        for value in 1..=4 {
+            js_set_add(set, value as f64);
+        }
+        for value in 1..=4 {
+            assert_eq!(js_set_has(set, value as f64), 1);
+        }
+        assert_eq!(js_set_has(set, 5.0), 0);
+        assert_eq!(js_set_has(set, 2.5), 0);
+        assert_eq!(js_set_has(set, -1.0), 0);
+        // Zero, -0 and NaN are the side-table's (SameValueZero).
+        js_set_add(set, -0.0);
+        assert_eq!(js_set_has(set, 0.0), 1);
+        js_set_add(set, f64::NAN);
+        assert_eq!(js_set_has(set, f64::from_bits(0x7FF8_0000_0000_0001)), 1);
+        // A tagged value never takes the scan.
+        let boxed_true = f64::from_bits(crate::value::TAG_TRUE);
+        js_set_add(set, boxed_true);
+        assert_eq!(js_set_has(set, boxed_true), 1);
+        assert_eq!(js_set_has(set, 1.0), 1);
+        // Delete compacts, so the scan keeps seeing exactly the members.
+        js_set_delete(set, 2.0);
+        assert_eq!(js_set_has(set, 2.0), 0);
+        assert_eq!(js_set_has(set, 3.0), 1);
+        assert_eq!(js_set_has(set, 4.0), 1);
+        // Re-adding a present number is a no-op for the size.
+        let size = js_set_size(set);
+        js_set_add(set, 3.0);
+        assert_eq!(js_set_size(set), size);
+        // Growing past the scan bound hands every lookup to the side-table.
+        for value in 100..120 {
+            js_set_add(set, value as f64);
+        }
+        for value in 100..120 {
+            assert_eq!(js_set_has(set, value as f64), 1);
+        }
+        assert_eq!(js_set_has(set, 1.0), 1);
+        assert_eq!(js_set_has(set, 2.0), 0);
+        assert_eq!(js_set_has(set, 120.0), 0);
     }
 
     #[test]

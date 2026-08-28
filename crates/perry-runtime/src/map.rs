@@ -561,7 +561,7 @@ impl NumericIndex {
 /// number from every tagged value; the zero test removes the one pair of
 /// distinct bit patterns (`+0`/`-0`) that SameValueZero identifies.
 #[inline]
-fn is_plain_nonzero_number_bits(bits: u64) -> bool {
+pub(crate) fn is_plain_nonzero_number_bits(bits: u64) -> bool {
     const QNAN_PREFIX: u64 = 0x7FF8_0000_0000_0000;
     (bits & QNAN_PREFIX) != QNAN_PREFIX && (bits & !(1u64 << 63)) != 0
 }
