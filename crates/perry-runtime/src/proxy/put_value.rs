@@ -604,11 +604,25 @@ pub extern "C" fn js_put_value_set_dyn_ic(
 /// identical bits by construction. Heap-string keys recur once canonicalised:
 /// the first write interns the key (write tail) and later concat evaluations
 /// return the canonical pointer (intern hit), so the second prime converges.
-const WRITE_STUB_WAYS: usize = 4096;
+/// Buckets in the megamorphic write stub, each holding [`WRITE_STUB_ASSOC`]
+/// entries. Capacity is `WRITE_STUB_BUCKETS * WRITE_STUB_ASSOC`.
+const WRITE_STUB_BUCKETS: usize = 2048;
+
+/// Two ways per bucket, because a DIRECT-MAPPED table cannot hold a colliding
+/// pair at all: the two keys evict each other on every rotation through the
+/// key set, so both miss forever and neither can ever stabilise. Measured on
+/// the computed-key write loop, that was not a rounding error — the pairs the
+/// runtime reported (`"k10"`/`"k115"`, `"k11"`/`"k125"`) land on one index,
+/// and the writes that never settle were 11.9% of the program, essentially
+/// all of it the full `[[Set]]` walk they fall through to.
+///
+/// A sweep of the 500-key working set puts the worst bucket at two, so two
+/// ways absorb the collisions that exist rather than merely reducing them.
+const WRITE_STUB_ASSOC: usize = 2;
 
 crate::perry_thread_local! {
-    static WRITE_STUB: [std::cell::Cell<(u64, u64, u64)>; WRITE_STUB_WAYS] =
-        std::array::from_fn(|_| std::cell::Cell::new((0, 0, 0)));
+    static WRITE_STUB: [[std::cell::Cell<(u64, u64, u64)>; WRITE_STUB_ASSOC]; WRITE_STUB_BUCKETS] =
+        std::array::from_fn(|_| std::array::from_fn(|_| std::cell::Cell::new((0, 0, 0))));
 }
 
 /// Content-stable cache key for a NaN-boxed property key, or `None` when this
@@ -664,14 +678,20 @@ fn stub_key_bits(key: f64) -> Option<u64> {
 #[inline(always)]
 fn write_stub_way(token: u64, key_bits: u64) -> usize {
     let h = (token ^ key_bits).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    ((h >> 40) as usize) & (WRITE_STUB_WAYS - 1)
+    ((h >> 40) as usize) & (WRITE_STUB_BUCKETS - 1)
 }
 
 #[inline(always)]
 fn write_stub_probe(token: u64, key_bits: u64) -> Option<u32> {
     WRITE_STUB.with(|t| {
-        let (tok, kb, slot) = t[write_stub_way(token, key_bits)].get();
-        (tok == token && kb == key_bits && tok != 0).then_some(slot as u32)
+        let bucket = &t[write_stub_way(token, key_bits)];
+        for way in bucket.iter() {
+            let (tok, kb, slot) = way.get();
+            if tok == token && kb == key_bits && tok != 0 {
+                return Some(slot as u32);
+            }
+        }
+        None
     })
 }
 
@@ -680,7 +700,30 @@ fn write_stub_insert(token: u64, key_bits: u64, slot: u32) {
     if token == 0 || key_bits == 0 {
         return;
     }
-    WRITE_STUB.with(|t| t[write_stub_way(token, key_bits)].set((token, key_bits, slot as u64)));
+    WRITE_STUB.with(|t| {
+        let bucket = &t[write_stub_way(token, key_bits)];
+        let entry = (token, key_bits, slot as u64);
+        // Refresh this key's own way if it is already resident, then fill an
+        // empty one, and only otherwise evict — shifting way 0 down so the
+        // most recently primed key survives.
+        for way in bucket.iter() {
+            let (tok, kb, _) = way.get();
+            if tok == token && kb == key_bits {
+                way.set(entry);
+                return;
+            }
+        }
+        for way in bucket.iter() {
+            if way.get().0 == 0 {
+                way.set(entry);
+                return;
+            }
+        }
+        for i in (1..WRITE_STUB_ASSOC).rev() {
+            bucket[i].set(bucket[i - 1].get());
+        }
+        bucket[0].set(entry);
+    });
 }
 
 /// Validated fast store: the receiver must still be an ordinary,
