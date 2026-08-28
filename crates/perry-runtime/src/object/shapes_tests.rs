@@ -881,3 +881,78 @@ fn shape_facts_hash_folds_every_field() {
     // Same facts must still hash the same, or lookups would miss.
     assert_eq!(h(&base), h(&base.clone()), "hashing must be deterministic");
 }
+
+/// The shape lookup cache holds a record's ADDRESS, so it must stop matching
+/// the moment that address can change under an id still in use.
+///
+/// A stale way would hand out a pointer to a dropped `Box<ShapeDescriptor>` —
+/// a use-after-free reachable from the hot property path, not a wrong answer.
+/// Removal is the funnel that frees a record, so it bumps the epoch; this pins
+/// that. Deleting the `invalidate_shape_lookup_cache()` call in
+/// `remove_descriptor_and_reverse_indices` fails this test.
+#[test]
+fn shape_lookup_cache_is_invalidated_when_a_record_is_removed() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let obj = crate::object::js_object_alloc(0, 0);
+        let keys = crate::object::object_keys_array(obj);
+        let id = test_shape_id_for_keys(keys as usize)
+            .expect("a fresh object must have a registered shape");
+
+        // Populate the way.
+        assert!(
+            shape_descriptor_by_id(id).is_some(),
+            "the descriptor must resolve before removal"
+        );
+        let epoch_before = crate::state::state().shapes.lookup_epoch.get();
+
+        // Drop it through the funnel that frees the box.
+        {
+            let mut inner = crate::state::state().shapes.inner.borrow_mut();
+            remove_descriptor_and_reverse_indices(&mut inner, id);
+        }
+
+        assert_ne!(
+            crate::state::state().shapes.lookup_epoch.get(),
+            epoch_before,
+            "removing a record must bump the lookup epoch — a way still naming \
+             the freed box would hand out a dangling ShapeDescriptor pointer"
+        );
+        assert!(
+            shape_descriptor_by_id(id).is_none(),
+            "a removed id must not resolve from the cache"
+        );
+    }
+}
+
+/// A fresh-id insert must NOT invalidate the cache: it cannot make any existing
+/// way wrong, and flushing on every shape creation would defeat the cache in
+/// exactly the workloads that build shapes.
+#[test]
+fn fresh_shape_creation_does_not_flush_the_lookup_cache() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let a = crate::object::js_object_alloc(0, 0);
+        let keys_a = crate::object::object_keys_array(a);
+        let id_a = test_shape_id_for_keys(keys_a as usize).expect("shape for a");
+        assert!(shape_descriptor_by_id(id_a).is_some());
+        let epoch = crate::state::state().shapes.lookup_epoch.get();
+
+        // Create more objects — each mints shapes through the fresh-id path.
+        for _ in 0..8 {
+            let o = crate::object::js_object_alloc(0, 0);
+            std::hint::black_box(o);
+        }
+
+        assert_eq!(
+            crate::state::state().shapes.lookup_epoch.get(),
+            epoch,
+            "minting fresh shape ids must not bump the epoch; only removal and \
+             the replacing insert may"
+        );
+        assert!(
+            shape_descriptor_by_id(id_a).is_some(),
+            "the earlier descriptor must still resolve"
+        );
+    }
+}

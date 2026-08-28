@@ -251,13 +251,43 @@ struct ShapeTableInner {
     ids_by_keys: crate::fast_hash::PtrHashMap<u64, Vec<u32>>,
 }
 
+/// Ways in the direct-mapped shape-descriptor lookup cache. Power of two so
+/// the index is a mask. 256 x 16 bytes = 4 KiB per thread.
+const SHAPE_LOOKUP_WAYS: usize = 256;
+
+/// One way: `(shape_id, boxed record address, epoch)`. `shape_id == 0` is the
+/// empty sentinel — a real id is always >= `SHAPE_ID_BASE`.
+type ShapeLookupWay = std::cell::Cell<(u32, usize, u32)>;
+
 pub(crate) struct ShapeTable {
     inner: RefCell<ShapeTableInner>,
+    /// Direct-mapped cache in front of `inner.descriptors`.
+    ///
+    /// `shape_descriptor_by_id` is on the hot property path — profiling a
+    /// dynamic-property loop put it and `shape_descriptor_ensure_with_generation`
+    /// at ~13% of main-thread samples between them — and each call paid a
+    /// `RefCell` borrow plus a hash probe to reach a record whose address never
+    /// moves. `Box<ShapeDescriptor>` is stable across rehash, so a way can hold
+    /// the record's address directly and a hit is: mask, compare, deref.
+    ///
+    /// Deliberately NOT holding a copy of the descriptor. The record is mutated
+    /// in place (`old_carrier`, `cache_carrier`, `keys` after evacuation), and a
+    /// cached copy would go quietly stale. Holding the address means a hit
+    /// always reads current data.
+    lookup: [ShapeLookupWay; SHAPE_LOOKUP_WAYS],
+    /// Bumped whenever a record's ADDRESS can change under an id that is still
+    /// in use: removal, and the one insert path that can replace an existing id
+    /// with a fresh `Box`. A fresh-id insert cannot invalidate an existing way,
+    /// so it deliberately does not bump — otherwise ordinary shape creation
+    /// would flush the cache continuously.
+    lookup_epoch: std::cell::Cell<u32>,
 }
 
 impl ShapeTable {
     pub(crate) fn new() -> Self {
         ShapeTable {
+            lookup: std::array::from_fn(|_| std::cell::Cell::new((0, 0, 0))),
+            lookup_epoch: std::cell::Cell::new(1),
             inner: RefCell::new(ShapeTableInner {
                 indices: crate::fast_hash::new_ptr_hash_map(),
                 descriptors: crate::fast_hash::new_ptr_hash_map(),
@@ -352,6 +382,9 @@ fn sync_descriptor_reverse_indices(inner: &mut ShapeTableInner, id: u32) {
 }
 
 fn remove_descriptor_and_reverse_indices(inner: &mut ShapeTableInner, id: u32) {
+    // The record's box is about to be dropped; any cached way naming it must
+    // stop matching.
+    invalidate_shape_lookup_cache();
     let Some(descriptor) = inner.descriptors.remove(&id) else {
         return;
     };
@@ -540,13 +573,41 @@ pub(crate) fn shape_descriptor_by_id(shape_id: u32) -> Option<ShapeDescriptor> {
     if !is_shape_id(shape_id) {
         return None;
     }
-    crate::state::state()
-        .shapes
-        .inner
-        .borrow()
-        .descriptors
-        .get(&shape_id)
-        .map(|record| lift_descriptor(record))
+    let table = &crate::state::state().shapes;
+    let epoch = table.lookup_epoch.get();
+    let way = &table.lookup[(shape_id as usize) & (SHAPE_LOOKUP_WAYS - 1)];
+
+    // Hit: mask, compare, deref. No RefCell borrow, no hash probe.
+    let (cached_id, record, cached_epoch) = way.get();
+    if cached_id == shape_id && cached_epoch == epoch && record != 0 {
+        // SAFETY: the way is only filled from a live `Box<ShapeDescriptor>`,
+        // and the epoch is bumped whenever a record's address can change under
+        // an id still in use, so a matching epoch means this address is the
+        // one the table holds for `shape_id`.
+        return Some(unsafe { *(record as *const ShapeDescriptor) });
+    }
+
+    let inner = table.inner.borrow();
+    let record = inner.descriptors.get(&shape_id)?;
+    // `descriptor.record` is the box's own address (self-referential, #8112),
+    // so it is exactly the stable pointer the cache wants.
+    way.set((shape_id, record.record, epoch));
+    Some(lift_descriptor(record))
+}
+
+/// Invalidate the whole lookup cache.
+///
+/// Called where a record's ADDRESS can change while its id stays in use:
+/// removal, and the insert path that can replace an existing id with a fresh
+/// `Box`. A fresh-id insert deliberately does NOT bump — it cannot invalidate
+/// an existing way, and bumping there would flush the cache on every shape
+/// creation, which is precisely the workload that has one.
+#[inline]
+fn invalidate_shape_lookup_cache() {
+    let table = &crate::state::state().shapes;
+    table
+        .lookup_epoch
+        .set(table.lookup_epoch.get().wrapping_add(1));
 }
 
 /// Immutable ordinary-vs-class fact with a pointer-free, per-agent direct
@@ -728,6 +789,11 @@ fn install_external_shape_id(
     // initialization installs the process-global codegen id. Keep both id
     // descriptors valid for already-published objects and make the external
     // id canonical for subsequent births in this agent.
+    //
+    // This is the one insert that can REPLACE a live id with a fresh box, so
+    // the lookup cache has to be invalidated here (the fresh-id insert in
+    // `intern_shape_descriptor` cannot, and deliberately does not).
+    invalidate_shape_lookup_cache();
     inner.descriptors.insert(id, box_descriptor(descriptor));
     // An equivalent local descriptor can predate module initialization. Keep
     // both reverse-index entries and prefer the external id for subsequent
