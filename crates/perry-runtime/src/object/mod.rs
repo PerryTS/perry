@@ -1783,7 +1783,9 @@ pub(crate) unsafe fn cell_meta_slot(user_ptr: usize) -> Option<*mut *mut ObjectM
     }
 }
 
-/// Does `user_ptr` name a cell that can own an `ObjectMeta`?
+/// Does `user_ptr` name a cell that can own an `ObjectMeta`? (Exercised by
+/// the error-cell tests; production code asks `cell_meta_slot` directly.)
+#[cfg(test)]
 pub(crate) unsafe fn cell_has_meta_edge(user_ptr: usize) -> bool {
     cell_meta_slot(user_ptr).is_some()
 }

@@ -226,17 +226,6 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners(is_dead_owner: &dyn Fn(
     }
 }
 
-#[cfg(test)]
-pub(in crate::gc) fn test_per_object_layout_present(user_ptr: usize) -> bool {
-    hot_layout_slot_masks().borrow().contains_key(&user_ptr)
-        || hot_typed_layouts().borrow().contains_key(&user_ptr)
-}
-
-#[cfg(test)]
-pub(in crate::gc) fn test_young_layout_records() -> u32 {
-    PERRY_YOUNG_LAYOUT_RECORDS.load(std::sync::atomic::Ordering::SeqCst)
-}
-
 /// Bits in the per-object address filter (see [`layout_addr_filter_may_hold`]).
 /// 4096 bits is 512 B of thread-local storage, held INLINE in
 /// [`PerObjectLayoutHint`] so the flag and the filter share one hot slot. One
