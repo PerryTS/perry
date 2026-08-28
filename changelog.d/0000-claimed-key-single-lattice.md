@@ -1,0 +1,3 @@
+### Changed
+
+- `arr[key]` on an erased-Array receiver with a dynamic key emits the receiver-unknown numeric tiers (inline typed-array read, dense Array-subclass `arrlike.ic`, complete dispatcher) once per site instead of twice: the canonical-i32 arm already serves every integral key below 2^31, so the runtime-key arm's duplicate copy — which only served keys in `[2^31, 2^32)` at ~11 KB of IR per site — now takes the complete `js_array_get_index_or_string` route. Same semantics; one-statement methods such as wolf-ecs `SparseSet.has` shrink by ~a quarter and come closer to the pre-statepoint inline budget.

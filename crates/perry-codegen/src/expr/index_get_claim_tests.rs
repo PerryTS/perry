@@ -394,24 +394,40 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
         ],
     );
     assert!(
-        ir.contains("aidxkey.int.exact") && ir.contains("aidxkey.generic"),
+        ir.contains("aidx.canonical") && ir.contains("aidx.claimed.other"),
         "the dynamic key must be classified inline before choosing a route:\n{ir}"
-    );
-    let exact = super::class_field_barrier_tests::block_body(&ir, "aidxkey.int.")
-        .expect("the range-checked key block exists");
-    assert!(
-        exact.contains("fptosi double")
-            && exact.contains("sitofp i64")
-            && exact.contains("fcmp oeq"),
-        "the integer test must be the fptosi/sitofp round trip:\n{exact}"
     );
     assert!(
         ir.contains("tav.get.brand") && ir.contains("arrlike.ic.family_token"),
         "an integer key must reach the inline typed-array and dense-subclass tiers:\n{ir}"
     );
+    // ONE copy of those tiers per site: the canonical arm's. The runtime-key
+    // arm used to emit a second `tav.*` + `arrlike.ic.*` lattice for integral
+    // keys in `[2^31, 2^32)` — ~11 KB of IR per site that kept one-statement
+    // clones (wolf-ecs `SparseSet.has`) out of the pre-statepoint inline
+    // budget — and now sends them down the complete route instead.
+    let defined = |prefix: &str| {
+        ir.lines()
+            .filter(|l| l.starts_with(prefix) && l.ends_with(':'))
+            .count()
+    };
+    assert_eq!(
+        defined("tav.get.brand."),
+        1,
+        "exactly one inline typed-array tier per dynamic site:\n{ir}"
+    );
+    assert_eq!(
+        defined("arrlike.ic.family_token."),
+        1,
+        "exactly one dense-subclass tier per dynamic site:\n{ir}"
+    );
     assert!(
-        ir.contains("call double @js_array_get_index_or_string("),
-        "non-index keys must keep the complete key route:\n{ir}"
+        !ir.contains("aidxkey.int"),
+        "the runtime-key arm must not carry its own numeric lattice:\n{ir}"
+    );
+    assert!(
+        ir.contains("aidxkey.sso") && ir.contains("call double @js_array_get_index_or_string("),
+        "string and non-index keys must keep the complete key route:\n{ir}"
     );
 }
 
