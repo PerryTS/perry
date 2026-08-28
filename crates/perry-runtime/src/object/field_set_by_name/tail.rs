@@ -40,6 +40,23 @@ pub(crate) fn set_field_by_name_object_tail(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    // An elements-backed Array-subclass instance stores its indices and
+    // `length` in its store: no index key ever becomes a shape property.
+    if let Some((backed_obj, elements)) =
+        unsafe { crate::array::subclass_elements::backed(obj as usize) }
+    {
+        if let Some(elements_key) = unsafe { crate::array::subclass_elements::key_of_header(key) } {
+            unsafe {
+                crate::array::subclass_elements::set_by_key(
+                    backed_obj,
+                    elements,
+                    elements_key,
+                    value,
+                )
+            };
+            return;
+        }
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let key_handle = scope.root_string_ptr(key);

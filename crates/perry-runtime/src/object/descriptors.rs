@@ -121,6 +121,16 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
         if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
             return crate::proxy::js_reflect_get_own_property_descriptor(obj_value, key_value);
         }
+        if let Some((obj, elements)) = crate::array::subclass_elements::backed_value(obj_value) {
+            if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key_value) {
+                return crate::array::subclass_elements::own_property_descriptor(
+                    obj,
+                    elements,
+                    elements_key,
+                )
+                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+            }
+        }
 
         // #6363: a native HANDLE receiver (zlib stream, fetch Headers/Request/
         // Response/Blob, crypto hash, …) is a pointer-tagged registry id, not a
@@ -1223,6 +1233,42 @@ unsafe fn string_primitive_descriptor(str_value: f64, key_value: f64) -> f64 {
 /// Takes a NaN-boxed f64 object pointer, returns a NaN-boxed f64 array pointer.
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
+    // An elements-backed Array-subclass instance: present indices, then
+    // `length`, then the shape's own string keys.
+    if crate::array::subclass_elements::backed_value(obj_value).is_some() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj_h = scope.root_nanbox_f64(obj_value);
+        let (names, obj_value) =
+            obj_h.across_nanbox(|| js_object_get_own_property_names_shape(obj_value));
+        if let Some((_, elements)) = crate::array::subclass_elements::backed_value(obj_value) {
+            let names_ptr = crate::value::js_nanbox_get_pointer(names) as *mut ArrayHeader;
+            let combined = unsafe {
+                crate::array::subclass_elements::prepend_index_keys(elements, names_ptr, true)
+            };
+            return crate::value::js_nanbox_pointer(combined as i64);
+        }
+        return names;
+    }
+    js_object_get_own_property_names_shape(obj_value)
+}
+
+/// [`js_object_get_own_property_names`] over the shape alone.
+/// A receiver whose heap cell IS a `GC_TYPE_ARRAY`. `Array.isArray` is also
+/// true for a `class X extends Array` instance, but that is an `ObjectHeader`
+/// (#8953: reading it through the array key helpers dereferenced a null
+/// cleaned pointer); its own keys come from the ordinary object walk — plus
+/// the elements store, for the elements-backed form.
+fn real_array_receiver(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let raw = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+    unsafe { crate::value::addr_class::try_read_gc_header(raw) }
+        .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
+}
+
+fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
     unsafe {
         // #2818: ToObject(null/undefined) throws TypeError, matching Node.
         let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());
@@ -1427,7 +1473,7 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
                     }
                     _ => Some(0),
                 }
-            } else if crate::array::js_array_is_array(obj_value).to_bits() == TAG_TRUE_BITS {
+            } else if real_array_receiver(obj_value) {
                 let ap = extract_obj_ptr(obj_value) as *const crate::array::ArrayHeader;
                 Some(crate::array::js_array_length(ap))
             } else {
@@ -1435,7 +1481,7 @@ pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
             };
             if let Some(n) = n {
                 let result = crate::array::js_array_alloc(n + 1);
-                if crate::array::js_array_is_array(obj_value).to_bits() == TAG_TRUE_BITS {
+                if real_array_receiver(obj_value) {
                     let ap = extract_obj_ptr(obj_value) as *const crate::array::ArrayHeader;
                     for i in 0..n {
                         if super::has_own_helpers::array_own_key_present(ap, {

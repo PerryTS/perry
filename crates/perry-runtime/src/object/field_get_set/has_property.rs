@@ -221,6 +221,15 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
         }
     };
     let key_val = JSValue::from_bits(key.to_bits());
+    if let Some((_, elements)) = crate::array::subclass_elements::backed_value(obj) {
+        if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key) {
+            if unsafe { crate::array::subclass_elements::has_own_key(elements, elements_key) } {
+                return nanbox_true;
+            }
+            // Absent index: not own — the ordinary walk continues to the
+            // prototype chain (the shape carries no index keys).
+        }
+    }
 
     // ── #6748 fast path: ordinary heap object + string key ────────────────
     // One GC-header read classifies the receiver. A `GC_TYPE_OBJECT` cannot

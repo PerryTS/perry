@@ -514,6 +514,11 @@ pub extern "C" fn js_object_delete_dynamic_value(obj_value: f64, key: f64) -> i3
 /// Returns 1 if successful, 0 otherwise
 #[no_mangle]
 pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> i32 {
+    if let Some((_, elements)) = unsafe { crate::array::subclass_elements::backed(obj as usize) } {
+        if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key) {
+            return unsafe { crate::array::subclass_elements::delete_key(elements, elements_key) };
+        }
+    }
     // Proxy receiver (small registered id) — route through the proxy
     // `deleteProperty` trap before any key coercion that would deref the fake
     // pointer. Handles symbol keys too (the string path also funnels into

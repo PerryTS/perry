@@ -11,6 +11,18 @@ pub(crate) fn get_field_by_name_object_tail(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    // An elements-backed Array-subclass instance answers its indices and
+    // `length` from its store; an absent index falls through to the ordinary
+    // lookup, which reaches the prototype chain (the shape has no index keys).
+    if let Some((_, elements)) = unsafe { crate::array::subclass_elements::backed(obj as usize) } {
+        if let Some(elements_key) = unsafe { crate::array::subclass_elements::key_of_header(key) } {
+            if let Some(value) =
+                unsafe { crate::array::subclass_elements::get_by_key(elements, elements_key) }
+            {
+                return JSValue::from_bits(value.to_bits());
+            }
+        }
+    }
     // Strip NaN-boxing tags if present (defensive: handle POINTER_TAG, UNDEFINED, NULL, etc.)
     let obj = {
         let bits = obj as u64;

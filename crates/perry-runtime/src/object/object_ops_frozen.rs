@@ -128,6 +128,7 @@ unsafe fn test_integrity_level_proxy(obj_value: f64, frozen: bool) -> bool {
 
 #[no_mangle]
 pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
+    crate::array::subclass_elements::deopt_value(obj_value);
     if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
         return unsafe {
             set_integrity_level_proxy(obj_value, /*frozen=*/ true)
@@ -236,6 +237,7 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
 /// existing key. Writable is preserved (sealed ≠ frozen). Returns the object.
 #[no_mangle]
 pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
+    crate::array::subclass_elements::deopt_value(obj_value);
     if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
         return unsafe {
             set_integrity_level_proxy(obj_value, /*frozen=*/ false)
@@ -339,6 +341,7 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
 /// Object.preventExtensions(obj) — sets the no-extend flag. Returns the object.
 #[no_mangle]
 pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
+    crate::array::subclass_elements::deopt_value(obj_value);
     // A Proxy is a small registered id, not a heap object — `extract_obj_ptr`
     // yields the fake pointer and `gc_header_for` would deref unmapped memory.
     // Route through the `[[PreventExtensions]]` trap; per spec throw a TypeError

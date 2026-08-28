@@ -551,6 +551,11 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
         // capacity heuristic (`cap < 10000`) misidentified legitimate
         // arrays that had grown past 10k as strings, panicking on
         // `JSON.stringify(arr)` where `arr.length >= 10000` (issue #43).
+        // An elements-backed Array-subclass instance IS an Array to
+        // `JSON.stringify` (IsArray is true): serialize its elements.
+        if let Some((_, elements)) = crate::array::subclass_elements::backed(ptr as usize) {
+            return stringify_array(elements as *const u8, buf);
+        }
         match gc_obj_type(ptr) {
             crate::gc::GC_TYPE_ARRAY => stringify_array(ptr, buf),
             // A function has no ordinary object/array/string/error/map/set
@@ -813,6 +818,9 @@ pub(crate) unsafe fn stringify_value_depth(
         if is_symbol_value(bits) {
             buf.push_str("null");
             return;
+        }
+        if let Some((_, elements)) = crate::array::subclass_elements::backed(ptr as usize) {
+            return stringify_array_depth(elements as *const u8, buf, depth);
         }
         match gc_obj_type(ptr) {
             crate::gc::GC_TYPE_OBJECT => stringify_object_inner(ptr, buf, depth),

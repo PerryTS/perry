@@ -1712,6 +1712,11 @@ pub fn is_array_subclass_instance(object: f64) -> bool {
 /// therefore yields `undefined` rather than a preserved hole — an accepted
 /// limitation for this rare case.
 pub fn array_subclass_dense_snapshot(recv: f64) -> f64 {
+    // An elements-backed instance iterates its live inner array, exactly as
+    // a plain Array does (no snapshot: a live length, live holes).
+    if let Some((_, elements)) = crate::array::subclass_elements::backed_value(recv) {
+        return crate::value::js_nanbox_pointer(elements as i64);
+    }
     let len = al_length(recv).max(0);
     // ArrayCreate throws a RangeError for len ≥ 2^32 (matching `js_arraylike_map`)
     // — and, critically, this guard prevents the `as u32` truncation below from
@@ -1925,6 +1930,11 @@ pub(crate) fn array_object_index_set(recv: f64, index: u32, value: f64) {
 /// on a bounded parent walk. `key` is a property-key VALUE; a non-canonical
 /// array index (`"length"`, `"foo"`, `"01"`, a symbol) is a no-op.
 pub(crate) fn note_array_subclass_index_write(recv: f64, key: f64) {
+    // An elements-backed instance's `length` is the inner array's: the index
+    // store already maintained it, and no numeric proof lives on the shape.
+    if crate::array::subclass_elements::backed_value(recv).is_some() {
+        return;
+    }
     // Stringifying a numeric key can allocate and evacuate the object. Keep
     // both inputs live, then re-read the receiver before retiring its proof.
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1959,6 +1969,9 @@ pub(crate) fn note_array_subclass_index_write(recv: f64, key: f64) {
 /// generic OBJECT index-store funnels can apply it without re-entering the
 /// store.
 pub(crate) fn maintain_array_exotic_length(recv: f64, index: u32) {
+    if crate::array::subclass_elements::backed_value(recv).is_some() {
+        return;
+    }
     let current = al_length(recv);
     if (index as i64) < current {
         return;
@@ -1981,6 +1994,10 @@ pub(crate) fn maintain_array_exotic_length(recv: f64, index: u32) {
 #[cold]
 #[inline(never)]
 pub(crate) fn array_object_set_length(recv: f64, new_length: f64) {
+    if let Some((obj, elements)) = crate::array::subclass_elements::backed_value(recv) {
+        unsafe { crate::array::subclass_elements::set_length(obj, elements, new_length) };
+        return;
+    }
     if !new_length.is_finite() || new_length < 0.0 || new_length.trunc() != new_length {
         crate::array::array_length_range_error();
     }

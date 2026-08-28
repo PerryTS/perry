@@ -514,6 +514,22 @@ pub extern "C" fn js_object_get_field_ic_miss(
         // slot without repeating generic object dispatch. Both arms retain
         // their established helpers, making this a dispatch short-circuit
         // rather than a second implementation of either representation.
+        // An elements-backed Array-subclass instance answers its indices and
+        // `length` from its store; an absent index falls through to the ordinary
+        // lookup, which reaches the prototype chain (the shape has no index keys).
+        if let Some((_, elements)) =
+            unsafe { crate::array::subclass_elements::backed(obj as usize) }
+        {
+            if let Some(elements_key) =
+                unsafe { crate::array::subclass_elements::key_of_header(key) }
+            {
+                if let Some(value) =
+                    unsafe { crate::array::subclass_elements::get_by_key(elements, elements_key) }
+                {
+                    return value;
+                }
+            }
+        }
         if unsafe { key_bytes_are(key, b"length") } {
             match unsafe { gc_type_of(obj) } {
                 Some(crate::gc::GC_TYPE_ARRAY) => {

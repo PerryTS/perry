@@ -312,6 +312,14 @@ pub extern "C" fn js_object_define_property(
     key_value: f64,
     descriptor_value: f64,
 ) -> f64 {
+    // An index or `length` descriptor on an elements-backed Array-subclass
+    // instance leaves the elements representation for good (the shape-carried
+    // machinery models descriptors); other keys keep the store.
+    if crate::array::subclass_elements::backed_value(obj_value).is_some()
+        && crate::array::subclass_elements::key_of_value(key_value).is_some()
+    {
+        crate::array::subclass_elements::deopt_value(obj_value);
+    }
     unsafe {
         // #6748 follow-up: classify the receiver ONCE. A `GC_TYPE_OBJECT` that
         // is not an exotic cell (RegExp is the one OBJECT-typed exotic) cannot

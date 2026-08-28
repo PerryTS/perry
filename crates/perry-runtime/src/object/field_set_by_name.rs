@@ -51,6 +51,23 @@ pub extern "C" fn js_object_set_field_by_name(
     // `prototype` property is non-writable, so both ordinary assignment and
     // a computed static field whose PropertyKey resolves to "prototype" must
     // fail instead of appending an ordinary shape slot.
+    // An elements-backed Array-subclass instance stores its indices and
+    // `length` in its store: no index key ever becomes a shape property.
+    if let Some((backed_obj, elements)) =
+        unsafe { crate::array::subclass_elements::backed(obj as usize) }
+    {
+        if let Some(elements_key) = unsafe { crate::array::subclass_elements::key_of_header(key) } {
+            unsafe {
+                crate::array::subclass_elements::set_by_key(
+                    backed_obj,
+                    elements,
+                    elements_key,
+                    value,
+                )
+            };
+            return;
+        }
+    }
     let obj_bits = obj as u64;
     let normalized_obj = if (obj_bits >> 48) == 0x7FFD {
         (obj_bits & crate::value::POINTER_MASK) as *mut ObjectHeader

@@ -12,6 +12,7 @@ use super::*;
 /// on that so `const x = Object.defineProperties(...)` still binds `x`.
 #[no_mangle]
 pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> f64 {
+    crate::array::subclass_elements::deopt_value(target);
     // #2817: target must be an object (or class-ref). Node throws
     // `Object.defineProperties called on non-object` for primitives.
     //
@@ -210,6 +211,7 @@ pub extern "C" fn js_object_define_properties(target: f64, descriptors: f64) -> 
 /// + inherited property dispatch can consult it.
 #[no_mangle]
 pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 {
+    crate::array::subclass_elements::deopt_value(obj_value);
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     let obj_bits = obj_value.to_bits();

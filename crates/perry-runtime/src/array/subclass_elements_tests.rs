@@ -142,3 +142,185 @@ fn hot_entries_route_to_the_elements_store() {
         0
     );
 }
+
+fn key(name: &str) -> *const crate::StringHeader {
+    crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+}
+fn key_value(name: &str) -> f64 {
+    crate::value::js_nanbox_string(key(name) as i64)
+}
+fn key_strings(arr: *const crate::array::ArrayHeader) -> Vec<String> {
+    let n = crate::array::js_array_length(arr);
+    (0..n)
+        .map(|i| {
+            let v = crate::array::js_array_get(arr, i);
+            let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            unsafe { crate::string::js_string_key_bytes(v, &mut sso) }
+                .map(|b| String::from_utf8_lossy(b).into_owned())
+                .unwrap_or_else(|| "<non-string>".to_string())
+        })
+        .collect()
+}
+fn truthy(v: f64) -> bool {
+    v.to_bits() == 0x7FFC_0000_0000_0004
+}
+
+/// The property funnel: through the ordinary object entry points, an
+/// elements-backed instance's indices and `length` are own properties backed
+/// by the inner array — reads, writes (in-bounds, append, hole-creating
+/// extension, `length` truncation/extension), `hasOwnProperty`/`in`,
+/// `delete`, key order for `Object.keys`/`getOwnPropertyNames`, and own
+/// property descriptors — and no index key ever lands in the shape.
+#[test]
+fn the_property_funnel_answers_indices_and_length_from_the_store() {
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    let class_id = 0x0074_8697;
+    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
+    let obj = js_object_alloc(class_id, 2);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+    unsafe { install_elements(live_obj(recv_h.get_nanbox_f64()), 0) };
+    let recv = || recv_h.get_nanbox_f64();
+    let obj = || live_obj(recv());
+    let get = |name: &str| crate::object::js_object_get_field_by_name(obj(), key(name));
+    let set = |name: &str, v: f64| crate::object::js_object_set_field_by_name(obj(), key(name), v);
+
+    // A named field stays a shape property; `length` and indices do not.
+    set("tag", 7.0);
+    set("0", 10.0);
+    set("1", 11.0);
+    set("2", 12.0);
+    assert_eq!(get("length").as_number(), 3.0);
+    assert_eq!(get("1").as_number(), 11.0);
+    assert_eq!(get("tag").as_number(), 7.0);
+    assert!(get("5").is_undefined());
+    // Hole-creating extension, then `length` truncation and extension.
+    set("5", 15.0);
+    assert_eq!(get("length").as_number(), 6.0);
+    assert!(get("3").is_undefined());
+    assert_eq!(get("5").as_number(), 15.0);
+    set("length", 2.0);
+    assert_eq!(get("length").as_number(), 2.0);
+    assert!(get("2").is_undefined());
+    set("length", 4.0);
+    assert_eq!(get("length").as_number(), 4.0);
+    assert!(get("3").is_undefined());
+    set("3", 13.0);
+    // hasOwn / in.
+    assert!(truthy(crate::object::js_object_has_own(
+        recv(),
+        key_value("0")
+    )));
+    assert!(truthy(crate::object::js_object_has_own(
+        recv(),
+        key_value("length")
+    )));
+    assert!(!truthy(crate::object::js_object_has_own(
+        recv(),
+        key_value("2")
+    )));
+    assert!(!truthy(crate::object::js_object_has_own(
+        recv(),
+        key_value("9")
+    )));
+    assert!(truthy(crate::object::js_object_has_property(recv(), 3.0)));
+    assert!(!truthy(crate::object::js_object_has_property(recv(), 2.0)));
+    assert!(truthy(crate::object::js_object_has_property(
+        recv(),
+        key_value("tag")
+    )));
+    // delete: an index becomes a hole, `length` is untouched and undeletable.
+    assert_eq!(crate::object::js_object_delete_dynamic(obj(), 0.0), 1);
+    assert!(get("0").is_undefined());
+    assert_eq!(get("length").as_number(), 4.0);
+    assert_eq!(
+        crate::object::js_object_delete_dynamic(obj(), key_value("length")),
+        0
+    );
+    // Key order: present indices ascending, then shape keys; `length` only
+    // in getOwnPropertyNames, between them.
+    assert_eq!(
+        key_strings(crate::object::js_object_keys(obj())),
+        vec!["1", "3", "tag"]
+    );
+    let names = crate::object::js_object_get_own_property_names(recv());
+    assert_eq!(
+        key_strings(crate::value::js_nanbox_get_pointer(names) as *const crate::array::ArrayHeader),
+        vec!["1", "3", "length", "tag"]
+    );
+    // Descriptors.
+    let d = crate::object::js_object_get_own_property_descriptor(recv(), key_value("1"));
+    let dobj = crate::value::js_nanbox_get_pointer(d) as *const ObjectHeader;
+    assert_eq!(
+        crate::object::js_object_get_field_by_name(dobj, key("value")).as_number(),
+        11.0
+    );
+    assert!(truthy(f64::from_bits(
+        crate::object::js_object_get_field_by_name(dobj, key("enumerable")).bits()
+    )));
+    let d = crate::object::js_object_get_own_property_descriptor(recv(), key_value("length"));
+    let dobj = crate::value::js_nanbox_get_pointer(d) as *const ObjectHeader;
+    assert_eq!(
+        crate::object::js_object_get_field_by_name(dobj, key("value")).as_number(),
+        4.0
+    );
+    assert!(!truthy(f64::from_bits(
+        crate::object::js_object_get_field_by_name(dobj, key("enumerable")).bits()
+    )));
+    assert!(crate::JSValue::from_bits(
+        crate::object::js_object_get_own_property_descriptor(recv(), key_value("0")).to_bits()
+    )
+    .is_undefined());
+    // The shape never learned an index key.
+    assert!(!key_strings(crate::object::js_object_keys(obj()))
+        .iter()
+        .any(|k| k == "0" || k == "1" && false));
+    assert!(!unsafe { elements_of(obj()) }.is_null());
+}
+
+/// `Object.freeze` leaves the elements representation for good: every present
+/// element and `length` become shape-carried properties, the store is
+/// detached, and the frozen instance reads back exactly the same.
+#[test]
+fn freeze_deopts_to_the_shape_carried_form() {
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    let class_id = 0x0074_8698;
+    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
+    let obj = js_object_alloc(class_id, 2);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+    unsafe { install_elements(live_obj(recv_h.get_nanbox_f64()), 0) };
+    let recv = || recv_h.get_nanbox_f64();
+    let obj = || live_obj(recv());
+    for i in 0..3u32 {
+        crate::object::js_object_set_field_by_name(obj(), key(&i.to_string()), f64::from(i * 10));
+    }
+    crate::object::js_object_delete_dynamic(obj(), 1.0);
+    crate::object::js_object_set_field_by_name(obj(), key("tag"), 7.0);
+    let _ = crate::object::js_object_freeze(recv());
+    assert!(
+        unsafe { elements_of(obj()) }.is_null(),
+        "the store is detached on freeze"
+    );
+    let get = |name: &str| crate::object::js_object_get_field_by_name(obj(), key(name));
+    assert_eq!(get("length").as_number(), 3.0);
+    assert_eq!(get("0").as_number(), 0.0);
+    assert!(get("1").is_undefined());
+    assert_eq!(get("2").as_number(), 20.0);
+    assert_eq!(get("tag").as_number(), 7.0);
+    assert!(truthy(crate::object::js_object_has_own(
+        recv(),
+        key_value("2")
+    )));
+    assert!(!truthy(crate::object::js_object_has_own(
+        recv(),
+        key_value("1")
+    )));
+    // Frozen: the shape-carried machinery refuses the append.
+    assert_eq!(
+        super::subclass::array_subclass_fast_push_one(recv(), 99.0),
+        None
+    );
+}
