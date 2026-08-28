@@ -50,6 +50,15 @@ crate::perry_thread_local! {
     /// (Node runs ESM evaluation as a job inside a microtask checkpoint, so
     /// ticks queued at top level wait for the checkpoint to finish; #788).
     static ESM_EVAL_CHECKPOINT_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+
+    /// Saved `ASYNC_BOX_EXECUTION_REFS` depths for nested microtask runners.
+    /// This state must not live in a Rust stack local: `longjmp` re-enters the
+    /// runner at `setjmp`, and optimized Linux builds may have reused that
+    /// local's stack slot while the protected callback was running (#8937).
+    /// Keeping the boundary out of the jumped-over frame also preserves the
+    /// distinct owner boundary of each re-entrant runner.
+    static ASYNC_BOX_EXECUTION_REF_BASES: std::cell::RefCell<Vec<u32>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Whether this thread is already executing a microtask pump, including its
@@ -204,7 +213,9 @@ fn rooted_closure(h: &crate::gc::RuntimeHandle<'_>) -> ClosurePtr {
 fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     mt_profile_register();
     bump(&MT_DRAIN_COUNT);
-    let async_box_ref_depth = async_box_execution_ref_depth();
+    let async_box_ref_depth = u32::try_from(async_box_execution_ref_depth())
+        .expect("microtask execution-ref depth overflow");
+    ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| bases.borrow_mut().push(async_box_ref_depth));
     let reentrant = MICROTASK_RUN_DEPTH.with(|depth| {
         let mut current = depth.get();
         let reentrant = current.pump > 0;
@@ -308,6 +319,16 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         // exactly the activation references acquired since THIS (possibly
         // re-entrant) runner began; an enclosing activation is below the saved
         // depth and must remain owned when this runner returns.
+        // Re-read the boundary from TLS after the non-local jump. A Rust local
+        // captured before `setjmp` is not stable here in optimized builds: its
+        // storage can be reused on the ordinary path before `longjmp` resumes
+        // this branch (#8937).
+        let async_box_ref_depth = ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| {
+            *bases
+                .borrow()
+                .last()
+                .expect("microtask execution-ref boundary")
+        }) as usize;
         unwind_async_box_execution_refs(async_box_ref_depth);
         if !cur.is_null() {
             unsafe {
@@ -1104,6 +1125,14 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     {
         crate::r#box::flush_released_boxes();
     }
+
+    ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| {
+        let base = bases
+            .borrow_mut()
+            .pop()
+            .expect("microtask execution-ref boundary");
+        debug_assert_eq!(async_box_execution_ref_depth(), base as usize);
+    });
 
     MICROTASK_RUN_DEPTH.with(|depth| {
         let mut current = depth.get();

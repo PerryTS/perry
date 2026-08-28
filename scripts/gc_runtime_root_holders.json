@@ -305,6 +305,12 @@
     },
     {
       "file": "crates/perry-runtime/src/promise/microtasks.rs",
+      "name": "ASYNC_BOX_EXECUTION_REF_BASES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Vec<u32> of checked length snapshots from ASYNC_BOX_EXECUTION_REFS. Every entry comes only from Vec::len() and is used only as a later Vec drain boundary; no address or JS value can enter this vector, and entries are never dereferenced or decoded."
+    },
+    {
+      "file": "crates/perry-runtime/src/promise/microtasks.rs",
       "name": "CURRENT_MICROTASK_VALUE",
       "verdict": "covered_elsewhere",
       "scanner": "promise::scan_promise_roots_mut (promise/scanners.rs:66, visit_cell_f64_slot) plus its budgeted step twin scan_current_microtask_value_step (scanners.rs:420); registered via reg_budgeted_scanner! at gc/mod.rs:833-838",
