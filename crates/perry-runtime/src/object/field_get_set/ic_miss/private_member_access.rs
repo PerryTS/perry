@@ -40,13 +40,50 @@ pub(crate) fn take_private_method_owner_hint(method_name: &str) -> Option<u32> {
     })
 }
 
+/// The prefix every private class member's storage name carries.
+const PRIVATE_MEMBER_PREFIX: &str = "#<perry:private-member:";
+
+/// Cheap rejection for the overwhelmingly common case: an ordinary property
+/// name is not a private-member storage name.
+///
+/// [`private_member_storage_name`] runs at the TOP of both the generic
+/// property read (`js_object_get_field_by_name`) and the generic write
+/// (`field_set_by_name`), so every property operation in the program pays it.
+/// It reaches that verdict via `str_from_string_header`, which UTF-8-validates
+/// the WHOLE key before the prefix compare can reject it — measured at ~7.5%
+/// self time in a computed-key read loop, plus its share of `from_utf8`, all
+/// of it spent proving that `"k123"` does not begin with `#`.
+///
+/// A storage name always starts with `#` and is at least `PRIVATE_MEMBER_PREFIX`
+/// long, so a length compare and one byte settle it for every ordinary key
+/// without validating anything. Only keys that pass this filter — private
+/// members and the rare `#`-prefixed user key — go on to the real check, so
+/// the slow path's behaviour is unchanged.
+#[inline(always)]
+fn cannot_be_private_member_name(key: *const crate::StringHeader) -> bool {
+    if key.is_null() {
+        return true;
+    }
+    // SAFETY: same reads `string_header_as_str` already performs on this
+    // pointer (null-checked header, then its payload); no new dereference.
+    unsafe {
+        if (*key).byte_len as usize <= PRIVATE_MEMBER_PREFIX.len() {
+            return true;
+        }
+        *crate::object::string_header_payload(key) != b'#'
+    }
+}
+
 fn private_member_storage_name(key: *const crate::StringHeader) -> Option<String> {
+    if cannot_be_private_member_name(key) {
+        return None;
+    }
     let key = unsafe { super::super::has_own_helpers::str_from_string_header(key) }?;
     private_member_storage_name_str(key).map(str::to_string)
 }
 
 fn private_member_storage_name_str(key: &str) -> Option<&str> {
-    let rest = key.strip_prefix("#<perry:private-member:")?;
+    let rest = key.strip_prefix(PRIVATE_MEMBER_PREFIX)?;
     let (_, name) = rest.split_once(':')?;
     name.strip_suffix('>')
 }
