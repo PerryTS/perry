@@ -125,6 +125,11 @@
       "max_diff_lines": 34,
       "issue": "8271"
     },
+    "method_value_snapshot_bind": {
+      "test_id": "test_parity_method_value_snapshot_bind",
+      "max_diff_lines": 14,
+      "issue": "8955"
+    },
     "moment": {
       "test_id": "test_parity_moment",
       "allowed_statuses": [

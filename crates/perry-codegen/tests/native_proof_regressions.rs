@@ -14253,6 +14253,61 @@ fn ir_function_body<'a>(ir: &'a str, marker: &str) -> &'a str {
 }
 
 #[test]
+fn this_method_value_uses_receiver_snapshot_bind() {
+    let mut snapshot = class(8955, "Snapshot", Vec::new());
+    snapshot.methods.push(Function {
+        id: 89550,
+        name: "capture".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Any,
+        body: vec![Stmt::Return(Some(Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(Expr::This),
+            property: "method".to_string(),
+        }))],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    snapshot.methods.push(Function {
+        id: 89551,
+        name: "method".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Number,
+        body: vec![Stmt::Return(Some(number(1.0)))],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    let module = module_with_classes_and_params(
+        "issue_8955_this_method_snapshot.ts",
+        vec![snapshot],
+        Vec::new(),
+        Type::Any,
+        vec![Stmt::Return(Some(Expr::Undefined))],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    let capture = ir_function_body(&ir, "Snapshot__capture(");
+    assert!(
+        capture.contains("call double @js_class_method_snapshot_bind"),
+        "a this.method value read must capture the receiver instead of using the canonical owner marker:\n{capture}"
+    );
+}
+
+#[test]
 fn annotated_class_method_value_uses_generic_lookup() {
     let mut calc = class(209, "Calc", Vec::new());
     calc.methods.push(Function {

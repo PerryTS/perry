@@ -832,12 +832,6 @@
       "linux"
     ]
   },
-  "test_parity_method_value_snapshot_bind": {
-    "issue": "4548",
-    "added": "2026-08-22",
-    "category": "bug-stale",
-    "reason": "Migration from the loose regression script exposed a recurrence of #4548: a captured method invoked after the own property is reassigned loses its receiver and returns C:undefined. Remove this entry when method-value snapshots are fixed."
-  },
   "test_parity_moment": {
     "issue": "8271",
     "added": "2026-08-17",
