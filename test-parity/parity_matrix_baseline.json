@@ -1,6 +1,6 @@
 {
   "_schema": {
-    "description": "Baseline for scripts/parity_matrix_trend.py. Modules absent from `modules` must pass with zero diff lines. Entries here are existing module-inventory gaps that may fail until their top-level parity smoke tests are retired or narrowed.",
+    "description": "Baseline for scripts/parity_matrix_trend.py. Modules absent from `modules` must pass with zero diff lines. Entries here are existing module-inventory gaps that may fail until their top-level parity smoke tests are retired or narrowed, or passing tests whose explicit expected-output oracle intentionally differs from Node.",
     "max_diff_lines": "Integer maximum accepted unified-diff changed-line count, or null when the current broad inventory test has not been converted to an exact diff baseline yet.",
     "allowed_statuses": "Statuses accepted for the module. `pass` is always accepted as an improvement."
   },
@@ -125,6 +125,11 @@
       "max_diff_lines": 34,
       "issue": "8271"
     },
+    "method_value_snapshot_bind": {
+      "test_id": "test_parity_method_value_snapshot_bind",
+      "max_diff_lines": 14,
+      "issue": "8955"
+    },
     "moment": {
       "test_id": "test_parity_moment",
       "allowed_statuses": [
@@ -140,6 +145,31 @@
       ],
       "max_diff_lines": 28,
       "issue": "8271"
+    },
+    "namespace_const_cross_module": {
+      "test_id": "test_parity_namespace_const_cross_module",
+      "max_diff_lines": 28,
+      "issue": "8956"
+    },
+    "native_value_profile": {
+      "test_id": "test_parity_native_value_profile",
+      "max_diff_lines": 20,
+      "issue": "8956"
+    },
+    "numeric_enum_reverse_mapping_4509": {
+      "test_id": "test_parity_numeric_enum_reverse_mapping_4509",
+      "max_diff_lines": 25,
+      "issue": "8956"
+    },
+    "regex_replace_fn_lookahead": {
+      "test_id": "test_parity_regex_replace_fn_lookahead",
+      "max_diff_lines": 12,
+      "issue": "8956"
+    },
+    "request_subclass_stream_body": {
+      "test_id": "test_parity_request_subclass_stream_body",
+      "max_diff_lines": 11,
+      "issue": "8956"
     },
     "sqlite": {
       "test_id": "test_parity_sqlite",
@@ -205,6 +235,11 @@
       ],
       "max_diff_lines": 21,
       "issue": "8271"
+    },
+    "webassembly_graceful_fail_default": {
+      "test_id": "test_parity_webassembly_graceful_fail_default",
+      "max_diff_lines": 11,
+      "issue": "8956"
     },
     "zlib": {
       "test_id": "test_parity_zlib",

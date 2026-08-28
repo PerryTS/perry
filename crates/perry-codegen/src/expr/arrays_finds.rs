@@ -75,6 +75,117 @@ use super::{
 // unsound the moment one of them was edited.
 use super::index_get::numeric_index_has_integer_array_index_proof;
 
+/// `for (const [k, v] of map)` entry read, inline.
+///
+/// Each iteration of the desugared loop read its key and its value through
+/// `js_map_entry_key_at` / `js_map_entry_value_at`, and each of those
+/// resolved the receiver again (`clean_map_ptr`: tag, magnitude, header,
+/// subclass redirect) to read one word of a flat buffer — two calls and two
+/// resolutions per entry, 0.8% of an ECS frame on its per-frame grouping
+/// map. The lowering here decides the common receiver from the same facts the
+/// resolver would establish — a NaN-boxed heap pointer above the handle band
+/// whose header is `GC_TYPE_MAP` and not forwarded — re-reads `size` and
+/// `entries` on every read (the body may `set`/`delete` and grow or compact
+/// the buffer, and the receiver itself is re-read from its root by the
+/// rooted-operand group), bounds-checks the index, and loads the slot. Every
+/// other shape — a subclass instance, a plain object, an out-of-range or
+/// negative index, an unpublished handle — takes the runtime helper exactly
+/// as before, so the two paths are equivalent by construction.
+fn lower_map_entry_at_inline(
+    ctx: &mut FnCtx<'_>,
+    m_box: &str,
+    i_dbl: &str,
+    runtime_fn: &str,
+    value_slot: bool,
+) -> Result<String> {
+    use crate::nanbox::POINTER_TAG_TOP16_I64;
+    use crate::types::{I1, I8};
+    const HANDLE_BAND_TOP: &str = "1048575"; // 0x0FFFFF — heap objects are above
+    const GC_TYPE_MAP: &str = "8";
+    const GC_FLAG_FORWARDED: &str = "128";
+    let stem = if value_slot {
+        "map_entry_value"
+    } else {
+        "map_entry_key"
+    };
+    let head_idx = ctx.new_block(&format!("{stem}.head"));
+    let fast_idx = ctx.new_block(&format!("{stem}.fast"));
+    let slow_idx = ctx.new_block(&format!("{stem}.slow"));
+    let merge_idx = ctx.new_block(&format!("{stem}.merge"));
+    let head_label = ctx.block_label(head_idx);
+    let fast_label = ctx.block_label(fast_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let merge_label = ctx.block_label(merge_idx);
+
+    // A heap pointer above the handle band, before any header is read.
+    let (m_handle, i_i32) = {
+        let blk = ctx.block();
+        let m_handle = unbox_to_i64(blk, m_box);
+        let i_i32 = blk.fptosi(DOUBLE, i_dbl, I32);
+        let bits = blk.bitcast_double_to_i64(m_box);
+        let top16 = blk.lshr(I64, &bits, "48");
+        let is_pointer = blk.icmp_eq(I64, &top16, POINTER_TAG_TOP16_I64);
+        let above_band = blk.icmp_ugt(I64, &m_handle, HANDLE_BAND_TOP);
+        let plausible = blk.and(I1, &is_pointer, &above_band);
+        blk.cond_br(&plausible, &head_label, &slow_label);
+        (m_handle, i_i32)
+    };
+    // The header: a live (not forwarded) genuine Map; the index in range of
+    // the live size.
+    ctx.current_block = head_idx;
+    {
+        let blk = ctx.block();
+        let type_addr = blk.sub(I64, &m_handle, "8");
+        let type_ptr = blk.inttoptr(I64, &type_addr);
+        let obj_type = blk.load(I8, &type_ptr);
+        let is_map = blk.icmp_eq(I8, &obj_type, GC_TYPE_MAP);
+        let flags_addr = blk.sub(I64, &m_handle, "7");
+        let flags_ptr = blk.inttoptr(I64, &flags_addr);
+        let gc_flags = blk.load(I8, &flags_ptr);
+        let forwarded = blk.and(I8, &gc_flags, GC_FLAG_FORWARDED);
+        let live = blk.icmp_eq(I8, &forwarded, "0");
+        let size_ptr = blk.inttoptr(I64, &m_handle);
+        let size = blk.load(I32, &size_ptr);
+        let in_range = blk.icmp_ult(I32, &i_i32, &size);
+        let a = blk.and(I1, &is_map, &live);
+        let admitted = blk.and(I1, &a, &in_range);
+        blk.cond_br(&admitted, &fast_label, &slow_label);
+    }
+    ctx.current_block = fast_idx;
+    let (fast_value, fast_pred) = {
+        let blk = ctx.block();
+        let entries_addr = blk.add(I64, &m_handle, "8");
+        let entries_ptr = blk.inttoptr(I64, &entries_addr);
+        let entries = blk.load(I64, &entries_ptr);
+        let index = blk.zext(I32, &i_i32, I64);
+        let entry_offset = blk.shl(I64, &index, "4");
+        let key_addr = blk.add(I64, &entries, &entry_offset);
+        let slot_addr = if value_slot {
+            blk.add(I64, &key_addr, "8")
+        } else {
+            key_addr
+        };
+        let slot_ptr = blk.inttoptr(I64, &slot_addr);
+        let value = blk.load(DOUBLE, &slot_ptr);
+        let pred = blk.label.clone();
+        blk.br(&merge_label);
+        (value, pred)
+    };
+    ctx.current_block = slow_idx;
+    let (slow_value, slow_pred) = {
+        let blk = ctx.block();
+        let value = blk.call(DOUBLE, runtime_fn, &[(I64, &m_handle), (I32, &i_i32)]);
+        let pred = blk.label.clone();
+        blk.br(&merge_label);
+        (value, pred)
+    };
+    ctx.current_block = merge_idx;
+    Ok(ctx.block().phi(
+        DOUBLE,
+        &[(&fast_value, &fast_pred), (&slow_value, &slow_pred)],
+    ))
+}
+
 fn lower_index_i32(ctx: &mut FnCtx<'_>, index: &Expr) -> Result<String> {
     if can_lower_expr_as_i32(
         index,
@@ -462,18 +573,15 @@ pub(crate) fn lower(
         // entries straight out of the Map's internal buffer instead of
         // calling `js_map_entries` (which materializes N+1 small Arrays).
         Expr::MapEntryKeyAt { map, idx } | Expr::MapEntryValueAt { map, idx } => {
-            let runtime_fn = match expr {
-                Expr::MapEntryKeyAt { .. } => "js_map_entry_key_at",
-                Expr::MapEntryValueAt { .. } => "js_map_entry_value_at",
+            let (runtime_fn, value_slot) = match expr {
+                Expr::MapEntryKeyAt { .. } => ("js_map_entry_key_at", false),
+                Expr::MapEntryValueAt { .. } => ("js_map_entry_value_at", true),
                 _ => unreachable!(),
             };
             rooting::with_operands_rooted(ctx, &[map, idx], |ctx, vals| {
                 let m_box = vals[0].clone();
                 let i_dbl = vals[1].clone();
-                let blk = ctx.block();
-                let m_handle = unbox_to_i64(blk, &m_box);
-                let i_i32 = blk.fptosi(DOUBLE, &i_dbl, I32);
-                Ok(blk.call(DOUBLE, runtime_fn, &[(I64, &m_handle), (I32, &i_i32)]))
+                lower_map_entry_at_inline(ctx, &m_box, &i_dbl, runtime_fn, value_slot)
             })
         }
 

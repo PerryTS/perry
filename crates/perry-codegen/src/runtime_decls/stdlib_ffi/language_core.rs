@@ -373,6 +373,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // Lets `typeof obj.method === "function"` and `let f = obj.method; f(args)`
     // dispatch through CLASS_VTABLE_REGISTRY instead of returning undefined.
     module.declare_function("js_class_method_bind", DOUBLE, &[DOUBLE, I64, I64]);
+    module.declare_function("js_class_method_snapshot_bind", DOUBLE, &[DOUBLE, I64, I64]);
     module.declare_function("js_class_method_bind_by_id", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_class_lexical_binding_get", DOUBLE, &[DOUBLE]);
     module.declare_function("js_class_lexical_binding_set", DOUBLE, &[DOUBLE, DOUBLE]);

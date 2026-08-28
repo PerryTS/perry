@@ -1,0 +1,1 @@
+- **codegen:** `for (const [k, v] of map)` reads each entry's key and value inline from the Map's flat buffer (a `GC_TYPE_MAP` header test, a live-size bounds check and one load) instead of two runtime calls that each re-resolved the receiver; subclass instances, plain objects and out-of-range indices keep the runtime helpers.

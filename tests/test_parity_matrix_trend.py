@@ -82,6 +82,36 @@ class ParityMatrixTrendTests(unittest.TestCase):
             self.assertTrue(zlib["known"])
             self.assertEqual(zlib["diff_lines"], 2)
 
+    def test_passing_expected_output_difference_needs_explicit_baseline(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            test_id = "test_parity_expected_output"
+            self.write_json(root / "report.json", {
+                "results": [{"id": test_id, "status": "pass"}],
+            })
+            self.write_json(root / "known_failures.json", {})
+            self.write_json(root / "baseline.json", {"modules": {}})
+            self.write_output(root, test_id, "node\n", "expected\n")
+
+            result = self.run_checker(root)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("diff_lines 2 exceeds baseline 0", result.stdout)
+
+            self.write_json(root / "baseline.json", {
+                "modules": {
+                    "expected_output": {
+                        "test_id": test_id,
+                        "max_diff_lines": 2,
+                        "issue": "8956",
+                    }
+                }
+            })
+
+            result = self.run_checker(root)
+
+            self.assertEqual(result.returncode, 0, result.stdout)
+
     def test_new_untriaged_failure_fails(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

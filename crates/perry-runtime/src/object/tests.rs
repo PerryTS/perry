@@ -1678,6 +1678,74 @@ fn array_receiver_is_never_read_as_a_class_id() {
     );
 }
 
+/// #8955: Perry intentionally snapshots the receiver for a `this.method`
+/// value read. Replacing the own property after capture must not make the
+/// saved value re-resolve by name, while an override present before the read
+/// must still win.
+#[test]
+fn this_method_snapshot_survives_own_property_replacement() {
+    // Named distinctly from the real `CLASS_ID` mirror in
+    // `class_registry/state.rs`: `class_id_collisions.py` matches on the
+    // NAME, so a test-local `CLASS_ID` with a different value reads to that
+    // gate as cross-crate mirror drift.
+    const SNAPSHOT_CLASS_ID: u32 = 0x8955;
+    const NAME: &[u8] = b"snapshot";
+
+    extern "C" fn return_receiver(this: f64) -> f64 {
+        this
+    }
+
+    unsafe {
+        super::class_registry::js_register_class_method(
+            SNAPSHOT_CLASS_ID as i64,
+            NAME.as_ptr(),
+            NAME.len() as i64,
+            return_receiver as *const () as usize as i64,
+            0,
+            0,
+            0,
+        );
+    }
+
+    let obj = js_object_alloc(SNAPSHOT_CLASS_ID, 0);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+    let captured = scope.root_nanbox_f64(super::native_module::js_class_method_snapshot_bind(
+        receiver.get_nanbox_f64(),
+        NAME.as_ptr(),
+        NAME.len(),
+    ));
+
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        NAME.as_ptr(),
+        NAME.len() as u32,
+    ));
+    let live_obj = JSValue::from_bits(receiver.get_nanbox_f64().to_bits())
+        .as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    key.with_const_ptr::<crate::StringHeader, _>(|key| {
+        js_object_set_field_by_name(live_obj, key, 99.0)
+    });
+
+    let result = unsafe {
+        crate::closure::js_native_call_value(captured.get_nanbox_f64(), std::ptr::null(), 0)
+    };
+    assert_eq!(
+        result.to_bits(),
+        receiver.get_nanbox_f64().to_bits(),
+        "the captured method must keep dispatching through the vtable with its read-time receiver"
+    );
+
+    let after_override = super::native_module::js_class_method_snapshot_bind(
+        receiver.get_nanbox_f64(),
+        NAME.as_ptr(),
+        NAME.len(),
+    );
+    assert_eq!(
+        after_override, 99.0,
+        "an own override that exists before the read must still shadow the prototype method"
+    );
+}
+
 /// #7689: `const f = C.m; f(...)` — a method value read off a CONSTRUCTOR
 /// class ref — must invoke the STATIC method when the class declares both a
 /// static and an instance method of the same name.
