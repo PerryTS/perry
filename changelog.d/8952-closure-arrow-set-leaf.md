@@ -1,0 +1,1 @@
+- **runtime:** `closure_is_arrow` takes its answer from the memoised dispatch strategy instead of a second thread-local registry probe per receiver rebind; `ReadonlySet.has` outlines its structural fallback so the genuine-`Set` arm is a leaf; `Set.clear()` on an already-empty set returns before the side-table probe.
