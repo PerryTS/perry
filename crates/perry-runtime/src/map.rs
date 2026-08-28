@@ -1903,6 +1903,11 @@ pub extern "C" fn js_map_set_string_string(
     map_set_string_returning_receiver(map, key, boxed_heap_string_key(value))
 }
 
+/// Above this many entries `js_map_clear` resets the string/pointer
+/// side-tables unconditionally rather than reading every key to see whether
+/// it has to.
+const SIDE_TABLE_CLEAR_SCAN_MAX: u32 = 16;
+
 /// Get a value from the map by key
 /// Returns the value, or TAG_UNDEFINED if not found
 #[no_mangle]
@@ -2340,6 +2345,28 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
     if map.is_null() {
         return;
     }
+    // Every index this function resets mirrors the entries exactly (insert,
+    // delete, clear and the GC rewrites keep them in step), so an already-empty
+    // map has nothing to reset: the per-entity `adds.clear(); removes.clear()`
+    // of a change set is this case half the time.
+    let size = unsafe { (*map).size };
+    if size == 0 {
+        return;
+    }
+    // The string and pointer side-tables hold an entry only for a string or
+    // pointer key the map holds. A small map whose keys are all plain numbers
+    // (or bits-stable primitives) owes them nothing, and reading its keys is
+    // cheaper than the two thread-local resolutions plus two hash probes
+    // that find two empty tables — the per-frame grouping maps of an ECS
+    // are this shape, ten thousand clears a frame.
+    let side_tables_may_hold_this_map = size > SIDE_TABLE_CLEAR_SCAN_MAX
+        || unsafe {
+            let entries = entries_ptr(map);
+            (0..size as usize).any(|i| {
+                let key_bits = ptr::read(entries.add(i * 2)).to_bits();
+                !is_safe_numeric_key(key_bits)
+            })
+        };
     unsafe {
         (*map).size = 0;
     }
@@ -2347,6 +2374,9 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
         if let Some(index) = (*map).numeric_index.as_mut() {
             index.clear();
         }
+    }
+    if !side_tables_may_hold_this_map {
+        return;
     }
     MAP_STRING_INDEX.with(|idx| {
         let mut idx = idx.borrow_mut();
@@ -3077,6 +3107,71 @@ mod tests {
             assert_eq!(js_map_get(map, i as f64), (i * 10) as f64);
             assert!(test_map_numeric_index_contains(map, i as f64));
         }
+    }
+
+    #[test]
+    fn clear_resets_every_index_whatever_the_key_kinds() {
+        // Numeric-only map: cleared without touching the side-tables; the
+        // numeric index is reset (a re-added key is found, a removed one not).
+        let map = js_map_alloc(4);
+        for key in 1..=3 {
+            js_map_set(map, key as f64, (key * 10) as f64);
+        }
+        js_map_clear(map);
+        assert_eq!(js_map_size(map), 0);
+        assert_eq!(js_map_has(map, 2.0), 0);
+        js_map_set(map, 2.0, 5.0);
+        assert_eq!(js_map_get(map, 2.0), 5.0);
+        assert_eq!(js_map_has(map, 1.0), 0);
+        // Clearing an empty map is a no-op that leaves it usable.
+        js_map_clear(map);
+        js_map_clear(map);
+        js_map_set(map, 7.0, 8.0);
+        assert_eq!(js_map_get(map, 7.0), 8.0);
+        assert_eq!(js_map_size(map), 1);
+
+        // String-keyed map: the content-hashed side-table must be reset too —
+        // a stale index entry would make the re-added key's lookup land on a
+        // wrong entry slot.
+        let strings = js_map_alloc(4);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let key_a = js_string_from_bytes(b"alpha".as_ptr(), 5);
+        let key_b = js_string_from_bytes(b"beta".as_ptr(), 4);
+        let _ra = scope.root_raw_mut_ptr(key_a);
+        let _rb = scope.root_raw_mut_ptr(key_b);
+        js_map_set_string_i32(strings, key_a, 1);
+        js_map_set_string_i32(strings, key_b, 2);
+        js_map_set(strings, 9.0, 3.0);
+        js_map_clear(strings);
+        assert_eq!(js_map_size(strings), 0);
+        assert_eq!(js_map_has_string_key(strings, key_a), 0);
+        js_map_set_string_i32(strings, key_b, 22);
+        js_map_set_string_i32(strings, key_a, 11);
+        assert_eq!(
+            js_map_get_string_key(strings, key_a).to_bits(),
+            crate::value::JSValue::int32(11).bits()
+        );
+        assert_eq!(
+            js_map_get_string_key(strings, key_b).to_bits(),
+            crate::value::JSValue::int32(22).bits()
+        );
+        assert_eq!(js_map_has(strings, 9.0), 0);
+
+        // A map past the scan bound still resets everything.
+        let big = js_map_alloc(4);
+        for key in 0..40 {
+            js_map_set(big, key as f64, key as f64);
+        }
+        js_map_set_string_i32(big, key_a, 5);
+        js_map_clear(big);
+        assert_eq!(js_map_size(big), 0);
+        assert_eq!(js_map_has(big, 12.0), 0);
+        assert_eq!(js_map_has_string_key(big, key_a), 0);
+        js_map_set_string_i32(big, key_a, 6);
+        assert_eq!(
+            js_map_get_string_key(big, key_a).to_bits(),
+            crate::value::JSValue::int32(6).bits()
+        );
     }
 
     #[test]
