@@ -437,6 +437,13 @@ pub(crate) fn build_and_run_link(
     // Multiple specifiers can route to the same native archive (`http` and
     // `https` both select perry_ext_http). They were de-duplicated before the
     // archive-preparation pass so the expensive transform also runs once.
+    // #8930: the archives below reference each other in BOTH directions and
+    // ELF `ld` scans each once — bracket them (see `ElfArchiveGroup`).
+    let archive_group = ElfArchiveGroup::open(
+        &mut cmd,
+        !is_windows && (is_linux || is_android || is_harmonyos),
+        !skip_runtime || ctx.needs_stdlib,
+    );
     if !skip_runtime {
         if ctx.needs_stdlib || is_windows {
             // On Windows/MSVC, always try to link stdlib because codegen unconditionally
@@ -550,6 +557,7 @@ pub(crate) fn build_and_run_link(
             eprintln!("Warning: stdlib required but libperry_stdlib.a not found");
         }
     }
+    archive_group.close(&mut cmd);
 
     // Issue #76 — wasmi host runtime, opt-in via `--enable-wasm-runtime`.
     // Append after stdlib so the linker can resolve `perry_wasm_host_*`

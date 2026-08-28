@@ -648,6 +648,119 @@ fn rewrite_link_with_response_file(cmd: &Command, msvc: bool) -> Option<(Command
     Some((new_cmd, rsp))
 }
 
+/// `--start-group` / `--end-group` around the perry static-archive block on
+/// ELF links (#8930).
+///
+/// GNU `ld` scans each archive on the command line exactly once, left to
+/// right, and pulls only the members that resolve symbols undefined *at that
+/// moment*. The perry archive block is mutually recursive, and the direction
+/// of that recursion is the opposite of the command-line order:
+///
+///   * the user objects reference `js_*` symbols that **perry-stdlib**
+///     provides, so the well-known wrapper archives listed BEFORE stdlib
+///     resolve nothing at all — in the #8930 repro not one of the 92
+///     eventually-linked wrapper members was pulled from that first listing;
+///   * every wrapper member came from the repeat AFTER stdlib, on references
+///     that stdlib's own members had just opened (`js_node_http_*`, …);
+///   * those wrapper members then reference back INTO stdlib, which `ld` has
+///     already walked past and never revisits.
+///
+/// While a wrapper archive bundled its own copy of everything it closed over,
+/// the third step was invisible. It turns into a hard error the moment
+/// `strip_bundled_shared_deps_from_well_known_lib` drops a bundled member
+/// *because stdlib provides it* — a correct decision by the archive index,
+/// but one that only holds if `ld` can still get back to stdlib. #8930 is
+/// exactly that shape: `futures_channel::mpsc::SenderTask::notify`, exported
+/// by the linked `libperry_stdlib.a`'s own `futures_channel` member and
+/// referenced by a kept `perry_ext_http` codegen unit, with no path from the
+/// one to the other.
+///
+/// A group makes `ld` re-scan the block until it reaches a fixed point, which
+/// is the guarantee a mutually recursive archive set needs. Repeating a single
+/// archive (the codebase's usual "archive twice" trick — see the GTK4 stdlib
+/// re-link) only covers a one-step cycle, and this graph is LTO-partitioned
+/// across hundreds of codegen units on both sides. Symbol precedence is
+/// unchanged: members are still pulled left to right, so the
+/// wrappers-before-stdlib and localized-runtime-last first-definition-wins
+/// ordering keeps working.
+///
+/// ELF only. Mach-O's `ld64` already resolves archives to a fixed point (and
+/// rejects the flag); `lld-link` / MSVC `link.exe` have no group concept.
+pub(super) struct ElfArchiveGroup {
+    opened: bool,
+}
+
+impl ElfArchiveGroup {
+    /// Emit `-Wl,--start-group` when this is an ELF link that will actually
+    /// receive archives. `has_archives` keeps an empty group off the command
+    /// line for the link shapes that add none.
+    pub(super) fn open(cmd: &mut Command, is_elf: bool, has_archives: bool) -> Self {
+        let opened = is_elf && has_archives;
+        if opened {
+            cmd.arg("-Wl,--start-group");
+        }
+        Self { opened }
+    }
+
+    /// Close a group opened by [`ElfArchiveGroup::open`]. Takes `self` by
+    /// value so the marker cannot be emitted twice.
+    pub(super) fn close(self, cmd: &mut Command) {
+        if self.opened {
+            cmd.arg("-Wl,--end-group");
+        }
+    }
+}
+
+#[cfg(test)]
+mod elf_archive_group_tests {
+    use super::ElfArchiveGroup;
+    use std::process::Command;
+
+    fn args(is_elf: bool, archives: &[&str]) -> Vec<String> {
+        let mut cmd = Command::new("cc");
+        let group = ElfArchiveGroup::open(&mut cmd, is_elf, !archives.is_empty());
+        for archive in archives {
+            cmd.arg(archive);
+        }
+        group.close(&mut cmd);
+        cmd.get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// #8930 — an ELF link brackets the archive block so `ld` re-scans it to a
+    /// fixed point instead of dying on a stdlib symbol it already walked past.
+    #[test]
+    fn elf_link_brackets_the_archive_block() {
+        assert_eq!(
+            args(true, &["wrapper.a", "libperry_stdlib.a", "wrapper.a"]),
+            vec![
+                "-Wl,--start-group",
+                "wrapper.a",
+                "libperry_stdlib.a",
+                "wrapper.a",
+                "-Wl,--end-group",
+            ]
+        );
+    }
+
+    /// Mach-O's `ld64` rejects the flag and needs no group; `lld-link` / MSVC
+    /// have no group concept. Those command lines must come out unchanged.
+    #[test]
+    fn non_elf_link_is_untouched() {
+        assert_eq!(
+            args(false, &["libperry_stdlib.a"]),
+            vec!["libperry_stdlib.a"]
+        );
+    }
+
+    /// A link shape that contributes no archive must not emit an empty group.
+    #[test]
+    fn empty_archive_block_emits_no_group() {
+        assert!(args(true, &[]).is_empty());
+    }
+}
+
 #[cfg(test)]
 mod optional_framework_dir_tests;
 
