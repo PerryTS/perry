@@ -67,6 +67,45 @@ fn configured_module_codegen_jobs(total_modules: usize) -> (usize, usize) {
     (module_jobs, llvm_unit_jobs)
 }
 
+/// Whether `name` is metadata for an erased TypeScript declaration rather
+/// than a JavaScript binding in `module`.
+///
+/// Interfaces and type aliases remain in `Module::exports` so cross-module
+/// type resolution can follow re-export chains. Runtime namespace builders
+/// must filter them back out, while preserving declaration-merged names that
+/// also have a value binding.
+fn is_type_only_export_binding(module: &perry_hir::Module, name: &str) -> bool {
+    let has_type_declaration = module
+        .interfaces
+        .iter()
+        .any(|interface| interface.name == name)
+        || module.type_aliases.iter().any(|alias| alias.name == name);
+    if !has_type_declaration {
+        return false;
+    }
+
+    let has_runtime_value = module
+        .functions
+        .iter()
+        .any(|function| function.name == name)
+        || module
+            .exported_functions
+            .iter()
+            .any(|(exported, _)| exported == name)
+        || module
+            .exported_objects
+            .iter()
+            .any(|exported| exported == name)
+        || module.classes.iter().any(|class| class.name == name)
+        || module
+            .enums
+            .iter()
+            .any(|enumeration| enumeration.name == name)
+        || module.globals.iter().any(|global| global.name == name);
+
+    !has_runtime_value
+}
+
 // OpenCode's 0.5--1.0 MiB generated chunks routinely lower to 20--45 MiB of
 // LLVM input even with fewer than 1,000 HIR callables. Treat that observed
 // range as memory-heavy too: ordinary modules still use outer parallelism,
@@ -1626,25 +1665,40 @@ pub fn run_with_parse_cache(
     for (path, hir_module) in &ctx.native_modules {
         let path_str = path.to_string_lossy().to_string();
         let exports = all_module_exports.entry(path_str.clone()).or_default();
+        // `is_exported` and `exported_objects` also mark PRIVATE backing names
+        // that need cross-module symbols. For `function _null() {}; export {
+        // _null as null }`, `_null` is link-visible but is not a public module
+        // export. Derive the namespace surface from the consumer-visible side
+        // of `Export::Named` so an alias does not publish both names (#8904).
+        let public_named_exports: std::collections::HashSet<&str> = hir_module
+            .exports
+            .iter()
+            .filter_map(|export| match export {
+                perry_hir::Export::Named { exported, .. } => Some(exported.as_str()),
+                _ => None,
+            })
+            .collect();
         // Exported functions
         for func in &hir_module.functions {
-            if func.is_exported {
+            if func.is_exported && public_named_exports.contains(func.name.as_str()) {
                 exports.insert(func.name.clone(), path_str.clone());
             }
         }
         // Exported objects (export const x = { ... })
         for obj_name in &hir_module.exported_objects {
-            exports.insert(obj_name.clone(), path_str.clone());
+            if public_named_exports.contains(obj_name.as_str()) {
+                exports.insert(obj_name.clone(), path_str.clone());
+            }
         }
         // Exported classes
         for class in &hir_module.classes {
-            if class.is_exported {
+            if class.is_exported && public_named_exports.contains(class.name.as_str()) {
                 exports.insert(class.name.clone(), path_str.clone());
             }
         }
         // Exported enums
         for en in &hir_module.enums {
-            if en.is_exported {
+            if en.is_exported && public_named_exports.contains(en.name.as_str()) {
                 exports.insert(en.name.clone(), path_str.clone());
             }
         }
@@ -1656,40 +1710,10 @@ pub fn run_with_parse_cache(
         // resolves to a bogus closure value that breaks consumers enumerating
         // the namespace (drizzle's `drizzle(pool, { schema })`, where the schema
         // module also `export type Customer = …` alongside the real tables).
-        // A name that is ALSO a value export (declaration merging, a class)
-        // stays — only names that are exclusively types are dropped.
-        let value_export_names: std::collections::HashSet<&str> = hir_module
-            .functions
-            .iter()
-            .filter(|f| f.is_exported)
-            .map(|f| f.name.as_str())
-            .chain(hir_module.exported_objects.iter().map(|s| s.as_str()))
-            .chain(
-                hir_module
-                    .classes
-                    .iter()
-                    .filter(|c| c.is_exported)
-                    .map(|c| c.name.as_str()),
-            )
-            .chain(
-                hir_module
-                    .enums
-                    .iter()
-                    .filter(|e| e.is_exported)
-                    .map(|e| e.name.as_str()),
-            )
-            .collect();
-        let type_only_export_names: std::collections::HashSet<String> = hir_module
-            .type_aliases
-            .iter()
-            .map(|t| t.name.clone())
-            .chain(hir_module.interfaces.iter().map(|i| i.name.clone()))
-            .filter(|n| !value_export_names.contains(n.as_str()))
-            .collect();
         // Named exports (export { foo, bar as baz })
         for export in &hir_module.exports {
             if let perry_hir::Export::Named { local, exported } = export {
-                if type_only_export_names.contains(exported) {
+                if is_type_only_export_binding(hir_module, local) {
                     continue;
                 }
                 exports.insert(exported.clone(), path_str.clone());
@@ -2660,6 +2684,18 @@ pub fn run_with_parse_cache(
         for fe in flat {
             // Locate source module's HIR (where the binding lives).
             let source_mod = module_name_to_module.get(&fe.source_module);
+            // `flatten_exports` intentionally retains interfaces and aliases
+            // so the type resolver can follow their barrel chains. A dynamic
+            // import or nested namespace re-export is a JavaScript object,
+            // though, and must not expose those erased declarations as own
+            // enumerable properties with `undefined` values (#8904).
+            if fe.nested_namespace_of.is_none()
+                && source_mod
+                    .map(|module| is_type_only_export_binding(module, &fe.source_local))
+                    .unwrap_or(false)
+            {
+                continue;
+            }
             let source_prefix = source_mod
                 .map(|m| sanitize_module_name(&m.name))
                 .unwrap_or_else(|| sanitize_module_name(&fe.source_module));
