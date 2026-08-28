@@ -11,10 +11,14 @@ use super::*;
 /// managed pointers, so the generated loop can reload a relocated receiver
 /// from its root before each residual check.
 ///
-/// Layout: `(kind, gc_header, receiver_header, length_slot, element_base,
-/// dense_prefix|inline_bound<<32, bound)`. Kind 1 is an ArrayHeader and kind 2
-/// is an ObjectHeader Array subclass. A zero return leaves every semantic case
-/// to the unchanged generic loop.
+/// Layout: `(kind, gc_header, receiver_header, length_slot|elements, element_base,
+/// dense_prefix|inline_bound<<32, bound)`. Kind 1 is an ArrayHeader, kind 2 is
+/// a shape-carried ObjectHeader Array subclass, and kind 3 is an
+/// elements-backed one (`super::subclass_elements`) whose payload lives in a
+/// separate Array: word 3 carries that store's user address, because the
+/// generated loop derives its base from the RECEIVER on the non-capture path
+/// and the receiver is the object, not the payload. A zero return leaves every
+/// semantic case to the unchanged generic loop.
 /// Resolve an elements-backed Array-subclass receiver to its inner array
 /// (`None` for every other receiver, including the shape-carried subclass
 /// form, which keeps the kind-2 admission below).
@@ -39,6 +43,57 @@ fn elements_loop_source(
     (elements_header.obj_type == crate::gc::GC_TYPE_ARRAY
         && elements_header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
         .then_some((elements, elements_header))
+}
+
+/// Admit an elements-backed Array-subclass receiver as a kind-3 loop over its
+/// store. Every proof is the store's (an ordinary Array): no descriptors, the
+/// prototype latch clear, `bound <= length <= capacity`, and — for a numeric
+/// mode — the whole-array raw-f64 bit. Mode 2 (the fused ECS entity-id clone)
+/// wants the per-prefix payload a shape-carried subclass publishes, so it is
+/// declined here exactly as it is for a plain Array.
+fn elements_backed_loop_guard(
+    receiver: *const u8,
+    elements: *const u8,
+    elements_header: &'static crate::gc::GcHeader,
+    requested_bound: Option<u32>,
+    require_numeric: i32,
+    out: *mut u64,
+) -> Option<(i32, *const u8)> {
+    if elements_header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+        || super::super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0
+        || require_numeric >= 2
+    {
+        return None;
+    }
+    let array = elements.cast::<ArrayHeader>();
+    let (length, capacity) = unsafe { ((*array).length, (*array).capacity) };
+    let bound = requested_bound.unwrap_or(length);
+    if bound > length || length > capacity || capacity > 16_000_000 {
+        return None;
+    }
+    if require_numeric != 0
+        && !unsafe { super::super::header::ensure_array_numeric_raw_f64(array as *mut ArrayHeader) }
+    {
+        return None;
+    }
+    let gc_word = unsafe { ptr::read_unaligned(elements.sub(8).cast::<u64>()) };
+    let array_word = (u64::from(capacity) << 32) | u64::from(length);
+    unsafe {
+        out.add(0).write(3);
+        out.add(1).write(gc_word);
+        out.add(2).write(array_word);
+        // Word 3 is the payload address the generated loop reads through; the
+        // revalidation entry refreshes it after every iteration that can move
+        // or re-allocate the store.
+        out.add(3).write(elements as u64);
+        out.add(4).write(0);
+        out.add(5).write(0);
+        out.add(6).write(u64::from(bound));
+    }
+    // The live address is the RECEIVER: the capture-safe caller reloads the
+    // receiver and re-derives the payload from word 3, so handing back the
+    // store here would let a stale capture read a detached payload.
+    Some((3, receiver))
 }
 
 fn packed_arraylike_loop_guard(
@@ -90,14 +145,24 @@ fn packed_arraylike_loop_guard(
         source
     };
     let header = unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) }?;
-    // An elements-backed Array-subclass instance (`super::subclass_elements`)
-    // keeps its elements in a real Array hanging off the meta record, so the
-    // loop is a PLAIN-ARRAY loop over that inner array: resolve to it and let
-    // the ordinary kind-1 admission below prove length/capacity/descriptors
-    // and (for a numeric mode) the raw-f64 bit. The live address the caller
-    // reads through is the inner array's, and the revalidation entry
-    // re-resolves it from the receiver on every iteration.
-    let (raw, header) = elements_loop_source(raw, header).unwrap_or((raw, header));
+    // An elements-backed Array-subclass instance keeps its payload in a
+    // separate Array hanging off the meta record. It is admitted as its own
+    // KIND rather than as a plain Array: kind 1 means "the receiver IS the
+    // ArrayHeader" and the generated loop computes `receiver + header + i*8`
+    // itself, so answering kind 1 with the store's address made element 0 read
+    // the object's `meta` word (`issue_8773_closure_capture_packed_loops`'s
+    // dense case). Kind 3 publishes the store address in word 3 and every
+    // proof below is the store's.
+    if let Some((elements, elements_header)) = elements_loop_source(raw, header) {
+        return elements_backed_loop_guard(
+            raw,
+            elements,
+            elements_header,
+            requested_bound,
+            require_numeric,
+            out,
+        );
+    }
 
     if header.obj_type == crate::gc::GC_TYPE_ARRAY {
         if header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
@@ -315,6 +380,9 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
     if unsafe { facts.read() } == 2 {
         return revalidate_admitted_subclass_live(receiver, bound, require_numeric, facts);
     }
+    if unsafe { facts.read() } == 3 {
+        return revalidate_admitted_elements_live(receiver, bound, require_numeric, facts);
+    }
     let live_length_bound = bound == -1.0;
     let js = JSValue::from_bits(receiver.to_bits());
     if !js.is_pointer() {
@@ -437,6 +505,77 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
             })
     {
         return 0;
+    }
+    raw as i64
+}
+
+/// Kind-3 revalidation: re-resolve the elements store from the receiver and
+/// prove it is the SAME payload the guard admitted (same header word, same
+/// length/capacity). A moving GC changes only the address, so word 3 is
+/// refreshed and the loop keeps running; a re-allocating append changes the
+/// capacity word and takes the side exit, exactly as a grown plain Array does.
+#[inline(always)]
+fn revalidate_admitted_elements_live(
+    receiver: f64,
+    bound: f64,
+    require_numeric: i32,
+    facts: *const u64,
+) -> i64 {
+    let js = JSValue::from_bits(receiver.to_bits());
+    if !js.is_pointer() {
+        return 0;
+    }
+    let raw = js.as_pointer::<u8>();
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) })
+    else {
+        return 0;
+    };
+    let Some((elements, elements_header)) = elements_loop_source(raw, header) else {
+        return 0;
+    };
+    if elements_header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+        || super::super::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0
+    {
+        return 0;
+    }
+    let (admitted_gc_word, admitted_array_word, admitted_bound) = unsafe {
+        (
+            facts.add(1).read(),
+            facts.add(2).read(),
+            facts.add(6).read(),
+        )
+    };
+    let array = elements.cast::<ArrayHeader>();
+    let (length, capacity) = unsafe { ((*array).length, (*array).capacity) };
+    let array_word = (u64::from(capacity) << 32) | u64::from(length);
+    let gc_word = unsafe { ptr::read_unaligned(elements.sub(8).cast::<u64>()) };
+    if array_word != admitted_array_word || gc_word != admitted_gc_word {
+        return 0;
+    }
+    let live_length_bound = bound == -1.0;
+    if !live_length_bound
+        && (!bound.is_finite()
+            || bound < 0.0
+            || bound.fract() != 0.0
+            || bound != admitted_bound as f64)
+    {
+        return 0;
+    }
+    if admitted_bound > u64::from(length) {
+        return 0;
+    }
+    if require_numeric != 0
+        && !unsafe { super::super::header::ensure_array_numeric_raw_f64(array as *mut ArrayHeader) }
+    {
+        return 0;
+    }
+    // Republish the payload address: the store itself may have been evacuated
+    // even though its contents and header word are unchanged.
+    unsafe {
+        (facts as *mut u64).add(3).write(elements as u64);
+        (facts as *mut u64)
+            .add(6)
+            .write(u64::from(length).min(admitted_bound));
     }
     raw as i64
 }

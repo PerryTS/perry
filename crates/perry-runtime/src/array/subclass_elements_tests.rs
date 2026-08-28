@@ -342,13 +342,16 @@ fn freeze_deopts_to_the_shape_carried_form() {
     );
 }
 
-/// The counted-loop guard admits an elements-backed instance as a PLAIN-ARRAY
-/// loop over its inner array: kind 1, the inner array's live address, and a
-/// revalidation that re-resolves the (possibly re-allocated) store from the
-/// receiver — this is what keeps versioned loops off the string-keyed
-/// property path.
+/// The counted-loop guard admits an elements-backed instance as KIND 3: the
+/// live address stays the RECEIVER (the capture-safe caller reloads it) and
+/// the payload address is published in descriptor word 3. The generated loop
+/// derives its base from the receiver on the ordinary path, so publishing the
+/// store as a plain-Array receiver (kind 1) made element 0 read the object's
+/// `meta` word instead — `issue_8773_closure_capture_packed_loops`'s dense
+/// case. Revalidation refreshes word 3 after a move and side-exits when an
+/// append re-allocates the store.
 #[test]
-fn the_counted_loop_guard_admits_an_elements_backed_receiver_as_its_inner_array() {
+fn the_counted_loop_guard_admits_an_elements_backed_receiver_as_kind_three() {
     let _representation = ArraySubclassRepresentationGuard::elements();
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::gc::register_runtime_handle_root_scanner_for_tests();
@@ -371,30 +374,35 @@ fn the_counted_loop_guard_admits_an_elements_backed_receiver_as_its_inner_array(
         facts.as_mut_ptr(),
     );
     assert_ne!(live, 0, "an elements-backed receiver must be admitted");
-    assert_eq!(facts[0], 1, "admitted as a plain-array loop");
+    assert_eq!(facts[0], 3, "its own kind, never a plain Array");
     assert_eq!(
         live as usize,
-        unsafe { elements_of(live_obj(recv())) } as usize,
-        "the live address is the inner array"
+        (recv().to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
+        "the live address is the RECEIVER, not the payload"
     );
-    assert_eq!(facts[6], 8, "the live-length bound is the inner length");
-    let revalidated = super::subclass::loop_guard::js_packed_arraylike_loop_revalidate_live(
-        recv(),
-        -1.0,
-        0,
-        facts.as_ptr(),
+    let store = unsafe { elements_of(live_obj(recv())) };
+    assert_eq!(facts[3] as usize, store as usize, "word 3 is the payload");
+    assert_eq!(facts[6], 8, "the live-length bound is the store's length");
+    assert_eq!(
+        super::subclass::loop_guard::js_packed_arraylike_loop_revalidate_live(
+            recv(),
+            -1.0,
+            0,
+            facts.as_ptr(),
+        ),
+        live,
+        "revalidation keeps the same receiver"
     );
-    assert_eq!(revalidated, live, "revalidation resolves the same store");
+    assert_eq!(facts[3] as usize, store as usize);
 
-    // An append inside the loop body re-allocates the store. The recorded
-    // facts describe the OLD array, so revalidation takes the side exit (0),
-    // exactly as it does for a grown plain Array — and a fresh guard call
-    // then admits the current store.
+    // An append inside the loop body re-allocates the store: the recorded
+    // capacity no longer matches, so revalidation side-exits exactly as it
+    // does for a grown plain Array, and a fresh guard call re-admits.
     for i in 8..64u32 {
         assert!(super::subclass::array_subclass_fast_push_one(recv(), f64::from(i)).is_some());
     }
     let grown = unsafe { elements_of(live_obj(recv())) };
-    assert_ne!(grown as usize, live as usize, "the appends re-allocated");
+    assert_ne!(grown as usize, store as usize, "the appends re-allocated");
     assert_eq!(
         super::subclass::loop_guard::js_packed_arraylike_loop_revalidate_live(
             recv(),
@@ -411,9 +419,11 @@ fn the_counted_loop_guard_admits_an_elements_backed_receiver_as_its_inner_array(
         0,
         facts.as_mut_ptr(),
     );
+    assert_ne!(live2, 0);
+    assert_eq!(facts[0], 3);
     assert_eq!(
-        live2 as usize, grown as usize,
-        "re-admission sees the new store"
+        facts[3] as usize, grown as usize,
+        "word 3 tracks the new store"
     );
     assert_eq!(facts[6], 64);
 }

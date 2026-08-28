@@ -631,15 +631,35 @@ fn descriptor_word(ctx: &mut FnCtx<'_>, descriptor: &str, index: u64) -> String 
 /// used once in ordinary call-free loops and at every iteration entry for a
 /// closure capture, where a nested guard/callback may have moved the receiver
 /// since the preceding iteration.
+/// The kind test and payload base shared by the two plain-payload kinds.
+///
+/// Kind 1 means the receiver IS the `ArrayHeader`, so its payload starts at
+/// `live_raw + 8`. Kind 3 is an elements-backed Array subclass
+/// (`perry-runtime::array::subclass_elements`): the receiver is the object and
+/// the payload lives in a separate Array whose address the guard publishes in
+/// descriptor word 3 and every revalidation refreshes. Selecting the base from
+/// that word keeps both the capture-safe path (which reloads the receiver) and
+/// the ordinary path (whose `live_raw` is the receiver) reading the payload.
+fn plain_payload_base(ctx: &mut FnCtx<'_>, descriptor: &str, live_raw: &str) -> (String, String) {
+    let kind = descriptor_word(ctx, descriptor, 0);
+    let is_array_receiver = ctx.block().icmp_eq(I64, &kind, "1");
+    let is_elements_store = ctx.block().icmp_eq(I64, &kind, "3");
+    let is_plain = ctx.block().or(I1, &is_array_receiver, &is_elements_store);
+    let store = descriptor_word(ctx, descriptor, 3);
+    let payload = ctx
+        .block()
+        .select(I1, &is_elements_store, I64, &store, live_raw);
+    (is_plain, payload)
+}
+
 fn build_numeric_access(
     ctx: &mut FnCtx<'_>,
     descriptor: &str,
     live_raw: &str,
     contiguous_u32_prefix: bool,
 ) -> StablePackedNumericAccess {
-    let kind = descriptor_word(ctx, descriptor, 0);
-    let is_plain = ctx.block().icmp_eq(I64, &kind, "1");
-    let plain_base = ctx.block().add(I64, live_raw, "8");
+    let (is_plain, payload) = plain_payload_base(ctx, descriptor, live_raw);
+    let plain_base = ctx.block().add(I64, &payload, "8");
 
     let element_base = descriptor_word(ctx, descriptor, 4);
     let packed_bounds = descriptor_word(ctx, descriptor, 5);
@@ -990,7 +1010,7 @@ pub(crate) fn try_lower_index_get(
             fact.u32_component_bound.as_deref(),
         ));
     }
-    let kind = descriptor_word(ctx, &fact.descriptor, 0);
+    let (is_plain, payload) = plain_payload_base(ctx, &fact.descriptor, &raw);
 
     let plain_idx = ctx.new_block("stable_packed.load.plain");
     let object_idx = ctx.new_block("stable_packed.load.object");
@@ -1004,13 +1024,12 @@ pub(crate) fn try_lower_index_get(
     let object_spill_label = ctx.block_label(object_spill_idx);
     let object_spill_ptr_label = ctx.block_label(object_spill_ptr_idx);
     let merge_label = ctx.block_label(merge_idx);
-    let is_plain = ctx.block().icmp_eq(I64, &kind, "1");
     ctx.block().cond_br(&is_plain, &plain_label, &object_label);
 
     ctx.current_block = plain_idx;
     let byte_offset = ctx.block().shl(I64, &idx_i64, "3");
     let with_header = ctx.block().add(I64, &byte_offset, "8");
-    let element_addr = ctx.block().add(I64, &raw, &with_header);
+    let element_addr = ctx.block().add(I64, &payload, &with_header);
     let element_ptr = ctx.block().inttoptr(I64, &element_addr);
     let plain_raw = ctx.block().load(DOUBLE, &element_ptr);
     let plain_bits = ctx.block().bitcast_double_to_i64(&plain_raw);
