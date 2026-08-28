@@ -1670,7 +1670,12 @@ pub(crate) fn get_field_by_name_object_tail(
             return JSValue::undefined();
         }
 
-        for i in 0..key_count {
+        // #8936/#8950's resolver narrows the candidate to one slot via the
+        // shape hash index instead of walking every key; the original match
+        // below still gates the hit, so this cannot widen what is accepted.
+        for i in crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key)
+            .map(|v| v as usize)
+        {
             let key_val = crate::array::keys_array_slot(keys, i as u32);
             // #1781: accept inline SSO short keys here too — the
             // slow-path lookup is what backs `obj[k]` for ≤5-byte

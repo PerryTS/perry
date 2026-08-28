@@ -189,23 +189,39 @@ pub extern "C" fn js_object_get_field_by_name(
                                 let key_count =
                                     crate::array::keys_array_len_capped_to_capacity(keys);
                                 if key_count <= 4096 {
-                                    for i in 0..key_count {
-                                        let kv = crate::array::keys_array_slot(keys, i as u32);
-                                        if crate::string::js_string_key_matches(kv, key) {
-                                            super::super::prop_plan::read_plan_record(
-                                                keys as usize,
-                                                key as usize,
-                                                i as u32,
-                                            );
-                                            return if i < alloc_limit {
-                                                super::accessors::js_object_get_field(o, i as u32)
-                                            } else {
-                                                match super::super::overflow_get(raw, i) {
-                                                    Some(b) => JSValue::from_bits(b),
-                                                    None => JSValue::undefined(),
-                                                }
-                                            };
-                                        }
+                                    // #8936/#8950's shared resolver: the shape's
+                                    // hash index answers in O(1), with the raw
+                                    // dense-slot scan as its own fallback. The
+                                    // open-coded `keys_array_slot` +
+                                    // `js_string_key_matches` walk this replaces
+                                    // was the read-plan cache's MISS path, so it
+                                    // ran in full — up to `key_count` string
+                                    // compares — every time the epoch-guarded
+                                    // plan was flushed (each GC, and every
+                                    // descriptor / prototype / delete mutation).
+                                    // On a 500-key receiver that put
+                                    // `js_string_key_matches` at 9.6% self time
+                                    // in a computed-key read loop, second only to
+                                    // this function itself.
+                                    if let Some(i) = crate::object::keys_find_slot_by_key_ptr(
+                                        keys,
+                                        key_count as u32,
+                                        key,
+                                    ) {
+                                        let i = i as usize;
+                                        super::super::prop_plan::read_plan_record(
+                                            keys as usize,
+                                            key as usize,
+                                            i as u32,
+                                        );
+                                        return if i < alloc_limit {
+                                            super::accessors::js_object_get_field(o, i as u32)
+                                        } else {
+                                            match super::super::overflow_get(raw, i) {
+                                                Some(b) => JSValue::from_bits(b),
+                                                None => JSValue::undefined(),
+                                            }
+                                        };
                                     }
                                 }
                             }
