@@ -860,7 +860,7 @@ pub(crate) fn set_field_by_name_object_tail(
         // shape hash index instead of walking every key (and probing each for
         // per-index accessors via `js_array_get`); the original match below
         // still gates the hit, so this cannot widen what is accepted.
-        for i in crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key)
+        if let Some(i) = crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key)
             .map(|v| v as usize)
         {
             let key_val = crate::array::js_array_get(keys, i as u32);
