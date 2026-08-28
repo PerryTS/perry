@@ -1034,6 +1034,9 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 && ctx.locals.contains_key(array_id)
             {
                 let slot = ctx.locals.get(array_id).cloned().unwrap();
+                let apush_meta_offset =
+                    crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple)
+                        .to_string();
                 let blk = ctx.block();
                 let arr_handle = unbox_to_i64(blk, &arr_box);
 
@@ -1078,18 +1081,78 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 let is_fwd = blk.or(I1, &not_array, &fwd_set);
 
                 let fwd_idx = ctx.new_block("apush.fwd");
+                // An elements-backed Array subclass (`ObjectMeta.elements`)
+                // appends to its store: the payload is resolved here and the
+                // ordinary room/flag tests and the inline store below run on
+                // it, so `sub.push(v)` stops paying a runtime entry whose only
+                // job is to follow one pointer.
+                let elem_idx = ctx.new_block("apush.elements");
+                let elem_check_idx = ctx.new_block("apush.elements.check");
                 let nofwd_idx = ctx.new_block("apush.nofwd");
                 let inbounds_idx = ctx.new_block("apush.inbounds");
                 let realloc_idx = ctx.new_block("apush.realloc");
                 let merge_idx = ctx.new_block("apush.merge");
 
                 let fwd_label = ctx.block_label(fwd_idx);
+                let elem_label = ctx.block_label(elem_idx);
+                let elem_check_label = ctx.block_label(elem_check_idx);
                 let nofwd_label = ctx.block_label(nofwd_idx);
                 let inbounds_label = ctx.block_label(inbounds_idx);
                 let realloc_label = ctx.block_label(realloc_idx);
                 let merge_label = ctx.block_label(merge_idx);
 
-                ctx.block().cond_br(&is_fwd, &fwd_label, &nofwd_label);
+                {
+                    let blk = ctx.block();
+                    // A forwarded receiver keeps the runtime arm; a live
+                    // non-Array receiver gets the elements probe.
+                    blk.cond_br(&fwd_set, &fwd_label, &elem_label);
+                }
+                let _ = &is_fwd;
+
+                ctx.current_block = elem_idx;
+                let elem_store = {
+                    let blk = ctx.block();
+                    let array_receiver = blk.icmp_eq(I8, &gc_type, "1");
+                    let meta_addr = blk.add(I64, &arr_handle, &apush_meta_offset);
+                    let meta_slot = blk.inttoptr(I64, &meta_addr);
+                    let meta = blk.load(I64, &meta_slot);
+                    let has_meta = blk.icmp_ne(I64, &meta, "0");
+                    let is_object = blk.icmp_eq(I8, &gc_type, "2");
+                    let can_read_meta = blk.and(I1, &is_object, &has_meta);
+                    // `select` keeps the word-12 load off a null meta pointer.
+                    let safe_meta = blk.select(I1, &can_read_meta, I64, &meta, &arr_handle);
+                    let meta_ptr = blk.inttoptr(I64, &safe_meta);
+                    let store_slot = blk.gep(I64, &meta_ptr, &[(I64, "12")]);
+                    let store = blk.load(I64, &store_slot);
+                    let has_store = blk.icmp_ne(I64, &store, "0");
+                    let backed = blk.and(I1, &can_read_meta, &has_store);
+                    // The payload for the check block, materialised BEFORE the
+                    // terminator so it dominates its uses; an ordinary Array
+                    // receiver skips the probe entirely.
+                    let payload = blk.select(I1, &backed, I64, &store, &arr_handle);
+                    blk.cond_br(&array_receiver, &nofwd_label, &elem_check_label);
+                    payload
+                };
+                let elem_probe_end = ctx.block_label(elem_idx);
+
+                ctx.current_block = elem_check_idx;
+                {
+                    let blk = ctx.block();
+                    let has_store = blk.icmp_ne(I64, &elem_store, "0");
+                    let gc_type_addr = blk.sub(I64, &elem_store, "8");
+                    let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
+                    let store_type = blk.load(I8, &gc_type_ptr);
+                    let store_is_array = blk.icmp_eq(I8, &store_type, "1");
+                    let gc_flags_addr = blk.sub(I64, &elem_store, "7");
+                    let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
+                    let store_flags = blk.load(I8, &gc_flags_ptr);
+                    let store_fwd = blk.and(I8, &store_flags, "128");
+                    let store_live = blk.icmp_eq(I8, &store_fwd, "0");
+                    let mut ok = blk.and(I1, &has_store, &store_is_array);
+                    ok = blk.and(I1, &ok, &store_live);
+                    blk.cond_br(&ok, &nofwd_label, &fwd_label);
+                }
+                let elem_check_end = ctx.block_label(elem_check_idx);
 
                 // FORWARDED branch: route through runtime.
                 ctx.current_block = fwd_idx;
@@ -1124,9 +1187,16 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 // FROZEN|SEALED|NO_EXTEND|ARRAY_DESCRIPTORS = 0x407.
                 let live_object_flags: String;
                 ctx.current_block = nofwd_idx;
+                let payload = ctx.block().phi(
+                    I64,
+                    &[
+                        (&arr_handle, &elem_probe_end),
+                        (&elem_store, &elem_check_end),
+                    ],
+                );
                 {
                     let blk = ctx.block();
-                    let flags_addr = blk.sub(I64, &arr_handle, "6");
+                    let flags_addr = blk.sub(I64, &payload, "6");
                     let flags_ptr = blk.inttoptr(I64, &flags_addr);
                     let obj_flags = blk.load(I16, &flags_ptr);
                     live_object_flags = obj_flags.clone();
@@ -1196,8 +1266,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                         blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
                     let prototype_clean = blk.icmp_eq(I8, &invalidated, "0");
                     let clean = blk.and(I1, &clean, &prototype_clean);
-                    let length = blk.safe_load_i32_from_ptr(&arr_handle);
-                    let cap_addr = blk.add(I64, &arr_handle, "4");
+                    let length = blk.safe_load_i32_from_ptr(&payload);
+                    let cap_addr = blk.add(I64, &payload, "4");
                     let cap_ptr = blk.inttoptr(I64, &cap_addr);
                     let capacity = blk.load(I32, &cap_ptr);
                     let has_room = blk.icmp_ult(I32, &length, &capacity);
@@ -1228,7 +1298,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 let (length, element_addr, barrier_value_bits) = if guarded_numeric_bookkeeping {
                     emit_numeric_push_store_pointer_tested(
                         ctx,
-                        &arr_handle,
+                        &payload,
                         &v,
                         v_bits.as_deref(),
                         string_addref_needed,
@@ -1238,7 +1308,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 } else if dynamic_pointer_bookkeeping {
                     let (length, element_addr, value_bits) = emit_dynamic_pointer_push_store(
                         ctx,
-                        &arr_handle,
+                        &payload,
                         &v,
                         v_bits.as_deref(),
                         &live_object_flags,
@@ -1252,11 +1322,11 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     )
                 } else {
                     let blk = ctx.block();
-                    let length = blk.safe_load_i32_from_ptr(&arr_handle);
+                    let length = blk.safe_load_i32_from_ptr(&payload);
                     let length_i64 = blk.zext(I32, &length, I64);
                     let byte_offset = blk.shl(I64, &length_i64, "3");
                     let with_header = blk.add(I64, &byte_offset, "8");
-                    let element_addr = blk.add(I64, &arr_handle, &with_header);
+                    let element_addr = blk.add(I64, &payload, &with_header);
                     let element_ptr = blk.inttoptr(I64, &element_addr);
                     let value_bits = if let Some(value_bits) = v_bits.as_deref() {
                         emit_jsvalue_slot_store_with_value_bits_on_block(
@@ -1264,11 +1334,11 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                             &element_ptr,
                             &v,
                             value_bits,
-                            &arr_handle,
+                            &payload,
                             &length,
                             string_addref_needed,
                             layout_note_needed,
-                            &arr_handle,
+                            &payload,
                             &element_addr,
                             false,
                         )
@@ -1277,11 +1347,11 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                             blk,
                             &element_ptr,
                             &v,
-                            &arr_handle,
+                            &payload,
                             &length,
                             string_addref_needed,
                             layout_note_needed,
-                            &arr_handle,
+                            &payload,
                             &element_addr,
                             false,
                         )
@@ -1312,7 +1382,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                             .clone()
                             .or(value_bits)
                             .unwrap_or_else(|| blk.bitcast_double_to_i64(&v));
-                        emit_array_numeric_write_note_on_block(blk, &arr_handle, &value_bits);
+                        emit_array_numeric_write_note_on_block(blk, &payload, &value_bits);
                     }
                     (length, element_addr, barrier_value_bits)
                 };
@@ -1322,8 +1392,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     // pointer — the precondition for reading its header byte.
                     emit_write_barrier_slot_generation_tested(
                         ctx,
-                        &arr_handle,
-                        &arr_handle,
+                        &payload,
+                        &payload,
                         &element_addr,
                         &child_bits,
                         "apush",
@@ -1332,7 +1402,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 {
                     let blk = ctx.block();
                     let new_length = blk.add(I32, &length, "1");
-                    let arr_ptr = blk.inttoptr(I64, &arr_handle);
+                    let arr_ptr = blk.inttoptr(I64, &payload);
                     // GC_STORE_AUDIT(POINTER_FREE): array length header update has no child pointer.
                     blk.store(I32, &new_length, &arr_ptr);
                     blk.br(&merge_label);
