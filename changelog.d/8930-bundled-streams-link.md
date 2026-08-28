@@ -1,0 +1,1 @@
+Fixed Linux links for HTTP wrappers when compiled-package stream usage enables `bundled-streams`. Shared-dependency archive pruning now only treats a matching stdlib codegen unit as a replacement for symbols that unit exports, preserving feature-dependent symbols such as `futures_channel::mpsc::SenderTask::notify` when they are still needed by the wrapper.

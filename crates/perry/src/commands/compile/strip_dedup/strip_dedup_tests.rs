@@ -4,7 +4,7 @@
 //! private items exactly as the inline `mod strip_dedup_tests` did.
 
 use super::{
-    force_localize_symbol, is_panic_unwind_symbol, parse_nm_archive_output,
+    force_localize_symbol, is_panic_unwind_symbol, parse_nm_archive_map, parse_nm_archive_output,
     requires_bundled_native_companion, shared_dep_members_to_remove,
 };
 
@@ -97,6 +97,24 @@ _sym
 }
 
 #[test]
+fn archive_map_parser_preserves_symbol_ownership() {
+    let armap = "\
+Archive map
+symbol_a in matching unit.o
+symbol_b in another.o
+symbol_c in matching unit.o
+
+matching unit.o:
+0000000000000000 T symbol_a
+";
+    let parsed = parse_nm_archive_map(armap);
+    assert_eq!(parsed["matching unit.o"].len(), 2);
+    assert!(parsed["matching unit.o"].contains("symbol_a"));
+    assert!(parsed["matching unit.o"].contains("symbol_c"));
+    assert_eq!(parsed["another.o"].len(), 1);
+}
+
+#[test]
 fn subset_check_prunes_only_full_overlap() {
     // The actual filter logic: keep a member iff at least one of its
     // symbols is unique (i.e. not in the provided set). This pins
@@ -183,21 +201,91 @@ fn shared_dep_fixed_point_keeps_ring_native_half_with_kept_rust_half() {
         )
     })
     .collect();
-    let stdlib_defined: HashSet<String> = ["ring_core_0_17_14__p384_point_mul", "ordinary_shared"]
-        .into_iter()
-        .map(str::to_string)
-        .collect();
+    let replacement_defined_by_candidate: HashMap<String, HashSet<String>> = [
+        ("ring-rust.o", vec![]),
+        ("ring-native.o", vec!["ring_core_0_17_14__p384_point_mul"]),
+        ("ordinary.o", vec!["ordinary_shared"]),
+    ]
+    .into_iter()
+    .map(|(member, symbols)| {
+        (
+            member.to_string(),
+            symbols.into_iter().map(str::to_string).collect(),
+        )
+    })
+    .collect();
 
     let removed = shared_dep_members_to_remove(
         &candidates,
         &defined_by_member,
         &undefined_by_member,
-        &stdlib_defined,
+        &replacement_defined_by_candidate,
     );
 
     assert!(!removed.contains("ring-rust.o"));
     assert!(!removed.contains("ring-native.o"));
     assert!(removed.contains("ordinary.o"));
+}
+
+#[test]
+fn issue_8930_requires_needed_symbol_in_matching_stdlib_member() {
+    use std::collections::{BTreeSet, HashMap, HashSet};
+
+    let candidates: BTreeSet<String> = ["futures_channel.o"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let defined_by_member: HashMap<String, HashSet<String>> = [("futures_channel.o", ["notify"])]
+        .into_iter()
+        .map(|(member, symbols)| {
+            (
+                member.to_string(),
+                symbols.into_iter().map(str::to_string).collect(),
+            )
+        })
+        .collect();
+    let undefined_by_member: HashMap<String, HashSet<String>> = [("http_receiver.o", ["notify"])]
+        .into_iter()
+        .map(|(member, symbols)| {
+            (
+                member.to_string(),
+                symbols.into_iter().map(str::to_string).collect(),
+            )
+        })
+        .collect();
+
+    // Another stdlib unit exporting `notify` is not proof that the
+    // name-matched futures_channel replacement is interchangeable.
+    let missing_from_match: HashMap<String, HashSet<String>> = [
+        ("futures_channel.o".to_string(), HashSet::new()),
+        (
+            "unrelated.o".to_string(),
+            ["notify".to_string()].into_iter().collect(),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let removed_without_match = shared_dep_members_to_remove(
+        &candidates,
+        &defined_by_member,
+        &undefined_by_member,
+        &missing_from_match,
+    );
+    assert!(!removed_without_match.contains("futures_channel.o"));
+
+    let present_in_match: HashMap<String, HashSet<String>> = [(
+        "futures_channel.o".to_string(),
+        ["notify".to_string()].into_iter().collect(),
+    )]
+    .into_iter()
+    .collect();
+    let removed = shared_dep_members_to_remove(
+        &candidates,
+        &defined_by_member,
+        &undefined_by_member,
+        &present_in_match,
+    );
+    assert!(removed.contains("futures_channel.o"));
 }
 
 #[cfg(target_os = "windows")]
