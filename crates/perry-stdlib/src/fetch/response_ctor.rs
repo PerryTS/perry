@@ -41,6 +41,9 @@ pub unsafe extern "C" fn js_response_new(
     headers_handle: f64,
 ) -> f64 {
     let body_stream_id = take_pending_fetch_body_stream_id();
+    // Consume before validation so a throwing constructor cannot leak body
+    // metadata into the next Response construction on this thread.
+    let body_content_type = take_pending_fetch_body_content_type();
     // Lossless raw-byte read so binary bodies survive byte-for-byte (#5435).
     let body_opt = dispatch::body_bytes_from_header(body_ptr);
     let body_present = body_opt.is_some() || body_stream_id.is_some();
@@ -77,16 +80,19 @@ pub unsafe extern "C" fn js_response_new(
         ));
     }
     let headers_id = handle_id(headers_handle);
-    let headers = if headers_id != 0 {
-        HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get(&headers_id)
-            .cloned()
-            .unwrap_or_default()
-    } else {
-        HeadersStore::default()
-    };
+    let registered = (headers_id != 0)
+        .then(|| HEADERS_REGISTRY.lock().unwrap().get(&headers_id).cloned())
+        .flatten();
+    // Non-literal Response init objects can deliver a plain HeadersInit value
+    // here. Preserve those records instead of treating them as missing handles.
+    let mut headers = registered
+        .or_else(|| headers_store_from_record_value(headers_handle))
+        .unwrap_or_default();
+    if let Some(content_type) = body_content_type {
+        if headers.get("content-type").is_none() {
+            headers.set("content-type", content_type);
+        }
+    }
     // A Response owns a private Headers list. The constructor input may be an
     // existing Headers object, so retaining its registry id would make
     // mutations alias in both directions instead of copying the initializer.

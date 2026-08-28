@@ -4,7 +4,9 @@
 //! parameter destructuring, and other pattern-related utilities.
 
 use crate::ir::*;
-use crate::lower::{lower_expr, LoweringContext};
+use crate::lower::{
+    lower_expr, private_storage_property, wrap_private_guard, LoweringContext, PRIV_OP_READ,
+};
 use crate::lower_types::*;
 use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
@@ -251,15 +253,10 @@ pub(crate) fn lower_assign_target_to_expr(
                     // Reading `#n` as a public property returns `undefined`,
                     // which made `this.#n += 1` store NaN in the real slot.
                     let private_name = format!("#{}", private.name);
-                    let object = crate::lower::wrap_private_guard(
-                        ctx,
-                        object,
-                        &private_name,
-                        crate::lower::PRIV_OP_READ,
-                    );
-                    let property = crate::lower::private_storage_property(ctx, &private_name);
+                    let object = wrap_private_guard(ctx, object, &private_name, PRIV_OP_READ);
+                    let property = private_storage_property(ctx, &private_name);
                     Ok(Expr::PropertyGet {
-                        byte_offset: 0,
+                        byte_offset: member.span.lo.0,
                         object,
                         property,
                     })

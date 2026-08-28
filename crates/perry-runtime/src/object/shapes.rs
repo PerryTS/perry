@@ -569,6 +569,44 @@ pub(crate) fn shape_id_for_keys_ensure(keys: *const ArrayHeader, key_count: u32)
     publish_shape_result(shape_descriptor_ensure(keys, key_count, key_count))
 }
 
+/// One FIELD of a shape's descriptor, without lifting the whole record.
+///
+/// [`shape_descriptor_by_id`] returns `ShapeDescriptor` **by value**, so every
+/// caller that wants a single `u32` still copies the entire ~48-byte record
+/// out of the table. That is most of them: `object_live_slot_count` — the slot
+/// bound consulted on essentially every property read and write — throws away
+/// all of it but `live_inline_slot_count`.
+///
+/// This shares the way-cache probe with `shape_descriptor_by_id` and reads the
+/// field through the record pointer instead. Same lookup, same validation,
+/// four bytes instead of forty-eight.
+#[inline]
+fn shape_descriptor_field_by_id<T>(
+    shape_id: u32,
+    read: impl Fn(&ShapeDescriptor) -> T,
+) -> Option<T> {
+    if !is_shape_id(shape_id) {
+        return None;
+    }
+    let table = &crate::state::state().shapes;
+    let epoch = table.lookup_epoch.get();
+    let way = &table.lookup_ways[(shape_id as usize) & (SHAPE_LOOKUP_WAYS - 1)];
+    let (cached_id, record, cached_epoch) = way.get();
+    if cached_id == shape_id && cached_epoch == epoch && record != 0 {
+        // SAFETY: identical to `shape_descriptor_by_id`'s hit arm — the way is
+        // only filled from a live `Box<ShapeDescriptor>` and the epoch is
+        // bumped whenever a record's address can change under an id still in
+        // use, so a matching epoch means this address is the table's record.
+        return Some(read(unsafe { &*(record as *const ShapeDescriptor) }));
+    }
+    shape_descriptor_by_id(shape_id).map(|d| read(&d))
+}
+
+/// The live inline-slot bound for `shape_id`, without copying its descriptor.
+pub(crate) fn shape_live_inline_slot_count_by_id(shape_id: u32) -> Option<u32> {
+    shape_descriptor_field_by_id(shape_id, |d| d.live_inline_slot_count)
+}
+
 pub(crate) fn shape_descriptor_by_id(shape_id: u32) -> Option<ShapeDescriptor> {
     if !is_shape_id(shape_id) {
         return None;

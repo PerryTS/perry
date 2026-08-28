@@ -18,6 +18,14 @@
 use super::*;
 use perry_runtime::{js_get_string_pointer_unified, js_jsvalue_to_string};
 
+/// Clear metadata left by an earlier Response whose init evaluation threw
+/// before `js_response_new` could consume it.
+#[no_mangle]
+pub extern "C" fn js_response_body_init_reset() -> f64 {
+    reset_pending_fetch_body_init();
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 /// Coerce a `Response` body-init value to a `*const StringHeader` (returned as
 /// i64, mirroring `js_get_string_pointer_unified`).
 ///
@@ -30,6 +38,11 @@ use perry_runtime::{js_get_string_pointer_unified, js_jsvalue_to_string};
 /// (`c.json`/`c.text`) are unaffected.
 #[no_mangle]
 pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
+    set_pending_fetch_body_content_type(
+        JSValue::from_bits(value.to_bits())
+            .is_any_string()
+            .then_some(BODY_CONTENT_TYPE_TEXT_PLAIN),
+    );
     // A binary body — Buffer / Uint8Array / typed array / ArrayBuffer — must
     // copy its RAW bytes. Such a value is a BufferHeader/TypedArrayHeader
     // pointer, NOT a StringHeader; passing it straight to `string_from_header`

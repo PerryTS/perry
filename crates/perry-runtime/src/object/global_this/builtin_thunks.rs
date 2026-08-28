@@ -407,7 +407,14 @@ pub(crate) extern "C" fn global_this_error_is_error_thunk(
 /// `fn`. Unrecognized templates fall back to a non-callable placeholder object
 /// (prior behavior); there is no general eval.
 #[no_mangle]
-pub extern "C" fn js_function_ctor_from_strings(args_ptr: *const f64, args_len: usize) -> f64 {
+// This is a generated-code boundary and the dyn-eval-off refusal below starts
+// a JS unwind to the caller's catch landing pad. A plain `extern "C"` installs
+// an abort-on-unwind guard in debug/static runtimes, turning zod's harmless
+// `new Function("")` capability probe into a process abort (#8958).
+pub extern "C-unwind" fn js_function_ctor_from_strings(
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
     let arg_str = |i: usize| -> String {
         if i >= args_len || args_ptr.is_null() {
             return String::new();
@@ -476,16 +483,21 @@ pub extern "C" fn js_function_ctor_from_strings(args_ptr: *const f64, args_len: 
         } else {
             String::new()
         };
-        let preview: String = body.chars().take(160).collect();
-        eprintln!(
-            "[perry] dynamic Function refused (AOT, dyn-eval feature off) — {} arg(s); body[..160]={:?}",
-            args_len, preview
-        );
-        super::super::object_ops::throw_object_type_error(
-            b"Function: dynamic code generation from a runtime string is not supported \
-              in an ahead-of-time compiled binary",
-        )
+        refuse_dynamic_function(args_len, &body)
     }
+}
+
+#[cfg(any(not(feature = "dyn-eval"), test))]
+fn refuse_dynamic_function(args_len: usize, body: &str) -> ! {
+    let preview: String = body.chars().take(160).collect();
+    eprintln!(
+        "[perry] dynamic Function refused (AOT, dyn-eval feature off) — {} arg(s); body[..160]={:?}",
+        args_len, preview
+    );
+    super::super::object_ops::throw_object_type_error(
+        b"Function: dynamic code generation from a runtime string is not supported \
+          in an ahead-of-time compiled binary",
+    )
 }
 
 /// depd `wrapfunction` outer `(fn, log, deprecate, message, site) => wrapper`.
@@ -505,8 +517,13 @@ extern "C" fn depd_wrapfunction_outer_thunk(
 
 #[cfg(feature = "keepalive-anchors")]
 #[used]
-static KEEP_JS_FUNCTION_CTOR_FROM_STRINGS: extern "C" fn(*const f64, usize) -> f64 =
+static KEEP_JS_FUNCTION_CTOR_FROM_STRINGS: extern "C-unwind" fn(*const f64, usize) -> f64 =
     js_function_ctor_from_strings;
+
+// Keep the unwind-capable ABI checked even in stripped builds that omit the
+// keepalive anchor: this helper conditionally originates, rather than merely
+// passes through, a raw Perry exception.
+const _: extern "C-unwind" fn(*const f64, usize) -> f64 = js_function_ctor_from_strings;
 
 /// #2904: `Error.prepareStackTrace` default — Node leaves a hook here that
 /// formats the stack from structured frames. Perry's stack strings are
@@ -540,4 +557,23 @@ pub(crate) extern "C" fn proxy_revocable_thunk(
     handler: f64,
 ) -> f64 {
     crate::proxy::js_proxy_revocable(target, handler)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_function_refusal_is_a_catchable_type_error() {
+        let thrown = crate::exception::js_call_catching(|| refuse_dynamic_function(1, ""))
+            .expect_err("a dyn-eval-off runtime must refuse a dynamic Function");
+
+        let value = crate::value::JSValue::from_bits(thrown.to_bits());
+        assert!(value.is_pointer(), "the refusal must throw an Error object");
+        let error = crate::value::js_nanbox_get_pointer(thrown) as *mut crate::error::ErrorHeader;
+        assert_eq!(
+            crate::error::js_error_get_kind(error),
+            crate::error::ERROR_KIND_TYPE_ERROR,
+        );
+    }
 }

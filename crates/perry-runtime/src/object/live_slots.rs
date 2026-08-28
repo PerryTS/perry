@@ -50,9 +50,11 @@ pub extern "C" fn perry_object_header_abi_revision() -> u32 {
 /// configuration.
 #[inline]
 pub unsafe fn object_live_slot_count(obj: *const ObjectHeader) -> u32 {
-    shapes::object_shape_descriptor(obj)
-        .map(|descriptor| descriptor.live_inline_slot_count)
-        .unwrap_or(0)
+    // Reads the one field through the table's record instead of lifting the
+    // whole ~48-byte descriptor to discard all but four bytes of it. This is
+    // the bound consulted on essentially every property read and write, and
+    // `shape_descriptor_by_id` was 10.1% of an isolated property-read loop.
+    shapes::shape_live_inline_slot_count_by_id(shapes::object_shape_stamp(obj)).unwrap_or(0)
 }
 
 /// C-ABI accessor for [`object_live_slot_count`], for out-of-runtime consumers

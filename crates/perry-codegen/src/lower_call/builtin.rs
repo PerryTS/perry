@@ -1056,6 +1056,10 @@ pub(super) fn lower_builtin_new<'a>(
         }
         "Response" => {
             // new Response(body?, init?) — init = { status?, statusText?, headers? }
+            // Clear BodyInit metadata before evaluating either argument: init
+            // evaluation can throw after the body was converted, in which case
+            // js_response_new never gets a chance to consume that metadata.
+            ctx.block().call(DOUBLE, "js_response_body_init_reset", &[]);
             // Route the body through js_response_body_init_ptr (not the plain
             // string coercion) so a ReadableStream body — e.g. Hono's
             // `new Response(res.body, res)` header re-wrap — is drained to its
