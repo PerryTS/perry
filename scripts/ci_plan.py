@@ -76,6 +76,7 @@ JOBS: dict[str, tuple[str, ...]] = {
     "check": ("pr", "sweep", "full"),
     "warnings": ("pr", "sweep", "full"),
     "cargo_test": ("pr", "sweep", "full"),
+    "cargo_test_perry": ("full",),
     "gap_suite": ("pr", "sweep", "full"),
     "gc_stress": ("pr", "sweep", "full"),
     "e2e_scoped": ("pr",),  # scoped to the PR's diff; meaningless without one
@@ -128,6 +129,14 @@ GAP_SUITE = {
 # full-tier jobs drain. `parity-aggregate` (not in JOBS: it keys off
 # `jobs.parity`) merges the shard reports and runs the aggregate-only gates.
 PARITY_SHARDS = 12
+
+# The growing `perry` integration inventory cannot finish serially inside
+# cargo-test's 180-minute release bound (#8914). Eight round-robin shards put
+# the observed low-cache workload below 90 minutes while fitting alongside the
+# existing eight gap workers in the org's 20-runner pool.  The regular
+# `cargo-test` job still covers the perry bin/unit target and every other
+# package; this matrix owns only `perry` integration targets.
+PERRY_INTEGRATION_SHARDS = 8
 
 EXTENDED_LABEL = "run-extended-tests"
 
@@ -309,11 +318,15 @@ def plan(
         "jobs": jobs,
         "gap": gap,
         "parity": {"total": PARITY_SHARDS, "shards": list(range(1, PARITY_SHARDS + 1))},
-        # cargo-test: a pull_request run scopes to the diff via ci_test_scope.py
-        # (`--lib --bins` of the affected crates); everything else -- including a
-        # `workflow_dispatch --tier pr`, which has no PR to read -- runs the full
-        # workspace with integration suites.
-        "cargo_test_scope": "pr" if event == "pull_request" else "full",
+        # cargo-test: the ordinary PR tier scopes to the diff via
+        # ci_test_scope.py (`--lib --bins` of the affected crates). A labelled
+        # full-tier PR must run the same complete package set as a nightly or
+        # release run; workflow dispatch has no PR to scope against either.
+        "cargo_test_scope": "pr" if tier == "pr" and event == "pull_request" else "full",
+        "cargo_test_perry": {
+            "total": PERRY_INTEGRATION_SHARDS,
+            "shards": list(range(1, PERRY_INTEGRATION_SHARDS + 1)),
+        },
         # gc-stress: the PR subset of the GC x repsel matrix vs the full one.
         "gc_stress_mode": "pr" if tier == "pr" else "full",
     }
@@ -405,6 +418,7 @@ def _self_test() -> int:
     check("sweep: windows on", sweep["jobs"]["windows_build"] and sweep["jobs"]["windows_arm64_build"])
     check("sweep: binary-size off (macOS report-only, nightly is enough)", not sweep["jobs"]["binary_size"])
     check("sweep: parity off", not sweep["jobs"]["parity"])
+    check("sweep: perry integration shards off", not sweep["jobs"]["cargo_test_perry"])
     check("sweep: e2e-scoped off", not sweep["jobs"]["e2e_scoped"])
     check("sweep: 3 fast gap shards", sweep["gap"]["total"] == 3 and sweep["gap"]["mode"] == "fast")
     check("sweep: cargo-test full", sweep["cargo_test_scope"] == "full")
@@ -412,11 +426,20 @@ def _self_test() -> int:
 
     full = plan("schedule", "refs/heads/main")
     check("full: every job except e2e-scoped", all(v for k, v in full["jobs"].items() if k != "e2e_scoped"))
+    check(
+        "full: perry integrations sharded",
+        full["cargo_test_perry"]
+        == {
+            "total": PERRY_INTEGRATION_SHARDS,
+            "shards": list(range(1, PERRY_INTEGRATION_SHARDS + 1)),
+        },
+    )
     check("full: 8 auto-optimize gap shards", full["gap"]["total"] == 8 and full["gap"]["mode"] == "full")
     check("full: parity sharded (6h-cap kill, 2026-08-16)", full["parity"]["total"] >= 2 and full["parity"]["shards"][0] == 1)
 
     labelled = plan("pull_request", "refs/pull/1/merge", labels=[EXTENDED_LABEL], changed=["README.md"])
     check("labelled PR runs the full tier regardless of scope", labelled["jobs"]["parity"] and labelled["jobs"]["gap_suite"])
+    check("labelled full-tier PR runs the full cargo-test scope", labelled["cargo_test_scope"] == "full")
 
     snap = plan("workflow_dispatch", "refs/heads/x", tier_input="pr", update_gap_snapshot=True)
     check("snapshot update: one fast shard", snap["gap"] == {"mode": "fast", "total": 1, "shards": [1], "update_snapshot": True})

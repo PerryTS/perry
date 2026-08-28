@@ -27,6 +27,7 @@ copy is current.
 | `check` | yes | yes | yes |
 | `warnings` | yes | yes | yes |
 | `cargo-test` | yes | yes | yes |
+| `cargo-test-perry` |  |  | yes |
 | `gap-suite` | 6x fast | 3x fast | 8x full |
 | `gc-stress` | yes | yes | yes |
 | `e2e-scoped` | yes |  |  |
@@ -99,6 +100,14 @@ Two specific costs dominated:
   and PR-scoped caches are not even readable by other PRs. sccache now saves only
   from main-line runs; PRs restore the newest main-line blob. `cache-warm.yml` is
   gone: the sweep is the cache-producing build on `main`.
+
+A later release run exposed a separate serial bottleneck: its 246 `perry`
+integration-test binaries had not reached their midpoint when `cargo-test` hit
+its 180-minute cap. In the full tier, `cargo-test` now retains the `perry` bin/unit
+target and every other package while `cargo-test-perry` assigns every `perry`
+integration target exactly once across eight deterministic, count-balanced shards.
+The shards restore the shared compiler cache but do not upload eight near-duplicate
+copies. Their aggregate matrix result is a direct dependency of `full-suite-gate`.
 
 The **satellite gates** (`gc-ratchet`, `gc-root-dominance`, `gc-native-roots`,
 `gc-moving-witnesses`, `gc-parse-churn-gate`, `gc-ptr-shape-off-witness`,

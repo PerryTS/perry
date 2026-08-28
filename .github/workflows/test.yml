@@ -248,6 +248,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           python3 scripts/ci_plan.py --self-test
+          python3 scripts/ci_cargo_test_shard.py --self-test
+          python3 scripts/ci_cargo_test_shard.py --package perry \
+            --total-shards "${{ fromJSON(needs.plan.outputs.plan).cargo_test_perry.total }}" \
+            --validate
           python3 scripts/ci_plan.py --table > /tmp/ci-plan-table.md
           if ! grep -qF -- "$(head -1 /tmp/ci-plan-table.md)" docs/src/testing/ci-tiers.md; then
             echo "::error::docs/src/testing/ci-tiers.md is missing the tier table header"; exit 1
@@ -1074,8 +1078,16 @@ jobs:
             # disk doesn't exhaust mid-job.
             export CARGO_BUILD_JOBS=1
             for package in $(printf '%s\n' "$scope" | grep -vx 'perry-runtime'); do
-              echo "::group::cargo test -p $package"
-              cargo test -p "$package"
+              if [ "$package" = "perry" ] && [ "${{ needs.plan.outputs.tier }}" = "full" ]; then
+                # The full tier's cargo-test-perry matrix owns every perry
+                # integration target. Keep the bin/unit target here so the
+                # split is exhaustive without running any target twice.
+                echo "::group::cargo test --bins -p perry"
+                cargo test --bins -p perry
+              else
+                echo "::group::cargo test -p $package"
+                cargo test -p "$package"
+              fi
               echo "::endgroup::"
               cargo clean -p "$package" || true
               find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete 2>/dev/null || true
@@ -1162,6 +1174,112 @@ jobs:
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+
+  # ---------------------------------------------------------------------------
+  # Full-tier perry integration tests (#8914)
+  #
+  # Release run 33123474583 had 246 `perry` integration-test binaries; the
+  # serial package invocation was still below their midpoint when its
+  # 180-minute timeout fired. The ordinary cargo-test job retains the
+  # perry bin/unit target and every other package; this matrix owns every perry
+  # integration target exactly once. The helper derives targets from Cargo
+  # metadata and round-robins the sorted inventory, so newly added suites are
+  # automatically covered and shard sizes differ by at most one.
+  #
+  # `fail-fast: false` preserves evidence from every shard. GitHub aggregates
+  # the matrix result under this job id, and full-suite-gate needs that result,
+  # so one failed, timed-out, or cancelled shard blocks a release.
+  # ---------------------------------------------------------------------------
+  cargo-test-perry:
+    name: cargo-test-perry (${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).cargo_test_perry.total }})
+    needs: plan
+    if: fromJSON(needs.plan.outputs.plan).jobs.cargo_test_perry
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.plan).cargo_test_perry.shards }}
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "12G"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+
+      # Every shard starts from the same most-recent compiler-object cache.
+      # Shards deliberately do not save eight near-duplicate 12G archives:
+      # cargo-test remains the single main-line writer for this shared prefix.
+      - name: Restore sccache objects
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}-${{ matrix.shard }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: false
+
+      - name: Evict stale auto-opt archives (#5892)
+        run: |
+          rm -rf target/perry-auto-* target/debug/libperry_ext_*.a 2>/dev/null || true
+
+      - name: Run perry integration shard ${{ matrix.shard }}
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          SHARD: ${{ matrix.shard }}
+          TOTAL_SHARDS: ${{ fromJSON(needs.plan.outputs.plan).cargo_test_perry.total }}
+        run: |
+          set -euo pipefail
+          (
+            while sleep 60; do
+              echo "perry integration shard $SHARD/$TOTAL_SHARDS still running at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            done
+          ) &
+          shard_heartbeat_pid=$!
+          trap 'kill "$shard_heartbeat_pid" 2>/dev/null || true' EXIT
+
+          mapfile -t test_targets < <(
+            python3 scripts/ci_cargo_test_shard.py --package perry \
+              --shard "$SHARD" --total-shards "$TOTAL_SHARDS"
+          )
+          if [ "${#test_targets[@]}" -eq 0 ]; then
+            echo "::error::perry integration shard $SHARD/$TOTAL_SHARDS is empty"
+            exit 1
+          fi
+          echo "perry integration shard $SHARD/$TOTAL_SHARDS: ${#test_targets[@]} targets"
+          printf '  %s\n' "${test_targets[@]}"
+
+          # Match cargo-test's shipped panic semantics and provide the static
+          # archives used by PERRY_NO_AUTO_OPTIMIZE=1 integration fixtures.
+          cargo build --release -p perry-runtime -p perry-stdlib \
+            -p perry-runtime-static -p perry-stdlib-static
+          export PERRY_RUNTIME_DIR="$PWD/target/release"
+          export CARGO_BUILD_JOBS=1
+
+          test_args=()
+          for test_target in "${test_targets[@]}"; do
+            test_args+=(--test "$test_target")
+          done
+          echo "::group::cargo test -p perry (integration shard $SHARD/$TOTAL_SHARDS)"
+          # Cargo prints `Running tests/<target>.rs` before each binary, making
+          # the currently executing integration suite explicit in live logs.
+          cargo test -p perry "${test_args[@]}"
+          echo "::endgroup::"
 
   # ---------------------------------------------------------------------------
   # Scoped e2e: run the integration suites NAMED BY THE DIFF (#5960)
@@ -3571,6 +3689,7 @@ jobs:
       - check
       - warnings
       - cargo-test
+      - cargo-test-perry
       - e2e-scoped
       - windows-build
       - windows-arm64-build
