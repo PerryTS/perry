@@ -140,6 +140,19 @@ pub(crate) unsafe fn key_of_header(key: *const crate::StringHeader) -> Option<El
     if key.is_null() {
         return None;
     }
+    // Cheap pre-filter: only a leading ASCII digit (an index) or `l`
+    // (`length`) can be an elements key, and no canonical index is longer
+    // than ten digits. Every ordinary named property — the common case on
+    // these receivers — is rejected on one byte, before the UTF-8 decode and
+    // the canonical-index parse below.
+    let byte_len = (*key).byte_len as usize;
+    if byte_len == 0 || byte_len > 10 {
+        return None;
+    }
+    let first = *(key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    if !first.is_ascii_digit() && first != b'l' {
+        return None;
+    }
     crate::object::has_own_helpers::str_from_string_header(key).and_then(key_of_str)
 }
 

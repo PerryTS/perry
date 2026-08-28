@@ -15,6 +15,32 @@ use super::*;
 /// dense_prefix|inline_bound<<32, bound)`. Kind 1 is an ArrayHeader and kind 2
 /// is an ObjectHeader Array subclass. A zero return leaves every semantic case
 /// to the unchanged generic loop.
+/// Resolve an elements-backed Array-subclass receiver to its inner array
+/// (`None` for every other receiver, including the shape-carried subclass
+/// form, which keeps the kind-2 admission below).
+#[inline]
+fn elements_loop_source(
+    raw: *const u8,
+    header: &'static crate::gc::GcHeader,
+) -> Option<(*const u8, &'static crate::gc::GcHeader)> {
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    let elements =
+        unsafe { crate::array::subclass_elements::elements_of(raw.cast::<ObjectHeader>()) }
+            as *const u8;
+    if elements.is_null() {
+        return None;
+    }
+    let elements_header =
+        unsafe { crate::value::addr_class::try_read_gc_header(elements as usize) }?;
+    (elements_header.obj_type == crate::gc::GC_TYPE_ARRAY
+        && elements_header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
+        .then_some((elements, elements_header))
+}
+
 fn packed_arraylike_loop_guard(
     receiver: f64,
     bound: f64,
@@ -64,6 +90,14 @@ fn packed_arraylike_loop_guard(
         source
     };
     let header = unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) }?;
+    // An elements-backed Array-subclass instance (`super::subclass_elements`)
+    // keeps its elements in a real Array hanging off the meta record, so the
+    // loop is a PLAIN-ARRAY loop over that inner array: resolve to it and let
+    // the ordinary kind-1 admission below prove length/capacity/descriptors
+    // and (for a numeric mode) the raw-f64 bit. The live address the caller
+    // reads through is the inner array's, and the revalidation entry
+    // re-resolves it from the receiver on every iteration.
+    let (raw, header) = elements_loop_source(raw, header).unwrap_or((raw, header));
 
     if header.obj_type == crate::gc::GC_TYPE_ARRAY {
         if header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
@@ -292,6 +326,11 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
     else {
         return 0;
     };
+    // Re-resolve an elements-backed receiver to its CURRENT inner array: an
+    // append inside the loop body may have re-allocated it, and the meta slot
+    // is the authority.
+    let (source, source_header) =
+        elements_loop_source(source, source_header).unwrap_or((source, source_header));
     let raw = if source_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         if source_header.obj_type != crate::gc::GC_TYPE_ARRAY {
             return 0;

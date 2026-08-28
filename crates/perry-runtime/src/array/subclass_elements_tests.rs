@@ -337,3 +337,78 @@ fn freeze_deopts_to_the_shape_carried_form() {
         None
     );
 }
+
+/// The counted-loop guard admits an elements-backed instance as a PLAIN-ARRAY
+/// loop over its inner array: kind 1, the inner array's live address, and a
+/// revalidation that re-resolves the (possibly re-allocated) store from the
+/// receiver — this is what keeps versioned loops off the string-keyed
+/// property path.
+#[test]
+fn the_counted_loop_guard_admits_an_elements_backed_receiver_as_its_inner_array() {
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    let class_id = 0x0074_8699;
+    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
+    let obj = js_object_alloc(class_id, 2);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+    unsafe { install_elements(live_obj(recv_h.get_nanbox_f64()), 0) };
+    let recv = || recv_h.get_nanbox_f64();
+    for i in 0..8u32 {
+        assert!(super::subclass::array_subclass_fast_push_one(recv(), f64::from(i)).is_some());
+    }
+
+    let mut facts = [0u64; 7];
+    let live = super::subclass::loop_guard::js_packed_arraylike_loop_guard_live(
+        recv(),
+        -1.0,
+        0,
+        facts.as_mut_ptr(),
+    );
+    assert_ne!(live, 0, "an elements-backed receiver must be admitted");
+    assert_eq!(facts[0], 1, "admitted as a plain-array loop");
+    assert_eq!(
+        live as usize,
+        unsafe { elements_of(live_obj(recv())) } as usize,
+        "the live address is the inner array"
+    );
+    assert_eq!(facts[6], 8, "the live-length bound is the inner length");
+    let revalidated = super::subclass::loop_guard::js_packed_arraylike_loop_revalidate_live(
+        recv(),
+        -1.0,
+        0,
+        facts.as_ptr(),
+    );
+    assert_eq!(revalidated, live, "revalidation resolves the same store");
+
+    // An append inside the loop body re-allocates the store. The recorded
+    // facts describe the OLD array, so revalidation takes the side exit (0),
+    // exactly as it does for a grown plain Array — and a fresh guard call
+    // then admits the current store.
+    for i in 8..64u32 {
+        assert!(super::subclass::array_subclass_fast_push_one(recv(), f64::from(i)).is_some());
+    }
+    let grown = unsafe { elements_of(live_obj(recv())) };
+    assert_ne!(grown as usize, live as usize, "the appends re-allocated");
+    assert_eq!(
+        super::subclass::loop_guard::js_packed_arraylike_loop_revalidate_live(
+            recv(),
+            -1.0,
+            0,
+            facts.as_ptr(),
+        ),
+        0,
+        "stale facts must side-exit"
+    );
+    let live2 = super::subclass::loop_guard::js_packed_arraylike_loop_guard_live(
+        recv(),
+        -1.0,
+        0,
+        facts.as_mut_ptr(),
+    );
+    assert_eq!(
+        live2 as usize, grown as usize,
+        "re-admission sees the new store"
+    );
+    assert_eq!(facts[6], 64);
+}

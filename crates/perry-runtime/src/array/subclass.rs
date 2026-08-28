@@ -15,7 +15,7 @@ use crate::object::ObjectHeader;
 use crate::value::JSValue;
 
 #[path = "subclass_loop_guard.rs"]
-mod loop_guard;
+pub(super) mod loop_guard;
 // The loop-guard entry points are exported C symbols; only the unit tests
 // reach them through Rust paths.
 #[cfg(test)]
