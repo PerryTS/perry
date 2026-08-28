@@ -1078,7 +1078,18 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
             unsafe {
                 let length = (*arr).length;
                 let capacity = (*arr).capacity;
-                if length != 0 && length <= capacity && length <= 100_000_000 {
+                // An empty plain array: `Set(O, "length", 0)` is a no-op on a
+                // writable length (`OBJ_FLAG_ARRAY_DESCRIPTORS` is where a
+                // non-writable one is recorded, and it is excluded above), and
+                // there is no index to Get or Delete — the answer is
+                // `undefined`. Without this arm the drained pool's
+                // `pool.pop() ?? []` ran the whole generic tower (subclass and
+                // plain-object probes, a tracked classification, the flag
+                // resolution) to reach the same `length == 0` return.
+                if length == 0 {
+                    return TAG_UNDEFINED_F64;
+                }
+                if length <= capacity && length <= 100_000_000 {
                     let new_length = length - 1;
                     let elements = (arr as *mut u8)
                         .add(std::mem::size_of::<ArrayHeader>())
