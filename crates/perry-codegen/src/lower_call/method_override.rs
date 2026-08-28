@@ -295,6 +295,109 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
     }
 }
 
+/// Inline form of the runtime probe `js_method_direct_shape_class`: resolve
+/// the live receiver's `(class_id, ShapeId)` for a multi-arm compare chain,
+/// or `(0, 0)` wherever the probe would decline — a non-pointer, an address
+/// outside the heap band, a non-`GC_TYPE_OBJECT` / forwarded /
+/// descriptor-bearing / packed-numeric-proof header, a tripped prototype
+/// latch (process-wide or for this method's dispatch slot), a zero class id
+/// or a zero ShapeId. The chains only ever compare both words against
+/// compiler-published non-zero pairs, so the zero convention is preserved by
+/// two `select`s rather than extra blocks.
+///
+/// The header word and the packed `class_id | ShapeId << 32` load are the
+/// ones [`emit_inline_direct_method_shape_guard`] already uses for the
+/// single-arm form; this is the same sequence without the comparison baked
+/// in. On the wolf-ecs cycle the runtime probe was 2.2–2.6% of self time on
+/// call, address classification and flag resolution for a few loads.
+pub(crate) fn emit_inline_direct_method_shape_probe(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    method_guard_slot: &str,
+) -> (String, String) {
+    let deref_idx = ctx.new_block("method_probe.deref");
+    let read_idx = ctx.new_block("method_probe.read");
+    let merge_idx = ctx.new_block("method_probe.merge");
+    let deref_label = ctx.block_label(deref_idx);
+    let read_label = ctx.block_label(read_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    let heap_floor =
+        crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
+    let heap_ceiling =
+        crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
+    let check_end = {
+        let blk = ctx.block();
+        let invalidated =
+            blk.load_atomic_acquire(I8, "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED", 1);
+        let all_methods_ok = blk.icmp_eq(I8, &invalidated, "0");
+        let method_slot_ptr = blk.gep(
+            I8,
+            "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD",
+            &[(I64, method_guard_slot)],
+        );
+        let method_invalidated = blk.load_atomic_acquire(I8, &method_slot_ptr, 1);
+        let method_ok = blk.icmp_eq(I8, &method_invalidated, "0");
+        let prototype_ok = blk.and(I1, &all_methods_ok, &method_ok);
+        let recv_bits = blk.bitcast_double_to_i64(recv_box);
+        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
+        let tag = blk.lshr(I64, &recv_bits, "48");
+        let is_tagged_ptr = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
+        // `normalize_raw_object_addr` also accepts the top-word-zero raw
+        // address form internal method ABIs carry.
+        let is_raw_ptr = blk.icmp_eq(I64, &tag, "0");
+        let is_ptr = blk.or(I1, &is_tagged_ptr, &is_raw_ptr);
+        let above_floor = blk.icmp_uge(I64, &recv_handle, &heap_floor);
+        let below_ceiling = blk.icmp_ult(I64, &recv_handle, &heap_ceiling);
+        let in_heap_range = blk.and(I1, &above_floor, &below_ceiling);
+        let ptr_safe = blk.and(I1, &is_ptr, &in_heap_range);
+        let can_deref = blk.and(I1, &prototype_ok, &ptr_safe);
+        blk.cond_br(&can_deref, &deref_label, &merge_label);
+        blk.label.clone()
+    };
+    ctx.current_block = deref_idx;
+    let deref_end = {
+        let blk = ctx.block();
+        let recv_bits = blk.bitcast_double_to_i64(recv_box);
+        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
+        let obj_ptr = blk.inttoptr(I64, &recv_handle);
+        let gc_header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
+        let gc_header = blk.load(I32, &gc_header_ptr);
+        let guarded_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_METHOD_GUARD_MASK_I32);
+        let gc_header_ok = blk.icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
+        blk.cond_br(&gc_header_ok, &read_label, &merge_label);
+        blk.label.clone()
+    };
+    ctx.current_block = read_idx;
+    let (cid, shape_id, read_end) = {
+        let blk = ctx.block();
+        let recv_bits = blk.bitcast_double_to_i64(recv_box);
+        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
+        let obj_ptr = blk.inttoptr(I64, &recv_handle);
+        // ObjectHeader: `class_id: u32` @0, authoritative ShapeId @4.
+        let class_id = blk.load(I32, &obj_ptr);
+        let shape_ptr = blk.gep(I8, &obj_ptr, &[(I64, "4")]);
+        let shape_id = blk.load(I32, &shape_ptr);
+        let class_nonzero = blk.icmp_ne(I32, &class_id, "0");
+        let shape_nonzero = blk.icmp_ne(I32, &shape_id, "0");
+        let both = blk.and(I1, &class_nonzero, &shape_nonzero);
+        let cid = blk.select(I1, &both, I32, &class_id, "0");
+        let shape = blk.select(I1, &both, I32, &shape_id, "0");
+        blk.br(&merge_label);
+        (cid, shape, blk.label.clone())
+    };
+    ctx.current_block = merge_idx;
+    let blk = ctx.block();
+    let cid_out = blk.phi(
+        I32,
+        &[("0", &check_end), ("0", &deref_end), (&cid, &read_end)],
+    );
+    let shape_out = blk.phi(
+        I32,
+        &[("0", &check_end), ("0", &deref_end), (&shape_id, &read_end)],
+    );
+    (cid_out, shape_out)
+}
+
 /// Emit the exact ordinary-object `(class_id, ShapeId)` guard used by a
 /// `$pshape_args` route.  Unlike the method-receiver guard above this does not
 /// consult prototype-method invalidation state: it proves field offsets only.
@@ -877,17 +980,8 @@ pub(super) fn emit_guarded_direct_method_call(
     let multi_arm = !subclass_arms.is_empty();
     let inline_single_arm = shape_only_guard && !multi_arm;
     if multi_arm {
-        let shape_slot = ctx.func.alloca_entry(I32);
-        let cid = ctx.block().call(
-            I32,
-            "js_method_direct_shape_class",
-            &[
-                (DOUBLE, recv_box),
-                (crate::types::PTR, &shape_slot),
-                (I32, &method_guard_slot_str),
-            ],
-        );
-        let shape_id = ctx.block().load(I32, &shape_slot);
+        let (cid, shape_id) =
+            emit_inline_direct_method_shape_probe(ctx, recv_box, &method_guard_slot_str);
         {
             let next = sub_test_labels[0].clone();
             let blk = ctx.block();

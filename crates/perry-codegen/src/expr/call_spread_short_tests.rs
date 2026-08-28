@@ -166,7 +166,11 @@ fn every_short_packed_arity_calls_reset_directly_without_apply() {
     let ir = emit();
     let invoke = function_body(&ir, "__invoke(");
     assert!(invoke.contains("call i32 @js_short_packed_spread_values("));
-    assert!(invoke.contains("call i32 @js_method_direct_shape_class("));
+    // The receiver probe is inline (`method_probe.*`): no runtime call.
+    assert!(
+        invoke.contains("method_probe.read") && !invoke.contains("@js_method_direct_shape_class("),
+        "the class/shape probe must be inline:\n{invoke}"
+    );
     let fast_prefix = &invoke[..invoke
         .find("\nshort_spread.method_probe")
         .expect("method-probe block")];
@@ -223,7 +227,11 @@ fn reverse_dependency_capabilities_activate_in_a_generic_consumer() {
         invoke.contains("call i32 @js_short_packed_spread_values("),
         "the generic consumer has no local concrete class, so activation proves the producer-to-consumer capability flow\n{invoke}"
     );
-    assert!(invoke.contains("call i32 @js_method_direct_shape_class("));
+    // The receiver probe is inline (`method_probe.*`): no runtime call.
+    assert!(
+        invoke.contains("method_probe.read") && !invoke.contains("@js_method_direct_shape_class("),
+        "the class/shape probe must be inline:\n{invoke}"
+    );
     assert!(invoke.contains("@perry_method_issue_8772_short_spread_ts__Position__reset("));
     assert!(invoke.contains("@perry_method_issue_8772_short_spread_ts__Velocity__reset("));
     assert!(ir.contains(

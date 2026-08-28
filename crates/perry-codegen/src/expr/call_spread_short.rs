@@ -268,17 +268,12 @@ pub(crate) fn try_lower<'f, 'e>(
     let key_idx = ctx.strings.intern(property);
     let entry = ctx.strings.entry(key_idx);
     let method_guard_slot = (entry.dispatch_hash & 0xffff).to_string();
-    let shape_out = ctx.func.alloca_entry(I32);
-    let live_class = ctx.block().call(
-        I32,
-        "js_method_direct_shape_class",
-        &[
-            (DOUBLE, &fast_recv),
-            (PTR, &shape_out),
-            (I32, &method_guard_slot),
-        ],
-    );
-    let live_shape = ctx.block().load(I32, &shape_out);
+    let (live_class, live_shape) =
+        crate::lower_call::method_override::emit_inline_direct_method_shape_probe(
+            ctx,
+            &fast_recv,
+            &method_guard_slot,
+        );
 
     let candidate_test_idxs: Vec<usize> = (0..candidates.len())
         .map(|index| ctx.new_block(&format!("short_spread.target_test{index}")))

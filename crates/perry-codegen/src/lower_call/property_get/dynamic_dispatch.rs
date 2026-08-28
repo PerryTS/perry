@@ -435,17 +435,12 @@ pub(crate) fn try_lower_instance_method_call(
             };
             let mut shape_probe_cid: Option<String> = None;
             if !shape_probe_arms.is_empty() {
-                let shape_slot = ctx.func.alloca_entry(I32);
-                let cid = ctx.block().call(
-                    I32,
-                    "js_method_direct_shape_class",
-                    &[
-                        (DOUBLE, &recv_box),
-                        (crate::types::PTR, &shape_slot),
-                        (I32, &method_guard_slot_str),
-                    ],
-                );
-                let shape_id = ctx.block().load(I32, &shape_slot);
+                let (cid, shape_id) =
+                    crate::lower_call::method_override::emit_inline_direct_method_shape_probe(
+                        ctx,
+                        &recv_box,
+                        &method_guard_slot_str,
+                    );
                 shape_probe_cid = Some(cid.clone());
                 let own_idx = ctx.new_block("idisp.own_probe");
                 let test_idxs: Vec<usize> = (1..shape_probe_arms.len())
