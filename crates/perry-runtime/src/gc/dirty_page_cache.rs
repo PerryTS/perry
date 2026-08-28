@@ -85,6 +85,75 @@ use std::cell::Cell;
 /// `usize::MAX` would need a 76-bit address.
 const NO_PAGE: usize = usize::MAX;
 
+/// The process-global mirror of the cache, tagged with the TSD base of the
+/// thread that wrote it.
+///
+/// The per-thread cell stays the authority, but reaching it costs the hot-TLS
+/// chain — a global slot-index load, the pthread key, `mrs`, the TSD slot,
+/// then the cell — four *dependent* loads on every barrier call, and the
+/// profile put the barrier entry's single hottest instruction on that chain.
+/// This mirror is read with one `mrs` and two loads that do not depend on
+/// each other: if the owner word names the calling thread, the page word is
+/// that thread's own most recent write (every path that writes or clears the
+/// cell also writes here), so the compare is exactly the cell's; otherwise
+/// another thread wrote last and the reader falls back to its cell.
+///
+/// Why a torn read across the two words is still harmless: a reader can only
+/// mis-see a page another thread cached, and heaps are per thread — a slot
+/// this thread stores into is never on another thread's page — so the
+/// mismatch cannot answer "already dirty" for a page this thread owns.
+#[cfg(all(
+    target_vendor = "apple",
+    target_arch = "aarch64",
+    target_pointer_width = "64"
+))]
+mod mirror {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static OWNER: AtomicUsize = AtomicUsize::new(0);
+    static PAGE: AtomicUsize = AtomicUsize::new(super::NO_PAGE);
+
+    /// `Some(cached == page)` when the mirror is this thread's, else `None`.
+    #[inline(always)]
+    pub(super) fn probe(page: usize) -> Option<bool> {
+        let me = crate::tls_hot::darwin_tsd::base();
+        if OWNER.load(Ordering::Relaxed) == me {
+            Some(PAGE.load(Ordering::Relaxed) == page)
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub(super) fn publish(page: usize) {
+        PAGE.store(page, Ordering::Relaxed);
+        OWNER.store(crate::tls_hot::darwin_tsd::base(), Ordering::Relaxed);
+    }
+
+    #[inline(always)]
+    pub(super) fn clear() {
+        if OWNER.load(Ordering::Relaxed) == crate::tls_hot::darwin_tsd::base() {
+            PAGE.store(super::NO_PAGE, Ordering::Relaxed);
+        }
+    }
+}
+
+#[cfg(not(all(
+    target_vendor = "apple",
+    target_arch = "aarch64",
+    target_pointer_width = "64"
+)))]
+mod mirror {
+    #[inline(always)]
+    pub(super) fn probe(_page: usize) -> Option<bool> {
+        None
+    }
+    #[inline(always)]
+    pub(super) fn publish(_page: usize) {}
+    #[inline(always)]
+    pub(super) fn clear() {}
+}
+
 /// The cache cell: an inline value in this thread's [`crate::tls_hot::HotTls`]
 /// — not a `std::thread_local!` (whose `_tlv_get_addr` was ~1% of a 5k-entity
 /// ECS frame by itself) and not a generic hot slot either: this is the HIT
@@ -101,6 +170,12 @@ fn cell() -> &'static Cell<usize> {
 #[inline]
 pub(super) fn dirty_old_page_already_marked(page: usize) -> bool {
     debug_assert_ne!(page, NO_PAGE, "page number collides with the empty marker");
+    // A stale mirror read (another thread published between the two loads)
+    // can only answer "not cached" for a page this thread owns — the
+    // conservative direction — so the cell is not re-consulted on a miss.
+    if let Some(hit) = mirror::probe(page) {
+        return hit;
+    }
     cell().get() == page
 }
 
@@ -109,6 +184,7 @@ pub(super) fn dirty_old_page_already_marked(page: usize) -> bool {
 #[inline]
 pub(super) fn note_dirty_old_page_marked(page: usize) {
     cell().set(page);
+    mirror::publish(page);
 }
 
 /// Drop the cached page. Called from every path that can remove a page from
@@ -117,6 +193,7 @@ pub(super) fn note_dirty_old_page_marked(page: usize) {
 /// not check whether the page they touched is the cached one.
 pub(crate) fn invalidate() {
     cell().set(NO_PAGE);
+    mirror::clear();
 }
 
 /// Test-only: is the cache currently empty? Lets the #7187 Phase B tests assert
