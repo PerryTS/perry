@@ -1796,10 +1796,6 @@
     },
     {
       "file": "crates/perry-runtime/src/box.rs",
-      "name": "BOOL_BOX_PTR_CACHE"
-    },
-    {
-      "file": "crates/perry-runtime/src/box.rs",
       "name": "BOOL_BOX_REGISTRY"
     },
     {
@@ -1812,10 +1808,6 @@
     },
     {
       "file": "crates/perry-runtime/src/box.rs",
-      "name": "BOX_PTR_CACHE"
-    },
-    {
-      "file": "crates/perry-runtime/src/box.rs",
       "name": "BOX_REGISTRY"
     },
     {
@@ -1825,10 +1817,6 @@
     {
       "file": "crates/perry-runtime/src/box.rs",
       "name": "I32_BOX_FREE_HEAD"
-    },
-    {
-      "file": "crates/perry-runtime/src/box.rs",
-      "name": "I32_BOX_PTR_CACHE"
     },
     {
       "file": "crates/perry-runtime/src/box.rs",
