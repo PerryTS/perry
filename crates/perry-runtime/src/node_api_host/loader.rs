@@ -202,6 +202,8 @@ fn verify_addon_payload(root: &Path, addon: &ManifestAddon) -> Result<PathBuf, S
             addon.logical_id
         ));
     }
+    let entry = safe_payload_path(root, &addon.entry)?;
+    let mut entry_verified = false;
     for file in &addon.files {
         let path = safe_payload_path(root, &file.path)?;
         let bytes = std::fs::read(&path).map_err(|error| {
@@ -225,8 +227,18 @@ fn verify_addon_payload(root: &Path, addon: &ManifestAddon) -> Result<PathBuf, S
                 path.display()
             ));
         }
+        if path == entry {
+            entry_verified = true;
+        }
     }
-    safe_payload_path(root, &addon.entry)
+    if !entry_verified {
+        return Err(format!(
+            "Node-API addon `{}` entry {} is not listed among its verified payload files",
+            addon.logical_id,
+            entry.display()
+        ));
+    }
+    Ok(entry)
 }
 
 #[cfg(unix)]
@@ -434,6 +446,10 @@ pub fn load_addon(request: &str) -> Result<f64, String> {
     }
     let load_result = (|| {
         begin_legacy_capture(&path)?;
+        // Platform dynamic loaders accept a pathname, not the bytes or a
+        // portable file handle retained by verification. A local writer can
+        // therefore race this open after hashing; the accepted trust boundary
+        // and deployment mitigation are documented in node-api-host.md.
         let handle = match unsafe { open_library(&path) } {
             Ok(handle) => handle,
             Err(error) => {

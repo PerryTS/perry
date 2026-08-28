@@ -455,6 +455,20 @@ never consults the build machine's `node_modules` tree.
 This sidecar model has no first-run write, so read-only install directories are
 supported. Moving the executable requires moving its `.perry-native` sibling.
 Missing or hash-mismatched files fail before `dlopen` with a packaging error.
+The loader also requires the canonical entry path passed to the dynamic loader
+to equal the canonical path of a payload file whose size and hash were just
+verified. An existing file that is selected only by `entry`, but omitted from
+`files`, is rejected.
+
+The platform dynamic-loader APIs reopen that canonical pathname; they do not
+provide one portable way to load from the file handle used for verification.
+There is consequently an accepted time-of-check/time-of-use window between the
+last payload hash and `dlopen`/`LoadLibraryExW`. Exploiting it requires write
+access to the installed sidecar directory, which is outside this loader's
+integrity boundary. Deployments must protect the executable and its sidecar
+with the same ownership and write permissions (and platform signing where
+applicable). The manifest checks detect packaging damage and tampering before
+the first load; they are not a defense against a concurrent local writer.
 
 For a macOS app bundle the directory is placed under `Contents/Frameworks`.
 Every Mach-O sidecar and nested dylib is signed before the outer executable or

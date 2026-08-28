@@ -368,7 +368,7 @@ console.log("node-api-cache", direct.exports === addon)
     ));
     let manifest_bytes =
         std::fs::read(sidecar.join("manifest.json")).expect("read Node-API sidecar manifest");
-    let manifest: serde_json::Value =
+    let mut manifest: serde_json::Value =
         serde_json::from_slice(&manifest_bytes).expect("parse sidecar manifest");
     assert_eq!(manifest["napi_version"], 8);
     assert_eq!(
@@ -427,6 +427,42 @@ console.log("node-api-cache", direct.exports === addon)
     assert!(stdout.contains("node-api-answer 8523"), "stdout: {stdout}");
     assert!(stdout.contains("node-api-add 42"), "stdout: {stdout}");
     assert!(stdout.contains("node-api-cache true"), "stdout: {stdout}");
+
+    let entry_parent = relative_entry
+        .rsplit_once('/')
+        .map(|(parent, _)| parent)
+        .unwrap_or(".");
+    let unverified_relative = format!("{entry_parent}/unverified.node");
+    let unverified_addon = unverified_relative
+        .split('/')
+        .fold(sidecar.clone(), |path, part| path.join(part));
+    std::fs::write(&unverified_addon, &staged_bytes).expect("write unverified addon entry");
+    manifest["addons"][0]["entry"] = serde_json::Value::String(unverified_relative.clone());
+    std::fs::write(
+        sidecar.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).expect("serialize manifest with unverified entry"),
+    )
+    .expect("point manifest at unverified addon entry");
+    let unverified_run = Command::new(&executable)
+        .output()
+        .expect("run Node-API host with unverified entry");
+    assert!(
+        !unverified_run.status.success(),
+        "unverified addon entry unexpectedly ran"
+    );
+    let diagnostic = format!(
+        "{}{}",
+        String::from_utf8_lossy(&unverified_run.stdout),
+        String::from_utf8_lossy(&unverified_run.stderr)
+    );
+    assert!(diagnostic.contains("ERR_DLOPEN_FAILED"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("not listed among its verified payload files"),
+        "unverified entry diagnostic did not identify missing authentication: {diagnostic}"
+    );
+    std::fs::write(sidecar.join("manifest.json"), &manifest_bytes)
+        .expect("restore original Node-API manifest");
+    std::fs::remove_file(unverified_addon).expect("remove unverified addon entry");
 
     let mut tampered = staged_bytes;
     tampered.push(0xA5);
