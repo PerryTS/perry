@@ -451,8 +451,12 @@ mod tests {
     fn macos_accepts_heap_addresses_below_two_tb() {
         // The Rust test harness has observed mimalloc allocations around
         // 45 GB. Classification is purely numeric and must not dereference
-        // this representative address.
-        assert!(is_valid_obj_ptr(0x0000_000a_0000_0000usize as *const u8));
+        // this representative address. In #8905 this gate was reached by the
+        // RegExp header-brand fallback across prebuilt-stdlib runtime copies;
+        // rejecting the address made dependency-side `.test()` dispatch miss.
+        let low_macos_heap_addr = 0x0000_000a_0000_0000usize;
+        assert!(is_valid_obj_ptr(low_macos_heap_addr as *const u8));
+        assert!(is_plausible_heap_addr(low_macos_heap_addr));
     }
 
     #[cfg(all(
