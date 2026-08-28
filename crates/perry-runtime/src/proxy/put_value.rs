@@ -451,8 +451,11 @@ pub extern "C" fn js_put_value_set_ic_miss(
             return result;
         }
 
+        // The descriptor above already proves this stamp is live, so the
+        // token comes from the header word rather than from a second full
+        // lookup-and-copy of the same id (see `dyn_ic_try_store`).
         let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
-            | crate::object::shapes::object_shape_id(obj) as u64;
+            | crate::object::shapes::object_shape_stamp(obj) as u64;
 
         // Publish the token last conceptually: a zero-initialized or stale
         // token cannot hit this slot until it matches this receiver's current
@@ -712,12 +715,23 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
     {
         return None;
     }
-    let current_token = crate::object::shapes::PIC_ID_TOKEN_BIT
-        | crate::object::shapes::object_shape_id(obj) as u64;
-    if current_token != token {
+    // ONE descriptor lookup, not two. `object_shape_id` runs a full lookup —
+    // and copies the whole `ShapeDescriptor` out of the table — purely to
+    // prove the stamped id is live, then throws the descriptor away; the bound
+    // check below then looked the SAME id up again. `shape_descriptor_by_id`
+    // was 10.5% of self time in a computed-key write loop, the single largest
+    // item, and half of that was this duplicate.
+    //
+    // Read the stamp straight off the header, reject on the token first (a
+    // load and a compare, so a wrong-shape receiver costs no table work at
+    // all), and let the one lookup that supplies the bound double as the
+    // liveness proof: a stamp with no live descriptor returns `None` here,
+    // exactly as `object_shape_id`'s 0 made the token compare fail before.
+    let stamp = crate::object::shapes::object_shape_stamp(obj);
+    if (crate::object::shapes::PIC_ID_TOKEN_BIT | stamp as u64) != token {
         return None;
     }
-    let shape = crate::object::shapes::object_shape_descriptor(obj)?;
+    let shape = crate::object::shapes::shape_descriptor_by_id(stamp)?;
     if slot >= shape.live_inline_slot_count {
         // Overflow slot. The token compare above already proved the receiver
         // is in the exact shape the (key → slot) pair was learned in, so the
@@ -877,8 +891,11 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         let Some(idx) = own_idx else {
             return result;
         };
+        // The descriptor above already proves this stamp is live, so the
+        // token comes from the header word rather than from a second full
+        // lookup-and-copy of the same id (see `dyn_ic_try_store`).
         let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
-            | crate::object::shapes::object_shape_id(obj) as u64;
+            | crate::object::shapes::object_shape_stamp(obj) as u64;
         let key_bits = key.to_bits() as i64;
         // Preserve the empty-way sentinel invariant: never prime bits 0
         // (only the JS number 0 has them, and numeric keys cannot prime
