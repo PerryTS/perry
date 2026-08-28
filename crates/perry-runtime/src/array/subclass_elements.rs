@@ -149,7 +149,7 @@ pub(crate) unsafe fn key_of_header(key: *const crate::StringHeader) -> Option<El
     if byte_len == 0 || byte_len > 10 {
         return None;
     }
-    let first = *(key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let first = *crate::object::string_header_payload(key);
     if !first.is_ascii_digit() && first != b'l' {
         return None;
     }
