@@ -696,9 +696,8 @@ fn build_numeric_access(
     } else {
         8
     };
-    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
-        - pointer_size)
-        .to_string();
+    let meta_offset =
+        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
     let meta_addr = ctx.block().add(I64, live_raw, &meta_offset);
     let meta_slot = ctx.block().inttoptr(I64, &meta_addr);
     let meta_native = ctx
@@ -1071,9 +1070,8 @@ pub(crate) fn try_lower_index_get(
     } else {
         8
     };
-    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
-        - pointer_size)
-        .to_string();
+    let meta_offset =
+        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
     let meta_addr = ctx.block().add(I64, &raw, &meta_offset);
     let meta_slot = ctx.block().inttoptr(I64, &meta_addr);
     let meta_native = ctx

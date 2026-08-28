@@ -387,9 +387,8 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     } else {
         8
     };
-    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
-        - meta_ptr_size)
-        .to_string();
+    let meta_offset =
+        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
 
     // Reject every non-pointer / handle-band / noncanonical-index case before
     // touching a managed header. The miss helper retains full ToPropertyKey,

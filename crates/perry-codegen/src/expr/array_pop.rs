@@ -36,19 +36,30 @@ const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
 const HANDLE_BAND_TOP: &str = "1048575"; // 0x0FFFFF — heap objects are above
 const HEAP_LIMIT: &str = "140737488355328"; // 2^47
 const GC_TYPE_ARRAY_I8: &str = "1";
+const GC_TYPE_OBJECT_I8: &str = "2";
 const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
 const MAX_FAST_LENGTH_I32: &str = "100000000";
 
 /// Lower `recv.pop()` for an Array-admitted receiver: the inline tier above
 /// with `js_array_pop_f64` behind it. Returns the popped element (boxed).
 pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> String {
+    let meta_offset =
+        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
     let hdr_idx = ctx.new_block("apop.hdr");
+    // An elements-backed Array subclass (`ObjectMeta.elements`, word 12) pops
+    // from its store: the header gate resolves the payload and the same
+    // length/read/take blocks run on it, so `sub.pop()` stops paying a runtime
+    // entry that only re-derives the store (5.1% of the wolf-ecs entity cycle).
+    let elem_idx = ctx.new_block("apop.elements");
+    let elem_check_idx = ctx.new_block("apop.elements.check");
     let len_idx = ctx.new_block("apop.len");
     let read_idx = ctx.new_block("apop.read");
     let take_idx = ctx.new_block("apop.take");
     let slow_idx = ctx.new_block("apop.slow");
     let merge_idx = ctx.new_block("apop.merge");
     let hdr_label = ctx.block_label(hdr_idx);
+    let elem_label = ctx.block_label(elem_idx);
+    let elem_check_label = ctx.block_label(elem_check_idx);
     let len_label = ctx.block_label(len_idx);
     let read_label = ctx.block_label(read_idx);
     let take_label = ctx.block_label(take_idx);
@@ -90,18 +101,72 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
         let plain = blk.icmp_eq(I16, &blocking, "0");
         let invalidated = blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
         let prototype_clean = blk.icmp_eq(I8, &invalidated, "0");
+        let mut ok = blk.and(I1, &not_fwd, &plain);
+        ok = blk.and(I1, &ok, &prototype_clean);
+        let array_ok = blk.and(I1, &ok, &is_array);
+        // A `GC_TYPE_OBJECT` receiver may be an elements-backed Array
+        // subclass; anything else keeps the runtime entry.
+        let is_object = blk.icmp_eq(I8, &gc_type, GC_TYPE_OBJECT_I8);
+        blk.cond_br(&array_ok, &len_label, &elem_label);
+        let _ = is_object;
+    }
+    let hdr_end = ctx.block_label(hdr_idx);
+
+    ctx.current_block = elem_idx;
+    let store = {
+        let blk = ctx.block();
+        let gc_type_addr = blk.sub(I64, &handle, "8");
+        let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
+        let gc_type = blk.load(I8, &gc_type_ptr);
+        let is_object = blk.icmp_eq(I8, &gc_type, GC_TYPE_OBJECT_I8);
+        let meta_addr = blk.add(I64, &handle, &meta_offset);
+        let meta_slot = blk.inttoptr(I64, &meta_addr);
+        let meta = blk.load(I64, &meta_slot);
+        let has_meta = blk.icmp_ne(I64, &meta, "0");
+        let can_read_meta = blk.and(I1, &is_object, &has_meta);
+        // `select` keeps the load of word 12 off a null meta pointer.
+        let safe_meta = blk.select(I1, &can_read_meta, I64, &meta, &handle);
+        let meta_ptr = blk.inttoptr(I64, &safe_meta);
+        let store_slot = blk.gep(I64, &meta_ptr, &[(I64, "12")]);
+        let store = blk.load(I64, &store_slot);
+        let has_store = blk.icmp_ne(I64, &store, "0");
+        let ok = blk.and(I1, &can_read_meta, &has_store);
+        blk.cond_br(&ok, &elem_check_label, &slow_label);
+        store
+    };
+
+    ctx.current_block = elem_check_idx;
+    {
+        let blk = ctx.block();
+        let gc_type_addr = blk.sub(I64, &store, "8");
+        let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
+        let gc_type = blk.load(I8, &gc_type_ptr);
+        let is_array = blk.icmp_eq(I8, &gc_type, GC_TYPE_ARRAY_I8);
+        let gc_flags_addr = blk.sub(I64, &store, "7");
+        let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
+        let gc_flags = blk.load(I8, &gc_flags_ptr);
+        let fwd_bits = blk.and(I8, &gc_flags, GC_FLAG_FORWARDED_I8);
+        let not_fwd = blk.icmp_eq(I8, &fwd_bits, "0");
+        let reserved_addr = blk.sub(I64, &store, "6");
+        let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
+        let reserved = blk.load(I16, &reserved_ptr);
+        let blocking = blk.and(I16, &reserved, POP_BLOCKING_FLAGS_I16);
+        let plain = blk.icmp_eq(I16, &blocking, "0");
         let mut ok = blk.and(I1, &is_array, &not_fwd);
         ok = blk.and(I1, &ok, &plain);
-        ok = blk.and(I1, &ok, &prototype_clean);
         blk.cond_br(&ok, &len_label, &slow_label);
     }
+    let elem_end = ctx.block_label(elem_check_idx);
 
     ctx.current_block = len_idx;
+    let payload = ctx
+        .block()
+        .phi(I64, &[(&handle, &hdr_end), (&store, &elem_end)]);
     let new_length = {
         let blk = ctx.block();
         // ArrayHeader: length @0 (i32), capacity @4 (i32), elements @8.
-        let length = blk.safe_load_i32_from_ptr(&handle);
-        let cap_addr = blk.add(I64, &handle, "4");
+        let length = blk.safe_load_i32_from_ptr(&payload);
+        let cap_addr = blk.add(I64, &payload, "4");
         let cap_ptr = blk.inttoptr(I64, &cap_addr);
         let capacity = blk.load(I32, &cap_ptr);
         let nonempty = blk.icmp_ne(I32, &length, "0");
@@ -119,7 +184,7 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
         let blk = ctx.block();
         let new_length_i64 = blk.zext(I32, &new_length, I64);
         let elem_off = blk.shl(I64, &new_length_i64, "3");
-        let elements_addr = blk.add(I64, &handle, "8");
+        let elements_addr = blk.add(I64, &payload, "8");
         let elem_addr = blk.add(I64, &elements_addr, &elem_off);
         let elem_ptr = blk.inttoptr(I64, &elem_addr);
         let elem = blk.load(DOUBLE, &elem_ptr);
@@ -132,7 +197,7 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
     ctx.current_block = take_idx;
     {
         let blk = ctx.block();
-        let len_ptr = blk.inttoptr(I64, &handle);
+        let len_ptr = blk.inttoptr(I64, &payload);
         // `length` is a plain i32 word: no pointer, no barrier, no layout
         // note — exactly the runtime fast path's single store.
         blk.store(I32, &new_length, &len_ptr);
@@ -336,6 +401,21 @@ mod tests {
         assert!(
             slow.contains("call double @js_array_pop_f64("),
             "{what}: the runtime pop must remain the fallback:\n{slow}"
+        );
+        // An elements-backed Array subclass resolves its payload through the
+        // meta record (`ObjectMeta.elements`, word 12) and pops from it with
+        // the same length/read/take blocks — no runtime entry for that case.
+        let elements = super::super::class_field_barrier_tests::block_body(ir, "apop.elements.")
+            .expect("the elements probe block exists");
+        assert!(
+            elements.contains("getelementptr i64, ptr %") && elements.contains(", i64 12"),
+            "{what}: the probe must load ObjectMeta.elements at word 12:\n{elements}"
+        );
+        let check = super::super::class_field_barrier_tests::block_body(ir, "apop.elements.check.")
+            .expect("the store validation block exists");
+        assert!(
+            check.contains(", 1031") && check.contains("icmp eq i8"),
+            "{what}: the store must clear the same integrity mask as a plain array:\n{check}"
         );
     }
 

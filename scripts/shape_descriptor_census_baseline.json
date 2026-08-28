@@ -3,13 +3,10 @@
     "crates/perry-codegen/src/codegen/artifacts.rs|crate::target_layout::object_header_size_bytes(target_triple),": 1,
     "crates/perry-codegen/src/expr/element_shape_guard.rs|let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
     "crates/perry-codegen/src/expr/index_get/inline_dyn_typed_array.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
-    "crates/perry-codegen/src/expr/index_get/inline_dyn_typed_array.rs|let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)": 1,
     "crates/perry-codegen/src/expr/member_update.rs|let header_skip = crate::target_layout::object_header_size_bytes(": 1,
     "crates/perry-codegen/src/expr/property_get.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple)": 3,
     "crates/perry-codegen/src/expr/property_get/composed_ics.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
-    "crates/perry-codegen/src/expr/property_get/composed_ics.rs|let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)": 1,
     "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
-    "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs|let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)": 1,
     "crates/perry-codegen/src/expr/property_get/helpers.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 3,
     "crates/perry-codegen/src/expr/property_get/helpers.rs|let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
     "crates/perry-codegen/src/expr/property_set.rs|crate::target_layout::object_header_size_bytes(": 3,
@@ -25,10 +22,10 @@
     "crates/perry-codegen/src/stmt/cached_field_index_return.rs|let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)": 1,
     "crates/perry-codegen/src/stmt/loops.rs|let object_header_size = crate::target_layout::object_header_size_bytes(ctx.target_triple);": 1,
     "crates/perry-codegen/src/stmt/stable_packed_loop.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 2,
-    "crates/perry-codegen/src/stmt/stable_packed_loop.rs|let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)": 2,
     "crates/perry-codegen/src/target_layout.rs|assert_eq!(object_header_size_bytes( ), 16);": 6,
     "crates/perry-codegen/src/target_layout.rs|let total = 8 + object_header_size_bytes(triple) + 8 * INLINE_SLOT_FLOOR;": 1,
     "crates/perry-codegen/src/target_layout.rs|object_header_size_bytes(target_triple) + alloc_field_count * FIELD_SLOT_SIZE_BYTES;": 1,
+    "crates/perry-codegen/src/target_layout.rs|object_header_size_bytes(target_triple) - pointer_size": 1,
     "crates/perry-codegen/src/target_layout.rs|object_header_size_bytes(triple) % 8,": 1,
     "crates/perry-codegen/src/target_layout.rs|pub fn object_header_size_bytes(_target_triple: &str) -> u64 {": 1
   },
@@ -55,7 +52,7 @@
     "crates/perry-runtime/src/object/object_ops.rs|keys_array|declaration|pub(crate) use keys_array::{": 1
   },
   "summary": {
-    "codegen_object_header_size_sites": 46,
+    "codegen_object_header_size_sites": 42,
     "raw_member_files": 7,
     "raw_member_sites": {
       "keys_array": 24

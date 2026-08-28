@@ -228,9 +228,8 @@ pub(super) fn emit_array_subclass_length_ic(
     } else {
         8
     };
-    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
-        - meta_ptr_size)
-        .to_string();
+    let meta_offset =
+        crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple).to_string();
     // An elements-backed Array-subclass instance (`ObjectMeta.elements`):
     // `length` is the inner Array's length word — no shape IC. A probe miss
     // (no meta, no store) is the shape-carried form and keeps the IC below.

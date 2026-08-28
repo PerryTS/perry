@@ -427,3 +427,94 @@ fn the_counted_loop_guard_admits_an_elements_backed_receiver_as_kind_three() {
     );
     assert_eq!(facts[6], 64);
 }
+
+/// The allocation-free append and tail-pop paths agree with the complete
+/// runtime entries: values, `length`, holes, an empty store, and the growth
+/// edge (which must still publish the re-allocated head).
+#[test]
+fn the_lean_append_and_pop_paths_match_the_runtime_entries() {
+    let _representation = ArraySubclassRepresentationGuard::elements();
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    let class_id = 0x0074_869a;
+    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
+    let obj = js_object_alloc(class_id, 2);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+    unsafe { install_elements(live_obj(recv_h.get_nanbox_f64()), 0) };
+    let recv = || recv_h.get_nanbox_f64();
+    let store = || unsafe { elements_of(live_obj(recv())) };
+
+    // Empty: pop takes the runtime entry and answers `undefined`.
+    let empty = super::subclass::array_subclass_fast_pop(recv()).expect("pop is handled");
+    assert_eq!(empty.to_bits(), crate::value::TAG_UNDEFINED);
+    assert_eq!(
+        super::subclass::array_subclass_fast_length(recv()),
+        Some(0.0)
+    );
+
+    // 64 appends: the first of each capacity class grows (head write-back),
+    // the rest take the in-capacity path.
+    let mut heads = std::collections::HashSet::new();
+    for i in 0..64u32 {
+        assert_eq!(
+            super::subclass::array_subclass_fast_push_one(recv(), f64::from(i)),
+            Some(f64::from(i + 1))
+        );
+        heads.insert(store() as usize);
+        assert_eq!(unsafe { (*store()).length }, i + 1);
+    }
+    assert!(heads.len() > 1, "the store re-allocated at least once");
+    assert_eq!(
+        super::subclass::array_subclass_fast_length(recv()),
+        Some(64.0)
+    );
+    for i in 0..64u32 {
+        assert_eq!(
+            super::subclass::array_subclass_fast_index_get(recv(), i),
+            Some(f64::from(i))
+        );
+    }
+
+    // Tail pops walk back down, and the values come out in order.
+    for i in (32..64u32).rev() {
+        assert_eq!(
+            super::subclass::array_subclass_fast_pop(recv()),
+            Some(f64::from(i))
+        );
+    }
+    assert_eq!(
+        super::subclass::array_subclass_fast_length(recv()),
+        Some(32.0)
+    );
+
+    // A hole at the tail keeps the complete entry (it reads through the
+    // prototype chain), and `length` still drops by one.
+    assert_eq!(
+        crate::object::js_object_delete_dynamic(live_obj(recv()), 31.0),
+        1
+    );
+    let popped = super::subclass::array_subclass_fast_pop(recv()).expect("pop is handled");
+    assert!(
+        popped.to_bits() == crate::value::TAG_UNDEFINED || popped.is_nan(),
+        "a hole pops as undefined: {popped:?}"
+    );
+    assert_eq!(
+        super::subclass::array_subclass_fast_length(recv()),
+        Some(31.0)
+    );
+
+    // A pointer value still gets its bookkeeping: store a string and read it
+    // back through the funnel.
+    let text = crate::string::js_string_from_bytes(b"hello".as_ptr(), 5);
+    let text_value = crate::value::js_nanbox_string(text as i64);
+    assert!(super::subclass::array_subclass_fast_push_one(recv(), text_value).is_some());
+    assert_eq!(
+        super::subclass::array_subclass_fast_index_get(recv(), 31).map(|v| v.to_bits()),
+        Some(text_value.to_bits())
+    );
+    assert_eq!(
+        super::subclass::array_subclass_fast_pop(recv()).map(|v| v.to_bits()),
+        Some(text_value.to_bits())
+    );
+}

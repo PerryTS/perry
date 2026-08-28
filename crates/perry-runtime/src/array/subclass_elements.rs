@@ -666,6 +666,17 @@ pub(super) fn elements_push(receiver: &ValidatedObjectReceiver, value: f64) -> O
     if !mutation_receiver_allows_plain_tail(receiver.object_flags) {
         return None;
     }
+    // In-capacity append: no allocation, therefore no rooting, no head
+    // write-back, and none of the receiver re-classification
+    // `js_array_push_f64` owes an arbitrary caller-supplied pointer (proxy
+    // probe, forwarding-stub cleaning, flag resolution) — this store is ours,
+    // reached through the meta slot, and its header is one read away. Only the
+    // element bookkeeping (`store_array_slot_resolved`) is kept: it maintains
+    // the numeric/element-shape proofs the read tiers and the loop guard
+    // consume.
+    if let Some(length) = unsafe { elements_push_in_capacity(elements, value) } {
+        return Some(length);
+    }
     let obj = receiver.object as *mut ObjectHeader;
     unsafe {
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -689,5 +700,73 @@ pub(super) fn elements_pop(receiver: &ValidatedObjectReceiver) -> Option<f64> {
     if !mutation_receiver_allows_plain_tail(receiver.object_flags) {
         return None;
     }
+    // The mirror of `elements_push_in_capacity`: removing the tail stores
+    // nothing, so a non-hole element is a length decrement and a load. An
+    // empty store, a hole (which reads through the prototype chain) and every
+    // exotic flag keep the complete runtime entry.
+    if let Some(value) = unsafe { elements_pop_tail(elements) } {
+        return Some(value);
+    }
     Some(crate::array::js_array_pop_f64(elements))
+}
+
+/// The store's header when it is an ordinary, non-forwarded, unrestricted
+/// Array — the only shape the lean append/pop below may touch.
+///
+/// # Safety
+/// `elements` must be a live store address read from the meta slot.
+#[inline]
+unsafe fn plain_store_flags(elements: *mut ArrayHeader) -> Option<u16> {
+    let header = crate::value::addr_class::try_read_gc_header(elements as usize)?;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    let blocking = crate::gc::OBJ_FLAG_FROZEN
+        | crate::gc::OBJ_FLAG_SEALED
+        | crate::gc::OBJ_FLAG_NO_EXTEND
+        | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
+    (header._reserved & blocking == 0).then_some(header._reserved)
+}
+
+/// Append without allocating: `Some(new_length)` when the store had spare
+/// capacity, `None` when the caller must take the growing path.
+///
+/// # Safety
+/// As [`plain_store_flags`].
+#[inline]
+unsafe fn elements_push_in_capacity(elements: *mut ArrayHeader, value: f64) -> Option<f64> {
+    let flags = plain_store_flags(elements)?;
+    let length = (*elements).length;
+    let capacity = (*elements).capacity;
+    if length >= capacity {
+        return None;
+    }
+    crate::string::js_string_addref_if_heap_string(value);
+    crate::array::store_array_slot_resolved(elements, length as usize, value, flags);
+    (*elements).length = length + 1;
+    Some(f64::from(length + 1))
+}
+
+/// Remove and return the tail element, or `None` when the complete runtime
+/// entry has to run (empty store, a hole, an exotic flag).
+///
+/// # Safety
+/// As [`plain_store_flags`].
+#[inline]
+unsafe fn elements_pop_tail(elements: *mut ArrayHeader) -> Option<f64> {
+    plain_store_flags(elements)?;
+    let length = (*elements).length;
+    let capacity = (*elements).capacity;
+    if length == 0 || length > capacity {
+        return None;
+    }
+    let index = length - 1;
+    let bits = slot_bits(elements, index);
+    if bits == crate::value::TAG_HOLE {
+        return None;
+    }
+    (*elements).length = index;
+    Some(f64::from_bits(bits))
 }
