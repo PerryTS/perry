@@ -76,6 +76,240 @@ fn is_static_number_key_map(ctx: &FnCtx<'_>, map: &Expr) -> bool {
 /// cannot be observed by `Array.prototype.some` and whose body cannot inspect
 /// a closure environment. The runtime may then invoke the code pointer
 /// directly without allocating/looking up a singleton ClosureHeader.
+/// `arr.some(capturelessArrow)` as an inline loop, with `js_array_some_captureless`
+/// as the fallback for every receiver the loop does not admit.
+///
+/// The runtime helper decides the receiver ONCE — a plain `GC_TYPE_ARRAY`
+/// head, no indexed descriptors, pristine `Array.prototype` /
+/// `Object.prototype` index state, `length <= capacity` — and then runs the
+/// element loop with one rooted re-resolution per element, a NaN-boxed
+/// receiver per call and an indirect call through the function pointer. The
+/// loop emitted here makes the same one-time decision on the same live bits
+/// (the sticky `PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED` byte is the
+/// prototype half), then per element: re-reads the head from its root (the
+/// callback may have collected, or grown the array — a forwarded head goes
+/// through `js_array_live_head`), skips indices past the live length and
+/// holes, calls the arrow's body symbol directly with as many of
+/// `(element, index, receiver)` as it declares, and decides `true` / `false`
+/// results inline with `js_is_truthy` for anything else. Same contract as
+/// the helper: the bound is the length at entry, holes are skipped, an
+/// exotic or non-array receiver takes the helper.
+fn lower_captureless_some_inline(
+    ctx: &mut FnCtx<'_>,
+    array: &Expr,
+    callback_func: &str,
+    param_count: usize,
+) -> Result<String> {
+    use crate::nanbox::{POINTER_TAG_TOP16_I64, TAG_HOLE_I64};
+    use crate::types::{I1, I16, I8};
+    const TAG_TRUE_I64: &str = "9222246136947933188"; // 0x7FFC_0000_0000_0004
+    const TAG_FALSE_I64: &str = "9222246136947933187"; // 0x7FFC_0000_0000_0003
+    rooting::with_rooted_group(ctx, 1, |ctx, group| {
+        let arr_idx = group.lower(ctx, array, true)?;
+        let arr_box0 = group.reread(ctx, arr_idx)?;
+        let admit_idx = ctx.new_block("some.inline.admit");
+        let loop_idx = ctx.new_block("some.inline.loop");
+        let body_idx = ctx.new_block("some.inline.body");
+        let resolve_idx = ctx.new_block("some.inline.resolve");
+        let live_idx = ctx.new_block("some.inline.live");
+        let elem_idx = ctx.new_block("some.inline.elem");
+        let call_idx = ctx.new_block("some.inline.call");
+        let slow_idx = ctx.new_block("some.inline.slow");
+        let truthy_idx = ctx.new_block("some.inline.truthy");
+        let next_idx = ctx.new_block("some.inline.next");
+        let found_idx = ctx.new_block("some.inline.found");
+        let fallback_idx = ctx.new_block("some.inline.fallback");
+        let merge_idx = ctx.new_block("some.inline.merge");
+        let admit_l = ctx.block_label(admit_idx);
+        let loop_l = ctx.block_label(loop_idx);
+        let body_l = ctx.block_label(body_idx);
+        let resolve_l = ctx.block_label(resolve_idx);
+        let live_l = ctx.block_label(live_idx);
+        let elem_l = ctx.block_label(elem_idx);
+        let call_l = ctx.block_label(call_idx);
+        let slow_l = ctx.block_label(slow_idx);
+        let truthy_l = ctx.block_label(truthy_idx);
+        let next_l = ctx.block_label(next_idx);
+        let found_l = ctx.block_label(found_idx);
+        let fallback_l = ctx.block_label(fallback_idx);
+        let merge_l = ctx.block_label(merge_idx);
+        let counter = ctx.func.alloca_entry(I32);
+
+        // A heap pointer, before any header is read.
+        {
+            let blk = ctx.block();
+            let bits = blk.bitcast_double_to_i64(&arr_box0);
+            let top16 = blk.lshr(I64, &bits, "48");
+            let is_pointer = blk.icmp_eq(I64, &top16, POINTER_TAG_TOP16_I64);
+            blk.cond_br(&is_pointer, &admit_l, &fallback_l);
+        }
+        // Admission: the helper's one-time decision, on the live bits.
+        ctx.current_block = admit_idx;
+        let len0 = {
+            let blk = ctx.block();
+            let raw = unbox_to_i64(blk, &arr_box0);
+            let type_addr = blk.sub(I64, &raw, "8");
+            let type_ptr = blk.inttoptr(I64, &type_addr);
+            let obj_type = blk.load(I8, &type_ptr);
+            let is_array = blk.icmp_eq(I8, &obj_type, "1"); // GC_TYPE_ARRAY
+            let flags_addr = blk.sub(I64, &raw, "7");
+            let flags_ptr = blk.inttoptr(I64, &flags_addr);
+            let gc_flags = blk.load(I8, &flags_ptr);
+            let forwarded = blk.and(I8, &gc_flags, "128"); // GC_FLAG_FORWARDED
+            let not_forwarded = blk.icmp_eq(I8, &forwarded, "0");
+            let reserved_addr = blk.sub(I64, &raw, "6");
+            let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
+            let reserved = blk.load(I16, &reserved_ptr);
+            let descriptors = blk.and(I16, &reserved, "1024"); // OBJ_FLAG_ARRAY_DESCRIPTORS
+            let no_descriptors = blk.icmp_eq(I16, &descriptors, "0");
+            let invalidated = blk.load_volatile(I8, "@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED");
+            let prototype_clean = blk.icmp_eq(I8, &invalidated, "0");
+            let len_ptr = blk.inttoptr(I64, &raw);
+            let length = blk.load(I32, &len_ptr);
+            let cap_addr = blk.add(I64, &raw, "4");
+            let cap_ptr = blk.inttoptr(I64, &cap_addr);
+            let capacity = blk.load(I32, &cap_ptr);
+            let dense = blk.icmp_ule(I32, &length, &capacity);
+            let a = blk.and(I1, &is_array, &not_forwarded);
+            let b = blk.and(I1, &a, &no_descriptors);
+            let c = blk.and(I1, &b, &prototype_clean);
+            let admitted = blk.and(I1, &c, &dense);
+            blk.store(I32, "0", &counter);
+            blk.cond_br(&admitted, &loop_l, &fallback_l);
+            length
+        };
+        // loop: i < len0 ? (the bound is the length at entry)
+        ctx.current_block = loop_idx;
+        let false_box = {
+            let blk = ctx.block();
+            let i = blk.load(I32, &counter);
+            let more = blk.icmp_ult(I32, &i, &len0);
+            // The merge phi's operands are materialised in the predecessors:
+            // a phi must lead its block.
+            let false_box = blk.bitcast_i64_to_double(TAG_FALSE_I64);
+            blk.cond_br(&more, &body_l, &merge_l);
+            false_box
+        };
+        // body: re-read the head from its root; a forwarded head resolves.
+        ctx.current_block = body_idx;
+        let arr_box = group.reread(ctx, arr_idx)?;
+        let raw_reread = {
+            let blk = ctx.block();
+            let raw = unbox_to_i64(blk, &arr_box);
+            let flags_addr = blk.sub(I64, &raw, "7");
+            let flags_ptr = blk.inttoptr(I64, &flags_addr);
+            let gc_flags = blk.load(I8, &flags_ptr);
+            let forwarded = blk.and(I8, &gc_flags, "128");
+            let is_forwarded = blk.icmp_ne(I8, &forwarded, "0");
+            blk.cond_br(&is_forwarded, &resolve_l, &live_l);
+            raw
+        };
+        ctx.current_block = resolve_idx;
+        let resolved = ctx
+            .block()
+            .call(I64, "js_array_live_head", &[(I64, &raw_reread)]);
+        ctx.block().br(&live_l);
+        // live: bounds against the live length, then the element.
+        ctx.current_block = live_idx;
+        let raw = ctx
+            .block()
+            .phi(I64, &[(&raw_reread, &body_l), (&resolved, &resolve_l)]);
+        let i = {
+            let blk = ctx.block();
+            let i = blk.load(I32, &counter);
+            let len_ptr = blk.inttoptr(I64, &raw);
+            let live_len = blk.load(I32, &len_ptr);
+            let in_range = blk.icmp_ult(I32, &i, &live_len);
+            blk.cond_br(&in_range, &elem_l, &next_l);
+            i
+        };
+        ctx.current_block = elem_idx;
+        let elem_bits = {
+            let blk = ctx.block();
+            let i64_i = blk.zext(I32, &i, I64);
+            let byte_offset = blk.shl(I64, &i64_i, "3");
+            let with_header = blk.add(I64, &byte_offset, "8");
+            let elem_addr = blk.add(I64, &raw, &with_header);
+            let elem_ptr = blk.inttoptr(I64, &elem_addr);
+            let bits = blk.load(I64, &elem_ptr);
+            let is_hole = blk.icmp_eq(I64, &bits, TAG_HOLE_I64);
+            blk.cond_br(&is_hole, &next_l, &call_l);
+            bits
+        };
+        ctx.current_block = call_idx;
+        let result = {
+            let blk = ctx.block();
+            let elem = blk.bitcast_i64_to_double(&elem_bits);
+            let i_double = blk.uitofp(I32, &i, DOUBLE);
+            let recv = nanbox_pointer_inline(blk, &raw);
+            let mut args: Vec<(crate::types::LlvmType, &str)> =
+                vec![(I64, "0"), (DOUBLE, elem.as_str())];
+            if param_count >= 2 {
+                args.push((DOUBLE, i_double.as_str()));
+            }
+            if param_count >= 3 {
+                args.push((DOUBLE, recv.as_str()));
+            }
+            let result = blk.call(DOUBLE, callback_func.trim_start_matches('@'), &args);
+            let bits = blk.bitcast_double_to_i64(&result);
+            let is_true = blk.icmp_eq(I64, &bits, TAG_TRUE_I64);
+            blk.cond_br(&is_true, &found_l, &slow_l);
+            result
+        };
+        ctx.current_block = slow_idx;
+        {
+            let blk = ctx.block();
+            let bits = blk.bitcast_double_to_i64(&result);
+            let is_false = blk.icmp_eq(I64, &bits, TAG_FALSE_I64);
+            blk.cond_br(&is_false, &next_l, &truthy_l);
+        }
+        ctx.current_block = truthy_idx;
+        {
+            let blk = ctx.block();
+            let truthy = blk.call(I32, "js_is_truthy", &[(DOUBLE, &result)]);
+            let nonzero = blk.icmp_ne(I32, &truthy, "0");
+            blk.cond_br(&nonzero, &found_l, &next_l);
+        }
+        ctx.current_block = next_idx;
+        {
+            let blk = ctx.block();
+            let i = blk.load(I32, &counter);
+            let inc = blk.add(I32, &i, "1");
+            blk.store(I32, &inc, &counter);
+            blk.br(&loop_l);
+        }
+        ctx.current_block = found_idx;
+        let true_box = {
+            let blk = ctx.block();
+            let true_box = blk.bitcast_i64_to_double(TAG_TRUE_I64);
+            blk.br(&merge_l);
+            true_box
+        };
+        ctx.current_block = fallback_idx;
+        let fallback_value = {
+            let blk = ctx.block();
+            let arr_handle = unbox_to_i64(blk, &arr_box0);
+            let value = blk.call(
+                DOUBLE,
+                "js_array_some_captureless",
+                &[(I64, &arr_handle), (PTR, callback_func)],
+            );
+            blk.br(&merge_l);
+            value
+        };
+        ctx.current_block = merge_idx;
+        let blk = ctx.block();
+        Ok(blk.phi(
+            DOUBLE,
+            &[
+                (&false_box, &loop_l),
+                (&true_box, &found_l),
+                (&fallback_value, &fallback_l),
+            ],
+        ))
+    })
+}
+
 fn captureless_some_callback(ctx: &FnCtx<'_>, callback: &Expr) -> Option<String> {
     let Expr::Closure {
         func_id,
@@ -346,13 +580,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // so we forward it directly without conversion.
         Expr::ArraySome { array, callback } => {
             if let Some(callback_func) = captureless_some_callback(ctx, callback) {
-                let arr_box = lower_expr(ctx, array)?;
-                let arr_handle = unbox_to_i64(ctx.block(), &arr_box);
-                return Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_array_some_captureless",
-                    &[(I64, &arr_handle), (PTR, &callback_func)],
-                ));
+                let Expr::Closure { params, .. } = callback.as_ref() else {
+                    unreachable!("captureless_some_callback matched a closure");
+                };
+                return lower_captureless_some_inline(ctx, array, &callback_func, params.len());
             }
             // #7615 slice 2: same callback window as `ArrayFilter` above.
             rooting::with_operands_rooted(ctx, &[array, callback], |ctx, vals| {
