@@ -693,10 +693,39 @@ pub(crate) fn apply_field_initializers_recursive(
                 None => init_pairs.push((field.name.clone(), init, field.is_private)),
             }
         }
+        // #8962: an IMPORTED class installs nothing here. Its whole
+        // field-initializer phase — public field writes, private-field adds AND
+        // the shared private brand — is baked into the defining module's
+        // standalone `<prefix>__<class>_constructor`, which `codegen/method.rs`
+        // emits for exactly that reason ("At the `new ImportedClass(...)` call
+        // site, `lower_new` applies initializers against the imported class
+        // stub — which has none"). That premise holds for FIELDS because the
+        // stub flattens every field to `is_private: false` with `init: None`,
+        // so the worst this loop could do was write `undefined` into a slot the
+        // real constructor overwrites moments later.
+        //
+        // It does NOT hold for the private BRAND. The stub copies private
+        // METHOD and accessor names verbatim (it needs them to resolve dispatch
+        // symbols), and `has_private_instance_brand` is defined purely over
+        // `#`-prefixed method/getter/setter names — so a stub answers `true` and
+        // this site emitted `js_private_brand_add` at the importing module's
+        // `new`, on top of the one the defining module's constructor emits.
+        // Installing a class's brand twice on one object is the observable
+        // error PrivateMethodOrAccessorAdd requires, so the runtime threw
+        // "Cannot initialize private elements twice on the same object" out of
+        // `new Hono()` — any imported class with a private method or accessor,
+        // whether constructed directly or reached as an ancestor through
+        // `AncestorsOnly`.
+        //
+        // Suppressing BOTH flags (not just the brand) is what restores the
+        // `continue` below for a stub whose only private elements are methods:
+        // for a stub the two predicates are the same question, since its fields
+        // are never private.
         let (class_has_private_elements, class_has_private_brand) = ctx
             .classes
             .get(&class_name_in_chain)
             .copied()
+            .filter(|class| !class.is_imported_stub())
             .map(|class| {
                 (
                     class.has_private_instance_elements(),

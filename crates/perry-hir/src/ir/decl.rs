@@ -284,6 +284,27 @@ pub struct Class {
 }
 
 impl Class {
+    /// True for the metadata-only stub `compile_module` synthesizes for a class
+    /// IMPORTED from another module (`perry-codegen/src/codegen/mod.rs`, "Build
+    /// a stub Class with the minimum fields the codegen needs").
+    ///
+    /// A stub is a NAME TABLE, not a class: it carries member names so the
+    /// importing module can resolve dispatch symbols, and carries no bodies, no
+    /// field initializers and no constructor. Everything a construction
+    /// actually *does* — field initializers, private-field adds, the private
+    /// brand — is baked into the defining module's standalone
+    /// `<prefix>__<class>_constructor` instead (`codegen/method.rs`,
+    /// `is_constructor_method`), precisely because the stub has none of it.
+    ///
+    /// `id == 0` is the marker: the driver hands out class ids from 1
+    /// (`run_pipeline.rs`: "Start at 1, 0 is reserved for \"no parent\"") and
+    /// every local class takes its id from `LoweringContext::fresh_class`, so
+    /// the stub built at `codegen/mod.rs` ("id: 0, // imported — no local
+    /// ClassId") is the only `Class` in a module's class table with id 0.
+    pub fn is_imported_stub(&self) -> bool {
+        self.id == 0
+    }
+
     /// Whether construction installs any instance-private element.
     pub fn has_private_instance_elements(&self) -> bool {
         self.fields.iter().any(|field| field.is_private)
