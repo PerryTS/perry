@@ -1,0 +1,1 @@
+- **runtime:** `Map.clear()` returns early on an already-empty map, and for a map of at most 16 entries whose keys are all bits-stable numerics it skips the string/pointer side-table probes (two thread-local resolutions plus two hash probes that found two empty tables — the whole cost of the ten-thousand-per-frame grouping-map clears of an ECS change set).
