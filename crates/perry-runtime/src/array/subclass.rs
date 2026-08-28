@@ -1801,6 +1801,21 @@ pub(crate) fn array_object_method(recv: f64, method: &str, args: &[f64]) -> Opti
         if let Some(value) = array_subclass_fast_pop(recv) {
             return Some(value);
         }
+    } else if method == "fill" {
+        // `Array.prototype.fill` over the receiver's own `length` + indexed
+        // properties. An elements-backed instance has no own `fill` method
+        // (see `js_array_subclass_init`), so this funnel is where the
+        // inherited one is served.
+        return Some(crate::array::js_array_fill_generic(
+            recv,
+            args.first()
+                .copied()
+                .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED)),
+            i32::from(args.len() > 1),
+            args.get(1).copied().unwrap_or(0.0),
+            i32::from(args.len() > 2),
+            args.get(2).copied().unwrap_or(0.0),
+        ));
     }
     let (ptr, len) = (args.as_ptr(), args.len());
     if let Some(result) = super::generic::run_object_mutator(recv, method, ptr, len) {

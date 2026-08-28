@@ -202,20 +202,13 @@ pub extern "C" fn js_array_subclass_init(this: f64, n: f64) -> f64 {
         unsafe {
             crate::array::subclass_elements::install_elements(obj, len.min(u32::MAX as f64) as u32)
         };
-        let this = this_root.get_nanbox_f64();
-        let obj = raw_ptr_from_value(this) as *mut ObjectHeader;
-        crate::closure::js_register_closure_arity(ns_array_fill as *const u8, 1);
-        let methods: [(&str, StubFn); 1] = [("fill", super::cast1(ns_array_fill))];
-        install_methods_on_existing_object(obj, this, &methods, &[]);
-        // `fill` is an own method here, but it must not show up as an
-        // enumerable own key (`Object.keys` / `for..in` / JSON): mark it
-        // non-enumerable like a prototype method would be.
-        let obj = raw_ptr_from_value(this_root.get_nanbox_f64()) as *mut ObjectHeader;
-        crate::object::descriptor_state::set_property_attrs(
-            obj as usize,
-            "fill".to_string(),
-            crate::object::descriptor_state::PropertyAttrs::new(true, false, true),
-        );
+        // No own `fill` method: an own property would show up in
+        // `Object.getOwnPropertyNames` (node inherits `fill` from
+        // `Array.prototype`), and hiding it with a descriptor would set
+        // `OBJ_FLAG_HAS_DESCRIPTORS` on every instance — which the codegen
+        // class-field inline guard rejects, sending every field read to the
+        // IC miss (measured: 6x on the wolf-ecs twins). The elements-backed
+        // instance serves `fill` through `array_object_method` instead.
         return this_root.get_nanbox_f64();
     }
     let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
