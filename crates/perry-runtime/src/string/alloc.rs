@@ -56,7 +56,18 @@ pub extern "C" fn js_string_materialize_to_heap(value: f64) -> *mut StringHeader
     if jsval.is_short_string() {
         let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         let n = jsval.short_string_to_buf(&mut buf);
-        return js_string_from_bytes(buf.as_ptr(), n as u32);
+        // Intern rather than mint. This function is the SSO→heap boundary
+        // every `*const StringHeader` consumer crosses, and a computed
+        // property name (`o["k" + i]`) crosses it on every read: minting gave
+        // each iteration a fresh allocation AND a fresh address, so the
+        // address-keyed read plan and the interned-key write fast paths could
+        // never hit on a key they had already seen. Interning makes the
+        // ADDRESS content-stable, which is what those caches actually compare.
+        // Same-content strings are already required to be interchangeable
+        // here (the materialized header is a value, never an identity), so
+        // sharing one canonical header changes nothing observable.
+        return crate::string::intern::intern_dispatch_bytes(0, buf.as_ptr(), n, 0, false)
+            as *mut StringHeader;
     }
     if jsval.is_string() {
         return jsval.as_string_ptr() as *mut StringHeader;

@@ -192,9 +192,10 @@ fn a_string_literal_operand_keeps_the_fused_concat() {
         add(Expr::String("item_".to_string()), Expr::LocalGet(1)),
     );
     assert!(
-        ir.contains("call i64 @js_string_concat_value("),
-        "a proven string must keep the fused single-allocation concat — the \
-         guard is for claims, not for proofs:\n{ir}"
+        ir.contains("call double @js_string_concat_value_box("),
+        "a proven string must keep the fused concat (the `_box` twin, which \
+         returns SSO for short results) — the guard is for claims, not for \
+         proofs:\n{ir}"
     );
     assert!(
         !ir.contains("call double @js_string_add_value("),
@@ -214,7 +215,7 @@ fn a_coerced_operand_keeps_the_fused_concat() {
         ),
     );
     assert!(
-        ir.contains("call i64 @js_string_concat_value(")
+        ir.contains("call double @js_string_concat_value_box(")
             && !ir.contains("call double @js_string_add_value("),
         "`String(x)` constructs a string; it is not an annotation:\n{ir}"
     );

@@ -570,14 +570,18 @@ fn coerce_concat_body(
         // Issue #214: SSO-safe unbox; repsel Phase 3a: inline `bitcast+and`
         // for proven-heap operands (string literals — the `"user_" + i`
         // shape) and tag-dispatch for canonical-Str locals.
+        //
+        // The `_box` twin returns the result NaN-boxed directly and takes
+        // the SSO arm for ≤5-ASCII-byte results, giving `"k" + i` computed
+        // keys content-stable bits (so dynamic-key write ICs and the
+        // megamorphic stub can hit) with zero allocation.
         let l_handle = str_operand_handle_tag_dispatched(ctx, left, l_box);
         let blk = ctx.block();
-        let result_handle = blk.call(
-            I64,
-            "js_string_concat_value",
+        return Ok(blk.call(
+            DOUBLE,
+            "js_string_concat_value_box",
             &[(I64, &l_handle), (DOUBLE, r_box)],
-        );
-        return Ok(nanbox_string_inline(blk, &result_handle));
+        ));
     }
 
     if !l_is_string && r_is_string {

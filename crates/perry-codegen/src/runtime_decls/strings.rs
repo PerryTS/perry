@@ -32,6 +32,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // `js_value_concat_string(value_f64, suffix_handle) -> handle`
     module.declare_function("js_string_concat_value", I64, &[I64, DOUBLE]);
     module.declare_function("js_value_concat_string", I64, &[DOUBLE, I64]);
+    // NaN-box-returning twin: SSO immediate for ≤5-ASCII-byte results, so
+    // `"k" + i` computed keys get content-stable bits (dyn-IC/stub hits)
+    // and skip the per-iteration allocation entirely.
+    module.declare_function("js_string_concat_value_box", DOUBLE, &[I64, DOUBLE]);
 
     // #7837: the same two fused concats, but with the STRING side passed
     // NaN-boxed instead of pre-unboxed, so the helper can tell a real string

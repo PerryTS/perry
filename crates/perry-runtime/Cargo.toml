@@ -49,6 +49,30 @@ keepalive-anchors = []
 # leaves it off and falls back to the system allocator. The #6882 VM-tag
 # retag rides the same gate (it only exists to label mimalloc's mappings).
 alloc-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
+# DIAGNOSTIC ONLY — never in `default`, never in a shipping build.
+#
+# Builds mimalloc in secure + debug mode to hunt heap corruption that is
+# *allocator-dependent*: the class of bug that crashes ~56% of the time on
+# mimalloc and 0/41 on the system allocator. macOS `free()` ignores the
+# caller-passed size, so a mismatched dealloc layout is silently harmless
+# there while it corrupts mimalloc's metadata — the system-allocator "fix"
+# hides the bug rather than proving its absence.
+#
+#   secure → guard pages after each block, encoded free lists, randomized
+#            placement  ⇒ catches heap *overflow* at the write.
+#   debug  → mi_assert checks on every free ⇒ catches invalid free, double
+#            free, and wrong-size/align dealloc at the *call site*.
+#
+# Both report through mimalloc's own error path, so a hit names the failing
+# operation instead of leaving a SIGSEGV to attribute by hand. Expect a large
+# slowdown; this is an instrument, not a configuration.
+alloc-mimalloc-hardened = [
+    "alloc-mimalloc",
+    "mimalloc/secure",
+    "mimalloc/debug",
+    "libmimalloc-sys/secure",
+    "libmimalloc-sys/debug",
+]
 # Per-module Node-API gate (binary-size): compiles `node:dgram`'s UDP-socket
 # implementation (`crate::dgram` + `crate::dgram_reactor`, ~2.2k LOC, incl. the
 # `js_dgram_*` externs codegen emits direct calls to) + its dispatch arm only

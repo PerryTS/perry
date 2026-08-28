@@ -446,6 +446,57 @@ pub extern "C" fn js_string_concat_value(
     js_string_concat(prefix_handle.get_raw_const_ptr::<StringHeader>(), value_str)
 }
 
+/// NaN-box-returning twin of [`js_string_concat_value`]: SSO immediate when
+/// the result fits (≤ 5 ASCII bytes), heap `STRING_TAG` box otherwise.
+///
+/// The SSO arm matters twice over. It removes the per-iteration allocation
+/// from the `"k" + i` computed-key pattern — but more importantly it makes
+/// the result's BITS content-stable: `"k" + 42` yields the identical f64
+/// every evaluation. Every key-keyed cache downstream (the dynamic-key
+/// write IC's ways, the megamorphic write stub, read plans) compares key
+/// VALUE bits, so a heap pointer minted fresh per iteration can never hit —
+/// which is exactly what the stub-cache counters showed (600k inserts,
+/// 1.19M probes, 0 hits, 99% `way_key_neq`). ASCII-only for the same
+/// `utf16_len` soundness reason as `js_string_concat_box`'s SSO arm.
+#[no_mangle]
+pub extern "C" fn js_string_concat_value_box(prefix: *const StringHeader, value: f64) -> f64 {
+    // Same "plain f64" test as `js_string_concat_value`'s fast path; the SSO
+    // arm additionally wants a small non-negative integer so the digit count
+    // comes from `fast_itoa_u32`.
+    let bits = value.to_bits();
+    let tag = bits >> 48;
+    let is_plain_f64 = tag < 0x7FF8 || (tag == 0x7FF8 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0);
+    if is_plain_f64
+        && value.fract() == 0.0
+        && (0.0..=999_999_999.0).contains(&value)
+        && is_valid_string_ptr(prefix)
+    {
+        let prefix_blen = unsafe { (*prefix).byte_len } as usize;
+        if prefix_blen < crate::value::SHORT_STRING_MAX_LEN {
+            let mut num_buf = [0u8; 32];
+            let num_len = fast_itoa_u32(value as u32, &mut num_buf);
+            if prefix_blen + num_len <= crate::value::SHORT_STRING_MAX_LEN {
+                let data = string_data(prefix);
+                if bytes_all_ascii(data, prefix_blen as u32) {
+                    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(data, sso.as_mut_ptr(), prefix_blen);
+                    }
+                    sso[prefix_blen..prefix_blen + num_len].copy_from_slice(&num_buf[..num_len]);
+                    return f64::from_bits(
+                        crate::value::JSValue::short_string_unchecked(
+                            &sso[..prefix_blen + num_len],
+                        )
+                        .bits(),
+                    );
+                }
+            }
+        }
+    }
+    let ptr = js_string_concat_value(prefix, value);
+    f64::from_bits(crate::value::js_nanbox_string(ptr as i64).to_bits())
+}
+
 /// Ceiling on the per-call part count. Must match `CONCAT_CHAIN_MAX_PARTS` in
 /// `perry-codegen/src/lower_string_concat.rs`. The cap keeps the stack scratch
 /// bounded so a pathological fold cannot overflow the stack.

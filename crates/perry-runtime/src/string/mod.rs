@@ -933,6 +933,42 @@ pub(crate) fn string_data(s: *const StringHeader) -> *const u8 {
     unsafe { (s as *const u8).add(std::mem::size_of::<StringHeader>()) }
 }
 
+/// The SSO immediate bits a heap string's CONTENT would encode as, or `None`
+/// when it doesn't fit the inline form (> `SHORT_STRING_MAX_LEN` bytes, or
+/// any non-ASCII byte — SSO's length tag doubles as the JS `.length`, so a
+/// multi-byte sequence must not take this form).
+///
+/// This is the representation-folding half of SSO: the same short string can
+/// reach a cache as an immediate or as a heap pointer depending on what the
+/// codegen materialized, and identity comparisons then fail on strings that
+/// are equal. Callers that key a cache on a property name use this to compare
+/// content without a byte-by-byte scan at every probe.
+///
+/// # Safety
+/// `p` must be a valid `StringHeader*` or null; the payload is read but not
+/// retained, so the borrow must not span an allocation.
+#[inline]
+pub(crate) unsafe fn short_ascii_sso_bits(p: *const StringHeader) -> Option<u64> {
+    if !is_valid_string_ptr(p) {
+        return None;
+    }
+    let blen = (*p).byte_len as usize;
+    if blen > crate::value::SHORT_STRING_MAX_LEN {
+        return None;
+    }
+    let data = string_data(p);
+    let mut payload: u64 = 0;
+    for i in 0..blen {
+        let b = *data.add(i);
+        if b >= 0x80 {
+            return None;
+        }
+        payload |= (b as u64) << (i * 8);
+    }
+    let len_bits = (blen as u64) << crate::value::SHORT_STRING_LEN_SHIFT;
+    Some(crate::value::SHORT_STRING_TAG | len_bits | payload)
+}
+
 /// Get string as a Rust `&str` for immediate, non-allocating internal use.
 ///
 /// The returned lifetime is caller-chosen and is not tied to a GC root. The
