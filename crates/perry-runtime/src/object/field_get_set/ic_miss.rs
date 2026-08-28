@@ -10,8 +10,10 @@ pub extern "C" fn js_object_get_field_by_name_f64(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> f64 {
-    if let Some(value) = private_member_get_by_name(obj, key) {
-        return value;
+    if !cannot_be_private_member_name(key) {
+        if let Some(value) = private_member_get_by_name(obj, key) {
+            return value;
+        }
     }
     if (obj as usize) > 0 && (obj as usize) < 0x10000 && !key.is_null() {
         if let Some(name) = unsafe { super::super::has_own_helpers::str_from_string_header(key) } {

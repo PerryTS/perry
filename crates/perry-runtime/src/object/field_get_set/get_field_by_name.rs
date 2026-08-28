@@ -27,8 +27,13 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
-    if let Some(value) = super::private_member_get_by_name(obj, key) {
-        return JSValue::from_bits(value.to_bits());
+    // Guard hoisted to the call site: an ordinary key is rejected on a length
+    // compare and one byte here, so the overwhelmingly common property read
+    // makes no call into the private-member path at all.
+    if !super::cannot_be_private_member_name(key) {
+        if let Some(value) = super::private_member_get_by_name(obj, key) {
+            return JSValue::from_bits(value.to_bits());
+        }
     }
     // An elements-backed Array-subclass instance answers its indices and
     // `length` from its store; an absent index falls through to the ordinary

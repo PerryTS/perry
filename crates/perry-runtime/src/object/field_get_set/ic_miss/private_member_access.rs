@@ -46,6 +46,13 @@ const PRIVATE_MEMBER_PREFIX: &str = "#<perry:private-member:";
 /// Cheap rejection for the overwhelmingly common case: an ordinary property
 /// name is not a private-member storage name.
 ///
+/// Callers invoke this at THEIR OWN call site, before calling into the
+/// private-member helpers, so an ordinary property operation makes no call at
+/// all. Folding the guard inside the helpers (as this originally did) made the
+/// work cheap but left the call: `private_member_get_by_name` was still 16.8%
+/// of a pure property-read loop, essentially all of it call overhead for keys
+/// that are rejected on their length.
+///
 /// [`private_member_storage_name`] runs at the TOP of both the generic
 /// property read (`js_object_get_field_by_name`) and the generic write
 /// (`field_set_by_name`), so every property operation in the program pays it.
@@ -60,7 +67,7 @@ const PRIVATE_MEMBER_PREFIX: &str = "#<perry:private-member:";
 /// members and the rare `#`-prefixed user key — go on to the real check, so
 /// the slow path's behaviour is unchanged.
 #[inline(always)]
-fn cannot_be_private_member_name(key: *const crate::StringHeader) -> bool {
+pub(crate) fn cannot_be_private_member_name(key: *const crate::StringHeader) -> bool {
     if key.is_null() {
         return true;
     }
