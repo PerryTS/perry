@@ -1406,7 +1406,63 @@ pub extern "C" fn js_map_find_key_index(map_boxed: f64, key: f64) -> f64 {
 #[used]
 static KEEP_MAP_FIND_KEY_INDEX: extern "C" fn(f64, f64) -> f64 = js_map_find_key_index;
 
+/// The two lookups every hot `Map` does, with nothing else in the frame.
+///
+/// `find_key_index` grew the string-hash, pointer-index and generic-compare
+/// paths into one body, and the register pressure of those cold paths costs
+/// every lookup the full prologue/epilogue (eight callee-saved GPRs and four
+/// FP registers on arm64 — the profile put a third of the function's self
+/// time there). The lane here answers the two shapes the numeric side-table
+/// exists for — a plain (untagged, non-NaN, non-zero) number key against a
+/// small map's entries by bit identity, or against the dense integer range
+/// table — and returns `None` for everything else so [`find_key_index_cold`]
+/// decides it. A dense-range miss is definitive for its span (every insert,
+/// delete, clear and GC rewrite keeps the table exact), exactly as in the cold
+/// path; a key outside the span goes to the hashed index there.
+#[inline(always)]
+unsafe fn find_key_index_hot(map: *const MapHeader, key: f64) -> Option<i32> {
+    let size = (*map).size;
+    let key_bits = key.to_bits();
+    if !is_plain_nonzero_number_bits(key_bits) {
+        return None;
+    }
+    if size <= SIDE_TABLE_THRESHOLD {
+        let entries = entries_ptr(map);
+        for i in 0..size {
+            if ptr::read(entries.add((i as usize) * 2)).to_bits() == key_bits {
+                return Some(i as i32);
+            }
+        }
+        return Some(-1);
+    }
+    let index = (*map).numeric_index.as_ref()?;
+    let dense = index.dense.as_ref()?;
+    let integer = dense_integer_key(NumericKey(key_bits))?;
+    let offset = integer.checked_sub(dense.base)? as usize;
+    if offset >= dense.slots.len() {
+        return None;
+    }
+    let entry = *dense.slots.get_unchecked(offset);
+    if entry == DENSE_NUMERIC_EMPTY || entry >= size {
+        return Some(-1);
+    }
+    Some(entry as i32)
+}
+
+#[inline(always)]
 pub(crate) unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
+    if let Some(index) = find_key_index_hot(map, key) {
+        return index;
+    }
+    find_key_index_cold(map, key)
+}
+
+/// Every lookup shape [`find_key_index_hot`] declines: tagged, zero and NaN
+/// keys, string content hashing, the pointer-identity index, the hashed
+/// numeric index, and the generic linear compare. Out of line on purpose —
+/// see the hot lane.
+#[inline(never)]
+unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
     let size = (*map).size;
     let key_bits = key.to_bits();
 
@@ -3077,6 +3133,64 @@ mod tests {
             assert_eq!(js_map_get(map, i as f64), (i * 10) as f64);
             assert!(test_map_numeric_index_contains(map, i as f64));
         }
+    }
+
+    #[test]
+    fn hot_lookup_lane_agrees_with_the_cold_path_on_every_key_shape() {
+        let map = js_map_alloc(4);
+        // Small map: bit-identity scan, hit and definitive miss.
+        for key in 1..=4 {
+            js_map_set(map, key as f64, (key * 10) as f64);
+        }
+        for key in 1..=4 {
+            assert_eq!(js_map_get(map, key as f64), (key * 10) as f64);
+            assert_eq!(js_map_has(map, key as f64), 1);
+        }
+        assert_eq!(js_map_has(map, 5.0), 0);
+        assert_eq!(js_map_has(map, 2.5), 0);
+        // Zero, -0 and NaN keys are the cold path's (SameValueZero).
+        js_map_set(map, 0.0, 1.0);
+        assert_eq!(js_map_get(map, -0.0), 1.0);
+        js_map_set(map, f64::NAN, 2.0);
+        assert_eq!(js_map_get(map, f64::from_bits(0x7FF8_0000_0000_0001)), 2.0);
+
+        // A tagged key (a boolean) never takes the numeric lane.
+        let boxed_true = f64::from_bits(crate::value::TAG_TRUE);
+        js_map_set(map, boxed_true, 5.0);
+        assert_eq!(js_map_get(map, boxed_true), 5.0);
+        assert_eq!(js_map_has(map, boxed_true), 1);
+        for key in 1..=4 {
+            assert_eq!(js_map_get(map, key as f64), (key * 10) as f64);
+        }
+
+        // Dense span (a fresh map, so the run is dense enough to build the
+        // range table): hit, definitive in-span miss, out-of-span keys through
+        // the hashed index; negative / fractional / huge keys never touch the
+        // range table.
+        let dense = js_map_alloc(4);
+        for key in 1_024..1_040 {
+            js_map_set(dense, key as f64, (key * 10) as f64);
+        }
+        let (base, len) = test_map_dense_numeric_index_range(dense)
+            .expect("a dense run should activate the numeric range index");
+        js_map_set(dense, 1_000_000.0, 77.0);
+        js_map_set(dense, -3.0, 88.0);
+        js_map_set(dense, 4.5, 99.0);
+        js_map_set(dense, u32::MAX as f64 + 1.0, 66.0);
+        for key in 1_024..1_040 {
+            assert_eq!(js_map_get(dense, key as f64), (key * 10) as f64);
+            assert_eq!(js_map_has(dense, key as f64), 1);
+        }
+        assert_eq!(js_map_has(dense, 1_023.0), 0);
+        assert_eq!(js_map_has(dense, 1_040.0), 0);
+        assert_eq!(js_map_has(dense, (base as f64) + (len as f64) + 5.0), 0);
+        assert_eq!(js_map_has(dense, 1_031.5), 0);
+        assert_eq!(js_map_get(dense, 1_000_000.0), 77.0);
+        assert_eq!(js_map_get(dense, -3.0), 88.0);
+        assert_eq!(js_map_get(dense, 4.5), 99.0);
+        assert_eq!(js_map_get(dense, u32::MAX as f64 + 1.0), 66.0);
+        assert_eq!(js_map_has(dense, 0.0), 0);
+        assert_eq!(js_map_has(dense, f64::NAN), 0);
     }
 
     #[test]
