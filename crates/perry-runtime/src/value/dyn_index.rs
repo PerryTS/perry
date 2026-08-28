@@ -530,8 +530,8 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
 ///
 /// Routes by the receiver's `gc_type` byte: arrays go through
 /// `js_array_set_index_or_string_strict` (numeric/string-key spec dispatch);
-/// everything else stringifies the index and routes through
-/// `js_object_set_field_by_name`. Strings are immutable — no-op (matches
+/// ordinary objects retain receiver-aware property `[[Set]]` semantics.
+/// Strings are immutable — no-op (matches
 /// strict-mode `s[i] = x` semantics, close enough for the `++result[key]`
 /// pattern this is added for).
 #[no_mangle]
@@ -773,65 +773,17 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
         );
         return value;
     }
-    // Non-array object: stringify the index and write via the object setter.
-    let bits = index.to_bits();
-    let top16 = bits >> 48;
-    if top16 == 0x7FFF || top16 == 0x7FF9 {
-        let key_ptr: *const crate::StringHeader = if top16 == 0x7FFF {
-            (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader
-        } else {
-            crate::value::js_get_string_pointer_unified(index) as *const crate::StringHeader
-        };
-        if key_ptr.is_null() {
-            return value;
-        }
-        crate::object::js_object_set_field_by_name(
-            raw_ptr as *mut crate::object::ObjectHeader,
-            key_ptr,
-            value,
-        );
-        return value;
-    }
-    // #6935: ToPropertyKey (below) runs a user `toString` / `valueOf` /
-    // `@@toPrimitive` for an object index (`obj[{toString(){...}}] = v`) and
-    // allocates for every other shape, so it can GC and EVACUATE. Both the
-    // receiver `raw_ptr` and the `value` being stored were raw Rust locals
-    // across it: a stale receiver dropped the write onto a forwarding stub, and
-    // a stale `value` wrote a dangling pointer INTO a live object, where it
-    // outlives the call.
-    //
-    // #6945 / CodeRabbit: use `js_to_property_key` (not `js_jsvalue_to_string`)
-    // so an `@@toPrimitive` that returns a Symbol is preserved and routed to
-    // the symbol store — matching the get-side fallback. Stringifying that
-    // Symbol would miss the target property (and Spec ToPropertyKey must not
-    // turn a Symbol result into a string).
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let recv = scope.root_raw_mut_ptr(raw_ptr as *mut crate::object::ObjectHeader);
-    let value_handle = scope.root_nanbox_f64(value);
-    let key = unsafe { crate::object::js_to_property_key(index) };
-    let key_h = scope.root_nanbox_f64(key);
-    let key = key_h.get_nanbox_f64();
-    let value = value_handle.get_nanbox_f64();
-    if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
-        let recv_bits = crate::value::js_nanbox_pointer(
-            recv.get_raw_const_ptr::<crate::object::ObjectHeader>() as i64,
-        );
-        unsafe {
-            crate::symbol::js_object_set_symbol_property(recv_bits, key, value);
-        }
-        return value;
-    }
-    let key_ptr = crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
-    if key_ptr.is_null() {
-        return value;
-    }
-    let key_handle = scope.root_string_ptr(key_ptr);
-    crate::object::js_object_set_field_by_name(
-        recv.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        key_handle.get_raw_const_ptr::<crate::StringHeader>(),
-        value,
-    );
-    value
+    // #8954: Non-array objects retain ordinary receiver-aware [[Set]] semantics.
+    // Object-destructuring member targets reach this untyped dynamic-index
+    // route, and a raw field write skips inherited accessors entirely.
+    // `js_put_value_set` owns observable key coercion and its rooting window
+    // (#6935/#6945), then walks the prototype chain with the real receiver.
+    let target = if jsval.is_pointer() {
+        obj
+    } else {
+        crate::value::js_nanbox_pointer(raw_ptr as i64)
+    };
+    crate::proxy::js_put_value_set(target, index, value, target, strict)
 }
 
 /// Check if a value should trigger a destructuring default.

@@ -93,10 +93,14 @@ check(
 );
 
 let setterOrder = "";
+let setterThis: any = null;
+let setterValue: any = null;
 const setterProto: any = {};
 Object.defineProperty(setterProto, "slot", {
   set: function(v: any) {
     setterOrder += "setter,";
+    setterThis = this;
+    setterValue = v;
     this.recorded = v;
   }
 });
@@ -116,7 +120,9 @@ function setterTargetKey(): any {
   return setterKey;
 }
 ({ prop: setterTarget()[setterTargetKey()] } = { prop: 11 });
-check(setterReceiver.recorded === 11, "object destructuring inherited setter value");
+check(setterThis === setterReceiver, "object destructuring inherited setter receiver");
+check(setterValue === 11, "object destructuring inherited setter argument");
+check(setterReceiver.recorded === 11, "object destructuring inherited setter effect");
 check(
   setterOrder === "target,target-key,target-key-tostring,setter,",
   "object destructuring inherited setter order: " + setterOrder
