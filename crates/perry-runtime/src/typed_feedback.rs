@@ -2554,6 +2554,13 @@ pub extern "C" fn js_typed_feedback_array_set_index_or_string(
     idx: f64,
     value: f64,
 ) -> *mut ArrayHeader {
+    // #5094 for the assignment site: with recording off (the default) every
+    // helper below early-returns, but the index conversion and two
+    // out-of-line calls to reach those returns were 1.5% of an ECS frame on
+    // `column[index] = record`. One flag test, then the store.
+    if !typed_feedback_enabled() {
+        return crate::array::js_array_set_index_or_string_strict(arr, idx, value);
+    }
     let index = finite_nonnegative_u32_index(idx).unwrap_or(u32::MAX);
     observe_array(site_id, arr, index);
     if index == u32::MAX {

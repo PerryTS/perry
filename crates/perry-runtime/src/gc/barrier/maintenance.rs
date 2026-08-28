@@ -125,6 +125,7 @@ fn external_dirty_slot_headers_empty() -> bool {
 }
 
 fn clear_one_external_dirty_slot_header() -> bool {
+    invalidate_external_dirty_slot_cache();
     EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
         let mut pages = s.borrow_mut();
         let Some(page) = pages.keys().next().copied() else {

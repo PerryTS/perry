@@ -63,6 +63,53 @@ fn remembered_maintenance_entry_count() -> usize {
     dirty_old + external_dirty + fallback
 }
 
+/// The external-slot pair cache answers a repeated `(header, page)` mark
+/// without touching the table, records nothing twice, and is dropped when
+/// the table drops the pair — so the next mark re-records it.
+#[test]
+fn external_dirty_slot_pair_cache_mirrors_the_table() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+    let header = 0x7000_0000usize;
+    let page = 0x1234usize;
+    let entries =
+        || EXTERNAL_DIRTY_SLOT_PAGES.with(|s| s.borrow().values().map(Vec::len).sum::<usize>());
+
+    assert!(
+        super::super::barrier::mark_dirty_external_slot_page(header, page),
+        "first mark records the pair"
+    );
+    assert_eq!(entries(), 1);
+    assert!(
+        !super::super::barrier::mark_dirty_external_slot_page(header, page),
+        "cache hit: nothing new"
+    );
+    assert_eq!(entries(), 1, "a hit records nothing");
+    // A different header on the same page is a miss that records.
+    assert!(super::super::barrier::mark_dirty_external_slot_page(
+        header + 0x100,
+        page
+    ));
+    assert_eq!(entries(), 2);
+    // Back to the first pair: the table still holds it, so not new — and the
+    // cache now names the second pair, so this goes through the table.
+    assert!(!super::super::barrier::mark_dirty_external_slot_page(
+        header, page
+    ));
+    assert_eq!(entries(), 2);
+
+    // Clearing the remembered set drops the pairs and the cache with them:
+    // the same mark records again.
+    reset_remembered_set();
+    assert_eq!(entries(), 0);
+    assert!(
+        super::super::barrier::mark_dirty_external_slot_page(header + 0x100, page),
+        "re-recorded after the clear"
+    );
+    assert_eq!(entries(), 1);
+    reset_remembered_set();
+}
+
 #[test]
 fn incremental_mark_barrier_active_count_tracks_thread_activation() {
     let _guard = GcTestIsolationGuard::new();

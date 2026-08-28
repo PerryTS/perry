@@ -166,6 +166,12 @@ pub(crate) struct HotTls {
     /// `gc::dirty_page_cache` — the one-entry dirty-page cache
     /// (`usize::MAX` = nothing cached).
     pub(crate) last_dirty_old_page: Cell<usize>,
+    /// `gc::barrier::mark_dirty_external_slot_page` — the last `(page, header)`
+    /// pair recorded in `EXTERNAL_DIRTY_SLOT_PAGES` (`usize::MAX` = none).
+    /// Same invariant discipline as the inline-slot cache: valid exactly while
+    /// the pair is still recorded, cleared wherever a pair is removed.
+    pub(crate) last_external_dirty_page: Cell<usize>,
+    pub(crate) last_external_dirty_header: Cell<usize>,
     /// `array::prototype_addr` — this thread's memoized intrinsic prototype
     /// addresses, `usize::MAX` = not yet computed. Rewritten by the
     /// collector's root scan like the slot it replaced.
@@ -223,6 +229,8 @@ impl HotTls {
         learned_inline_fields: std::ptr::null_mut(),
         temp_roots: std::ptr::null_mut(),
         last_dirty_old_page: Cell::new(usize::MAX),
+        last_external_dirty_page: Cell::new(usize::MAX),
+        last_external_dirty_header: Cell::new(usize::MAX),
         prototype_addrs: [const { Cell::new(usize::MAX) }; INLINE_PROTOTYPE_ADDR_ROWS],
         box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],
         i32_box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],

@@ -1703,7 +1703,24 @@ pub(super) fn ever_dirty_old_page(page: usize) -> bool {
 
 pub(super) fn mark_dirty_external_slot_page(header_addr: usize, page: usize) -> bool {
     bump_write_barrier_trace_counter(BarrierTraceCounter::DirtyPageMarkAttempts);
-    EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
+    // One-entry cache over the (page → headers) table, the external-slot
+    // twin of `dirty_page_cache`: a `Map`'s entries buffer is an external
+    // slot span, so `map.set(k, v)` on one map stores into the same page
+    // under the same header again and again, and each store paid the
+    // thread-local table probe plus a linear scan of that page's header list
+    // (which grows with every map whose buffer shares the page). The pair is
+    // recorded only after the table holds it and cleared wherever the table
+    // drops a pair (`clear_one_external_dirty_slot_header`), so a hit means
+    // exactly what the probe would have found.
+    {
+        let hot = crate::tls_hot::hot();
+        if hot.last_external_dirty_page.get() == page
+            && hot.last_external_dirty_header.get() == header_addr
+        {
+            return false;
+        }
+    }
+    let header_was_new = EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
         let mut pages = s.borrow_mut();
         let page_was_new = !pages.contains_key(&page);
         let headers = pages.entry(page).or_insert_with(Vec::new);
@@ -1717,7 +1734,19 @@ pub(super) fn mark_dirty_external_slot_page(header_addr: usize, page: usize) -> 
             bump_write_barrier_trace_counter(BarrierTraceCounter::NewDirtyPages);
         }
         header_was_new
-    })
+    });
+    let hot = crate::tls_hot::hot();
+    hot.last_external_dirty_page.set(page);
+    hot.last_external_dirty_header.set(header_addr);
+    header_was_new
+}
+
+/// Drop the external-slot pair cache. Called from every path that removes a
+/// pair from `EXTERNAL_DIRTY_SLOT_PAGES` — see `mark_dirty_external_slot_page`.
+pub(super) fn invalidate_external_dirty_slot_cache() {
+    let hot = crate::tls_hot::hot();
+    hot.last_external_dirty_page.set(usize::MAX);
+    hot.last_external_dirty_header.set(usize::MAX);
 }
 
 #[inline]
