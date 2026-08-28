@@ -163,6 +163,12 @@ pub(crate) struct HotTls {
     // measurable part. Only small `Copy` values with a `const` initial state
     // belong here; anything needing `Drop` stays a slot.
     // ------------------------------------------------------------------
+    /// `object::this_binding` — the implicit `this` of the current
+    /// dynamically-dispatched method call, NaN-boxed (`TAG_UNDEFINED` when
+    /// none). FIRST inline value on purpose: generated code on Apple
+    /// aarch64 reads and writes it at the fixed byte offset
+    /// [`HOT_TLS_IMPLICIT_THIS_OFFSET`] (see `hot_tls_layout_is_what_codegen_assumes`).
+    pub(crate) implicit_this: Cell<u64>,
     /// `gc::dirty_page_cache` — the one-entry dirty-page cache
     /// (`usize::MAX` = nothing cached).
     pub(crate) last_dirty_old_page: Cell<usize>,
@@ -185,6 +191,16 @@ pub(crate) struct HotTls {
     /// keep their small fixed offsets.
     slots: [Cell<*mut u8>; HOT_SLOT_CAPACITY],
 }
+
+/// Byte offsets generated code hard-codes into its inline hot-cache access
+/// (`perry-codegen/src/expr/hot_tls.rs`, Apple aarch64 only). Pinned here
+/// with `offset_of!` so a field reorder fails to compile instead of silently
+/// reading the wrong cell.
+pub const HOT_TLS_INLINE_STATE_OFFSET: usize = 8;
+pub const HOT_TLS_IMPLICIT_THIS_OFFSET: usize = 128;
+const _: () = assert!(std::mem::offset_of!(HotTls, inline_state) == HOT_TLS_INLINE_STATE_OFFSET);
+const _: () = assert!(std::mem::offset_of!(HotTls, implicit_this) == HOT_TLS_IMPLICIT_THIS_OFFSET);
+const _: () = assert!(std::mem::offset_of!(crate::arena::InlineArenaState, data) == 0);
 
 /// Rows of [`HotTls::prototype_addrs`]; `array::prototype_addr` sizes its
 /// builtin-name table from this.
@@ -228,6 +244,7 @@ impl HotTls {
         shape_install_memo: std::ptr::null_mut(),
         learned_inline_fields: std::ptr::null_mut(),
         temp_roots: std::ptr::null_mut(),
+        implicit_this: Cell::new(crate::value::TAG_UNDEFINED),
         last_dirty_old_page: Cell::new(usize::MAX),
         last_external_dirty_page: Cell::new(usize::MAX),
         last_external_dirty_header: Cell::new(usize::MAX),
@@ -312,7 +329,16 @@ pub(crate) mod darwin_tsd {
     /// created yet, or [`publish`]'s self-check rejected it.
     pub(super) const NO_KEY: usize = usize::MAX;
 
-    pub(super) static KEY: AtomicUsize = AtomicUsize::new(NO_KEY);
+    /// The pthread key under which each thread publishes its `HotTls`
+    /// address. Exported by name because generated code on this platform
+    /// performs the same lookup inline (`perry-codegen/src/expr/hot_tls.rs`):
+    /// load this key, `mrs tpidrro_el0`, index the TSD array, and read the
+    /// cache — falling back to the runtime accessor when the key is
+    /// [`NO_KEY`] or the slot is still null. The value is only ever written
+    /// by [`ensure_key`] / [`disable`], exactly as before.
+    #[no_mangle]
+    pub static PERRY_HOT_TSD_KEY: AtomicUsize = AtomicUsize::new(NO_KEY);
+    pub(super) use PERRY_HOT_TSD_KEY as KEY;
 
     /// Latched by [`disable`] so no later thread retries a path this process
     /// has already proven wrong.

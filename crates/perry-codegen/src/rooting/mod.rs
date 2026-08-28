@@ -1073,9 +1073,7 @@ pub(crate) struct ImplicitThisSave {
 /// so `operand_protection`'s "can this window collect?" test has exactly one
 /// answer here and there is nothing to gate on.
 pub(crate) fn implicit_this_save(ctx: &mut FnCtx<'_>, new_this: &str) -> ImplicitThisSave {
-    let prev = ctx
-        .block()
-        .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, new_this)]);
+    let prev = implicit_this_swap(ctx, new_this, "implicit_this.save");
     let idx = temp_root::temp_root_push_double(ctx, &prev);
     ImplicitThisSave {
         slot: RootedSlot {
@@ -1098,8 +1096,52 @@ pub(crate) fn implicit_this_save(ctx: &mut FnCtx<'_>, new_this: &str) -> Implici
 pub(crate) fn implicit_this_restore(ctx: &mut FnCtx<'_>, save: ImplicitThisSave) {
     let prev = read_slot(ctx, &save.slot);
     save.slot.release(ctx);
-    ctx.block()
-        .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, &prev)]);
+    implicit_this_swap(ctx, &prev, "implicit_this.restore");
+}
+
+/// `js_implicit_this_set(value)`: bind `value` as the implicit `this` and
+/// return the previous binding. On Apple aarch64 the cell is read and
+/// written inline through the hot-cache lookup (`expr::hot_tls`), with the
+/// runtime call as the fallback for every miss — the pair around a
+/// dynamically-dispatched call was two runtime calls whose whole body was
+/// that lookup plus a `replace`.
+fn implicit_this_swap(ctx: &mut FnCtx<'_>, value: &str, stem: &str) -> String {
+    if !crate::expr::hot_tls::inline_hot_tls_enabled(ctx) {
+        return ctx
+            .block()
+            .call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, value)]);
+    }
+    let lookup = crate::expr::hot_tls::emit_hot_tls_lookup(ctx, stem);
+    let merge_idx = ctx.new_block(&format!("{stem}.hot_tls.merge"));
+    let merge_label = ctx.block_label(merge_idx);
+    let cell = crate::expr::hot_tls::hot_tls_field(
+        ctx,
+        &lookup.hot,
+        crate::expr::hot_tls::HOT_TLS_IMPLICIT_THIS_OFFSET,
+    );
+    let (fast_prev, fast_pred) = {
+        let blk = ctx.block();
+        let prev_bits = blk.load(I64, &cell);
+        let value_bits = blk.bitcast_double_to_i64(value);
+        blk.store(I64, &value_bits, &cell);
+        let prev = blk.bitcast_i64_to_double(&prev_bits);
+        let pred = blk.label.clone();
+        blk.br(&merge_label);
+        (prev, pred)
+    };
+    ctx.current_block = lookup.slow_idx;
+    let (slow_prev, slow_pred) = {
+        let blk = ctx.block();
+        let prev = blk.call(DOUBLE, "js_implicit_this_set", &[(DOUBLE, value)]);
+        let pred = blk.label.clone();
+        blk.br(&merge_label);
+        (prev, pred)
+    };
+    ctx.current_block = merge_idx;
+    ctx.block().phi(
+        DOUBLE,
+        &[(&fast_prev, &fast_pred), (&slow_prev, &slow_pred)],
+    )
 }
 
 /// The `new.target` cell's saved previous value (#7664).

@@ -23,8 +23,34 @@ use std::cell::{Cell, RefCell};
 //
 // Defaults to `TAG_UNDEFINED`. JS spec says top-level `this` is undefined
 // in strict mode, which matches.
+// The implicit-`this` cell itself lives INLINE in this thread's
+// `tls_hot::HotTls` (`implicit_this`), so the save/restore pair around every
+// dynamically-dispatched call — two calls per call — can be performed by
+// generated code on Apple aarch64 without entering the runtime at all; the
+// accessors below are the portable path and the fallback.
+#[inline(always)]
+fn implicit_this_cell() -> &'static Cell<u64> {
+    &crate::tls_hot::hot().implicit_this
+}
+
+/// The `IMPLICIT_THIS.with(|cell| …)` shape the runtime's dispatch paths and
+/// prototype thunks already use, re-backed by the inline `HotTls` field above
+/// instead of a `perry_thread_local!` slot. Preserving the shape keeps the
+/// move invisible at those ~120 call sites while making every one of them one
+/// hop shorter — and it is the same cell generated code now reads and writes
+/// directly on Apple aarch64.
+pub(crate) struct ImplicitThisSlot;
+
+impl ImplicitThisSlot {
+    #[inline(always)]
+    pub(crate) fn with<R>(&self, f: impl FnOnce(&Cell<u64>) -> R) -> R {
+        f(implicit_this_cell())
+    }
+}
+
+pub(crate) static IMPLICIT_THIS: ImplicitThisSlot = ImplicitThisSlot;
+
 crate::perry_thread_local! {
-    pub(crate) static IMPLICIT_THIS: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
     pub(crate) static NEW_TARGET: Cell<u64> = const { Cell::new(crate::value::TAG_UNDEFINED) };
     // One-shot receiver override for STATIC method bodies. A compiled static
     // method's `this` slot used to be a compile-time class-ref literal, so
@@ -145,7 +171,7 @@ pub extern "C" fn js_static_this_resolve(default_this: f64) -> f64 {
 /// Read the current implicit `this` (issue #519).
 #[no_mangle]
 pub extern "C" fn js_implicit_this_get() -> f64 {
-    IMPLICIT_THIS.with(|c| f64::from_bits(c.get()))
+    f64::from_bits(implicit_this_cell().get())
 }
 
 /// Read implicit `this` using ordinary (non-strict) function binding rules.
@@ -189,7 +215,7 @@ pub extern "C" fn js_implicit_this_get_sloppy() -> f64 {
 /// still impose their mode checks millions of times on closure-heavy programs.
 #[no_mangle]
 pub extern "C" fn js_implicit_this_set(value: f64) -> f64 {
-    IMPLICIT_THIS.with(|c| f64::from_bits(c.replace(value.to_bits())))
+    f64::from_bits(implicit_this_cell().replace(value.to_bits()))
 }
 
 /// Read the current `new.target` value for ordinary function bodies.
@@ -228,12 +254,13 @@ pub extern "C" fn js_new_target_set(value: f64) -> f64 {
 /// flow through `visit_nanbox_bits` as no-ops, so scanning the idle cell
 /// is safe.
 pub fn scan_implicit_this_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    IMPLICIT_THIS.with(|c| {
+    {
+        let c = implicit_this_cell();
         let mut bits = c.get();
         if visitor.visit_nanbox_u64_slot(&mut bits) {
             c.set(bits);
         }
-    });
+    }
     NEW_TARGET.with(|c| {
         let mut bits = c.get();
         if visitor.visit_nanbox_u64_slot(&mut bits) {

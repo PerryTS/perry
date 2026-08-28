@@ -33,6 +33,7 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // existing `crate::expr::X` paths resolve unchanged.
 mod array_literal;
 mod bitset_test;
+pub(crate) mod hot_tls;
 pub(crate) use bitset_test::is_u32_bitset_test;
 mod buffer_access;
 mod buffer_views;
@@ -2211,9 +2212,47 @@ pub(crate) fn load_inline_arena_state(ctx: &mut FnCtx<'_>) -> String {
     ctx.block().cond_br(&is_null, &init_label, &done_label);
 
     ctx.current_block = init_idx;
-    let fresh = ctx.block().call(PTR, "js_inline_arena_state", &[]);
-    ctx.block().store(PTR, &fresh, &arena_state_slot);
-    let init_pred = ctx.block().label.clone();
+    let (fresh, init_pred) = if hot_tls::inline_hot_tls_enabled(ctx) {
+        // Apple aarch64: the runtime accessor is one hot-cache lookup, a
+        // field load and a lazy-init test — do those here and keep the call
+        // for the misses (no key, unpublished cache, uninitialised state).
+        let lookup = hot_tls::emit_hot_tls_lookup(ctx, "arena_state");
+        let ready_idx = ctx.new_block("arena_state.hot_tls.ready");
+        let resolved_idx = ctx.new_block("arena_state.hot_tls.resolved");
+        let ready_label = ctx.block_label(ready_idx);
+        let resolved_label = ctx.block_label(resolved_idx);
+        let slow_label = ctx.block_label(lookup.slow_idx);
+        let state_ptr =
+            hot_tls::hot_tls_field(ctx, &lookup.hot, hot_tls::HOT_TLS_INLINE_STATE_OFFSET);
+        let state = {
+            let blk = ctx.block();
+            let state = blk.load(PTR, &state_ptr);
+            let data = blk.load(PTR, &state);
+            let initialised = blk.icmp_ne(PTR, &data, "null");
+            blk.cond_br(&initialised, &ready_label, &slow_label);
+            state
+        };
+        ctx.current_block = ready_idx;
+        ctx.block().store(PTR, &state, &arena_state_slot);
+        let ready_pred = ctx.block().label.clone();
+        ctx.block().br(&resolved_label);
+
+        ctx.current_block = lookup.slow_idx;
+        let called = ctx.block().call(PTR, "js_inline_arena_state", &[]);
+        ctx.block().store(PTR, &called, &arena_state_slot);
+        let slow_pred = ctx.block().label.clone();
+        ctx.block().br(&resolved_label);
+
+        ctx.current_block = resolved_idx;
+        let resolved = ctx
+            .block()
+            .phi(PTR, &[(&state, &ready_pred), (&called, &slow_pred)]);
+        (resolved, ctx.block().label.clone())
+    } else {
+        let fresh = ctx.block().call(PTR, "js_inline_arena_state", &[]);
+        ctx.block().store(PTR, &fresh, &arena_state_slot);
+        (fresh, ctx.block().label.clone())
+    };
     ctx.block().br(&done_label);
 
     ctx.current_block = done_idx;

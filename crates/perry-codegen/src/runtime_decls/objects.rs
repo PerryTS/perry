@@ -63,6 +63,10 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // barrier. Persistent shadow-slot updates use zero as an authoritative
     // fast skip before calling the TLS-backed root barrier.
     module.add_external_global("PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", I32);
+    // tls_hot::darwin_tsd — the pthread key of the per-thread hot cache, read
+    // by the inline lookup in `expr::hot_tls` (Apple aarch64 targets only;
+    // the declaration is unreferenced, and therefore inert, elsewhere).
+    module.add_external_global("PERRY_HOT_TSD_KEY", I64);
     // #5525 follow-up: the process-global typed-array kind cache + the
     // "any exotic views live" guard, exported from perry-runtime so the codegen
     // can emit a guarded *inline* typed-array element load at the access site

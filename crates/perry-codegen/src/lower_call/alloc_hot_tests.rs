@@ -367,6 +367,38 @@ fn ir_for(m: Module) -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+fn ir_for_target(m: Module, target: &str) -> String {
+    let mut opts = ir_opts();
+    opts.target = Some(target.to_string());
+    String::from_utf8(compile_module(&m, opts).expect("module compiles"))
+        .expect("LLVM IR should be UTF-8")
+}
+
+/// On Apple aarch64 the first-use arena-state resolution reads the hot cache
+/// inline (`mrs tpidrro_el0` through the exported pthread key) and keeps the
+/// runtime accessor only as the fallback; every other target calls it.
+#[test]
+fn inline_arena_state_is_resolved_through_the_hot_cache_on_apple_aarch64() {
+    assert_inline_new_not_forced();
+    if std::env::var_os("PERRY_INLINE_HOT_TLS").as_deref() == Some(std::ffi::OsStr::new("0")) {
+        return;
+    }
+    let ir = ir_for_target(tiny_factory_module(0), "arm64-apple-macosx15.0.0");
+    assert!(
+        ir.contains("mrs $0, tpidrro_el0")
+            && ir.contains("@PERRY_HOT_TSD_KEY")
+            && ir.contains("arena_state.hot_tls.ready")
+            && ir.contains("call ptr @js_inline_arena_state()"),
+        "the Apple aarch64 lowering should read the hot cache inline with the runtime \
+         accessor as its fallback:\n{ir}"
+    );
+    let ir = ir_for_target(tiny_factory_module(0), "x86_64-unknown-linux-gnu");
+    assert!(
+        !ir.contains("tpidrro_el0") && ir.contains("call ptr @js_inline_arena_state()"),
+        "other targets keep the runtime accessor alone:\n{ir}"
+    );
+}
+
 /// Guard against `PERRY_INLINE_NEW`, which forces the inline form everywhere
 /// and would make the positive arm pass and the negative arm fail for a reason
 /// that has nothing to do with the gate.
