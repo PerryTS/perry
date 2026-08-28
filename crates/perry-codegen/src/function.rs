@@ -786,6 +786,12 @@ impl LlFunction {
         self.reg_counter.set_preserve_none_fns(fns);
     }
 
+    /// Point this function's null-guard loads at the module's (possibly
+    /// module-prefixed) null-guard global. See `RegCounter::null_guard_symbol`.
+    pub(crate) fn set_null_guard_global(&self, global: &str) {
+        self.reg_counter.set_null_guard_global(global);
+    }
+
     /// Whether this function's define header (and every declare of it) must
     /// carry the `preserve_nonecc` calling convention (#8175). Render-time
     /// lookup against the module registry, so define order never matters.

@@ -121,10 +121,16 @@ fn promote_global_for_units(line: &str) -> String {
     }
 }
 
-/// Give a generated global one non-discardable definition. On COFF each
-/// global has a unique owning codegen unit; leaving that sole definition as
+/// Give a generated global one non-discardable definition. On every
+/// non-Mach-O target (ELF and COFF — see `replicate_globals`) each global has
+/// a unique owning codegen unit; leaving that sole definition as
 /// `linkonce_odr` lets LLVM discard it when all references in the owner happen
 /// to optimize away, even though other object files still reference it.
+///
+/// The result is a plain STRONG definition with default visibility, so the
+/// symbol's NAME must be unique across the whole program, not just the
+/// module: `.str.N` constants only satisfy that through
+/// [`LlModule::set_symbol_prefix`].
 fn make_unique_owner_global(line: &str) -> String {
     if line.contains(" = external ") {
         return line.to_string();
@@ -347,6 +353,21 @@ pub struct LlModule {
     globals: Vec<String>,
     string_constants: Vec<String>,
     string_counter: u32,
+    /// Module symbol prefix folded into every anonymous rodata constant this
+    /// module mints (`add_string_constant` → `@<prefix>_.str.N`). Empty (the
+    /// bare `@.str.N`) only for modules that never call
+    /// [`Self::set_symbol_prefix`] — unit tests and other single-module
+    /// fixtures.
+    ///
+    /// Load-bearing under codegen-unit splitting: `render_codegen_units`
+    /// promotes every `private` constant so sibling units can reference it,
+    /// and on ELF/COFF the owning unit's copy is a plain STRONG global. The
+    /// `.str.N` counter restarts at 0 per module, so two split modules used to
+    /// export the same `.str.375` with different contents — GNU ld rejects
+    /// that as a multiple definition, and ld64's weak coalescing silently kept
+    /// whichever copy it saw first. The prefix makes the name module-unique,
+    /// exactly as `strings.rs` already does for `<prefix>_.str.N.bytes`.
+    symbol_prefix: String,
     /// Extra numbered metadata nodes emitted after `!0 = !{}`. Used by
     /// the buffer alias-scope system to declare per-buffer scopes and
     /// noalias sets so LLVM's LoopVectorizer can prove different buffers
@@ -407,12 +428,46 @@ impl LlModule {
             globals: Vec::new(),
             string_constants: Vec::new(),
             string_counter: 0,
+            symbol_prefix: String::new(),
             metadata_lines: Vec::new(),
             ic_counter: 0,
             buffer_alias_counter: 0,
             native_rep_records: Vec::new(),
             fp_flags,
             preserve_none_fns: Rc::new(RefCell::new(HashSet::new())),
+        }
+    }
+
+    /// Install the per-module symbol prefix that [`Self::add_string_constant`]
+    /// folds into every anonymous constant it mints. Must run before the
+    /// first string constant is added — a prefix that only covers part of
+    /// the pool would leave the earlier `.str.N` names colliding across
+    /// modules again.
+    pub fn set_symbol_prefix(&mut self, prefix: &str) {
+        debug_assert!(
+            self.string_constants.is_empty() && self.functions.is_empty(),
+            "set_symbol_prefix must precede the first add_string_constant/define_function"
+        );
+        self.symbol_prefix = prefix.to_string();
+    }
+
+    /// Name (no `@`) of this module's null-guard global — the zeroed `i32`
+    /// that `LlBlock::safe_load_i32_from_ptr` reads instead of a bad handle.
+    /// The caller defines it (`add_internal_global(.., I32, "0")`); every
+    /// function defined afterwards references it by this name. Module-prefixed
+    /// for the same reason as `add_string_constant`'s names: unit splitting
+    /// promotes it to a strong link-visible symbol on ELF/COFF, and the bare
+    /// `perry_null_guard_zero` in two split modules is a GNU ld
+    /// `multiple definition`.
+    pub fn null_guard_global(&self) -> String {
+        if self.symbol_prefix.is_empty() {
+            crate::block::DEFAULT_NULL_GUARD_GLOBAL.to_string()
+        } else {
+            format!(
+                "{}_{}",
+                crate::block::DEFAULT_NULL_GUARD_GLOBAL,
+                self.symbol_prefix
+            )
         }
     }
 
@@ -571,6 +626,7 @@ impl LlModule {
         // #8175: every function shares the module's preserve_nonecc registry,
         // so its call sites and its own define header agree on the convention.
         func.set_preserve_none_fns(Rc::clone(&self.preserve_none_fns));
+        func.set_null_guard_global(&self.null_guard_global());
         self.functions.push(func);
         self.functions.last_mut().unwrap()
     }
@@ -680,8 +736,18 @@ impl LlModule {
     /// Add a UTF-8 string constant to the module's constant pool. Returns
     /// `(global_name, byte_length)` — the byte length is what Perry passes as
     /// the `len` argument to `js_string_from_bytes`.
+    ///
+    /// The name is `@<prefix>_.str.N` once [`Self::set_symbol_prefix`] has
+    /// run (bare `@.str.N` otherwise). The constant is `private` here, but
+    /// codegen-unit splitting promotes it to a link-visible symbol, so the
+    /// name must already be unique across the whole program — see the
+    /// `symbol_prefix` field.
     pub fn add_string_constant(&mut self, value: &str) -> (String, usize) {
-        let name = format!(".str.{}", self.string_counter);
+        let name = if self.symbol_prefix.is_empty() {
+            format!(".str.{}", self.string_counter)
+        } else {
+            format!("{}_.str.{}", self.symbol_prefix, self.string_counter)
+        };
         self.string_counter += 1;
 
         let bytes = value.as_bytes();
@@ -1383,6 +1449,153 @@ mod tests {
             }
             assert!(u.contains("target triple = \"x86_64-pc-windows-msvc\""));
         }
+    }
+
+    /// Every `@sym` a rendered unit DEFINES with linkage the linker treats
+    /// as strong: not a `private`/`internal` local, not a `linkonce`/`weak`
+    /// COMDAT the linker folds, not an `external`/`appending` declaration.
+    /// Two of these with the same name in one link is GNU ld's
+    /// `multiple definition of ...`.
+    fn strong_global_definitions(unit: &str) -> Vec<String> {
+        unit.lines()
+            .filter_map(|line| {
+                let name = global_symbol_name(line)?;
+                let rhs = line[name.len()..].trim_start().strip_prefix("= ")?;
+                let weak_or_local = [
+                    "private ",
+                    "internal ",
+                    "linkonce_odr ",
+                    "linkonce ",
+                    "weak_odr ",
+                    "weak ",
+                    "external ",
+                    "appending ",
+                    "available_externally ",
+                    "common ",
+                ]
+                .iter()
+                .any(|kw| rhs.starts_with(kw));
+                (!weak_or_local).then(|| name.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn split_modules_do_not_export_colliding_string_constants() {
+        // A Next.js route bundle compiled to a Linux shared library: five
+        // modules large enough to split into codegen units. Splitting
+        // promotes every `add_string_constant` global so sibling units can
+        // reference it, and on ELF/COFF the owning unit's copy is a plain
+        // STRONG global (`make_unique_owner_global`). The `.str.N` counter
+        // restarts at 0 per module, so `app-page.runtime.prod.js` and
+        // `route.js` both exported `.str.375` — with different contents — and
+        // GNU ld refused the final link with 2,188 `multiple definition`
+        // errors. (ld64 accepts the Mach-O `linkonce_odr` copies and
+        // coalesces them by name, which is worse: one module's bytes silently
+        // stand in for the other's.) The fix folds the module prefix into the
+        // name, as `strings.rs` already does for `<prefix>_.str.N.bytes`.
+        fn split_module(prefix: &str, literal: &str) -> (String, Vec<String>) {
+            let mut m = LlModule::new("x86_64-unknown-linux-gnu");
+            m.set_symbol_prefix(prefix);
+            // The null-guard global is the other unprefixed per-module
+            // definition `compile_module` used to mint; it rides the same
+            // prefix and the same strong-definition assertion below.
+            let null_guard = m.null_guard_global();
+            assert_eq!(null_guard, format!("perry_null_guard_zero_{prefix}"));
+            m.add_internal_global(&null_guard, I32, "0");
+            let (name, len) = m.add_string_constant(literal);
+            assert_eq!(len, literal.len());
+            // Two functions, each referencing the constant, so a 2-way split
+            // has one owning unit and one unit that must resolve it across
+            // the unit boundary.
+            for fname in ["f", "g"] {
+                let f = m.define_function(format!("perry_fn_{prefix}__{fname}"), PTR, vec![]);
+                let e = f.create_block("entry");
+                let _len = e.safe_load_i32_from_ptr("0");
+                e.ret(PTR, &format!("@{name}"));
+            }
+            let units = m.render_codegen_units(2);
+            assert_eq!(units.len(), 2, "two functions → two units");
+            (name, units)
+        }
+        let (name_a, units_a) = split_module("app_page_runtime_prod_js", "alpha");
+        let (name_b, units_b) = split_module("route_js", "beta");
+
+        // The name is module-unique (both would have been `.str.0`), and it
+        // is what the functions reference.
+        assert_eq!(name_a, "app_page_runtime_prod_js_.str.0");
+        assert_eq!(name_b, "route_js_.str.0");
+        assert_ne!(name_a, name_b);
+        for (prefix, name, literal, units) in [
+            ("app_page_runtime_prod_js", &name_a, "alpha", &units_a),
+            ("route_js", &name_b, "beta", &units_b),
+        ] {
+            let ty = format!("[{} x i8]", literal.len() + 1);
+            let def = format!("@{name} = unnamed_addr constant {ty}");
+            let decl = format!("@{name} = external constant {ty}");
+            assert_eq!(
+                units.iter().filter(|u| u.contains(&def)).count(),
+                1,
+                "#7174: the constant is DEFINED in exactly one unit"
+            );
+            assert_eq!(
+                units.iter().filter(|u| u.contains(&decl)).count(),
+                1,
+                "the other unit resolves it through an external declaration"
+            );
+            for u in units {
+                assert!(
+                    u.contains(&format!("ret ptr @{name}")),
+                    "both units reference the constant by its prefixed name"
+                );
+            }
+            // The bare per-module names never leak into a link-visible symbol.
+            assert!(!units.iter().any(|u| u.contains("@.str.0")));
+            assert!(!units
+                .iter()
+                .any(|u| u.contains("@perry_null_guard_zero ")
+                    || u.contains("@perry_null_guard_zero,")));
+            let guard_def = format!("@perry_null_guard_zero_{prefix} = global i32 0");
+            assert_eq!(
+                units.iter().filter(|u| u.contains(&guard_def)).count(),
+                1,
+                "the null guard is DEFINED (strong, prefixed) in exactly one unit"
+            );
+        }
+
+        // The GNU ld property: across every unit of both modules, no strong
+        // symbol is defined more than once.
+        let mut strong: Vec<String> = units_a
+            .iter()
+            .chain(units_b.iter())
+            .flat_map(|u| strong_global_definitions(u))
+            .collect();
+        assert!(
+            strong.iter().any(|s| s == &format!("@{name_a}")),
+            "subject is live: the owning unit's copy is a strong ELF definition"
+        );
+        let n = strong.len();
+        strong.sort();
+        strong.dedup();
+        assert_eq!(
+            strong.len(),
+            n,
+            "a strong global is defined in two units — GNU ld would reject the link"
+        );
+    }
+
+    #[test]
+    fn string_constants_without_a_prefix_keep_the_bare_name() {
+        // Single-module fixtures never set a prefix; their `@.str.N` spelling
+        // stays exactly as before so nothing downstream shifts.
+        let mut m = LlModule::new("x86_64-unknown-linux-gnu");
+        let (first, _) = m.add_string_constant("a");
+        let (second, _) = m.add_string_constant("b");
+        assert_eq!(first, ".str.0");
+        assert_eq!(second, ".str.1");
+        assert!(m
+            .to_ir()
+            .contains("@.str.1 = private unnamed_addr constant [2 x i8] c\"b\\00\""));
     }
 
     #[test]

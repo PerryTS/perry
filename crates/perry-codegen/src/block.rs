@@ -55,6 +55,10 @@ impl Default for FpFlags {
     }
 }
 
+/// Name of the null-guard global in a module without a symbol prefix. A
+/// prefixed module uses [`crate::module::LlModule::null_guard_global`].
+pub(crate) const DEFAULT_NULL_GUARD_GLOBAL: &str = "perry_null_guard_zero";
+
 /// Function-wide register counter shared between all blocks in a function.
 ///
 /// Registers are `%r1`, `%r2`, … unique across the entire function body —
@@ -92,6 +96,15 @@ pub struct RegCounter {
     /// callee is UB, so the registry, not the emitting code, is the single
     /// source of truth. `None` for functions built outside a module (tests).
     preserve_none_fns: RefCell<Option<Rc<RefCell<HashSet<String>>>>>,
+    /// `@`-prefixed symbol of the module's null-guard global (the zeroed
+    /// `i32` that [`LlBlock::safe_load_i32_from_ptr`] dereferences in place
+    /// of a bad handle). Injected by `LlModule::define_function` so the name
+    /// can carry the module prefix: codegen-unit splitting promotes the
+    /// global to a strong link-visible symbol on ELF/COFF, and an unprefixed
+    /// `perry_null_guard_zero` in two split modules is a GNU ld
+    /// `multiple definition`. Functions built outside a module (tests) keep
+    /// the bare name.
+    null_guard_symbol: RefCell<Option<String>>,
     /// Compiler-private validity bits for nested stable-packed loop proofs.
     ///
     /// A guarded inner receiver may keep its raw address across call-free
@@ -113,8 +126,22 @@ impl RegCounter {
             eh_unwind_labels: RefCell::new(Vec::new()),
             shadow_slot_allocas: RefCell::new(HashSet::new()),
             preserve_none_fns: RefCell::new(None),
+            null_guard_symbol: RefCell::new(None),
             stable_packed_revalidation_slots: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Point this function's null-guard loads at `global` (a bare symbol
+    /// name, no `@`). See the `null_guard_symbol` field.
+    pub(crate) fn set_null_guard_global(&self, global: &str) {
+        *self.null_guard_symbol.borrow_mut() = Some(format!("@{global}"));
+    }
+
+    fn null_guard_symbol(&self) -> String {
+        self.null_guard_symbol
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| format!("@{DEFAULT_NULL_GUARD_GLOBAL}"))
     }
 
     pub(crate) fn push_stable_packed_revalidation_slot(&self, slot: String) {
@@ -1028,8 +1055,10 @@ impl LlBlock {
     /// a small handle), returns 0 instead of dereferencing.
     /// Used for .length reads and bounds checks on arrays/strings.
     ///
-    /// Uses `@perry_null_guard_zero` — a module-global i32 initialized
-    /// to 0 that serves as a safe dereference target.
+    /// Uses the module's null-guard global (`@perry_null_guard_zero`, or
+    /// its module-prefixed spelling under `LlModule::set_symbol_prefix`) — a
+    /// module-global i32 initialized to 0 that serves as a safe dereference
+    /// target.
     ///
     /// (Issue #52) The length load is tagged `!invariant.load` — once
     /// resolved, an Array/Buffer's length field at offset 0 of the
@@ -1054,7 +1083,7 @@ impl LlBlock {
                 cond_ty: "i1",
                 cond: is_bad.clone(),
                 ty: "ptr",
-                a: "@perry_null_guard_zero".to_string(),
+                a: self.counter.null_guard_symbol(),
                 b: handle_ptr.clone(),
             });
             r

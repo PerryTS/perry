@@ -426,10 +426,6 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     let _opt_report_module_scope = crate::opt_report::enter_module(hir);
 
     let mut llmod = LlModule::new_with_fp_flags(&triple, fp_flags);
-    // Null guard global: a zeroed i32 used as a safe dereference target
-    // when a NaN-unboxed pointer is null/invalid. Prevents segfaults from
-    // uninitialized locals or unhandled expressions producing 0.0/TAG_UNDEFINED.
-    llmod.add_internal_global("perry_null_guard_zero", crate::types::I32, "0");
     runtime_decls::declare_phase1(&mut llmod);
 
     // Derive a per-module symbol prefix from the HIR module name:
@@ -443,6 +439,18 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // `main` is the only globally-named symbol — non-entry modules emit
     // `<prefix>__init` instead.
     let module_prefix = sanitize(&hir.name);
+    // Anonymous rodata constants (`add_string_constant`) carry the prefix
+    // too: codegen-unit splitting promotes them to link-visible symbols,
+    // and their per-module counter would otherwise collide across modules
+    // at the final link (GNU ld: `multiple definition of .str.N`).
+    llmod.set_symbol_prefix(&module_prefix);
+    // Null guard global: a zeroed i32 used as a safe dereference target
+    // when a NaN-unboxed pointer is null/invalid. Prevents segfaults from
+    // uninitialized locals or unhandled expressions producing 0.0/TAG_UNDEFINED.
+    // Defined AFTER the prefix is installed so its name is module-unique
+    // (`perry_null_guard_zero_<prefix>`) — split units export it strong on
+    // ELF/COFF, exactly like the string constants above.
+    llmod.add_internal_global(&llmod.null_guard_global(), crate::types::I32, "0");
 
     // Imports are no longer a hard error — Phase F.1 supports multi-
     // module compilation. Cross-module function CALLS via ExternFuncRef
