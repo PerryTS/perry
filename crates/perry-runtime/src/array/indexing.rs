@@ -1297,6 +1297,110 @@ pub(crate) fn test_strict_dense_number_store(
     unsafe { try_strict_dense_number_store(arr, index, value) }.is_some()
 }
 
+/// The strict store's third exact lane: an in-range overwrite of a slot that
+/// holds a heap pointer with another heap pointer — `column[index] = record`
+/// on an ECS archetype's component column, once per command.
+///
+/// Both number lanes decline a pointer value at their first test, and the
+/// store then paid the whole tower: the registry-probing head resolver, a
+/// second flag resolution, the descriptor guard, the string add-ref probe,
+/// a handle scope, the prototype note and the extend path's own descriptor
+/// checks, to reach the same one-slot write. The admission here is the
+/// plain-number lane's receiver discipline (the same decode, magnitude,
+/// alignment, plausibility and generation classification before the header
+/// is read), the same integrity / descriptor / element-shape / raw-f64
+/// rejections, plus what a pointer overwrite specifically needs: the head's
+/// layout is not pointer-free and the old slot already holds a pointer (its
+/// per-slot mask bit is therefore set, or the array is tag-scanned), so the
+/// store changes no layout claim. The write itself is
+/// [`store_array_slot_resolved`] — the exact layout note and write barrier
+/// the general path performs — so what is skipped is bookkeeping the proven
+/// shape cannot need, never a barrier. A store onto `Array.prototype` keeps
+/// the general path (it must flip `ARRAY_PROTO_HAS_INDEX`).
+///
+/// # Safety
+/// `arr` is decoded and validated before any dereference, exactly as in
+/// [`try_strict_dense_number_store`].
+unsafe fn try_strict_dense_pointer_overwrite(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+) -> Option<*mut ArrayHeader> {
+    const PAYLOAD_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    let value_bits = value.to_bits();
+    if value_bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+        return None;
+    }
+    let bits = arr as u64;
+    let top16 = bits >> 48;
+    let raw = if top16 >= 0x7FF8 {
+        if top16 == 0x7FFC || bits & PAYLOAD_MASK == 0 {
+            return None;
+        }
+        (bits & PAYLOAD_MASK) as usize
+    } else {
+        bits as usize
+    };
+    if raw < crate::gc::GC_HEADER_SIZE
+        || raw % std::mem::align_of::<crate::gc::GcHeader>() != 0
+        || !crate::value::addr_class::is_plausible_heap_addr(raw)
+    {
+        return None;
+    }
+    if matches!(
+        crate::arena::classify_heap_generation(raw),
+        crate::arena::HeapGeneration::Unknown
+    ) {
+        return None;
+    }
+    let header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+        || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    let flags = (*header)._reserved;
+    const REJECT: u16 = crate::gc::OBJ_FLAG_FROZEN
+        | crate::gc::OBJ_FLAG_SEALED
+        | crate::gc::OBJ_FLAG_NO_EXTEND
+        | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS
+        | crate::gc::GC_ARRAY_ELEMENT_SHAPE
+        | crate::gc::GC_ARRAY_RAW_F64_LAYOUT
+        | crate::gc::GC_ARRAY_RAW_F64_HOLES;
+    if flags & REJECT != 0 {
+        return None;
+    }
+    if flags & crate::gc::GC_LAYOUT_STATE_MASK == crate::gc::GC_LAYOUT_POINTER_FREE {
+        return None;
+    }
+    let arr = raw as *mut ArrayHeader;
+    if index >= (*arr).length || index >= (*arr).capacity {
+        return None;
+    }
+    let old_bits = ptr::read(super::header::array_elements_ptr(arr).add(index as usize));
+    if old_bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+        return None;
+    }
+    if raw == array_prototype_addr() {
+        return None;
+    }
+    // GC_STORE_AUDIT(BARRIERED): the resolved store performs the layout note
+    // and write barrier as part of the slot write.
+    super::header_gc_slots::store_array_slot_resolved(arr, index as usize, value, flags);
+    Some(arr)
+}
+
+/// Exercised by the unit tests: `true` when the pointer-overwrite lane
+/// answered the store.
+#[cfg(test)]
+pub(crate) fn test_strict_dense_pointer_overwrite(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+) -> bool {
+    unsafe { try_strict_dense_pointer_overwrite(arr, index, value) }.is_some()
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_set_f64_extend_strict(
     arr: *mut ArrayHeader,
@@ -1311,6 +1415,10 @@ pub extern "C" fn js_array_set_f64_extend_strict(
     // leaving the first unreachable outside its unit tests.
     // SAFETY: the lane validates the receiver before every dereference.
     if let Some(resolved) = unsafe { try_strict_dense_number_store(arr, index, value) } {
+        return resolved;
+    }
+    // SAFETY: as above — the lane validates the receiver before every dereference.
+    if let Some(resolved) = unsafe { try_strict_dense_pointer_overwrite(arr, index, value) } {
         return resolved;
     }
     if let Some(resolved) = try_strict_dense_index_set(arr, index, value) {
