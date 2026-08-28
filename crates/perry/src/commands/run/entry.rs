@@ -41,15 +41,17 @@ pub fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
 
 /// Resolve the entry TypeScript file
 pub fn resolve_entry_file(input: Option<&Path>) -> Result<PathBuf> {
-    if let Some(path) = input {
-        if path.exists() {
-            return Ok(path.to_path_buf());
+    let project_dir = match input {
+        Some(path) if !path.exists() => {
+            return Err(anyhow!("File not found: {}", path.display()));
         }
-        return Err(anyhow!("File not found: {}", path.display()));
-    }
+        Some(path) if !path.is_dir() => return Ok(path.to_path_buf()),
+        Some(path) => path,
+        None => Path::new("."),
+    };
 
     // Try perry.toml
-    if let Some(entry) = read_perry_toml_entry() {
+    if let Some(entry) = read_perry_toml_entry(project_dir) {
         if entry.exists() {
             return Ok(entry);
         }
@@ -57,7 +59,7 @@ pub fn resolve_entry_file(input: Option<&Path>) -> Result<PathBuf> {
 
     // Fallback: src/main.ts, then main.ts
     for candidate in &["src/main.ts", "main.ts"] {
-        let path = PathBuf::from(candidate);
+        let path = project_dir.join(candidate);
         if path.exists() {
             return Ok(path);
         }
@@ -71,14 +73,14 @@ pub fn resolve_entry_file(input: Option<&Path>) -> Result<PathBuf> {
 }
 
 /// Read entry point from perry.toml if present
-pub fn read_perry_toml_entry() -> Option<PathBuf> {
-    let toml_str = std::fs::read_to_string("perry.toml").ok()?;
+fn read_perry_toml_entry(project_dir: &Path) -> Option<PathBuf> {
+    let toml_str = std::fs::read_to_string(project_dir.join("perry.toml")).ok()?;
     for line in toml_str.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("entry") {
             if let Some(eq_pos) = trimmed.find('=') {
                 let value = trimmed[eq_pos + 1..].trim().trim_matches('"');
-                return Some(PathBuf::from(value));
+                return Some(project_dir.join(value));
             }
         }
     }
@@ -272,7 +274,32 @@ pub fn resolve_target(
 
 #[cfg(test)]
 mod tests {
-    use super::rust_target_triple;
+    use super::{resolve_entry_file, rust_target_triple};
+
+    #[test]
+    fn directory_input_resolves_default_entry() {
+        let project = tempfile::tempdir().unwrap();
+        let entry = project.path().join("src/main.ts");
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        std::fs::write(&entry, "console.log('hello');").unwrap();
+
+        assert_eq!(resolve_entry_file(Some(project.path())).unwrap(), entry);
+    }
+
+    #[test]
+    fn directory_input_resolves_perry_toml_entry() {
+        let project = tempfile::tempdir().unwrap();
+        let entry = project.path().join("app/index.ts");
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        std::fs::write(&entry, "console.log('hello');").unwrap();
+        std::fs::write(
+            project.path().join("perry.toml"),
+            "entry = \"app/index.ts\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(resolve_entry_file(Some(project.path())).unwrap(), entry);
+    }
 
     #[test]
     fn android_x86_64_uses_its_cross_runtime() {
