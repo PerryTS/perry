@@ -1684,7 +1684,11 @@ fn array_receiver_is_never_read_as_a_class_id() {
 /// must still win.
 #[test]
 fn this_method_snapshot_survives_own_property_replacement() {
-    const CLASS_ID: u32 = 0x8955;
+    // Named distinctly from the real `CLASS_ID` mirror in
+    // `class_registry/state.rs`: `class_id_collisions.py` matches on the
+    // NAME, so a test-local `CLASS_ID` with a different value reads to that
+    // gate as cross-crate mirror drift.
+    const SNAPSHOT_CLASS_ID: u32 = 0x8955;
     const NAME: &[u8] = b"snapshot";
 
     extern "C" fn return_receiver(this: f64) -> f64 {
@@ -1693,7 +1697,7 @@ fn this_method_snapshot_survives_own_property_replacement() {
 
     unsafe {
         super::class_registry::js_register_class_method(
-            CLASS_ID as i64,
+            SNAPSHOT_CLASS_ID as i64,
             NAME.as_ptr(),
             NAME.len() as i64,
             return_receiver as *const () as usize as i64,
@@ -1703,7 +1707,7 @@ fn this_method_snapshot_survives_own_property_replacement() {
         );
     }
 
-    let obj = js_object_alloc(CLASS_ID, 0);
+    let obj = js_object_alloc(SNAPSHOT_CLASS_ID, 0);
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
     let captured = scope.root_nanbox_f64(super::native_module::js_class_method_snapshot_bind(
