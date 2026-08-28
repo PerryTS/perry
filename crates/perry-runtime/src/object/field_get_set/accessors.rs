@@ -614,7 +614,7 @@ pub(crate) unsafe fn array_subclass_prototype_field(
     {
         return None;
     }
-    let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let key_ptr = crate::object::string_header_payload(key);
     let key_len = (*key).byte_len as usize;
     let name = std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).ok()?;
     // `array_prototype_property_value` copies `name` before its first
