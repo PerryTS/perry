@@ -290,6 +290,27 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
             }
         }
     }
+    // A PLAIN `Map` / `Set`: answer with the builtin iterator directly.
+    //
+    // Placed ahead of the URLSearchParams probes below because it is the
+    // overwhelmingly common receiver and those probes are far from free — the
+    // backing probe runs a by-name field lookup. A plain collection is never a
+    // URLSearchParams (that arm needs an ordinary object), so nothing below can
+    // claim a receiver this arm accepts, and the lane disables itself the
+    // moment any `@@iterator` write is observed.
+    match crate::object::map_set_subclass::plain_collection_default_iteration(val_f64) {
+        Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
+            return crate::value::js_nanbox_pointer(
+                crate::collection_iter_object::js_map_entries_iter_obj(m),
+            );
+        }
+        Some(crate::object::map_set_subclass::CollectionBacking::Set(s)) => {
+            return crate::value::js_nanbox_pointer(
+                crate::collection_iter_object::js_set_values_iter_obj(s),
+            );
+        }
+        None => {}
+    }
     // `class X extends Map | Set` instance — its default `[Symbol.iterator]`
     // yields the hidden backing collection's entries (Map) / values (Set),
     // returned as a real iterator object so the lazy `for…of` protocol can

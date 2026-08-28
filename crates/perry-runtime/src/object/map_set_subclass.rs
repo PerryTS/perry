@@ -84,6 +84,68 @@ unsafe fn instance_object_ptr(this: f64) -> Option<*mut ObjectHeader> {
 /// hidden backing field), return its backing collection. Returns `None` for
 /// real Maps/Sets, ordinary objects, and non-objects — so callers fall through
 /// to their existing handling.
+/// Set once any `[Symbol.iterator]` symbol-keyed write or delete is observed,
+/// anywhere in the process.
+///
+/// [`plain_collection_default_iteration`] answers a plain `Map`/`Set` with its
+/// builtin iterator WITHOUT consulting the symbol tables, so it must not run
+/// once the iteration protocol has been tampered with — a patched
+/// `Map.prototype[Symbol.iterator]`, or an own `@@iterator` installed on one
+/// instance, both have to be observable.
+///
+/// Deliberately coarse: the flag is not keyed to the collection prototypes,
+/// because a plain `Map` has no prototype OBJECT to compare against the way
+/// `Array.prototype` does (its surface is served by redirecting the operation
+/// at each dispatch point). Any `@@iterator` write in the program disables the
+/// lane process-wide. That is the conservative direction — it can only cost
+/// speed, never correctness — and the overwhelming majority of programs never
+/// write `@@iterator` at all, so they keep the lane for free.
+pub static ITERATOR_PROTOCOL_TOUCHED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Record (if `sym_key` is the well-known `Symbol.iterator`) that the
+/// iteration protocol has been tampered with. Called from the same symbol
+/// set/delete paths that already feed `note_array_proto_iterator_write`.
+pub fn note_iterator_symbol_write(sym_key: usize) {
+    if sym_key == 0 || ITERATOR_PROTOCOL_TOUCHED.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    if sym_key == crate::symbol::well_known_symbol("iterator") as usize {
+        ITERATOR_PROTOCOL_TOUCHED.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// A PLAIN (non-subclass) `Map` or `Set` receiver's default iteration target.
+///
+/// `subclass_backing_of` answers only instances that carry a hidden backing
+/// field, so a plain collection fell through every arm of `js_get_iterator` to
+/// the generic `[Symbol.iterator]` property lookup plus a dynamic method call.
+/// On a profile of small-collection `for…of` those two were ~81% of GetIterator,
+/// and `for (const v of set)` over a 4-element Set measured 10.6x node.
+///
+/// Returns `None` once [`ITERATOR_PROTOCOL_TOUCHED`] is set, so a program that
+/// patches `@@iterator` keeps the fully general path.
+pub(crate) fn plain_collection_default_iteration(value: f64) -> Option<CollectionBacking> {
+    if ITERATOR_PROTOCOL_TOUCHED.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    let jsv = JSValue::from_bits(value.to_bits());
+    if !jsv.is_pointer() {
+        return None;
+    }
+    let raw = (value.to_bits() & POINTER_MASK) as usize;
+    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    if crate::map::is_registered_map(raw) {
+        return Some(CollectionBacking::Map(raw as *mut MapHeader));
+    }
+    if crate::set::is_registered_set(raw) {
+        return Some(CollectionBacking::Set(raw as *mut SetHeader));
+    }
+    None
+}
+
 pub(crate) fn subclass_backing_of(value: f64) -> Option<CollectionBacking> {
     // #7795: no Map/Set subclass instance exists, so this cannot return `Some`.
     if !MAP_SET_SUBCLASS_EVER.load(std::sync::atomic::Ordering::Relaxed) {
@@ -568,5 +630,78 @@ mod tests {
 
     fn js_map_size_of(obj: *mut ObjectHeader) -> u32 {
         crate::map::js_map_size(obj as *const crate::map::MapHeader)
+    }
+}
+
+#[cfg(test)]
+mod plain_collection_lane_tests {
+    use super::*;
+
+    /// The lane must claim a plain Map and a plain Set — those are the
+    /// receivers `for…of` hands `js_get_iterator` — and refuse everything it
+    /// cannot prove, so the general path still decides those.
+    #[test]
+    fn lane_claims_plain_collections_only() {
+        ITERATOR_PROTOCOL_TOUCHED.store(false, std::sync::atomic::Ordering::Relaxed);
+
+        let map = crate::map::js_map_alloc(4);
+        let map_value = crate::value::js_nanbox_pointer(map as i64);
+        assert!(
+            matches!(
+                plain_collection_default_iteration(map_value),
+                Some(CollectionBacking::Map(_))
+            ),
+            "a plain Map must take the builtin-iterator lane"
+        );
+
+        let set = crate::set::js_set_alloc(4);
+        let set_value = crate::value::js_nanbox_pointer(set as i64);
+        assert!(
+            matches!(
+                plain_collection_default_iteration(set_value),
+                Some(CollectionBacking::Set(_))
+            ),
+            "a plain Set must take the builtin-iterator lane"
+        );
+
+        // Not a collection, and not a pointer: both decline.
+        let plain = crate::object::js_object_alloc(0, 0);
+        assert!(
+            plain_collection_default_iteration(crate::value::js_nanbox_pointer(plain as i64))
+                .is_none(),
+            "an ordinary object is not a plain collection"
+        );
+        assert!(plain_collection_default_iteration(37.0).is_none());
+    }
+
+    /// The whole safety argument: once any `@@iterator` write is observed the
+    /// lane must stop claiming receivers, so a patched iteration protocol stays
+    /// observable through the general lookup. The latch is monotone.
+    #[test]
+    fn a_touched_iterator_protocol_disables_the_lane() {
+        ITERATOR_PROTOCOL_TOUCHED.store(false, std::sync::atomic::Ordering::Relaxed);
+        let map = crate::map::js_map_alloc(4);
+        let map_value = crate::value::js_nanbox_pointer(map as i64);
+        assert!(plain_collection_default_iteration(map_value).is_some());
+
+        note_iterator_symbol_write(crate::symbol::well_known_symbol("iterator") as usize);
+        assert!(
+            ITERATOR_PROTOCOL_TOUCHED.load(std::sync::atomic::Ordering::Relaxed),
+            "an @@iterator write must flip the latch"
+        );
+        assert!(
+            plain_collection_default_iteration(map_value).is_none(),
+            "with the protocol touched, the lane must decline and let the \
+             general [Symbol.iterator] lookup decide"
+        );
+
+        // An unrelated symbol must not flip it (checked from the clean state).
+        ITERATOR_PROTOCOL_TOUCHED.store(false, std::sync::atomic::Ordering::Relaxed);
+        note_iterator_symbol_write(crate::symbol::well_known_symbol("asyncIterator") as usize);
+        assert!(
+            !ITERATOR_PROTOCOL_TOUCHED.load(std::sync::atomic::Ordering::Relaxed),
+            "only @@iterator disables the lane"
+        );
+        ITERATOR_PROTOCOL_TOUCHED.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 }

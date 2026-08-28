@@ -111,6 +111,7 @@ pub(crate) unsafe fn js_object_delete_symbol_property(obj_f64: f64, sym_f64: f64
     // virtual (native dispatch, not in the side table), so the delete must
     // still flip the modified flag for `js_get_iterator` to throw per spec.
     crate::array::note_array_proto_iterator_write(obj_key, sym_key);
+    crate::object::map_set_subclass::note_iterator_symbol_write(sym_key);
 
     accessors::clear_symbol_accessor_property(obj_key, sym_key);
     {
@@ -389,6 +390,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     // `Array.prototype[Symbol.iterator] = fn` disables the array fast path in
     // `js_get_iterator` so destructuring / GetIterator see the patched method.
     crate::array::note_array_proto_iterator_write(obj_key, sym_key);
+    crate::object::map_set_subclass::note_iterator_symbol_write(sym_key);
     let has_own_data = object_symbol_data_property_exists(obj_key, sym_key);
     // Frozen / sealed / non-extensible receivers reject symbol-keyed writes
     // like string-keyed ones: an existing prop is non-writable when frozen
