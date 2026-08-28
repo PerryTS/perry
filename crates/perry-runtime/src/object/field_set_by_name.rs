@@ -44,7 +44,11 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
-    if super::private_member_set_by_name(obj, key, value) {
+    // Guard hoisted to the call site (see `cannot_be_private_member_name`):
+    // an ordinary key never calls into the private-member path.
+    if !super::cannot_be_private_member_name(key)
+        && super::private_member_set_by_name(obj, key, value)
+    {
         return;
     }
     // A heap class value is an exotic constructor object. Its own
