@@ -1194,10 +1194,18 @@ pub unsafe extern "C-unwind" fn js_readonly_set_has(receiver: f64, value: f64) -
         }
     }
 
-    // The structural fallback can allocate and re-enter generated code. Root
-    // both operands before crossing that boundary, then pass refreshed values
-    // into the existing dispatcher (which establishes its own roots before
-    // the first collecting probe).
+    readonly_set_has_structural(receiver, value)
+}
+
+/// The structural fallback of [`js_readonly_set_has`]: it can allocate and
+/// re-enter generated code, so it roots both operands before crossing that
+/// boundary and passes refreshed values into the existing dispatcher (which
+/// establishes its own roots before the first collecting probe). Out of line
+/// so the genuine-`Set` arm above is a leaf: with the handle scope inlined,
+/// every `componentTypeSet.has(type)` paid the fallback's full frame.
+#[cold]
+#[inline(never)]
+unsafe fn readonly_set_has_structural(receiver: f64, value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_handle = scope.root_nanbox_f64(receiver);
     let value_handle = scope.root_nanbox_f64(value);
@@ -1452,6 +1460,12 @@ pub extern "C" fn js_set_clear(set: *mut SetHeader) {
         return;
     }
     unsafe {
+        // The side-table mirrors the elements exactly, so an already-empty
+        // set has nothing to reset — half of a change set's per-entity
+        // `adds.clear(); removes.clear()` — and skips the table probe.
+        if (*set).size == 0 {
+            return;
+        }
         (*set).size = 0;
     }
     SET_INDEX.with(|idx| {
@@ -2137,6 +2151,23 @@ mod tests {
         let size = js_set_size(set);
         js_set_add(set, 3.0);
         assert_eq!(js_set_size(set), size);
+        // Clearing an empty set is a no-op that leaves it usable; clearing a
+        // populated one resets the side-table (the re-added value is found,
+        // the removed ones are not).
+        let empty = js_set_alloc(2);
+        js_set_clear(empty);
+        js_set_add(empty, 3.0);
+        assert_eq!(js_set_has(empty, 3.0), 1);
+        js_set_clear(set);
+        assert_eq!(js_set_size(set), 0);
+        assert_eq!(js_set_has(set, 1.0), 0);
+        js_set_add(set, 1.0);
+        assert_eq!(js_set_has(set, 1.0), 1);
+        js_set_clear(set);
+        // Restore the members the tail below expects (2 was deleted above).
+        for value in [1.0, 3.0, 4.0] {
+            js_set_add(set, value);
+        }
         // Growing past the scan bound hands every lookup to the side-table.
         for value in 100..120 {
             js_set_add(set, value as f64);

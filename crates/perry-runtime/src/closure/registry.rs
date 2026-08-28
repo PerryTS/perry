@@ -658,7 +658,13 @@ pub fn closure_is_arrow(closure: *const ClosureHeader) -> bool {
     if func_ptr.is_null() {
         return false;
     }
-    is_registered_arrow_function(func_ptr)
+    // The unified dispatch strategy already carries arrow-ness (the same
+    // registry answer, memoised per body and kept coherent by
+    // `js_register_closure_arrow_function`'s invalidation), and the call
+    // that follows a receiver rebind resolves it anyway — so answer from the
+    // recent-bodies cache instead of a second thread-local hash probe per
+    // call. (`this.handler(a, b)` on a closure-typed field paid both.)
+    resolve_strategy(func_ptr).is_arrow()
 }
 
 /// True if `closure` is a bound-method / bound-function value (its body is the
