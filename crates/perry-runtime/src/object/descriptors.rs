@@ -1463,7 +1463,6 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
         // property names are the index names `"0".."len-1"` plus `"length"`.
         // Reading a bogus `keys_array` off their header segfaulted (#800).
         {
-            const TAG_TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
             let jv = JSValue::from_bits(obj_value.to_bits());
             let n: Option<u32> = if jv.is_any_string() {
                 let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];

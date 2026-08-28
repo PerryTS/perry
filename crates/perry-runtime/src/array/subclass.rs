@@ -1606,7 +1606,15 @@ pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64, cache
                     && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 {
                     let obj = raw.cast::<ObjectHeader>();
-                    if let Some(layout) = dense_layout_for_validated_object(obj) {
+                    // Elements-backed instance: an in-bounds non-hole element
+                    // answers directly; a hole continues to the complete
+                    // dispatcher (prototype chain).
+                    let elements = unsafe { super::subclass_elements::elements_of(obj) };
+                    if !elements.is_null() {
+                        if let Some(value) = elements_index_get(elements, index_u32) {
+                            return value;
+                        }
+                    } else if let Some(layout) = dense_layout_for_validated_object(obj) {
                         // The codegen hit path handles both inline and
                         // object-owned spill slots.  In spill mode, publish a
                         // class-wide dense-tail identity when the owner has
