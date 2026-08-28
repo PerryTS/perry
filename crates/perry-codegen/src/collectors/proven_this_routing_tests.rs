@@ -1014,6 +1014,90 @@ fn guarded_pshape_call_site_is_preceded_by_a_shape_id_guard() {
     }
 }
 
+/// A method that hands a declared field's VALUE to a sibling method
+/// (`this.scale(this.value)`) passes nothing but that value: the receiver is
+/// not leaked, so the caller keeps its proven-`this` clone. Before, any
+/// mention of `this` inside an internal call's arguments rejected the caller
+/// outright — wolf-ecs `addComponent(this._ent[id], i)`-style calls lost their
+/// clone and re-proved `this` at every site of the public body.
+#[test]
+fn field_value_arguments_to_sibling_methods_keep_the_proven_this_clone() {
+    let mut counter = counter_class();
+    counter.methods.push(func(
+        92,
+        "scaleByValue",
+        Vec::new(),
+        Type::Number,
+        vec![Stmt::Return(Some(call(
+            Expr::This,
+            "scale",
+            vec![this_get("value")],
+        )))],
+    ));
+    let mut m = Module::new("pshape_field_value_args.ts");
+    m.classes = vec![counter];
+    m.functions = vec![func(
+        1,
+        "probe",
+        vec![param(2, "c", Type::Named("Counter".to_string()))],
+        Type::Number,
+        vec![Stmt::Return(Some(call(
+            Expr::LocalGet(2),
+            "scaleByValue",
+            Vec::new(),
+        )))],
+    )];
+    m.init_kind = ModuleInitKind::Eager;
+    let ir = emit(&m, false);
+    let clones = pshape_definitions(&ir);
+    assert!(
+        clones.iter().any(|d| d.contains("__scaleByValue$pshape")),
+        "a field-value argument to a sibling method must not reject the clone:\n{clones:#?}"
+    );
+
+    // A bare `this` argument still leaks the receiver and must still reject.
+    let mut counter = counter_class();
+    counter.methods.push(func(
+        93,
+        "leak",
+        vec![param(94, "other", Type::Any)],
+        Type::Number,
+        vec![Stmt::Return(Some(Expr::Number(1.0)))],
+    ));
+    counter.methods.push(func(
+        95,
+        "leakSelf",
+        Vec::new(),
+        Type::Number,
+        vec![Stmt::Return(Some(call(
+            Expr::This,
+            "leak",
+            vec![Expr::This],
+        )))],
+    ));
+    let mut m = Module::new("pshape_this_value_arg.ts");
+    m.classes = vec![counter];
+    m.functions = vec![func(
+        1,
+        "probeLeak",
+        vec![param(2, "c", Type::Named("Counter".to_string()))],
+        Type::Number,
+        vec![Stmt::Return(Some(call(
+            Expr::LocalGet(2),
+            "leakSelf",
+            Vec::new(),
+        )))],
+    )];
+    m.init_kind = ModuleInitKind::Eager;
+    let ir = emit(&m, false);
+    assert!(
+        !pshape_definitions(&ir)
+            .iter()
+            .any(|d| d.contains("__leakSelf$pshape")),
+        "a bare `this` argument leaks the receiver and must reject the clone:\n{ir}"
+    );
+}
+
 /// The single-pair shape-only arm is small enough to inline at the call site.
 /// Pin the complete safety gate: acquire both the all-method escape latch and
 /// the FNV-indexed method-name latch, accept both the boxed-pointer and

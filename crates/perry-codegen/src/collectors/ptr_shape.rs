@@ -1758,8 +1758,15 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 if !self.function_this_safe(&owner, property, func, false) {
                     return false;
                 }
-                args.iter()
-                    .all(|a| !expr_mentions_this(a) && self.expr_this_safe(a, ctx))
+                // Arguments are vetted as ordinary expressions: a bare `this`
+                // in value position, a `this`-capturing closure and a
+                // non-field `this.x` read all reject there already. A declared
+                // field READ passed along (`this.m(this.ents[id])`) hands the
+                // callee a field's value, never the receiver, and must not
+                // disqualify the caller — wolf-ecs `addComponent` /
+                // `removeComponent` / `createEntity` each call a sibling
+                // method with such an argument.
+                args.iter().all(|a| self.expr_this_safe(a, ctx))
             }
             // `super(...)`: the parent constructor body was already vetted by
             // `ctor_chain_safe` (whole chain). Args must not leak `this`; in
@@ -1788,8 +1795,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 if !self.function_this_safe(&owner, method, func, false) {
                     return false;
                 }
-                args.iter()
-                    .all(|a| !expr_mentions_this(a) && self.expr_this_safe(a, ctx))
+                args.iter().all(|a| self.expr_this_safe(a, ctx))
             }
             // Shape barriers on `this` inside a method body (the module-wide
             // kill already covers these; kept as defense in depth).
