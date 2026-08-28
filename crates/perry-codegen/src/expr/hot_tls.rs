@@ -91,3 +91,41 @@ pub(crate) fn emit_hot_tls_lookup(ctx: &mut FnCtx<'_>, stem: &str) -> HotTlsLook
 pub(crate) fn hot_tls_field(ctx: &mut FnCtx<'_>, hot: &str, offset: &str) -> String {
     ctx.block().gep(I8, hot, &[(I64, offset)])
 }
+
+#[cfg(test)]
+mod layout_tie_tests {
+    //! The offsets below are string literals in THIS crate, while the struct
+    //! they index lives in `perry-runtime`, which this crate does not depend
+    //! on. `tls_hot.rs`'s `const _: () = assert!(offset_of!(..) == ..)` pins the
+    //! runtime constant to the struct, so a field REORDER fails to compile —
+    //! but the natural fix is to update that constant, which leaves the string
+    //! here stale and still compiling. Generated code would then load the wrong
+    //! field of a GC-visible cell. Tie the two together by reading the source.
+
+    fn runtime_offset(name: &str) -> usize {
+        let src = include_str!("../../../perry-runtime/src/tls_hot.rs");
+        let needle = format!("pub const {name}: usize = ");
+        let rest = src
+            .split_once(&needle)
+            .unwrap_or_else(|| panic!("{name} not found in tls_hot.rs — was it renamed?"))
+            .1;
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().expect("offset is a decimal literal")
+    }
+
+    #[test]
+    fn hot_tls_layout_is_what_codegen_assumes() {
+        assert_eq!(
+            super::HOT_TLS_INLINE_STATE_OFFSET.parse::<usize>().unwrap(),
+            runtime_offset("HOT_TLS_INLINE_STATE_OFFSET"),
+            "codegen emits a stale HotTls::inline_state offset",
+        );
+        assert_eq!(
+            super::HOT_TLS_IMPLICIT_THIS_OFFSET
+                .parse::<usize>()
+                .unwrap(),
+            runtime_offset("HOT_TLS_IMPLICIT_THIS_OFFSET"),
+            "codegen emits a stale HotTls::implicit_this offset",
+        );
+    }
+}
