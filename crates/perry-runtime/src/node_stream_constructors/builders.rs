@@ -211,15 +211,15 @@ pub extern "C" fn js_array_subclass_init(this: f64, n: f64) -> f64 {
         // divergence tracked in #8953, unchanged by the elements store.
         let this = this_root.get_nanbox_f64();
         let obj = raw_ptr_from_value(this) as *mut ObjectHeader;
-        crate::closure::js_register_closure_arity(ns_array_fill as *const u8, 1);
-        let methods: [(&str, StubFn); 1] = [("fill", super::cast1(ns_array_fill))];
+        crate::closure::js_register_closure_arity(ns_array_fill as *const u8, 3);
+        let methods: [(&str, StubFn); 1] = [("fill", super::cast3(ns_array_fill))];
         install_methods_on_existing_object(obj, this, &methods, &[]);
         return this_root.get_nanbox_f64();
     }
     let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
     js_object_set_field_by_name(obj, length_key, len);
-    crate::closure::js_register_closure_arity(ns_array_fill as *const u8, 1);
-    let methods: [(&str, StubFn); 1] = [("fill", super::cast1(ns_array_fill))];
+    crate::closure::js_register_closure_arity(ns_array_fill as *const u8, 3);
+    let methods: [(&str, StubFn); 1] = [("fill", super::cast3(ns_array_fill))];
     install_methods_on_existing_object(obj, this, &methods, &[]);
     this
 }
@@ -261,8 +261,25 @@ pub unsafe extern "C" fn js_array_subclass_init_args(
 /// `Array.prototype.fill`-equivalent installed on an Array-subclass instance:
 /// fills the receiver's own indexed slots `0..length` with `value`. Delegates
 /// to the generic array-like fill (which reads `length` off the receiver).
-pub(super) extern "C" fn ns_array_fill(closure: *const ClosureHeader, value: f64) -> f64 {
-    crate::array::js_array_fill_generic(super::this_value(closure), value, 0, 0.0, 0, 0.0)
+pub(super) extern "C" fn ns_array_fill(
+    closure: *const ClosureHeader,
+    value: f64,
+    start: f64,
+    end: f64,
+) -> f64 {
+    // `fill(value, start?, end?)`. An omitted argument arrives as `undefined`
+    // and selects the spec default (`0` / `length`); before this the stub had
+    // arity 1, so `sub.fill(8, 1)` filled the WHOLE array instead of the tail
+    // from index 1 (node: `7|8|8`, perry: `8|8|8`).
+    let present = |v: f64| i32::from(!JSValue::from_bits(v.to_bits()).is_undefined());
+    crate::array::js_array_fill_generic(
+        super::this_value(closure),
+        value,
+        present(start),
+        start,
+        present(end),
+        end,
+    )
 }
 
 #[no_mangle]
