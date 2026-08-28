@@ -72,3 +72,73 @@ fn the_elements_edge_survives_moving_gc_and_keeps_the_inner_array_alive() {
         "index 1 must still be absent: {hole:#x}"
     );
 }
+
+/// The hot runtime entries route an elements-backed instance to its inner
+/// array: `length`, `[i]` get/set, append (including the re-allocating one,
+/// with the owner rooted across it) and pop — through both the value-taking
+/// `array_subclass_fast_*` entries and the raw `js_array_*` entries the
+/// codegen fallbacks call, and across a forced-evacuation minor GC.
+#[test]
+fn hot_entries_route_to_the_elements_store() {
+    use super::subclass::{
+        array_subclass_fast_index_get, array_subclass_fast_index_set, array_subclass_fast_length,
+        array_subclass_fast_pop, array_subclass_fast_push_one,
+    };
+    let _copying_nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+    crate::gc::register_runtime_handle_root_scanner_for_tests();
+    crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+
+    let class_id = 0x0074_8696;
+    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
+    let obj = js_object_alloc(class_id, 2);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+    unsafe { install_elements(live_obj(receiver_h.get_nanbox_f64()), 0) };
+    let recv = || receiver_h.get_nanbox_f64();
+    let as_arr = || (recv().to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::array::ArrayHeader;
+
+    assert_eq!(array_subclass_fast_length(recv()), Some(0.0));
+    assert_eq!(array_subclass_fast_index_get(recv(), 0), None);
+    // 40 appends from an exact-capacity-0 store: several re-allocations.
+    for i in 0..40u32 {
+        assert_eq!(
+            array_subclass_fast_push_one(recv(), f64::from(i)),
+            Some(f64::from(i + 1))
+        );
+        if i == 17 {
+            let _ = crate::gc::gc_collect_minor();
+        }
+    }
+    assert_eq!(array_subclass_fast_length(recv()), Some(40.0));
+    for i in 0..40u32 {
+        assert_eq!(array_subclass_fast_index_get(recv(), i), Some(f64::from(i)));
+    }
+    assert_eq!(array_subclass_fast_index_get(recv(), 40), None);
+    // In-bounds write, appending write, hole-creating write (declined).
+    assert!(array_subclass_fast_index_set(recv(), 3, 300.0));
+    assert_eq!(array_subclass_fast_index_get(recv(), 3), Some(300.0));
+    assert!(array_subclass_fast_index_set(recv(), 40, 400.0));
+    assert_eq!(array_subclass_fast_length(recv()), Some(41.0));
+    assert!(!array_subclass_fast_index_set(recv(), 50, 500.0));
+    assert_eq!(array_subclass_fast_length(recv()), Some(41.0));
+    // Pop through the value entry and through the raw `js_array_*` entries
+    // the codegen fallbacks call with the object address as an ArrayHeader.
+    assert_eq!(array_subclass_fast_pop(recv()), Some(400.0));
+    assert_eq!(crate::array::js_array_pop_f64(as_arr()), 39.0);
+    assert_eq!(crate::array::js_array_length(as_arr()), 39);
+    let _ = crate::array::js_array_push_f64(as_arr(), 77.0);
+    assert_eq!(crate::array::js_array_length(as_arr()), 40);
+    assert_eq!(crate::array::js_array_get_f64(as_arr(), 39), 77.0);
+    assert_eq!(array_subclass_fast_index_get(recv(), 39), Some(77.0));
+    let _ = crate::gc::gc_collect_minor();
+    assert_eq!(array_subclass_fast_length(recv()), Some(40.0));
+    assert_eq!(array_subclass_fast_index_get(recv(), 3), Some(300.0));
+    assert_eq!(crate::array::js_array_get_f64(as_arr(), 39), 77.0);
+    // The shape-carried machinery never learned anything for this instance.
+    assert_eq!(
+        unsafe { (*(*live_obj(recv())).meta).array_subclass_dense_key },
+        0
+    );
+}

@@ -352,6 +352,32 @@ fn validated_object_receiver_for_value(value: f64) -> Option<ValidatedObjectRece
         .flatten()
 }
 
+/// The elements store of an elements-backed instance (`super::subclass_elements`),
+/// or `None` for the shape-carried representation. Non-null only when the
+/// store was installed at construction, so no gate check is needed here.
+#[inline]
+fn elements_for_validated(receiver: &ValidatedObjectReceiver) -> Option<*mut ArrayHeader> {
+    let elements = unsafe { super::subclass_elements::elements_of(receiver.object) };
+    (!elements.is_null()).then_some(elements)
+}
+
+/// In-bounds, non-hole element of the inner array; `None` sends the caller
+/// to the same prototype-chain fallback a hole in the shape-carried form does.
+#[inline]
+fn elements_index_get(elements: *const ArrayHeader, index: u32) -> Option<f64> {
+    unsafe {
+        if index >= (*elements).length {
+            return None;
+        }
+        let slot = (elements as *const u8)
+            .add(std::mem::size_of::<ArrayHeader>())
+            .cast::<u64>()
+            .add(index as usize);
+        let bits = *slot;
+        (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits))
+    }
+}
+
 /// Resolve the cached dense layout after the caller has proved that `obj` is
 /// a live, non-forwarded ordinary object. Every rejected Array-subclass brand,
 /// descriptor, hole, or prototype case returns `None`.
@@ -855,6 +881,11 @@ fn nonnegative_u32_length(value: JSValue) -> Option<u32> {
 /// semantics; descriptor/prototype-divergent shapes decline above.
 #[inline]
 pub(crate) fn array_subclass_fast_length(value: f64) -> Option<f64> {
+    if let Some(elements) =
+        validated_object_receiver_for_value(value).and_then(|r| elements_for_validated(&r))
+    {
+        return Some(f64::from(unsafe { (*elements).length }));
+    }
     let (obj, layout) = dense_layout_for_value(value)?;
     Some(f64::from_bits(layout_length_value(obj, layout).bits()))
 }
@@ -868,6 +899,13 @@ pub(crate) fn array_subclass_fast_length(value: f64) -> Option<f64> {
 /// into the cache, so moving GC needs neither a root nor a rewrite hook.
 #[inline]
 pub(crate) fn array_subclass_fast_length_with_ic(value: f64, cache: *mut u64) -> Option<f64> {
+    if let Some(elements) =
+        validated_object_receiver_for_value(value).and_then(|r| elements_for_validated(&r))
+    {
+        // No shape layout to publish: the IC words describe inline slots,
+        // and an elements-backed receiver has none for `length`.
+        return Some(f64::from(unsafe { (*elements).length }));
+    }
     let (obj, layout) = dense_layout_for_value(value)?;
     let result = f64::from_bits(layout_length_value(obj, layout).bits());
     if !cache.is_null() {
@@ -893,6 +931,9 @@ pub(crate) fn array_subclass_fast_length_with_ic(value: f64, cache: *mut u64) ->
 pub(crate) fn array_subclass_fast_length_raw(arr: *const ArrayHeader) -> Option<f64> {
     let raw = (arr as u64 & crate::value::POINTER_MASK) as usize;
     let receiver = validated_object_receiver(raw)?;
+    if let Some(elements) = elements_for_validated(&receiver) {
+        return Some(f64::from(unsafe { (*elements).length }));
+    }
     let layout = dense_layout_for_validated_object(receiver.object)?;
     Some(f64::from_bits(
         layout_length_value(receiver.object, layout).bits(),
@@ -904,6 +945,11 @@ pub(crate) fn array_subclass_fast_length_raw(arr: *const ArrayHeader) -> Option<
 /// proof when a length-only grow created holes without changing the shape.
 #[inline]
 pub(crate) fn array_subclass_fast_index_get(value: f64, index: u32) -> Option<f64> {
+    if let Some(elements) =
+        validated_object_receiver_for_value(value).and_then(|r| elements_for_validated(&r))
+    {
+        return elements_index_get(elements, index);
+    }
     let (obj, layout) = dense_layout_for_value(value)?;
     dense_index_get_with_layout(obj, layout, index)
 }
@@ -915,6 +961,9 @@ pub(crate) fn array_subclass_fast_index_get_raw(
 ) -> Option<f64> {
     let raw = (arr as u64 & crate::value::POINTER_MASK) as usize;
     let receiver = validated_object_receiver(raw)?;
+    if let Some(elements) = elements_for_validated(&receiver) {
+        return elements_index_get(elements, index);
+    }
     let layout = dense_layout_for_validated_object(receiver.object)?;
     dense_index_get_with_layout(receiver.object, layout, index)
 }
@@ -1127,6 +1176,59 @@ pub(crate) fn array_subclass_fast_index_set(receiver: f64, index: u32, value: f6
     array_subclass_fast_index_set_validated(receiver, index, value)
 }
 
+/// Elements-backed `receiver[index] = value` for an in-bounds index or the
+/// appending index (`== length`); anything else (holes past the end, a
+/// frozen/sealed/non-extensible receiver) declines to the generic path.
+fn elements_index_set(receiver: &ValidatedObjectReceiver, index: u32, value: f64) -> Option<bool> {
+    let elements = elements_for_validated(receiver)?;
+    if !mutation_receiver_allows_plain_tail(receiver.object_flags) {
+        return Some(false);
+    }
+    let length = unsafe { (*elements).length };
+    if index < length {
+        crate::array::js_array_set_f64(elements, index, value);
+        return Some(true);
+    }
+    if index == length {
+        return elements_push(receiver, value).map(|_| true);
+    }
+    Some(false)
+}
+
+/// Elements-backed append: the owner is rooted across the (possibly
+/// re-allocating) push and the new head is written back through the
+/// barriered meta slot. Returns the new length.
+fn elements_push(receiver: &ValidatedObjectReceiver, value: f64) -> Option<f64> {
+    let elements = elements_for_validated(receiver)?;
+    if !mutation_receiver_allows_plain_tail(receiver.object_flags) {
+        return None;
+    }
+    let obj = receiver.object as *mut ObjectHeader;
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj_handle = scope.root_raw_mut_ptr(obj);
+        let value_root = scope.root_nanbox_f64(value);
+        let (grown, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
+            crate::array::js_array_push_f64(elements, value_root.get_nanbox_f64())
+        });
+        let current = super::subclass_elements::elements_of(obj);
+        if grown != current {
+            super::subclass_elements::set_elements_head(obj, grown);
+        }
+        Some(f64::from((*grown).length))
+    }
+}
+
+/// Elements-backed `pop`: the inner array's own pop (no allocation, so no
+/// rooting), declining like `elements_push` on a non-plain receiver.
+fn elements_pop(receiver: &ValidatedObjectReceiver) -> Option<f64> {
+    let elements = elements_for_validated(receiver)?;
+    if !mutation_receiver_allows_plain_tail(receiver.object_flags) {
+        return None;
+    }
+    Some(crate::array::js_array_pop_f64(elements))
+}
+
 #[inline]
 pub(crate) fn array_subclass_fast_index_set_raw(
     arr: *const ArrayHeader,
@@ -1146,6 +1248,9 @@ fn array_subclass_fast_index_set_validated(
     index: u32,
     value: f64,
 ) -> bool {
+    if let Some(done) = elements_index_set(&receiver, index, value) {
+        return done;
+    }
     let obj = receiver.object;
     let Some(layout) = dense_layout_for_validated_object(obj) else {
         return false;
@@ -1226,6 +1331,9 @@ fn array_subclass_fast_push_one_validated(
     value: f64,
     proven_u31: Option<u32>,
 ) -> Option<f64> {
+    if elements_for_validated(&receiver).is_some() {
+        return elements_push(&receiver, value);
+    }
     let obj = receiver.object;
     let layout = dense_layout_for_validated_object(obj)?;
     let length = nonnegative_u32_length(layout_length_value(obj, layout))?;
@@ -1351,6 +1459,9 @@ pub(crate) fn array_subclass_fast_pop_raw(arr: *const ArrayHeader) -> Option<f64
 
 #[inline]
 fn array_subclass_fast_pop_validated(receiver: ValidatedObjectReceiver) -> Option<f64> {
+    if elements_for_validated(&receiver).is_some() {
+        return elements_pop(&receiver);
+    }
     let obj = receiver.object;
     let layout = dense_layout_for_validated_object(obj)?;
     let length = nonnegative_u32_length(layout_length_value(obj, layout))?;
