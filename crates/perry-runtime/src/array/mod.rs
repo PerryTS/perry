@@ -35,6 +35,8 @@ mod collection_tag_tests;
 #[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
+mod push_pop_tests;
+#[cfg(test)]
 mod spread_dense_tests;
 #[cfg(test)]
 mod strict_store_tests;
