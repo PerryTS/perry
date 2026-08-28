@@ -85,26 +85,30 @@ use std::cell::Cell;
 /// `usize::MAX` would need a 76-bit address.
 const NO_PAGE: usize = usize::MAX;
 
-// Hot TLS, not `std::thread_local!`: this is the HIT path of every old→young
-// store the barrier remembers (an old bucket taking a young command each
-// push), and the `_tlv_get_addr` resolution a plain thread-local pays per
-// probe was ~1% of a 5k-entity ECS frame by itself.
-crate::perry_thread_local! {
-    static LAST_DIRTY_OLD_PAGE: Cell<usize> = const { Cell::new(NO_PAGE) };
+/// The cache cell: an inline value in this thread's [`crate::tls_hot::HotTls`]
+/// — not a `std::thread_local!` (whose `_tlv_get_addr` was ~1% of a 5k-entity
+/// ECS frame by itself) and not a generic hot slot either: this is the HIT
+/// path of every store the barrier consults (an old bucket taking a young
+/// command each push), and the slot's extra dependent load was the measurable
+/// part of what the barrier still cost after the parent/child classifications
+/// were skipped on a hit.
+#[inline(always)]
+fn cell() -> &'static Cell<usize> {
+    &crate::tls_hot::hot().last_dirty_old_page
 }
 
 /// Is `page` known to be recorded already? See the module invariant.
 #[inline]
 pub(super) fn dirty_old_page_already_marked(page: usize) -> bool {
     debug_assert_ne!(page, NO_PAGE, "page number collides with the empty marker");
-    LAST_DIRTY_OLD_PAGE.with(Cell::get) == page
+    cell().get() == page
 }
 
 /// Record that `page` is now in `DIRTY_OLD_PAGES` **and** stamped dirty in the
 /// arena page metadata. Callers must have established both immediately before.
 #[inline]
 pub(super) fn note_dirty_old_page_marked(page: usize) {
-    LAST_DIRTY_OLD_PAGE.with(|cell| cell.set(page));
+    cell().set(page);
 }
 
 /// Drop the cached page. Called from every path that can remove a page from
@@ -112,12 +116,12 @@ pub(super) fn note_dirty_old_page_marked(page: usize) {
 /// the module doc. Cheap enough (one thread-local store) that these callers do
 /// not check whether the page they touched is the cached one.
 pub(crate) fn invalidate() {
-    LAST_DIRTY_OLD_PAGE.with(|cell| cell.set(NO_PAGE));
+    cell().set(NO_PAGE);
 }
 
 /// Test-only: is the cache currently empty? Lets the #7187 Phase B tests assert
 /// that an invalidation really happened rather than that nothing broke.
 #[cfg(test)]
 pub(super) fn is_empty_for_tests() -> bool {
-    LAST_DIRTY_OLD_PAGE.with(Cell::get) == NO_PAGE
+    cell().get() == NO_PAGE
 }
