@@ -273,6 +273,26 @@ fn response_headers_snapshot(response: &FetchResponse) -> HeadersStore {
 
 thread_local! {
     static PENDING_FETCH_BODY_STREAM_ID: Cell<usize> = const { Cell::new(0) };
+    // Codegen coerces BodyInit to a StringHeader before js_response_new, so
+    // preserve whether the original value was a string long enough for the
+    // Response constructor to install Fetch's default Content-Type.
+    static PENDING_FETCH_BODY_CONTENT_TYPE: Cell<Option<&'static str>> =
+        const { Cell::new(None) };
+}
+
+pub(super) const BODY_CONTENT_TYPE_TEXT_PLAIN: &str = "text/plain;charset=UTF-8";
+
+pub(super) fn set_pending_fetch_body_content_type(content_type: Option<&'static str>) {
+    PENDING_FETCH_BODY_CONTENT_TYPE.with(|pending| pending.set(content_type));
+}
+
+pub(super) fn reset_pending_fetch_body_init() {
+    PENDING_FETCH_BODY_STREAM_ID.with(|pending| pending.set(0));
+    PENDING_FETCH_BODY_CONTENT_TYPE.with(|pending| pending.set(None));
+}
+
+fn take_pending_fetch_body_content_type() -> Option<&'static str> {
+    PENDING_FETCH_BODY_CONTENT_TYPE.with(|pending| pending.replace(None))
 }
 
 fn take_pending_fetch_body_stream_id() -> Option<usize> {

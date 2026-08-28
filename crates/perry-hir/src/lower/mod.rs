@@ -42,7 +42,9 @@ mod expr_call;
 pub(crate) mod expr_function;
 pub(crate) use expr_function::capture_function_source;
 mod expr_member;
-pub(crate) use expr_member::{private_storage_property, wrap_private_guard, PRIV_OP_WRITE};
+pub(crate) use expr_member::{
+    private_storage_property, wrap_private_guard, PRIV_OP_READ, PRIV_OP_WRITE,
+};
 mod expr_misc;
 mod expr_new;
 mod expr_new_builtins;

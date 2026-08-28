@@ -100,6 +100,20 @@ fn is_headers_init_iterable(value: f64) -> bool {
         || has_sync_iterator(value)
 }
 
+/// Read a plain-object `HeadersInit` without changing registry ownership.
+/// Response construction uses this when codegen passes a runtime header record
+/// rather than a `Headers` registry handle.
+pub(super) fn headers_store_from_record_value(init: f64) -> Option<HeadersStore> {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let rooted = scope.root_nanbox_f64(init);
+    let entries = read_headers_record_entries(rooted.get_nanbox_f64(), &scope)?;
+    let mut store = HeadersStore::default();
+    for (key, value) in entries {
+        store.append(&key, &value);
+    }
+    Some(store)
+}
+
 fn read_headers_record_entries(
     value: f64,
     scope: &perry_runtime::gc::RuntimeHandleScope,
