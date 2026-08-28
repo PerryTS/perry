@@ -33,6 +33,8 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // existing `crate::expr::X` paths resolve unchanged.
 mod array_literal;
 mod bitset_test;
+#[cfg(test)]
+mod map_entry_at_tests;
 pub(crate) use bitset_test::is_u32_bitset_test;
 mod buffer_access;
 mod buffer_views;
