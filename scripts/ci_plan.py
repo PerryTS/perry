@@ -138,6 +138,14 @@ PARITY_SHARDS = 12
 # package; this matrix owns only `perry` integration targets.
 PERRY_INTEGRATION_SHARDS = 8
 
+# GC x representation-selection matrix. The PR subset remains one bounded job;
+# sweep/full runs retain every corpus file and every arm but partition the 80
+# files four ways. The previous single runner spent its remaining 78 minutes
+# compiling 80 files across ten compile environments and never reached a
+# verdict (#8915). Four stable round-robin slices leave ample room below the
+# 90-minute release bound without consuming the org's full 20-runner pool.
+GC_STRESS_SHARDS = {"pr": 1, "sweep": 4, "full": 4}
+
 EXTENDED_LABEL = "run-extended-tests"
 
 # The nightly (full-tier) cron in test.yml `on.schedule`. Any OTHER cron firing
@@ -310,6 +318,7 @@ def plan(
         gap = {"mode": "fast", "total": 1}
     gap["shards"] = list(range(1, gap["total"] + 1))
     gap["update_snapshot"] = bool(update_gap_snapshot)
+    gc_stress_total = GC_STRESS_SHARDS[tier]
 
     return {
         "tier": tier,
@@ -327,8 +336,14 @@ def plan(
             "total": PERRY_INTEGRATION_SHARDS,
             "shards": list(range(1, PERRY_INTEGRATION_SHARDS + 1)),
         },
-        # gc-stress: the PR subset of the GC x repsel matrix vs the full one.
-        "gc_stress_mode": "pr" if tier == "pr" else "full",
+        # gc-stress: one PR-subset runner or a sharded all-arms run. The
+        # gc-stress fan-in validates exact coverage and applies liveness once
+        # across the reconstructed whole-corpus report.
+        "gc_stress": {
+            "mode": "pr" if tier == "pr" else "all",
+            "total": gc_stress_total,
+            "shards": list(range(1, gc_stress_total + 1)),
+        },
     }
 
 
@@ -348,6 +363,8 @@ def table() -> str:
             if job == "gap_suite" and mark:
                 g = GAP_SUITE[t]
                 mark = f"{g['total']}x {g['mode']}"
+            if job == "gc_stress" and mark:
+                mark = f"{GC_STRESS_SHARDS[t]}x {'pr' if t == 'pr' else 'all'}"
             cells.append(mark)
         lines.append(f"| `{job.replace('_', '-')}` | " + " | ".join(cells) + " |")
     return "\n".join(lines)
@@ -388,6 +405,7 @@ def _self_test() -> int:
     core = plan("pull_request", "refs/pull/1/merge", changed=["crates/perry-runtime/src/gc/mod.rs"])
     check("core PR: gap suite on", core["jobs"]["gap_suite"])
     check("core PR: gc-stress on", core["jobs"]["gc_stress"])
+    check("core PR: gc-stress is one PR-subset shard", core["gc_stress"] == {"mode": "pr", "total": 1, "shards": [1]})
     check("core PR: e2e-scoped on", core["jobs"]["e2e_scoped"])
     check("core PR: windows off", not core["jobs"]["windows_build"])
     check("core PR: parity off", not core["jobs"]["parity"])
@@ -423,6 +441,7 @@ def _self_test() -> int:
     check("sweep: 3 fast gap shards", sweep["gap"]["total"] == 3 and sweep["gap"]["mode"] == "fast")
     check("sweep: cargo-test full", sweep["cargo_test_scope"] == "full")
     check("sweep: security-audit on", sweep["jobs"]["security_audit"])
+    check("sweep: full GC matrix has four shards", sweep["gc_stress"] == {"mode": "all", "total": 4, "shards": [1, 2, 3, 4]})
 
     full = plan("schedule", "refs/heads/main")
     check("full: every job except e2e-scoped", all(v for k, v in full["jobs"].items() if k != "e2e_scoped"))
@@ -436,6 +455,7 @@ def _self_test() -> int:
     )
     check("full: 8 auto-optimize gap shards", full["gap"]["total"] == 8 and full["gap"]["mode"] == "full")
     check("full: parity sharded (6h-cap kill, 2026-08-16)", full["parity"]["total"] >= 2 and full["parity"]["shards"][0] == 1)
+    check("full: full GC matrix has four shards", full["gc_stress"] == {"mode": "all", "total": 4, "shards": [1, 2, 3, 4]})
 
     labelled = plan("pull_request", "refs/pull/1/merge", labels=[EXTENDED_LABEL], changed=["README.md"])
     check("labelled PR runs the full tier regardless of scope", labelled["jobs"]["parity"] and labelled["jobs"]["gap_suite"])
@@ -450,8 +470,8 @@ def _self_test() -> int:
     #    moving-GC gate and MUST be main-line reachable (push:main or
     #    schedule). The checker cannot see through fromJSON(plan), so this is
     #    where that guarantee lives.
-    check("gc-stress reachable on push:main", sweep["jobs"]["gc_stress"] and sweep["gc_stress_mode"] == "full")
-    check("gc-stress reachable on schedule", full["jobs"]["gc_stress"] and full["gc_stress_mode"] == "full")
+    check("gc-stress reachable on push:main", sweep["jobs"]["gc_stress"] and sweep["gc_stress"]["mode"] == "all")
+    check("gc-stress reachable on schedule", full["jobs"]["gc_stress"] and full["gc_stress"]["mode"] == "all")
 
     # 5. Sabotage: the checker can fail.
     check("sabotage: a job cannot be in no tier", all(JOBS.values()))

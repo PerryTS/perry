@@ -653,6 +653,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           ./scripts/gc_repsel_matrix.sh --self-test-liveness-parser
+          python3 scripts/gc_repsel_matrix_merge.py --self-test
           python3 scripts/gc_matrix_liveness_check.py --self-test
           python3 scripts/gc_matrix_liveness_check.py --check-registry
 
@@ -1712,91 +1713,40 @@ jobs:
           }
 
   # ---------------------------------------------------------------------------
-  # GC write-barrier stress (optional / non-blocking)
+  # GC x representation-selection stress matrix
   #
-  # `crates/perry/tests/gc_write_barrier_stress.rs` runs compiled binaries
-  # under the slowest GC configuration (PERRY_GC_FORCE_EVACUATE +
-  # PERRY_GC_VERIFY_EVACUATION) to hunt a *rare* corruption window (#5029).
-  # Those tests are ~200s each and nondeterministic by nature, so they are a
-  # poor fit for the blocking per-PR `cargo-test` gate (one flake blocked
-  # every unrelated PR). They are `#[ignore]`d there and run here instead.
+  # This is the only CI execution of the requires=move allocation-point arms
+  # over the representation corpus. PRs run the high-signal subset; sweep and
+  # full tiers run every arm. The final job id remains `gc-stress`, a blocking
+  # input to the tier fan-in; scripts/gc_gate_wiring_check.py asserts it stays
+  # main-line reachable and able to fail (#7194).
   #
-  # The write-barrier stress tests stay opt-in + informational
-  # (`continue-on-error` on THEIR step, so a flake never fails the workflow).
-  #
-  # The job itself is no longer informational. It also runs the GC x
-  # representation-selection stress matrix (`scripts/gc_repsel_matrix.sh`),
-  # which IS a gate: until it existed, a representation could regress GC
-  # correctness and no CI job would say a word. Three weaknesses were fixed
-  # deliberately, and re-introducing any of them re-opens that hole:
-  #   1. job-level `continue-on-error: true` is gone (a gate that cannot fail
-  #      is not a gate); it now sits on the legacy write-barrier step only;
-  #   2. the `if:` no longer requires a `run-extended-tests` label, which is
-  #      why this job "skipped" on the representation PRs (#6911, #6925);
-  #   3. it no longer runs write-barrier stress *only* — nothing about the
-  #      representation corpus was covered before.
-  #
-  # Cost split: a PR runs the 4-arm subset, whose arms all share one
-  # compile-time environment, so the corpus is compiled ONCE and run four
-  # times. push / schedule / workflow_dispatch run the full arm list as the
-  # deeper net. NOTE: this job is not yet in branch protection's required
-  # contexts — adding it there is what makes the gate blocking.
-  #
-  # ***`schedule` IS LOAD-BEARING IN THE `if:` BELOW (#7194).*** Without it this
-  # job had NO main-line execution at all, and the hole is invisible from either
-  # end on its own:
-  #
-  #   * this workflow's `push:` trigger is TAGS ONLY — "Direct pushes to main do
-  #     NOT trigger tests", stated at the top of this file — so `push` in the
-  #     `if:` only ever means a release tag;
-  #   * the nightly cron, which the concurrency comment above calls "the only
-  #     backstop for integration-suite regressions a scoped PR run can't see",
-  #     fires as `schedule`, which the `if:` did not list. Measured: twelve
-  #     consecutive nightly `main` runs, `gc-stress` reported `skipped` in every
-  #     one.
-  #
-  # So between release tags, nothing in CI ran scripts/gc_repsel_matrix.sh on
-  # `main` — and the matrix is the only place the `requires=move`
-  # allocation-point arms execute over the representation corpus. That is how
-  # test_gap_repsel_p4a3_ptr_numarray stayed red on ten arms for over a week
-  # with no CI event to say so, forcing three separate PRs (#7193, #7233, #7196)
-  # to hand-exonerate the same seventy cells. This is CLAUDE.md hazard 4 in its
-  # purest form: the job existed, was correctly written, and its subject never
-  # ran. scripts/gc_gate_wiring_check.py asserts this from `lint` so it cannot
-  # silently come back.
+  # The legacy write-barrier corruption-window hunts remain in the final job as
+  # an informational continue-on-error step. Only that nondeterministic step is
+  # soft; matrix coverage, parity, liveness, and the GC instrument smoke gate.
   # ---------------------------------------------------------------------------
-  gc-stress:
+  # Build the base compiler/runtime once and share it with every matrix shard.
+  # Release run 33123474583 spent 11m41s here before the unsharded matrix even
+  # started; repeating that fixed cost in each worker would erase much of the
+  # sharding win (#8915).
+  gc-stress-build:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.gc_stress
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
-
       - name: Install clang
         run: |
           sudo apt-get update
           sudo apt-get install -y clang
-
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          # Single source of truth: .node-version at the repo root. Node is the
-          # matrix oracle (we byte-diff against it), so the version is a
-          # correctness input. scripts/gc_repsel_matrix.sh refuses to run when
-          # the running node disagrees with the pin — a test the oracle cannot
-          # run would drop out of the gate silently.
-          node-version-file: .node-version
-
       - name: Build perry + runtime staticlibs (release)
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
@@ -1804,37 +1754,141 @@ jobs:
           cargo build --release \
             -p perry -p perry-runtime -p perry-stdlib \
             -p perry-runtime-static -p perry-stdlib-static
+      - name: Upload shared GC matrix build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gc-repsel-release-build
+          path: |
+            target/release/perry
+            target/release/libperry_runtime.a
+            target/release/libperry_stdlib.a
+          if-no-files-found: error
+          retention-days: 1
 
-      # GATING. Fails the job on any new untriaged red cell. Cells whose GC arm
-      # was measurably inert are reported UNVERIFIED, never green (#6942,
-      # #6946, #6950) — the script asserts liveness from the collector's own
-      # PERRY_GC_TRACE / PERRY_GC_DIAG output rather than trusting the env var.
-      - name: GC x representation-selection matrix (PR subset)
-        if: fromJSON(needs.plan.outputs.plan).gc_stress_mode == 'pr'
-        run: ./scripts/gc_repsel_matrix.sh --no-build --arms pr --json gc-repsel-matrix.json
+  # Stable round-robin slices of test-parity/gc_repsel_corpus.txt. Full/sweep
+  # tiers use four shards; the PR subset uses one (scripts/ci_plan.py). Every
+  # shard still runs every selected arm, so the complete cross-product remains
+  # covered. fail-fast:false preserves evidence from all shards after a red.
+  gc-stress-shard:
+    name: gc-stress matrix (${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).gc_stress.total }})
+    needs: [plan, gc-stress-build]
+    if: >-
+      always() &&
+      fromJSON(needs.plan.outputs.plan).jobs.gc_stress &&
+      needs.gc-stress-build.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.plan).gc_stress.shards }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Per-shard auto-optimize archives are compile-environment-specific and
+      # stay local; the shared artifact supplies the base release build.
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: false
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          # Node is the byte-exact oracle; the script refuses a version that
+          # differs from the repository's single source of truth.
+          node-version-file: .node-version
+      - name: Download shared GC matrix build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: gc-repsel-release-build
+          path: target/release
+      - name: Ensure the downloaded compiler is executable
+        run: chmod +x target/release/perry
 
-      - name: GC x representation-selection matrix (full)
-        if: fromJSON(needs.plan.outputs.plan).gc_stress_mode == 'full'
-        run: ./scripts/gc_repsel_matrix.sh --no-build --arms all --json gc-repsel-matrix.json
+      # Liveness is corpus-wide, so a shard defers only that verdict to the
+      # strict fan-in below. GNU timeout fires before the job cap: TERM lets
+      # the harness record the active file/environment and completed cells,
+      # leaving time for the always() artifact upload.
+      - name: GC x representation-selection matrix shard ${{ matrix.shard }}
+        env:
+          MODE: ${{ fromJSON(needs.plan.outputs.plan).gc_stress.mode }}
+          SHARD: ${{ matrix.shard }}
+          TOTAL: ${{ fromJSON(needs.plan.outputs.plan).gc_stress.total }}
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=1m 75m \
+            ./scripts/gc_repsel_matrix.sh \
+              --no-build \
+              --arms "$MODE" \
+              --shard "$SHARD/$TOTAL" \
+              --defer-liveness \
+              --json "gc-repsel-matrix-$SHARD.json"
+      - name: Upload shard report and interruption progress
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: gc-repsel-matrix-shard-${{ matrix.shard }}
+          path: gc-repsel-matrix-${{ matrix.shard }}.json*
+          if-no-files-found: error
 
-      # GATING, and deliberately so. CLAUDE.md's GC knob kill-policy requires
-      # every GC knob to have an arm that exercises it; the #7154 instruments
-      # (PERRY_GC_PROTECT_FROMSPACE, PERRY_GC_SCHEDULE_SEED)
-      # would otherwise be dark knobs on the subsystem with this repo's worst
-      # history of configuration rot. This asserts BOTH defaults — inert with
-      # the knobs unset, live with them set — and refuses to pass unless the
-      # stress arms (the rate-1 seeded schedule, and the #7254 RATE=1 +
-      # VERIFY_EVACUATION pairing)
-      # forced strictly more collections than the pressure-only arm, so it
-      # cannot go green having run zero copying minors (the #6942 / #7024 /
-      # #7025 failure mode).
-      # The detection property itself is a required-gate unit test:
-      # gc/tests/fromspace_protect.rs::quarantine_catches_a_planted_stale_from_space_deref.
-      # Arms 1-3/5 use a fixture sized for ~1200 back-edge polls (not #7154's
-      # 240k), pinned to every-poll candidacy
-      # (PERRY_GC_SCHEDULE_ALLOC_KB=0). Arm 6 (#7728) is the budgeted one:
-      # a realistic poll count at the SHIPPED default, which is the axis that
-      # a ~1200-poll fixture structurally cannot see.
+  # Strict fan-in, retaining the historical job id that full-suite-gate needs.
+  # It rejects missing/duplicate/interrupted shards, proves every expected cell
+  # appears exactly once, then applies liveness to the reconstructed corpus.
+  gc-stress:
+    needs: [plan, gc-stress-build, gc-stress-shard]
+    if: ${{ always() && fromJSON(needs.plan.outputs.plan).jobs.gc_stress }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Download GC matrix shard evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: gc-repsel-matrix-shard-*
+          path: gc-repsel-shards
+      - name: Merge shards and enforce complete coverage + liveness
+        env:
+          EXPECT: ${{ fromJSON(needs.plan.outputs.plan).gc_stress.total }}
+          MODE: ${{ fromJSON(needs.plan.outputs.plan).gc_stress.mode }}
+        run: |
+          set -euo pipefail
+          python3 scripts/gc_repsel_matrix_merge.py --self-test
+          python3 scripts/gc_repsel_matrix_merge.py \
+            --expect "$EXPECT" \
+            --mode "$MODE" \
+            --output gc-repsel-matrix.json \
+            gc-repsel-shards/gc-repsel-matrix-shard-*/gc-repsel-matrix-*.json
+
+      # The remaining GC stress arms are aggregate-only. Repeating them in
+      # every matrix shard would add cost without increasing their coverage.
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: false
+      - name: Install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+      - name: Download shared GC matrix build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: gc-repsel-release-build
+          path: target/release
+      - name: Ensure the downloaded compiler is executable
+        run: chmod +x target/release/perry
+
+      # GATING. The kill-policy requires every GC knob to have a live arm;
+      # gc_instrument_smoke asserts both the default-inert and stressed-live
+      # sides of the from-space/schedule instruments.
       - name: GC rooting-bug instruments (inert-when-off, live-when-on)
         run: ./scripts/gc_instrument_smoke.sh target/release/perry
 
@@ -1843,12 +1897,10 @@ jobs:
         # hunts (#5029). Kept out of the gate so a flake never blocks a PR.
         continue-on-error: true
         env:
-          # Match the cargo-test gate's linker workaround (lld SIGBUS on the
-          # shared runner during large test links).
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
         run: cargo test -p perry --test gc_write_barrier_stress -- --ignored
 
-      - name: Upload matrix report
+      - name: Upload merged matrix report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

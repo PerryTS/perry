@@ -70,6 +70,7 @@
 #   scripts/gc_repsel_matrix.sh [--arms pr|all|<csv>] [--filter <substr>]
 #                               [--pressure <MB>] [--jobs N] [--no-build]
 #                               [--profile <cargo profile>] [--json <path>]
+#                               [--shard N/M] [--defer-liveness]
 #                               [--list-arms] [--liveness-report-only]
 #                               [--self-test-liveness-parser]
 set -uo pipefail
@@ -112,6 +113,9 @@ JSON_OUT=""
 PROFILE="release"
 LIVENESS_REPORT_ONLY=0
 SELF_TEST_LIVENESS_PARSER=0
+SHARD_INDEX=1
+SHARD_COUNT=1
+DEFER_LIVENESS=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -122,6 +126,21 @@ while [ $# -gt 0 ]; do
         --profile) PROFILE="$2"; shift 2 ;;
         --no-build) DO_BUILD=0; shift ;;
         --json) JSON_OUT="$2"; shift 2 ;;
+        --shard)
+            shard_spec="$2"
+            SHARD_INDEX="${shard_spec%%/*}"
+            SHARD_COUNT="${shard_spec#*/}"
+            if [ "$shard_spec" != "$SHARD_INDEX/$SHARD_COUNT" ]; then
+                echo "invalid --shard '$shard_spec' (expected N/M)" >&2
+                exit 2
+            fi
+            shift 2
+            ;;
+        # A shard cannot make a corpus-wide liveness claim: the few tests on
+        # it may legitimately be inert for an arm that bites elsewhere. CI
+        # passes this on every shard and runs the gate once on the strict
+        # fan-in report produced by gc_repsel_matrix_merge.py.
+        --defer-liveness) DEFER_LIVENESS=1; shift ;;
         --list-arms) ARMS_SEL="__list__"; shift ;;
         --self-test-liveness-parser) SELF_TEST_LIVENESS_PARSER=1; shift ;;
         # Local exploration only (e.g. a `--filter` narrow enough that an arm
@@ -132,6 +151,58 @@ while [ $# -gt 0 ]; do
         *) echo "unknown flag: $1" >&2; exit 2 ;;
     esac
 done
+
+case "$SHARD_INDEX:$SHARD_COUNT" in
+    *[!0-9:]*|:*|*:)
+        echo "invalid --shard '$SHARD_INDEX/$SHARD_COUNT' (expected positive integers)" >&2
+        exit 2
+        ;;
+esac
+if [ "$SHARD_INDEX" -lt 1 ] || [ "$SHARD_COUNT" -lt 1 ] || [ "$SHARD_INDEX" -gt "$SHARD_COUNT" ]; then
+    echo "invalid --shard '$SHARD_INDEX/$SHARD_COUNT' (require 1 <= N <= M)" >&2
+    exit 2
+fi
+if [ "$DEFER_LIVENESS" = 1 ] && [ -z "$JSON_OUT" ]; then
+    echo "--defer-liveness requires --json so the fan-in has evidence to check" >&2
+    exit 2
+fi
+
+# Keep a durable, append-only breadcrumb beside the final JSON. The report is
+# intentionally written only when complete (the fan-in rejects a missing one),
+# while this file survives a TERM/INT and tells an interrupted CI shard exactly
+# which file/environment was active plus every completed cell's counters.
+PROGRESS_OUT=""
+if [ -n "$JSON_OUT" ]; then
+    PROGRESS_OUT="$JSON_OUT.progress.log"
+    : > "$PROGRESS_OUT"
+fi
+progress() {
+    [ -n "$PROGRESS_OUT" ] || return 0
+    printf '%s shard=%s/%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "$SHARD_INDEX" "$SHARD_COUNT" "$*" >> "$PROGRESS_OUT"
+}
+progress "start arms=$ARMS_SEL filter=${FILTER:-<none>}"
+
+WORK=""
+cleanup() {
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        progress "exit status=$rc (final JSON may be absent; this log is the partial evidence)"
+    fi
+    # WORK is assigned only from mktemp below. Keep the empty guard explicit:
+    # this trap is intentionally armed before registration/oracle checks so an
+    # early interruption is preserved too.
+    [ -z "$WORK" ] || rm -rf "$WORK"
+}
+on_signal() {
+    signal="$1"; status="$2"
+    progress "interrupted signal=$signal"
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'on_signal INT 130' INT
+trap 'on_signal TERM 143' TERM
+trap 'on_signal HUP 129' HUP
 
 if [ "$SELF_TEST_LIVENESS_PARSER" = 1 ]; then
     got="$(sum_copy_minor_moved <<'EOF'
@@ -368,6 +439,22 @@ if [ -n "$FILTER" ]; then
 fi
 [ "${#CORPUS[@]}" -gt 0 ] || { echo "empty corpus after filter" >&2; exit 2; }
 
+CORPUS_TOTAL="${#CORPUS[@]}"
+if [ "$SHARD_COUNT" -gt 1 ]; then
+    SHARDED=()
+    corpus_i=0
+    for b in "${CORPUS[@]}"; do
+        if [ $((corpus_i % SHARD_COUNT + 1)) -eq "$SHARD_INDEX" ]; then
+            SHARDED+=("$b")
+        fi
+        corpus_i=$((corpus_i+1))
+    done
+    CORPUS=(${SHARDED[@]+"${SHARDED[@]}"})
+fi
+[ "${#CORPUS[@]}" -gt 0 ] || { echo "empty corpus in shard $SHARD_INDEX/$SHARD_COUNT" >&2; exit 2; }
+echo "==> shard $SHARD_INDEX/$SHARD_COUNT: ${#CORPUS[@]}/$CORPUS_TOTAL corpus files (stable manifest round-robin)"
+progress "selected files=${#CORPUS[@]} corpus_total=$CORPUS_TOTAL"
+
 # ---------------------------------------------------------------------------
 # Oracle + compiler.  THE ORACLE VERSION IS LOAD-BEARING: a test the oracle
 # cannot run would drop out of the gate silently, so refuse to run at all.
@@ -392,15 +479,21 @@ fi
 [ -x "$PERRY_BIN" ] || { echo "${RED}missing $PERRY_BIN${NC}" >&2; exit 2; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/perry-gcmatrix.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/oracle" "$WORK/bin" "$WORK/out"
 
 echo "==> oracle: node $NODE_V x ${#CORPUS[@]} corpus files"
 oracle_fail=0
+oracle_i=0
 for b in "${CORPUS[@]}"; do
+    oracle_i=$((oracle_i+1))
+    echo "  oracle [$oracle_i/${#CORPUS[@]}] $b"
+    progress "oracle-start test=$b"
     if ! node --experimental-strip-types "test-files/$b.ts" > "$WORK/oracle/$b.out" 2>/dev/null; then
         echo "${RED}ORACLE FAIL${NC} node cannot run test-files/$b.ts -- it would drop out of the gate" >&2
         oracle_fail=1
+        progress "oracle-result test=$b result=FAIL"
+    else
+        progress "oracle-result test=$b result=PASS"
     fi
 done
 [ "$oracle_fail" = 0 ] || exit 2
@@ -434,8 +527,10 @@ NARMS="${#ARM_IDS[@]}"
 # are handled below).
 echo "==> warming the auto-optimize archive"
 mkdir -p "$WORK/bin/_warm"
+progress "compile-start env=_warm test=${CORPUS[0]}"
 "$PERRY_BIN" "test-files/${CORPUS[0]}.ts" -o "$WORK/bin/_warm/warm" > "$WORK/bin/_warm/warm.log" 2>&1 \
     || { echo "${RED}warm-up compile failed${NC} (see $WORK/bin/_warm/warm.log)" >&2; }
+progress "compile-result env=_warm test=${CORPUS[0]} result=$([ -x "$WORK/bin/_warm/warm" ] && echo PASS || echo FAIL)"
 
 echo "==> compiling ${#CORPUS[@]} files x ${#GROUP_SLUGS[@]} compile-env groups (jobs=$JOBS)"
 gi=0
@@ -443,8 +538,9 @@ while [ "$gi" -lt "${#GROUP_SLUGS[@]}" ]; do
     slug="${GROUP_SLUGS[$gi]}"; cenv="${GROUP_ENVS[$gi]}"
     mkdir -p "$WORK/bin/$slug"
     printf '%s\n' "${CORPUS[@]}" | WORK="$WORK" PERRY_BIN="$PERRY_BIN" CENV="$cenv" SLUG="$slug" \
+        PROGRESS_OUT="$PROGRESS_OUT" SHARD_INDEX="$SHARD_INDEX" SHARD_COUNT="$SHARD_COUNT" \
         xargs -P "$JOBS" -I{} sh -c \
-        'env $CENV "$PERRY_BIN" "test-files/$1.ts" -o "$WORK/bin/$SLUG/$1" > "$WORK/bin/$SLUG/$1.log" 2>&1 || echo "COMPILEFAIL $SLUG $1"' _ {}
+        'echo "  compile env=$SLUG test=$1"; [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-start env=%s test=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" >> "$PROGRESS_OUT"; if env $CENV "$PERRY_BIN" "test-files/$1.ts" -o "$WORK/bin/$SLUG/$1" > "$WORK/bin/$SLUG/$1.log" 2>&1; then [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-result env=%s test=%s result=PASS\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" >> "$PROGRESS_OUT"; else echo "COMPILEFAIL $SLUG $1"; [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-result env=%s test=%s result=FAIL\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" >> "$PROGRESS_OUT"; fi' _ {}
     gi=$((gi+1))
 done
 
@@ -477,6 +573,8 @@ while [ "$ai" -lt "$NARMS" ]; do
     ti=0
     while [ "$ti" -lt "${#CORPUS[@]}" ]; do
         b="${CORPUS[$ti]}"; bin="$WORK/bin/$slug/$b"; idx=$((ti*NARMS+ai))
+        echo "  run [$((ti+1))/${#CORPUS[@]}] test=$b env=$slug arm=$id"
+        progress "cell-start test=$b env=$slug arm=$id"
         cycles=0; evacuated=0; scavenged=0
         if [ ! -x "$bin" ]; then
             result="FAIL"; ev="compile-failed"
@@ -590,6 +688,7 @@ while [ "$ai" -lt "$NARMS" ]; do
             XFAIL) n_xfail=$((n_xfail+1)); echo "  ${YELLOW}XFAIL${NC} $b" ;;
             FAIL)  n_fail=$((n_fail+1)); echo "  ${RED}FAIL${NC} $b ($ev)" ;;
         esac
+        progress "cell-result test=$b env=$slug arm=$id result=$result $ev"
         ti=$((ti+1))
     done
     ai=$((ai+1))
@@ -675,7 +774,8 @@ echo "  UNVER = output matched but the arm was inert here; see #6942 / #6946 / #
 # A gate that runs only when someone remembered a flag is not a gate.
 JSON_REPORT="${JSON_OUT:-$WORK/matrix.json}"
 {
-    printf '{"node":"%s","pressure_mb":"%s","arms":[' "$NODE_V" "$PRESSURE_MB"
+    printf '{"node":"%s","pressure_mb":"%s","complete":true,"shard":{"index":%d,"count":%d,"corpus_total":%d,"corpus_selected":%d},"arms":[' \
+        "$NODE_V" "$PRESSURE_MB" "$SHARD_INDEX" "$SHARD_COUNT" "$CORPUS_TOTAL" "${#CORPUS[@]}"
     ai=0
     while [ "$ai" -lt "$NARMS" ]; do
         [ "$ai" = 0 ] || printf ','
@@ -704,6 +804,7 @@ JSON_REPORT="${JSON_OUT:-$WORK/matrix.json}"
         "$n_pass" "$n_unver" "$n_xfail" "$n_fail"
 } > "$JSON_REPORT"
 [ -n "$JSON_OUT" ] && echo "json: $JSON_OUT"
+progress "report-complete cells=$n_cells pass=$n_pass unver=$n_unver xfail=$n_xfail fail=$n_fail path=$JSON_REPORT"
 
 # ---------------------------------------------------------------------------
 # LIVENESS GATE (#7255). Half of this script's exit status.
@@ -717,7 +818,10 @@ JSON_REPORT="${JSON_OUT:-$WORK/matrix.json}"
 # ---------------------------------------------------------------------------
 echo
 liveness_rc=0
-if command -v python3 > /dev/null 2>&1; then
+if [ "$DEFER_LIVENESS" = 1 ]; then
+    echo "liveness gate: deferred to gc_repsel_matrix_merge.py over all $SHARD_COUNT shard report(s)"
+    progress "liveness-deferred"
+elif command -v python3 > /dev/null 2>&1; then
     liveness_args=""
     [ "$LIVENESS_REPORT_ONLY" = 1 ] && liveness_args="--report-only"
     # shellcheck disable=SC2086

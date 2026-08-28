@@ -53,10 +53,17 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 GATES = [
     (
         ".github/workflows/test.yml",
-        "gc-stress",
+        "gc-stress-shard",
         "scripts/gc_repsel_matrix.sh — the GC x representation-selection matrix, "
         "and the only CI execution of the requires=move allocation-point arms "
         "over the representation corpus",
+    ),
+    (
+        ".github/workflows/test.yml",
+        "gc-stress",
+        "scripts/gc_repsel_matrix_merge.py — the strict matrix fan-in that "
+        "rejects missing shards and enforces corpus-wide liveness before "
+        "full-suite-gate can pass",
     ),
     (
         ".github/workflows/gc-moving-witnesses.yml",
