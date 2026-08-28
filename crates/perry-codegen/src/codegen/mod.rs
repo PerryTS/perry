@@ -1164,15 +1164,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // first (walking from deepest ancestor down) so the slot
         // order matches `class_field_global_index`'s assumption.
         let mut packed_keys = String::new();
-        // Skip computed-key fields (`[Symbol.for("k")] = …`): their key is an
-        // expression evaluated at runtime, not a stable string, so they don't
-        // get an inline slot. Including their synthetic `__computed_field_*`
-        // names in the packed keys would surface them as enumerable own
-        // properties via Object.keys() and inflate the inline-slot count.
-        // Their values are stored via `apply_field_initializers_recursive`'s
-        // IndexSet path → js_object_set_field / js_object_set_symbol_property.
+        // Skip computed-key fields (`[Symbol.for("k")] = …`) and private
+        // fields. Computed keys are evaluated at construction time; private
+        // fields live in class-id-qualified runtime storage installed by
+        // `js_private_field_add`. Neither is a public inline shape key.
+        // Including either synthetic/source spelling in packed keys leaks it
+        // through reflection and inflates/misaligns the inline-slot layout.
         let count_keyable = |fields: &[perry_hir::ClassField]| -> u32 {
-            fields.iter().filter(|f| f.key_expr.is_none()).count() as u32
+            fields
+                .iter()
+                .filter(|f| f.key_expr.is_none() && !f.is_private)
+                .count() as u32
         };
         let mut total_field_count = count_keyable(&c.fields);
         // (parent_name, resolved_fields) captured during the chain walk so we
@@ -1251,7 +1253,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // (which would risk re-picking the wrong same-named stub).
         for (_parent_name, parent_fields) in parent_chain.iter().rev() {
             for f in parent_fields {
-                if f.key_expr.is_some() {
+                if f.key_expr.is_some() || f.is_private {
                     continue;
                 }
                 packed_keys.push_str(&f.name);
@@ -1259,7 +1261,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             }
         }
         for f in &c.fields {
-            if f.key_expr.is_some() {
+            if f.key_expr.is_some() || f.is_private {
                 continue;
             }
             packed_keys.push_str(&f.name);
@@ -1351,7 +1353,13 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         );
         class_keys_globals_map.insert(c.name.clone(), global_name.clone());
         let mut packed_keys = String::new();
-        let mut total_field_count = c.fields.len() as u32;
+        let keyable_count = |fields: &[perry_hir::ClassField]| -> u32 {
+            fields
+                .iter()
+                .filter(|f| f.key_expr.is_none() && !f.is_private)
+                .count() as u32
+        };
+        let mut total_field_count = keyable_count(&c.fields);
         // Issue #485: imported subclass stubs also need their parent's
         // fields prepended to the packed-keys, so allocations on this
         // importing side reserve enough inline slots for parent +
@@ -1379,12 +1387,12 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 resolve_parent(&parent_name, child_prefix.as_deref())
             {
                 parent_chain.push((parent_name.clone(), parent_fields.clone()));
-                total_field_count += parent_fields.len() as u32;
+                total_field_count += keyable_count(&parent_fields);
                 p = parent_extends;
                 child_prefix = Some(parent_prefix);
             } else if let Some(parent) = hir.classes.iter().find(|cls| cls.name == parent_name) {
                 parent_chain.push((parent_name.clone(), parent.fields.clone()));
-                total_field_count += parent.fields.len() as u32;
+                total_field_count += keyable_count(&parent.fields);
                 p = parent.extends_name.clone();
                 child_prefix = Some(module_prefix.clone());
             } else {
@@ -1393,11 +1401,17 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
         for (_parent_name, parent_fields) in parent_chain.iter().rev() {
             for f in parent_fields {
+                if f.key_expr.is_some() || f.is_private {
+                    continue;
+                }
                 packed_keys.push_str(&f.name);
                 packed_keys.push('\0');
             }
         }
         for f in &c.fields {
+            if f.key_expr.is_some() || f.is_private {
+                continue;
+            }
             packed_keys.push_str(&f.name);
             packed_keys.push('\0');
         }

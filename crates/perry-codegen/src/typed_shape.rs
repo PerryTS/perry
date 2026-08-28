@@ -298,7 +298,10 @@ fn typed_layout_from_fields<'a>(
     let mut pointer_mask_words = Vec::new();
     let mut slot_count = 0u32;
     for field in fields {
-        if field.key_expr.is_some() {
+        // Computed fields and private fields are initialized through runtime
+        // storage, not the public inline slots represented by this descriptor.
+        // Keep the mask indices in lockstep with the packed class keys.
+        if field.key_expr.is_some() || field.is_private {
             continue;
         }
         let slot = slot_count as usize;

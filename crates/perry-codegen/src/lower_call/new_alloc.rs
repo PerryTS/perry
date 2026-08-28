@@ -173,7 +173,13 @@ fn emit_instance_alloc_inner(
     // Compute total field count including inherited parent fields.
     // The runtime allocates at least 8 inline slots regardless, so this
     // mostly matters for shapes >8 fields.
-    let mut field_count = class.fields.len() as u32;
+    let public_keyable_count = |fields: &[perry_hir::ClassField]| -> u32 {
+        fields
+            .iter()
+            .filter(|field| field.key_expr.is_none() && !field.is_private)
+            .count() as u32
+    };
+    let mut field_count = public_keyable_count(&class.fields);
     // Imported classes now carry their real field_names from the source
     // module. If the field count is still 0 (no fields info available),
     // use a generous default as a safety net.
@@ -183,7 +189,7 @@ fn emit_instance_alloc_inner(
     let mut parent = class.extends_name.as_deref();
     while let Some(parent_name) = parent {
         if let Some(p) = ctx.classes.get(parent_name).copied() {
-            field_count += p.fields.len() as u32;
+            field_count += public_keyable_count(&p.fields);
             parent = p.extends_name.as_deref();
         } else {
             break;
@@ -306,7 +312,7 @@ fn emit_instance_alloc_inner(
         // inline bump-alloc fast path (which would bake the wrong layout).
         let mut packed_keys = String::new();
         for f in &class.fields {
-            if f.key_expr.is_some() {
+            if f.key_expr.is_some() || f.is_private {
                 continue;
             }
             packed_keys.push_str(&f.name);
@@ -688,15 +694,12 @@ fn emit_instance_alloc_inner(
                 break;
             }
         }
-        // Skip computed-key fields: their key is an expression evaluated at
-        // construction time, not a stable string, so they don't get an inline
-        // slot. The runtime stores them via IndexSet → js_object_set_field /
-        // js_object_set_symbol_property paths in `apply_field_initializers_recursive`.
-        // Including their synthetic `__computed_field_*` names in packed_keys
-        // would surface them as enumerable own properties on Object.keys().
+        // Skip computed and private fields: both are initialized through
+        // dedicated runtime paths and neither belongs in the public inline
+        // shape exposed by Object.keys/getOwnPropertyNames.
         for pc in parent_chain.iter().rev() {
             for f in &pc.fields {
-                if f.key_expr.is_some() {
+                if f.key_expr.is_some() || f.is_private {
                     continue;
                 }
                 packed_keys.push_str(&f.name);
@@ -704,7 +707,7 @@ fn emit_instance_alloc_inner(
             }
         }
         for f in &class.fields {
-            if f.key_expr.is_some() {
+            if f.key_expr.is_some() || f.is_private {
                 continue;
             }
             packed_keys.push_str(&f.name);

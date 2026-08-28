@@ -244,7 +244,20 @@ pub(crate) fn lower_assign_target_to_expr(
                     Ok(Expr::IndexGet { object, index })
                 }
                 ast::MemberProp::PrivateName(private) => {
-                    let property = format!("#{}", private.name);
+                    // A compound/logical assignment reads the target before
+                    // writing it back. Private fields do not live under their
+                    // source spelling (`#n`): use the same guarded, class-id-
+                    // qualified storage lookup as an ordinary `this.#n` read.
+                    // Reading `#n` as a public property returns `undefined`,
+                    // which made `this.#n += 1` store NaN in the real slot.
+                    let private_name = format!("#{}", private.name);
+                    let object = crate::lower::wrap_private_guard(
+                        ctx,
+                        object,
+                        &private_name,
+                        crate::lower::PRIV_OP_READ,
+                    );
+                    let property = crate::lower::private_storage_property(ctx, &private_name);
                     Ok(Expr::PropertyGet {
                         byte_offset: 0,
                         object,

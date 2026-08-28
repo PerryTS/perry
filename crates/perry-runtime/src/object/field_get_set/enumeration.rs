@@ -1368,6 +1368,12 @@ pub(crate) unsafe fn instance_private_key_hidden(
 /// prefix test would wrongly hide legitimate user properties whose name happens
 /// to begin with `__perry_` (e.g. `this.__perry_user = 1`).
 ///
+/// `#<perry:private-member:…>` is deliberately NOT in this list. It is a
+/// transient compiler routing key for private method/accessor operations; the
+/// runtime consumes it only when a matching private-access hint is pending and
+/// never installs it as private object storage. Without a hint, that spelling
+/// is ordinary user data and must remain visible to reflection.
+///
 /// The one prefix family is `__perry_native_super__<method>` (#6316): the native
 /// base method a subclass override displaced. Its key set is parameterized by
 /// method name, so an exact allowlist cannot enumerate it. The prefix is a
@@ -1386,7 +1392,6 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
         || b == b"#<perry:class-evaluation-prototype>"
         || b == b"#<perry:private-class-lexical-binding>"
         || b.starts_with(b"#<perry:private-brand:")
-        || b.starts_with(b"#<perry:private-member:")
         || b.starts_with(b"#<perry:private-field:")
         || b.starts_with(b"#<perry:private-value:")
         || b.starts_with(b"#<perry:class-evaluation-method:")
