@@ -409,6 +409,18 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
         ir.contains("tav.get.brand") && ir.contains("arrlike.ic.family_token"),
         "an integer key must reach the inline typed-array and dense-subclass tiers:\n{ir}"
     );
+    // The elements-backed subclass probe sits ahead of the shape IC: meta
+    // word → `ObjectMeta.elements` (word 12) → inner-array bounds → slot.
+    let store = super::class_field_barrier_tests::block_body(&ir, "arrlike.elem.store.")
+        .expect("the elements-store probe block exists");
+    assert!(
+        store.contains("getelementptr i64, ptr %") && store.contains(", i64 12"),
+        "the probe must load ObjectMeta.elements at word 12:\n{store}"
+    );
+    assert!(
+        ir.contains("arrlike.elem.bounds") && ir.contains("arrlike.elem.load"),
+        "the probe must bounds-check and load from the inner array:\n{ir}"
+    );
     assert!(
         ir.contains("call double @js_array_get_index_or_string("),
         "non-index keys must keep the complete key route:\n{ir}"

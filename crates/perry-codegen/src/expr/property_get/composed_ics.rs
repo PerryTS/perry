@@ -223,7 +223,54 @@ pub(super) fn emit_array_subclass_length_ic(
     let forwarded = ctx.block().and(I8, &gc_flags, "128");
     let not_forwarded = ctx.block().icmp_eq(I8, &forwarded, "0");
     let header_ok = ctx.block().and(I1, &is_object, &not_forwarded);
-    ctx.block().cond_br(&header_ok, &shape_label, &miss_label);
+    // An elements-backed Array-subclass instance (`ObjectMeta.elements`):
+    // `length` is the inner Array's length word — no shape IC. A probe miss
+    // (no meta, no store) is the shape-carried form and keeps the IC below.
+    let elem_meta_idx = ctx.new_block("plen.elem.meta");
+    let elem_store_idx = ctx.new_block("plen.elem.store");
+    let elem_length_idx = ctx.new_block("plen.elem.length");
+    let elem_meta_label = ctx.block_label(elem_meta_idx);
+    let elem_store_label = ctx.block_label(elem_store_idx);
+    let elem_length_label = ctx.block_label(elem_length_idx);
+    ctx.block()
+        .cond_br(&header_ok, &elem_meta_label, &miss_label);
+    ctx.current_block = elem_meta_idx;
+    let elem_meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        4
+    } else {
+        8
+    };
+    let elem_meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
+        - elem_meta_ptr_size)
+        .to_string();
+    let elem_meta_addr = ctx.block().add(I64, recv_handle, &elem_meta_offset);
+    let elem_meta_slot_ptr = ctx.block().inttoptr(I64, &elem_meta_addr);
+    let elem_meta_loaded = ctx.block().load(
+        if elem_meta_ptr_size == 4 { I32 } else { I64 },
+        &elem_meta_slot_ptr,
+    );
+    let elem_meta_i64 = if elem_meta_ptr_size == 4 {
+        ctx.block().zext(I32, &elem_meta_loaded, I64)
+    } else {
+        elem_meta_loaded
+    };
+    let elem_has_meta = ctx.block().icmp_ne(I64, &elem_meta_i64, "0");
+    ctx.block()
+        .cond_br(&elem_has_meta, &elem_store_label, &shape_label);
+    ctx.current_block = elem_store_idx;
+    let elem_meta_ptr = ctx.block().inttoptr(I64, &elem_meta_i64);
+    // `ObjectMeta.elements` is word 12 (offset 96; const-asserted in the runtime).
+    let elem_store_slot_ptr = ctx.block().gep(I64, &elem_meta_ptr, &[(I64, "12")]);
+    let elem_store_i64 = ctx.block().load(I64, &elem_store_slot_ptr);
+    let elem_has_store = ctx.block().icmp_ne(I64, &elem_store_i64, "0");
+    ctx.block()
+        .cond_br(&elem_has_store, &elem_length_label, &shape_label);
+    ctx.current_block = elem_length_idx;
+    let elem_store_ptr = ctx.block().inttoptr(I64, &elem_store_i64);
+    let elem_length_i32 = ctx.block().load(I32, &elem_store_ptr);
+    let elem_length = ctx.block().uitofp(I32, &elem_length_i32, DOUBLE);
+    let elem_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
 
     ctx.current_block = shape_idx;
     let object_ptr = ctx.block().inttoptr(I64, recv_handle);
@@ -358,6 +405,7 @@ pub(super) fn emit_array_subclass_length_ic(
     let length = ctx.block().phi(
         DOUBLE,
         &[
+            (&elem_length, &elem_end),
             (&inline_length, &inline_end),
             (&spilled_length, &spill_end),
             (&miss_length, &miss_end),

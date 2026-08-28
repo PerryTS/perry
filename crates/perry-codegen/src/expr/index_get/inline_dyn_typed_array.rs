@@ -438,9 +438,90 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     ctx.block()
         .cond_br(&header_ok, &object_brand_label, &object_miss_label);
 
+    // An elements-backed Array-subclass instance (`ObjectMeta.elements`,
+    // perry-runtime `array/subclass_elements.rs`): its indexed elements live
+    // in a real Array hanging off the meta record, so the read is the plain
+    // Array read on that inner array — no shape IC, no family token. A miss
+    // of this probe (no meta, no store) is the shape-carried form and keeps
+    // the IC below; an out-of-bounds index or a hole goes to the complete
+    // dispatcher (prototype chain).
+    let elem_meta_idx = ctx.new_block("arrlike.elem.meta");
+    let elem_store_idx = ctx.new_block("arrlike.elem.store");
+    let elem_bounds_idx = ctx.new_block("arrlike.elem.bounds");
+    let elem_load_idx = ctx.new_block("arrlike.elem.load");
+    let elem_value_idx = ctx.new_block("arrlike.elem.value");
+    let elem_meta_label = ctx.block_label(elem_meta_idx);
+    let elem_store_label = ctx.block_label(elem_store_idx);
+    let elem_bounds_label = ctx.block_label(elem_bounds_idx);
+    let elem_load_label = ctx.block_label(elem_load_idx);
+    let elem_value_label = ctx.block_label(elem_value_idx);
     ctx.current_block = object_brand_idx;
     ctx.block()
-        .cond_br(&is_array, &object_array_guard_label, &object_shape_label);
+        .cond_br(&is_array, &object_array_guard_label, &elem_meta_label);
+    ctx.current_block = elem_meta_idx;
+    let elem_meta_addr = ctx.block().add(I64, &object_raw, &meta_offset);
+    let elem_meta_slot_ptr = ctx.block().inttoptr(I64, &elem_meta_addr);
+    let elem_meta_loaded = ctx.block().load(
+        if meta_ptr_size == 4 { I32 } else { I64 },
+        &elem_meta_slot_ptr,
+    );
+    let elem_meta_i64 = if meta_ptr_size == 4 {
+        ctx.block().zext(I32, &elem_meta_loaded, I64)
+    } else {
+        elem_meta_loaded
+    };
+    let elem_has_meta = ctx.block().icmp_ne(I64, &elem_meta_i64, "0");
+    ctx.block()
+        .cond_br(&elem_has_meta, &elem_store_label, &object_shape_label);
+    ctx.current_block = elem_store_idx;
+    let elem_meta_ptr = ctx.block().inttoptr(I64, &elem_meta_i64);
+    // `ObjectMeta.elements` is word 12 (offset 96; pinned by a const assert
+    // in perry-runtime `object/mod.rs`).
+    let elem_store_slot_ptr = ctx.block().gep(I64, &elem_meta_ptr, &[(I64, "12")]);
+    let elem_store_i64 = ctx.block().load(I64, &elem_store_slot_ptr);
+    let elem_has_store = ctx.block().icmp_ne(I64, &elem_store_i64, "0");
+    ctx.block()
+        .cond_br(&elem_has_store, &elem_bounds_label, &object_shape_label);
+    ctx.current_block = elem_bounds_idx;
+    let elem_type_addr = ctx.block().sub(I64, &elem_store_i64, "8");
+    let elem_type_ptr = ctx.block().inttoptr(I64, &elem_type_addr);
+    let elem_type = ctx.block().load(I8, &elem_type_ptr);
+    let elem_is_array = ctx.block().icmp_eq(I8, &elem_type, "1");
+    let elem_flags_addr = ctx.block().sub(I64, &elem_store_i64, "7");
+    let elem_flags_ptr = ctx.block().inttoptr(I64, &elem_flags_addr);
+    let elem_flags = ctx.block().load(I8, &elem_flags_ptr);
+    let elem_fwd = ctx.block().and(I8, &elem_flags, "128");
+    let elem_not_fwd = ctx.block().icmp_eq(I8, &elem_fwd, "0");
+    let elem_store_ptr = ctx.block().inttoptr(I64, &elem_store_i64);
+    let elem_length = ctx.block().load(I32, &elem_store_ptr);
+    let elem_length_i64 = ctx.block().zext(I32, &elem_length, I64);
+    let elem_in_bounds = ctx.block().icmp_ult(I64, &object_idx_i64, &elem_length_i64);
+    let elem_ok = ctx.block().and(I1, &elem_is_array, &elem_not_fwd);
+    let elem_ok = ctx.block().and(I1, &elem_ok, &elem_in_bounds);
+    ctx.block()
+        .cond_br(&elem_ok, &elem_load_label, &object_miss_label);
+    ctx.current_block = elem_load_idx;
+    let elem_bytes = ctx.block().shl(I64, &object_idx_i64, "3");
+    let elem_elements_addr = ctx.block().add(I64, &elem_store_i64, "8");
+    let elem_addr = ctx.block().add(I64, &elem_elements_addr, &elem_bytes);
+    let elem_ptr = ctx.block().inttoptr(I64, &elem_addr);
+    let elem_raw = ctx.block().load(DOUBLE, &elem_ptr);
+    let elem_bits = ctx.block().bitcast_double_to_i64(&elem_raw);
+    let elem_is_hole = ctx
+        .block()
+        .icmp_eq(I64, &elem_bits, crate::nanbox::TAG_HOLE_I64);
+    ctx.block()
+        .cond_br(&elem_is_hole, &object_miss_label, &elem_value_label);
+    ctx.current_block = elem_value_idx;
+    let elem_value = if coerce_slow_to_number {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &elem_raw)])
+    } else {
+        elem_raw
+    };
+    let elem_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+    kind_incoming.push((elem_value, elem_end_label));
 
     // Ordinary Array: the receiver tag and forwarding state were checked in
     // the predecessor.  Reject descriptors or any process-wide prototype

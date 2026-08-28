@@ -1663,6 +1663,11 @@ pub(crate) unsafe fn object_is_shaped(obj: *const ObjectHeader) -> bool {
 const _: () = assert!(std::mem::offset_of!(ObjectMeta, spill) == 32);
 const _: () = assert!(std::mem::offset_of!(ObjectMeta, array_subclass_named_prefix_token) == 48);
 const _: () = assert!(std::mem::offset_of!(ObjectMeta, array_tail_object_hot) == 56);
+// The Array-subclass elements store: codegen's inline `elem.*` tiers load
+// `ObjectHeader.meta` then this word (perry-codegen `expr/index_get` and
+// `property_get/composed_ics.rs`). Keep in lock-step.
+const _: () = assert!(std::mem::offset_of!(ObjectMeta, elements) == 96);
+const _: () = assert!(std::mem::offset_of!(ObjectHeader, meta) == 8);
 const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 
 /// Fetch-or-allocate the per-object meta record. Caller must have already

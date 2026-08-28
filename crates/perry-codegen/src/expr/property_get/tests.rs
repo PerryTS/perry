@@ -860,3 +860,26 @@ fn generic_non_size_read_has_no_collection_layout_load() {
         "only `.size` may grow the native collection fast path:\n{ir}"
     );
 }
+
+/// The object-backed `.length` tier probes the elements-backed subclass store
+/// first: meta word → `ObjectMeta.elements` (word 12) → the inner Array's
+/// `length` word — and only then the shape/family IC.
+#[test]
+fn the_length_tier_probes_the_elements_store_before_the_shape_ic() {
+    let ir = emit_guarded_length_read();
+    assert!(
+        ir.contains("plen.elem.meta") && ir.contains("plen.elem.length"),
+        "the elements probe must exist:\n{ir}"
+    );
+    let store = super::super::class_field_barrier_tests::block_body(&ir, "plen.elem.store.")
+        .expect("the elements-store probe block exists");
+    assert!(
+        store.contains("getelementptr i64, ptr %") && store.contains(", i64 12"),
+        "the probe must load ObjectMeta.elements at word 12:\n{store}"
+    );
+    // A miss of the probe keeps the shape IC.
+    assert!(
+        store.contains("plen.ic.shape"),
+        "a missing store must fall through to the shape IC:\n{store}"
+    );
+}
