@@ -16,6 +16,7 @@ pub mod finally_inline;
 pub mod generator;
 pub mod i18n;
 pub mod inline;
+pub mod module_const_fold;
 pub mod prop_cse;
 mod source_spans;
 pub mod state_desugar;
