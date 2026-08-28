@@ -115,12 +115,15 @@ pub(crate) unsafe fn own_data_field_by_name(
         crate::object::object_live_slot_count(obj),
         crate::object::INLINE_SLOT_FLOOR as u32,
     ) as usize;
-    for i in 0..key_count {
-        let key_val = crate::array::js_array_get(keys, i as u32);
-        // #1781: accept inline SSO short keys — `is_string()` is
-        // STRING_TAG-only, so the pre-fix shape silently skipped any
-        // ≤5-byte key stored as a `SHORT_STRING_TAG` value.
-        if crate::string::js_string_key_matches(key_val, key) {
+    // #6759: shape-index + raw dense-slot scan, replacing the per-element
+    // `js_array_get` + `js_string_key_matches` walk. This is the READ path's
+    // copy of the scan that #8936 killed on the [[Set]]/delete side — an
+    // isolated overwrite-loop profile still showed `js_array_get_f64` at 23.5%
+    // self time, and the caller graph attributed it here. The shared helper
+    // preserves #1781's SSO-key acceptance (its byte resolver is SSO-aware).
+    if let Some(islot) = crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key) {
+        let i = islot as usize;
+        {
             if i < alloc_limit {
                 return Some(js_object_get_field(obj, i as u32));
             }
