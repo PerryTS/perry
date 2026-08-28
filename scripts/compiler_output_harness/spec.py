@@ -92,6 +92,22 @@ def validate_workload_spec(data: dict[str, Any]) -> None:
                     raise HarnessError(
                         f"workload {name!r} native_rep_checks require_records need names"
                     )
+                named_region = required.get("named_region")
+                if named_region is not None:
+                    known_regions = {
+                        region.get("name")
+                        for region in workload.get("named_regions", []) or []
+                    }
+                    if not isinstance(named_region, str) or not named_region:
+                        raise HarnessError(
+                            f"workload {name!r} native_rep_checks require_records "
+                            "named_region must be a non-empty string"
+                        )
+                    if named_region not in known_regions:
+                        raise HarnessError(
+                            f"workload {name!r} native_rep_checks require_records "
+                            f"references unknown named region {named_region!r}"
+                        )
         for region in workload.get("named_regions", []) or []:
             if not region.get("name"):
                 raise HarnessError(f"workload {name!r} has a named region without name")

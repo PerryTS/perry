@@ -90,7 +90,11 @@ required = true
 no_runtime_calls = true
 
 [[workloads.image_convolution.named_regions.selectors]]
-label_prefix_any = ["for.body.36", "while.body.40"]
+counter_min = { store_i8 = 1 }
+counter_equals = { load_i8 = 0 }
+
+[[workloads.image_convolution.named_regions.selectors]]
+counter_min = { load_i8 = 1, store_i8 = 1, xor_i32 = 1 }
 
 [[workloads.image_convolution.named_regions.checks]]
 name = "named_region_input_generation_byte_writes"
@@ -101,6 +105,24 @@ detail = "input_generation byte writes and xor shape"
 name = "named_region_input_generation_to_int32_conversion_budget"
 max = { fptosi = 1, sitofp = 1, inttoptr = 0, ptrtoint = 0 }
 detail = "input_generation JS division ToInt32 conversion budget"
+
+# Native record requirements use these structural regions rather than LLVM's
+# ordinal block suffixes. The latter shift whenever an earlier lowering grows
+# its CFG even when these loops and their checked guarantees are unchanged.
+[[workloads.image_convolution.named_regions]]
+name = "input_gradient_native"
+exclusive = false
+
+[[workloads.image_convolution.named_regions.selectors]]
+counter_min = { store_i8 = 1 }
+counter_equals = { load_i8 = 0 }
+
+[[workloads.image_convolution.named_regions]]
+name = "input_noise_native"
+exclusive = false
+
+[[workloads.image_convolution.named_regions.selectors]]
+counter_min = { load_i8 = 1, store_i8 = 1, xor_i32 = 1 }
 
 [[workloads.image_convolution.named_regions]]
 name = "blur"
@@ -127,9 +149,6 @@ no_runtime_calls = true
 no_conversions = true
 
 [[workloads.image_convolution.named_regions.selectors]]
-label_prefix_any = ["for.body.64"]
-
-[[workloads.image_convolution.named_regions.selectors]]
 counter_min = { load_i8 = 1, xor_i32 = 1, mul_i32 = 1 }
 counter_equals = { store_i8 = 0 }
 
@@ -145,7 +164,7 @@ allow_materialization_reasons = ["function_abi", "return_abi"]
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_input_generation_buffer_view"
-block_label = "for.body.36"
+named_region = "input_gradient_native"
 expr_kind = "Uint8ArraySet.array"
 consumer = "Uint8ArraySet.BufferView"
 native_rep_name = "buffer_view"
@@ -155,7 +174,7 @@ min = 3
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_input_generation_byte_store"
-block_label = "for.body.36"
+named_region = "input_gradient_native"
 expr_kind = "Uint8ArraySet"
 consumer = "u8_store_trunc_i32"
 native_rep_name = "u8"
@@ -165,7 +184,7 @@ min = 3
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_noise_byte_load"
-block_label = "while.body.40"
+named_region = "input_noise_native"
 expr_kind = "Uint8ArrayGet"
 consumer = "u8_load_zext_i32"
 native_rep_name = "u8"
@@ -174,7 +193,7 @@ bounds_state = "proven_or_guarded"
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_noise_byte_store"
-block_label = "while.body.40"
+named_region = "input_noise_native"
 expr_kind = "Uint8ArraySet"
 consumer = "u8_store_trunc_i32"
 native_rep_name = "u8"
@@ -183,7 +202,7 @@ bounds_state = "proven_or_guarded"
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_blur_byte_load"
-block_label = "for.body.56"
+named_region = "blur"
 expr_kind = "Uint8ArrayGet"
 consumer = "u8_load_zext_i32"
 native_rep_name = "u8"
@@ -194,7 +213,7 @@ min = 3
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_blur_byte_store"
-block_label = "for.body.56"
+named_region = "blur"
 expr_kind = "Uint8ArraySet"
 consumer = "u8_store_trunc_i32"
 native_rep_name = "u8"
@@ -204,7 +223,7 @@ alias_state = "no_alias_proven_or_guarded"
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_fnv_byte_load"
-block_label = "for.body.64"
+named_region = "fnv_hash"
 expr_kind = "Uint8ArrayGet"
 consumer = "u8_load_zext_i32"
 native_rep_name = "u8"
@@ -214,7 +233,7 @@ alias_state = "no_alias_proven_or_guarded"
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_fnv_i32_hash"
-block_label = "for.body.64"
+named_region = "fnv_hash"
 expr_kind = "MathImul"
 consumer = "lower_expr_native_i32.structural"
 native_rep_name = "i32"

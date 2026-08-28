@@ -657,6 +657,90 @@ entry:
         )
         self.assertEqual(report["status"], "pass", report["errors"])
 
+    def test_image_convolution_native_proof_survives_block_renumbering(self):
+        replacements = {
+            "for.body.36": "for.body.48",
+            "while.body.40": "while.body.52",
+            "for.body.56": "for.body.68",
+            "for.body.64": "for.body.76",
+        }
+        renamed_ir = GOOD_IR
+        for old_label, new_label in replacements.items():
+            renamed_ir = renamed_ir.replace(old_label, new_label)
+        records = image_native_records()
+        for record in records:
+            record["block_label"] = replacements.get(
+                record["block_label"], record["block_label"]
+            )
+            record["lowering_block"] = record["block_label"]
+
+        report = HARNESS.verify_artifacts(
+            workload="image_convolution",
+            ir_before=renamed_ir,
+            ir_after=renamed_ir,
+            assembly=GOOD_ASM,
+            benchmark={"runs": [{"exit_code": 0}]},
+            vectorization={
+                "vectorized_count": 0,
+                "missed_count": 0,
+                "analysis_count": 0,
+            },
+            native_reps=[{"records": records}],
+        )
+        self.assertEqual(report["status"], "pass", report["errors"])
+
+    def test_image_native_regions_use_pre_optimization_ir(self):
+        optimized_ir = GOOD_IR.replace("for.body.36", "vector.body")
+        report = HARNESS.verify_artifacts(
+            workload="image_convolution",
+            ir_before=GOOD_IR,
+            ir_after=optimized_ir,
+            assembly=GOOD_ASM,
+            benchmark={"runs": [{"exit_code": 0}]},
+            vectorization={
+                "vectorized_count": 1,
+                "missed_count": 0,
+                "analysis_count": 0,
+            },
+            native_reps=[{"records": image_native_records()}],
+        )
+        self.assertEqual(report["status"], "pass", report["errors"])
+        self.assertEqual(
+            report["native_named_regions"]["input_gradient_native"]["labels"],
+            ["for.body.36"],
+        )
+        self.assertEqual(
+            report["named_regions"]["input_gradient_native"]["labels"],
+            ["vector.body"],
+        )
+
+    def test_image_convolution_rejects_native_proof_from_wrong_named_region(self):
+        records = image_native_records()
+        fnv_record = next(
+            record for record in records if record.get("expr_kind") == "MathImul"
+        )
+        fnv_record["block_label"] = "for.body.56"
+        fnv_record["lowering_block"] = "for.body.56"
+
+        report = HARNESS.verify_artifacts(
+            workload="image_convolution",
+            ir_before=GOOD_IR,
+            ir_after=GOOD_IR,
+            assembly=GOOD_ASM,
+            benchmark={"runs": [{"exit_code": 0}]},
+            vectorization={
+                "vectorized_count": 0,
+                "missed_count": 0,
+                "analysis_count": 0,
+            },
+            native_reps=[{"records": records}],
+        )
+        self.assertEqual(report["status"], "fail")
+        self.assertTrue(
+            any("image_fnv_i32_hash" in error for error in report["errors"]),
+            report["errors"],
+        )
+
     def test_hot_loop_runtime_call_fails_gate(self):
         bad_ir = GOOD_IR.replace(
             "  %p0 = getelementptr inbounds i8, ptr %base, i64 %i\n",
@@ -1552,6 +1636,34 @@ idxset.bounded_numeric_merge.5:
                                     "contains": "25",
                                 }
                             ],
+                        }
+                    },
+                }
+            )
+
+    def test_workload_spec_rejects_unknown_required_record_region(self):
+        with self.assertRaises(HARNESS.HarnessError):
+            HARNESS.validate_workload_spec(
+                {
+                    "schema_version": 1,
+                    "workloads": {
+                        "bad": {
+                            "source": "fixture.ts",
+                            "kind": "numeric_loop",
+                            "vectorization": {
+                                "min_vectorized_loops": 0,
+                                "allowed_missed_reason_kinds": [],
+                            },
+                            "runtime_budgets": {},
+                            "named_regions": [{"name": "known"}],
+                            "native_rep_checks": {
+                                "require_records": [
+                                    {
+                                        "name": "bad_region",
+                                        "named_region": "missing",
+                                    }
+                                ]
+                            },
                         }
                     },
                 }

@@ -1,4 +1,5 @@
 const SIZE = 32;
+let escapedRead: ((i: number) => number) | undefined;
 
 function aliasLocal(): number {
   const owned = Buffer.alloc(SIZE);
@@ -40,6 +41,10 @@ function unknownCallEscape(): number {
 function closureCapture(): number {
   const owned = Buffer.alloc(SIZE);
   const read = (i: number) => owned[i];
+  // Keep the closure observable so HIR cannot erase the capture before the
+  // native-region proof sees it. The captured Buffer must remain a denied
+  // unchecked-native candidate even though the direct call below is exact.
+  escapedRead = read;
   let total = read(0) | 0;
   closure_capture:
   for (let i = 0; i < owned.length; i++) {
@@ -144,7 +149,8 @@ console.log(
       mutatedWhileIndex(mutationBuf) +
       staleNativeAlias() +
       staleAllocationLength() +
-      arrayBufferViews()
+      arrayBufferViews() +
+      (escapedRead ? 0 : 1)
     ) |
       0),
 );

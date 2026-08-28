@@ -640,7 +640,15 @@ def generic_native_rep_contract_results(
     )
 
     for required in check_spec.get("require_records", []) or []:
-        matches = [r for r in records if _record_matches_required(r, required)]
+        candidate_records = records
+        named_region = required.get("named_region")
+        if named_region:
+            candidate_records = _records_for_native_region(
+                records, named_regions or {}, workload_info, str(named_region)
+            )
+        matches = [
+            r for r in candidate_records if _record_matches_required(r, required)
+        ]
         min_count = int(required.get("min", 1) or 1)
         name = str(required.get("name") or required.get("consumer") or "record")
         add(
@@ -1130,6 +1138,11 @@ def verify_artifacts(
     clang_args = clang_args or []
     workload_info = workloads.get(workload, {})
     named_regions = named_hot_regions(workload_info, ir_after)
+    # Native-representation records describe lowering blocks before LLVM's
+    # optimization and vectorization passes. Resolve their structural regions
+    # against the matching IR phase, while optimized-shape checks keep using
+    # the post-optimization regions above.
+    native_named_regions = named_hot_regions(workload_info, ir_before)
     counters = counters or {}
     native_records = _flatten_native_records(native_reps)
 
@@ -1331,7 +1344,11 @@ def verify_artifacts(
         add(result["name"], bool(result["passed"]), result["detail"])
 
     for result in native_rep_contract_results(
-        workload, native_records, named_regions, len(native_reps or []), workloads
+        workload,
+        native_records,
+        native_named_regions,
+        len(native_reps or []),
+        workloads,
     ):
         add(result["name"], bool(result["passed"]), result["detail"])
 
@@ -1351,10 +1368,15 @@ def verify_artifacts(
         "vectorization_expectation": vector_expectation,
         "runtime_budget_results": runtime_budget_results(workload, runtime_summary, workloads),
         "named_regions": named_regions,
+        "native_named_regions": native_named_regions,
         "named_region_contract_results": named_region_contract_results(
             workload, named_regions, workloads
         ),
         "native_rep_contract_results": native_rep_contract_results(
-            workload, native_records, named_regions, len(native_reps or []), workloads
+            workload,
+            native_records,
+            native_named_regions,
+            len(native_reps or []),
+            workloads,
         ),
     }
