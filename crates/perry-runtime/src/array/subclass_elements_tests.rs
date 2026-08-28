@@ -1,7 +1,9 @@
 //! The `ObjectMeta.elements` edge of an Array-subclass instance is a traced
 //! child exactly like `spill`: it must survive owner and meta evacuation, be
 //! rewritten to the moved inner array, and keep the inner array alive.
-use super::subclass_elements::{elements_of, install_elements, set_elements_head};
+use super::subclass_elements::{
+    elements_of, install_elements, set_elements_head, ArraySubclassRepresentationGuard,
+};
 use crate::object::{js_object_alloc, ObjectHeader};
 
 const CLASS_ID_ARRAY: u32 = 0xFFFF_0024;
@@ -173,6 +175,7 @@ fn truthy(v: f64) -> bool {
 /// property descriptors — and no index key ever lands in the shape.
 #[test]
 fn the_property_funnel_answers_indices_and_length_from_the_store() {
+    let _representation = ArraySubclassRepresentationGuard::elements();
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     let class_id = 0x0074_8697;
@@ -297,6 +300,7 @@ fn the_property_funnel_answers_indices_and_length_from_the_store() {
 /// detached, and the frozen instance reads back exactly the same.
 #[test]
 fn freeze_deopts_to_the_shape_carried_form() {
+    let _representation = ArraySubclassRepresentationGuard::elements();
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     let class_id = 0x0074_8698;
@@ -345,6 +349,7 @@ fn freeze_deopts_to_the_shape_carried_form() {
 /// property path.
 #[test]
 fn the_counted_loop_guard_admits_an_elements_backed_receiver_as_its_inner_array() {
+    let _representation = ArraySubclassRepresentationGuard::elements();
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     let class_id = 0x0074_8699;

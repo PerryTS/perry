@@ -178,6 +178,10 @@ fn array_object_receiver_is_safe_for_non_pointers_and_handle_band_ids() {
 /// its side exit after a structural mutation.
 #[test]
 fn dense_array_subclass_reads_slots_until_its_shape_changes() {
+    // Pins the shape-carried representation: the elements store is the
+    // default, and this test is about the property-shape machinery.
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let class_id = 0x0074_8655;
     crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
     let obj = js_object_alloc(class_id, 2);
@@ -248,6 +252,10 @@ fn dense_array_subclass_reads_slots_until_its_shape_changes() {
 
 #[test]
 fn dense_array_subclass_cache_declines_a_per_instance_prototype_override() {
+    // Pins the shape-carried representation: the elements store is the
+    // default, and this test is about the property-shape machinery.
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let class_id = 0x0074_865A;
     crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
     let obj = js_object_alloc(class_id, 2);
@@ -274,6 +282,10 @@ fn dense_array_subclass_cache_declines_a_per_instance_prototype_override() {
 /// ShapeId, so exact identity makes this test non-vacuous.
 #[test]
 fn dense_array_subclass_tail_transitions_reuse_exact_shapes_and_slots() {
+    // Pins the shape-carried representation: the elements store is the
+    // default, and this test is about the property-shape machinery.
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let _global = crate::gc::global_side_table_test_lock();
     crate::object::array_tail_transition::test_clear();
     let class_id = 0x0074_8657;
@@ -342,6 +354,10 @@ fn dense_array_subclass_tail_transitions_reuse_exact_shapes_and_slots() {
 
 #[test]
 fn array_subclass_length_ic_publishes_only_scalar_exact_or_family_facts() {
+    // Pins the shape-carried representation: the elements store is the
+    // default, and this test is about the property-shape machinery.
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let _global = crate::gc::global_side_table_test_lock();
     crate::object::array_tail_transition::test_clear();
     let class_id = 0x0074_867b;
@@ -398,6 +414,10 @@ fn array_subclass_length_ic_publishes_only_scalar_exact_or_family_facts() {
 /// the ordinary barriered slot-store path.
 #[test]
 fn dense_array_subclass_numeric_tail_store_preserves_tagged_fallbacks() {
+    // Pins the shape-carried representation: the elements store is the
+    // default, and this test is about the property-shape machinery.
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let _global = crate::gc::global_side_table_test_lock();
     crate::object::array_tail_transition::test_clear();
     let class_id = 0x0074_865c;
@@ -510,6 +530,10 @@ fn fused_u31_push_reports_length_for_plain_and_subclass_arrays() {
 /// mark once no live entry names them (eviction / tombstone / test clear).
 #[test]
 fn transition_cache_carrier_bits_follow_live_occupancy_across_full_trace_recompute() {
+    // Pins the shape-carried representation: the elements store is the
+    // default, and this test is about the property-shape machinery.
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let _global = crate::gc::global_side_table_test_lock();
     crate::object::array_tail_transition::test_clear();
     let class_id = 0x0074_8695;
@@ -629,6 +653,10 @@ fn spec_and_generic_push_entries_append_to_an_object_backed_subclass_densely() {
 
 #[test]
 fn array_subclass_named_prefix_token_survives_only_exact_numeric_tail_transitions() {
+    // Pins the shape-carried representation: the elements store is the
+    // default, and this test is about the property-shape machinery.
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let _global = crate::gc::global_side_table_test_lock();
     crate::object::array_tail_transition::test_clear();
     let class_id = 0x0074_865b;
@@ -738,6 +766,10 @@ fn array_subclass_named_prefix_token_survives_only_exact_numeric_tail_transition
 /// overwrite defeats the transition cache that made the tail mutation cheap.
 #[test]
 fn plain_array_element_shape_consumes_array_subclass_prefix_proof() {
+    // Pins the shape-carried representation: the elements store is the
+    // default, and this test is about the property-shape machinery.
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let _global = crate::gc::global_side_table_test_lock();
     crate::object::array_tail_transition::test_clear();
     let class_id = 0x0074_8667;
@@ -918,6 +950,10 @@ fn dense_array_subclass_tail_cache_preserves_a_1024_shape_lattice() {
 
 #[test]
 fn dense_array_subclass_tail_fast_path_declines_restricted_receivers() {
+    // Pins the shape-carried representation: the elements store is the
+    // default, and this test is about the property-shape machinery.
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let _global = crate::gc::global_side_table_test_lock();
     crate::object::array_tail_transition::test_clear();
     let class_id = 0x0074_8658;
@@ -955,6 +991,10 @@ fn dense_array_subclass_tail_fast_path_declines_restricted_receivers() {
 
 #[test]
 fn dense_array_subclass_tail_transition_edges_survive_moving_gc() {
+    // Pins the shape-carried representation: the elements store is the
+    // default, and this test is about the property-shape machinery.
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let _copying_nursery = crate::gc::CopyingNurseryTestGuard::new(0);
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
@@ -1010,6 +1050,10 @@ fn dense_array_subclass_tail_transition_edges_survive_moving_gc() {
 /// later loop clone would reinterpret the SSO bits as an f64 Number.
 #[test]
 fn packed_numeric_proof_is_retired_by_sso_index_overwrite() {
+    // Pins the shape-carried representation: the elements store is the
+    // default, and this test is about the property-shape machinery.
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let class_id = 0x0074_8690;
     crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
     let obj = js_object_alloc(class_id, 2);
@@ -1069,6 +1113,10 @@ fn packed_numeric_proof_is_retired_by_sso_index_overwrite() {
 
 #[test]
 fn packed_numeric_proof_survives_pointer_free_index_swap() {
+    // Pins the shape-carried representation: the elements store is the
+    // default, and this test is about the property-shape machinery.
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let class_id = 0x0074_8692;
     crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
     let obj = js_object_alloc(class_id, 2);
@@ -1108,6 +1156,10 @@ fn packed_numeric_proof_survives_pointer_free_index_swap() {
 
 #[test]
 fn fused_ecs_guard_requires_distinct_owning_u32_columns_and_exact_entity_ids() {
+    // Pins the shape-carried representation: the elements store is the
+    // default, and this test is about the property-shape machinery.
+    let _representation =
+        super::subclass_elements::ArraySubclassRepresentationGuard::shape_carried();
     let class_id = 0x0074_8691;
     crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
     let obj = js_object_alloc(class_id, 2);
