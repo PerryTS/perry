@@ -1737,6 +1737,14 @@ class C {
             "const re = /schön/i;\n",
             "const re = /Maß/;\n",
             "const re = /\\s*(\\d+)\\s+([\\d.,]+)\\s*€/;\n",
+            // #8902: whitespace code points are pattern characters too. The
+            // report used both literal and character-class forms of NBSP and
+            // narrow NBSP; keep them raw here (the Rust escapes decode before
+            // this source reaches the TypeScript parser).
+            "const re = /\u{00a0}/g;\n",
+            "const re = /[\u{00a0}]/g;\n",
+            "const re = /\u{202f}/g;\n",
+            "const re = /[\u{202f}]/g;\n",
             // A non-ASCII character immediately after a backslash (identity
             // escape) took the other corrupting arm of the same match.
             "const re = /\\€/;\n",
@@ -1755,26 +1763,31 @@ class C {
 
     #[test]
     fn test_regex_literal_non_ascii_survives_to_the_ast() {
-        // End-to-end through SWC: the pattern SWC reports must be the source text.
-        let module = parse_typescript("const re = /a€b/;\n", "re.ts").unwrap();
-        let mut seen = None;
-        for item in &module.body {
-            let swc_ecma_ast::ModuleItem::Stmt(swc_ecma_ast::Stmt::Decl(swc_ecma_ast::Decl::Var(
-                var,
-            ))) = item
-            else {
-                continue;
-            };
-            for decl in &var.decls {
-                if let Some(init) = decl.init.as_deref() {
-                    if let swc_ecma_ast::Expr::Lit(swc_ecma_ast::Lit::Regex(re)) = init {
-                        seen = Some(re.exp.to_string());
+        // End-to-end through SWC: the pattern SWC reports must be the source
+        // text, including Unicode whitespace that is invisible in a diff
+        // (#8902).
+        for expected in ["a€b", "\u{00a0}", "\u{202f}"] {
+            let source = format!("const re = /{expected}/;\n");
+            let module = parse_typescript(&source, "re.ts").unwrap();
+            let mut seen = None;
+            for item in &module.body {
+                let swc_ecma_ast::ModuleItem::Stmt(swc_ecma_ast::Stmt::Decl(
+                    swc_ecma_ast::Decl::Var(var),
+                )) = item
+                else {
+                    continue;
+                };
+                for decl in &var.decls {
+                    if let Some(init) = decl.init.as_deref() {
+                        if let swc_ecma_ast::Expr::Lit(swc_ecma_ast::Lit::Regex(re)) = init {
+                            seen = Some(re.exp.to_string());
+                        }
                     }
                 }
             }
+            assert_eq!(seen.as_deref(), Some(expected));
+            assert_eq!(seen.unwrap().chars().count(), expected.chars().count());
         }
-        assert_eq!(seen.as_deref(), Some("a€b"));
-        assert_eq!(seen.unwrap().chars().count(), 3);
     }
 
     #[test]
