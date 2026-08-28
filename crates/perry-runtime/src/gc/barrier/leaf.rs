@@ -2,8 +2,6 @@
 //! inlines ahead of the outlined body. A sibling of `barrier/mod.rs` for the
 //! 2000-line file-size gate; same module tree, same visibility semantics.
 
-use super::*;
-
 /// The authoritative arena lookup for an address-shaped raw word — the arm of
 /// [`decode_heap_addr`] that a subnormal double reaches. Cold and out of line:
 /// it is the only part of the decode that is more than a few compares.

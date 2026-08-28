@@ -1218,7 +1218,6 @@ pub(super) fn barrier_parent_addr_is_dereferenceable(parent_addr: usize) -> bool
 /// here, because the Rust callers derive `parent_addr` from a live
 /// `*mut ArrayHeader` / `*mut ObjectHeader` / … rather than from JS value
 /// bits.
-#[inline]
 #[inline(never)]
 pub(super) fn write_barrier_decoded_parent(
     parent_addr: usize,
