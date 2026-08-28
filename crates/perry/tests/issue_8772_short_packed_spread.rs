@@ -226,7 +226,12 @@ fn repro_has_direct_empty_and_one_arms_and_matches_node_under_moving_gc() {
         .expect("read main LLVM IR");
     let invoke = function_ir(&ir, "__invoke(");
     assert!(invoke.contains("call i32 @js_short_packed_spread_values("));
-    assert!(invoke.contains("call i32 @js_method_direct_shape_class("));
+    // #8947: the receiver's (class_id, ShapeId) probe is emitted INLINE
+    // (`method_probe.*`) instead of calling `js_method_direct_shape_class`.
+    assert!(
+        invoke.contains("method_probe.read") && !invoke.contains("@js_method_direct_shape_class("),
+        "the short-spread method probe must be inline:\n{invoke}"
+    );
     let direct = named_blocks(
         invoke,
         &[
@@ -276,7 +281,12 @@ fn reverse_dependency_has_direct_arms_and_matches_node_under_moving_gc() {
         .expect("read generic consumer LLVM IR");
     let invoke = function_ir(&ir, "__invoke(");
     assert!(invoke.contains("call i32 @js_short_packed_spread_values("));
-    assert!(invoke.contains("call i32 @js_method_direct_shape_class("));
+    // #8947: the receiver's (class_id, ShapeId) probe is emitted INLINE
+    // (`method_probe.*`) instead of calling `js_method_direct_shape_class`.
+    assert!(
+        invoke.contains("method_probe.read") && !invoke.contains("@js_method_direct_shape_class("),
+        "the short-spread method probe must be inline:\n{invoke}"
+    );
     assert!(invoke.contains("@perry_method_reverse_ts__Position__reset("));
     assert!(invoke.contains("@perry_method_reverse_ts__Velocity__reset("));
     assert!(ir.contains("@perry_class_shape_id_reverse_ts__Position = external global i32"));
