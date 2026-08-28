@@ -1211,8 +1211,62 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
 /// non-throwing `[[DefineOwnProperty]]`/no-Throw contract. Only the assignment
 /// codegen paths (`field_set_by_name` / `property_set` / proxy `PutValue`) route
 /// here. test262 built-ins/Array length-write-on-frozen.
+/// `arr.length = 0` on a plain dense array, decided from one header read.
+///
+/// Both `length =` entries resolve the receiver through `clean_arr_ptr_mut`
+/// (allocator ownership, forwarding, the Buffer / typed-array registries),
+/// coerce the new length, resolve the flags a second time and probe the
+/// named-property table before reaching the plain-shrink branch — for an
+/// object pool's `pooled.length = 0` that tower was the whole cost, five
+/// thousand times a frame. Exactly the header facts the pop fast path proves
+/// are enough here: a `GC_TYPE_ARRAY` head that is not forwarded, none of the
+/// integrity / descriptor flags (a non-writable `length` is recorded under
+/// `OBJ_FLAG_ARRAY_DESCRIPTORS`, so neither entry has anything to throw), a
+/// dense `length <= capacity`, and no named properties. The work is the
+/// plain-shrink branch's, unchanged: holes over the retired prefix, the
+/// length, one layout rebuild. Anything else declines to the full entry.
+#[inline(always)]
+fn try_truncate_plain_array_to_zero(arr: *mut ArrayHeader) -> bool {
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) })
+    else {
+        return false;
+    };
+    let guarded_flags = crate::gc::OBJ_FLAG_FROZEN
+        | crate::gc::OBJ_FLAG_SEALED
+        | crate::gc::OBJ_FLAG_NO_EXTEND
+        | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || header._reserved & guarded_flags != 0
+    {
+        return false;
+    }
+    unsafe {
+        let cur = (*arr).length;
+        if cur > (*arr).capacity || array_has_named_properties_resolved(arr) {
+            return false;
+        }
+        if cur == 0 {
+            return true;
+        }
+        let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+        for i in 0..cur {
+            // GC_STORE_AUDIT(BARRIERED): the suffix becomes unreachable when
+            // length is published below; rebuild_array_layout then rebuilds
+            // the complete live-prefix layout/barrier state.
+            ptr::write(elements.add(i as usize), crate::value::TAG_HOLE);
+        }
+        (*arr).length = 0;
+        rebuild_array_layout(arr);
+    }
+    true
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: f64) {
+    if new_length.to_bits() == 0 && try_truncate_plain_array_to_zero(arr) {
+        return;
+    }
     let cleaned = clean_arr_ptr_mut(arr);
     if cleaned.is_null() {
         // #7574: `a.length = n` on a `class X extends Array` instance reached
@@ -1235,6 +1289,9 @@ pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: 
 
 #[no_mangle]
 pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
+    if new_length.to_bits() == 0 && try_truncate_plain_array_to_zero(arr) {
+        return;
+    }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return;
