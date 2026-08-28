@@ -290,17 +290,14 @@ pub extern "C" fn js_object_delete_field(
 
         // Search through the keys array for a match
         let key_count = crate::array::js_array_length(keys) as usize;
-        let mut found_idx: Option<usize> = None;
-        for i in 0..key_count {
-            let key_val = crate::array::js_array_get(keys, i as u32);
-            // #1781: SSO-aware match — pre-fix `delete obj.id` on an
-            // object whose `id` lived as an inline SSO key reported
-            // success vacuously without actually deleting anything.
-            if crate::string::js_string_key_matches(key_val, key) {
-                found_idx = Some(i);
-                break;
-            }
-        }
+        // #6759: shape-index + dense-slot scan (SSO-aware via the shared
+        // helper, preserving #1781). The old per-element `js_array_get` walk
+        // made every `delete` O(keys) full-accessor calls — measured as the
+        // dominant residue (16.0 M of 90.8 M accessor calls) after the
+        // [[Set]]/[[Get]] walks were fixed.
+        let found_idx: Option<usize> =
+            crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key)
+                .map(|i| i as usize);
 
         let i = match found_idx {
             Some(i) => i,

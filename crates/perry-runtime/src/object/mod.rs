@@ -571,6 +571,94 @@ fn key_bytes_hash(name_ptr: *const u8, name_len: usize) -> u64 {
     h
 }
 
+/// Find `key_bytes` among the first `key_count` keys of `keys`.
+///
+/// The [[Set]]/[[Get]] fallback walks used to do this with a per-element
+/// `js_array_get` + `js_string_key_matches` loop — the full JS-facing array
+/// accessor (pointer cleaning, typed-array and buffer registry probes,
+/// descriptor gates) per element, per property access. A computed-key site
+/// allocates a fresh key string every evaluation, so the pointer-keyed read
+/// plan in front of those walks never hits and every access paid the scan:
+/// measured 90.8 MILLION `js_array_get_f64` calls for 1.5 M property
+/// operations (~60 per access) on the dynamic-property benchmark.
+///
+/// Strategy: the shared shape index (`shape_slot_lookup`, content-validated,
+/// built once per shape) answers in O(1) for receivers at or above
+/// `KEYS_INDEX_THRESHOLD`; below it — and as a correctness fallback if the
+/// index declines — a linear scan over the DENSE raw slots
+/// (`keys_array_dense_slots`, no per-element accessor) does the compare.
+pub(crate) unsafe fn keys_find_slot_by_bytes(
+    keys: *const crate::array::ArrayHeader,
+    key_count: u32,
+    key_bytes: &[u8],
+) -> Option<u32> {
+    if key_count >= KEYS_INDEX_THRESHOLD {
+        let h = key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());
+        // build=false — consult-only. These call sites run on delete-churn
+        // workloads where every delete drops the index; rebuilding it on the
+        // next access (500 hashes) to use it once DOUBLED delete-heavy time
+        // (1570 -> 3064 ms measured). Appends maintain the index incrementally
+        // (shape_note_append), so stable-shape workloads still hit; churny
+        // ones fall back to the raw dense scan below instead of thrashing.
+        if let Some(slot) = shapes::shape_slot_lookup(keys, key_bytes, h, key_count, false) {
+            return Some(slot);
+        }
+        // A miss from a fully built index is authoritative in the common case,
+        // but the index can decline (shrunk arrays, partial builds); the raw
+        // scan below is cheap enough to serve as the correctness backstop.
+    }
+    let (slots, slot_len) = keys_array_dense_slots(keys);
+    if slots.is_null() {
+        return None;
+    }
+    let n = (key_count as usize).min(slot_len);
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    for i in 0..n {
+        let v = crate::JSValue::from_bits((*slots.add(i)).to_bits());
+        if let Some(stored) = crate::string::js_string_key_bytes(v, &mut sso) {
+            if stored == key_bytes {
+                return Some(i as u32);
+            }
+        }
+    }
+    None
+}
+
+/// [`keys_find_slot_by_bytes`] for a key held as a `StringHeader`.
+pub(crate) unsafe fn keys_find_slot_by_key_ptr(
+    keys: *const crate::array::ArrayHeader,
+    key_count: u32,
+    key: *const crate::StringHeader,
+) -> Option<u32> {
+    if key.is_null() || (key as usize) < 0x10000 {
+        return None;
+    }
+    // The callers this replaced tolerated a `key` that is not actually a
+    // valid string header: `js_string_key_matches` compares LENGTHS first, so
+    // a garbage `byte_len` was just a harmless mismatch. Building a slice from
+    // that length instead reads it — the first version of this helper panicked
+    // in an unrelated stream test with `range start index 2613749136200`.
+    // Keep the old tolerance: a length that cannot be a real key falls back to
+    // the length-guarded per-candidate compare below.
+    let len = (*key).byte_len as usize;
+    if len <= (*key).capacity as usize && len < (1 << 28) {
+        let data = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        return keys_find_slot_by_bytes(keys, key_count, std::slice::from_raw_parts(data, len));
+    }
+    let (slots, slot_len) = keys_array_dense_slots(keys);
+    if slots.is_null() {
+        return None;
+    }
+    let n = (key_count as usize).min(slot_len);
+    for i in 0..n {
+        let v = crate::JSValue::from_bits((*slots.add(i)).to_bits());
+        if crate::string::js_string_key_matches(v, key) {
+            return Some(i as u32);
+        }
+    }
+    None
+}
+
 /// Locate `key` in `obj`'s keys array via the shape record (#6759 C1:
 /// keyed on keys_array identity — shared across same-shape objects —
 /// replacing the per-object sidecar). Returns `Some(slot)` on a

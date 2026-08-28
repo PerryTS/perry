@@ -1740,8 +1740,14 @@ pub(crate) fn prune_dead_shape_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
 crate::perry_thread_local! {
     /// Scratch memo for [`scan_shape_table_rekey_mut`]'s per-address probe,
     /// reused across collections so the scan allocates nothing.
-    static PROBE_MEMO: std::cell::RefCell<std::collections::HashMap<(usize, bool), (bool, usize)>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// `PtrHashMap`, NOT std's SipHash default: perf on the dynamic-property
+    /// benchmark put `RandomState::hash_one::<&(usize, bool)>` at **7.0% of
+    /// total samples** — pure hashing overhead inside the GC scan this memo
+    /// exists to make cheaper. The key is folded to one word (`addr ^ carrier`
+    /// in bit 0; addresses are >= 8-aligned so bit 0 is free), which is the
+    /// single-word shape `PtrHasher` is built for.
+    static PROBE_MEMO: std::cell::RefCell<crate::fast_hash::PtrHashMap<usize, (bool, usize)>> =
+        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
 /// Per-descriptor bookkeeping after its keys address has been probed.
@@ -1818,7 +1824,9 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
             // immortal and turn `prune_dead_shape_keys`'s "is the keys array
             // dead?" into a question it asks of itself.
             let is_carrier = descriptor.old_carrier || descriptor.cache_carrier;
-            let memo_key = (addr, is_carrier);
+            // Addresses are 8-aligned, so bit 0 is free to carry the carrier
+            // duty (carriers use a MARKING visit; the answers must not mix).
+            let memo_key = addr | usize::from(is_carrier);
             if let Some(&(prev_moved, prev_addr)) = probe_memo.get(&memo_key) {
                 // Already probed this exact (address, carrier-duty) pair in this
                 // pass — reuse the answer instead of paying the walk again.
@@ -1847,7 +1855,7 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
             } else {
                 visitor.visit_metadata_usize_slot(&mut addr)
             };
-            probe_memo.insert((probe_addr, is_carrier), (moved, addr));
+            probe_memo.insert(probe_addr | usize::from(is_carrier), (moved, addr));
             record_shape_scan_outcome(
                 visitor,
                 id,

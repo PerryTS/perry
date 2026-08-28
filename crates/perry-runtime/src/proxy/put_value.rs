@@ -436,17 +436,11 @@ pub extern "C" fn js_put_value_set_ic_miss(
             if key_count > 4096 {
                 return result;
             }
-            for i in 0..key_count {
-                let candidate = crate::array::js_array_get(keys, i as u32);
-                if crate::string::js_string_key_matches(candidate, key) {
-                    crate::object::prop_plan::read_plan_record(
-                        keys as usize,
-                        key as usize,
-                        i as u32,
-                    );
-                    own_idx = Some(i as u32);
-                    break;
-                }
+            // #6759: shape-index + dense-slot scan; the old per-element
+            // js_array_get walk was ~60 accessor calls per property op.
+            if let Some(i) = crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key) {
+                crate::object::prop_plan::read_plan_record(keys as usize, key as usize, i);
+                own_idx = Some(i);
             }
         }
         let Some(idx) = own_idx else {
@@ -726,17 +720,7 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         if key_count > 4096 {
             return result;
         }
-        let mut own_idx = None;
-        let mut cand_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        for i in 0..key_count {
-            let candidate = crate::array::js_array_get(keys, i as u32);
-            if let Some(cand_bytes) = crate::string::js_string_key_bytes(candidate, &mut cand_buf) {
-                if cand_bytes == key_bytes {
-                    own_idx = Some(i as u32);
-                    break;
-                }
-            }
-        }
+        let own_idx = crate::object::keys_find_slot_by_bytes(keys, key_count as u32, key_bytes);
         let Some(idx) = own_idx else {
             return result;
         };
@@ -1056,11 +1040,8 @@ fn object_array_numeric_write_slots(
         if key_count > 4096 {
             return None;
         }
-        for i in 0..key_count {
-            let candidate = crate::array::js_array_get(keys, i as u32);
-            if crate::string::js_string_key_matches(candidate, key) {
-                return Some(i as u32);
-            }
+        if let Some(slot) = crate::object::keys_find_slot_by_key_ptr(keys, key_count, key) {
+            return Some(slot);
         }
         None
     }
