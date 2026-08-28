@@ -409,6 +409,19 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
         ir.contains("tav.get.brand") && ir.contains("arrlike.ic.family_token"),
         "an integer key must reach the inline typed-array and dense-subclass tiers:\n{ir}"
     );
+    // Only an ordinary ObjectHeader has the `meta` slot used by the
+    // elements-backed Array-subclass probe. Native Buffers and other exotic
+    // managed cells must leave through the complete dispatcher before that
+    // load; interpreting their header word at offset 8 as ObjectMeta crashes.
+    let kind = super::class_field_barrier_tests::block_body(&ir, "arrlike.elem.kind.")
+        .expect("the elements-store object-kind guard exists");
+    assert!(
+        kind.contains("icmp eq i8")
+            && kind.contains(", 2")
+            && kind.contains("arrlike.elem.meta")
+            && kind.contains("arrlike.ic.miss"),
+        "only GC_TYPE_OBJECT may reach the ObjectMeta.elements load:\n{kind}"
+    );
     // The elements-backed subclass probe sits ahead of the shape IC: meta
     // word → `ObjectMeta.elements` (word 12) → inner-array bounds → slot.
     let store = super::class_field_barrier_tests::block_body(&ir, "arrlike.elem.store.")

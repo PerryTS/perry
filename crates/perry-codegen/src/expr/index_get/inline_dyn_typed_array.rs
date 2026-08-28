@@ -444,11 +444,13 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     // of this probe (no meta, no store) is the shape-carried form and keeps
     // the IC below; an out-of-bounds index or a hole goes to the complete
     // dispatcher (prototype chain).
+    let elem_kind_idx = ctx.new_block("arrlike.elem.kind");
     let elem_meta_idx = ctx.new_block("arrlike.elem.meta");
     let elem_store_idx = ctx.new_block("arrlike.elem.store");
     let elem_bounds_idx = ctx.new_block("arrlike.elem.bounds");
     let elem_load_idx = ctx.new_block("arrlike.elem.load");
     let elem_value_idx = ctx.new_block("arrlike.elem.value");
+    let elem_kind_label = ctx.block_label(elem_kind_idx);
     let elem_meta_label = ctx.block_label(elem_meta_idx);
     let elem_store_label = ctx.block_label(elem_store_idx);
     let elem_bounds_label = ctx.block_label(elem_bounds_idx);
@@ -456,7 +458,11 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let elem_value_label = ctx.block_label(elem_value_idx);
     ctx.current_block = object_brand_idx;
     ctx.block()
-        .cond_br(&is_array, &object_array_guard_label, &elem_meta_label);
+        .cond_br(&is_array, &object_array_guard_label, &elem_kind_label);
+    ctx.current_block = elem_kind_idx;
+    let elem_is_object = ctx.block().icmp_eq(I8, &gc_type, "2");
+    ctx.block()
+        .cond_br(&elem_is_object, &elem_meta_label, &object_miss_label);
     ctx.current_block = elem_meta_idx;
     let elem_meta_addr = ctx.block().add(I64, &object_raw, &meta_offset);
     let elem_meta_slot_ptr = ctx.block().inttoptr(I64, &elem_meta_addr);
