@@ -246,6 +246,23 @@ struct RawBlock {
     end_line: usize,
     bytes: Vec<u8>,
     symbols: HashMap<usize, String>,
+    /// Zero-width lines found inside the block that describe some OTHER
+    /// symbol — they must be re-emitted, not dropped with the map bytes.
+    ///
+    /// The block is delimited by section switches, but LLVM prints a
+    /// symbol's *attributes* before it switches to that symbol's section.
+    /// The ELF personality slot is the case that bit: `AsmPrinter`
+    /// finalization emits the stack map, then `.hidden` + `.weak` for
+    /// `DW.ref.perry_eh_personality`, and only then `.section
+    /// .data.DW.ref.perry_eh_personality,"awG",…,comdat`. Swallowing those
+    /// two lines assembles the COMDAT slot as a LOCAL symbol; every
+    /// multi-object link (`ld -r` of split codegen units, or the final
+    /// exe/dylib link) keeps one group and silently drops the other objects'
+    /// CIE personality relocations (`.eh_frame` is exempt from the
+    /// discarded-section diagnostic), so the first caught throw through a
+    /// frame from any other object calls a garbage personality pointer and
+    /// dies in `_Unwind_RaiseException`.
+    carried: Vec<String>,
 }
 
 fn find_block_start(lines: &[&str]) -> Option<usize> {
@@ -261,6 +278,7 @@ fn parse_block(lines: &[&str], word_width: usize) -> Result<RawBlock, String> {
 
     let mut bytes: Vec<u8> = Vec::new();
     let mut symbols: HashMap<usize, String> = HashMap::new();
+    let mut carried: Vec<String> = Vec::new();
     let mut end_line = lines.len();
 
     for (index, raw) in lines.iter().enumerate().skip(start_line + 1) {
@@ -299,6 +317,7 @@ fn parse_block(lines: &[&str], word_width: usize) -> Result<RawBlock, String> {
         // asm printer emits them in this form. Mach-O output does not, so this
         // is invisible on the macOS arms.
         if is_symbol_assignment(line) {
+            carry_if_foreign(&mut carried, line);
             continue;
         }
 
@@ -373,6 +392,7 @@ fn parse_block(lines: &[&str], word_width: usize) -> Result<RawBlock, String> {
                 index + 1
             ));
         }
+        carry_if_foreign(&mut carried, line);
     }
 
     Ok(RawBlock {
@@ -380,7 +400,20 @@ fn parse_block(lines: &[&str], word_width: usize) -> Result<RawBlock, String> {
         end_line,
         bytes,
         symbols,
+        carried,
     })
+}
+
+/// A zero-width line inside the block emits no map bytes, so it can only be
+/// describing a symbol. If that symbol is the map's own label it belongs to
+/// the block being replaced (the replacement declares its own); anything
+/// else — a symbol attribute LLVM printed ahead of its section switch, or an
+/// absolute-symbol assignment — is unrelated to the map and must survive the
+/// rewrite verbatim.
+fn carry_if_foreign(carried: &mut Vec<String>, line: &str) {
+    if !line.contains("__LLVM_StackMaps") {
+        carried.push(line.to_string());
+    }
 }
 
 fn parse_int(text: &str) -> Option<u64> {
@@ -1058,6 +1091,17 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
         }
     }
     out.push_str(&replacement);
+    // Re-emit the symbol lines the block swallowed, in their original order,
+    // exactly where they stood: after the map, before the section switch
+    // that ends the block. They are position-independent (attributes and
+    // assignments), so the only thing that matters is that they are present.
+    for line in &block.carried {
+        if !is_symbol_assignment(line) {
+            out.push('\t');
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
     for line in &lines[block.end_line..] {
         if line.contains("__LLVM_StackMaps") {
             continue;
@@ -1642,6 +1686,140 @@ mod tests {
         let block = super::parse_block(&lines, 4).expect("ELF symbol assignments must parse");
         // 1 + 1 + 2 + 4 -- the assignments contribute nothing.
         assert_eq!(block.bytes.len(), 8);
+    }
+
+    /// The x86-64 **ELF** spelling of `sample_asm`, with `tail` inserted
+    /// between the map's last byte and the section switch that ends the
+    /// block — the exact spot where `AsmPrinter` finalization prints the
+    /// attributes of the NEXT symbol it is about to define.
+    fn x86_64_elf_sample_asm(tail: &str) -> String {
+        let mut asm = String::new();
+        asm.push_str("\t.section\t.llvm_stackmaps,\"a\",@progbits\n");
+        asm.push_str("\t.p2align\t3, 0x0\n");
+        asm.push_str("__LLVM_StackMaps:\n");
+        asm.push_str("\t.byte\t3\n\t.byte\t0\n\t.short\t0\n");
+        asm.push_str("\t.long\t1\n"); // functions
+        asm.push_str("\t.long\t0\n"); // constants
+        asm.push_str("\t.long\t1\n"); // records
+        asm.push_str("\t.quad\tprobe_fn\n");
+        asm.push_str("\t.quad\t144\n"); // stack size
+        asm.push_str("\t.quad\t1\n"); // record count
+        asm.push_str("\t.quad\t0\n"); // patchpoint id
+        asm.push_str("\t.long\t64\n"); // instruction offset
+        asm.push_str("\t.short\t0\n");
+        asm.push_str("\t.short\t4\n"); // location count
+        for _ in 0..3 {
+            asm.push_str(
+                "\t.byte\t4\n\t.byte\t0\n\t.short\t8\n\t.short\t0\n\t.short\t0\n\t.long\t0\n",
+            );
+        }
+        // The live root: RBP-relative (DWARF 6), frame offset -24.
+        asm.push_str(
+            "\t.byte\t3\n\t.byte\t0\n\t.short\t8\n\t.short\t6\n\t.short\t0\n\t.long\t4294967272\n",
+        );
+        asm.push_str("\t.p2align\t3, 0x0\n");
+        asm.push_str("\t.short\t0\n\t.short\t0\n"); // live-out header
+        asm.push_str("\t.p2align\t3, 0x0\n");
+        asm.push_str(tail);
+        asm.push_str("\t.section\t\".note.GNU-stack\",\"\",@progbits\n");
+        asm
+    }
+
+    /// The Linux crash this guards: LLVM prints `.hidden` + `.weak` for the
+    /// personality slot `DW.ref.perry_eh_personality` BEFORE switching to
+    /// its COMDAT section, i.e. inside what this parser treats as the
+    /// stack-map block. Dropping them assembles the slot as a LOCAL symbol
+    /// in a COMDAT group; the linker keeps one group per program and drops
+    /// every other object's CIE personality relocation (`.eh_frame` is
+    /// exempt from the discarded-section complaint), and the first caught
+    /// throw through a frame from any other module or codegen unit calls a
+    /// garbage personality pointer inside `_Unwind_RaiseException`. A
+    /// two-module program with a `try` in each module is enough to hit it.
+    #[test]
+    fn elf_personality_slot_attributes_survive_the_rewrite() {
+        let asm = x86_64_elf_sample_asm(concat!(
+            "\t.hidden\tDW.ref.perry_eh_personality\n",
+            "\t.weak\tDW.ref.perry_eh_personality\n",
+            "\t.section\t.data.DW.ref.perry_eh_personality,\"awG\",@progbits,DW.ref.perry_eh_personality,comdat\n",
+            "\t.p2align\t3, 0x0\n",
+            "\t.type\tDW.ref.perry_eh_personality,@object\n",
+            "\t.size\tDW.ref.perry_eh_personality, 8\n",
+            "DW.ref.perry_eh_personality:\n",
+            "\t.quad\tperry_eh_personality\n",
+        ));
+        let (out, stats) = compact_stack_map_asm(&asm, "x86_64-unknown-linux-gnu")
+            .expect("an x86-64 ELF stack map must parse")
+            .expect("an x86-64 ELF stack map must be rewritten");
+        assert_eq!(stats.functions, 1);
+        assert_eq!(stats.roots, 1);
+        assert!(!out.contains("__LLVM_StackMaps"), "{out}");
+        assert_eq!(
+            out.matches("\t.hidden\tDW.ref.perry_eh_personality\n")
+                .count(),
+            1,
+            "the slot's visibility must be re-emitted exactly once:\n{out}"
+        );
+        assert_eq!(
+            out.matches("\t.weak\tDW.ref.perry_eh_personality\n")
+                .count(),
+            1,
+            "the slot's weak binding must be re-emitted exactly once:\n{out}"
+        );
+        // Order: map, then the attributes, then the slot's own section — the
+        // layout LLVM printed, so the assembler sees exactly what it would
+        // have seen without the rewrite.
+        let map = out.find("_perry_gc_map:").expect("compact map label");
+        let hidden = out.find("\t.hidden\tDW.ref").expect("hidden directive");
+        let weak = out.find("\t.weak\tDW.ref").expect("weak directive");
+        let section = out
+            .find("\t.section\t.data.DW.ref.perry_eh_personality")
+            .expect("slot section");
+        assert!(map < hidden && hidden < weak && weak < section, "{out}");
+        assert!(
+            out.contains("\t.type\tDW.ref.perry_eh_personality,@object\n"),
+            "{out}"
+        );
+    }
+
+    /// Only lines about OTHER symbols are carried: the map's own label is
+    /// re-declared by the replacement, so anything naming it stays dropped.
+    #[test]
+    fn the_map_labels_own_attributes_are_not_carried() {
+        let asm = x86_64_elf_sample_asm(concat!(
+            "\t.globl\t__LLVM_StackMaps\n",
+            "\t.type\t__LLVM_StackMaps,@object\n",
+            "\t.size\t__LLVM_StackMaps, .-__LLVM_StackMaps\n",
+        ));
+        let (out, _) = compact_stack_map_asm(&asm, "x86_64-unknown-linux-gnu")
+            .expect("an x86-64 ELF stack map must parse")
+            .expect("an x86-64 ELF stack map must be rewritten");
+        assert!(!out.contains("__LLVM_StackMaps"), "{out}");
+        assert!(out.contains("_perry_gc_map:"), "{out}");
+    }
+
+    /// The -O3 ELF absolute-symbol aliases land inside the block too. They
+    /// define symbols the code references, so they must survive the rewrite
+    /// as well as parse to zero bytes.
+    #[test]
+    fn symbol_assignments_inside_the_block_are_re_emitted() {
+        let asm = x86_64_elf_sample_asm(concat!(
+            "perry_null_guard_zero = 0\n",
+            ".Lperry_ic_8 = .Ltmp3-4\n",
+        ));
+        let (out, stats) = compact_stack_map_asm(&asm, "x86_64-unknown-linux-gnu")
+            .expect("an x86-64 ELF stack map must parse")
+            .expect("an x86-64 ELF stack map must be rewritten");
+        assert_eq!(stats.roots, 1);
+        assert_eq!(
+            out.matches("\nperry_null_guard_zero = 0\n").count(),
+            1,
+            "{out}"
+        );
+        assert_eq!(
+            out.matches("\n.Lperry_ic_8 = .Ltmp3-4\n").count(),
+            1,
+            "{out}"
+        );
     }
 
     #[test]
