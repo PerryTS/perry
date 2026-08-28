@@ -15,17 +15,72 @@ use crate::object::ObjectHeader;
 
 use super::subclass::{mutation_receiver_allows_plain_tail, ValidatedObjectReceiver};
 
-/// `PERRY_ARRAY_SUBCLASS_ELEMENTS=1|on|true` — off while the property entry
-/// points are being routed; the default flips once the semantics suite is green.
+/// The elements store is the DEFAULT representation for `class X extends
+/// Array` instances; `PERRY_ARRAY_SUBCLASS_ELEMENTS=0` restores the
+/// shape-carried form (a bisecting kill switch, not a supported mode).
+///
+/// Flipped on after: the whole `test-files/` corpus compiled once and run
+/// twice under both settings (1285 binaries, 9 output differences, every one
+/// of them nondeterministic output — random bytes, timestamps,
+/// `console.time`, a PID, a flaky watcher — each reproducible with the switch
+/// untouched); the Array-subclass integration suites green with the store
+/// enabled; and, on the wolf-ecs twins, −11.4% (add/remove) and −11.9%
+/// (entity cycle), 11/11 pairs in both the 2 s and 50 ms windows. Semantics
+/// move TOWARD node: `JSON.stringify` produces the array form, `Object.keys`
+/// no longer leaks `length`, and the mutator surface
+/// (`sort`/`reverse`/`splice`/`shift`/`unshift`, `length` truncation, holes,
+/// spread) becomes node-identical.
 #[inline]
 pub(crate) fn array_subclass_elements_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(forced) = FORCED_REPRESENTATION.with(std::cell::Cell::get) {
+        return forced;
+    }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        matches!(
+        !matches!(
             std::env::var("PERRY_ARRAY_SUBCLASS_ELEMENTS").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+            Ok("0") | Ok("off") | Ok("false")
         )
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    static FORCED_REPRESENTATION: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Pins the representation for one test, whatever the process default is.
+///
+/// The shape-carried form stays reachable through the kill switch, so its
+/// tests (`super::subclass_tests`) name it explicitly rather than rely on the
+/// default; the elements tests do the same in the other direction.
+#[cfg(test)]
+pub(crate) struct ArraySubclassRepresentationGuard(Option<bool>);
+
+#[cfg(test)]
+impl ArraySubclassRepresentationGuard {
+    /// Indexed elements and `length` are shape-carried properties.
+    pub(crate) fn shape_carried() -> Self {
+        Self::force(false)
+    }
+
+    /// Indexed elements and `length` live in `ObjectMeta.elements`.
+    pub(crate) fn elements() -> Self {
+        Self::force(true)
+    }
+
+    fn force(value: bool) -> Self {
+        Self(FORCED_REPRESENTATION.with(|cell| cell.replace(Some(value))))
+    }
+}
+
+#[cfg(test)]
+impl Drop for ArraySubclassRepresentationGuard {
+    fn drop(&mut self) {
+        FORCED_REPRESENTATION.with(|cell| cell.set(self.0));
+    }
 }
 
 /// The elements store of a live `GC_TYPE_OBJECT`, or null when it has none
