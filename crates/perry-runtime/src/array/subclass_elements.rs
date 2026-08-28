@@ -431,3 +431,103 @@ pub(crate) fn deopt_value(value: f64) {
         unsafe { deopt_to_shape(obj) };
     }
 }
+
+/// A fresh values array: present elements (ascending), then every value of
+/// `shape_values` in order (`Object.values`).
+///
+/// # Safety
+/// `elements` must be a live store; `shape_values` a live array (or null).
+pub(crate) unsafe fn prepend_index_values(
+    elements: *const ArrayHeader,
+    shape_values: *mut ArrayHeader,
+) -> *mut ArrayHeader {
+    let indices = own_index_keys(elements);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let elements_h = scope.root_raw_const_ptr(elements);
+    let shape_h = scope.root_raw_mut_ptr(shape_values);
+    let out_h = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
+    let push = |value: f64| {
+        let (grown, _) = out_h.across_mut::<ArrayHeader, _>(|| {
+            let out: *mut ArrayHeader = out_h.with_mut_ptr(|p| p);
+            crate::array::js_array_push_f64(out, value)
+        });
+        out_h.set_raw_mut_ptr(grown);
+    };
+    for index in indices {
+        let value =
+            elements_h.with_const_ptr(|e: *const ArrayHeader| f64::from_bits(slot_bits(e, index)));
+        push(value);
+    }
+    let shape_len = shape_h.with_mut_ptr(|p: *mut ArrayHeader| {
+        if p.is_null() {
+            0
+        } else {
+            crate::array::js_array_length(p)
+        }
+    });
+    for i in 0..shape_len {
+        let value = shape_h.with_mut_ptr(|p: *mut ArrayHeader| crate::array::js_array_get(p, i));
+        push(f64::from_bits(value.bits()));
+    }
+    out_h.with_mut_ptr(|p| p)
+}
+
+/// A fresh entries array: `[String(index), element]` pairs for the present
+/// elements (ascending), then every pair of `shape_entries` in order
+/// (`Object.entries`).
+///
+/// # Safety
+/// `elements` must be a live store; `shape_entries` a live array (or null).
+pub(crate) unsafe fn prepend_index_entries(
+    elements: *const ArrayHeader,
+    shape_entries: *mut ArrayHeader,
+) -> *mut ArrayHeader {
+    let indices = own_index_keys(elements);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let elements_h = scope.root_raw_const_ptr(elements);
+    let shape_h = scope.root_raw_mut_ptr(shape_entries);
+    let out_h = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
+    let push = |value: f64| {
+        let (grown, _) = out_h.across_mut::<ArrayHeader, _>(|| {
+            let out: *mut ArrayHeader = out_h.with_mut_ptr(|p| p);
+            crate::array::js_array_push_f64(out, value)
+        });
+        out_h.set_raw_mut_ptr(grown);
+    };
+    for index in indices {
+        let name = index.to_string();
+        let (key, _) = out_h.across_mut::<ArrayHeader, _>(|| {
+            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32)
+        });
+        let key_h = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
+        let (pair, _) = out_h.across_mut::<ArrayHeader, _>(|| crate::array::js_array_alloc(2));
+        let pair_h = scope.root_raw_mut_ptr(pair);
+        let (pair, _) = pair_h.across_mut::<ArrayHeader, _>(|| {
+            let pair: *mut ArrayHeader = pair_h.with_mut_ptr(|p| p);
+            crate::array::js_array_push_f64(pair, key_h.get_nanbox_f64())
+        });
+        pair_h.set_raw_mut_ptr(pair);
+        let value =
+            elements_h.with_const_ptr(|e: *const ArrayHeader| f64::from_bits(slot_bits(e, index)));
+        let (pair, _) = pair_h.across_mut::<ArrayHeader, _>(|| {
+            let pair: *mut ArrayHeader = pair_h.with_mut_ptr(|p| p);
+            crate::array::js_array_push_f64(pair, value)
+        });
+        pair_h.set_raw_mut_ptr(pair);
+        let pair_value =
+            pair_h.with_mut_ptr(|p: *mut ArrayHeader| crate::value::js_nanbox_pointer(p as i64));
+        push(pair_value);
+    }
+    let shape_len = shape_h.with_mut_ptr(|p: *mut ArrayHeader| {
+        if p.is_null() {
+            0
+        } else {
+            crate::array::js_array_length(p)
+        }
+    });
+    for i in 0..shape_len {
+        let value = shape_h.with_mut_ptr(|p: *mut ArrayHeader| crate::array::js_array_get(p, i));
+        push(f64::from_bits(value.bits()));
+    }
+    out_h.with_mut_ptr(|p| p)
+}

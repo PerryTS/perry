@@ -249,6 +249,19 @@ fn the_property_funnel_answers_indices_and_length_from_the_store() {
         key_strings(crate::value::js_nanbox_get_pointer(names) as *const crate::array::ArrayHeader),
         vec!["1", "3", "length", "tag"]
     );
+    // values / entries: present elements first, then the shape's `tag`.
+    let values = crate::object::js_object_values(obj());
+    assert_eq!(crate::array::js_array_length(values), 3);
+    assert_eq!(crate::array::js_array_get(values, 0).as_number(), 11.0);
+    assert_eq!(crate::array::js_array_get(values, 1).as_number(), 13.0);
+    assert_eq!(crate::array::js_array_get(values, 2).as_number(), 7.0);
+    let entries = crate::object::js_object_entries(obj());
+    assert_eq!(crate::array::js_array_length(entries), 3);
+    let first = crate::value::js_nanbox_get_pointer(f64::from_bits(
+        crate::array::js_array_get(entries, 0).bits(),
+    )) as *const crate::array::ArrayHeader;
+    assert_eq!(key_strings(first)[0], "1");
+    assert_eq!(crate::array::js_array_get(first, 1).as_number(), 11.0);
     // Descriptors.
     let d = crate::object::js_object_get_own_property_descriptor(recv(), key_value("1"));
     let dobj = crate::value::js_nanbox_get_pointer(d) as *const ObjectHeader;
