@@ -209,10 +209,13 @@ pub(crate) fn lower_array_method(
                 // effects before the call — which is why they are in the rooted
                 // operand list even though their values are discarded: they are
                 // collection points the receiver has to cross.
-                let blk = ctx.block();
-                let recv_handle = unbox_to_i64(blk, recv_box);
-                // Returns f64 directly (the popped element, NaN if empty).
-                Ok(blk.call(DOUBLE, "js_array_pop_f64", &[(I64, &recv_handle)]))
+                //
+                // Inline plain-array tier with `js_array_pop_f64` behind it
+                // (`expr/array_pop.rs`). Returns the popped element boxed
+                // (`undefined` when empty, from the call).
+                Ok(crate::expr::array_pop::lower_array_pop_inline(
+                    ctx, recv_box,
+                ))
             }
             "join" => {
                 let sep_box = arg_or_undefined(arg_vals, 0);

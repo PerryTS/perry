@@ -2529,6 +2529,7 @@ impl<'a> FnCtx<'a> {
 // per-chunk sibling modules. The dispatch in `lower_expr` below routes each
 // variant to its module's `lower(ctx, expr)` helper.
 mod array_methods;
+pub(crate) mod array_pop;
 mod array_push;
 mod arrays_finds;
 mod bigint_set;

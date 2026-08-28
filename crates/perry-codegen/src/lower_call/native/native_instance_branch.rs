@@ -457,9 +457,13 @@
             bail!("array.pop expects 0 args, got {}", args.len());
         }
         let arr_box = lower_expr(ctx, recv)?;
-        let blk = ctx.block();
-        let arr_handle = unbox_to_i64(blk, &arr_box);
-        return Ok(blk.call(DOUBLE, "js_array_pop_f64", &[(I64, &arr_handle)]));
+        // Inline plain-array tier with `js_array_pop_f64` behind it
+        // (`expr/array_pop.rs`): `this.packed.pop()` on an erased field is
+        // this route, and it is the 8–10% pop self time in the wolf-ecs
+        // entity cycle.
+        return Ok(crate::expr::array_pop::lower_array_pop_inline(
+            ctx, &arr_box,
+        ));
     }
 
     // Generic native module dispatch (with receiver): fastify instance
