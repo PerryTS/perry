@@ -162,15 +162,11 @@ pub extern "C" fn js_event_emitter_async_resource_subclass_init(this: f64, optio
 /// `super(n)` for a source-compiled `class X extends Array` (e.g. lru-cache's
 /// `ZeroArray`: `class ZeroArray extends Array { constructor(n){ super(n);
 /// this.fill(0) } }`). Perry models the subclass instance as a plain object,
-/// not a real exotic Array, so `super(n)` otherwise left it length-less with no
-/// Array methods. Size it (`length = ToLength(n)`, a visible own property the
-/// generic array-like helpers read) and install the Array surface the instance
-/// relies on — currently `fill`, which delegates to `js_array_fill_generic`
-/// (it operates on the receiver's own `length` + indexed properties, exactly
-/// what an array-like object exposes). Indexed get/set already work as ordinary
-/// object properties. Mirrors `js_event_emitter_subclass_init` (#5494); the
-/// codegen `super()` lowering for an `Array` parent calls this. Additional
-/// Array methods can be added to `array_subclass_methods` as bundles need them.
+/// not a real exotic Array, so `super(n)` initializes its elements store. In
+/// the default representation, inherited methods resolve through
+/// `Array.prototype` and are not stamped as enumerable own properties. The
+/// legacy shape-carried kill switch retains its old compatibility closure.
+/// The codegen `super()` lowering calls this entry point.
 #[no_mangle]
 pub extern "C" fn js_array_subclass_init(this: f64, n: f64) -> f64 {
     let raw = raw_ptr_from_value(this);
@@ -202,18 +198,6 @@ pub extern "C" fn js_array_subclass_init(this: f64, n: f64) -> f64 {
         unsafe {
             crate::array::subclass_elements::install_elements(obj, len.min(u32::MAX as f64) as u32)
         };
-        // The Array surface the instance relies on, installed exactly as in
-        // the shape-carried form. It must NOT be hidden behind a property
-        // descriptor: that sets `OBJ_FLAG_HAS_DESCRIPTORS` on every instance,
-        // which the codegen class-field inline guard rejects — every field
-        // read then takes the IC miss (measured: 6x on the wolf-ecs twins).
-        // `fill` showing up in `getOwnPropertyNames` is the pre-existing
-        // divergence tracked in #8953, unchanged by the elements store.
-        let this = this_root.get_nanbox_f64();
-        let obj = raw_ptr_from_value(this) as *mut ObjectHeader;
-        crate::closure::js_register_closure_arity(ns_array_fill as *const u8, 3);
-        let methods: [(&str, StubFn); 1] = [("fill", super::cast3(ns_array_fill))];
-        install_methods_on_existing_object(obj, this, &methods, &[]);
         return this_root.get_nanbox_f64();
     }
     let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
@@ -258,9 +242,7 @@ pub unsafe extern "C" fn js_array_subclass_init_args(
     this.get_nanbox_f64()
 }
 
-/// `Array.prototype.fill`-equivalent installed on an Array-subclass instance:
-/// fills the receiver's own indexed slots `0..length` with `value`. Delegates
-/// to the generic array-like fill (which reads `length` off the receiver).
+/// Legacy shape-carried compatibility closure for `Array.prototype.fill`.
 pub(super) extern "C" fn ns_array_fill(
     closure: *const ClosureHeader,
     value: f64,

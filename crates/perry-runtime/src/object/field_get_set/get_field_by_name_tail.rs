@@ -1,12 +1,9 @@
-//! Object-deref tail of `js_object_get_field_by_name`: pointer-strip,
-//! handle dispatch, and the full ObjectHeader property walk. Extracted
-//! verbatim from field_get_set.rs (issue #1103 split) so neither half
-//! exceeds the file-size budget. Pure relocation — no logic change.
+//! Object-deref tail of `js_object_get_field_by_name`: pointer stripping,
+//! handle dispatch, and the full ObjectHeader property walk (#1103 split).
 
 use super::*;
 
-/// Tail of `js_object_get_field_by_name` (everything after the leading
-/// primitive/handle/Date receiver guards). Body moved verbatim.
+/// Object-deref tail of `js_object_get_field_by_name`.
 pub(crate) fn get_field_by_name_object_tail(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
@@ -1470,6 +1467,9 @@ pub(crate) fn get_field_by_name_object_tail(
                 {
                     return v;
                 }
+                if let Some(v) = super::accessors::array_subclass_prototype_field(obj, key) {
+                    return v;
+                }
                 if let Some(v) = ordinary_object_prototype_property_value(obj, key) {
                     return v;
                 }
@@ -1871,6 +1871,9 @@ pub(crate) fn get_field_by_name_object_tail(
             if let Some(v) =
                 super::super::prototype_chain::resolve_inherited_field(obj as usize, key)
             {
+                return v;
+            }
+            if let Some(v) = super::accessors::array_subclass_prototype_field(obj, key) {
                 return v;
             }
             if let Some(v) = ordinary_object_prototype_property_value(obj, key) {

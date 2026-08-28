@@ -2102,19 +2102,38 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         let method_key =
             crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
         if !method_key.is_null() {
-            let inherited = super::prototype_chain::resolve_inherited_field(
-                obj as usize,
-                method_key,
-            )
-            .or_else(|| unsafe {
-                // A plain object's implicit Object.prototype is not stored in
-                // the recorded-prototype table. Property reads already use
-                // this guarded fallback, so direct `obj.method()` dispatch
-                // must consult it too (including user-added methods such as a
-                // borrowed Array.prototype.join). The helper rejects arrays,
-                // exotic/null-prototype objects, and explicit overrides.
-                super::field_get_set::ordinary_object_prototype_property_value(obj, method_key)
-            });
+            let inherited =
+                super::prototype_chain::resolve_inherited_field(obj as usize, method_key)
+                    .or_else(|| unsafe {
+                        // A plain object's implicit Object.prototype is not stored in
+                        // the recorded-prototype table. Property reads already use
+                        // this guarded fallback, so direct `obj.method()` dispatch
+                        // must consult it too (including user-added methods such as a
+                        // borrowed Array.prototype.join). The helper rejects arrays,
+                        // exotic/null-prototype objects, and explicit overrides.
+                        super::field_get_set::ordinary_object_prototype_property_value(
+                            obj, method_key,
+                        )
+                    })
+                    .or_else(|| unsafe {
+                        // Elements-backed Array-subclass instances inherit `fill`
+                        // instead of carrying a bound enumerable own closure (#8953).
+                        // A class method or explicit per-instance prototype wins; only
+                        // the ordinary class chain reaches Array.prototype here.
+                        let class_id = (*obj).class_id;
+                        if method_name != "fill"
+                            || super::prototype_chain::object_static_prototype(obj as usize)
+                                .is_some()
+                            || !crate::array::is_array_subclass_class_id(class_id)
+                            || lookup_class_method_in_chain(class_id, method_name).is_some()
+                        {
+                            return None;
+                        }
+                        super::field_get_set::array_prototype_property_value(
+                            method_name,
+                            obj as usize,
+                        )
+                    });
             if let Some(field_val) = inherited {
                 if !field_val.is_undefined() && !field_val.is_null() {
                     let bound = crate::closure::clone_closure_rebind_this(

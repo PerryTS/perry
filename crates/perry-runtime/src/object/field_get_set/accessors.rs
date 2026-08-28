@@ -599,6 +599,29 @@ pub(crate) unsafe fn string_index_value(
     }
 }
 
+/// Resolve an inherited `Array.prototype` property for an Array-subclass
+/// instance after its own fields and class-declared methods have missed.
+/// An explicit per-instance prototype replaces the ordinary class chain and
+/// therefore suppresses this implicit fallback.
+pub(crate) unsafe fn array_subclass_prototype_field(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
+    if obj.is_null()
+        || key.is_null()
+        || super::super::prototype_chain::object_static_prototype(obj as usize).is_some()
+        || !crate::array::is_array_subclass_class_id((*obj).class_id)
+    {
+        return None;
+    }
+    let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let key_len = (*key).byte_len as usize;
+    let name = std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).ok()?;
+    // `array_prototype_property_value` copies `name` before its first
+    // allocation and roots the receiver across the prototype lookup.
+    array_prototype_property_value(name, obj as usize)
+}
+
 pub(crate) unsafe fn array_prototype_property_value(
     name: &str,
     receiver_addr: usize,
@@ -625,6 +648,8 @@ pub(crate) unsafe fn array_prototype_property_value(
     let name_copy = super::HeapKeyBytes::copy_of(name.as_bytes());
     let name: &str = std::str::from_utf8_unchecked(name_copy.as_bytes());
 
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver_addr as i64));
     let ctor = super::super::js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
     let ctor_value = JSValue::from_bits(ctor.to_bits());
     if !ctor_value.is_pointer() {
@@ -636,15 +661,11 @@ pub(crate) unsafe fn array_prototype_property_value(
     if !proto_value.is_pointer() {
         return None;
     }
-    // #7498: `js_string_from_bytes` ALLOCATES, so `Array.prototype` and the
-    // receiver cannot be carried across it as bare `usize`s — and the key it
-    // produces is itself a fresh heap string this function then hands to two
-    // more calls that can collect (`js_object_get_field_by_name` runs getters;
-    // `default_object_prototype_property_value` interns another key). Root all
-    // three and read each back at its point of use.
-    let scope = crate::gc::RuntimeHandleScope::new();
+    // #7498: the receiver is rooted before the allocating global lookup above;
+    // `Array.prototype` and the fresh key are rooted before the calls below,
+    // which can collect (`js_object_get_field_by_name` runs getters and
+    // `default_object_prototype_property_value` interns another key).
     let proto_h = scope.root_nanbox_f64(proto);
-    let receiver_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver_addr as i64));
     let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(
         crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32),
     ));

@@ -543,11 +543,11 @@ pub(crate) unsafe fn array_subclass_named_prefix_token_for_slot(
         }
     }
 
-    // `js_array_subclass_init` installs two canonical own properties that are
-    // absent from most class allocation shapes: `length` and the generic
-    // `fill` method. If a class declared either name, init overwrites its
-    // existing slot; otherwise the exact missing names must follow the
-    // declared prefix in that order. Anything else is instance-specific.
+    // The legacy shape-carried representation installs `length` and its
+    // compatibility `fill` closure after the declared prefix. The default
+    // elements-backed representation inherits `fill` from `Array.prototype`
+    // and has no runtime names in its shape. Anything else is
+    // instance-specific.
     let declared_count = declared_count as u32;
     let mut expected_runtime_names: [&[u8]; 2] = [&[]; 2];
     let mut expected_runtime_count = 0usize;
@@ -568,7 +568,7 @@ pub(crate) unsafe fn array_subclass_named_prefix_token_for_slot(
         // elements store (the store owns `length`); keep it off this token.
         return 0;
     }
-    if !declared_fill {
+    if !elements_backed && !declared_fill {
         expected_runtime_names[expected_runtime_count] = b"fill";
         expected_runtime_count += 1;
     }
