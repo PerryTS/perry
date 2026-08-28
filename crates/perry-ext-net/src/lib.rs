@@ -116,8 +116,8 @@ pub use server_state::*;
 mod jsvalue;
 pub(crate) use jsvalue::{
     build_error_object, get_object_bool_field, get_object_number_field, get_object_string_field,
-    get_object_value_field, is_nanboxed_pointer, jsvalue_to_socket_bytes, string_from_header_i64,
-    unbox_pointer,
+    get_object_value_field, is_nanboxed_pointer, jsvalue_to_owned_string, jsvalue_to_socket_bytes,
+    string_from_header_i64, unbox_pointer,
 };
 
 use crate::tls::{do_tls_handshake, record_tls_handshake, TlsClientConfigData};
@@ -380,7 +380,6 @@ enum PendingNetEvent {
 // callback pointer with it.
 extern "C" {
     fn js_net_callback_ptr(value: f64) -> i64;
-    fn js_get_string_pointer_unified(value: f64) -> i64;
     fn js_async_hooks_provider_init(type_ptr: *const u8, type_len: usize) -> u64;
     fn js_async_hooks_provider_init_with_trigger(
         type_ptr: *const u8,
@@ -494,14 +493,10 @@ pub unsafe extern "C" fn js_net_socket_connect(arg1_f64: f64, arg2_f64: f64, arg
         return handle;
     }
     // Positional overload: arg1 is the port number, arg2 is the host
-    // string (NaN-boxed), arg3 is the optional connectListener. Reuse
-    // the runtime's string-pointer unifier (handles STRING_TAG and
-    // POINTER_TAG strings the same way).
-    extern "C" {
-        fn js_get_string_pointer_unified(value: f64) -> i64;
-    }
-    let host_ptr = js_get_string_pointer_unified(arg2_f64);
-    let (host, listener_f64) = match string_from_header_i64(host_ptr) {
+    // string (NaN-boxed), arg3 is the optional connectListener. Accept only
+    // actual JS string tags: arg2 may instead be the connectListener closure,
+    // whose POINTER_TAG storage must never be read as a StringHeader (#8909).
+    let (host, listener_f64) = match jsvalue_to_owned_string(arg2_f64) {
         Some(h) => (h, arg3_f64),
         // #4905: `connect(port)` / `connect(port, connectListener)` —
         // Node defaults the host to localhost when arg2 isn't a string
@@ -662,8 +657,10 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
         // #2013: a numeric `port` must be an integer in [0, 65536); Node throws
         // RangeError [ERR_SOCKET_BAD_PORT] otherwise.
         js_net_validate_listen_port(port);
-        let host = string_from_header_i64(js_get_string_pointer_unified(arg2.get()))
-            .unwrap_or_else(|| "0.0.0.0".to_string());
+        // `listen(port, callback)` places the callback in arg2. Keep the host
+        // boundary strict so closure/object storage cannot become a hostname;
+        // real heap and SSO strings are copied at their logical byte length.
+        let host = jsvalue_to_owned_string(arg2.get()).unwrap_or_else(|| "0.0.0.0".to_string());
         (port as u16, host)
     };
     let server_async_id = init_provider(b"TCPSERVERWRAP");

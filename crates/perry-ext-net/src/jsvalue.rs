@@ -51,6 +51,23 @@ extern "C" {
     fn js_get_string_pointer_unified(value: f64) -> i64;
 }
 
+/// Read an actual NaN-boxed JS string using its logical byte length.
+///
+/// `js_get_string_pointer_unified` also accepts `POINTER_TAG` values for
+/// historical callers that pass raw string pointers. That permissive fallback
+/// is unsafe at typed JS-value boundaries: closures and ordinary objects use
+/// the same tag, and interpreting their storage as a `StringHeader` can leak
+/// header bytes (including NULs) into a native hostname or path. Check the JS
+/// tag first, then materialize heap and SSO strings through the shared runtime
+/// helper and copy exactly `StringHeader::byte_len` bytes via `read_string`.
+pub(crate) unsafe fn jsvalue_to_owned_string(value: f64) -> Option<String> {
+    let value_kind = JsValue::from_bits(value.to_bits());
+    if !value_kind.is_any_string() {
+        return None;
+    }
+    string_from_header_i64(js_get_string_pointer_unified(value))
+}
+
 /// Issue #1131 — read a NaN-boxed JS value as the raw bytes to put on
 /// the wire for `socket.write(chunk)`. Outbound mirror of
 /// `perry-ext-http`'s `jsvalue_to_body_bytes` (#1124): a JS
@@ -178,8 +195,8 @@ pub(crate) unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> 
     if val.is_undefined() || val.is_null() {
         return None;
     }
-    if val.is_string() {
-        return string_from_header_i64(val.as_string_ptr() as i64);
+    if val.is_any_string() {
+        return jsvalue_to_owned_string(val_f64);
     }
     if val.is_number() {
         return Some(format!("{}", val.to_number() as i64));
@@ -221,8 +238,8 @@ pub(crate) unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> 
         return Some(val.to_number());
     }
     // Some npm code passes `port` as a string — accept that too.
-    if val.is_string() {
-        if let Some(s) = string_from_header_i64(val.as_string_ptr() as i64) {
+    if val.is_any_string() {
+        if let Some(s) = jsvalue_to_owned_string(val_f64) {
             if let Ok(n) = s.parse::<f64>() {
                 return Some(n);
             }
@@ -364,6 +381,36 @@ mod tests {
         let v = JsValue::from_string_ptr(s.as_raw());
         let bytes = unsafe { jsvalue_to_socket_bytes(f64::from_bits(v.bits())) };
         assert_eq!(bytes.as_deref(), Some(&b"longer-than-sso"[..]));
+    }
+
+    /// #8909 — native address conversion must copy only the logical string
+    /// payload and must never treat a callback/object pointer's storage as a
+    /// `StringHeader`. `listen(port, callback)` puts the callback in the same
+    /// positional slot used by `listen(port, host, callback)`; accepting its
+    /// POINTER_TAG used to feed closure-header NUL bytes to `TcpListener::bind`.
+    #[test]
+    fn address_string_boundary_accepts_strings_and_rejects_pointer_storage() {
+        let host = alloc_string("127.0.0.1");
+        let heap_string = f64::from_bits(JsValue::from_string_ptr(host.as_raw()).bits());
+        let converted = unsafe { jsvalue_to_owned_string(heap_string) };
+        assert_eq!(converted.as_deref(), Some("127.0.0.1"));
+        assert!(!converted.unwrap().contains('\0'));
+
+        assert_eq!(
+            unsafe { jsvalue_to_owned_string(sso(b"::1")) }.as_deref(),
+            Some("::1"),
+            "short inline host strings must retain their logical length"
+        );
+
+        // Use a valid allocation behind the wrong tag so this regression test
+        // safely proves the tag check. The pre-fix listen conversion accepted
+        // every POINTER_TAG (including a real closure) and read its storage as
+        // a string header.
+        let pointer_tagged_storage = f64::from_bits(JsValue::from_object_ptr(host.as_raw()).bits());
+        assert!(unsafe { jsvalue_to_owned_string(pointer_tagged_storage) }.is_none());
+        assert!(
+            unsafe { jsvalue_to_owned_string(f64::from_bits(JsValue::UNDEFINED.bits())) }.is_none()
+        );
     }
 
     /// The clean non-string reject must still hold: a `POINTER_TAG`
