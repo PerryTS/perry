@@ -6753,7 +6753,9 @@ fn expr_array_length_effect(
         expr_array_length_effect(ctx, sub, arr_id, bounded_idx_id, has_strict_bound, aliases)
     };
     match e {
-        Expr::ArrayPush { array_id, value } => {
+        Expr::ArrayPush {
+            array_id, value, ..
+        } => {
             if local_may_alias_guarded_array(ctx, arr_id, *array_id, aliases) {
                 LoopArrayLengthEffect::AliasLengthMutation
             } else {
@@ -7213,9 +7215,9 @@ pub(crate) fn expr_preserves_array_length(
         expr_preserves_array_length(ctx, sub, arr_id, bounded_idx_id, has_strict_bound, aliases)
     };
     match e {
-        Expr::ArrayPush { array_id, value } => {
-            !local_may_alias_guarded_array(ctx, arr_id, *array_id, aliases) && walk(value)
-        }
+        Expr::ArrayPush {
+            array_id, value, ..
+        } => !local_may_alias_guarded_array(ctx, arr_id, *array_id, aliases) && walk(value),
         Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
             !local_may_alias_guarded_array(ctx, arr_id, *id, aliases)
         }

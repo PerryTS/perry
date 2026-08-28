@@ -774,7 +774,9 @@ impl<'a> UseWalk<'a> {
             // Numeric push keeps every invariant (canonical store through the
             // Phase 4a.1 tiers; growth writes the live head back to the
             // slot). A possibly-non-numeric push value disqualifies.
-            Expr::ArrayPush { array_id, value } => {
+            Expr::ArrayPush {
+                array_id, value, ..
+            } => {
                 if self.is_candidate(*array_id) && !self.value_is_numeric(*array_id, value) {
                     self.disq(*array_id);
                 }
@@ -955,6 +957,7 @@ mod tests {
         Expr::ArrayPush {
             array_id: id,
             value: Box::new(value),
+            field_writeback: None,
         }
     }
 

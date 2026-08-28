@@ -398,6 +398,7 @@ fn number_typed_local_array_push_keeps_layout_note_and_barrier() {
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 2,
                 value: Box::new(Expr::LocalGet(1)),
+                field_writeback: None,
             }),
             Stmt::Return(Some(Expr::LocalGet(2))),
         ],
@@ -722,6 +723,7 @@ fn integer_arithmetic_array_push_omits_inbounds_layout_note_and_barrier() {
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::Number(1.5)),
                     }),
+                    field_writeback: None,
                 })],
             },
             Stmt::Return(Some(Expr::LocalGet(1))),

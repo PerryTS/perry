@@ -493,6 +493,7 @@ fn exact_local_array_construction_skips_the_runtime_shape_scan() {
                 byte_offset: 0,
                 cap_args_appended: 0,
             }),
+            field_writeback: None,
         }),
     );
 

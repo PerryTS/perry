@@ -560,7 +560,7 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(init, candidates, classes, escaped);
             }
         }
-        Expr::ArrayPush { array_id, value } => {
+        Expr::ArrayPush { array_id, value, ..  } => {
             if candidates.contains_key(array_id) {
                 escaped.insert(*array_id);
             }

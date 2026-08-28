@@ -1600,6 +1600,12 @@ pub enum Expr {
     ArrayPush {
         array_id: LocalId,
         value: Box<Expr>,
+        /// `Some(field)` when `perry-transform::field_push_local_bind` bound
+        /// `this.<field>.push(value)` to the local `array_id`: after the push,
+        /// codegen re-points `this.<field>` at the local's head when the
+        /// append re-allocated it (compared by handle bits — JS equality sees
+        /// through growth forwarding, so it cannot express this).
+        field_writeback: Option<String>,
     }, // arr.push(value) -> new length
     ArrayPushSpread {
         array_id: LocalId,

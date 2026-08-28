@@ -25,7 +25,7 @@
 //!    would point the local at an array the declaration never covered, and the
 //!    elided stores would then be describing the wrong object.
 //! 3. **Every store into it is a push of an allocation, and there is at least
-//!    one.** Every `Expr::ArrayPush { array_id: id }` pushes a fresh
+//!    one.** Every `Expr::ArrayPush { array_id: id, ..  }` pushes a fresh
 //!    allocation; no `Expr::ArrayPushSpread`, no `Expr::IndexSet` whose object
 //!    is `LocalGet(id)` (an indexed store can jump past `length`, a different
 //!    claim than "append"), no other in-place array mutation.
@@ -168,7 +168,9 @@ pub(crate) fn collect_all_pointer_array_locals(
         Expr::ArrayPop(array_id) | Expr::ArrayShift(array_id) => {
             killed.insert(*array_id);
         }
-        Expr::ArrayPush { array_id, value } => {
+        Expr::ArrayPush {
+            array_id, value, ..
+        } => {
             if crate::expr::expr_produces_fresh_heap_allocation(value) {
                 pushed.insert(*array_id);
             } else {
@@ -258,6 +260,7 @@ mod tests {
         Stmt::Expr(Expr::ArrayPush {
             array_id: id,
             value: Box::new(value),
+            field_writeback: None,
         })
     }
 

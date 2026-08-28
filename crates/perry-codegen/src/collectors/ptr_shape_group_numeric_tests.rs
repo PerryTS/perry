@@ -152,6 +152,7 @@ fn push(array_id: u32, value: Expr) -> Stmt {
     Stmt::Expr(Expr::ArrayPush {
         array_id,
         value: Box::new(value),
+        field_writeback: None,
     })
 }
 

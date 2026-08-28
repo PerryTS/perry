@@ -374,7 +374,7 @@ impl SH for Expr {
             Expr::NetCreateServer { options, connection_listener, } => { tag(h, 246); options.hash(h); connection_listener.hash(h); }
             Expr::NetCreateConnection { port, host, connect_listener, } => { tag(h, 247); port.as_ref().hash(h); host.hash(h); connect_listener.hash(h); }
             Expr::NetConnect { port, host, connect_listener, } => { tag(h, 248); port.as_ref().hash(h); host.hash(h); connect_listener.hash(h); }
-            Expr::ArrayPush { array_id, value } => { tag(h, 249); array_id.hash(h); value.as_ref().hash(h); }
+            Expr::ArrayPush { array_id, value, field_writeback } => { tag(h, 249); array_id.hash(h); value.as_ref().hash(h); field_writeback.hash(h); }
             Expr::ArrayPushSpread { array_id, source } => { tag(h, 250); array_id.hash(h); source.as_ref().hash(h); }
             Expr::ArrayPop(id) => { tag(h, 251); id.hash(h); }
             Expr::ArrayShift(id) => { tag(h, 252); id.hash(h); }

@@ -1,6 +1,6 @@
 //! Bind `this.field.push(v)` to a local so the inline append lowering applies.
 //!
-//! `arr.push(v)` on a LOCAL array lowers to `Expr::ArrayPush { array_id }`,
+//! `arr.push(v)` on a LOCAL array lowers to `Expr::ArrayPush { array_id, ..  }`,
 //! which codegen turns into an inline bump append: a header test, one store,
 //! and — when the value and the live header jointly prove it — none of the
 //! per-store GC bookkeeping calls. The same push through a class field
@@ -19,10 +19,8 @@
 //! into
 //!
 //! ```text
-//! let __push_recv_old = this.f;
-//! let __push_recv = __push_recv_old;
-//! __push_recv.push(v);                       // Expr::ArrayPush
-//! if (__push_recv !== __push_recv_old) this.f = __push_recv;
+//! let __push_recv = this.f;
+//! __push_recv.push(v);   // Expr::ArrayPush { field_writeback: Some("f") }
 //! ```
 //!
 //! which is, read for read and write for write, what the native lowering
@@ -33,6 +31,19 @@
 //! against the original for exactly this). A `let` local is what codegen
 //! roots across the value's evaluation, so the head survives a collection
 //! there; a synthetic codegen slot would not.
+//!
+//! The write-back is NOT expressed in HIR. An earlier shape of this pass
+//! emitted `if (__push_recv !== __push_recv_old) this.f = __push_recv;`,
+//! and that guard is dead: a growing append leaves the old head as a
+//! forwarding stub to the new one, and JS equality sees through forwarding
+//! (perry matches Node — `const a = []; let b = a; b.push(...); a === b`
+//! stays `true`), so the field kept pointing at the stub and every later
+//! `this.f.length` / `this.f[i]` walked it through the dynamic property
+//! path (#8897: a 2.5× entity-cycle regression that decayed only as the
+//! arrays stopped growing). Instead the `ArrayPush` node carries the field
+//! name in `field_writeback`, and codegen compares the receiver local's
+//! HANDLE BITS before and after the append — the one comparison that does
+//! not see through forwarding — re-pointing `this.f` when they differ.
 //!
 //! Admission is deliberately narrow:
 //!
@@ -46,7 +57,12 @@
 //!   where a field may not be initialised yet, and never a static method.
 use perry_hir::types::LocalId;
 use perry_hir::types::Type;
-use perry_hir::{Class, CompareOp, Expr, Function, Module, Stmt};
+use perry_hir::{Class, Expr, Function, Module, Stmt};
+
+/// Name of the receiver local one expansion binds. `perry-codegen`'s
+/// tiny-method rule (`collectors/hot_callees.rs`) recognises an expansion by
+/// this name so the two statements still count as the one the author wrote.
+pub const FIELD_PUSH_RECEIVER_NAME: &str = "__push_recv";
 
 use crate::closure_local_inline::nested_stmt_lists;
 
@@ -108,45 +124,24 @@ fn process_stmts(stmts: &mut Vec<Stmt>, fields: &[(String, Type)], next_local_id
             .into_iter()
             .next()
             .expect("push_single carries one argument");
-        let old_id = alloc_local(next_local_id);
         let recv_id = alloc_local(next_local_id);
-        let field_get = || Expr::PropertyGet {
-            object: Box::new(Expr::This),
-            property: field.clone(),
-            byte_offset: 0,
-        };
         let rewritten = [
             Stmt::Let {
-                id: old_id,
-                name: "__push_recv_old".to_string(),
-                ty: ty.clone(),
-                mutable: false,
-                init: Some(field_get()),
-            },
-            Stmt::Let {
                 id: recv_id,
-                name: "__push_recv".to_string(),
+                name: FIELD_PUSH_RECEIVER_NAME.to_string(),
                 ty: ty.clone(),
                 mutable: true,
-                init: Some(Expr::LocalGet(old_id)),
+                init: Some(Expr::PropertyGet {
+                    object: Box::new(Expr::This),
+                    property: field.clone(),
+                    byte_offset: 0,
+                }),
             },
             Stmt::Expr(Expr::ArrayPush {
                 array_id: recv_id,
                 value: Box::new(value),
+                field_writeback: Some(field),
             }),
-            Stmt::If {
-                condition: Expr::Compare {
-                    op: CompareOp::Ne,
-                    left: Box::new(Expr::LocalGet(recv_id)),
-                    right: Box::new(Expr::LocalGet(old_id)),
-                },
-                then_branch: vec![Stmt::Expr(Expr::PropertySet {
-                    object: Box::new(Expr::This),
-                    property: field.clone(),
-                    value: Box::new(Expr::LocalGet(recv_id)),
-                })],
-                else_branch: None,
-            },
         ];
         let n = rewritten.len();
         stmts.splice(i..i, rewritten);
@@ -278,61 +273,56 @@ mod tests {
     }
 
     #[test]
-    fn a_field_push_statement_binds_a_local_and_writes_back_only_on_realloc() {
+    fn a_field_push_statement_binds_a_local_and_carries_the_field_writeback() {
         let mut m = module_with(class(
             vec![field("items", Type::Array(Box::new(Type::Number)))],
             vec![push_stmt("items")],
         ));
         run(&mut m);
         let body = &m.classes[0].methods[0].body;
-        assert_eq!(body.len(), 4, "{body:?}");
-        let (old_id, recv_id) = match (&body[0], &body[1]) {
-            (
-                Stmt::Let {
-                    id: old,
-                    init: Some(Expr::PropertyGet { property, .. }),
-                    ..
-                },
-                Stmt::Let {
-                    id: recv,
-                    init: Some(Expr::LocalGet(from)),
-                    mutable: true,
-                    ..
-                },
-            ) => {
-                assert_eq!(property, "items");
-                assert_eq!(from, old);
-                (*old, *recv)
-            }
-            other => panic!("expected the two receiver lets, got {other:?}"),
-        };
-        assert!(
-            matches!(&body[2], Stmt::Expr(Expr::ArrayPush { array_id, .. }) if *array_id == recv_id),
-            "the push must target the mutable receiver local: {:?}",
-            body[2]
-        );
-        match &body[3] {
-            Stmt::If {
-                condition:
-                    Expr::Compare {
-                        op: CompareOp::Ne,
-                        left,
-                        right,
-                    },
-                then_branch,
-                else_branch: None,
+        assert_eq!(body.len(), 2, "{body:?}");
+        let recv_id = match &body[0] {
+            Stmt::Let {
+                id,
+                name,
+                init:
+                    Some(Expr::PropertyGet {
+                        object, property, ..
+                    }),
+                mutable: true,
+                ..
             } => {
-                assert!(matches!(left.as_ref(), Expr::LocalGet(id) if *id == recv_id));
-                assert!(matches!(right.as_ref(), Expr::LocalGet(id) if *id == old_id));
-                assert!(matches!(
-                    &then_branch[..],
-                    [Stmt::Expr(Expr::PropertySet { property, value, .. })]
-                        if property == "items"
-                            && matches!(value.as_ref(), Expr::LocalGet(id) if *id == recv_id)
-                ));
+                assert_eq!(name, FIELD_PUSH_RECEIVER_NAME);
+                assert!(matches!(object.as_ref(), Expr::This));
+                assert_eq!(property, "items");
+                *id
             }
-            other => panic!("expected the guarded write-back, got {other:?}"),
+            other => panic!("expected the mutable receiver let, got {other:?}"),
+        };
+        match &body[1] {
+            Stmt::Expr(Expr::ArrayPush {
+                array_id,
+                field_writeback: Some(field),
+                ..
+            }) => {
+                assert_eq!(
+                    *array_id, recv_id,
+                    "the push must target the receiver local"
+                );
+                assert_eq!(
+                    field, "items",
+                    "the write-back names the field the receiver came from"
+                );
+            }
+            other => panic!("expected the field-writeback push, got {other:?}"),
         }
+        // No HIR-level guard: the `!==` compare an earlier shape emitted is
+        // dead after a growing append (#8897), so nothing but the two
+        // statements above may remain.
+        assert!(
+            !body.iter().any(|s| matches!(s, Stmt::If { .. })),
+            "the write-back must not be an HIR compare: {body:?}"
+        );
     }
 
     #[test]

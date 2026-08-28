@@ -112,6 +112,7 @@ fn module_with_callback(declare_source_array_param: bool) -> Module {
                 byte_offset: 0,
                 cap_args_appended: 0,
             }),
+            field_writeback: None,
         }),
         Stmt::Expr(Expr::ArrayForEach {
             array: Box::new(Expr::LocalGet(ARRAY_ID)),

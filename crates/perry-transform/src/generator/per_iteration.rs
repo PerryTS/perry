@@ -852,7 +852,7 @@ pub(crate) fn collect_written_suspended_loop_captures(body: &[Stmt]) -> HashSet<
 
 /// Ids that appear in a reference form [`rewrite_written_captures_to_cells`]
 /// does NOT rewrite: array/set mutation intrinsics keyed on a bare `LocalId`
-/// (`arr.push(x)` → `ArrayPush { array_id }`, `set.add(x)`, `arr.pop()`, …) and
+/// (`arr.push(x)` → `ArrayPush { array_id, ..  }`, `set.add(x)`, `arr.pop()`, …) and
 /// `with`-statement fallbacks. Turning such a binding into a cell would leave
 /// the intrinsic pointing at the one-element cell array instead of the value it
 /// holds, so these ids are excluded from the candidate set.

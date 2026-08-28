@@ -1,0 +1,3 @@
+### Fixed
+
+- The `this.f.push(v)` expansion (`field_push_local_bind`) wrote the field back through a JS `!==` guard that never fired: a growing append leaves the old head forwarding to the new one and equality sees through forwarding, so the field kept the stub and every later `this.f.length` / `this.f[i]` took the dynamic property path (#8897 — a 2.5× cold-phase regression in the wolf-ecs entity cycle). `Expr::ArrayPush` now carries the field to write back and codegen compares the receiver local's handle bits before and after the append, re-pointing the field — behind an inline plain-object header gate — when they differ.

@@ -1071,6 +1071,7 @@ fn typed_feedback_guards_numeric_array_push_specialization() {
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 1,
                 value: Box::new(Expr::Number(7.0)),
+                field_writeback: None,
             }),
             Stmt::Return(Some(Expr::LocalGet(1))),
         ],
@@ -1143,6 +1144,7 @@ fn typed_feedback_inline_array_writes_note_numeric_downgrade() {
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 2,
                 value: Box::new(Expr::String("still-not-number".to_string())),
+                field_writeback: None,
             }),
             Stmt::Return(Some(Expr::LocalGet(2))),
         ],

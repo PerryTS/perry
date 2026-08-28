@@ -487,9 +487,14 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         ),
 
         // Array methods
-        Expr::ArrayPush { array_id, value } => Expr::ArrayPush {
+        Expr::ArrayPush {
+            array_id,
+            value,
+            field_writeback,
+        } => Expr::ArrayPush {
             array_id: *array_id,
             value: Box::new(substitute_expr(value, substitutions)),
+            field_writeback: field_writeback.clone(),
         },
         Expr::ArrayPushSpread { array_id, source } => Expr::ArrayPushSpread {
             array_id: *array_id,

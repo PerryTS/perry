@@ -201,7 +201,9 @@ impl SubstituteLocal {
                 *id = self.to;
                 return;
             }
-            Expr::ArrayPush { array_id, value } => {
+            Expr::ArrayPush {
+                array_id, value, ..
+            } => {
                 if *array_id == self.from {
                     *array_id = self.to;
                 }

@@ -74,7 +74,9 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
-            Expr::ArrayPush { array_id, value } => {
+            Expr::ArrayPush {
+                array_id, value, ..
+            } => {
                 self.emit_local_or_global_get(func, array_id);
                 self.emit_frame_begin(func, 2);
                 func.instruction(&Instruction::LocalSet(self.temp_local));
