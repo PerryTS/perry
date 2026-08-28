@@ -670,6 +670,15 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
         }
         return arr;
     }
+    // An object-backed Array subclass carries `GC_TYPE_OBJECT`, so the tracked
+    // resolver below is a guaranteed miss for it. Ask the dense subclass append
+    // first, off the header tag the guarded element tiers already read; every
+    // rejected case (no dense proof, integrity flags, tail not learned) keeps
+    // the complete route below. wolf-ecs `packed.push(id)` on an `Archetype`
+    // paid the resolver twice per push once #8897 routed field pushes here.
+    if object_backed_push_fast(arr, value) {
+        return arr;
+    }
     let cleaned = clean_arr_ptr_mut(arr);
     if cleaned.is_null() {
         // #7574: a `class X extends Array` instance (or any array-like object)
@@ -690,6 +699,17 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
         return js_array_alloc(0);
     }
     unsafe { js_array_push_f64_resolved(cleaned, value) }
+}
+
+/// The dense object-backed Array-subclass append, dispatched off the receiver's
+/// `GC_TYPE_OBJECT` header tag before any allocator/registry resolution. The
+/// caller has already demoted a uniquely-owned heap string in `value`.
+#[inline]
+fn object_backed_push_fast(arr: *mut ArrayHeader, value: f64) -> bool {
+    if crate::array::array_receiver_gc_tag(arr).0 != crate::gc::GC_TYPE_OBJECT {
+        return false;
+    }
+    crate::array::subclass::array_subclass_fast_push_one_raw(arr, value).is_some()
 }
 
 /// Push into a live, forwarding-resolved plain Array. The caller owns all
@@ -831,6 +851,16 @@ static KEEP_JS_ARRAY_PUSH_U31_WITH_LENGTH: extern "C" fn(
 pub extern "C" fn js_array_push_f64_spec(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
     if array_ptr_as_proxy(arr).is_some() {
         return js_array_push_f64(arr, value);
+    }
+    // Object-backed Array subclass: the dense append needs neither the tracked
+    // resolver nor the exotic probe (both are classification misses for an
+    // OBJECT header); the string demote precedes the store as in
+    // `js_array_push_f64`.
+    if crate::array::array_receiver_gc_tag(arr).0 == crate::gc::GC_TYPE_OBJECT {
+        crate::string::js_string_addref_if_heap_string(value);
+        if crate::array::subclass::array_subclass_fast_push_one_raw(arr, value).is_some() {
+            return arr;
+        }
     }
     let cleaned = clean_arr_ptr_mut(arr);
     if cleaned.is_null() {

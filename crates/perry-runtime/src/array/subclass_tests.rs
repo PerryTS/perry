@@ -571,6 +571,62 @@ fn transition_cache_carrier_bits_follow_live_occupancy_across_full_trace_recompu
     );
 }
 
+/// The spec push entry (the typed field-push lowering's complete fallback)
+/// and the generic entry both append to an object-backed Array subclass
+/// through the dense fast arm, off the header tag, without the tracked
+/// resolver: the receiver pointer is returned unchanged and the element is
+/// readable through the dense read.
+#[test]
+fn spec_and_generic_push_entries_append_to_an_object_backed_subclass_densely() {
+    let _global = crate::gc::global_side_table_test_lock();
+    crate::object::array_tail_transition::test_clear();
+    let class_id = 0x0074_8696;
+    crate::object::js_register_class_parent(class_id, CLASS_ID_ARRAY);
+    let obj = js_object_alloc(class_id, 2);
+    assert!(!obj.is_null());
+    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+    crate::node_stream::js_array_subclass_init(receiver, 0.0);
+    // Learn the tail edge once through the generic route.
+    assert_eq!(
+        js_array_push_f64(obj as *mut ArrayHeader, 1.0),
+        obj as *mut ArrayHeader
+    );
+    assert_eq!(array_subclass_fast_pop(receiver), Some(1.0));
+    // Reference: the fused u31 entry's dense arm. Whatever tracked-resolver
+    // probes the arm itself needs, the spec and generic entries must need the
+    // same number — none of their own before reaching it.
+    let probes = crate::value::addr_class::tracked_header_probe_count_for_tests;
+    let mut length = u32::MAX;
+    let before = probes();
+    assert_eq!(
+        js_array_push_u31_with_length(obj as *mut ArrayHeader, 5, &mut length),
+        obj as *mut ArrayHeader
+    );
+    let u31_probes = probes() - before;
+    assert_eq!(array_subclass_fast_pop(receiver), Some(5.0));
+    let before = probes();
+    assert_eq!(
+        crate::array::js_array_push_f64_spec(obj as *mut ArrayHeader, 7.0),
+        obj as *mut ArrayHeader
+    );
+    let spec_probes = probes() - before;
+    // Back to the learned edge (length 0 -> 1) before the generic entry.
+    assert_eq!(array_subclass_fast_pop(receiver), Some(7.0));
+    let before = probes();
+    assert_eq!(
+        js_array_push_f64(obj as *mut ArrayHeader, 9.0),
+        obj as *mut ArrayHeader
+    );
+    let generic_probes = probes() - before;
+    assert_eq!(
+        (spec_probes, generic_probes),
+        (u31_probes, u31_probes),
+        "the spec and generic entries must reach the dense arm without tracked probes of their own"
+    );
+    assert_eq!(array_subclass_fast_length(receiver), Some(1.0));
+    assert_eq!(array_subclass_fast_index_get(receiver, 0), Some(9.0));
+}
+
 #[test]
 fn array_subclass_named_prefix_token_survives_only_exact_numeric_tail_transitions() {
     let _global = crate::gc::global_side_table_test_lock();

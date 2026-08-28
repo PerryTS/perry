@@ -265,6 +265,16 @@ fn classify_tracked_gc_header_with(
         .then_some((header_addr, TrackedGcStorage::Malloc))
 }
 
+/// Test-only count of tracked-resolver probes, so a fast path can pin that
+/// it answered without one.
+#[cfg(test)]
+static TRACKED_HEADER_PROBES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+pub(crate) fn tracked_header_probe_count_for_tests() -> u64 {
+    TRACKED_HEADER_PROBES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Locate a `GcHeader` only after allocator-owned metadata proves that `addr`
 /// is a Perry GC allocation. Unlike [`try_read_gc_header`], this does not use
 /// an address-magnitude window as evidence of ownership: arena page membership
@@ -285,6 +295,8 @@ fn classify_tracked_gc_header_with(
 pub(crate) unsafe fn try_read_tracked_gc_header(
     addr: usize,
 ) -> Option<std::ptr::NonNull<GcHeader>> {
+    #[cfg(test)]
+    TRACKED_HEADER_PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (header_addr, storage) = classify_tracked_gc_header_with(
         addr,
         |candidate| crate::arena::classify_heap_space_in_range(candidate).map(|(_, base, _)| base),
