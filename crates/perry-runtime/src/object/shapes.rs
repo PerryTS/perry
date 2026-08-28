@@ -1841,7 +1841,8 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
             // census gate (`scripts/shape_descriptor_census.py`) pins this exact
             // two-armed expression so that a sabotage which widens the gate or
             // swaps the arms is red, and its own self-test sabotages this very
-            // literal. `is_carrier` above is the same predicate, and keys the memo.
+            // literal. `is_carrier` above is the same predicate, and is what
+            // keys the memo.
             let moved = if descriptor.old_carrier || descriptor.cache_carrier {
                 visitor.visit_usize_slot(&mut addr)
             } else {

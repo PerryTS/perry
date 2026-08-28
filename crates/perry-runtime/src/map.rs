@@ -336,9 +336,11 @@ struct NumericIndex {
 #[inline]
 fn dense_integer_key(key: NumericKey) -> Option<u32> {
     let value = f64::from_bits(key.0);
-    if !value.is_finite() || value < 0.0 || value > u32::MAX as f64 {
-        return None;
-    }
+    // `as u32` saturates (NaN → 0, negatives → 0, > u32::MAX and +inf →
+    // u32::MAX), so the round trip alone decides every case the three range
+    // tests used to pre-screen: a value that is not a finite integer in
+    // 0..=u32::MAX never converts back to itself. One conversion pair instead
+    // of three compares and a conversion pair, on every dense Map lookup.
     let integer = value as u32;
     (integer as f64 == value).then_some(integer)
 }

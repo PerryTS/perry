@@ -667,14 +667,13 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
     use crate::option_setters::js_net_validate_connect_port;
     use crate::{
         get_object_bool_field, get_object_number_field, get_object_string_field,
-        is_nanboxed_pointer, spawn_socket_task_initialized, statics, string_from_header_i64,
+        is_nanboxed_pointer, jsvalue_to_owned_string, spawn_socket_task_initialized, statics,
         unbox_pointer,
     };
     use perry_ffi::JsValue;
 
     extern "C" {
         fn js_value_is_closure(value_bits: i64) -> i32;
-        fn js_get_string_pointer_unified(value: f64) -> i64;
     }
     let is_closure =
         |v: f64| is_nanboxed_pointer(v) && js_value_is_closure(v.to_bits() as i64) != 0;
@@ -687,7 +686,7 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
         if !JsValue::from_bits(v.to_bits()).is_any_string() {
             return None;
         }
-        string_from_header_i64(js_get_string_pointer_unified(v))
+        jsvalue_to_owned_string(v)
     };
     // Cert verification only goes off when the caller says so explicitly —
     // a missing/undefined flag keeps it on.

@@ -62,10 +62,7 @@ fn allocate_socket() -> (i64, mpsc::UnboundedReceiver<SocketCommand>) {
 /// Read a JS string without coercing closures or option objects through a
 /// StringHeader layout.
 pub(crate) unsafe fn string_value(value: f64) -> Option<String> {
-    let value = perry_ffi::JsValue::from_bits(value.to_bits());
-    value
-        .is_string()
-        .then(|| crate::string_from_header_i64(value.as_string_ptr() as i64))?
+    crate::jsvalue_to_owned_string(value)
 }
 
 pub(crate) fn register_connect_cb(handle: i64, cb_f64: f64) {

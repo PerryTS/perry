@@ -1220,6 +1220,26 @@ pub(super) fn write_barrier_decoded_parent(
     // Old → young check. Runtime-owned malloc GC objects are outside
     // the nursery and must be treated as old when the caller uses the
     // external-slot path for fields or side buffers.
+    // An inline slot whose page is the one the dirty-page cache names has
+    // nothing left to owe the remembered set: the cache's invariant
+    // (`dirty_page_cache`) is "cached ⟹ recorded in DIRTY_OLD_PAGES AND
+    // stamped dirty in the page metadata", and that is exactly what
+    // `remember_old_to_young_inline_slot` would establish for this slot. The
+    // SATB shading already ran in the caller's prologue. Answering here skips
+    // both page-generation classifications — the parent's and the child's —
+    // which is the whole cost of the barrier on the second and third push into
+    // the same bucket, or on every push into a large array whose tail sits on
+    // one page.
+    if !external_slot
+        && slot_addr != 0
+        && slot_addr >= parent_addr
+        && super::dirty_page_cache::dirty_old_page_already_marked(
+            crate::arena::generation_page_for_addr(slot_addr),
+        )
+    {
+        bump_write_barrier_trace_counter(BarrierTraceCounter::DirtyPageCacheHits);
+        return;
+    }
     if !barrier_parent_needs_remembering(parent_addr, external_slot) {
         bump_write_barrier_trace_counter(BarrierTraceCounter::ParentNotOldSkips);
         return;
