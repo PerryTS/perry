@@ -264,6 +264,34 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .filter(|class| class.extends_expr.is_none() && !class.heritage_lexically_shadowed)
                 .and_then(|class| class.extends_name.clone())
                 .filter(|parent| !ctx.classes.contains_key(parent.as_str()));
+            // `class X extends Array { constructor(...a) { super(...a) } }`:
+            // the Array parent has no registered constructor, so the spread
+            // form must run the same subclass init the direct `super(n)`
+            // form does (`lower_array_super_init`), handing it the
+            // materialized argument array's elements. Without this the
+            // instance had no `length` and no Array surface at all.
+            if async_parent.as_deref() == Some("Array") {
+                let len_i32 = ctx.block().call(I32, "js_array_length", &[(I64, &arr)]);
+                let len = ctx.block().zext(I32, &len_i32, I64);
+                let elems_addr = ctx.block().add(I64, &arr, "8");
+                let elems_ptr = ctx.block().inttoptr(I64, &elems_addr);
+                let result = ctx.block().call(
+                    DOUBLE,
+                    "js_array_subclass_init_args",
+                    &[
+                        (DOUBLE, &this_box),
+                        (crate::types::PTR, &elems_ptr),
+                        (I64, &len),
+                    ],
+                );
+                bind_derived_this_after_super(ctx);
+                crate::lower_call::apply_field_initializers_recursive(
+                    ctx,
+                    &current_class_name,
+                    crate::lower_call::FieldInitMode::SelfOnly,
+                )?;
+                return Ok(result);
+            }
             if matches!(
                 async_parent.as_deref(),
                 Some("EventEmitterAsyncResource" | "AsyncLocalStorage" | "AsyncResource")

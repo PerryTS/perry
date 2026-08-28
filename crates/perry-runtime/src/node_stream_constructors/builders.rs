@@ -207,7 +207,16 @@ pub extern "C" fn js_array_subclass_init(this: f64, n: f64) -> f64 {
         crate::closure::js_register_closure_arity(ns_array_fill as *const u8, 1);
         let methods: [(&str, StubFn); 1] = [("fill", super::cast1(ns_array_fill))];
         install_methods_on_existing_object(obj, this, &methods, &[]);
-        return this;
+        // `fill` is an own method here, but it must not show up as an
+        // enumerable own key (`Object.keys` / `for..in` / JSON): mark it
+        // non-enumerable like a prototype method would be.
+        let obj = raw_ptr_from_value(this_root.get_nanbox_f64()) as *mut ObjectHeader;
+        crate::object::descriptor_state::set_property_attrs(
+            obj as usize,
+            "fill".to_string(),
+            crate::object::descriptor_state::PropertyAttrs::new(true, false, true),
+        );
+        return this_root.get_nanbox_f64();
     }
     let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
     js_object_set_field_by_name(obj, length_key, len);
