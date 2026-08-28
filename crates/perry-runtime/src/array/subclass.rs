@@ -439,23 +439,43 @@ pub(crate) unsafe fn array_subclass_named_prefix_token_for_slot(
     if declared_keys.is_null() {
         return 0;
     }
-    let shape_id = (*obj).parent_class_id;
-    let cache_key = dense_cache_key(class_id, shape_id);
-    let layout = cached_dense_layout(cache_key).or_else(|| {
-        let layout = build_dense_layout(obj)?;
-        publish_dense_layout(cache_key, layout);
-        Some(layout)
-    });
-    let Some(layout) = layout else {
-        return 0;
+    // An elements-backed instance (`super::subclass_elements`) has NO numeric
+    // keys and no `length` property in its shape, so `build_dense_layout`
+    // (which locates `length` by name) cannot describe it — and without a
+    // token the descriptor-bearing IC-miss path below never primes the PIC,
+    // leaving every declared-field read to miss forever (measured: 17.8M
+    // misses on `change`/`sset`/`mask` in a 2 s wolf-ecs run). Its named
+    // prefix is simply the WHOLE shape: the strongest form of the same
+    // proof, validated by the identical declared-prefix comparison below.
+    let elements_backed = !super::subclass_elements::elements_of(obj).is_null();
+    let (element_base, dense_prefix_len, length_slot) = if elements_backed {
+        (u32::MAX, 0, u32::MAX)
+    } else {
+        let shape_id = (*obj).parent_class_id;
+        let cache_key = dense_cache_key(class_id, shape_id);
+        let layout = cached_dense_layout(cache_key).or_else(|| {
+            let layout = build_dense_layout(obj)?;
+            publish_dense_layout(cache_key, layout);
+            Some(layout)
+        });
+        let Some(layout) = layout else {
+            return 0;
+        };
+        (
+            layout.element_base,
+            layout.dense_prefix_len,
+            layout.length_slot,
+        )
     };
     // Descriptor-bearing Array subclasses cannot use the ordinary exact-shape
     // raw-load PIC even while empty: their unrelated `length` descriptor sends
     // them through the descriptor arm. Admit the fully validated named prefix
     // before the first numeric key exists as well. `element_base` is the first
     // prospective numeric slot and `dense_prefix_len == 0` proves there is no
-    // tail yet; the complete-prefix equality below remains the authority.
-    if requested_slot >= layout.element_base as usize {
+    // tail yet; the complete-prefix equality below remains the authority. An
+    // elements-backed instance has no numeric slot at all (`u32::MAX`), so
+    // only the declared-prefix bound below applies to it.
+    if requested_slot >= element_base as usize {
         return 0;
     }
     let cached = (*meta).array_subclass_named_prefix_token;
@@ -475,11 +495,17 @@ pub(crate) unsafe fn array_subclass_named_prefix_token_for_slot(
         crate::object::keys_array_dense_slots(declared_keys as *const ArrayHeader);
     let current_count = (shape.logical_key_count as usize).min(current_physical_len);
     let declared_count = (declared_count as usize).min(declared_physical_len);
-    if current_slots.is_null()
-        || declared_slots.is_null()
-        || declared_count > current_count
-        || layout.element_base as usize + layout.dense_prefix_len as usize != current_count
-    {
+    if current_slots.is_null() || declared_slots.is_null() || declared_count > current_count {
+        return 0;
+    }
+    // Every key is either in the named prefix or in the numeric tail. An
+    // elements-backed instance has no tail, so the requested slot must simply
+    // be a declared one; the shape-carried form keeps the exact partition.
+    if elements_backed {
+        if requested_slot >= declared_count {
+            return 0;
+        }
+    } else if element_base as usize + dense_prefix_len as usize != current_count {
         return 0;
     }
 
@@ -523,25 +549,32 @@ pub(crate) unsafe fn array_subclass_named_prefix_token_for_slot(
     // existing slot; otherwise the exact missing names must follow the
     // declared prefix in that order. Anything else is instance-specific.
     let declared_count = declared_count as u32;
-    let expected_length_slot = if let Some(slot) = declared_length_slot {
-        slot
-    } else {
-        declared_count
-    };
-    if layout.length_slot != expected_length_slot {
-        return 0;
-    }
     let mut expected_runtime_names: [&[u8]; 2] = [&[]; 2];
     let mut expected_runtime_count = 0usize;
-    if declared_length_slot.is_none() {
-        expected_runtime_names[expected_runtime_count] = b"length";
-        expected_runtime_count += 1;
+    if !elements_backed {
+        // The shape-carried form carries `length` as an own property, at the
+        // declared slot when the class declared that name and appended
+        // otherwise.
+        let expected_length_slot = declared_length_slot.unwrap_or(declared_count);
+        if length_slot != expected_length_slot {
+            return 0;
+        }
+        if declared_length_slot.is_none() {
+            expected_runtime_names[expected_runtime_count] = b"length";
+            expected_runtime_count += 1;
+        }
+    } else if declared_length_slot.is_some() {
+        // A class that declares its own `length` field is not modelled by the
+        // elements store (the store owns `length`); keep it off this token.
+        return 0;
     }
     if !declared_fill {
         expected_runtime_names[expected_runtime_count] = b"fill";
         expected_runtime_count += 1;
     }
-    if layout.element_base != declared_count.saturating_add(expected_runtime_count as u32) {
+    if !elements_backed
+        && element_base != declared_count.saturating_add(expected_runtime_count as u32)
+    {
         return 0;
     }
     for (offset, expected) in expected_runtime_names[..expected_runtime_count]
