@@ -270,7 +270,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // form does (`lower_array_super_init`), handing it the
             // materialized argument array's elements. Without this the
             // instance had no `length` and no Array surface at all.
-            if async_parent.as_deref() == Some("Array") {
+            // Resolved the way the direct `super(n)` arm resolves its parent
+            // (`extends_name`, a lexically shadowed heritage excluded): the
+            // heritage of `class X extends Array` also carries `extends_expr`,
+            // which the `async_parent` filter above rejects.
+            let array_parent = ctx
+                .classes
+                .get(&current_class_name)
+                .filter(|class| !class.heritage_lexically_shadowed)
+                .and_then(|class| class.extends_name.as_deref())
+                .is_some_and(|parent| parent == "Array" && !ctx.classes.contains_key("Array"));
+            if array_parent {
                 let len_i32 = ctx.block().call(I32, "js_array_length", &[(I64, &arr)]);
                 let len = ctx.block().zext(I32, &len_i32, I64);
                 let elems_addr = ctx.block().add(I64, &arr, "8");

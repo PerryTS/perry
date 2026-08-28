@@ -485,6 +485,15 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         // which handles shape transitions, frozen/sealed/extensible checks,
         // overflow into out-of-line storage, and accessor descriptors.
         // Keep the receiver/key alive because the setter can allocate and the
+        // An Array-subclass instance with an in-bounds or appending index:
+        // the dense/elements store takes it without minting a key string
+        // (the keyed path below allocates one per store — on the wolf-ecs
+        // `packed[sparse[x]] = last` that was an allocation per swap).
+        if let Some(index) = numeric_key_u32_index(idx) {
+            if crate::array::array_subclass_fast_index_set(boxed, index, value) {
+                return;
+            }
+        }
         // Array-subclass post-step below must observe their evacuated values.
         let scope = crate::gc::RuntimeHandleScope::new();
         let recv_h = scope.root_nanbox_f64(boxed);

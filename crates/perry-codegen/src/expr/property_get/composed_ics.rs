@@ -223,6 +223,14 @@ pub(super) fn emit_array_subclass_length_ic(
     let forwarded = ctx.block().and(I8, &gc_flags, "128");
     let not_forwarded = ctx.block().icmp_eq(I8, &forwarded, "0");
     let header_ok = ctx.block().and(I1, &is_object, &not_forwarded);
+    let meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        4
+    } else {
+        8
+    };
+    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
+        - meta_ptr_size)
+        .to_string();
     // An elements-backed Array-subclass instance (`ObjectMeta.elements`):
     // `length` is the inner Array's length word — no shape IC. A probe miss
     // (no meta, no store) is the shape-carried form and keeps the IC below.
@@ -235,21 +243,13 @@ pub(super) fn emit_array_subclass_length_ic(
     ctx.block()
         .cond_br(&header_ok, &elem_meta_label, &miss_label);
     ctx.current_block = elem_meta_idx;
-    let elem_meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-        4
-    } else {
-        8
-    };
-    let elem_meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
-        - elem_meta_ptr_size)
-        .to_string();
-    let elem_meta_addr = ctx.block().add(I64, recv_handle, &elem_meta_offset);
+    let elem_meta_addr = ctx.block().add(I64, recv_handle, &meta_offset);
     let elem_meta_slot_ptr = ctx.block().inttoptr(I64, &elem_meta_addr);
     let elem_meta_loaded = ctx.block().load(
-        if elem_meta_ptr_size == 4 { I32 } else { I64 },
+        if meta_ptr_size == 4 { I32 } else { I64 },
         &elem_meta_slot_ptr,
     );
-    let elem_meta_i64 = if elem_meta_ptr_size == 4 {
+    let elem_meta_i64 = if meta_ptr_size == 4 {
         ctx.block().zext(I32, &elem_meta_loaded, I64)
     } else {
         elem_meta_loaded
@@ -298,15 +298,6 @@ pub(super) fn emit_array_subclass_length_ic(
     ctx.current_block = exact_idx;
     let exact_match = ctx.block().icmp_eq(I64, &live_key, &cached_key);
     ctx.block().cond_br(&exact_match, &slot_label, &miss_label);
-
-    let meta_ptr_size: u64 = if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-        4
-    } else {
-        8
-    };
-    let meta_offset = (crate::target_layout::object_header_size_bytes(ctx.target_triple)
-        - meta_ptr_size)
-        .to_string();
 
     ctx.current_block = family_meta_idx;
     let family_meta_addr = ctx.block().add(I64, recv_handle, &meta_offset);

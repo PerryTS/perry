@@ -13,6 +13,8 @@
 use crate::array::ArrayHeader;
 use crate::object::ObjectHeader;
 
+use super::subclass::{mutation_receiver_allows_plain_tail, ValidatedObjectReceiver};
+
 /// `PERRY_ARRAY_SUBCLASS_ELEMENTS=1|on|true` — off while the property entry
 /// points are being routed; the default flips once the semantics suite is green.
 #[inline]
@@ -530,4 +532,94 @@ pub(crate) unsafe fn prepend_index_entries(
         push(f64::from_bits(value.bits()));
     }
     out_h.with_mut_ptr(|p| p)
+}
+
+// ---------------------------------------------------------------------------
+// Hot-entry helpers used by `super::subclass` (moved here to keep that file
+// under the size gate).
+// ---------------------------------------------------------------------------
+
+/// The elements store of an elements-backed instance (`super::subclass_elements`),
+/// or `None` for the shape-carried representation. Non-null only when the
+/// store was installed at construction, so no gate check is needed here.
+#[inline]
+pub(super) fn elements_for_validated(
+    receiver: &ValidatedObjectReceiver,
+) -> Option<*mut ArrayHeader> {
+    let elements = unsafe { elements_of(receiver.object) };
+    (!elements.is_null()).then_some(elements)
+}
+
+/// In-bounds, non-hole element of the inner array; `None` sends the caller
+/// to the same prototype-chain fallback a hole in the shape-carried form does.
+#[inline]
+pub(super) fn elements_index_get(elements: *const ArrayHeader, index: u32) -> Option<f64> {
+    unsafe {
+        if index >= (*elements).length {
+            return None;
+        }
+        let slot = (elements as *const u8)
+            .add(std::mem::size_of::<ArrayHeader>())
+            .cast::<u64>()
+            .add(index as usize);
+        let bits = *slot;
+        (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits))
+    }
+}
+
+/// Elements-backed `receiver[index] = value` for an in-bounds index or the
+/// appending index (`== length`); anything else (holes past the end, a
+/// frozen/sealed/non-extensible receiver) declines to the generic path.
+pub(super) fn elements_index_set(
+    receiver: &ValidatedObjectReceiver,
+    index: u32,
+    value: f64,
+) -> Option<bool> {
+    let elements = elements_for_validated(receiver)?;
+    if !mutation_receiver_allows_plain_tail(receiver.object_flags) {
+        return Some(false);
+    }
+    let length = unsafe { (*elements).length };
+    if index < length {
+        crate::array::js_array_set_f64(elements, index, value);
+        return Some(true);
+    }
+    if index == length {
+        return elements_push(receiver, value).map(|_| true);
+    }
+    Some(false)
+}
+
+/// Elements-backed append: the owner is rooted across the (possibly
+/// re-allocating) push and the new head is written back through the
+/// barriered meta slot. Returns the new length.
+pub(super) fn elements_push(receiver: &ValidatedObjectReceiver, value: f64) -> Option<f64> {
+    let elements = elements_for_validated(receiver)?;
+    if !mutation_receiver_allows_plain_tail(receiver.object_flags) {
+        return None;
+    }
+    let obj = receiver.object as *mut ObjectHeader;
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj_handle = scope.root_raw_mut_ptr(obj);
+        let value_root = scope.root_nanbox_f64(value);
+        let (grown, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
+            crate::array::js_array_push_f64(elements, value_root.get_nanbox_f64())
+        });
+        let current = elements_of(obj);
+        if grown != current {
+            set_elements_head(obj, grown);
+        }
+        Some(f64::from((*grown).length))
+    }
+}
+
+/// Elements-backed `pop`: the inner array's own pop (no allocation, so no
+/// rooting), declining like `elements_push` on a non-plain receiver.
+pub(super) fn elements_pop(receiver: &ValidatedObjectReceiver) -> Option<f64> {
+    let elements = elements_for_validated(receiver)?;
+    if !mutation_receiver_allows_plain_tail(receiver.object_flags) {
+        return None;
+    }
+    Some(crate::array::js_array_pop_f64(elements))
 }
