@@ -843,6 +843,10 @@ unsafe fn compact_set_elements(set: *mut SetHeader) {
             continue;
         }
         if out != i {
+            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): the dirty-span barrier below
+            // covers every surviving slot this pass writes. Overlap-safe by
+            // construction -- `out <= i` always, so a live element only ever
+            // moves DOWN within the one buffer, never onto an unread source.
             ptr::write(elements.add(out), v);
         }
         out += 1;
@@ -1809,6 +1813,15 @@ fn js_set_foreach_impl(
     this_arg: f64,
     collection_override: f64,
 ) {
+    // Raw element walk below: squeeze holes out first. `Set.prototype.forEach`
+    // walks raw slots to `size`, so a tombstone was yielded to the callback as
+    // the raw marker AND the walk ended early, dropping live elements past it.
+    unsafe {
+        let resolved = clean_set_ptr(set);
+        if !resolved.is_null() {
+            compact_if_holey_set(resolved as *mut SetHeader);
+        }
+    }
     // ECMA-262 Set.prototype.forEach step 4: a non-callable callback throws a
     // TypeError before iterating (and before any null-set early return).
     crate::array::js_validate_array_callback(callback);
@@ -1906,6 +1919,15 @@ unsafe fn other_set_ptr(other: f64) -> *const SetHeader {
 #[no_mangle]
 pub extern "C" fn js_set_union(set: *const SetHeader, other: f64) -> *mut SetHeader {
     let set = clean_set_ptr(set);
+    // Raw element walk below: squeeze holes out first, exactly as
+    // `js_set_is_subset_of` does. Without this a tombstone is read as an
+    // element -- it leaks into the result as the raw marker, and the walk
+    // stops at `size` so live elements past the last hole are dropped.
+    unsafe {
+        if !set.is_null() {
+            compact_if_holey_set(set as *mut SetHeader);
+        }
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let result = js_set_alloc(4);
     let result_handle = scope.root_raw_mut_ptr(result);
@@ -1948,6 +1970,15 @@ pub extern "C" fn js_set_union(set: *const SetHeader, other: f64) -> *mut SetHea
 #[no_mangle]
 pub extern "C" fn js_set_intersection(set: *const SetHeader, other: f64) -> *mut SetHeader {
     let set = clean_set_ptr(set);
+    // Raw element walk below: squeeze holes out first, exactly as
+    // `js_set_is_subset_of` does. Without this a tombstone is read as an
+    // element -- it leaks into the result as the raw marker, and the walk
+    // stops at `size` so live elements past the last hole are dropped.
+    unsafe {
+        if !set.is_null() {
+            compact_if_holey_set(set as *mut SetHeader);
+        }
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let result = js_set_alloc(4);
     let result_handle = scope.root_raw_mut_ptr(result);
@@ -1986,6 +2017,15 @@ pub extern "C" fn js_set_intersection(set: *const SetHeader, other: f64) -> *mut
 #[no_mangle]
 pub extern "C" fn js_set_difference(set: *const SetHeader, other: f64) -> *mut SetHeader {
     let set = clean_set_ptr(set);
+    // Raw element walk below: squeeze holes out first, exactly as
+    // `js_set_is_subset_of` does. Without this a tombstone is read as an
+    // element -- it leaks into the result as the raw marker, and the walk
+    // stops at `size` so live elements past the last hole are dropped.
+    unsafe {
+        if !set.is_null() {
+            compact_if_holey_set(set as *mut SetHeader);
+        }
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let result = js_set_alloc(4);
     let result_handle = scope.root_raw_mut_ptr(result);
@@ -2025,6 +2065,15 @@ pub extern "C" fn js_set_difference(set: *const SetHeader, other: f64) -> *mut S
 #[no_mangle]
 pub extern "C" fn js_set_symmetric_difference(set: *const SetHeader, other: f64) -> *mut SetHeader {
     let set = clean_set_ptr(set);
+    // Raw element walk below: squeeze holes out first, exactly as
+    // `js_set_is_subset_of` does. Without this a tombstone is read as an
+    // element -- it leaks into the result as the raw marker, and the walk
+    // stops at `size` so live elements past the last hole are dropped.
+    unsafe {
+        if !set.is_null() {
+            compact_if_holey_set(set as *mut SetHeader);
+        }
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let result = js_set_alloc(4);
     let result_handle = scope.root_raw_mut_ptr(result);
@@ -2117,6 +2166,15 @@ pub extern "C" fn js_set_is_subset_of(set: *const SetHeader, other: f64) -> i32 
 #[no_mangle]
 pub extern "C" fn js_set_is_superset_of(set: *const SetHeader, other: f64) -> i32 {
     let set = clean_set_ptr(set);
+    // Raw element walk below: squeeze holes out first, exactly as
+    // `js_set_is_subset_of` does. Without this a tombstone is read as an
+    // element -- it leaks into the result as the raw marker, and the walk
+    // stops at `size` so live elements past the last hole are dropped.
+    unsafe {
+        if !set.is_null() {
+            compact_if_holey_set(set as *mut SetHeader);
+        }
+    }
     unsafe {
         let other = other_set_ptr(other);
         if other.is_null() {
