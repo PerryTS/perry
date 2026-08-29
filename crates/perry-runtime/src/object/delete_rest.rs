@@ -375,7 +375,7 @@ pub extern "C" fn js_object_delete_field(
         // property name. On a 500-key object that rebuild ran on EVERY delete.
         // A wrong index can only cause a miss — `shape_slot_lookup` validates
         // the stored key against the requested bytes before returning a slot.
-        super::shapes::shape_index_migrate_after_delete(
+        let index_migrated = super::shapes::shape_index_migrate_after_delete(
             keys as usize,
             keys_cloned as usize,
             i as u32,
@@ -458,7 +458,13 @@ pub extern "C" fn js_object_delete_field(
         //    not eagerly deleted because a sibling may still name one; exact
         //    new facts are published below and weak post-trace pruning retires
         //    dead historical descriptors.
-        crate::object::shapes::shape_drop(crate::object::object_keys_array(obj));
+        // ...unless the migration above already shifted it to match the
+        // compacted array, in which case it is CURRENT, not stale, and
+        // dropping it would throw away the rebuild this is meant to avoid —
+        // the next lookup would re-hash every surviving key name.
+        if !index_migrated {
+            crate::object::shapes::shape_drop(crate::object::object_keys_array(obj));
+        }
         1
     }
 }

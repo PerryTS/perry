@@ -126,23 +126,27 @@ pub(crate) fn record_shape_scan_outcome(
 /// index that is wrong produces a MISS and the caller's own fallback, never a
 /// wrong property. Only a fully-built index is carried over; a partially built
 /// one is dropped and rebuilt as before.
+///
+/// Returns whether the index was actually carried over: the delete tail uses
+/// that to skip the `shape_drop` that would otherwise discard it immediately.
+#[must_use]
 pub(crate) fn shape_index_migrate_after_delete(
     old_keys_id: usize,
     new_keys_id: usize,
     removed_slot: u32,
     old_key_count: u32,
-) {
+) -> bool {
     if old_keys_id == 0 || new_keys_id == 0 || old_keys_id == new_keys_id {
-        return;
+        return false;
     }
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     let Some(mut index) = inner.indices.remove(&old_keys_id) else {
-        return;
+        return false;
     };
     if index.indexed_len < old_key_count {
         // Partially built: shifting it would leave the un-indexed tail
         // misaligned. Dropping it preserves the previous behaviour exactly.
-        return;
+        return false;
     }
     index.slots.retain(|_, list| {
         list.retain_shift(removed_slot);
@@ -150,4 +154,5 @@ pub(crate) fn shape_index_migrate_after_delete(
     });
     index.indexed_len = old_key_count - 1;
     inner.indices.insert(new_keys_id, index);
+    true
 }
