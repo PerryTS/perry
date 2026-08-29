@@ -211,6 +211,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // (ToString, accessor descriptors, closure creation), leaving `obj`
         // and `key` stale in bare SSA registers across the collection point.
         Expr::ObjectDefineProperty(obj, key, value) => {
+            // Fast path: the esbuild `__export` / CJS-interop descriptor
+            // literal `{ get: <expr>, enumerable: true }` (either property
+            // order) lowers to a direct accessor-install call, skipping the
+            // descriptor allocation and its by-name field decode. `true` is
+            // effect-free, so evaluating only obj → key → getter preserves
+            // the literal's evaluation order; the runtime entrypoint owns the
+            // exact `defineProperty` semantics (see
+            // perry-runtime's object_ops/define_get_accessor.rs contract).
+            if let Some(getter) = get_only_descriptor_getter(ctx.classes, value) {
+                return rooting::with_operands_rooted(ctx, &[obj, key, getter], |ctx, vals| {
+                    let blk = ctx.block();
+                    blk.call(
+                        DOUBLE,
+                        "js_object_define_get_accessor",
+                        &[(DOUBLE, &vals[0]), (DOUBLE, &vals[1]), (DOUBLE, &vals[2])],
+                    );
+                    Ok(vals[0].clone())
+                });
+            }
             rooting::with_operands_rooted(ctx, &[obj, key, value], |ctx, vals| {
                 let blk = ctx.block();
                 blk.call(
@@ -1066,5 +1085,209 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- set.clear() --------
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
+    }
+}
+
+/// The esbuild `__export` descriptor literal: a closed-shape two-field
+/// `{ get: <expr>, enumerable: true }` (either property order), lowered by
+/// perry-hir to `new __AnonShape_N(<get value>, true)`. Returns the getter's
+/// argument expression when — and only when — the descriptor is exactly that
+/// shape; anything else (extra fields, a non-`true`-literal `enumerable`, a
+/// non-anon-shape class, appended capture args) keeps the generic
+/// `js_object_define_property` lowering. Dropping the `enumerable` position
+/// is order-preserving because its argument is the effect-free literal
+/// `true`.
+fn get_only_descriptor_getter<'e>(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    desc: &'e Expr,
+) -> Option<&'e Expr> {
+    let Expr::New {
+        class_name,
+        args,
+        cap_args_appended,
+        ..
+    } = desc
+    else {
+        return None;
+    };
+    if !class_name.starts_with("__AnonShape_") || *cap_args_appended != 0 || args.len() != 2 {
+        return None;
+    }
+    let class = classes.get(class_name)?;
+    // Anon-shape classes are pure field records; fail closed if this one is
+    // anything more (a parent chain or any method surface could change what
+    // constructing — or decoding — the literal observes).
+    if class.extends.is_some()
+        || class.extends_name.is_some()
+        || class.extends_expr.is_some()
+        || class.fields.len() != 2
+        || !class.methods.is_empty()
+        || !class.static_methods.is_empty()
+        || !class.getters.is_empty()
+        || !class.setters.is_empty()
+        || !class.computed_members.is_empty()
+        || !class.static_fields.is_empty()
+    {
+        return None;
+    }
+    let (get_idx, enumerable_idx) =
+        match (class.fields[0].name.as_str(), class.fields[1].name.as_str()) {
+            ("get", "enumerable") => (0usize, 1usize),
+            ("enumerable", "get") => (1, 0),
+            _ => return None,
+        };
+    matches!(args[enumerable_idx], Expr::Bool(true)).then(|| &args[get_idx])
+}
+
+#[cfg(test)]
+mod define_get_accessor_tests {
+    use super::*;
+    use crate::{compile_module, CompileOptions};
+    use perry_hir::types::Type;
+    use perry_hir::{Class, ClassField, Module, ModuleInitKind, Stmt};
+
+    const DESC_SHAPE: &str = "__AnonShape_00000000000desc";
+    const EMPTY_SHAPE: &str = "__AnonShape_0000000000empty";
+
+    fn anon_shape_class(id: u32, name: &str, fields: &[&str]) -> Class {
+        Class {
+            id,
+            name: name.to_string(),
+            type_params: Vec::new(),
+            extends: None,
+            extends_name: None,
+            native_extends: None,
+            extends_expr: None,
+            heritage_lexically_shadowed: false,
+            fields: fields
+                .iter()
+                .map(|field| ClassField {
+                    name: (*field).to_string(),
+                    key_expr: None,
+                    ty: Type::Any,
+                    init: None,
+                    is_private: false,
+                    is_readonly: false,
+                    decorators: Vec::new(),
+                })
+                .collect(),
+            constructor: None,
+            methods: Vec::new(),
+            getters: Vec::new(),
+            setters: Vec::new(),
+            static_accessor_names: Vec::new(),
+            static_accessor_fn_ids: Vec::new(),
+            computed_members: Vec::new(),
+            static_fields: Vec::new(),
+            static_methods: Vec::new(),
+            decorators: Vec::new(),
+            is_exported: false,
+            aliases: Vec::new(),
+            is_nested: false,
+            alloc_width_hint: 0,
+            specialized_from: None,
+        }
+    }
+
+    /// `const o = {}; Object.defineProperty(o, "a", new __AnonShape(<desc args>))`
+    fn define_property_module(desc_fields: &[&str], desc_args: Vec<Expr>) -> Module {
+        let mut m = Module::new("define_get_accessor.ts");
+        m.classes = vec![
+            anon_shape_class(701, EMPTY_SHAPE, &[]),
+            anon_shape_class(702, DESC_SHAPE, desc_fields),
+        ];
+        m.init = vec![
+            Stmt::Let {
+                id: 1,
+                name: "o".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::New {
+                    class_name: EMPTY_SHAPE.to_string(),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+            },
+            Stmt::Expr(Expr::ObjectDefineProperty(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::String("a".to_string())),
+                Box::new(Expr::New {
+                    class_name: DESC_SHAPE.to_string(),
+                    args: desc_args,
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+            )),
+        ];
+        m.init_kind = ModuleInitKind::Eager;
+        m
+    }
+
+    fn emit(m: &Module) -> String {
+        let opts = CompileOptions {
+            is_entry_module: true,
+            emit_ir_only: true,
+            ..Default::default()
+        };
+        String::from_utf8(compile_module(m, opts).unwrap()).expect("LLVM IR should be UTF-8")
+    }
+
+    #[test]
+    fn get_enumerable_true_literal_takes_the_fast_call() {
+        for fields in [&["get", "enumerable"][..], &["enumerable", "get"][..]] {
+            let mut args = vec![Expr::Undefined, Expr::Bool(true)];
+            if fields[0] == "enumerable" {
+                args.reverse();
+            }
+            let ir = emit(&define_property_module(fields, args));
+            // Assert on CALL SITES (`@name(double %…`) — the runtime decl
+            // block declares both symbols in every module.
+            assert!(
+                ir.contains("@js_object_define_get_accessor(double %"),
+                "{fields:?}: the literal shape must lower to the direct accessor install"
+            );
+            assert!(
+                !ir.contains("@js_object_define_property(double %"),
+                "{fields:?}: the descriptor allocation + generic decode must be gone"
+            );
+        }
+    }
+
+    #[test]
+    fn non_matching_descriptors_keep_the_generic_call() {
+        // `enumerable: false`, `enumerable: <non-literal>`, a third field, and
+        // a get-less two-field record all stay on the generic path.
+        let cases: Vec<(Vec<&str>, Vec<Expr>)> = vec![
+            (
+                vec!["get", "enumerable"],
+                vec![Expr::Undefined, Expr::Bool(false)],
+            ),
+            (
+                vec!["get", "enumerable"],
+                vec![Expr::Undefined, Expr::LocalGet(1)],
+            ),
+            (
+                vec!["get", "enumerable", "configurable"],
+                vec![Expr::Undefined, Expr::Bool(true), Expr::Bool(true)],
+            ),
+            (
+                vec!["value", "enumerable"],
+                vec![Expr::Undefined, Expr::Bool(true)],
+            ),
+        ];
+        for (fields, args) in cases {
+            let ir = emit(&define_property_module(&fields, args));
+            assert!(
+                ir.contains("@js_object_define_property(double %"),
+                "{fields:?}: must keep the generic lowering"
+            );
+            assert!(
+                !ir.contains("@js_object_define_get_accessor(double %"),
+                "{fields:?}: must not take the fast call"
+            );
+        }
     }
 }

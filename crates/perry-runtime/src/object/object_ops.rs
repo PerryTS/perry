@@ -10,6 +10,7 @@
 use super::*;
 
 mod accessors;
+mod define_get_accessor;
 mod define_properties;
 mod define_property;
 mod descriptor_helpers;
@@ -24,6 +25,7 @@ pub use accessors::{
     js_object_define_getter, js_object_define_setter, js_object_get_own_field_or_undef,
     js_object_lookup_getter, js_object_lookup_setter,
 };
+pub use define_get_accessor::js_object_define_get_accessor;
 pub use define_properties::{js_object_define_properties, js_object_set_prototype_of};
 pub use define_property::js_object_define_property;
 pub use from_entries::js_object_from_entries;

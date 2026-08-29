@@ -197,7 +197,7 @@ fn desc_field_index(b: &[u8]) -> Option<usize> {
 /// `Object.prototype.enumerable = true` is spec-visible through
 /// `ToPropertyDescriptor`'s inherited-field reads, so a polluted prototype
 /// forces the general path.
-unsafe fn object_prototype_has_desc_field() -> bool {
+pub(super) unsafe fn object_prototype_has_desc_field() -> bool {
     let op = crate::object::builtin_prototype_value("Object");
     let ptr = extract_obj_ptr(op);
     if ptr.is_null() {

@@ -256,6 +256,15 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
+    // Fast path for the `{ get: <expr>, enumerable: true }` descriptor
+    // literal (esbuild `__export` / CJS interop re-export getters) — see
+    // expr/misc_methods.rs and perry-runtime's
+    // object_ops/define_get_accessor.rs.
+    module.declare_function(
+        "js_object_define_get_accessor",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function(
         "js_object_get_own_property_descriptor",
         DOUBLE,
