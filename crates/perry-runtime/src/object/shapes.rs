@@ -33,8 +33,10 @@ use std::cell::RefCell;
 
 #[path = "shapes_slot_list.rs"]
 mod shapes_slot_list;
+#[cfg(test)]
+pub(crate) use shapes_slot_list::shape_descriptor_keys_slot;
+pub(crate) use shapes_slot_list::shape_id_owns_keys_slot;
 pub(crate) use shapes_slot_list::{
-    debug_assert_object_shape_parity, debug_assert_object_shape_parity_for_keys,
     object_shape_hole_count, publish_object_shape_holes, record_shape_scan_outcome,
     shape_index_migrate_after_delete, shape_index_shift_in_place, SlotList,
 };
@@ -1505,56 +1507,38 @@ unsafe fn object_header_key_count(obj: *const crate::object::ObjectHeader) -> u3
     }
 }
 
-/// The address of the ONE `keys` word the collector rewrites for `shape_id`,
-/// or `None` when the id names no descriptor in this agent (#8112).
-///
-/// This is the seam that replaced the post-visit write-back callback. The
-/// callback existed because the header word was the strong edge and the
-/// descriptor a weak copy that had to be repaired from it, under exact-facts
-/// validation, once per traced receiver whose keys array had moved. With the
-/// descriptor holding the edge, the slot visitor writes the record directly
-/// and there is nothing left to reconcile.
-///
-/// The returned address belongs to a BOXED record, so it is stable across
-/// descriptor insertion; only `prune_dead_shape_keys` frees one, and that runs
-/// at sweep, after every enumeration of the cycle that produced it.
-#[cfg(test)]
+/// #8113: the live-slot bound is no longer independently observable, so parity
+/// is now exactly "the stamp resolves, and its structural keys facts match the
+/// keys edge the receiver is about to carry". The bound cannot disagree with
+/// itself.
 #[inline]
-pub(crate) fn shape_descriptor_keys_slot(shape_id: u32) -> Option<*mut u64> {
-    if !is_shape_id(shape_id) {
-        return None;
-    }
-    crate::state::state()
-        .shapes
-        .inner
-        .borrow_mut()
-        .descriptors
-        .get_mut(&shape_id)
-        .map(|record| std::ptr::addr_of_mut!(record.keys))
+pub(crate) unsafe fn debug_assert_object_shape_parity(obj: *const crate::object::ObjectHeader) {
+    debug_assert_object_shape_parity_for_keys(obj, crate::object::object_keys_array(obj));
 }
 
-/// Is `slot` the shared `keys` word of `shape_id`'s descriptor record?
+/// Parity against an EXPLICIT keys edge.
 ///
-/// #8112: that word is a TABLE root, not a slot any receiver owns. Every
-/// sibling of the shape enumerates it, so a rewrite performed while tracing
-/// one receiver silently changes the edge of every other — including old
-/// receivers a minor never visits, for which no per-parent remembered-set page
-/// could ever be armed. The remembered-set and old→young verification paths
-/// therefore skip it and let the shape table's own root scanner cover it.
+/// `publish_object_shape_from` stamps the successor before the header store
+/// (that is what makes the keys mutation mint-then-stamp), so for that one
+/// window the authoritative edge is the caller's argument, not the header word.
 #[inline]
-pub(crate) fn shape_id_owns_keys_slot(shape_id: u32, slot: *mut u64) -> bool {
-    if !is_shape_id(shape_id) {
-        return false;
+pub(crate) unsafe fn debug_assert_object_shape_parity_for_keys(
+    obj: *const crate::object::ObjectHeader,
+    keys: *mut ArrayHeader,
+) {
+    let id = object_shape_stamp(obj);
+    if id != 0 {
+        let key_count = if keys.is_null() {
+            0
+        } else {
+            crate::array::keys_array_len_capped_to_capacity(keys) as u32
+        };
+        debug_assert!(
+            shape_descriptor_by_id(id)
+                .is_some_and(|d| { d.keys == keys as u64 && d.logical_key_count == key_count }),
+            "published ShapeId disagrees with authoritative ObjectHeader facts"
+        );
     }
-    // Immutable borrow on purpose: this runs inside collector walks, and a
-    // `borrow_mut` here would make the predicate itself a re-entrancy hazard.
-    crate::state::state()
-        .shapes
-        .inner
-        .borrow()
-        .descriptors
-        .get(&shape_id)
-        .is_some_and(|record| std::ptr::addr_of!(record.keys) as *mut u64 == slot)
 }
 
 /// Drop the stamp iff the word currently holds one, leaving a real

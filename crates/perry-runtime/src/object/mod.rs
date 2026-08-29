@@ -1868,6 +1868,8 @@ pub(super) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tombstone_tests;
 
 /// The named-property bag for a cell that has no inline slot layout of its own,
 /// creating it on first write.
