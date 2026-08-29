@@ -204,13 +204,18 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
                 None => is_num,
             });
         }
-        // Both callers guarantee at least one value that a static raw-f64
-        // proof cannot vouch for: either a declared-only read or the dynamic
-        // arm of a null-defaulted conditional. Keep that contract explicit so
-        // future predicate drift cannot silently turn this into an unguarded
-        // `fadd`.
+        // Every leaf vouched for: the whole tree is proven canonical raw
+        // f64, so the diamond has nothing to test — emit the fast tree
+        // unguarded. This is not new trust: the MIXED case already `fadd`s
+        // every vouched leaf without a runtime test, so an unsound vouching
+        // predicate ships wrong answers there regardless — the predicate's
+        // own tests are the guard, not this function. (This corner used to
+        // `bail!` as a drift tripwire; #9033's integer-provenance LocalGet
+        // arm made it reachable from ordinary code — `width += 1` where
+        // `width` is provenance-proven — and the tripwire took whole
+        // application builds down: pi's `graphemeWidth`, cc's cli bundle.)
         let Some(all_num) = cond else {
-            anyhow::bail!("guarded `+` tree has no testable leaf");
+            return Ok(rebuild_add_tree(ctx, expr, values, &mut 0, true));
         };
 
         let fast_idx = ctx.new_block("guarded_add.numeric");
