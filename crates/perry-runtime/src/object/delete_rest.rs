@@ -370,6 +370,17 @@ pub extern "C" fn js_object_delete_field(
         }
         (*keys_cloned).length = new_count as u32;
         super::rebuild_array_layout_from_slots(keys_cloned);
+        // Carry the key index onto the clone by shifting slots, instead of
+        // letting the new address miss `indices` and re-hash every surviving
+        // property name. On a 500-key object that rebuild ran on EVERY delete.
+        // A wrong index can only cause a miss — `shape_slot_lookup` validates
+        // the stored key against the requested bytes before returning a slot.
+        super::shapes::shape_index_migrate_after_delete(
+            keys as usize,
+            keys_cloned as usize,
+            i as u32,
+            key_count as u32,
+        );
         // `set_object_keys_array` publishes the cloned edge while preserving
         // the predecessor's semantic generation and object kind.
         set_object_keys_array(obj, keys_cloned);

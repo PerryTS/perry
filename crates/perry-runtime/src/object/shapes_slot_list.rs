@@ -31,6 +31,44 @@ impl SlotList {
         }
     }
 
+    /// Drop `removed` and shift every slot above it down by one.
+    #[inline]
+    pub(crate) fn retain_shift(&mut self, removed: u32) {
+        let shift = |s: u32| -> Option<u32> {
+            match s.cmp(&removed) {
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Less => Some(s),
+                std::cmp::Ordering::Greater => Some(s - 1),
+            }
+        };
+        match self {
+            SlotList::One(slot) => match shift(*slot) {
+                Some(s) => *slot = s,
+                None => *self = SlotList::Many(Vec::new()),
+            },
+            SlotList::Many(v) => {
+                v.retain_mut(|s| match shift(*s) {
+                    Some(n) => {
+                        *s = n;
+                        true
+                    }
+                    None => false,
+                });
+                if v.len() == 1 {
+                    *self = SlotList::One(v[0]);
+                }
+            }
+        }
+    }
+
+    #[inline]
+    pub(crate) fn is_empty(&self) -> bool {
+        match self {
+            SlotList::One(_) => false,
+            SlotList::Many(v) => v.is_empty(),
+        }
+    }
+
     #[inline]
     pub(crate) fn iter(&self) -> impl Iterator<Item = &u32> {
         match self {

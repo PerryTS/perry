@@ -1597,6 +1597,46 @@ pub(crate) unsafe fn clear_object_shape_stamp(obj: *mut crate::object::ObjectHea
     }
 }
 
+/// Carry a key index across a delete, instead of re-hashing every key name.
+///
+/// `delete obj[k]` clones the keys array, so the result has a new address and
+/// misses `indices` — which meant a 500-key object rebuilt its whole index on
+/// every delete, decoding and FNV-hashing all ~500 property names each time.
+/// The surviving keys are the same strings in the same order minus one, so the
+/// index can be shifted rather than recomputed: drop the removed slot and
+/// decrement every slot above it. No key bytes are touched.
+///
+/// Safe against a mistake by construction: [`shape_slot_lookup`] re-validates
+/// the stored key against the requested bytes before returning a slot, so an
+/// index that is wrong produces a MISS and the caller's own fallback, never a
+/// wrong property. Only a fully-built index is carried over; a partially built
+/// one is dropped and rebuilt as before.
+pub(crate) fn shape_index_migrate_after_delete(
+    old_keys_id: usize,
+    new_keys_id: usize,
+    removed_slot: u32,
+    old_key_count: u32,
+) {
+    if old_keys_id == 0 || new_keys_id == 0 || old_keys_id == new_keys_id {
+        return;
+    }
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    let Some(mut index) = inner.indices.remove(&old_keys_id) else {
+        return;
+    };
+    if index.indexed_len < old_key_count {
+        // Partially built: shifting it would leave the un-indexed tail
+        // misaligned. Dropping it preserves the previous behaviour exactly.
+        return;
+    }
+    index.slots.retain(|_, list| {
+        list.retain_shift(removed_slot);
+        !list.is_empty()
+    });
+    index.indexed_len = old_key_count - 1;
+    inner.indices.insert(new_keys_id, index);
+}
+
 /// Build (or extend) the slot map for `keys` covering `key_count` keys.
 unsafe fn index_range(shape: &mut ShapeIndex, keys: *const ArrayHeader, key_count: u32) {
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
