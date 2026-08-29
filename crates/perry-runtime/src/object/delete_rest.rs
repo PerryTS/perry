@@ -352,7 +352,18 @@ pub extern "C" fn js_object_delete_field(
             let elements =
                 (keys as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
             // Overlapping ranges inside ONE allocation: `copy` (memmove).
+            //
+            // Unlike the clone arm below, this destination is the LIVE,
+            // PUBLISHED array, so that arm's "unpublished, so no barrier" does
+            // not carry over. No new referent is introduced -- every value
+            // moved was already in this array one slot higher.
+            // Same shape as `Array.prototype.splice`'s tail memmove
+            // (`array/splice_slice.rs`), and safe for the same reason.
             if new_count > i {
+                // GC_STORE_AUDIT(BARRIERED): `rebuild_array_layout_from_slots`
+                // runs just below and, for an old-gen array, re-runs
+                // `runtime_write_barrier_slot` over every slot; `length` is set
+                // first so it covers exactly the compacted range.
                 std::ptr::copy(elements.add(i + 1), elements.add(i), new_count - i);
             }
             (*keys).length = new_count as u32;

@@ -112,23 +112,6 @@ pub(crate) fn record_shape_scan_outcome(
     }
 }
 
-/// Carry a key index across a delete, instead of re-hashing every key name.
-///
-/// `delete obj[k]` clones the keys array, so the result has a new address and
-/// misses `indices` — which meant a 500-key object rebuilt its whole index on
-/// every delete, decoding and FNV-hashing all ~500 property names each time.
-/// The surviving keys are the same strings in the same order minus one, so the
-/// index can be shifted rather than recomputed: drop the removed slot and
-/// decrement every slot above it. No key bytes are touched.
-///
-/// Safe against a mistake by construction: [`shape_slot_lookup`] re-validates
-/// the stored key against the requested bytes before returning a slot, so an
-/// index that is wrong produces a MISS and the caller's own fallback, never a
-/// wrong property. Only a fully-built index is carried over; a partially built
-/// one is dropped and rebuilt as before.
-///
-/// Returns whether the index was actually carried over: the delete tail uses
-/// that to skip the `shape_drop` that would otherwise discard it immediately.
 /// Shift a key index in place after an IN-PLACE delete.
 ///
 /// Twin of [`shape_index_migrate_after_delete`] for an OWNED keys array (no
@@ -164,6 +147,23 @@ pub(crate) fn shape_index_shift_in_place(
     true
 }
 
+/// Carry a key index across a delete, instead of re-hashing every key name.
+///
+/// `delete obj[k]` clones the keys array, so the result has a new address and
+/// misses `indices` — which meant a 500-key object rebuilt its whole index on
+/// every delete, decoding and FNV-hashing all ~500 property names each time.
+/// The surviving keys are the same strings in the same order minus one, so the
+/// index can be shifted rather than recomputed: drop the removed slot and
+/// decrement every slot above it. No key bytes are touched.
+///
+/// Safe against a mistake by construction: [`shape_slot_lookup`] re-validates
+/// the stored key against the requested bytes before returning a slot, so an
+/// index that is wrong produces a MISS and the caller's own fallback, never a
+/// wrong property. Only a fully-built index is carried over; a partially built
+/// one is dropped and rebuilt as before.
+///
+/// Returns whether the index was actually carried over: the delete tail uses
+/// that to skip the `shape_drop` that would otherwise discard it immediately.
 #[must_use]
 pub(crate) fn shape_index_migrate_after_delete(
     old_keys_id: usize,
