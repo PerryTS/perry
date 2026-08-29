@@ -96,6 +96,30 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     };
 
     let module_reassigned_locals = crate::collectors::reassigned_locals_in_module(hir);
+    // #9071 follow-up: module-wide GUARD-FREE closure bindings. #7170 R1's
+    // `single_binding_closure_locals` is the strong fact: exactly one `Let`,
+    // never written at any depth in any body, never rebound by a parameter or
+    // catch clause — "a call through this binding names that closure" with
+    // `Expr::FuncRef` strength, which is why the function-body pipeline
+    // already devirtualizes (and LLVM then folds) these calls. Closure bodies
+    // get the same treatment through this map: seeded into the known-func_id
+    // path, and the identity guard skipped outright.
+    let closure_param_counts: std::collections::HashMap<u32, usize> = closures
+        .iter()
+        .filter_map(|(func_id, expr)| match expr {
+            perry_hir::Expr::Closure { params, .. } => Some((*func_id, params.len())),
+            _ => None,
+        })
+        .collect();
+    let immutable_closure_bindings: std::collections::HashMap<u32, (u32, usize)> =
+        crate::collectors::spec_abi_sites::single_binding_closure_locals(hir)
+            .into_iter()
+            .filter_map(|(id, func_id)| {
+                closure_param_counts
+                    .get(&func_id)
+                    .map(|count| (id, (func_id, *count)))
+            })
+            .collect();
     progress.checkpoint("reassigned-local analysis");
 
     let closure_started = Instant::now();
@@ -160,6 +184,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             module_boxed_vars,
             module_receiver_types,
             &module_reassigned_locals,
+            &immutable_closure_bindings,
             closure_rest_params,
             cross_module,
             false,
@@ -186,6 +211,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 module_boxed_vars,
                 module_receiver_types,
                 &module_reassigned_locals,
+                &immutable_closure_bindings,
                 closure_rest_params,
                 cross_module,
                 true,
@@ -213,6 +239,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 module_boxed_vars,
                 module_receiver_types,
                 &module_reassigned_locals,
+                &immutable_closure_bindings,
                 closure_rest_params,
                 cross_module,
                 true,

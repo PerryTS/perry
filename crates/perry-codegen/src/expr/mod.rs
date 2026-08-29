@@ -615,6 +615,10 @@ pub(crate) struct FnCtx<'a> {
     /// Used by the closure call site in `lower_call` to look up the
     /// callee's rest param info from `closure_rest_params`.
     pub local_closure_func_ids: std::collections::HashMap<u32, u32>,
+    /// Bindings whose closure identity holds with `FuncRef` strength (#7170
+    /// R1's single-binding fact: one `Let`, never written anywhere, never
+    /// rebound). A call through one of these needs NO runtime identity guard.
+    pub guard_free_closure_bindings: std::collections::HashSet<u32>,
     /// LocalId → closure declared parameter count. Paired with
     /// `local_closure_func_ids` for guarded direct closure calls: direct
     /// calls only fire when the static arity exactly matches the call site.

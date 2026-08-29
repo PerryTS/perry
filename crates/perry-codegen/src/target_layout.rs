@@ -109,6 +109,14 @@ pub fn object_meta_slot_offset_bytes(target_triple: &str) -> u64 {
 /// capture pointers directly from their immutable capture slots. Keep the
 /// target derivation here: using the compiler host's pointer width would make
 /// cross-compiled arm64_32 watchOS closures read four bytes past the slot.
+/// Byte offset of `ClosureHeader::type_tag` (the `CLOSURE_MAGIC` slot) for
+/// the target: the header's last 4 bytes (`func_ptr` + `capture_count`
+/// precede it), i.e. 12 on LP64 and 8 on ILP32 — the codegen mirror of the
+/// runtime's `offset_of!`-derived `CLOSURE_TYPE_TAG_OFFSET`.
+pub fn closure_type_tag_offset_bytes(target_triple: &str) -> u64 {
+    closure_header_size_bytes(target_triple) - 4
+}
+
 pub fn closure_header_size_bytes(target_triple: &str) -> u64 {
     if target_is_ilp32(target_triple) {
         12

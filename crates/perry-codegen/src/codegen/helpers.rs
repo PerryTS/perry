@@ -1761,6 +1761,12 @@ pub(super) fn emit_callee_binding_resolutions(
         {
             continue;
         }
+        // A statically-known callee takes the known-func_id guarded direct
+        // path — a static, inlinable call — which beats the entry-resolved
+        // indirect call this map would install.
+        if ctx.local_closure_func_ids.contains_key(&id) {
+            continue;
+        }
         if !matches!(
             ctx.local_type_hint(&id),
             Some(perry_hir::types::Type::Function(function))

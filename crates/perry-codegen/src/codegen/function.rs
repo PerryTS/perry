@@ -1081,6 +1081,7 @@ pub(super) fn compile_function(
             .compiler_private_async_i1_control_locals,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
+        guard_free_closure_bindings: std::collections::HashSet::new(),
         local_closure_param_counts: HashMap::new(),
         resolved_arrow_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),

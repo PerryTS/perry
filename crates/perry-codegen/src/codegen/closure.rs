@@ -497,6 +497,9 @@ pub(super) fn compile_closure(
     // inherit module-wide receiver types, so their invalidation scope must be
     // module-wide too.
     module_reassigned_locals: &HashSet<u32>,
+    // Module-wide `immutable binding -> (closure func_id, param count)` facts;
+    // already filtered by the reassignment oracle at the collection site.
+    immutable_closure_bindings: &HashMap<u32, (u32, usize)>,
     closure_rest_params: &HashMap<u32, usize>,
     cross_module: &CrossModuleCtx,
     trusted_box_captures: bool,
@@ -1126,6 +1129,7 @@ pub(super) fn compile_closure(
             .compiler_private_async_i1_control_locals,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
+        guard_free_closure_bindings: std::collections::HashSet::new(),
         local_closure_param_counts: HashMap::new(),
         resolved_arrow_callback_targets: HashMap::new(),
         resolved_versioned_loop_callback_targets: HashMap::new(),
@@ -1313,6 +1317,38 @@ pub(super) fn compile_closure(
     // live parameter of every closure body, so capture-slot reads are direct.
     // Skipped for async bodies: entry SSA values do not survive the CPS
     // rewrite.
+    // #9071 follow-up: a captured or module-global binding that provably holds
+    // one specific same-module closure gets the body-local known-func_id
+    // treatment — the guarded direct path with compile-time typed-clone
+    // selection and a STATIC fast call — exactly as if its `Let` were in this
+    // body. Entry resolution below skips these ids: static beats indirect.
+    for id in ctx
+        .closure_captures
+        .keys()
+        .chain(ctx.module_globals.keys())
+        .copied()
+        .collect::<Vec<u32>>()
+    {
+        if let Some((func_id, param_count)) = immutable_closure_bindings.get(&id) {
+            ctx.local_closure_func_ids.entry(id).or_insert(*func_id);
+            ctx.local_closure_param_counts
+                .entry(id)
+                .or_insert(*param_count);
+            // The single-binding fact holds module-wide, so the identity
+            // guard is unnecessary at these call sites — for CAPTURED
+            // bindings. A capture of a single-binding closure is boxed by
+            // construction when it can be read before its `Let` runs, and the
+            // boxed read throws the TDZ error before the dispatch arm is
+            // reached. A MODULE GLOBAL has no such protection: code running
+            // during module init can call through the binding while the cell
+            // still holds the TDZ sentinel, so globals keep the inline
+            // identity probe (whose magic check fails on the sentinel and
+            // falls back to the full dispatcher's correct error path).
+            if ctx.closure_captures.contains_key(&id) {
+                ctx.guard_free_closure_bindings.insert(id);
+            }
+        }
+    }
     if !is_async {
         let param_ids: std::collections::HashSet<u32> = params.iter().map(|p| p.id).collect();
         super::helpers::emit_callee_binding_resolutions(

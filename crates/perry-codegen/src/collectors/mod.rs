@@ -49,7 +49,7 @@ mod safepoint_sites;
 mod scalar_method_dispatch;
 mod scalar_methods;
 mod shadow_slots;
-mod spec_abi_sites;
+pub(crate) mod spec_abi_sites;
 mod this_as_value;
 mod uppercase_strings;
 
