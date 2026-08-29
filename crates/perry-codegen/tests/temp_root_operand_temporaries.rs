@@ -530,7 +530,7 @@ fn registered_root_operands_are_reloaded_rather_than_rooted() {
 // concat read the string's pre-move address: an empty line, exit code 0.
 
 /// An operand that is statically NUMERIC *and* can collect, so `"lit" + it`
-/// takes the fused `js_string_concat_value` path — the exact expression form
+/// takes the fused `js_string_concat_value_box` path — the exact expression form
 /// #7114 was reported against.
 ///
 /// A non-`Add` `Expr::Binary` is numeric by construction (`is_numeric_expr`),
@@ -641,7 +641,8 @@ fn string_literal_concat_operand_is_re_derived_below_the_allocating_sibling() {
     let f = init_ir(&ir);
     let handle = "load double, ptr @concat_reload_ts_.str.";
     assert_eq!(
-        f.matches("call i64 @js_string_concat_value(").count(),
+        f.matches("call double @js_string_concat_value_box(")
+            .count(),
         1,
         "exactly one fused string+value concat in @main:\n{f}"
     );
@@ -659,7 +660,7 @@ fn string_literal_concat_operand_is_re_derived_below_the_allocating_sibling() {
          it:\n{f}"
     );
 
-    let concat = f.find("call i64 @js_string_concat_value(").unwrap();
+    let concat = f.find("call double @js_string_concat_value_box(").unwrap();
     let alloc = f[..concat]
         .rfind("call i64 @js_object_alloc(")
         .unwrap_or_else(|| panic!("the sibling must allocate before the concat:\n{f}"));

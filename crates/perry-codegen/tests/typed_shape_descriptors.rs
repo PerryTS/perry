@@ -187,7 +187,7 @@ fn scalar_object_literal_skips_pure_unobserved_initializers() {
         "non-escaping object literal should stay scalar-replaced"
     );
     assert!(
-        !ir.contains("call i64 @js_string_concat"),
+        !ir.contains("call double @js_string_concat_value_box("),
         "pure unobserved field initializer should not be lowered"
     );
 }
@@ -226,7 +226,7 @@ fn scalar_array_literal_skips_pure_unobserved_initializers() {
         "non-escaping array literal should stay scalar-replaced"
     );
     assert!(
-        !ir.contains("call i64 @js_string_concat"),
+        !ir.contains("call double @js_string_concat_value_box("),
         "pure unobserved array initializer should not be lowered"
     );
 }
@@ -294,7 +294,7 @@ fn scalar_object_literal_keeps_initializers_read_by_update() {
 
     let ir = ir_for(module);
     assert!(
-        ir.contains("call i64 @js_string_concat"),
+        ir.contains("call double @js_string_concat_value_box("),
         "field initializer read by obj.field++ must still be lowered"
     );
 }
