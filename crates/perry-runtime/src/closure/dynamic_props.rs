@@ -419,6 +419,24 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
     if !ptr.is_multiple_of(std::mem::align_of::<ClosureHeader>()) {
         return false;
     }
+    // Arena ownership gives us an authoritative discriminator. Do not let a
+    // coincidental CLOSURE_MAGIC in another managed cell's payload win: in
+    // particular, ErrorHeader has padding at the closure tag offset and an
+    // arena slot reused after a closure can retain "CLOS" in those bytes.
+    // Headerless/external allocations remain on the exact-magic fallback.
+    if !matches!(
+        crate::arena::classify_heap_generation(ptr),
+        crate::arena::HeapGeneration::Unknown
+    ) {
+        let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(ptr) }) else {
+            return false;
+        };
+        if header.obj_type != crate::gc::GC_TYPE_CLOSURE
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return false;
+        }
+    }
     unsafe {
         let type_tag = *((ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32);
         type_tag == CLOSURE_MAGIC
@@ -1009,6 +1027,32 @@ mod tests_1802 {
                 !is_closure_ptr(handle),
                 "is_closure_ptr({handle:#x}) must be false (small-handle band) \
                  without dereferencing the handle as a pointer",
+            );
+        }
+    }
+
+    /// A managed cell's GC kind must outrank bytes that merely look like a
+    /// closure tag. ErrorHeader's bytes 12..16 are padding on 64-bit targets;
+    /// reused arena storage can therefore retain CLOSURE_MAGIC there.
+    #[test]
+    fn managed_error_with_closure_magic_in_padding_is_not_a_closure() {
+        unsafe {
+            let message = crate::string::js_string_from_bytes(b"survives".as_ptr(), 8);
+            let error = crate::error::js_error_new_with_message(message);
+            std::ptr::write_unaligned(
+                (error as *mut u8).add(CLOSURE_TYPE_TAG_OFFSET) as *mut u32,
+                CLOSURE_MAGIC,
+            );
+
+            assert!(!is_closure_ptr(error as usize));
+            assert_eq!((*error).message, message);
+
+            let key = crate::string::js_string_from_bytes(b"message".as_ptr(), 7);
+            let value = crate::object::js_object_get_field_by_name(error.cast(), key);
+            assert_eq!(
+                value.bits() & crate::value::POINTER_MASK,
+                message as usize as u64,
+                "property lookup must reach Error handling, not the closure path",
             );
         }
     }

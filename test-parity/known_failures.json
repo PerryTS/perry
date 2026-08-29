@@ -37,15 +37,6 @@
       "linux"
     ]
   },
-  "test_class_field_layout": {
-    "issue": "8841",
-    "added": "2026-08-25",
-    "category": "bug-open",
-    "reason": "Reproduces 5/5 on pre-#8835 r13 and in r14 Full CI: both runtimes exit 0 but their class-field layout output differs. Tracked in #8841.",
-    "platforms": [
-      "linux"
-    ]
-  },
   "test_date_fns_format": {
     "issue": "8271",
     "added": "2026-08-17",
