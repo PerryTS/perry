@@ -6348,6 +6348,7 @@ dependencies = [
  "taffy",
  "temporal_rs",
  "thiserror 1.0.69",
+ "timezone_provider",
  "unicode-normalization",
  "unicode-segmentation",
  "url",
