@@ -30,8 +30,6 @@
 
 use crate::array::ArrayHeader;
 use std::cell::RefCell;
-<<<<<<< HEAD
-=======
 
 /// Slots sharing one content hash.
 ///
@@ -68,7 +66,6 @@ impl SlotList {
         }
     }
 }
->>>>>>> refs/tmp/pr9001
 
 pub(crate) struct ShapeIndex {
     /// Key count covered by `slots`. Longer live array ⟹ catch up
@@ -84,11 +81,7 @@ pub(crate) struct ShapeIndex {
     /// `bench_populated_delete.ts` — perry's worst object-model gap against
     /// node — `hash_one::<&usize>` plus `sip::Hasher::write` were **14.7% of
     /// self time**, second only to the lookup that performs them.
-<<<<<<< HEAD
-    slots: crate::fast_hash::PtrHashMap<u64, Vec<u32>>,
-=======
     slots: crate::fast_hash::PtrHashMap<u64, SlotList>,
->>>>>>> refs/tmp/pr9001
 }
 
 /// Immutable facts named by one ShapeId.
