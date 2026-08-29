@@ -317,9 +317,9 @@ fn rebuild_set_index(set: *mut SetHeader) {
         return;
     }
     unsafe {
-        let size = (*set).size as usize;
+        let used = (*set).used as usize;
         let capacity = (*set).capacity as usize;
-        if size > capacity || size > 16_000_000 || (*set).elements.is_null() {
+        if used > capacity || used > 16_000_000 || (*set).elements.is_null() {
             return;
         }
         let elements = elements_ptr(set);
@@ -329,35 +329,15 @@ fn rebuild_set_index(set: *mut SetHeader) {
                 .entry(set as usize)
                 .or_insert_with(crate::fast_hash::new_ptr_hash_map);
             map.clear();
-            for i in 0..size {
-                map.insert(JSValueKey(ptr::read(elements.add(i))), i as u32);
+            for i in 0..used {
+                let v = ptr::read(elements.add(i));
+                if v.to_bits() == SET_HOLE_VALUE_BITS {
+                    continue;
+                }
+                map.insert(JSValueKey(v), i as u32);
             }
         });
     }
-}
-
-/// Repair `SET_INDEX` after an ordered delete compacted the elements buffer.
-///
-/// Removes the deleted value's entry and decrements every stored offset that
-/// sat after it. Equivalent to rebuilding the table from the compacted buffer
-/// — the offsets are exactly what a rebuild would produce — but it re-hashes
-/// nothing, which is what made the rebuild quadratic when a Set is emptied.
-unsafe fn repair_set_index_after_ordered_delete(
-    set: *mut SetHeader,
-    deleted_value: f64,
-    deleted_idx: u32,
-) {
-    SET_INDEX.with(|idx| {
-        let mut idx = idx.borrow_mut();
-        if let Some(map) = idx.get_mut(&(set as usize)) {
-            map.remove(&JSValueKey(deleted_value));
-            for entry_idx in map.values_mut() {
-                if *entry_idx > deleted_idx {
-                    *entry_idx -= 1;
-                }
-            }
-        }
-    });
 }
 
 pub(crate) fn rebuild_set_index_for_gc(set: *mut SetHeader) {
@@ -553,7 +533,22 @@ pub struct SetHeader {
     /// `trace_heap_rewrite_slots` drives — so the edge is marked, not merely
     /// rewritten (#6812).
     pub meta: *mut crate::object::ObjectMeta,
+    /// Extent of the elements array actually written: raw element indices run
+    /// `0..used`. `size` stays the LIVE count; `used - size` counts the
+    /// tombstoned slots awaiting compaction. Appended last (offset pinned).
+    pub used: u32,
 }
+
+const _: () = {
+    assert!(std::mem::offset_of!(SetHeader, size) == 0);
+    assert!(std::mem::offset_of!(SetHeader, capacity) == 4);
+    assert!(std::mem::offset_of!(SetHeader, elements) == 8);
+    assert!(std::mem::offset_of!(SetHeader, used) == 24);
+};
+
+/// The tombstone a deleted element's slot takes — same reserved marker as the
+/// Map tombstones; `normalize_zero` keeps it out of stored values.
+pub(crate) const SET_HOLE_VALUE_BITS: u64 = crate::value::TAG_HOLE;
 
 /// Each set element is 8 bytes (f64/JSValue)
 const ELEMENT_SIZE: usize = 8;
@@ -581,8 +576,9 @@ pub(crate) unsafe fn gc_element_slot_range(
         return None;
     }
     let size = (*set).size as usize;
+    let used = (*set).used as usize;
     let capacity = (*set).capacity as usize;
-    if size > capacity || size > 16_000_000 || (*set).elements.is_null() {
+    if size > used || used > capacity || used > 16_000_000 || (*set).elements.is_null() {
         return None;
     }
     // Defensive tripwire (cf. Map's entries check in layout_slot_visit):
@@ -605,7 +601,7 @@ pub(crate) unsafe fn gc_element_slot_range(
     }
     Some(crate::gc::HeapSlotRange::new(
         (*set).elements as *mut u64,
-        size,
+        used,
     ))
 }
 
@@ -616,6 +612,11 @@ pub(crate) unsafe fn gc_element_slot_range(
 /// so `v == 0.0` stays false for them.
 #[inline(always)]
 fn normalize_zero(value: f64) -> f64 {
+    if value.to_bits() == SET_HOLE_VALUE_BITS {
+        // A leaked array hole reads as `undefined` at every other boundary;
+        // canonicalize here so the tombstone can never collide with a value.
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     if value == 0.0 {
         0.0
     } else if value.is_nan() && crate::value::JSValue::from_bits(value.to_bits()).is_number() {
@@ -814,9 +815,60 @@ static KEEP_SET_FIND_VALUE_INDEX: extern "C" fn(f64, f64) -> f64 = js_set_find_v
 /// hashing into the side-table twice (set address, then value).
 const SMALL_SET_SCAN_MAX: u32 = 8;
 
+/// Live-extent accessor for iteration (`0..used` are the raw indices).
+#[inline(always)]
+pub(crate) fn set_used_entries(set: *const SetHeader) -> u32 {
+    unsafe { (*set).used }
+}
+
+/// Raw-indexed element read for the iterator objects: bound by `used`, no
+/// compaction — the advance loop skips holes itself.
+#[inline(always)]
+pub(crate) unsafe fn set_value_raw(set: *const SetHeader, idx: u32) -> f64 {
+    if idx >= (*set).used {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    ptr::read(elements_ptr(set).add(idx as usize))
+}
+
+/// Squeeze the tombstones out (insertion order preserved), then rebuild the
+/// lookup index from the dense buffer.
+unsafe fn compact_set_elements(set: *mut SetHeader) {
+    let used = (*set).used as usize;
+    let elements = elements_ptr_mut(set);
+    let mut out = 0usize;
+    for i in 0..used {
+        let v = ptr::read(elements.add(i));
+        if v.to_bits() == SET_HOLE_VALUE_BITS {
+            continue;
+        }
+        if out != i {
+            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): the dirty-span barrier below
+            // covers every surviving slot this pass writes. Overlap-safe by
+            // construction -- `out <= i` always, so a live element only ever
+            // moves DOWN within the one buffer, never onto an unread source.
+            ptr::write(elements.add(out), v);
+        }
+        out += 1;
+    }
+    debug_assert_eq!(out as u32, (*set).size);
+    (*set).used = out as u32;
+    if out > 0 {
+        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): compaction is followed by a dirty-span barrier for every surviving slot.
+        crate::gc::runtime_write_barrier_external_slot_span(set as usize, elements as usize, out);
+    }
+    rebuild_set_index(set);
+}
+
+pub(crate) unsafe fn compact_if_holey_set(set: *mut SetHeader) {
+    if (*set).used != (*set).size {
+        compact_set_elements(set);
+    }
+}
+
 /// The lookup a hot `Set.has` / `Set.add` does on a small set of numbers,
 /// with nothing else in the frame: a plain (untagged, non-NaN, non-zero)
-/// number against the elements by bit identity. `elements[0..size)` is exactly
+/// number against the elements by bit identity. `elements[0..used)` is exactly
 /// the membership (`delete` compacts, `add` normalises `-0`), and no tagged
 /// value equals a number, so a bit match is a hit and a full scan is a miss.
 /// Everything else — larger sets, tagged / zero / NaN values, every string —
@@ -827,12 +879,12 @@ unsafe fn find_value_index_hot(set: *const SetHeader, value: f64) -> Option<i32>
     if !crate::map::is_plain_nonzero_number_bits(bits) {
         return None;
     }
-    let size = (*set).size;
-    if size > SMALL_SET_SCAN_MAX {
+    let used = (*set).used;
+    if used > SMALL_SET_SCAN_MAX {
         return None;
     }
     let elements = elements_ptr(set);
-    for i in 0..size {
+    for i in 0..used {
         if ptr::read(elements.add(i as usize)).to_bits() == bits {
             return Some(i as i32);
         }
@@ -854,7 +906,7 @@ unsafe fn find_value_index_cold(set: *const SetHeader, value: f64) -> i32 {
         let idx = idx.borrow();
         if let Some(map) = idx.get(&(set as usize)) {
             if let Some(&index) = map.get(&JSValueKey(value)) {
-                if index < (*set).size {
+                if index < (*set).used {
                     return index as i32;
                 }
             }
@@ -928,6 +980,7 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
         // The arena allocator reuses free-list memory without zeroing, so an
         // uninitialised meta edge would be a garbage pointer the GC follows.
         (*ptr).meta = std::ptr::null_mut();
+        (*ptr).used = 0;
 
         // Register in set registry for runtime type detection
         register_set(ptr, elements, cap as usize);
@@ -1058,12 +1111,13 @@ fn set_add_resolved(set: *mut SetHeader, value: f64) {
         // Value doesn't exist, need to add it
         let grew = ensure_capacity(set);
         let size = (*set).size;
+        let used = (*set).used;
         let elements = elements_ptr_mut(set);
-        if grew && size > 0 {
+        if grew && used > 0 {
             crate::gc::runtime_write_barrier_external_slot_span(
                 set as usize,
                 elements as usize,
-                size as usize,
+                used as usize,
             );
         }
 
@@ -1071,7 +1125,7 @@ fn set_add_resolved(set: *mut SetHeader, value: f64) {
         // GC_STORE_AUDIT(EXTERNAL_BARRIERED): Set append stores through the shared external-slot helper.
         crate::gc::runtime_store_external_jsvalue_slot(
             set as usize,
-            elements.add(size as usize) as usize,
+            elements.add(used as usize) as usize,
             value.to_bits(),
         );
 
@@ -1079,11 +1133,12 @@ fn set_add_resolved(set: *mut SetHeader, value: f64) {
         SET_INDEX.with(|idx| {
             let mut idx = idx.borrow_mut();
             if let Some(map) = idx.get_mut(&(set as usize)) {
-                map.insert(JSValueKey(value), size);
+                map.insert(JSValueKey(value), used);
             }
         });
 
         (*set).size = size + 1;
+        (*set).used = used + 1;
     }
 }
 
@@ -1115,30 +1170,32 @@ fn set_add_string_resolved(set: *mut SetHeader, value: *const StringHeader) {
 
         let grew = ensure_capacity(set);
         let size = (*set).size;
+        let used = (*set).used;
         let elements = elements_ptr_mut(set);
-        if grew && size > 0 {
+        if grew && used > 0 {
             crate::gc::runtime_write_barrier_external_slot_span(
                 set as usize,
                 elements as usize,
-                size as usize,
+                used as usize,
             );
         }
 
         // GC_STORE_AUDIT(EXTERNAL_BARRIERED): Set append stores through the shared external-slot helper.
         crate::gc::runtime_store_external_jsvalue_slot(
             set as usize,
-            elements.add(size as usize) as usize,
+            elements.add(used as usize) as usize,
             value.to_bits(),
         );
 
         SET_INDEX.with(|idx| {
             let mut idx = idx.borrow_mut();
             if let Some(map) = idx.get_mut(&(set as usize)) {
-                map.insert(JSValueKey(value), size);
+                map.insert(JSValueKey(value), used);
             }
         });
 
         (*set).size = size + 1;
+        (*set).used = used + 1;
     }
 }
 
@@ -1329,43 +1386,31 @@ pub extern "C" fn js_set_delete(set: *mut SetHeader, value: f64) -> i32 {
         let elements = elements_ptr_mut(set);
         let deleted_value = ptr::read(elements.add(idx as usize));
 
-        // #2831: preserve insertion order. The previous swap-remove moved
-        // the last element into the hole, reordering iteration. Shift every
-        // element after `idx` down by one slot instead so survivors keep
-        // their relative order (and a delete-then-re-add appends at the end).
-        //
-        // One overlap-safe move plus a single dirty-span barrier, matching
-        // `map::delete_entry_at_index`. The previous form issued a full
-        // barriered store PER shifted element, so emptying an N-element Set
-        // cost N^2 barrier entries; the span records the same old->young
-        // contract for the moved slots' new addresses in one call. No new
-        // parent -> child edge is created — every moved value was already in
-        // this Set.
-        let moved = size as usize - idx as usize - 1;
-        if moved > 0 {
-            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): ordered compaction is followed by a dirty-span barrier for every moved slot.
-            ptr::copy(
-                elements.add(idx as usize + 1),
-                elements.add(idx as usize),
-                moved,
-            );
-            crate::gc::runtime_write_barrier_external_slot_span(
-                set as usize,
-                elements.add(idx as usize) as usize,
-                moved,
-            );
-        }
+        // O(1) ordered delete: survivors keep their RAW indices (no move, no
+        // span barrier over the tail, no index-offset repair — the costs that
+        // made emptying a Set quadratic). The slot takes the reserved hole
+        // marker through the barriered store, so SATB marking still shades
+        // the overwritten value; iteration skips holes, and delete-then-
+        // re-add still appends at the end (#2831). Holes are squeezed out
+        // when they outnumber the live elements, or before growing.
+        crate::gc::runtime_store_external_jsvalue_slot(
+            set as usize,
+            elements.add(idx as usize) as usize,
+            SET_HOLE_VALUE_BITS,
+        );
 
         (*set).size = size - 1;
+        SET_INDEX.with(|indexes| {
+            let mut indexes = indexes.borrow_mut();
+            if let Some(index) = indexes.get_mut(&(set as usize)) {
+                index.remove(&JSValueKey(deleted_value));
+            }
+        });
 
-        // The shift decrements the stored index of every surviving element
-        // after `idx`. Repair those offsets in place instead of clearing the
-        // table and re-hashing every survivor: `rebuild_set_index` re-inserted
-        // all N elements on EVERY delete, so emptying an N-element Set hashed
-        // O(N^2) times. Removing one key and decrementing later offsets is a
-        // cache-linear pass that re-hashes nothing — the same repair
-        // `map::repair_map_indices_after_ordered_delete` already does.
-        repair_set_index_after_ordered_delete(set, deleted_value, idx as u32);
+        let used = (*set).used;
+        if used >= 16 && (*set).size < used / 2 {
+            compact_set_elements(set);
+        }
         1
     }
 }
@@ -1506,9 +1551,11 @@ pub extern "C" fn js_set_clear(set: *mut SetHeader) {
         // set has nothing to reset — half of a change set's per-entity
         // `adds.clear(); removes.clear()` — and skips the table probe.
         if (*set).size == 0 {
+            (*set).used = 0;
             return;
         }
         (*set).size = 0;
+        (*set).used = 0;
     }
     SET_INDEX.with(|idx| {
         let mut idx = idx.borrow_mut();
@@ -1530,6 +1577,11 @@ pub extern "C" fn js_set_value_at(set: *const SetHeader, i: u32) -> f64 {
         return f64::from_bits(UNDEF);
     }
     unsafe {
+        if (*set).used != (*set).size {
+            // Raw-indexed access with holes present: compact so raw == live
+            // again for every external walker that loops `0..size`.
+            compact_set_elements(set as *mut SetHeader);
+        }
         if i >= (*set).size {
             return f64::from_bits(UNDEF);
         }
@@ -1551,6 +1603,13 @@ pub extern "C" fn js_set_value_at(set: *const SetHeader, i: u32) -> f64 {
 /// no concurrent modification, capacity is exact.
 #[no_mangle]
 pub extern "C" fn js_set_to_array(set: *const SetHeader) -> *mut crate::array::ArrayHeader {
+    // Raw element walk below: squeeze holes out first.
+    unsafe {
+        let resolved = clean_set_ptr(set);
+        if !resolved.is_null() {
+            compact_if_holey_set(resolved as *mut SetHeader);
+        }
+    }
     // #7570: resolve a `class X extends Set` receiver onto its backing.
     let set = clean_set_ptr(set);
     if set.is_null() {
@@ -1754,6 +1813,15 @@ fn js_set_foreach_impl(
     this_arg: f64,
     collection_override: f64,
 ) {
+    // Raw element walk below: squeeze holes out first. `Set.prototype.forEach`
+    // walks raw slots to `size`, so a tombstone was yielded to the callback as
+    // the raw marker AND the walk ended early, dropping live elements past it.
+    unsafe {
+        let resolved = clean_set_ptr(set);
+        if !resolved.is_null() {
+            compact_if_holey_set(resolved as *mut SetHeader);
+        }
+    }
     // ECMA-262 Set.prototype.forEach step 4: a non-callable callback throws a
     // TypeError before iterating (and before any null-set early return).
     crate::array::js_validate_array_callback(callback);
@@ -1851,6 +1919,15 @@ unsafe fn other_set_ptr(other: f64) -> *const SetHeader {
 #[no_mangle]
 pub extern "C" fn js_set_union(set: *const SetHeader, other: f64) -> *mut SetHeader {
     let set = clean_set_ptr(set);
+    // Raw element walk below: squeeze holes out first, exactly as
+    // `js_set_is_subset_of` does. Without this a tombstone is read as an
+    // element -- it leaks into the result as the raw marker, and the walk
+    // stops at `size` so live elements past the last hole are dropped.
+    unsafe {
+        if !set.is_null() {
+            compact_if_holey_set(set as *mut SetHeader);
+        }
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let result = js_set_alloc(4);
     let result_handle = scope.root_raw_mut_ptr(result);
@@ -1893,6 +1970,15 @@ pub extern "C" fn js_set_union(set: *const SetHeader, other: f64) -> *mut SetHea
 #[no_mangle]
 pub extern "C" fn js_set_intersection(set: *const SetHeader, other: f64) -> *mut SetHeader {
     let set = clean_set_ptr(set);
+    // Raw element walk below: squeeze holes out first, exactly as
+    // `js_set_is_subset_of` does. Without this a tombstone is read as an
+    // element -- it leaks into the result as the raw marker, and the walk
+    // stops at `size` so live elements past the last hole are dropped.
+    unsafe {
+        if !set.is_null() {
+            compact_if_holey_set(set as *mut SetHeader);
+        }
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let result = js_set_alloc(4);
     let result_handle = scope.root_raw_mut_ptr(result);
@@ -1931,6 +2017,15 @@ pub extern "C" fn js_set_intersection(set: *const SetHeader, other: f64) -> *mut
 #[no_mangle]
 pub extern "C" fn js_set_difference(set: *const SetHeader, other: f64) -> *mut SetHeader {
     let set = clean_set_ptr(set);
+    // Raw element walk below: squeeze holes out first, exactly as
+    // `js_set_is_subset_of` does. Without this a tombstone is read as an
+    // element -- it leaks into the result as the raw marker, and the walk
+    // stops at `size` so live elements past the last hole are dropped.
+    unsafe {
+        if !set.is_null() {
+            compact_if_holey_set(set as *mut SetHeader);
+        }
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let result = js_set_alloc(4);
     let result_handle = scope.root_raw_mut_ptr(result);
@@ -1970,6 +2065,15 @@ pub extern "C" fn js_set_difference(set: *const SetHeader, other: f64) -> *mut S
 #[no_mangle]
 pub extern "C" fn js_set_symmetric_difference(set: *const SetHeader, other: f64) -> *mut SetHeader {
     let set = clean_set_ptr(set);
+    // Raw element walk below: squeeze holes out first, exactly as
+    // `js_set_is_subset_of` does. Without this a tombstone is read as an
+    // element -- it leaks into the result as the raw marker, and the walk
+    // stops at `size` so live elements past the last hole are dropped.
+    unsafe {
+        if !set.is_null() {
+            compact_if_holey_set(set as *mut SetHeader);
+        }
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let result = js_set_alloc(4);
     let result_handle = scope.root_raw_mut_ptr(result);
@@ -2029,6 +2133,13 @@ pub extern "C" fn js_set_symmetric_difference(set: *const SetHeader, other: f64)
 /// also in `other`. Returns 1/0.
 #[no_mangle]
 pub extern "C" fn js_set_is_subset_of(set: *const SetHeader, other: f64) -> i32 {
+    // Raw element walk below: squeeze holes out first.
+    unsafe {
+        let resolved = clean_set_ptr(set);
+        if !resolved.is_null() {
+            compact_if_holey_set(resolved as *mut SetHeader);
+        }
+    }
     let set = clean_set_ptr(set);
     if set.is_null() {
         return 1; // empty set is a subset of anything
@@ -2055,6 +2166,15 @@ pub extern "C" fn js_set_is_subset_of(set: *const SetHeader, other: f64) -> i32 
 #[no_mangle]
 pub extern "C" fn js_set_is_superset_of(set: *const SetHeader, other: f64) -> i32 {
     let set = clean_set_ptr(set);
+    // Raw element walk below: squeeze holes out first, exactly as
+    // `js_set_is_subset_of` does. Without this a tombstone is read as an
+    // element -- it leaks into the result as the raw marker, and the walk
+    // stops at `size` so live elements past the last hole are dropped.
+    unsafe {
+        if !set.is_null() {
+            compact_if_holey_set(set as *mut SetHeader);
+        }
+    }
     unsafe {
         let other = other_set_ptr(other);
         if other.is_null() {
@@ -2079,6 +2199,13 @@ pub extern "C" fn js_set_is_superset_of(set: *const SetHeader, other: f64) -> i3
 /// elements. Returns 1/0.
 #[no_mangle]
 pub extern "C" fn js_set_is_disjoint_from(set: *const SetHeader, other: f64) -> i32 {
+    // Raw element walk below: squeeze holes out first.
+    unsafe {
+        let resolved = clean_set_ptr(set);
+        if !resolved.is_null() {
+            compact_if_holey_set(resolved as *mut SetHeader);
+        }
+    }
     let set = clean_set_ptr(set);
     if set.is_null() {
         return 1;
@@ -2157,8 +2284,11 @@ mod tests {
 
     fn collect(set: *const SetHeader) -> Vec<f64> {
         unsafe {
-            let size = (*set).size as usize;
-            (0..size).map(|i| *(elements_ptr(set).add(i))).collect()
+            let used = (*set).used as usize;
+            (0..used)
+                .map(|i| *(elements_ptr(set).add(i)))
+                .filter(|v| v.to_bits() != SET_HOLE_VALUE_BITS)
+                .collect()
         }
     }
 
@@ -2688,6 +2818,7 @@ mod tests {
             capacity: 4,
             elements: std::ptr::null_mut(),
             meta: std::ptr::null_mut(),
+            used: 1,
         };
 
         let cases: &[(&str, *mut f64)] = &[
@@ -2738,6 +2869,7 @@ mod ordered_delete_repair_tests {
 
         unsafe {
             assert_eq!((*set).size, 2, "three of five removed");
+            compact_if_holey_set(set);
             let elements = elements_ptr(set);
             assert_eq!(
                 ptr::read(elements),
@@ -2758,6 +2890,7 @@ mod ordered_delete_repair_tests {
         // A re-add appends at the end (delete-then-re-add ordering, #2831).
         js_set_add(set, 30.0);
         unsafe {
+            compact_if_holey_set(set);
             let elements = elements_ptr(set);
             assert_eq!(ptr::read(elements.add(2)), 30.0);
         }
@@ -2790,3 +2923,7 @@ mod ordered_delete_repair_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "set_tombstone_tests.rs"]
+mod set_tombstone_tests;

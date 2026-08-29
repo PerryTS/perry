@@ -480,6 +480,14 @@ pub fn transform_generator_function_with_extra_captures(
         .collect();
     let mut hoisted_ids: std::collections::HashSet<LocalId> =
         hoisted_for_rewrite.iter().map(|(id, _, _)| *id).collect();
+    // Linearization allocates additional locals for state-spanning values
+    // (including the resume and condition temporaries for a `yield` in a loop
+    // condition). They are preallocated and captured below just like ordinary
+    // hoisted bindings, so a `Let` left inside a resume state would allocate a
+    // shadow box: the state writes the shadow, while later `LocalGet`s read the
+    // untouched captured box. Rewrite those declarations to assignments to
+    // the preallocated capture too.
+    hoisted_ids.extend(extra_local_ids.iter().copied());
     // The lifted param prologue defines locals (destructured targets + temps)
     // that the state machine reads; treat them as hoisted so their `Let`s route
     // through the prealloc box (`js_box_set`) instead of shadowing the capture.

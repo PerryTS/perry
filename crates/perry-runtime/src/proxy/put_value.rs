@@ -726,12 +726,24 @@ fn write_stub_insert(token: u64, key_bits: u64, slot: u32) {
     });
 }
 
-/// Validated fast store: the receiver must still be an ordinary,
-/// non-forwarded, unblocked, class-tagged heap object whose CURRENT shape
-/// token equals the cached one and whose inline region covers the slot.
-/// Every check reads the receiver's live state — the cached token/slot are
-/// never dereferenced — so a GC between prime and hit at worst causes a
-/// miss, never a wrong store.
+/// Slot-word bit marking a cached slot as living in the OVERFLOW store.
+///
+/// Set at prime time, where the full receiver validation runs and the
+/// inline-vs-overflow verdict is known. `object_kind`,
+/// `live_inline_slot_count` and `logical_key_count` are IMMUTABLE per shape
+/// id (the shape table only ever inserts descriptors; the sole in-place
+/// mutations are GC bookkeeping — the relocated `keys` address and the
+/// carrier liveness bits), so a hit whose token matches the receiver's
+/// CURRENT stamp has already proved everything the prime proved about kind
+/// and bounds. What remains mutable per object is the GC header — type,
+/// forwarded, and the blocking flags `Object.freeze`-family operations set —
+/// and the hit still checks those on every store.
+pub(crate) const IC_SLOT_OVERFLOW_BIT: u32 = 1 << 30;
+
+/// Validated fast store for a cached `(token, slot)` hit. Header checks and
+/// the token compare read the receiver's LIVE state; everything shape-derived
+/// was proved at prime time and is immutable per id (see
+/// [`IC_SLOT_OVERFLOW_BIT`]). A stale entry misses; it cannot store wrongly.
 #[inline]
 unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Option<f64> {
     let target_bits = target.to_bits();
@@ -753,41 +765,24 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
         return None;
     }
     let obj = obj_addr as *mut crate::ObjectHeader;
-    if !crate::object::object_is_regular(obj)
-        || !write_fast_path_receiver_kind_ok(obj, gc_header._reserved)
-    {
-        return None;
-    }
-    // ONE descriptor lookup, not two. `object_shape_id` runs a full lookup —
-    // and copies the whole `ShapeDescriptor` out of the table — purely to
-    // prove the stamped id is live, then throws the descriptor away; the bound
-    // check below then looked the SAME id up again. `shape_descriptor_by_id`
-    // was 10.5% of self time in a computed-key write loop, the single largest
-    // item, and half of that was this duplicate.
-    //
-    // Read the stamp straight off the header, reject on the token first (a
-    // load and a compare, so a wrong-shape receiver costs no table work at
-    // all), and let the one lookup that supplies the bound double as the
-    // liveness proof: a stamp with no live descriptor returns `None` here,
-    // exactly as `object_shape_id`'s 0 made the token compare fail before.
+    // Token compare against the receiver's CURRENT stamp. On a match, the
+    // shape id is the one every prime-time check ran under — receiver kind,
+    // class-object exclusion, and the slot's inline/overflow placement (now
+    // carried in the slot word) — so none of it is re-derived here. This
+    // took `write_fast_path_receiver_kind_ok` (6.8%), `shape_object_kind_by_id`
+    // (5.1%) and the descriptor bound fetch (4.4%) off every hit of the
+    // combined overwrite loop.
     let stamp = crate::object::shapes::object_shape_stamp(obj);
     if (crate::object::shapes::PIC_ID_TOKEN_BIT | stamp as u64) != token {
         return None;
     }
-    let shape = crate::object::shapes::shape_descriptor_by_id(stamp)?;
-    if slot >= shape.live_inline_slot_count {
-        // Overflow slot. The token compare above already proved the receiver
-        // is in the exact shape the (key → slot) pair was learned in, so the
-        // slot names this key's storage; it just lives in the spill store
-        // instead of the inline region. `overflow_set` is the same store the
-        // full walk bottoms out in (barriers, layout notes, remembered set),
-        // minus the walk. Wide objects — where EVERY data property is an
-        // overflow slot — are exactly the receivers the stub cache exists for.
-        if slot < shape.logical_key_count {
-            crate::object::overflow_set(obj_addr, slot as usize, value.to_bits());
-            return Some(value);
-        }
-        return None;
+    if slot & IC_SLOT_OVERFLOW_BIT != 0 {
+        crate::object::overflow_set(
+            obj_addr,
+            (slot & !IC_SLOT_OVERFLOW_BIT) as usize,
+            value.to_bits(),
+        );
+        return Some(value);
     }
     crate::object::store_object_field_slot(obj, slot as usize, value.to_bits());
     Some(value)
@@ -949,12 +944,20 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         // Feed the megamorphic stub BEFORE the inline-slot bail below: a wide
         // object keeps every data property in an overflow slot, so gating the
         // stub on the inline region would starve it for exactly the receivers
-        // it exists for. `dyn_ic_try_store` stores overflow slots via
-        // `overflow_set` under the same token validation.
-        if let Some(kb) = stub_key_bits(key) {
-            write_stub_insert(shape_token, kb, idx);
-        }
+        // it exists for. The slot word carries the inline/overflow verdict
+        // (IC_SLOT_OVERFLOW_BIT), decided HERE where the descriptor is in
+        // hand, so the hit never re-fetches the bound — the verdict is a
+        // fact of the shape id the token pins.
         let alloc_limit = shape.live_inline_slot_count;
+        if let Some(kb) = stub_key_bits(key) {
+            if idx < alloc_limit {
+                write_stub_insert(shape_token, kb, idx);
+            } else if idx < shape.logical_key_count {
+                // Overflow: bound-checked against the key count at prime,
+                // which the hit-time token match preserves.
+                write_stub_insert(shape_token, kb, idx | IC_SLOT_OVERFLOW_BIT);
+            }
+        }
         if idx >= alloc_limit {
             return result;
         }

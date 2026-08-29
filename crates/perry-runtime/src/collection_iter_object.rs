@@ -344,21 +344,28 @@ unsafe fn dispatch_set_iterator_method_emit(
             }
             let cursor = f64::from_bits(js_object_get_field(iter_obj(), 1).bits()) as u32;
             let last_val = js_object_get_field(iter_obj(), 4);
-            let size = crate::set::js_set_size(set());
+            let used = crate::set::set_used_entries(set());
             let in_place = cursor > 0 && {
-                let prev = crate::set::js_set_value_at(set(), cursor - 1);
+                let prev = crate::set::set_value_raw(set(), cursor - 1);
                 crate::value::js_jsvalue_same_value_zero(prev, f64::from_bits(last_val.bits())) != 0
             };
-            let idx = next_read_index(cursor, in_place, || {
+            let mut idx = next_read_index(cursor, in_place, || {
                 crate::set::find_value_index(set(), f64::from_bits(last_val.bits()))
             });
-            if idx >= size {
-                js_object_set_field(iter_obj(), 1, JSValue::number(size as f64));
+            // Tombstoned deletes leave holes in the raw order; step over them.
+            while idx < used
+                && crate::set::set_value_raw(set(), idx).to_bits()
+                    == crate::set::SET_HOLE_VALUE_BITS
+            {
+                idx += 1;
+            }
+            if idx >= used {
+                js_object_set_field(iter_obj(), 1, JSValue::number(used as f64));
                 js_object_set_field(iter_obj(), 0, JSValue::undefined());
                 return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
             }
 
-            let elem = crate::set::js_set_value_at(set(), idx);
+            let elem = crate::set::set_value_raw(set(), idx);
             js_object_set_field(iter_obj(), 1, JSValue::number((idx + 1) as f64));
             js_object_set_field(iter_obj(), 4, JSValue::from_bits(elem.to_bits()));
 

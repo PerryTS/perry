@@ -1911,13 +1911,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // error, not a style choice: the NUMERIC sibling block below
                 // uses that one, and a definition in THIS block does not
                 // dominate it.
-                let (key_handle, str_obj_handle) = {
+                // The by-VALUE entry takes the key as its NaN-boxed value, so
+                // an SSO key is probed against the read stub on its content
+                // bits and a hit never materialises a `StringHeader` at all.
+                // That also removes the allocation the comment above works
+                // around on the fast path; the runtime entry roots the
+                // receiver across the fallback materialisation, which is where
+                // that hazard now lives.
+                let str_obj_handle = {
                     let blk = ctx.block();
-                    let key_handle = unbox_str_handle(blk, &idx_box);
                     let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-                    let str_obj_handle =
-                        classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
-                    (key_handle, str_obj_handle)
+                    classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits)
                 };
                 let site_id = emit_typed_feedback_register_site(
                     ctx,
@@ -1927,8 +1931,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
                 let v_str = ctx.block().call(
                     DOUBLE,
-                    "js_typed_feedback_object_get_field_by_name_f64",
-                    &[(I64, &site_id), (I64, &str_obj_handle), (I64, &key_handle)],
+                    "js_typed_feedback_object_get_field_by_value_f64",
+                    &[(I64, &site_id), (I64, &str_obj_handle), (DOUBLE, &idx_box)],
                 );
                 let str_end_lbl = ctx.block().label.clone();
                 ctx.block().br(&merge_lbl);

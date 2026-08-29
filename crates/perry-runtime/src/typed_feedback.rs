@@ -948,6 +948,73 @@ pub extern "C" fn js_typed_feedback_observe_property_set(
     observe_property(site_id, TypedFeedbackSiteKind::PropertySet, obj as u64, key);
 }
 
+/// By-VALUE twin of [`js_typed_feedback_object_get_field_by_name_f64`], for the
+/// computed-read lowering.
+///
+/// That lowering had to call `js_get_string_pointer_unified` first, because the
+/// by-name entry wants a `*const StringHeader` — and for an SSO key that means
+/// materialising inline bytes onto the heap (an intern hash plus table probe,
+/// and an allocation on a miss) on EVERY read, purely to satisfy a pointer
+/// signature. `intern_dispatch_bytes` is 5.5% of the combined overwrite loop,
+/// essentially all of it that.
+///
+/// An SSO key is probed against the megamorphic read stub on its CONTENT bits
+/// first; a hit returns the slot without ever building a `StringHeader`.
+/// Everything else falls through to exactly the previous path, so feedback
+/// recording, exotic receivers and prototype resolution are unchanged.
+///
+/// # Safety
+/// `obj` is the raw receiver the caller already holds; the fallback below
+/// materialises the key, which can allocate and therefore move `obj`, so the
+/// receiver is rooted across it and re-read — the hazard the caller's own
+/// lowering comment describes.
+#[no_mangle]
+pub extern "C" fn js_typed_feedback_object_get_field_by_value_f64(
+    site_id: u64,
+    obj: *const ObjectHeader,
+    key: f64,
+) -> f64 {
+    let bits = key.to_bits();
+    let top16 = bits >> 48;
+    // Heap string key: the pointer already exists — unmask and go. No scope,
+    // nothing here can allocate.
+    if top16 == 0x7FFF {
+        let key_ptr = (bits & crate::value::POINTER_MASK) as *const crate::StringHeader;
+        return js_typed_feedback_object_get_field_by_name_f64(site_id, obj, key_ptr);
+    }
+    if top16 == 0x7FF9 {
+        if let Some(v) = unsafe { crate::object::read_stub::try_read_by_content_bits(obj, bits) } {
+            return v;
+        }
+        // Stub miss. An intern HIT cannot allocate or move anything, so probe
+        // the table read-only and call through with the canonical pointer —
+        // still no scope. This is the steady state: the write path interns
+        // every key it stores, so a key being read has almost always been
+        // written first. The first version of this entry opened a rooted
+        // scope here unconditionally, and the per-read root push's write
+        // barrier fed the remembered set hard enough to multiply minor
+        // collections — cache misses rose 29x and the populated-delete
+        // benchmark regressed 38%.
+        let jsval = crate::value::JSValue::from_bits(bits);
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let n = jsval.short_string_to_buf(&mut sso);
+        if let Some(canonical) = crate::string::intern_lookup_bytes(&sso[..n]) {
+            return js_typed_feedback_object_get_field_by_name_f64(site_id, obj, canonical);
+        }
+    }
+    // Cold path only: an SSO key read before its first write, or a
+    // non-string key. Materialisation can allocate and move the receiver,
+    // so root it across the call.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_const_ptr(obj);
+    let key_ptr = crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+    // Scoped post-call reload (#7341): the materialisation above may have
+    // moved the receiver; nothing in the closure allocates.
+    obj_handle.with_const_ptr::<ObjectHeader, _>(|obj| {
+        js_typed_feedback_object_get_field_by_name_f64(site_id, obj, key_ptr)
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn js_typed_feedback_object_get_field_by_name_f64(
     site_id: u64,

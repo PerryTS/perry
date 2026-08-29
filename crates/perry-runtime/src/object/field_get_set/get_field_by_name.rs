@@ -142,15 +142,12 @@ pub extern "C" fn js_object_get_field_by_name(
                             if let Some(slot) =
                                 super::super::read_stub::read_stub_probe(token, key_bits)
                             {
-                                let live = crate::object::object_live_slot_count(o);
-                                let limit =
-                                    std::cmp::max(live, crate::object::INLINE_SLOT_FLOOR as u32);
-                                if slot < limit {
-                                    return super::accessors::js_object_get_field(o, slot);
-                                }
-                                if let Some(bits) = super::super::overflow_get(addr, slot as usize)
+                                // The slot word carries the inline/overflow
+                                // verdict from prime time; no bound fetch.
+                                if let Some(v) =
+                                    super::super::read_stub::read_slot_by_tag(o, addr, slot)
                                 {
-                                    return JSValue::from_bits(bits);
+                                    return JSValue::from_bits(v.to_bits());
                                 }
                             }
                         }
@@ -228,7 +225,7 @@ pub extern "C" fn js_object_get_field_by_name(
                                 keys as usize,
                                 key as usize,
                             ) {
-                                prime_read_stub(o, key, idx);
+                                prime_read_stub(o, key, idx, (idx as usize) < alloc_limit);
                                 return if (idx as usize) < alloc_limit {
                                     super::accessors::js_object_get_field(o, idx)
                                 } else {
@@ -264,7 +261,7 @@ pub extern "C" fn js_object_get_field_by_name(
                                         key,
                                     ) {
                                         let i = i as usize;
-                                        prime_read_stub(o, key, i as u32);
+                                        prime_read_stub(o, key, i as u32, i < alloc_limit);
                                         super::super::prop_plan::read_plan_record(
                                             keys as usize,
                                             key as usize,
@@ -1758,7 +1755,17 @@ mod null_key_guard_5972 {
 /// semantics. Keys that cannot be represented as content bits are skipped by
 /// `read_stub_key_bits`.
 #[inline]
-fn prime_read_stub(obj: *const ObjectHeader, key: *const crate::StringHeader, slot: u32) {
+fn prime_read_stub(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+    slot: u32,
+    inline: bool,
+) {
+    let slot = if inline {
+        slot
+    } else {
+        slot | crate::proxy::IC_SLOT_OVERFLOW_BIT
+    };
     if let Some(key_bits) = super::super::read_stub::read_stub_key_bits(key) {
         if let Some(token) = unsafe { super::super::read_stub::receiver_shape_token(obj) } {
             super::super::read_stub::read_stub_insert(token, key_bits, slot);
