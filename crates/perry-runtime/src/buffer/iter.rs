@@ -110,6 +110,13 @@ pub unsafe fn dispatch_buffer_iterator_method(
 ) -> f64 {
     match method_name {
         "next" => {
+            // #9019: an own `next` assigned onto the iterator instance wins
+            // over the builtin advance, exactly as on the Map/Set path.
+            if let Some(result) =
+                crate::object::call_overridden_iterator_next(iter_obj, BUFFER_ITERATOR_CLASS_ID)
+            {
+                return result;
+            }
             // Field 0: backing buffer pointer (NaN-boxed).
             let backing_field = js_object_get_field(iter_obj, 0);
             let backing_f64 = f64::from_bits(backing_field.bits());

@@ -435,7 +435,7 @@ pub(crate) fn set_field_by_name_object_tail(
             obj_flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0;
         let record_array_tail = crate::array::is_array_subclass_class_id((*obj).class_id);
 
-        let keys = crate::object::object_keys_array(obj);
+        let mut keys = crate::object::object_keys_array(obj);
 
         // Validate keys_array is a real heap pointer or null.
         if !keys.is_null() {
@@ -444,9 +444,6 @@ pub(crate) fn set_field_by_name_object_tail(
                 return;
             }
         }
-
-        let mut prev_keys_usize = keys as usize;
-        let prev_shape_id = super::shapes::object_shape_stamp(obj);
 
         // #7341: call after ANY allocating step, before the next use of
         // obj/key/value. Rationale in changelog.d/7381-*, 7383-*.
@@ -458,6 +455,27 @@ pub(crate) fn set_field_by_name_object_tail(
                 interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
             }};
         }
+
+        // #9019: a built-in iterator receiver (Set/Map/array/string/…
+        // iterator object) keeps its internal state in RAW numbered fields
+        // the keys array does not describe, so the append below would hand
+        // its first user key field index 0 and overwrite the backing
+        // collection — a later builtin `.next()` then dereferences the
+        // stored value as a collection header. Seed the reserved-floor keys
+        // (leading tombstones) first; the ordinary flow — including the
+        // transition-cache fast path, whose `prev_shape_id` is read AFTER
+        // this — then appends at the floor. Seeding allocates, so every raw
+        // local is re-read through its handle.
+        if keys.is_null()
+            && crate::object::reserved_slot_floor_for_class_id((*obj).class_id) != 0
+            && crate::object::ensure_reserved_floor_keys(obj)
+        {
+            refresh_roots_after_alloc!();
+            keys = crate::object::object_keys_array(obj);
+        }
+
+        let mut prev_keys_usize = keys as usize;
+        let prev_shape_id = super::shapes::object_shape_stamp(obj);
 
         // FAST PATH: shape-transition cache with interned string pointer identity.
         //

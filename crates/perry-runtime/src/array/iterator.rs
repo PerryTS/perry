@@ -1378,6 +1378,10 @@ pub(crate) fn sync_iterator_to_array_if_not_async(iter_f64: f64) -> Option<*mut 
     let next_ptr = if next_val.is_undefined() {
         std::ptr::null::<closure::ClosureHeader>()
     } else {
+        // #9019: same non-callable own `next` guard as `js_iterator_to_array`.
+        if !is_callable_value(next_f64) {
+            crate::closure::throw_not_callable();
+        }
         js_nanbox_get_pointer(next_f64) as *const closure::ClosureHeader
     };
     let use_method_dispatch = next_ptr.is_null();
@@ -1403,7 +1407,12 @@ pub(crate) fn sync_iterator_to_array_if_not_async(iter_f64: f64) -> Option<*mut 
                 )
             }
         } else {
-            closure::js_closure_call1(next_ptr, f64::from_bits(TAG_UNDEFINED))
+            // Call(next, iterator) — bind `this` like `js_iterator_to_array`
+            // does for its stored-closure path (#9019).
+            let prev_this = crate::object::js_implicit_this_set(iter_f64);
+            let r = closure::js_closure_call1(next_ptr, f64::from_bits(TAG_UNDEFINED));
+            crate::object::js_implicit_this_set(prev_this);
+            r
         };
         if crate::promise::js_value_is_promise(step) != 0 {
             return None;
@@ -1540,6 +1549,14 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     let next_ptr = if next_val.is_undefined() {
         std::ptr::null::<closure::ClosureHeader>()
     } else {
+        // #9019: an own `next` that is not a callable closure must throw
+        // (IteratorNext is GetV + Call), not be reinterpreted as a
+        // `ClosureHeader` — a builtin iterator can now carry a user-assigned
+        // own `next` of any type, and calling through a number's payload
+        // bits crashes.
+        if !is_callable_value(next_f64) {
+            crate::closure::throw_not_callable();
+        }
         js_nanbox_get_pointer(next_f64) as *const closure::ClosureHeader
     };
     // #321: some iterators (perry's runtime array iterator with
@@ -1583,10 +1600,16 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
                 )
             }
         } else {
-            closure::js_closure_call1(
+            // Call(next, iterator): bind `this` for the stored-closure path
+            // exactly like `js_iterator_next_result` — a user-assigned
+            // `it.next = function () { … }` may read `this` (#9019).
+            let prev_this = crate::object::js_implicit_this_set(iter_h.get_nanbox_f64());
+            let r = closure::js_closure_call1(
                 js_nanbox_get_pointer(next_h.get_nanbox_f64()) as *const closure::ClosureHeader,
                 f64::from_bits(TAG_UNDEFINED),
-            )
+            );
+            crate::object::js_implicit_this_set(prev_this);
+            r
         };
         // IteratorNext (ECMA-262 §7.4.2 step 3): if Type(result) is not
         // Object, throw a TypeError. `is_pointer()` is true only for
@@ -1672,6 +1695,10 @@ fn js_async_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
     let next_ptr = if next_val.is_undefined() {
         std::ptr::null::<closure::ClosureHeader>()
     } else {
+        // #9019: same non-callable own `next` guard as `js_iterator_to_array`.
+        if !is_callable_value(next_f64) {
+            crate::closure::throw_not_callable();
+        }
         js_nanbox_get_pointer(next_f64) as *const closure::ClosureHeader
     };
     let use_method_dispatch = next_ptr.is_null();
@@ -1696,7 +1723,12 @@ fn js_async_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
                 )
             }
         } else {
-            closure::js_closure_call1(next_ptr, f64::from_bits(TAG_UNDEFINED))
+            // Call(next, iterator) — bind `this` for the stored-closure path
+            // (#9019), mirroring `js_iterator_to_array`.
+            let prev_this = crate::object::js_implicit_this_set(iter_f64);
+            let r = closure::js_closure_call1(next_ptr, f64::from_bits(TAG_UNDEFINED));
+            crate::object::js_implicit_this_set(prev_this);
+            r
         };
         let Some(step_result) = settled_promise_value(step) else {
             break;
