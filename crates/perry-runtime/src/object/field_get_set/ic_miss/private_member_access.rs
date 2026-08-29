@@ -270,6 +270,21 @@ fn private_evaluation_brand_matches(
     brand_owner: f64,
     declaring_class_id: u32,
 ) -> Option<bool> {
+    // A bare class REF receiver names the class's lexical self-binding
+    // (`class c { static create() { c.#o = ... } }` — the lru-cache guard
+    // pattern, minified into pi's bundle). Codegen hands the runtime the
+    // template ref, which carries no per-evaluation brand, so both brand
+    // paths below compared None against Some(_) and every closure-nested
+    // class expression's static private access threw "did not declare it".
+    // A private access with the ref as receiver can only be emitted from
+    // inside the class's own body (outside it, `c.#o` is a syntax error),
+    // where the self-binding denotes the CURRENT evaluation — the exact
+    // verdict the pre-brand static fallback (`class_ref_id(obj) == id`)
+    // always gave.
+    if crate::object::native_module::class_ref_id(obj) == Some(declaring_class_id) {
+        return Some(true);
+    }
+
     if let Some(expected) = current_private_lexical_brand(declaring_class_id) {
         let actual = private_evaluation_brand(obj, declaring_class_id);
         return Some(actual == Some(expected));
