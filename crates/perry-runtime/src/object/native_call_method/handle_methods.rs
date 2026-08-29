@@ -67,6 +67,51 @@ pub(super) unsafe fn dispatch_handle(
     let refreshed_args = || crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
     let _ = (root_scope, object_handle, &refreshed_args, raw_bits, jsval);
     let _ = (method_name_ptr, method_name_len);
+
+    // Builtin collection / array iterators, decided first.
+    //
+    // `for…of` calls `.next()` once PER ELEMENT, and every one of those calls
+    // used to walk the whole ladder below — hundreds of lines of receiver
+    // classification — before reaching the `class_id` compare that actually
+    // answers it. On a 4k-entity ECS archetype-migration frame the Map and Set
+    // iterator dispatchers were 8.6% of the row, nearly all of it spent
+    // getting to them.
+    //
+    // The test hoisted here is byte-identical to the one further down; only its
+    // position changes. These class ids are dedicated to the builtin iterators,
+    // so no earlier arm of the ladder can legitimately claim such a receiver.
+    // A user override of `.next()` is still honoured: the override lookup lives
+    // INSIDE each dispatcher (`call_overridden_iterator_next`), not in the
+    // ladder that precedes it.
+    if jsval.is_pointer() {
+        let raw = jsval.as_pointer::<u8>() as usize;
+        if !crate::value::addr_class::is_small_handle(raw) && raw != 0 {
+            if let Some(header) = crate::value::addr_class::try_read_gc_header(raw) {
+                if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+                    let obj = raw as *mut ObjectHeader;
+                    let class_id = (*obj).class_id;
+                    if class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID {
+                        return Some(crate::collection_iter_object::dispatch_map_iterator_method(
+                            obj,
+                            method_name,
+                        ));
+                    }
+                    if class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID {
+                        return Some(crate::collection_iter_object::dispatch_set_iterator_method(
+                            obj,
+                            method_name,
+                        ));
+                    }
+                    if class_id == crate::array::ARRAY_ITERATOR_CLASS_ID {
+                        return Some(crate::array::dispatch_array_iterator_method(
+                            obj,
+                            method_name,
+                        ));
+                    }
+                }
+            }
+        }
+    }
     // Check if this is a handle-based object (small integer, not a real heap pointer)
     // Handles are used by Fastify, ioredis, and other native modules that store
     // objects in a registry and use integer IDs to reference them.
