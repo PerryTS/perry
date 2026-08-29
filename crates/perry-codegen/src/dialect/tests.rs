@@ -417,3 +417,81 @@ fn gc_leaf_attribute_constructs_on_invoke() {
         "invoke lost its gc-leaf-function call-site attribute:\n{printed}"
     );
 }
+
+/// #9050: Apple arm64's hot-TLS reader is value-returning inline asm, not the
+/// void-only loop barrier that originally defined this parser branch. Keep
+/// both forms live, plus an operand-bearing form that proves the constructed
+/// function signature follows the inline-asm argument list.
+#[test]
+fn typed_and_void_inline_asm_round_trip_with_gc_leaf_attributes() {
+    let ir = r#"
+declare i64 @"ordinary asm callee"()
+
+define i64 @read_tpidrro() {
+entry:
+  %r = call i64 asm sideeffect "mrs $0, tpidrro_el0", "=r"() "gc-leaf-function"
+  ret i64 %r
+}
+
+define i64 @asm_with_operand(i64 %x) {
+entry:
+  %r = call i64 asm sideeffect "", "=r,r"(i64 %x) "gc-leaf-function"
+  ret i64 %r
+}
+
+define void @barrier() {
+entry:
+  call void asm sideeffect "", ""() "gc-leaf-function"
+  ret void
+}
+
+define i64 @ordinary_call() {
+entry:
+  %r = call i64 @"ordinary asm callee"()
+  ret i64 %r
+}
+"#;
+    let (skeleton, fns) = split_corpus(ir);
+    let ctx = Context::create();
+    let module = crate::inprocess::parse_ir_text(&ctx, &skeleton, "typed_inline_asm_skel")
+        .expect("skeleton parses");
+    for function in &fns {
+        predeclare_function_from_text(&ctx, &module, function).expect("predeclare");
+    }
+    for function in &fns {
+        add_function_from_text(&ctx, &module, function).unwrap_or_else(|e| panic!("{e:#}"));
+    }
+    module
+        .verify()
+        .unwrap_or_else(|e| panic!("verifier rejected native module:\n{}", e.to_string()));
+
+    let printed = module.print_to_string().to_string();
+    let typed = printed
+        .lines()
+        .find(|line| line.contains("mrs $0, tpidrro_el0"))
+        .unwrap_or_else(|| panic!("typed inline asm was not constructed:\n{printed}"));
+    assert!(
+        typed.contains("call i64 asm sideeffect") && typed.contains("#0"),
+        "typed inline asm lost its result type, sideeffect flag, or leaf attribute:\n{printed}"
+    );
+    assert!(
+        printed.contains("ret i64 %r"),
+        "typed inline asm result is not returned:\n{printed}"
+    );
+    assert!(
+        printed.contains("\"=r,r\"(i64 %x)"),
+        "inline-asm argument list did not survive construction:\n{printed}"
+    );
+    assert!(
+        printed.contains("call void asm sideeffect"),
+        "void inline-asm barrier regressed:\n{printed}"
+    );
+    assert!(
+        printed.contains("call i64 @\"ordinary asm callee\"()"),
+        "ordinary call containing ` asm ` was misclassified:\n{printed}"
+    );
+    assert!(
+        printed.contains("attributes #0 = { \"gc-leaf-function\" }"),
+        "inline asm lost its structural gc-leaf-function attribute:\n{printed}"
+    );
+}
