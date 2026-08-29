@@ -53,6 +53,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // body entry instead of per call — the two settings emit different call
     // sequences, so a cached object from one must not serve the other.
     "PERRY_CALLEE_BINDING_RESOLUTION",
+    // #9105: gates devirtualizing calls to single-binding closure locals —
+    // off, the map is empty and every binding takes the entry-resolved
+    // indirect path, so the two settings emit different call sequences.
+    "PERRY_CALL_DEVIRT",
     // #9060: gates whether a reduce accumulator earns the stable-packed fast
     // clone's numeric proof — with it on, `s += arr[i]` lowers to an inline
     // fadd instead of `js_dynamic_string_or_number_add`, so the two settings
