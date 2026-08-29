@@ -222,6 +222,7 @@ def assert_before(body: str, first: str, second: str, label: str) -> None:
 def assert_authority_surfaces(sources: dict[str, str]) -> None:
     authority_paths = (
         "crates/perry-runtime/src/object/shapes.rs",
+        "crates/perry-runtime/src/object/shapes_slot_list.rs",
         "crates/perry-runtime/src/object/mod.rs",
         "crates/perry-runtime/src/object/live_slots.rs",
         "crates/perry-codegen/src/lower_call/new_alloc.rs",
@@ -246,7 +247,17 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             "shape descriptor authority source missing: " + ", ".join(missing)
         )
     clean = stripped_sources({path: sources[path] for path in authority_paths})
-    shapes = clean["crates/perry-runtime/src/object/shapes.rs"]
+    # `shapes.rs` sits against the repo's 2000-line cap, so helpers keep being
+    # split into the `shapes_slot_list.rs` sibling as it grows. Read the two as
+    # ONE logical unit: every `function_body(shapes, ...)` below then finds its
+    # target wherever it currently lives, instead of silently matching nothing
+    # the next time a pinned function crosses the split — #8918's exact failure
+    # mode, where a census inspecting an empty body reports success.
+    shapes = (
+        clean["crates/perry-runtime/src/object/shapes.rs"]
+        + "\n"
+        + clean["crates/perry-runtime/src/object/shapes_slot_list.rs"]
+    )
     object_mod = clean["crates/perry-runtime/src/object/mod.rs"]
     live_slots = clean["crates/perry-runtime/src/object/live_slots.rs"]
     codegen_alloc = clean["crates/perry-codegen/src/lower_call/new_alloc.rs"]
