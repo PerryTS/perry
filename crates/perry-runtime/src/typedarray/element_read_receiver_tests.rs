@@ -510,6 +510,25 @@ fn js_typed_array_index_get_dynamic_still_reads_a_uint8array_buffer_owner() {
     assert!(is_undefined(js_typed_array_index_get_dynamic(recv, 3.0)));
 }
 
+#[test]
+fn js_typed_array_set_dispatches_a_uint8array_buffer_owner() {
+    // Function inlining can specialize an `any` helper at a Uint8Array call
+    // site and emit this generic typed-array setter. The receiver remains a
+    // BufferHeader, so the setter must dispatch instead of assuming the +16
+    // TypedArrayHeader data offset. Keep the value NaN-boxed to match the
+    // erased `any` parameter ABI that exposed the release blocker.
+    let buf = crate::buffer::js_uint8array_alloc(2);
+    let recv = ((buf as u64) & POINTER_MASK) as *mut TypedArrayHeader;
+    let boxed_257 = f64::from_bits(crate::value::INT32_TAG | 257);
+    let boxed_minus_one = f64::from_bits(crate::value::INT32_TAG | u64::from((-1_i32) as u32));
+
+    js_typed_array_set(recv, 0, boxed_257);
+    js_typed_array_set(recv, 1, boxed_minus_one);
+
+    assert_eq!(js_typed_array_get(recv, 0), 1.0);
+    assert_eq!(js_typed_array_get(recv, 1), 255.0);
+}
+
 /// The generic Array element read routes a registered %TypedArray% receiver
 /// off its managed header tag BEFORE the tracked-allocation resolver (which
 /// can only miss for a typed array), and answers exactly what the typed read

@@ -263,10 +263,19 @@ fn value_needs_coercion_side_effect(value: f64) -> bool {
 /// `ta[i] = value`.
 #[no_mangle]
 pub extern "C" fn js_typed_array_set(ta: *mut TypedArrayHeader, index: i32, value: f64) {
-    let ta = clean_ta_ptr(ta) as *mut TypedArrayHeader;
-    if ta.is_null() {
-        return;
-    }
+    // Mirror `js_typed_array_get`'s receiver validation. TypeScript's erased
+    // declarations and the function-inlining pass can route a Buffer-backed
+    // Uint8Array (or a reassigned plain receiver) through this generic helper.
+    // BufferHeader has data at +8 while TypedArrayHeader has data at +16, so
+    // interpreting the former as the latter silently drops/corrupts stores.
+    let ta = match classify_element_read_receiver(ta as u64) {
+        ElementReadReceiver::TypedArray(addr) => addr as *mut TypedArrayHeader,
+        ElementReadReceiver::Ordinary(receiver) => {
+            crate::value::js_dyn_index_set(receiver, f64::from(index), value);
+            return;
+        }
+        ElementReadReceiver::Absent => return,
+    };
     unsafe {
         if crate::native_arena::is_native_typed_view(ta as *const TypedArrayHeader) {
             crate::native_arena::validate_view_alive(

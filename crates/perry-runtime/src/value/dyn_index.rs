@@ -692,10 +692,11 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     }
     if crate::buffer::is_registered_buffer(raw_ptr) {
         if let Some(idx_i32) = finite_nonnegative_i32_index(index) {
+            let byte = crate::typedarray::jsvalue_to_uint8(value);
             crate::buffer::js_buffer_set(
                 raw_ptr as *mut crate::buffer::BufferHeader,
                 idx_i32,
-                value as i32,
+                i32::from(byte),
             );
         }
         return value;
@@ -845,3 +846,7 @@ static KEEP_JS_IS_UNDEFINED_OR_BARE_NAN: extern "C" fn(f64) -> i32 = js_is_undef
 #[cfg(test)]
 #[path = "dyn_index_collection_tag_tests.rs"]
 mod collection_tag_tests;
+
+#[cfg(test)]
+#[path = "dyn_index_uint8array_tests.rs"]
+mod uint8array_tests;
