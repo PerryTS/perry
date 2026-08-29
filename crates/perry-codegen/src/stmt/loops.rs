@@ -671,8 +671,7 @@ fn emit_packed_numeric_accumulator_admission(
         }
         let alloca = ctx.func.alloca_entry(DOUBLE);
         ctx.block().store(DOUBLE, &value, &alloca);
-        ctx.numeric_accumulator_f64_slots
-            .insert(id, alloca.clone());
+        ctx.numeric_accumulator_f64_slots.insert(id, alloca.clone());
         unboxed.push((id, alloca, slot));
     }
     let side_exit_override = if unboxed.is_empty() {
