@@ -1287,8 +1287,9 @@ pub(super) fn compile_method(
         let lowered = llmod
             .function_mut(lowered_function_index)
             .expect("just-lowered method function");
-        if super::helpers::guarded_specialization_fits_preinline_budget(
+        if super::helpers::guarded_specialization_admits_preinline(
             lowered.estimated_ir_bytes(),
+            method.body.len(),
         ) {
             lowered.pre_statepoint_inline = true;
         }
