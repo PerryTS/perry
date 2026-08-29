@@ -444,22 +444,6 @@ impl NumericIndex {
         }
         self.dense_key_count = 0;
     }
-
-    fn repair_entry_indices_after_delete(&mut self, deleted_index: u32) {
-        for entry_index in self.hashed.values_mut() {
-            if *entry_index > deleted_index {
-                *entry_index -= 1;
-            }
-        }
-        if let Some(dense) = self.dense.as_mut() {
-            for entry_index in &mut dense.slots {
-                if *entry_index != DENSE_NUMERIC_EMPTY && *entry_index > deleted_index {
-                    *entry_index -= 1;
-                }
-            }
-        }
-    }
-
     fn allowed_dense_span(&self) -> usize {
         self.dense_key_count
             .saturating_mul(DENSE_NUMERIC_SPAN_FACTOR)
@@ -1105,7 +1089,24 @@ pub struct MapHeader {
     /// marked as well as rewritten (#6812: an edge visited only on the rewrite
     /// path is invisible to marking).
     pub meta: *mut crate::object::ObjectMeta,
+    /// Extent of the entries array actually written: raw entry indices run
+    /// `0..used`. `size` stays the LIVE count, so `used - size` is the number
+    /// of tombstoned entries awaiting compaction. Appended last; codegen
+    /// reads it at offset 32 (pinned below).
+    pub used: u32,
 }
+
+const _: () = {
+    assert!(std::mem::offset_of!(MapHeader, size) == 0);
+    assert!(std::mem::offset_of!(MapHeader, capacity) == 4);
+    assert!(std::mem::offset_of!(MapHeader, entries) == 8);
+    assert!(std::mem::offset_of!(MapHeader, used) == 32);
+};
+
+/// The tombstone a deleted entry's KEY slot takes. Never a legal stored key:
+/// `normalize_zero` canonicalizes a leaked array hole to `undefined` before
+/// any key reaches the entries buffer.
+pub(crate) const MAP_HOLE_KEY_BITS: u64 = crate::value::TAG_HOLE;
 
 /// Each map entry is 16 bytes (key + value, both as f64/JSValue)
 const ENTRY_SIZE: usize = 16;
@@ -1133,6 +1134,12 @@ unsafe fn entries_ptr_mut(map: *mut MapHeader) -> *mut f64 {
 /// so `v == 0.0` stays false for them (NaN-tagged f64 is never equal to 0.0).
 #[inline(always)]
 fn normalize_zero(key: f64) -> f64 {
+    if key.to_bits() == MAP_HOLE_KEY_BITS {
+        // An array hole leaking through an untyped path reads as `undefined`
+        // at every other boundary; canonicalize here too, so the tombstone
+        // marker can never collide with a stored key.
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     if key == 0.0 {
         0.0
     } else if key.is_nan() && crate::value::JSValue::from_bits(key.to_bits()).is_number() {
@@ -1341,6 +1348,7 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
         // zeroing, so this MUST be initialised explicitly — an uninitialised
         // meta edge is a garbage pointer the collector would follow.
         (*ptr).meta = std::ptr::null_mut();
+        (*ptr).used = 0;
 
         // Register in map registry for runtime type detection
         register_map(ptr, entries, cap as usize);
@@ -1406,6 +1414,99 @@ pub extern "C" fn js_map_find_key_index(map_boxed: f64, key: f64) -> f64 {
 #[used]
 static KEEP_MAP_FIND_KEY_INDEX: extern "C" fn(f64, f64) -> f64 = js_map_find_key_index;
 
+/// Live-extent accessor for iteration (`0..used` are the raw entry indices).
+#[inline(always)]
+pub(crate) fn map_used_entries(map: *const MapHeader) -> u32 {
+    unsafe { (*map).used }
+}
+
+/// Raw-indexed entry reads for the iterator objects: bound by `used`, no
+/// compaction — the advance loop skips tombstones itself, so iterating a map
+/// that is being emptied stays O(live + holes), not O(n) per element.
+#[inline(always)]
+pub(crate) unsafe fn map_entry_key_raw(map: *const MapHeader, idx: u32) -> f64 {
+    if idx >= (*map).used {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    ptr::read(entries_ptr(map).add(idx as usize * 2))
+}
+
+#[inline(always)]
+pub(crate) unsafe fn map_entry_value_raw(map: *const MapHeader, idx: u32) -> f64 {
+    if idx >= (*map).used {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    ptr::read(entries_ptr(map).add(idx as usize * 2 + 1))
+}
+
+/// Squeeze the tombstones out: shift live pairs down (insertion order is
+/// preserved — only holes are removed), then rebuild the three side indexes
+/// from the dense buffer. One overlap-safe pass plus one dirty-span barrier,
+/// exactly the cost ONE ordered delete used to pay — but amortized over the
+/// deletes that created the holes.
+unsafe fn compact_map_entries(map: *mut MapHeader) {
+    let used = (*map).used as usize;
+    let entries = entries_ptr_mut(map);
+    let mut out = 0usize;
+    for i in 0..used {
+        let key = ptr::read(entries.add(i * 2));
+        if key.to_bits() == MAP_HOLE_KEY_BITS {
+            continue;
+        }
+        if out != i {
+            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): the dirty-span barrier below
+            // covers every surviving slot this pass writes. Overlap-safe by
+            // construction -- `out <= i` always, so a live pair only ever moves
+            // DOWN within the one buffer, never onto an unread source.
+            ptr::write(entries.add(out * 2), key);
+            ptr::write(entries.add(out * 2 + 1), ptr::read(entries.add(i * 2 + 1)));
+        }
+        out += 1;
+    }
+    debug_assert_eq!(out as u32, (*map).size);
+    (*map).used = out as u32;
+    if out > 0 {
+        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): compaction is followed by a dirty-span barrier for every surviving slot.
+        crate::gc::runtime_write_barrier_external_slot_span(
+            map as usize,
+            entries as usize,
+            out * 2,
+        );
+    }
+    // Raw entry indices changed; rebuild the side indexes from the dense
+    // buffer (the same rebuilds every GC rewrite already performs).
+    if let Some(index) = (*map).numeric_index.as_mut() {
+        index.clear();
+        for i in 0..out {
+            let bits = ptr::read(entries.add(i * 2)).to_bits();
+            if is_safe_numeric_key(bits) {
+                index.insert(NumericKey(bits), i as u32);
+            }
+        }
+    }
+    MAP_STRING_INDEX.with(|idx| {
+        let mut idx = idx.borrow_mut();
+        if let Some(slot) = idx.get_mut(&(map as usize)) {
+            slot.clear();
+            for i in 0..out {
+                let kb = ptr::read(entries.add(i * 2)).to_bits();
+                if is_string_like(kb) {
+                    if let Some(h) = string_content_hash(kb) {
+                        slot.entry(h).or_insert_with(Vec::new).push(i as u32);
+                    }
+                }
+            }
+        }
+    });
+    rebuild_map_ptr_index(map);
+}
+
+pub(crate) unsafe fn compact_if_holey(map: *mut MapHeader) {
+    if (*map).used != (*map).size {
+        compact_map_entries(map);
+    }
+}
+
 /// The two lookups every hot `Map` does, with nothing else in the frame.
 ///
 /// `find_key_index` grew the string-hash, pointer-index and generic-compare
@@ -1421,14 +1522,14 @@ static KEEP_MAP_FIND_KEY_INDEX: extern "C" fn(f64, f64) -> f64 = js_map_find_key
 /// path; a key outside the span goes to the hashed index there.
 #[inline(always)]
 unsafe fn find_key_index_hot(map: *const MapHeader, key: f64) -> Option<i32> {
-    let size = (*map).size;
+    let used = (*map).used;
     let key_bits = key.to_bits();
     if !is_plain_nonzero_number_bits(key_bits) {
         return None;
     }
-    if size <= SIDE_TABLE_THRESHOLD {
+    if used <= SIDE_TABLE_THRESHOLD {
         let entries = entries_ptr(map);
-        for i in 0..size {
+        for i in 0..used {
             if ptr::read(entries.add((i as usize) * 2)).to_bits() == key_bits {
                 return Some(i as i32);
             }
@@ -1443,7 +1544,7 @@ unsafe fn find_key_index_hot(map: *const MapHeader, key: f64) -> Option<i32> {
         return None;
     }
     let entry = *dense.slots.get_unchecked(offset);
-    if entry == DENSE_NUMERIC_EMPTY || entry >= size {
+    if entry == DENSE_NUMERIC_EMPTY || entry >= used {
         return Some(-1);
     }
     Some(entry as i32)
@@ -1463,18 +1564,18 @@ pub(crate) unsafe fn find_key_index(map: *const MapHeader, key: f64) -> i32 {
 /// see the hot lane.
 #[inline(never)]
 unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
-    let size = (*map).size;
+    let used = (*map).used;
     let key_bits = key.to_bits();
 
     // Small maps: linear scan beats side-table dispatch.
-    if size <= SIDE_TABLE_THRESHOLD {
+    if used <= SIDE_TABLE_THRESHOLD {
         let entries = entries_ptr(map);
         // A plain (untagged, non-NaN), non-zero number is SameValueZero-equal
         // to an entry key exactly when the bits match: no tagged value can
         // equal a number, and only `±0` / NaN break bit identity, so those
         // (and every non-number) keep the general comparison below.
         if is_plain_nonzero_number_bits(key_bits) {
-            for i in 0..size {
+            for i in 0..used {
                 let entry_bits = ptr::read(entries.add((i as usize) * 2)).to_bits();
                 if entry_bits == key_bits {
                     return i as i32;
@@ -1482,8 +1583,11 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
             }
             return -1;
         }
-        for i in 0..size {
+        for i in 0..used {
             let entry_key = ptr::read(entries.add((i as usize) * 2));
+            if entry_key.to_bits() == MAP_HOLE_KEY_BITS {
+                continue;
+            }
             if jsvalue_eq(entry_key, key) {
                 return i as i32;
             }
@@ -1496,7 +1600,7 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
     if is_safe_numeric_key(key_bits) {
         if let Some(index) = (*map).numeric_index.as_ref() {
             if let Some(i) = index.get(&NumericKey(key_bits)) {
-                if i < size {
+                if i < used {
                     return i as i32;
                 }
             }
@@ -1518,7 +1622,7 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
                         // FNV-1a collisions are rare but possible; validate
                         // each candidate via `jsvalue_eq` (memcmp on bytes).
                         for &cand_idx in bucket {
-                            if cand_idx >= size {
+                            if cand_idx >= used {
                                 continue;
                             }
                             let cand_key = ptr::read(entries.add((cand_idx as usize) * 2));
@@ -1547,7 +1651,7 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
             let idx = idx.borrow();
             if let Some(slot) = idx.get(&(map as usize)) {
                 if let Some(&i) = slot.get(&MapPtrKey(key)) {
-                    if i < size {
+                    if i < used {
                         return Some(i as i32);
                     }
                 }
@@ -1562,8 +1666,11 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
 
     // Linear scan for maps with no side-table entry.
     let entries = entries_ptr(map);
-    for i in 0..size {
+    for i in 0..used {
         let entry_key = ptr::read(entries.add((i as usize) * 2));
+        if entry_key.to_bits() == MAP_HOLE_KEY_BITS {
+            continue;
+        }
         if jsvalue_eq(entry_key, key) {
             return i as i32;
         }
@@ -1573,14 +1680,17 @@ unsafe fn find_key_index_cold(map: *const MapHeader, key: f64) -> i32 {
 }
 
 unsafe fn find_string_key_index(map: *const MapHeader, key: *const StringHeader) -> i32 {
-    let size = (*map).size;
+    let used = (*map).used;
     let key_value = boxed_heap_string_key(key);
     let key_bits = key_value.to_bits();
 
-    if size <= SIDE_TABLE_THRESHOLD {
+    if used <= SIDE_TABLE_THRESHOLD {
         let entries = entries_ptr(map);
-        for i in 0..size {
+        for i in 0..used {
             let entry_key = ptr::read(entries.add((i as usize) * 2));
+            if entry_key.to_bits() == MAP_HOLE_KEY_BITS {
+                continue;
+            }
             if jsvalue_eq(entry_key, key_value) {
                 return i as i32;
             }
@@ -1595,7 +1705,7 @@ unsafe fn find_string_key_index(map: *const MapHeader, key: *const StringHeader)
             if let Some(slot) = idx.get(&(map as usize)) {
                 if let Some(bucket) = slot.get(&h) {
                     for &cand_idx in bucket {
-                        if cand_idx >= size {
+                        if cand_idx >= used {
                             continue;
                         }
                         let cand_key = ptr::read(entries.add((cand_idx as usize) * 2));
@@ -1614,8 +1724,11 @@ unsafe fn find_string_key_index(map: *const MapHeader, key: *const StringHeader)
     }
 
     let entries = entries_ptr(map);
-    for i in 0..size {
+    for i in 0..used {
         let entry_key = ptr::read(entries.add((i as usize) * 2));
+        if entry_key.to_bits() == MAP_HOLE_KEY_BITS {
+            continue;
+        }
         if jsvalue_eq(entry_key, key_value) {
             return i as i32;
         }
@@ -1626,12 +1739,19 @@ unsafe fn find_string_key_index(map: *const MapHeader, key: *const StringHeader)
 
 /// Grow the entries array if needed (header stays at same address)
 unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
-    let size = (*map).size;
-    let capacity = (*map).capacity;
-
-    if size < capacity {
+    if (*map).used < (*map).capacity {
         return false;
     }
+    // Full by EXTENT. Squeeze tombstones out first — reclaiming holes is
+    // cheaper than doubling, and it keeps a delete-heavy map from growing on
+    // dead weight.
+    if (*map).size < (*map).used {
+        compact_map_entries(map);
+        if (*map).used < (*map).capacity {
+            return false;
+        }
+    }
+    let capacity = (*map).capacity;
 
     // Double the capacity
     let new_capacity = capacity * 2;
@@ -1697,18 +1817,19 @@ unsafe fn map_set_string_key_value(
     let key = key_handle.get_raw_const_ptr::<StringHeader>();
     let value = value_handle.get_nanbox_f64();
     let size = (*map).size;
+    let used = (*map).used;
     let entries = entries_ptr_mut(map);
-    if grew && size > 0 {
+    if grew && used > 0 {
         crate::gc::runtime_write_barrier_external_slot_span(
             map as usize,
             entries as usize,
-            size as usize * 2,
+            used as usize * 2,
         );
     }
 
     let key_value = boxed_heap_string_key(key);
-    let key_slot = entries.add((size as usize) * 2);
-    let value_slot = entries.add((size as usize) * 2 + 1);
+    let key_slot = entries.add((used as usize) * 2);
+    let value_slot = entries.add((used as usize) * 2 + 1);
     // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map append key/value slots use the shared external-slot helper.
     crate::gc::runtime_store_external_jsvalue_slot(
         map as usize,
@@ -1722,6 +1843,7 @@ unsafe fn map_set_string_key_value(
     );
 
     (*map).size = size + 1;
+    (*map).used = used + 1;
 
     if let Some(h) = string_content_hash(key_value.to_bits()) {
         MAP_STRING_INDEX.with(|idx| {
@@ -1729,7 +1851,7 @@ unsafe fn map_set_string_key_value(
             let slot = idx
                 .entry(map as usize)
                 .or_insert_with(std::collections::HashMap::new);
-            slot.entry(h).or_insert_with(Vec::new).push(size);
+            slot.entry(h).or_insert_with(Vec::new).push(used);
         });
     }
 
@@ -1806,17 +1928,18 @@ fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
         let key = key_handle.get_nanbox_f64();
         let value = value_handle.get_nanbox_f64();
         let size = (*map).size;
+        let used = (*map).used;
         let entries = entries_ptr_mut(map);
-        if grew && size > 0 {
+        if grew && used > 0 {
             crate::gc::runtime_write_barrier_external_slot_span(
                 map as usize,
                 entries as usize,
-                size as usize * 2,
+                used as usize * 2,
             );
         }
 
-        let key_slot = entries.add((size as usize) * 2);
-        let value_slot = entries.add((size as usize) * 2 + 1);
+        let key_slot = entries.add((used as usize) * 2);
+        let value_slot = entries.add((used as usize) * 2 + 1);
         // GC_STORE_AUDIT(EXTERNAL_BARRIERED): map append key/value slots use the shared external-slot helper.
         crate::gc::runtime_store_external_jsvalue_slot(
             map as usize,
@@ -1830,6 +1953,7 @@ fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
         );
 
         (*map).size = size + 1;
+        (*map).used = used + 1;
 
         // Update the O(1) side-tables: numeric keys by bits, string keys by
         // content hash, pointer keys (objects/symbols/bigints) in the
@@ -1837,7 +1961,7 @@ fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
         let key_bits = key.to_bits();
         if is_safe_numeric_key(key_bits) {
             if let Some(index) = (*map).numeric_index.as_mut() {
-                index.insert(NumericKey(key_bits), size);
+                index.insert(NumericKey(key_bits), used);
             }
         } else if is_string_like(key_bits) {
             // String key: content-hashed index bypasses the gen-GC stale-bits
@@ -1849,7 +1973,7 @@ fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
                     let slot = idx
                         .entry(map as usize)
                         .or_insert_with(std::collections::HashMap::new);
-                    slot.entry(h).or_insert_with(Vec::new).push(size);
+                    slot.entry(h).or_insert_with(Vec::new).push(used);
                 });
             }
         } else {
@@ -1858,7 +1982,7 @@ fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
                 let slot = idx
                     .entry(map as usize)
                     .or_insert_with(crate::fast_hash::new_ptr_hash_map);
-                slot.insert(MapPtrKey(key), size);
+                slot.insert(MapPtrKey(key), used);
             });
         }
     }
@@ -2269,89 +2393,81 @@ unsafe fn delete_entry_at_index(map: *mut MapHeader, idx: i32) -> i32 {
     }
     let size = (*map).size;
     let idx = idx as usize;
-    if idx >= size as usize {
+    if idx >= (*map).used as usize {
         return 0;
     }
     let entries = entries_ptr_mut(map);
     let deleted_key = ptr::read(entries.add(idx * 2));
 
-    // #2831: preserve insertion order. JS Map iteration must keep the
-    // relative order of surviving entries after a delete (and a
-    // delete-then-re-add appends at the end). The previous swap-and-pop
-    // moved the last entry into the hole, reordering iteration. Compact the
-    // already-owned key/value pairs with one overlap-safe move. This does not
-    // create a new parent -> child edge: every copied value was already in
-    // this Map. The span mark preserves the old -> young remembered-set
-    // contract for the slots' new addresses without paying two full runtime
-    // stores per entry.
-    let moved_entries = size as usize - idx - 1;
-    if moved_entries > 0 {
-        // GC_STORE_AUDIT(EXTERNAL_BARRIERED): ordered compaction is followed by a dirty-span barrier for every moved slot.
-        ptr::copy(
-            entries.add((idx + 1) * 2),
-            entries.add(idx * 2),
-            moved_entries * 2,
-        );
-        crate::gc::runtime_write_barrier_external_slot_span(
-            map as usize,
-            entries.add(idx * 2) as usize,
-            moved_entries * 2,
-        );
-    }
+    // O(1) ordered delete (#2831 preserved): survivors keep their RAW entry
+    // indices, so nothing shifts, nothing is memmoved, no span barrier over
+    // the tail, and no side-index offsets need repairing — the three O(n)
+    // costs that made emptying an N-entry map O(N²) (18.7x node on the ECS
+    // archetype-migration row). The entry is TOMBSTONED: its key slot takes
+    // the reserved hole marker (never a legal stored key — `normalize_zero`
+    // canonicalizes a leaked hole to `undefined`), and its value slot is
+    // cleared through the barriered store so SATB marking still shades the
+    // overwritten child. Iteration walks raw indices and skips holes;
+    // delete-then-re-add still appends at the end. Tombstones are squeezed
+    // out when they outnumber the live entries, or on growth.
+    crate::gc::runtime_store_external_jsvalue_slot(
+        map as usize,
+        entries.add(idx * 2) as usize,
+        MAP_HOLE_KEY_BITS,
+    );
+    crate::gc::runtime_store_external_jsvalue_slot(
+        map as usize,
+        entries.add(idx * 2 + 1) as usize,
+        crate::value::TAG_UNDEFINED,
+    );
 
     (*map).size = size - 1;
+    forget_map_index_entry(map, deleted_key, idx as u32);
 
-    // The old implementation rebuilt all three indexes from the entries
-    // buffer after every ordered delete. Repair their existing u32 offsets
-    // in place instead: removing one key and decrementing later offsets is a
-    // cache-linear pass over index values and does not re-hash surviving keys.
-    repair_map_indices_after_ordered_delete(map, deleted_key, idx as u32);
+    let used = (*map).used;
+    if used >= 16 && (*map).size < used / 2 {
+        compact_map_entries(map);
+    }
     1
 }
 
-unsafe fn repair_map_indices_after_ordered_delete(
-    map: *mut MapHeader,
-    deleted_key: f64,
-    deleted_idx: u32,
-) {
+/// Forget ONE deleted key from whichever side index holds it. Raw entry
+/// indices are stable under tombstoned deletes, so — unlike the pre-tombstone
+/// repair — no surviving offset is touched.
+unsafe fn forget_map_index_entry(map: *mut MapHeader, deleted_key: f64, deleted_idx: u32) {
     let map_addr = map as usize;
     let deleted_bits = deleted_key.to_bits();
 
-    if let Some(index) = (*map).numeric_index.as_mut() {
-        if is_safe_numeric_key(deleted_bits) {
+    if is_safe_numeric_key(deleted_bits) {
+        if let Some(index) = (*map).numeric_index.as_mut() {
             index.remove(&NumericKey(deleted_bits));
         }
-        index.repair_entry_indices_after_delete(deleted_idx);
+        return;
     }
-
-    MAP_STRING_INDEX.with(|indexes| {
-        let mut indexes = indexes.borrow_mut();
-        if let Some(index) = indexes.get_mut(&map_addr) {
-            for bucket in index.values_mut() {
-                bucket.retain(|entry_idx| *entry_idx != deleted_idx);
-                for entry_idx in bucket {
-                    if *entry_idx > deleted_idx {
-                        *entry_idx -= 1;
+    if is_string_like(deleted_bits) {
+        if let Some(h) = string_content_hash(deleted_bits) {
+            MAP_STRING_INDEX.with(|indexes| {
+                let mut indexes = indexes.borrow_mut();
+                if let Some(index) = indexes.get_mut(&map_addr) {
+                    if let Some(bucket) = index.get_mut(&h) {
+                        bucket.retain(|entry_idx| *entry_idx != deleted_idx);
+                        if bucket.is_empty() {
+                            index.remove(&h);
+                        }
                     }
                 }
-            }
-            index.retain(|_, bucket| !bucket.is_empty());
+            });
         }
-    });
-
-    MAP_PTR_INDEX.with(|indexes| {
-        let mut indexes = indexes.borrow_mut();
-        if let Some(index) = indexes.get_mut(&map_addr) {
-            if is_ptr_index_key(deleted_bits) {
+        return;
+    }
+    if is_ptr_index_key(deleted_bits) {
+        MAP_PTR_INDEX.with(|indexes| {
+            let mut indexes = indexes.borrow_mut();
+            if let Some(index) = indexes.get_mut(&map_addr) {
                 index.remove(&MapPtrKey(deleted_key));
             }
-            for entry_idx in index.values_mut() {
-                if *entry_idx > deleted_idx {
-                    *entry_idx -= 1;
-                }
-            }
-        }
-    });
+        });
+    }
 }
 
 /// Rebuild ONLY the pointer-key index for `map` from its current entries
@@ -2362,9 +2478,9 @@ unsafe fn rebuild_map_ptr_index(map: *mut MapHeader) {
     if map.is_null() {
         return;
     }
-    let size = (*map).size as usize;
+    let used = (*map).used as usize;
     let capacity = (*map).capacity as usize;
-    if size > capacity || size > 16_000_000 || (*map).entries.is_null() {
+    if used > capacity || used > 16_000_000 || (*map).entries.is_null() {
         return;
     }
     let entries = entries_ptr(map);
@@ -2374,7 +2490,7 @@ unsafe fn rebuild_map_ptr_index(map: *mut MapHeader) {
             .entry(map as usize)
             .or_insert_with(crate::fast_hash::new_ptr_hash_map);
         slot.clear();
-        for i in 0..size {
+        for i in 0..used {
             let entry_key = ptr::read(entries.add(i * 2));
             if is_ptr_index_key(entry_key.to_bits()) {
                 slot.insert(MapPtrKey(entry_key), i as u32);
@@ -2406,6 +2522,7 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
     // map has nothing to reset: the per-entity `adds.clear(); removes.clear()`
     // of a change set is this case half the time.
     let size = unsafe { (*map).size };
+    let used = unsafe { (*map).used };
     if size == 0 {
         return;
     }
@@ -2415,16 +2532,17 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
     // cheaper than the two thread-local resolutions plus two hash probes
     // that find two empty tables — the per-frame grouping maps of an ECS
     // are this shape, ten thousand clears a frame.
-    let side_tables_may_hold_this_map = size > SIDE_TABLE_CLEAR_SCAN_MAX
+    let side_tables_may_hold_this_map = used > SIDE_TABLE_CLEAR_SCAN_MAX
         || unsafe {
             let entries = entries_ptr(map);
-            (0..size as usize).any(|i| {
+            (0..used as usize).any(|i| {
                 let key_bits = ptr::read(entries.add(i * 2)).to_bits();
                 !is_safe_numeric_key(key_bits)
             })
         };
     unsafe {
         (*map).size = 0;
+        (*map).used = 0;
     }
     unsafe {
         if let Some(index) = (*map).numeric_index.as_mut() {
@@ -2460,6 +2578,13 @@ pub extern "C" fn js_map_entry_key_at(map: *const MapHeader, idx: u32) -> f64 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     unsafe {
+        if (*map).used != (*map).size {
+            // Tombstones present under a raw-indexed read: the typed for-of
+            // lane and this fallback iterate raw indices against the live
+            // size, so squeeze the holes out — after which the codegen lane's
+            // `used == size` admission holds again and the lane self-heals.
+            compact_map_entries(map as *mut MapHeader);
+        }
         let size = (*map).size;
         if idx >= size {
             return f64::from_bits(TAG_UNDEFINED);
@@ -2477,6 +2602,13 @@ pub extern "C" fn js_map_entry_value_at(map: *const MapHeader, idx: u32) -> f64 
         return f64::from_bits(TAG_UNDEFINED);
     }
     unsafe {
+        if (*map).used != (*map).size {
+            // Tombstones present under a raw-indexed read: the typed for-of
+            // lane and this fallback iterate raw indices against the live
+            // size, so squeeze the holes out — after which the codegen lane's
+            // `used == size` admission holds again and the lane self-heals.
+            compact_map_entries(map as *mut MapHeader);
+        }
         let size = (*map).size;
         if idx >= size {
             return f64::from_bits(TAG_UNDEFINED);
@@ -2494,6 +2626,7 @@ pub extern "C" fn js_map_entries(map: *const MapHeader) -> *mut crate::array::Ar
     if map.is_null() {
         return crate::array::js_array_alloc(0);
     }
+    unsafe { compact_if_holey(map as *mut MapHeader) };
     let scope = crate::gc::RuntimeHandleScope::new();
     let map_handle = scope.root_raw_const_ptr(map);
     unsafe {
@@ -2547,6 +2680,7 @@ pub extern "C" fn js_map_keys(map: *const MapHeader) -> *mut crate::array::Array
     if map.is_null() {
         return crate::array::js_array_alloc(0);
     }
+    unsafe { compact_if_holey(map as *mut MapHeader) };
     let scope = crate::gc::RuntimeHandleScope::new();
     let map_handle = scope.root_raw_const_ptr(map);
     unsafe {
@@ -2579,6 +2713,7 @@ pub extern "C" fn js_map_values(map: *const MapHeader) -> *mut crate::array::Arr
     if map.is_null() {
         return crate::array::js_array_alloc(0);
     }
+    unsafe { compact_if_holey(map as *mut MapHeader) };
     let scope = crate::gc::RuntimeHandleScope::new();
     let map_handle = scope.root_raw_const_ptr(map);
     unsafe {
@@ -2617,6 +2752,7 @@ fn copy_map_into_new(src: *const MapHeader) -> *mut MapHeader {
     if src.is_null() {
         return js_map_alloc(4);
     }
+    unsafe { compact_if_holey(src as *const MapHeader as *mut MapHeader) };
     let src_handle = scope.root_raw_const_ptr(src);
     let size = unsafe {
         let s = src_handle.get_raw_const_ptr::<MapHeader>();
@@ -2903,6 +3039,7 @@ fn js_map_foreach_impl(
     if map.is_null() {
         return;
     }
+    unsafe { compact_if_holey(map as *mut MapHeader) };
     let scope = crate::gc::RuntimeHandleScope::new();
     let map_handle = scope.root_raw_const_ptr(map);
     let callback_handle = scope.root_nanbox_f64(callback);
@@ -3488,3 +3625,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "map_tombstone_tests.rs"]
+mod map_tombstone_tests;

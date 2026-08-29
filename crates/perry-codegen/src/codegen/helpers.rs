@@ -367,9 +367,97 @@ pub(super) fn apply_pshape_inline_policy(
 /// such as mutation-heavy ECS transitions by nearly an order of magnitude.
 pub(super) const GUARDED_SPECIALIZATION_PREINLINE_MAX_IR_BYTES: usize = 16 * 1024;
 
+/// Raised ceiling for a body that is **small at the source level**.
+///
+/// The constant above deliberately judges lowered IR rather than statement
+/// count, because one source statement can lower to a large property/index
+/// dispatch lattice. That is the right *admission* test and the wrong *bound*:
+/// it also rejects the leaf methods that consist of a single such statement,
+/// which are exactly the ones worth flattening into their callers. wolf-ecs is
+/// the case in point — `SparseSet.add`, `ECS._hasComponent` and
+/// `ECS._archChange` are one statement each and lower to tens of KiB of guard
+/// lattice, so every call from `addComponent` stayed a native call boundary.
+///
+/// Statement count is a sound bound on how much *source* a caller can absorb,
+/// and it is what keeps this away from #8583's failure mode: the giant bundled
+/// IIFEs whose `rewrite-statepoints-for-gc` fan-out made `-Os` never finish are
+/// thousands of statements, so they can never reach this arm however their IR
+/// measures. Overridable via `PERRY_GUARDED_PREINLINE_MAX_IR_BYTES` (the raised
+/// ceiling) for A/B without a rebuild.
+pub(super) fn guarded_specialization_source_small_max_ir_bytes() -> usize {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<usize> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        std::env::var("PERRY_GUARDED_PREINLINE_MAX_IR_BYTES")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(64 * 1024)
+    })
+}
+
+/// Statement ceiling for the raised budget. Shares
+/// [`inline_hot_small_size_cap`]'s value: the same "this is a leaf, not a
+/// subsystem" judgement, measured the same way.
+#[inline]
+pub(super) fn guarded_specialization_source_small(statements: usize) -> bool {
+    statements <= inline_hot_small_size_cap()
+}
+
 #[inline]
 pub(super) fn guarded_specialization_fits_preinline_budget(ir_bytes: usize) -> bool {
     ir_bytes <= GUARDED_SPECIALIZATION_PREINLINE_MAX_IR_BYTES
+}
+
+/// [`guarded_specialization_fits_preinline_budget`] plus the source-small arm.
+#[inline]
+pub(super) fn guarded_specialization_admits_preinline(ir_bytes: usize, statements: usize) -> bool {
+    guarded_specialization_fits_preinline_budget(ir_bytes)
+        || (guarded_specialization_source_small(statements)
+            && ir_bytes <= guarded_specialization_source_small_max_ir_bytes())
+}
+
+#[cfg(test)]
+mod guarded_preinline_admission_tests {
+    use super::*;
+
+    /// Written against the functions' own values rather than literals, so a
+    /// retuned default cannot silently turn these into vacuous assertions.
+    #[test]
+    fn source_small_arm_admits_a_large_lattice_but_a_statement_bound_still_bounds_it() {
+        let raised = guarded_specialization_source_small_max_ir_bytes();
+        let cap = inline_hot_small_size_cap();
+        assert!(
+            raised > GUARDED_SPECIALIZATION_PREINLINE_MAX_IR_BYTES,
+            "the new arm only means something if its ceiling is higher than the original's",
+        );
+
+        // The case this change exists for: one-statement leaves whose guard
+        // lattice lowers well past the original 16 KiB ceiling.
+        let past_original = GUARDED_SPECIALIZATION_PREINLINE_MAX_IR_BYTES + 1;
+        assert!(!guarded_specialization_fits_preinline_budget(past_original));
+        assert!(guarded_specialization_admits_preinline(past_original, 1));
+        assert!(guarded_specialization_admits_preinline(raised, cap));
+
+        // #8583's protection, and the reason the statement count is a BOUND
+        // rather than an admission test: the giant bundled IIFEs are thousands
+        // of statements, so no IR size may let them through this arm.
+        assert!(!guarded_specialization_admits_preinline(raised, cap + 1));
+        assert!(!guarded_specialization_admits_preinline(
+            past_original,
+            5_000
+        ));
+
+        // The raised ceiling is still a ceiling.
+        assert!(!guarded_specialization_admits_preinline(raised + 1, 1));
+
+        // The original arm is unchanged: within 16 KiB, statement count is
+        // irrelevant, exactly as before this change.
+        assert!(guarded_specialization_admits_preinline(
+            GUARDED_SPECIALIZATION_PREINLINE_MAX_IR_BYTES,
+            5_000,
+        ));
+        assert!(guarded_specialization_admits_preinline(0, usize::MAX));
+    }
 }
 
 /// Maximum total (module-wide) direct call sites a function may have and still

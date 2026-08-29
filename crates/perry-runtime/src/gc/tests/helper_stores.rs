@@ -22,6 +22,7 @@ unsafe fn alloc_old_test_map(
     let entries = std::alloc::alloc_zeroed(layout) as *mut u64;
     assert!(!entries.is_null());
     (*map).size = 0;
+    (*map).used = 0;
     (*map).capacity = capacity;
     (*map).entries = entries as *mut f64;
     (map, entries, layout)
@@ -33,6 +34,7 @@ unsafe fn retire_old_test_map(
     layout: std::alloc::Layout,
 ) {
     (*map).size = 0;
+    (*map).used = 0;
     (*map).capacity = 0;
     (*map).entries = std::ptr::null_mut();
     std::alloc::dealloc(entries as *mut u8, layout);
@@ -102,6 +104,7 @@ fn map_and_set_external_helper_stores_preserve_young_children() {
     let (map, entries, layout) = unsafe { alloc_old_test_map(1) };
     unsafe {
         (*map).size = 1;
+        (*map).used = 1;
         crate::gc::runtime_store_external_jsvalue_slot(
             map as usize,
             entries as usize,
@@ -112,6 +115,7 @@ fn map_and_set_external_helper_stores_preserve_young_children() {
     let (set, set_elements, set_layout) = unsafe { alloc_old_test_set(1) };
     unsafe {
         (*set).size = 1;
+        (*set).used = 1;
         crate::gc::runtime_store_external_jsvalue_slot(
             set as usize,
             set_elements as usize,

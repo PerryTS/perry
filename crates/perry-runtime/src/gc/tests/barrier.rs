@@ -15,6 +15,7 @@ unsafe fn alloc_old_test_map(
     let entries = std::alloc::alloc_zeroed(layout) as *mut u64;
     assert!(!entries.is_null());
     (*map).size = 0;
+    (*map).used = 0;
     (*map).capacity = capacity;
     (*map).entries = entries as *mut f64;
     (map, entries, layout)
@@ -26,6 +27,7 @@ unsafe fn retire_old_test_map(
     layout: std::alloc::Layout,
 ) {
     (*map).size = 0;
+    (*map).used = 0;
     (*map).capacity = 0;
     (*map).entries = std::ptr::null_mut();
     std::alloc::dealloc(entries as *mut u8, layout);
@@ -625,6 +627,7 @@ fn test_old_young_edge_verifier_accepts_map_external_slot() {
     let map_header = unsafe { header_from_user_ptr(map as *const u8) };
     unsafe {
         (*map).size = 1;
+        (*map).used = 1;
         *entries = ptr_bits(young);
         (*map_header).gc_flags |= GC_FLAG_MARKED;
     }
@@ -658,6 +661,7 @@ fn test_old_young_edge_verifier_accepts_set_external_slot() {
     let set_header = unsafe { header_from_user_ptr(set as *const u8) };
     unsafe {
         (*set).size = 1;
+        (*set).used = 1;
         (*set_header).gc_flags |= GC_FLAG_MARKED;
     }
     runtime_store_external_jsvalue_slot(set as usize, elements as usize, ptr_bits(young));
@@ -932,6 +936,7 @@ fn test_dirty_page_map_entry_scan_is_external_range_bounded() {
     let (map, entries, layout) = unsafe { alloc_old_test_map(2048) };
     unsafe {
         (*map).size = 2048;
+        (*map).used = 2048;
     }
     let (dirty_idx, clean_idx) = unsafe { field_indices_on_distinct_pages(entries, 4096) };
     let dirty_slot = unsafe { entries.add(dirty_idx) };
@@ -1045,6 +1050,7 @@ fn test_dirty_page_map_external_dedupes_and_clears() {
     let (map, entries, layout) = unsafe { alloc_old_test_map(16) };
     unsafe {
         (*map).size = 16;
+        (*map).used = 16;
         *entries.add(1) = POINTER_TAG | young as u64;
     }
     let slot = unsafe { entries.add(1) };
@@ -1077,6 +1083,7 @@ fn test_dirty_page_map_realloc_span_marks_new_entries_pages() {
     let (map, entries, layout) = unsafe { alloc_old_test_map(1024) };
     unsafe {
         (*map).size = 1024;
+        (*map).used = 1024;
         *entries.add(1023) = POINTER_TAG | young as u64;
     }
     let new_layout = std::alloc::Layout::from_size_align(2048 * 16, 8).unwrap();
@@ -1114,6 +1121,7 @@ fn test_dirty_page_set_external_slot_marks_child() {
     let (set, elements, layout) = unsafe { alloc_old_test_set(1) };
     unsafe {
         (*set).size = 1;
+        (*set).used = 1;
     }
     runtime_store_external_jsvalue_slot(set as usize, elements as usize, ptr_bits(young));
 
@@ -1149,6 +1157,7 @@ fn test_rewrite_remembered_dirty_range_updates_set_external_entry_span() {
     let (set, elements, layout) = unsafe { alloc_old_test_set(2048) };
     unsafe {
         (*set).size = 2048;
+        (*set).used = 2048;
     }
     let (dirty_idx, clean_idx) = unsafe { field_indices_on_distinct_pages(elements, 2048) };
     let dirty_slot = unsafe { elements.add(dirty_idx) };
@@ -1462,7 +1471,9 @@ fn test_incremental_barrier_marks_external_map_and_set_slots() {
     let (set, elements, set_layout) = unsafe { alloc_old_test_set(1) };
     unsafe {
         (*map).size = 1;
+        (*map).used = 1;
         (*set).size = 1;
+        (*set).used = 1;
     }
     mark_user_ptr(map as usize);
     mark_user_ptr(set as usize);
@@ -1687,6 +1698,7 @@ fn test_rewrite_remembered_dirty_range_updates_map_external_entry_span() {
     let (map, entries, layout) = unsafe { alloc_old_test_map(2048) };
     unsafe {
         (*map).size = 2048;
+        (*map).used = 2048;
     }
     let (dirty_idx, clean_idx) = unsafe { field_indices_on_distinct_pages(entries, 4096) };
     let dirty_slot = unsafe { entries.add(dirty_idx) };

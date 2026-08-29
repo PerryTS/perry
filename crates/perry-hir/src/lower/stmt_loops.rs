@@ -348,18 +348,20 @@ fn iterator_result_validated(call: Expr) -> Expr {
     }
 }
 
-/// `__iter.next()` (validated: a non-object result is a TypeError).
+/// One fused IteratorNext (`js_for_of_next(__iter)`): builtin Map/Set
+/// iterators advance in place; everything else runs the dynamic `.next()`
+/// plus result validation inside the entry — the two-call shape this emitted.
 pub(crate) fn iterator_next_call(iter_id: LocalId) -> Expr {
-    iterator_result_validated(Expr::Call {
-        callee: Box::new(Expr::PropertyGet {
-            byte_offset: 0,
-            object: Box::new(Expr::LocalGet(iter_id)),
-            property: "next".to_string(),
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_for_of_next".to_string(),
+            param_types: vec![Type::Any],
+            return_type: Type::Any,
         }),
-        args: vec![],
+        args: vec![Expr::LocalGet(iter_id)],
         type_args: vec![],
         byte_offset: 0,
-    })
+    }
 }
 
 /// Iterator-driver loop with the ADVANCE AT THE TOP of the body:
@@ -368,11 +370,9 @@ pub(crate) fn iterator_next_call(iter_id: LocalId) -> Expr {
 /// advance. The previous shape — `while (!__result.done) { <body>;
 /// __result = next() }` — put the advance at the body TAIL, so a `continue`
 /// skipped it and re-processed the SAME result forever (the footgun
-/// `lazy_iter_for_stmt` documents; it can use `Stmt::For`'s update clause,
-/// but the await-capable drivers here cannot carry an `await` there, so they
-/// use this shape). Canonical spin: an SSE consumer's
-/// `for await (...) { if (ev === "ping") continue; ... }` hung a large
-/// esbuild-bundled CLI app on the first real server ping.
+/// the footgun `lazy_iter_for_stmt` documents; the await-capable drivers
+/// here cannot carry an `await` in a `for` update clause, so they use this
+/// shape). An SSE consumer's `continue` on ping hung a bundled CLI app.
 ///
 /// The synthetic `if done break` is appended AFTER
 /// `insert_iterator_return_before_abrupts` runs over the user body, so the
@@ -981,7 +981,7 @@ pub(super) fn lower_stmt_for_of_inner(
         let next_call = if needs_await {
             Expr::Await(Box::new(raw_next_call))
         } else {
-            raw_next_call
+            iterator_next_call(iter_id)
         };
         module.init.push(Stmt::Let {
             id: result_id,
