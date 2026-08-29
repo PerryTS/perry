@@ -23,7 +23,8 @@ fn lower_src(src: &str) -> anyhow::Result<perry_hir::Module> {
 fn lower_entry_src(src: &str) -> anyhow::Result<perry_hir::Module> {
     let mut cache = SourceCache::new();
     let parsed = parse_typescript_with_cache(src, "issue_5833_entry.ts", &mut cache)?;
-    lower_module_with_class_id_types_seed_and_entry(
+    perry_hir::set_current_module_source(src.to_string());
+    let lowered = lower_module_with_class_id_types_seed_and_entry(
         &parsed.module,
         "test",
         "issue_5833_entry.ts",
@@ -33,7 +34,9 @@ fn lower_entry_src(src: &str) -> anyhow::Result<perry_hir::Module> {
         None,
         true,
     )
-    .map(|(module, _)| module)
+    .map(|(module, _)| module);
+    perry_hir::clear_current_module_source();
+    lowered
 }
 
 fn class_local_let<'a>(module: &'a perry_hir::Module, name: &str) -> Option<&'a Expr> {
@@ -132,5 +135,28 @@ fn restricted_global_check_only_applies_to_the_entry_script() {
     lower_src("let undefined;").expect(
         "a non-entry module's `let undefined` must not be rejected \
          (it never binds against the real global object)",
+    );
+}
+
+#[test]
+fn reflected_script_var_gets_an_early_nonconfigurable_global_slot() {
+    // The later HIR mirror uses an ordinary property write. Seed the Script
+    // binding first so that write preserves GlobalDeclarationInstantiation's
+    // configurable=false descriptor (#5841 / #5903).
+    let module = lower_entry_src(
+        r#"
+        var existing = 23;
+        globalThis.existing;
+        "#,
+    )
+    .expect("entry Script var should lower");
+
+    assert!(
+        module
+            .annexb_global_undefined_names
+            .iter()
+            .any(|name| name == "existing"),
+        "the Script var must be created before its reflected initializer: {:?}",
+        module.annexb_global_undefined_names
     );
 }

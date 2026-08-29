@@ -1173,6 +1173,16 @@ fn parse_eval_literal(src: &str) -> Option<Expr> {
 fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str) -> Option<Expr> {
     let src = body.trim().trim_end_matches(';').trim();
     let is_var_assignment = src.starts_with("var ");
+    // A sloppy direct eval at global-script top level performs
+    // GlobalDeclarationInstantiation. Even the tiny `eval("var x")` shape
+    // must run CanDeclareGlobalVar: it throws when `globalThis` is
+    // non-extensible and `x` is absent. Leave every `var` form to the general
+    // eval fold below, which publishes through `apply_global_eval_hoist` and
+    // preserves the global property's descriptor. The shortcut remains valid
+    // for strict eval (fresh eval var environment) and for function-local eval.
+    if is_var_assignment && !ctx.current_strict && eval_is_module_top_global(ctx) {
+        return None;
+    }
     let assignment = src.strip_prefix("var ").unwrap_or(src);
     let (name_raw, value_raw) = match assignment.split_once('=') {
         Some(parts) => parts,

@@ -1508,6 +1508,30 @@ pub fn lower_module_full(
     let is_esm_entry =
         !module.imports.is_empty() || !module.exports.is_empty() || module.has_top_level_await;
     if ctx.is_entry_module && !is_esm_entry && module.references_global_this {
+        // GlobalDeclarationInstantiation creates every Script-level `var`
+        // property before user code, with configurable=false. The late
+        // reflection pass below mirrors declaration/assignment values with an
+        // ordinary property write; if that write creates the property itself,
+        // it gets configurable=true and a later eval can no longer preserve
+        // the Script binding's descriptor (#5841). Reuse the existing early
+        // non-configurable-undefined codegen list. A same-named top-level
+        // function owns the entry value and is emitted separately, so do not
+        // overwrite it with undefined.
+        let script_function_names: HashSet<&str> = module
+            .script_global_functions
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        module.annexb_global_undefined_names.extend(
+            ctx.script_var_decl_names
+                .iter()
+                .filter(|name| !script_function_names.contains(name.as_str()))
+                .cloned(),
+        );
+        module.annexb_global_undefined_names.sort();
+        module.annexb_global_undefined_names.dedup();
+    }
+    if ctx.is_entry_module && !is_esm_entry && module.references_global_this {
         let script_vars: HashMap<_, _> = ctx
             .script_var_decl_names
             .iter()
