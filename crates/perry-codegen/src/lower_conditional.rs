@@ -109,7 +109,31 @@ pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr
     let falsy = ctx.block().or(I1, &falsy_a, &is_null);
     let decided = ctx.block().or(I1, &is_true, &falsy);
     let tag_pred = ctx.block().label.clone();
-    ctx.block().cond_br(&decided, &merge_l, &slow_l);
+    let obj_idx = ctx.new_block("truthy.obj");
+    let obj_l = ctx.block_label(obj_idx);
+    ctx.block().cond_br(&decided, &merge_l, &obj_l);
+
+    // On the WOULD-BE-SLOW edge only — the singleton compares above decide
+    // `true`/`false`/`undefined`/`null` with the exact instruction sequence
+    // they always had (widening them measured +0.6% on wolf-ecs: the common
+    // tag-arm dependency chain grew for every `if (flag)`). A POINTER_TAG
+    // value with a nonzero payload is an object (or array, closure, handle),
+    // and objects are unconditionally truthy — mirroring `js_is_truthy`'s
+    // POINTER_TAG arm, including its zero-payload falsy case, which stays on
+    // the call along with strings (empty is falsy — needs a length load) and
+    // BigInt (`0n` is falsy). This is the arm `a.change[e] || (...)` takes on
+    // its hit path: the loaded value is an object every time, and it paid the
+    // call every time.
+    ctx.current_block = obj_idx;
+    let top16 = ctx.block().lshr(I64, &bits, "48");
+    let is_pointer = ctx
+        .block()
+        .icmp_eq(I64, &top16, crate::nanbox::POINTER_TAG_TOP16_I64);
+    let payload = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let payload_nz = ctx.block().icmp_ne(I64, &payload, "0");
+    let obj_truthy = ctx.block().and(I1, &is_pointer, &payload_nz);
+    let obj_pred = ctx.block().label.clone();
+    ctx.block().cond_br(&obj_truthy, &merge_l, &slow_l);
 
     ctx.current_block = slow_idx;
     let i32_truthy = ctx.block().call(I32, "js_is_truthy", &[(DOUBLE, cond_val)]);
@@ -123,6 +147,7 @@ pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr
         &[
             (&num_res, &num_pred),
             (&is_true, &tag_pred),
+            (&obj_truthy, &obj_pred),
             (&slow_res, &slow_pred),
         ],
     )
