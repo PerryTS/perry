@@ -410,9 +410,20 @@ impl LlInst {
                     return false;
                 };
                 let callee = &s[pos..];
-                !callee.contains("@llvm.") && !callee.contains(" asm ")
+                !callee.contains("@llvm.")
+                    && !callee.contains(" asm ")
+                    // `js_shadow_slot_set` is a bounds-checked TLS store
+                    // (`gc/roots/shadow_stack.rs`): it cannot allocate,
+                    // collect, or revoke a layout, which is precisely what the
+                    // two call-free clone scans exist to exclude. Without the
+                    // exemption a proven-numeric accumulator's per-statement
+                    // shadow CLEAR — itself emitted BECAUSE the value is a
+                    // known non-pointer — condemned the whole fast clone.
+                    && !callee.contains("@js_shadow_slot_set")
             }
-            LlInst::Call { callee, .. } => !callee.starts_with("llvm."),
+            LlInst::Call { callee, .. } => {
+                !callee.starts_with("llvm.") && callee != "js_shadow_slot_set"
+            }
             LlInst::CallIndirect { .. } => true,
             _ => false,
         }

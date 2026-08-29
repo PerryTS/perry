@@ -726,7 +726,18 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                             }
                             None
                         } else {
-                            for decl in var_decl.decls.iter().skip(1) {
+                            // A multi-declarator lexical head cannot fit in the
+                            // HIR's single `For::init` slot. Lower the complete
+                            // head into the loop-scoped prelude in source order,
+                            // registering each binding before the next
+                            // initializer is lowered.
+                            let has_multiple_decls = var_decl.decls.len() > 1;
+                            for decl in
+                                var_decl
+                                    .decls
+                                    .iter()
+                                    .skip(if has_multiple_decls { 0 } else { 1 })
+                            {
                                 if let Some(init_ast) = decl.init.as_ref() {
                                     result.extend(predeclare_implicit_assignment_targets(
                                         ctx, init_ast,
@@ -747,6 +758,12 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                     let stmts = crate::destructuring::lower_pattern_binding(
                                         ctx, &decl.name, init_expr, true, false,
                                     )?;
+                                    for stmt in &stmts {
+                                        crate::lower_decl::collect_let_decls_in_stmt(
+                                            stmt,
+                                            &mut ctx.classic_for_lexical_bindings,
+                                        );
+                                    }
                                     result.extend(stmts);
                                     continue;
                                 }
@@ -761,6 +778,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                     ty.clone(),
                                     decl.name.span(),
                                 );
+                                ctx.classic_for_lexical_bindings.insert(id);
                                 result.push(Stmt::Let {
                                     id,
                                     name,
@@ -769,7 +787,9 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                     init: init_expr,
                                 });
                             }
-                            if let Some(decl) = var_decl.decls.first() {
+                            if has_multiple_decls {
+                                None
+                            } else if let Some(decl) = var_decl.decls.first() {
                                 if let Some(init_ast) = decl.init.as_ref() {
                                     result.extend(predeclare_implicit_assignment_targets(
                                         ctx, init_ast,

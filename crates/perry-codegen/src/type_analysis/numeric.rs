@@ -150,6 +150,16 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 .iter()
                 .rev()
                 .any(|fact| fact.numeric_accumulator == *id)
+                // The stable-packed twin: the fast preheader tag-tested the
+                // accumulator and every in-clone write is numeric-preserving,
+                // so within the fast clone the local provably holds a Number.
+                // The fact is pushed around the fast-clone lowering only, so
+                // the slow clone and post-loop code never see it.
+                || ctx
+                    .stable_packed_loop_facts
+                    .iter()
+                    .rev()
+                    .any(|fact| fact.numeric_accumulators.contains(id))
                 || ctx.integer_locals.contains(id)
                 || ctx.unsigned_i32_locals.contains(id)
                 || ctx.int_valued_i64_locals.contains_key(id)

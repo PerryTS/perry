@@ -1727,6 +1727,15 @@ pub(crate) struct StablePackedReadCache {
 pub(crate) struct StablePackedLoopFact {
     pub counter_local_id: u32,
     pub array_local_id: u32,
+    /// Plain locals the fast preheader proved to hold a Number (one tag test
+    /// per admitted accumulator) and whose every write inside the loop body is
+    /// numeric-preserving with all leaves provable numeric in-loop, so the
+    /// value stays a Number by induction for the whole fast clone.
+    /// `is_numeric_expr` consults this for `LocalGet`, exactly like the
+    /// element-shape clone's `numeric_accumulator` — it is what lets
+    /// `s += arr[i]` lower to a native `fadd` instead of
+    /// `js_dynamic_string_or_number_add` on every iteration.
+    pub numeric_accumulators: Vec<u32>,
     pub side_exit_label: String,
     pub descriptor: String,
     /// Boxed bound passed to the runtime guard (`-1` requests live length).

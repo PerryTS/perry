@@ -111,6 +111,7 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
             was_unrolled: false,
         }],
         init: Vec::new(),
+        classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),
         exported_objects: Vec::new(),

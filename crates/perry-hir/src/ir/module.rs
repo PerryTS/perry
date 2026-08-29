@@ -65,6 +65,13 @@ pub struct Module {
     pub annexb_global_undefined_names: Vec<String>,
     /// Top-level statements to execute
     pub init: Vec<Stmt>,
+    /// Lexical bindings from multi-declarator classic `for` heads.
+    ///
+    /// HIR has one `For::init` statement slot, so these declarations are
+    /// emitted immediately before the loop. Codegen still needs to recognize
+    /// them as per-iteration bindings when deciding whether a closure capture
+    /// is a snapshot or a shared box.
+    pub classic_for_lexical_bindings: std::collections::HashSet<crate::types::LocalId>,
     /// Exported native module instances: (export_name, module_name, class_name)
     /// This tracks variables like `export const pool = new Pool(...)` from pg
     pub exported_native_instances: Vec<(String, String, String)>,
@@ -183,6 +190,7 @@ impl Module {
             references_global_this: false,
             annexb_global_undefined_names: Vec::new(),
             init: Vec::new(),
+            classic_for_lexical_bindings: std::collections::HashSet::new(),
             exported_native_instances: Vec::new(),
             exported_func_return_native_instances: Vec::new(),
             exported_objects: Vec::new(),

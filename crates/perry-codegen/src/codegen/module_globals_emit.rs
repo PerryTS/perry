@@ -413,7 +413,8 @@ pub(crate) fn emit_module_globals(
                 module_global_proven_types.insert(*id, proven);
             }
             if outlined_entry_globals.contains(id)
-                || referenced_from_fn.contains(id)
+                || (referenced_from_fn.contains(id)
+                    && !hir.classic_for_lexical_bindings.contains(id))
                 || exported_var_names.contains(name)
             {
                 // A `var` redeclared at module scope (`var x = …; … var x = …;`)
