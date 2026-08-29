@@ -343,14 +343,27 @@ pub extern "C" fn js_object_delete_field(
             (keys as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
         let dst_elements =
             (keys_cloned as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
-        // Copy keys [0..i) ++ [i+1..N) into [0..new_count).
-        for j in 0..i {
-            // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
-            *dst_elements.add(j) = *src_elements.add(j);
+        // Copy keys [0..i) ++ [i+1..N) into [0..new_count) as two contiguous
+        // runs. These were scalar element loops, which is O(resident keys) of
+        // load/store pairs on a path that already allocates and rebuilds a
+        // layout per delete — and `delete obj[k]` on a populated object is
+        // perry's worst object-model gap against node (~200x on
+        // `bench_populated_delete.ts`).
+        //
+        // GC_STORE_AUDIT(INIT): the destination is a freshly allocated, still
+        // UNPUBLISHED keys array whose layout is rebuilt before it is
+        // published — which is why the per-element writes carried no barrier
+        // either. Source and destination are distinct allocations, so the
+        // copies cannot overlap.
+        if i > 0 {
+            std::ptr::copy_nonoverlapping(src_elements, dst_elements, i);
         }
-        for j in i..new_count {
-            // GC_STORE_AUDIT(INIT): cloned keys array is unpublished; layout is rebuilt before publication.
-            *dst_elements.add(j) = *src_elements.add(j + 1);
+        if new_count > i {
+            std::ptr::copy_nonoverlapping(
+                src_elements.add(i + 1),
+                dst_elements.add(i),
+                new_count - i,
+            );
         }
         (*keys_cloned).length = new_count as u32;
         super::rebuild_array_layout_from_slots(keys_cloned);

@@ -119,7 +119,7 @@ pub(crate) fn test_seed_shape_entry(keys_id: usize) {
             keys_id,
             ShapeIndex {
                 indexed_len: 0,
-                slots: HashMap::new(),
+                slots: crate::fast_hash::new_ptr_hash_map(),
             },
         );
     let _ = shape_descriptor_ensure(keys_id as *const ArrayHeader, 0, 0)

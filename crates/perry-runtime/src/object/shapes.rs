@@ -30,7 +30,6 @@
 
 use crate::array::ArrayHeader;
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 pub(crate) struct ShapeIndex {
     /// Key count covered by `slots`. Longer live array ⟹ catch up
@@ -39,7 +38,14 @@ pub(crate) struct ShapeIndex {
     indexed_len: u32,
     /// FNV-1a content hash of key bytes → candidate slots (collisions
     /// resolved by the per-hit content validation).
-    slots: HashMap<u64, Vec<u32>>,
+    ///
+    /// Keyed with [`crate::fast_hash::PtrHasher`], not the std default: the
+    /// key is ALREADY a well-distributed FNV-1a hash, so running SipHash over
+    /// it again buys no distribution and costs real time. On
+    /// `bench_populated_delete.ts` — perry's worst object-model gap against
+    /// node — `hash_one::<&usize>` plus `sip::Hasher::write` were **14.7% of
+    /// self time**, second only to the lookup that performs them.
+    slots: crate::fast_hash::PtrHashMap<u64, Vec<u32>>,
 }
 
 /// Immutable facts named by one ShapeId.
@@ -1633,7 +1639,7 @@ pub(crate) unsafe fn shape_slot_lookup(
             }
             inner.indices.entry(keys_id).or_insert(ShapeIndex {
                 indexed_len: 0,
-                slots: HashMap::with_capacity(key_count as usize),
+                slots: crate::fast_hash::new_ptr_hash_map(),
             })
         }
     };
