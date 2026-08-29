@@ -1,0 +1,1 @@
+Gave module-global (and captured) array receivers the inline guarded index-store lane and both inline push tiers, and replaced the packed versioned loop's per-store runtime guard call with the range store's inline value check — isolated stores through globals 34.7 → 3.1 ns, `i < a.length` store loops 9.1 → 1.4 ns, global pushes to node parity.

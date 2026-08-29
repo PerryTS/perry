@@ -1147,26 +1147,63 @@ pub(crate) fn lower(
                                 &feedback_site_id,
                             )?;
                         } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {
-                            let blk = ctx.block();
-                            let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                            let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
-                            let new_handle = blk.call(
-                                I64,
-                                "js_typed_feedback_array_set_f64_extend",
-                                &[
-                                    (I64, &feedback_site_id),
-                                    (I64, &arr_handle),
-                                    (I32, &idx_i32),
-                                    (DOUBLE, &val_double),
-                                ],
-                            );
-                            let new_box = nanbox_pointer_inline(blk, &new_handle);
-                            let g_ref = format!("@{}", global_name);
-                            // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
-                            emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
-                            // The extending runtime setter barriers the actual
-                            // destination slot on every pointer-bearing store.
+                            // A module-global receiver took a bare extend call
+                            // on EVERY store — the only receiver shape with no
+                            // inline arm at all (params and slot locals get
+                            // `lower_index_set_fast`, property receivers get
+                            // the guarded diamond below): 9.1 vs 3.4 ns per
+                            // in-bounds store. A STRICTLY in-bounds store
+                            // changes no head and no length, so the global
+                            // root needs no re-store on the fast arm — the
+                            // head write-back below is slow-arm-only, exactly
+                            // like `lower_index_set_fast`'s slot write-back.
+                            let idx_i32 = {
+                                let blk = ctx.block();
+                                blk.fptosi(DOUBLE, &idx_double, I32)
+                            };
+                            let arr_box_c = arr_box.clone();
+                            let val_double_c = val_double.clone();
+                            let idx_i32_c = idx_i32.clone();
+                            let feedback_site_id_c = feedback_site_id.clone();
+                            let slow_store = move |ctx: &mut FnCtx<'_>| -> Result<()> {
+                                let blk = ctx.block();
+                                let arr_bits = blk.bitcast_double_to_i64(&arr_box_c);
+                                let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                                let new_handle = blk.call(
+                                    I64,
+                                    "js_typed_feedback_array_set_f64_extend",
+                                    &[
+                                        (I64, &feedback_site_id_c),
+                                        (I64, &arr_handle),
+                                        (I32, &idx_i32_c),
+                                        (DOUBLE, &val_double_c),
+                                    ],
+                                );
+                                let new_box = nanbox_pointer_inline(blk, &new_handle);
+                                let g_ref = format!("@{}", global_name);
+                                // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
+                                emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
+                                // The extending runtime setter barriers the actual
+                                // destination slot on every pointer-bearing store.
+                                Ok(())
+                            };
+                            if !super::typed_feedback_emission_enabled() {
+                                super::index_set_guarded::emit_guarded_inbounds_array_store(
+                                    ctx,
+                                    &arr_box,
+                                    &idx_i32,
+                                    &val_double,
+                                    "idxset.recv_global",
+                                    layout_note_needed,
+                                    write_barrier_needed,
+                                    value_is_numeric,
+                                    slow_store,
+                                )?;
+                            } else {
+                                // Feedback-emission builds keep the out-of-line
+                                // call so observation stays complete.
+                                slow_store(ctx)?;
+                            }
                         } else {
                             // Closure-captured array, or local without a
                             // stack slot (rare). Issue #637 followup / hono r2:
@@ -1183,22 +1220,51 @@ pub(crate) fn lower(
                             // writeback target here. Discard the returned
                             // pointer; downstream reads via clean_arr_ptr
                             // follow the forwarding chain to the new head.
-                            let blk = ctx.block();
-                            let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                            let idx_i32 = blk.fptosi(DOUBLE, &idx_double, I32);
-                            blk.call(
-                                I64,
-                                "js_typed_feedback_array_set_f64_extend",
-                                &[
-                                    (I64, &feedback_site_id),
-                                    (I64, &arr_handle),
-                                    (I32, &idx_i32),
-                                    (DOUBLE, &val_double),
-                                ],
-                            );
-                            // The extending runtime setter barriers the actual
-                            // destination slot on every pointer-bearing store.
+                            // Same inline-arm treatment as the global and
+                            // property receivers: strictly in-bounds needs no
+                            // writeback (forwarding covers the realloc case on
+                            // the slow arm, per the note above).
+                            let idx_i32 = {
+                                let blk = ctx.block();
+                                blk.fptosi(DOUBLE, &idx_double, I32)
+                            };
+                            let arr_box_c = arr_box.clone();
+                            let val_double_c = val_double.clone();
+                            let idx_i32_c = idx_i32.clone();
+                            let feedback_site_id_c = feedback_site_id.clone();
+                            let slow_store = move |ctx: &mut FnCtx<'_>| -> Result<()> {
+                                let blk = ctx.block();
+                                let arr_bits = blk.bitcast_double_to_i64(&arr_box_c);
+                                let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+                                blk.call(
+                                    I64,
+                                    "js_typed_feedback_array_set_f64_extend",
+                                    &[
+                                        (I64, &feedback_site_id_c),
+                                        (I64, &arr_handle),
+                                        (I32, &idx_i32_c),
+                                        (DOUBLE, &val_double_c),
+                                    ],
+                                );
+                                // The extending runtime setter barriers the actual
+                                // destination slot on every pointer-bearing store.
+                                Ok(())
+                            };
+                            if !super::typed_feedback_emission_enabled() {
+                                super::index_set_guarded::emit_guarded_inbounds_array_store(
+                                    ctx,
+                                    &arr_box,
+                                    &idx_i32,
+                                    &val_double,
+                                    "idxset.recv_captured",
+                                    layout_note_needed,
+                                    write_barrier_needed,
+                                    value_is_numeric,
+                                    slow_store,
+                                )?;
+                            } else {
+                                slow_store(ctx)?;
+                            }
                         }
                     } else {
                         let idx_i32 = {
