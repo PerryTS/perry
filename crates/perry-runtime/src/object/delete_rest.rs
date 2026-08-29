@@ -394,7 +394,18 @@ pub extern "C" fn js_object_delete_field(
             // written under. Reading by NAME here would invoke a getter and store its
             // result as a data property, silently collapsing accessors (Next's module
             // exports are `Object.defineProperty(..., {get})`).
-            let next = js_object_get_field(obj, (j + 1) as u32);
+            // `js_object_get_field` resolves the live-slot bound itself, and
+            // that bound is a shape-table probe — so shifting N values paid N
+            // descriptor lookups per delete. This loop already holds the same
+            // bound in `field_count`, and nothing in it changes the receiver's
+            // shape, so pass it in. `object_field_at_with_live` exists for
+            // exactly this (#8122) and is otherwise the identical body,
+            // including the inline-vs-overflow split.
+            let next = crate::object::field_get_set::object_field_at_with_live(
+                obj,
+                (j + 1) as u32,
+                field_count,
+            );
             // Inline write if target slot < alloc_limit, else overflow.
             if j < alloc_limit {
                 let fields_ptr =

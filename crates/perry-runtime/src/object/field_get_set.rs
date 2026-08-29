@@ -250,7 +250,7 @@ pub(crate) use accessors::{
     accessor_receiver_override_begin, accessor_receiver_override_end,
     array_prototype_property_value, builtin_reflection_accessor_read, class_getter_this,
     invoke_accessor_getter, invoke_accessor_setter, is_typed_array_prototype,
-    ordinary_object_prototype_property_value, own_data_field_by_name,
+    object_field_at_with_live, ordinary_object_prototype_property_value, own_data_field_by_name,
     primitive_builtin_prototype_property, primitive_object_prototype_accessor, string_index_value,
 };
 pub(crate) use class_object_props::class_object_prototype_value;
