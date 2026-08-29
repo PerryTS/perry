@@ -1849,79 +1849,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn reference_from_generated_function_keeps_materialized_aggregate() {
-        let mut module = aggregate_fixture(false);
-        module.functions.push(Function {
-            id: 99,
-            name: "__obj_method_computed".to_string(),
-            type_params: Vec::new(),
-            params: Vec::new(),
-            return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::LocalGet(1)))],
-            is_async: false,
-            is_generator: false,
-            is_strict: false,
-            is_exported: false,
-            captures: Vec::new(),
-            decorators: Vec::new(),
-            was_plain_async: false,
-            was_unrolled: false,
-        });
-
-        run(&mut module);
-
-        assert!(module.init.iter().any(|stmt| {
-            matches!(
-                stmt,
-                Stmt::Let {
-                    id: 1,
-                    init: Some(Expr::Array(_)),
-                    ..
-                }
-            )
-        }));
-    }
-
-    #[test]
-    fn module_local_reference_from_closure_body_keeps_materialized_aggregate() {
-        let mut module = aggregate_fixture(false);
-        *module.init.last_mut().expect("observer statement") = Stmt::Expr(Expr::Closure {
-            func_id: 99,
-            params: Vec::new(),
-            return_type: Type::Any,
-            body: vec![Stmt::Return(Some(property(
-                Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(0)),
-                },
-                "component",
-            )))],
-            captures: Vec::new(),
-            mutable_captures: Vec::new(),
-            captures_this: false,
-            captures_new_target: false,
-            enclosing_class: None,
-            is_arrow: true,
-            is_async: false,
-            is_generator: false,
-            is_strict: true,
-        });
-
-        run(&mut module);
-
-        assert!(module.init.iter().any(|stmt| {
-            matches!(
-                stmt,
-                Stmt::Let {
-                    id: 1,
-                    init: Some(Expr::Array(_)),
-                    ..
-                }
-            )
-        }));
-    }
-
     fn shape_new(name: &str, args: Vec<Expr>) -> Expr {
         Expr::New {
             class_name: name.to_string(),
@@ -2041,3 +1968,7 @@ mod tests {
 #[cfg(test)]
 #[path = "aggregate_scalar_export_tests.rs"]
 mod export_tests;
+
+#[cfg(test)]
+#[path = "aggregate_scalar_closure_tests.rs"]
+mod closure_tests;
