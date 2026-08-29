@@ -40,14 +40,17 @@ fn workspace_root() -> PathBuf {
         .expect("canonicalize workspace root")
 }
 
-fn target_debug_dir() -> PathBuf {
+/// Perry ships a `panic=abort` runtime. A debug `panic=unwind` archive plants
+/// abort-on-unwind guards in `extern "C"` helpers, so the raw JS exception in
+/// the extracted-method case cannot reach the generated catch landing pad.
+fn target_runtime_dir() -> PathBuf {
     let target = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace_root().join("target"));
     if cfg!(windows) {
-        target.join("x86_64-pc-windows-msvc").join("debug")
+        target.join("x86_64-pc-windows-msvc").join("release")
     } else {
-        target.join("debug")
+        target.join("release")
     }
 }
 
@@ -59,6 +62,9 @@ fn ensure_runtime_archive() {
         command
             .current_dir(workspace_root())
             .arg("build")
+            // `panic` is profile-level; this must match `target_runtime_dir()`
+            // and the runtime Perry actually ships.
+            .arg("--release")
             .arg("-p")
             .arg("perry-runtime-static")
             .arg("-p")
@@ -107,7 +113,7 @@ fn compile(dir: &Path, entry: &str, explain: bool) -> PathBuf {
         .arg("--trace")
         .arg("llvm")
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")
-        .env("PERRY_RUNTIME_DIR", target_debug_dir());
+        .env("PERRY_RUNTIME_DIR", target_runtime_dir());
     if explain {
         command.arg("--opt-report=json").arg("--explain-lowering");
     }
