@@ -537,6 +537,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // double round-trip. The double slot is still maintained (for
                 // closures or escape sites) but mem2reg + DSE will eliminate
                 // it when the i32 path covers every read.
+                // Unboxed accumulator redirect (packed fast clones): the
+                // live value sits in a plain F64 alloca; its bits are the
+                // nanbox, so the load IS the value.
+                if let Some(f64_slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
+                    return Ok(ctx.block().load(DOUBLE, &f64_slot));
+                }
                 if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
                     let i = ctx.block().load(I32, &i32_slot);
                     let v = if ctx.unsigned_i32_locals.contains(id) {
@@ -579,6 +585,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::LocalSet(id, value) => {
             super::invalidate_local_write_facts(ctx, *id);
             super::record_local_value_alias_for_write(ctx, *id, value.as_ref());
+            // Unboxed accumulator redirect (packed fast clones): the matcher
+            // proved every in-clone write numeric-preserving, so the store is
+            // a bare F64 alloca store — no shadow bookkeeping (the real slot
+            // holds a stale NUMBER for the clone's duration, consistent with
+            // whatever shadow state preceded the loop), no barrier (numbers
+            // carry no heap edge). Exits write the value back.
+            if let Some(f64_slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
+                let v = lower_expr(ctx, value)?;
+                ctx.block().store(DOUBLE, &v, &f64_slot);
+                return Ok(v);
+            }
             if let Some(v) = lower_pod_local_reassignment(ctx, *id, value)? {
                 super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
                 return Ok(v);

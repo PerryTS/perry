@@ -1188,6 +1188,7 @@ pub(super) fn compile_closure(
         class_field_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
+        numeric_accumulator_f64_slots: HashMap::new(),
         local_slot_reps: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
         // #7109 split the FIELD out of `repsel_context_allows_canonical_i32`;

@@ -1046,6 +1046,17 @@ pub(crate) struct FnCtx<'a> {
     /// on hot array-walking loops like `for (let i = 0; i < arr.length;
     /// i++) arr[i] = expr`.
     pub i32_counter_slots: std::collections::HashMap<u32, String>,
+    /// Unboxed reduce-accumulator redirect, active only while a packed fast
+    /// clone is being lowered: local id -> plain (addrspace-0) F64 alloca.
+    /// The clone's preheader tag-tested the local as a Number and moved its
+    /// value here; every in-clone read/write of the local goes through this
+    /// alloca (mem2reg promotes it to a register — the GC-root slot's
+    /// store-to-load-forward chain was the reduce rows' latency floor), and
+    /// every clone exit (fall-through and side-exit trampoline) writes the
+    /// value back to the real slot. A genuine double's bits ARE its nanbox,
+    /// so no conversion exists on either edge; the stale number left in the
+    /// root slot during the clone is harmless to a GC scan.
+    pub numeric_accumulator_f64_slots: std::collections::HashMap<u32, String>,
 
     /// Representation-selection Phase 1 (RFC `docs/representation-selection-
     /// rfc.md`): LocalId → selected slot representation. Absent = `Boxed`

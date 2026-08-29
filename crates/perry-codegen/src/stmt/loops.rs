@@ -534,17 +534,17 @@ fn emit_range_loop_accumulator_admission(
     body: &[Stmt],
     slow_pre_label: &str,
     block_prefix: &str,
-) -> Vec<u32> {
+) -> PackedAccumulatorScope {
     let mut counter_arrays = matched
         .arrays
         .iter()
         .filter(|access| access.counter.is_some())
         .map(|access| access.array_id);
     let Some(array_id) = counter_arrays.next() else {
-        return Vec::new();
+        return PackedAccumulatorScope::empty();
     };
     if counter_arrays.next().is_some() {
-        return Vec::new();
+        return PackedAccumulatorScope::empty();
     }
     emit_packed_numeric_accumulator_admission(
         ctx,
@@ -556,6 +556,56 @@ fn emit_range_loop_accumulator_admission(
     )
 }
 
+/// The live state of a packed clone's accumulator admission: the admitted
+/// ids (they ride the scope's fact so `is_numeric_expr` sees them), the
+/// unboxed subset (id, F64 alloca, real slot) whose reads/writes redirect
+/// through `ctx.numeric_accumulator_f64_slots`, and the side-exit trampoline
+/// that writes the live values back before entering the slow clone.
+struct PackedAccumulatorScope {
+    accumulators: Vec<u32>,
+    unboxed: Vec<(u32, String, String)>,
+    side_exit_override: Option<String>,
+}
+
+impl PackedAccumulatorScope {
+    fn empty() -> Self {
+        Self {
+            accumulators: Vec::new(),
+            unboxed: Vec::new(),
+            side_exit_override: None,
+        }
+    }
+
+    /// The label packed facts should carry as their side exit: the
+    /// write-back trampoline when unboxed accumulators exist, else the slow
+    /// preheader itself.
+    fn fact_side_exit(&self, slow_pre_label: &str) -> String {
+        self.side_exit_override
+            .clone()
+            .unwrap_or_else(|| slow_pre_label.to_string())
+    }
+
+    /// Fall-through exit: write the live values back to the real slots and
+    /// end the redirect scope. Must run right after the fast clone's
+    /// lowering, BEFORE the slow clone is lowered (the slow clone reads and
+    /// writes the real slots).
+    fn finish(self, ctx: &mut FnCtx<'_>) {
+        let emit_writeback = !ctx.block().is_terminated();
+        for (id, alloca, real_slot) in &self.unboxed {
+            if emit_writeback {
+                let value = ctx.block().load(DOUBLE, alloca);
+                // A genuine double's bits are its nanbox; numbers carry no
+                // heap edge, so no barrier. Leaving the shadow state
+                // conservative is always safe — shadow slots only license
+                // SKIPPING a root scan, and scanning a number nanbox is
+                // harmless.
+                ctx.block().store(DOUBLE, &value, real_slot);
+            }
+            ctx.numeric_accumulator_f64_slots.remove(id);
+        }
+    }
+}
+
 fn emit_packed_numeric_accumulator_admission(
     ctx: &mut FnCtx<'_>,
     body: &[Stmt],
@@ -563,24 +613,35 @@ fn emit_packed_numeric_accumulator_admission(
     counter_id: u32,
     slow_pre_label: &str,
     block_prefix: &str,
-) -> Vec<u32> {
+) -> PackedAccumulatorScope {
     let accumulators = super::stable_packed_accumulator::collect_numeric_accumulators(
         ctx, body, array_id, counter_id,
     );
     if accumulators.is_empty() {
-        return accumulators;
+        return PackedAccumulatorScope::empty();
     }
+    let mut loaded: Vec<(u32, String, String)> = Vec::new();
     let mut all_numbers: Option<String> = None;
     for id in &accumulators {
         let Some(slot) = ctx.locals.get(id).cloned() else {
-            return Vec::new();
+            return PackedAccumulatorScope::empty();
         };
         let value = ctx.block().load(DOUBLE, &slot);
+        // `emit_js_value_is_number` IS the strict genuine-double window:
+        // SHORT_STRING (0x7FF9) .. STRING (0x7FFF) is the ENTIRE boxed tag
+        // band (INT32/POINTER/BIGINT/singletons included), so
+        // `tag < SHORT_STRING || tag > STRING` accepts exactly non-boxed
+        // doubles. That strictness is required here — the fact these ids
+        // ride lets consumers use bare fadd/fcmp on the value, and an
+        // INT32-boxed number's bits are not a valid double; it takes the
+        // slow clone instead. Shared with the stable clone's admission so
+        // the two cannot drift.
         let is_number = emit_js_value_is_number(ctx, &value);
         all_numbers = Some(match all_numbers {
             Some(prev) => ctx.block().and(I1, &prev, &is_number),
             None => is_number,
         });
+        loaded.push((*id, slot, value));
     }
     let all_numbers = all_numbers.expect("at least one accumulator");
     let acc_ok_idx = ctx.new_block(&format!("{block_prefix}.acc.ok"));
@@ -591,7 +652,52 @@ fn emit_packed_numeric_accumulator_admission(
     ctx.block()
         .cond_br(&all_numbers, &acc_ok_label, slow_pre_label);
     ctx.current_block = acc_ok_idx;
-    accumulators
+
+    // Unbox LocalSet-only accumulators into plain F64 allocas (mem2reg
+    // promotes them to registers — the GC-root slot's per-iteration
+    // store-to-load-forward chain was the reduce rows' latency floor).
+    // Update-written accumulators (`c++`) keep the slot: the Update lowering
+    // does not consult the redirect, and the int-slot machinery already
+    // serves counters well.
+    let mut writes = std::collections::BTreeMap::new();
+    super::stable_packed_accumulator::collect_local_writes(body, &mut writes);
+    let mut unboxed: Vec<(u32, String, String)> = Vec::new();
+    for (id, slot, value) in loaded {
+        let localset_only = writes
+            .get(&id)
+            .is_some_and(|ws| ws.iter().all(|w| w.is_some()));
+        if !localset_only {
+            continue;
+        }
+        let alloca = ctx.func.alloca_entry(DOUBLE);
+        ctx.block().store(DOUBLE, &value, &alloca);
+        ctx.numeric_accumulator_f64_slots
+            .insert(id, alloca.clone());
+        unboxed.push((id, alloca, slot));
+    }
+    let side_exit_override = if unboxed.is_empty() {
+        None
+    } else {
+        // Side-exit trampoline: any mid-iteration exit (a hole-checked load,
+        // a masked store's value check) lands here, writes the live values
+        // back, and only then enters the slow clone — which re-executes the
+        // current iteration against correct slot state.
+        let tramp_idx = ctx.new_block(&format!("{block_prefix}.acc.writeback_exit"));
+        let saved = ctx.current_block;
+        ctx.current_block = tramp_idx;
+        for (_, alloca, real_slot) in &unboxed {
+            let value = ctx.block().load(DOUBLE, alloca);
+            ctx.block().store(DOUBLE, &value, real_slot);
+        }
+        ctx.block().br(slow_pre_label);
+        ctx.current_block = saved;
+        Some(ctx.block_label(tramp_idx))
+    };
+    PackedAccumulatorScope {
+        accumulators,
+        unboxed,
+        side_exit_override,
+    }
 }
 
 fn lower_packed_f64_versioned_for(
@@ -662,7 +768,7 @@ fn lower_packed_f64_versioned_for(
     let packed_scope_id = ctx.next_loop_proof_scope_id();
 
     ctx.current_block = fast_pre_idx;
-    let numeric_accumulators = emit_packed_numeric_accumulator_admission(
+    let acc_scope = emit_packed_numeric_accumulator_admission(
         ctx,
         body,
         matched.array_id,
@@ -675,11 +781,11 @@ fn lower_packed_f64_versioned_for(
         array_local_id: matched.array_id,
         scope_id: packed_scope_id,
         guard_id: guard_id.to_string(),
-        store_side_exit_label: slow_pre_label.clone(),
+        store_side_exit_label: acc_scope.fact_side_exit(&slow_pre_label),
         array_kind: matched.array_kind,
         allow_holes: false,
         window_validated: false,
-        numeric_accumulators,
+        numeric_accumulators: acc_scope.accumulators.clone(),
     });
     // The guard just proved a live, non-forwarded plain array, and the
     // matched body cannot change its length (in-bounds stores only, no
@@ -708,6 +814,7 @@ fn lower_packed_f64_versioned_for(
     )?;
     ctx.packed_f64_loop_facts
         .retain(|fact| fact.scope_id != packed_scope_id);
+    acc_scope.finish(ctx);
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }
@@ -2119,22 +2226,23 @@ fn lower_packed_f64_range_versioned_for(
 
             ctx.current_block = fast_i32_pre_idx;
             let scope_i32 = ctx.next_loop_proof_scope_id();
-            let range_numeric_accumulators = emit_range_loop_accumulator_admission(
+            let acc_scope = emit_range_loop_accumulator_admission(
                 ctx,
                 &matched,
                 body,
                 &slow_pre_label,
                 "packed_f64_range.fast_i32",
             );
+            let fact_side_exit = acc_scope.fact_side_exit(&slow_pre_label);
             push_packed_f64_range_facts(
                 ctx,
                 &matched,
                 scope_i32,
                 "packed_f64_range_loop_guard_dense_i32",
-                &slow_pre_label,
+                &fact_side_exit,
                 true,
                 false,
-                &range_numeric_accumulators,
+                &acc_scope.accumulators,
             );
             lower_for_after_init_with_i32_bound(
                 ctx,
@@ -2149,6 +2257,7 @@ fn lower_packed_f64_range_versioned_for(
                 .retain(|fact| fact.scope_id != scope_i32);
             ctx.masked_window_array_facts
                 .retain(|fact| fact.scope_id != scope_i32);
+            acc_scope.finish(ctx);
             if !ctx.block().is_terminated() {
                 ctx.block().br(&merge_label);
             }
@@ -2156,22 +2265,23 @@ fn lower_packed_f64_range_versioned_for(
 
         ctx.current_block = fast_pre_idx;
         let scope_f64 = ctx.next_loop_proof_scope_id();
-        let range_numeric_accumulators = emit_range_loop_accumulator_admission(
+        let acc_scope = emit_range_loop_accumulator_admission(
             ctx,
             &matched,
             body,
             &slow_pre_label,
             "packed_f64_range.fast",
         );
+        let fact_side_exit = acc_scope.fact_side_exit(&slow_pre_label);
         push_packed_f64_range_facts(
             ctx,
             &matched,
             scope_f64,
             "packed_f64_range_loop_guard_dense",
-            &slow_pre_label,
+            &fact_side_exit,
             false,
             has_stores,
-            &range_numeric_accumulators,
+            &acc_scope.accumulators,
         );
         lower_for_after_init_with_i32_bound(
             ctx,
@@ -2186,6 +2296,7 @@ fn lower_packed_f64_range_versioned_for(
             .retain(|fact| fact.scope_id != scope_f64);
         ctx.masked_window_array_facts
             .retain(|fact| fact.scope_id != scope_f64);
+        acc_scope.finish(ctx);
         if !ctx.block().is_terminated() {
             ctx.block().br(&merge_label);
         }
@@ -2203,22 +2314,23 @@ fn lower_packed_f64_range_versioned_for(
         let packed_scope_id = ctx.next_loop_proof_scope_id();
 
         ctx.current_block = fast_pre_idx;
-        let range_numeric_accumulators = emit_range_loop_accumulator_admission(
+        let acc_scope = emit_range_loop_accumulator_admission(
             ctx,
             &matched,
             body,
             &slow_pre_label,
             "packed_f64_range.classic",
         );
+        let fact_side_exit = acc_scope.fact_side_exit(&slow_pre_label);
         push_packed_f64_range_facts(
             ctx,
             &matched,
             packed_scope_id,
             "packed_f64_range_loop_guard",
-            &slow_pre_label,
+            &fact_side_exit,
             false,
             false,
-            &range_numeric_accumulators,
+            &acc_scope.accumulators,
         );
         lower_for_after_init_with_i32_bound(
             ctx,
@@ -2233,6 +2345,7 @@ fn lower_packed_f64_range_versioned_for(
             .retain(|fact| fact.scope_id != packed_scope_id);
         ctx.masked_window_array_facts
             .retain(|fact| fact.scope_id != packed_scope_id);
+        acc_scope.finish(ctx);
         if !ctx.block().is_terminated() {
             ctx.block().br(&merge_label);
         }

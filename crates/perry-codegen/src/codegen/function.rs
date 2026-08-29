@@ -1147,6 +1147,7 @@ pub(super) fn compile_function(
             .map(|id| (*id, crate::expr::SlotRep::I32))
             .collect(),
         i32_counter_slots: spec_i32_param_slots,
+        numeric_accumulator_f64_slots: HashMap::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
         // #7109 split the FIELD out of `repsel_context_allows_canonical_i32`;
         // #7128 split the VALUE, which is what the knob actually reads. Until

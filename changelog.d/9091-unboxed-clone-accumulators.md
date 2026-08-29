@@ -1,0 +1,1 @@
+Reduce accumulators in packed fast clones now live in register-promotable unboxed F64 slots for the clone's duration (write-back at every exit) — `s += a[i]` reduce loops reach node parity or better (literal-bound 0.98 ns/element vs Node's 1.01).

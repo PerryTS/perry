@@ -86,7 +86,7 @@ fn accumulator_rhs_is_numeric(
 /// Collect every write (`LocalSet` / `Update`) per local in `body`, without
 /// descending into nested closures (their writes go through boxes, and a
 /// boxed local is excluded from admission anyway).
-fn collect_local_writes<'a>(
+pub(super) fn collect_local_writes<'a>(
     stmts: &'a [Stmt],
     out: &mut std::collections::BTreeMap<u32, Vec<Option<&'a Expr>>>,
 ) {
