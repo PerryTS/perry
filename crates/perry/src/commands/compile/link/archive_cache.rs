@@ -314,6 +314,7 @@ fn hash_field(hasher: &mut Sha256, name: &str, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env_lock::env_lock;
 
     fn key(root: &Path, features: &[String], archives: &[PathBuf], target: &str) -> String {
         let runtime = root.join("runtime.a");
@@ -400,6 +401,10 @@ mod tests {
 
     #[test]
     fn preparation_safety_survives_fallback_and_cache_hit() {
+        // Cache keys include discovered archive tools, so every lookup reads
+        // process-global environment such as PATH. Keep sibling tests from
+        // changing that environment between this test's miss, store, and hit.
+        let _env = env_lock();
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         let runtime = root.join("runtime.a");
