@@ -5,7 +5,7 @@ static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 struct GcTestGuard {
     frame: u64,
-    previous_force_evacuation: Option<std::ffi::OsString>,
+    previous_force_evacuation: i32,
     _lock: MutexGuard<'static, ()>,
 }
 
@@ -15,15 +15,9 @@ impl GcTestGuard {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Rewriting is observable only when the collector moves the root.
-        // Unit-test heaps are normally too quiet for the evacuation policy to
-        // choose that path, so make the test's collection deterministic. The
-        // lock serializes this crate's GC tests, and Drop restores any value
-        // supplied by the test runner.
-        let previous_force_evacuation = std::env::var_os("PERRY_GC_FORCE_EVACUATE");
-        // SAFETY: GC_TEST_LOCK is held until this guard is dropped, so no
-        // other GC test in this binary observes the temporary environment
-        // value.
-        unsafe { std::env::set_var("PERRY_GC_FORCE_EVACUATE", "1") };
+        // Keep that test policy thread-local so unrelated test threads do not
+        // observe a process-wide environment mutation.
+        let previous_force_evacuation = perry_runtime::gc::js_gc_force_evacuation_test_override(1);
         perry_runtime::gc::js_gc_write_barriers_emitted(1);
         let frame = perry_runtime::gc::js_shadow_frame_push(1);
         Self {
@@ -38,14 +32,7 @@ impl Drop for GcTestGuard {
     fn drop(&mut self) {
         perry_runtime::gc::js_shadow_frame_pop(self.frame);
         perry_runtime::gc::js_gc_write_barriers_emitted(0);
-        // SAFETY: GC_TEST_LOCK is still held here and is released only after
-        // this Drop implementation returns.
-        unsafe {
-            match self.previous_force_evacuation.take() {
-                Some(value) => std::env::set_var("PERRY_GC_FORCE_EVACUATE", value),
-                None => std::env::remove_var("PERRY_GC_FORCE_EVACUATE"),
-            }
-        }
+        perry_runtime::gc::js_gc_force_evacuation_test_override(self.previous_force_evacuation);
     }
 }
 
