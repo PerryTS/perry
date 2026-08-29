@@ -159,14 +159,32 @@ pub(crate) unsafe fn try_read_by_content_bits(
     }
     let token = receiver_shape_token(obj)?;
     let slot = read_stub_probe(token, key_bits)?;
-    let limit = std::cmp::max(
-        crate::object::object_live_slot_count(obj),
-        crate::object::INLINE_SLOT_FLOOR as u32,
-    );
-    if slot < limit {
-        return Some(f64::from_bits(
-            crate::object::js_object_get_field(obj, slot).bits(),
-        ));
+    read_slot_by_tag(obj, addr, slot)
+}
+
+/// Read the value a bit-tagged cached slot names. The inline/overflow verdict
+/// was decided at prime time (`IC_SLOT_OVERFLOW_BIT`, see `proxy::put_value`)
+/// under the exact shape id the caller's token match just re-proved, so no
+/// bound is fetched here — the shape table only ever inserts descriptors, so
+/// the verdict cannot have changed under the same id.
+#[inline(always)]
+pub(crate) unsafe fn read_slot_by_tag(
+    obj: *const ObjectHeader,
+    addr: usize,
+    slot: u32,
+) -> Option<f64> {
+    use crate::proxy::IC_SLOT_OVERFLOW_BIT;
+    if slot & IC_SLOT_OVERFLOW_BIT != 0 {
+        return crate::object::overflow_get(addr, (slot & !IC_SLOT_OVERFLOW_BIT) as usize)
+            .map(f64::from_bits);
     }
-    crate::object::overflow_get(addr, slot as usize).map(f64::from_bits)
+    let fields_ptr =
+        (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const crate::JSValue;
+    let val = *fields_ptr.add(slot as usize);
+    // Same null-POINTER_TAG guard as `js_object_get_field`'s inline half: the
+    // pattern is never a legitimate stored value.
+    if val.bits() == 0x7FFD_0000_0000_0000 {
+        return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+    }
+    Some(f64::from_bits(val.bits()))
 }
