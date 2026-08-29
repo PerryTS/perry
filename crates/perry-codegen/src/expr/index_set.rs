@@ -800,6 +800,39 @@ pub(crate) fn lower(
                 )? {
                     return Ok(value);
                 }
+                // Masked-window dense store: the dense range guard proved
+                // the whole static index window in bounds and hole-free on a
+                // plain raw-f64 array at loop entry, the matcher admitted
+                // this store's RHS as a provably genuine double, and the
+                // fact's scope allows stores — so the store is a bare
+                // in-window `store double`, no guard, no value check, no
+                // barrier. Mirrors the masked-window read lane in
+                // `index_get.rs`.
+                if let Expr::LocalGet(arr_id) = object.as_ref() {
+                    if let Some(fact) = super::masked_window::masked_window_store_fact_for_index(
+                        ctx,
+                        *arr_id,
+                        index.as_ref(),
+                    ) {
+                        if super::masked_window::masked_store_rhs_is_genuine_f64(
+                            ctx,
+                            value.as_ref(),
+                        ) {
+                            let arr_box = lower_expr(ctx, object.as_ref())?;
+                            let idx_i32 = super::lower_expr_as_i32(ctx, index.as_ref())?;
+                            let val_double = lower_expr(ctx, value.as_ref())?;
+                            super::masked_window::lower_masked_window_index_set(
+                                ctx,
+                                *arr_id,
+                                &arr_box,
+                                &idx_i32,
+                                &val_double,
+                                &fact,
+                            );
+                            return Ok(val_double);
+                        }
+                    }
+                }
                 // Bounded-index fast-fast path: when the surrounding
                 // for-loop has registered `(counter_id, arr_id)` as a
                 // bounded pair (via `lower_for`'s

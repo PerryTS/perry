@@ -821,7 +821,28 @@ fn match_packed_f64_range_loop(
         // A wrong static hint costs one failed guard → slow loop, never
         // correctness.
         if access.written {
-            if !packed_loop_array_binding_is_eligible(ctx, arr_id) {
+            if dense {
+                // Dense written arrays take the READ rule (addressable, not
+                // scalar-replaced) rather than the full fact-graph
+                // eligibility: the same `mark_unknown_call_escape` blanket
+                // hazard the comment above describes fires for the
+                // `new Array(n).fill(0)` CONSTRUCTION calls of a locally
+                // built buffer, which would keep every such array off the
+                // store tier forever. The dense guard re-validates the ACTUAL
+                // runtime array at loop entry — plain shape, raw-f64
+                // packedness, integrity flags, the whole hole-free window —
+                // and the matched body admits no call/closure/await, so no
+                // alias can reshape it mid-loop; a store the matcher admitted
+                // writes a genuine double into a validated slot, preserving
+                // every guarded property. A wrong static hint costs one
+                // failed guard -> slow loop, never correctness. Classic
+                // (hole-tolerant) written arrays keep the full eligibility.
+                if !packed_loop_array_binding_storage_is_addressable(ctx, arr_id)
+                    || ctx.scalar_replaced_arrays.contains_key(&arr_id)
+                {
+                    return None;
+                }
+            } else if !packed_loop_array_binding_is_eligible(ctx, arr_id) {
                 return None;
             }
         } else if !packed_loop_array_binding_storage_is_addressable(ctx, arr_id)
@@ -851,8 +872,21 @@ fn match_packed_f64_range_loop(
             return None;
         }
         if access.written {
-            if !local_allows_packed_f64_loop_store(ctx, arr_id)
-                || !ctx
+            // Dense written arrays need only the declared number[]-ness: the
+            // static fact set `packed_f64_eligible_for_guarded_store` consults
+            // (PackedF64 kind, noalias, no materialization hazard) exists to
+            // justify guard-FREE static claims, and its hazard bit trips on
+            // the very construction calls (`new Array(n).fill(0)`) that build
+            // these buffers. The dense guard re-validates the ACTUAL array —
+            // shape, raw-f64 packedness, integrity, the hole-free window — at
+            // every loop entry, so those static facts are not load-bearing
+            // here; a wrong hint is one failed guard -> slow loop. Classic
+            // (side-exiting, hole-tolerant) written arrays keep the full set.
+            if !local_allows_packed_f64_loop_store(ctx, arr_id) {
+                return None;
+            }
+            if !dense
+                && !ctx
                     .native_facts
                     .packed_f64_eligible_for_guarded_store(arr_id)
             {
@@ -899,6 +933,21 @@ fn record_packed_f64_range_access(
         Some((min, max)) => (min.min(offset), max.max(offset)),
     });
     entry.written |= written;
+}
+
+/// Record a masked STORE's static window: same merge as the read recorder,
+/// but the access is marked written so the matcher tail applies the written
+/// eligibility set and the lowering knows the window is mutated.
+fn record_packed_f64_range_static_store(
+    accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
+    array_id: u32,
+    lo: i64,
+    hi: i64,
+) {
+    record_packed_f64_range_static_access(accesses, array_id, lo, hi);
+    if let Some(entry) = accesses.get_mut(&array_id) {
+        entry.written = true;
+    }
 }
 
 pub(super) fn record_packed_f64_range_static_access(
@@ -1112,6 +1161,37 @@ fn packed_f64_range_loop_dense_body_collect(
                 written.insert(*id);
             }
             Stmt::Expr(expr) => {
+                // Masked STORE: `a[e & K] = <RHS>` where the RHS provably
+                // materializes a genuine (unboxed) double — dense mode has no
+                // side exits, so a per-store value check is impossible and the
+                // proof must be static. The index and RHS walks also record
+                // any nested in-window reads, so the entry guard validates
+                // every window the statement touches.
+                if let Some((object, index, value)) = match_indexed_store_shape(expr) {
+                    let perry_hir::Expr::LocalGet(arr_id) = object else {
+                        return false;
+                    };
+                    if !masked_window_expression_is_non_collecting(ctx, index)
+                        || !masked_window_expression_is_non_collecting(ctx, value)
+                        || !dense_masked_store_rhs_is_admissible(ctx, value, counter_id, accesses)
+                        || !packed_f64_range_loop_pure_expr_collect(
+                            index, counter_id, true, accesses,
+                        )
+                        || !packed_f64_range_loop_pure_expr_collect(
+                            value, counter_id, true, accesses,
+                        )
+                    {
+                        return false;
+                    }
+                    let Some((lo, hi)) = crate::collectors::static_index_window(index) else {
+                        return false;
+                    };
+                    if lo < 0 || hi >= i64::from(i32::MAX) {
+                        return false;
+                    }
+                    record_packed_f64_range_static_store(accesses, *arr_id, lo, hi);
+                    continue;
+                }
                 if !masked_window_expression_is_non_collecting(ctx, expr)
                     || !packed_f64_range_loop_pure_expr_collect(expr, counter_id, true, accesses)
                 {
@@ -1121,9 +1201,34 @@ fn packed_f64_range_loop_dense_body_collect(
             _ => return false,
         }
     }
-    !accesses.is_empty()
-        && accesses.values().all(|access| !access.written)
-        && accesses.keys().all(|arr_id| !written.contains(arr_id))
+    // Written arrays are allowed (masked stores above); a scalar `let`/set
+    // shadowing a tracked array id still rejects.
+    !accesses.is_empty() && accesses.keys().all(|arr_id| !written.contains(arr_id))
+}
+
+/// Match-time twin of `masked_window::masked_store_rhs_is_genuine_f64`: at
+/// match time no facts are pushed yet, so an in-window read qualifies when its
+/// index has a static window over a tracked LocalGet array (the collector
+/// records it, so the entry guard will validate that window too), and the
+/// counter local qualifies because the range matcher requires (or creates) its
+/// shared i32 shadow, making every fast-clone read `sitofp i32 -> double`.
+fn dense_masked_store_rhs_is_admissible(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+    counter_id: u32,
+    _accesses: &std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
+) -> bool {
+    use perry_hir::Expr;
+    match expr {
+        Expr::Number(_) | Expr::Integer(_) => true,
+        Expr::LocalGet(id) => *id == counter_id || ctx.i32_counter_slots.contains_key(id),
+        Expr::IndexGet { object, index } => {
+            matches!(object.as_ref(), Expr::LocalGet(_))
+                && crate::collectors::static_index_window(index)
+                    .is_some_and(|(lo, hi)| lo >= 0 && hi < i64::from(i32::MAX))
+        }
+        _ => false,
+    }
 }
 
 /// Prove that an expression lowered while masked-window facts are active cannot
@@ -1469,6 +1574,7 @@ fn push_packed_f64_range_facts(
     guard_id: &str,
     slow_pre_label: &str,
     values_i32: bool,
+    allow_masked_stores: bool,
 ) {
     for access in &matched.arrays {
         if access.counter.is_some() {
@@ -1496,6 +1602,7 @@ fn push_packed_f64_range_facts(
                     max_idx_exclusive: hi + 1,
                     values_i32,
                     elem: crate::expr::MaskedWindowElem::PlainF64,
+                    allows_stores: allow_masked_stores,
                 });
         }
     }
@@ -1597,6 +1704,7 @@ fn lower_masked_window_ta_tier(
                 max_idx_exclusive: hi + 1,
                 values_i32,
                 elem,
+                allows_stores: false,
             });
     }
     lower_for_after_init_with_i32_bound(
@@ -1743,10 +1851,15 @@ fn lower_packed_f64_range_versioned_for(
         // whose runtime guards reject typed arrays. Counter-offset accesses
         // keep assuming plain raw-f64 storage, so the TA tiers require every
         // access to carry a static window.
-        let ta_tiers_apply = matched
-            .arrays
-            .iter()
-            .all(|access| access.counter.is_none() && access.stat.is_some())
+        let has_stores = matched.arrays.iter().any(|access| access.written);
+        // The TA tiers' fast copies hoist a data pointer and serve READS only;
+        // a store-admitting body would fall to a generic per-store call inside
+        // the "call-free" copy. Store loops skip straight to the plain tiers.
+        let ta_tiers_apply = !has_stores
+            && matched
+                .arrays
+                .iter()
+                .all(|access| access.counter.is_none() && access.stat.is_some())
             && matched
                 .arrays
                 .iter()
@@ -1840,57 +1953,75 @@ fn lower_packed_f64_range_versioned_for(
         // fast copy materializes loads with a bare exact `fptosi` (bit-mixing
         // chains stay in integer registers); the f64 tier keeps raw-double
         // loads for float lookup tables. Either failing falls through.
-        let try_f64_idx = ctx.new_block("packed_f64_range.dense.try_f64");
-        let try_f64_label = ctx.block_label(try_f64_idx);
-        let fast_i32_pre_idx = ctx.new_block("packed_f64_range.loop.fast_i32.preheader");
-        let fast_i32_pre_label = ctx.block_label(fast_i32_pre_idx);
+        //
+        // A store-admitting dense loop uses ONLY the f64 tier: a store of a
+        // genuine double could break the i32 tier's all-slots-i32 loading
+        // proof mid-loop, and the f64 tier's raw loads/stores need no such
+        // claim.
+        if has_stores {
+            let ok_f64 = emit_packed_f64_range_guards(
+                ctx,
+                &matched,
+                &bound_i32,
+                "js_typed_feedback_packed_f64_range_loop_guard_dense",
+                "packed_f64_range_loop_guard_dense",
+            )?;
+            ctx.block()
+                .cond_br(&ok_f64, &fast_pre_label, &slow_pre_label);
+        } else {
+            let try_f64_idx = ctx.new_block("packed_f64_range.dense.try_f64");
+            let try_f64_label = ctx.block_label(try_f64_idx);
+            let fast_i32_pre_idx = ctx.new_block("packed_f64_range.loop.fast_i32.preheader");
+            let fast_i32_pre_label = ctx.block_label(fast_i32_pre_idx);
 
-        let ok_i32 = emit_packed_f64_range_guards(
-            ctx,
-            &matched,
-            &bound_i32,
-            "js_typed_feedback_packed_f64_range_loop_guard_dense_i32",
-            "packed_f64_range_loop_guard_dense_i32",
-        )?;
-        ctx.block()
-            .cond_br(&ok_i32, &fast_i32_pre_label, &try_f64_label);
+            let ok_i32 = emit_packed_f64_range_guards(
+                ctx,
+                &matched,
+                &bound_i32,
+                "js_typed_feedback_packed_f64_range_loop_guard_dense_i32",
+                "packed_f64_range_loop_guard_dense_i32",
+            )?;
+            ctx.block()
+                .cond_br(&ok_i32, &fast_i32_pre_label, &try_f64_label);
 
-        ctx.current_block = try_f64_idx;
-        let ok_f64 = emit_packed_f64_range_guards(
-            ctx,
-            &matched,
-            &bound_i32,
-            "js_typed_feedback_packed_f64_range_loop_guard_dense",
-            "packed_f64_range_loop_guard_dense",
-        )?;
-        ctx.block()
-            .cond_br(&ok_f64, &fast_pre_label, &slow_pre_label);
+            ctx.current_block = try_f64_idx;
+            let ok_f64 = emit_packed_f64_range_guards(
+                ctx,
+                &matched,
+                &bound_i32,
+                "js_typed_feedback_packed_f64_range_loop_guard_dense",
+                "packed_f64_range_loop_guard_dense",
+            )?;
+            ctx.block()
+                .cond_br(&ok_f64, &fast_pre_label, &slow_pre_label);
 
-        ctx.current_block = fast_i32_pre_idx;
-        let scope_i32 = ctx.next_loop_proof_scope_id();
-        push_packed_f64_range_facts(
-            ctx,
-            &matched,
-            scope_i32,
-            "packed_f64_range_loop_guard_dense_i32",
-            &slow_pre_label,
-            true,
-        );
-        lower_for_after_init_with_i32_bound(
-            ctx,
-            init,
-            condition,
-            update,
-            body,
-            "for.packed_f64_range_fast_i32",
-            Some((matched.counter_id, bound_i32.clone())),
-        )?;
-        ctx.packed_f64_loop_facts
-            .retain(|fact| fact.scope_id != scope_i32);
-        ctx.masked_window_array_facts
-            .retain(|fact| fact.scope_id != scope_i32);
-        if !ctx.block().is_terminated() {
-            ctx.block().br(&merge_label);
+            ctx.current_block = fast_i32_pre_idx;
+            let scope_i32 = ctx.next_loop_proof_scope_id();
+            push_packed_f64_range_facts(
+                ctx,
+                &matched,
+                scope_i32,
+                "packed_f64_range_loop_guard_dense_i32",
+                &slow_pre_label,
+                true,
+                false,
+            );
+            lower_for_after_init_with_i32_bound(
+                ctx,
+                init,
+                condition,
+                update,
+                body,
+                "for.packed_f64_range_fast_i32",
+                Some((matched.counter_id, bound_i32.clone())),
+            )?;
+            ctx.packed_f64_loop_facts
+                .retain(|fact| fact.scope_id != scope_i32);
+            ctx.masked_window_array_facts
+                .retain(|fact| fact.scope_id != scope_i32);
+            if !ctx.block().is_terminated() {
+                ctx.block().br(&merge_label);
+            }
         }
 
         ctx.current_block = fast_pre_idx;
@@ -1902,6 +2033,7 @@ fn lower_packed_f64_range_versioned_for(
             "packed_f64_range_loop_guard_dense",
             &slow_pre_label,
             false,
+            has_stores,
         );
         lower_for_after_init_with_i32_bound(
             ctx,
@@ -1939,6 +2071,7 @@ fn lower_packed_f64_range_versioned_for(
             packed_scope_id,
             "packed_f64_range_loop_guard",
             &slow_pre_label,
+            false,
             false,
         );
         lower_for_after_init_with_i32_bound(
