@@ -66,6 +66,7 @@ use grammar::{
 };
 #[cfg(feature = "regex-engine")]
 pub(crate) use match_all::dispatch_regexp_string_iterator_method_builtin;
+#[cfg(feature = "regex-engine")]
 pub use match_all::{
     dispatch_regexp_string_iterator_method, js_string_match_all, js_string_match_all_value,
 };
