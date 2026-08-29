@@ -116,3 +116,57 @@ pub(crate) unsafe fn receiver_shape_token(obj: *const ObjectHeader) -> Option<u6
     }
     Some(crate::object::shapes::PIC_ID_TOKEN_BIT | stamp as u64)
 }
+
+/// Resolve an own data slot straight from an SSO key's CONTENT bits, without
+/// building a `StringHeader` for it at all.
+///
+/// The computed-read lowering hands the key to `js_get_string_pointer_unified`
+/// before calling the by-name entry, because that entry's signature wants a
+/// `*const StringHeader`. For an SSO key that means materialising inline bytes
+/// onto the heap — an intern hash and table probe — on EVERY read, purely to
+/// satisfy a pointer signature. On the combined overwrite loop
+/// `intern_dispatch_bytes` is 5.5% of self time, all of it that.
+///
+/// Validation is the read stub's usual one, so this can only answer for a
+/// receiver the stub was primed from: heap-object type, not forwarded, no
+/// blocking flags, a real class id, and the receiver's CURRENT shape token,
+/// which pins the key set and order. Anything else returns `None` and the
+/// caller takes its normal route.
+///
+/// # Safety
+/// `obj` must be a plausible heap address or null; nothing is dereferenced
+/// before the GC header read classifies it.
+pub(crate) unsafe fn try_read_by_content_bits(
+    obj: *const ObjectHeader,
+    key_bits: u64,
+) -> Option<f64> {
+    if obj.is_null() {
+        return None;
+    }
+    let addr = obj as usize;
+    let gc = crate::value::addr_class::try_read_gc_header(addr)?;
+    const STUB_BLOCKING: u16 =
+        crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
+    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+        || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || gc._reserved & STUB_BLOCKING != 0
+    {
+        return None;
+    }
+    let class_id = (*obj).class_id;
+    if class_id == 0 || class_id == crate::object::NATIVE_MODULE_CLASS_ID {
+        return None;
+    }
+    let token = receiver_shape_token(obj)?;
+    let slot = read_stub_probe(token, key_bits)?;
+    let limit = std::cmp::max(
+        crate::object::object_live_slot_count(obj),
+        crate::object::INLINE_SLOT_FLOOR as u32,
+    );
+    if slot < limit {
+        return Some(f64::from_bits(
+            crate::object::js_object_get_field(obj, slot).bits(),
+        ));
+    }
+    crate::object::overflow_get(addr, slot as usize).map(f64::from_bits)
+}

@@ -192,6 +192,8 @@ pub use slice_ops::{
 };
 pub use split::{js_string_split, js_string_split_n};
 
+pub(crate) use intern::intern_lookup_bytes;
+
 #[cfg(test)]
 pub(crate) use intern::{
     test_clear_intern_table_root, test_intern_table_root, test_seed_intern_table_root,

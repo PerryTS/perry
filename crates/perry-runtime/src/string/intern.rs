@@ -299,3 +299,31 @@ pub(crate) fn test_clear_intern_table_root() {
         };
     });
 }
+
+/// Read-only intern-table probe: the canonical pointer for `bytes`, or `None`
+/// when they are not currently tabled. Never inserts, never allocates, never
+/// touches GC state — safe to call with unrooted raw pointers live.
+pub(crate) fn intern_lookup_bytes(bytes: &[u8]) -> Option<*const StringHeader> {
+    if bytes.is_empty() || bytes.len() > INTERN_MAX_BYTE_LEN as usize {
+        return None;
+    }
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    let slot = (hash as usize) & INTERN_TABLE_MASK;
+    with_intern_table(|table| unsafe {
+        let entry = &(*table)[slot];
+        if entry.string_ptr != 0 && entry.hash == hash {
+            let existing = entry.string_ptr as *const StringHeader;
+            if is_valid_string_ptr(existing)
+                && (*existing).byte_len as usize == bytes.len()
+                && std::slice::from_raw_parts(super::string_data(existing), bytes.len()) == bytes
+            {
+                return Some(existing);
+            }
+        }
+        None
+    })
+}
