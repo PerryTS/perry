@@ -595,6 +595,14 @@ impl Serializer {
         let mut count = 0u64;
         for f in 0..keys_len {
             let key = crate::array::js_array_get_f64(keys_arr, f);
+            // A tombstoned key slot (#9029, flag-gated deletes) reads back as
+            // undefined through `js_array_get_f64`'s hole canonicalization
+            // (#323) — and undefined is never a legal key, so this skip
+            // cannot drop a real property. Serializing the slot would emit a
+            // phantom `undefined` key node's structured clone doesn't have.
+            if key.to_bits() == crate::value::TAG_UNDEFINED {
+                continue;
+            }
             let val = if f < alloc_limit {
                 *fields_ptr.add(f as usize)
             } else {

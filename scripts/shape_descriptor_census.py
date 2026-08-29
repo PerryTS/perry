@@ -783,7 +783,9 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     )
     inverted_body = swap_once(
         publication_body,
-        "shape_descriptor_ensure_with_generation(",
+        # #9029 tombstones: the lineage publish carries hole_count, so the
+        # mint call in publish_object_shape_from is the _with_holes form.
+        "shape_descriptor_ensure_with_holes(",
         "(*obj).parent_class_id = id",
     )
     inverted_publication[path] = inverted_publication[path].replace(

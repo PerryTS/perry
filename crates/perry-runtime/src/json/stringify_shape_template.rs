@@ -194,6 +194,14 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     let mut prefixes: Vec<String> = Vec::with_capacity(shape_fields as usize);
     for f in 0..shape_fields {
         let key_bits = (*keys_elements.add(f as usize)).to_bits();
+        // A tombstoned key slot (#9029, flag-gated deletes): the hole's bits
+        // are NOT a string header — the untagged-else below would deref them.
+        // Holed shapes take the generic slow path, which skips holes; the
+        // squeeze that removes them keeps the array's identity, so no stale
+        // template can outlive the holes it declined to cache.
+        if key_bits == crate::value::TAG_HOLE {
+            return None;
+        }
         let key_tag = key_bits & 0xFFFF_0000_0000_0000;
         let key_ptr = if key_tag == STRING_TAG || key_tag == POINTER_TAG {
             (key_bits & POINTER_MASK) as *const StringHeader
