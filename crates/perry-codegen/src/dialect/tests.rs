@@ -417,3 +417,23 @@ fn gc_leaf_attribute_constructs_on_invoke() {
         "invoke lost its gc-leaf-function call-site attribute:\n{printed}"
     );
 }
+
+/// Value-returning inline asm — the hot-TLS thread-pointer read
+/// (`mrs $0, tpidrro_el0`). The reader handled only the VOID asm barrier;
+/// the value form fell through to the callee search and failed with
+/// "call without callee", which killed whole application builds (pi's
+/// bundle) at native codegen. The void barrier rides along to pin both.
+#[test]
+fn value_returning_inline_asm() {
+    let text = r#"
+define i64 @tls_read() {
+entry:
+  %tsd = call i64 asm sideeffect "mrs $0, tpidrro_el0", "=r"() "gc-leaf-function"
+  call void asm sideeffect "", ""()
+  %base = and i64 %tsd, -8
+  ret i64 %base
+}
+"#;
+    let n = roundtrip_ir(text, "asm_value");
+    assert!(n >= 4, "built only {n} instructions");
+}

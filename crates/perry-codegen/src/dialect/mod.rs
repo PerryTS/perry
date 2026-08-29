@@ -793,6 +793,17 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             return self.call_asm(asm_rest).map(|_| None);
         }
 
+        // Value-returning inline asm: `TY asm sideeffect "ASM", "CONSTR"(ARGS)`
+        // — the hot-TLS thread-pointer read (`mrs $0, tpidrro_el0`). The type
+        // token before ` asm ` must be a bare type, not a callee or signature,
+        // or an ordinary call to a function whose name contains "asm" would be
+        // misparsed.
+        if let Some((ty_tok, asm_rest)) = rest.split_once(" asm ") {
+            if !ty_tok.contains(['@', '%', '(']) {
+                return self.call_asm_value(dst, ty_tok.trim(), asm_rest).map(Some);
+            }
+        }
+
         // #8175: explicit calling-convention token before the return type.
         let (rest, preserve_none) = match rest.strip_prefix(crate::inst::PRESERVE_NONE_CC) {
             Some(tail) => (tail.trim_start(), true),
@@ -912,6 +923,66 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             self.ctx.create_string_attribute("gc-leaf-function", ""),
         );
         Ok(())
+    }
+
+    /// Value-returning inline asm, the register-read twin of [`Self::call_asm`]:
+    /// `%dst = call TY asm sideeffect "ASM", "CONSTR"(ARGS)`. Same
+    /// `gc-leaf-function` marking — perry-emitted asm never re-enters the
+    /// runtime, so RS4GC must not statepoint-wrap it (#8121).
+    fn call_asm_value(
+        &mut self,
+        dst: Option<&str>,
+        ty_tok: &str,
+        rest: &str,
+    ) -> Result<BasicValueEnum<'ctx>> {
+        let sideeffect = rest.trim_start().starts_with("sideeffect");
+        let mut strings = rest.split('"');
+        let asm = strings.nth(1).unwrap_or("").to_string();
+        let constraints = strings.nth(1).unwrap_or("").to_string();
+        // Arguments live after the CONSTRAINTS' closing quote (the 4th quote
+        // in the line) — not after the last quote in the line, because the
+        // emitter appends a quoted `"gc-leaf-function"` attribute after the
+        // arg list. That attribute is dropped here and re-added structurally
+        // below, like the void barrier's.
+        let mut quote_iter = rest
+            .char_indices()
+            .filter(|(_, c)| *c == '"')
+            .map(|(i, _)| i);
+        let after_constraints = quote_iter
+            .nth(3)
+            .map(|i| i + 1)
+            .ok_or_else(|| anyhow!("asm call missing constraint string"))?;
+        let tail = &rest[after_constraints..];
+        let paren = tail
+            .find('(')
+            .ok_or_else(|| anyhow!("asm call missing arg list"))?;
+        let close = rmatch_paren(tail, paren)?;
+        let args_str = &tail[paren + 1..close];
+        let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
+        let mut arg_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
+        for a in split_top_level(args_str) {
+            let (aty, atok) = ty_and_val(&a)?;
+            let ty = basic_type(self.ctx, aty)?;
+            args.push(self.val(ty, atok)?.into());
+            arg_types.push(ty.into());
+        }
+        let fn_ty = indirect_fn_type(self.ctx, ty_tok, &arg_types)?;
+        let ptr =
+            self.ctx
+                .create_inline_asm(fn_ty, asm, constraints, sideeffect, false, None, false);
+        let name = dst.map(|d| d.trim_start_matches('%')).unwrap_or("");
+        let site = self
+            .builder
+            .build_indirect_call(fn_ty, ptr, &args, name)
+            .map_err(be)?;
+        site.add_attribute(
+            inkwell::attributes::AttributeLoc::Function,
+            self.ctx.create_string_attribute("gc-leaf-function", ""),
+        );
+        match site.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(v),
+            other => bail!("value asm call produced no value: {other:?}"),
+        }
     }
 
     fn binary_or_cast(&mut self, dst: &str, op: &str, rest: &str) -> Result<BasicValueEnum<'ctx>> {
