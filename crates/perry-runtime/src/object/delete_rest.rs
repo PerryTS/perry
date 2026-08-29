@@ -359,6 +359,9 @@ pub extern "C" fn js_object_delete_field(
             std::ptr::copy_nonoverlapping(src_elements, dst_elements, i);
         }
         if new_count > i {
+            // GC_STORE_AUDIT(INIT): same unpublished destination as the run
+            // above — freshly allocated keys array, layout rebuilt before
+            // `set_object_keys_array` publishes it, distinct allocations.
             std::ptr::copy_nonoverlapping(
                 src_elements.add(i + 1),
                 dst_elements.add(i),
