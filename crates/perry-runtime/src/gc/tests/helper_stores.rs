@@ -115,6 +115,7 @@ fn map_and_set_external_helper_stores_preserve_young_children() {
     let (set, set_elements, set_layout) = unsafe { alloc_old_test_set(1) };
     unsafe {
         (*set).size = 1;
+        (*set).used = 1;
         crate::gc::runtime_store_external_jsvalue_slot(
             set as usize,
             set_elements as usize,

@@ -661,6 +661,7 @@ fn test_old_young_edge_verifier_accepts_set_external_slot() {
     let set_header = unsafe { header_from_user_ptr(set as *const u8) };
     unsafe {
         (*set).size = 1;
+        (*set).used = 1;
         (*set_header).gc_flags |= GC_FLAG_MARKED;
     }
     runtime_store_external_jsvalue_slot(set as usize, elements as usize, ptr_bits(young));
@@ -1120,6 +1121,7 @@ fn test_dirty_page_set_external_slot_marks_child() {
     let (set, elements, layout) = unsafe { alloc_old_test_set(1) };
     unsafe {
         (*set).size = 1;
+        (*set).used = 1;
     }
     runtime_store_external_jsvalue_slot(set as usize, elements as usize, ptr_bits(young));
 
@@ -1155,6 +1157,7 @@ fn test_rewrite_remembered_dirty_range_updates_set_external_entry_span() {
     let (set, elements, layout) = unsafe { alloc_old_test_set(2048) };
     unsafe {
         (*set).size = 2048;
+        (*set).used = 2048;
     }
     let (dirty_idx, clean_idx) = unsafe { field_indices_on_distinct_pages(elements, 2048) };
     let dirty_slot = unsafe { elements.add(dirty_idx) };
@@ -1470,6 +1473,7 @@ fn test_incremental_barrier_marks_external_map_and_set_slots() {
         (*map).size = 1;
         (*map).used = 1;
         (*set).size = 1;
+        (*set).used = 1;
     }
     mark_user_ptr(map as usize);
     mark_user_ptr(set as usize);
