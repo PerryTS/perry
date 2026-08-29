@@ -996,6 +996,132 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
         .insert((obj, key), acc);
 }
 
+/// #9103 follow-up: one-call install of a BRAND-NEW accessor property — the
+/// `{ get, enumerable: true }` fast arm's tail
+/// (`object_ops/define_get_accessor.rs`), which installs ~1,245 re-export
+/// getters at pi startup and previously paid the full
+/// `set_accessor_descriptor` + `set_property_attrs` stack twice over.
+///
+/// Semantically identical to
+/// `set_accessor_descriptor(obj, key.clone(), acc);
+///  set_property_attrs(obj, key, attrs);`
+/// with the duplicated per-call work folded to one occurrence. Each fold is
+/// individually equivalence-preserving:
+///
+/// * **One epoch bump.** The plan epochs are compared against snapshots for
+///   equality ("changed since I cached?"); the two halves of the old sequence
+///   run back-to-back on the single mutator thread with no reader in
+///   between, so one bump invalidates every snapshot exactly as two did.
+/// * **One `note_descriptor_target`.** Its flag writes are idempotent, and
+///   its `transition_object_shape_semantics` mints a fresh semantic
+///   generation whose only consumer contract is "any cached fact keyed by an
+///   older ShapeId is now stale" — one fresh generation retires older ids
+///   exactly as two consecutive generations did (nothing can observe the
+///   intermediate id: no reader runs between the halves).
+/// * **One `disable_inline_guards_for_descriptor_target`.** Both old calls
+///   passed the identical `(obj, key)`; the body is idempotent (guard-slot
+///   retirement plus a hash-set insert).
+/// * **One meta access setting BOTH kind bits** (`accessor_key_bits` /
+///   `attr_key_bits`), returning each bit's prior state.
+/// * **Owner-index dedupe elided when the kind's meta bit was clear.** The
+///   summary's own contract (see `note_meta_descriptor_key` /
+///   `may_have_descriptor_entry`: "every insert … whose owner is
+///   meta-capable sets the key's bit first, so for such owners a clear bit —
+///   or a still-null meta record — proves the tables hold no entry for that
+///   key") extends to the owner indexes: every `owner_index_add` site in
+///   this file is preceded by the matching-kind `note_meta_descriptor_key`,
+///   bits are never cleared, and index removals only shrink the index — so a
+///   clear prior bit proves the index holds no entry either, and the O(N)
+///   `Vec<String>` dedupe scan (the second-largest term of the __export
+///   install profile at 500 keys) can be a plain push. A set prior bit (a
+///   Bloom collision, a genuine earlier entry) or a non-meta-capable owner
+///   keeps the scanning `owner_index_add`.
+///
+/// Callers must guarantee the property is brand new on `obj` (the fast arm
+/// proves absence via `own_key_present_via_index` /
+/// `obj_value_has_own_key` immediately before, with no allocation between
+/// probe and install); the descriptor-table `insert`s themselves are plain
+/// upserts either way, so a violated precondition degrades to the old
+/// overwrite behavior, never to corruption.
+pub(crate) fn install_fresh_accessor_property(
+    obj: usize,
+    key: String,
+    acc: AccessorDescriptor,
+    attrs: PropertyAttrs,
+) {
+    super::prop_plan::prop_plan_epoch_bump();
+    note_descriptor_target(obj);
+    let st = state();
+    st.descriptors.accessors_in_use.set(true);
+    st.descriptors.property_attrs_in_use.set(true);
+    GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
+    disable_inline_guards_for_descriptor_target(obj, &key);
+    note_accessor_descriptor_key(&key);
+    match note_meta_descriptor_key_both(obj, &key) {
+        Some((accessor_bit_was_set, attr_bit_was_set)) => {
+            if accessor_bit_was_set {
+                owner_index_add(&st.descriptors.accessor_keys_by_owner, obj, &key);
+            } else {
+                owner_index_push_proven_new(&st.descriptors.accessor_keys_by_owner, obj, &key);
+            }
+            if attr_bit_was_set {
+                owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
+            } else {
+                owner_index_push_proven_new(&st.descriptors.attr_keys_by_owner, obj, &key);
+            }
+        }
+        // Non-meta-capable owner: no summary to consult — keep the scans.
+        None => {
+            owner_index_add(&st.descriptors.accessor_keys_by_owner, obj, &key);
+            owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
+        }
+    }
+    st.descriptors
+        .accessor_descriptors
+        .borrow_mut()
+        .insert((obj, key.clone()), acc);
+    st.descriptors
+        .property_descriptors
+        .borrow_mut()
+        .insert((obj, key), attrs);
+}
+
+/// [`owner_index_add`] minus the dedupe scan, for a key
+/// [`install_fresh_accessor_property`] has PROVEN absent via the meta
+/// summary. Never call without that proof — a duplicate push would make
+/// enumeration report the key twice.
+fn owner_index_push_proven_new(
+    index: &RefCell<FastKeyHashMap<usize, Vec<String>>>,
+    owner: usize,
+    key: &str,
+) {
+    index
+        .borrow_mut()
+        .entry(owner)
+        .or_default()
+        .push(key.to_string());
+}
+
+/// [`note_meta_descriptor_key`] for both kinds in ONE meta access, returning
+/// each kind bit's PRIOR state `(accessor_bit_was_set, attr_bit_was_set)` —
+/// `None` for a non-meta-capable owner (nothing recorded, matching the
+/// single-kind form's no-op arm).
+fn note_meta_descriptor_key_both(owner: usize, key: &str) -> Option<(bool, bool)> {
+    unsafe {
+        let obj = super::prototype_chain::meta_capable_object(owner)?;
+        // No-move window: `object_meta_ensure` allocates (see
+        // `note_meta_descriptor_key`).
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        let meta = super::object_meta_ensure(obj);
+        let bit = descriptor_key_bit(key);
+        let accessor_bit_was_set = (*meta).accessor_key_bits & bit != 0;
+        let attr_bit_was_set = (*meta).attr_key_bits & bit != 0;
+        (*meta).accessor_key_bits |= bit;
+        (*meta).attr_key_bits |= bit;
+        Some((accessor_bit_was_set, attr_bit_was_set))
+    }
+}
+
 /// Remove an accessor descriptor for (obj, key), letting ordinary data-property
 /// reads and writes use the object's stored field again.
 pub(crate) fn clear_accessor_descriptor(obj: usize, key: &str) {

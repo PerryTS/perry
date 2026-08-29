@@ -198,11 +198,23 @@ fn desc_field_index(b: &[u8]) -> Option<usize> {
 /// `ToPropertyDescriptor`'s inherited-field reads, so a polluted prototype
 /// forces the general path.
 pub(super) unsafe fn object_prototype_has_desc_field() -> bool {
-    let op = crate::object::builtin_prototype_value("Object");
-    let ptr = extract_obj_ptr(op);
-    if ptr.is_null() {
-        return false;
+    // #9103 follow-up: resolve %Object.prototype% through the memoized,
+    // root-scanned prototype-addr cache (one slot load + a forwarding heal)
+    // instead of the per-call `globalThis.Object` builtin lookup +
+    // `closure_get_dynamic_prop(ctor, "prototype")` walk. On the __export
+    // install profile that walk was the single largest per-define term
+    // (~2.7us of a ~6us install; the keys scan below is ~0.04us). The cache
+    // IS the realm intrinsic — the object `ToPropertyDescriptor` reads
+    // inherited fields through — so a program that rebinds
+    // `globalThis.Object` no longer perturbs the probe (the intrinsic
+    // prototype of a descriptor literal never changes), and GC moves are
+    // healed by `scan_prototype_addr_cache_roots_mut` exactly as they are for
+    // `object_prototype_addr_matches`.
+    let addr = crate::array::object_prototype_addr();
+    if addr == 0 {
+        return false; // intrinsic not materialized yet — nothing own
     }
+    let ptr = addr as *mut ObjectHeader;
     // NOTE: builtin init legitimately installs (non-field-named) descriptors
     // on Object.prototype, so the per-object flag is no signal here. Every own
     // install — data write, defineProperty accessor, builtin getter — mirrors
