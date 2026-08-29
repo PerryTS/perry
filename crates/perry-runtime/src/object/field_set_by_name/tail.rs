@@ -445,6 +445,17 @@ pub(crate) fn set_field_by_name_object_tail(
             }
         }
 
+        // #7341: call after ANY allocating step, before the next use of
+        // obj/key/value. Rationale in changelog.d/7381-*, 7383-*.
+        macro_rules! refresh_roots_after_alloc {
+            () => {{
+                obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+                key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+                value = value_handle.get_nanbox_f64();
+                interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
+            }};
+        }
+
         // #9019: a built-in iterator receiver (Set/Map/array/string/…
         // iterator object) keeps its internal state in RAW numbered fields
         // the keys array does not describe, so the append below would hand
@@ -459,26 +470,12 @@ pub(crate) fn set_field_by_name_object_tail(
             && crate::object::reserved_slot_floor_for_class_id((*obj).class_id) != 0
             && crate::object::ensure_reserved_floor_keys(obj)
         {
-            obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-            key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
-            value = value_handle.get_nanbox_f64();
-            interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
+            refresh_roots_after_alloc!();
             keys = crate::object::object_keys_array(obj);
         }
 
         let mut prev_keys_usize = keys as usize;
         let prev_shape_id = super::shapes::object_shape_stamp(obj);
-
-        // #7341: call after ANY allocating step, before the next use of
-        // obj/key/value. Rationale in changelog.d/7381-*, 7383-*.
-        macro_rules! refresh_roots_after_alloc {
-            () => {{
-                obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-                key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
-                value = value_handle.get_nanbox_f64();
-                interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
-            }};
-        }
 
         // FAST PATH: shape-transition cache with interned string pointer identity.
         //

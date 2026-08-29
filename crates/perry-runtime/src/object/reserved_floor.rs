@@ -65,22 +65,28 @@ pub(crate) unsafe fn ensure_reserved_floor_keys(obj: *mut ObjectHeader) -> bool 
     if floor == 0 || !super::object_keys_array(obj).is_null() {
         return false;
     }
+    // NaN-boxed handles rather than `root_raw_*_ptr`, so every reload is a
+    // `get_nanbox_f64` at the point of use and this module stays out of
+    // `scripts/raw_handle_debt.py`'s ledger (same idiom as
+    // `array/iterator.rs::js_iterator_to_array`).
     let scope = crate::gc::RuntimeHandleScope::new();
-    let obj_h = scope.root_raw_mut_ptr(obj);
+    let obj_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
     let keys = crate::array::js_array_alloc(floor);
     if keys.is_null() {
         return false;
     }
-    let keys_h = scope.root_raw_mut_ptr(keys);
-    keys_h.with_mut_ptr::<ArrayHeader, _>(|keys| {
-        for i in 0..floor as usize {
-            crate::array::store_array_slot(keys, i, crate::value::TAG_HOLE);
-        }
-        (*keys).length = floor;
-        crate::array::rebuild_array_layout_exact(keys);
-    });
-    let obj = obj_h.get_raw_mut_ptr::<ObjectHeader>();
-    let keys = keys_h.get_raw_mut_ptr::<ArrayHeader>();
+    let keys_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(keys as i64));
+    let keys = crate::value::js_nanbox_get_pointer(keys_h.get_nanbox_f64()) as *mut ArrayHeader;
+    for i in 0..floor as usize {
+        crate::array::store_array_slot(keys, i, crate::value::TAG_HOLE);
+    }
+    (*keys).length = floor;
+    crate::array::rebuild_array_layout_exact(keys);
+    // Reload both through their handles before publishing: nothing between
+    // the allocation and here allocates, but the publish path must never
+    // hold a pre-collection address.
+    let obj = crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader;
+    let keys = crate::value::js_nanbox_get_pointer(keys_h.get_nanbox_f64()) as *mut ArrayHeader;
     // The keys edge is changing: retire any typed layout trained on the old
     // (keys-less) representation before the successor is published, exactly
     // like `set_object_keys_array_with_live`.
