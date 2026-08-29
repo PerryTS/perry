@@ -34,7 +34,8 @@ use std::cell::RefCell;
 #[path = "shapes_slot_list.rs"]
 mod shapes_slot_list;
 pub(crate) use shapes_slot_list::{
-    record_shape_scan_outcome, shape_index_migrate_after_delete, SlotList,
+    record_shape_scan_outcome, shape_index_migrate_after_delete, shape_index_shift_in_place,
+    SlotList,
 };
 
 pub(crate) struct ShapeIndex {

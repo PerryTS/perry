@@ -332,58 +332,89 @@ pub extern "C" fn js_object_delete_field(
         let alloc_limit = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
         let new_count = key_count - 1;
 
-        // CRITICAL: clone the keys_array before mutating it. The same
-        // keys_array is shared across all objects that built the same
-        // shape via `transition_cache_lookup`-hit fast paths. Without
-        // cloning, mutating its length / contents to remove the deleted
-        // key would corrupt every other object that picks up this
-        // shape — they'd silently lose entries they never deleted.
-        let keys_cloned = crate::array::js_array_alloc(new_count.max(1) as u32 + 4);
-        let src_elements =
-            (keys as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
-        let dst_elements =
-            (keys_cloned as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
-        // Copy keys [0..i) ++ [i+1..N) into [0..new_count) as two contiguous
-        // runs. These were scalar element loops, which is O(resident keys) of
-        // load/store pairs on a path that already allocates and rebuilds a
-        // layout per delete — and `delete obj[k]` on a populated object is
-        // perry's worst object-model gap against node (~200x on
-        // `bench_populated_delete.ts`).
+        // The clone below exists because one keys_array is shared by every
+        // object that built this shape through a `transition_cache_lookup`
+        // hit: mutating it in place would silently drop entries from siblings
+        // that never deleted anything.
         //
-        // GC_STORE_AUDIT(INIT): the destination is a freshly allocated, still
-        // UNPUBLISHED keys array whose layout is rebuilt before it is
-        // published — which is why the per-element writes carried no barrier
-        // either. Source and destination are distinct allocations, so the
-        // copies cannot overlap.
-        if i > 0 {
-            std::ptr::copy_nonoverlapping(src_elements, dst_elements, i);
-        }
-        if new_count > i {
-            // GC_STORE_AUDIT(INIT): same unpublished destination as the run
-            // above — freshly allocated keys array, layout rebuilt before
-            // `set_object_keys_array` publishes it, distinct allocations.
-            std::ptr::copy_nonoverlapping(
-                src_elements.add(i + 1),
-                dst_elements.add(i),
-                new_count - i,
+        // Sharing is TRACKED. The caches stamp `GC_FLAG_SHAPE_SHARED` when
+        // they publish an array (`transition_cache_insert`), and both the
+        // ordinary `[[Set]]` growth path and `object_ops::keys_array` already
+        // treat that bit as authoritative for exactly this decision. An array
+        // without it has a single owner, so it can be compacted in place —
+        // removing the last per-delete allocation on this path (a ~500-element
+        // clone, 200k of them on `bench_populated_delete.ts`) and keeping the
+        // array's ADDRESS, so the key index only needs its slots shifted.
+        let keys_gc_header =
+            (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let keys_owned = (*keys_gc_header).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED == 0;
+        let index_migrated = if keys_owned {
+            let elements =
+                (keys as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
+            // Overlapping ranges inside ONE allocation: `copy` (memmove).
+            if new_count > i {
+                std::ptr::copy(elements.add(i + 1), elements.add(i), new_count - i);
+            }
+            (*keys).length = new_count as u32;
+            super::rebuild_array_layout_from_slots(keys);
+            // Re-publish the shape for the SAME array at its new key count.
+            // Without this the object keeps a stamped ShapeId whose descriptor
+            // still claims the pre-delete count, which the shape-facts audit
+            // catches as "published ShapeId disagrees with authoritative
+            // ObjectHeader facts". `publish_object_shape_from` versions a
+            // same-pointer change internally, and `keys_changed` is false here
+            // so the typed layout is preserved rather than marked unknown.
+            set_object_keys_array(obj, keys as *mut crate::ArrayHeader);
+            super::shapes::shape_index_shift_in_place(keys as usize, i as u32, key_count as u32)
+        } else {
+            let keys_cloned = crate::array::js_array_alloc(new_count.max(1) as u32 + 4);
+            let src_elements =
+                (keys as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+            let dst_elements =
+                (keys_cloned as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
+            // Copy keys [0..i) ++ [i+1..N) into [0..new_count) as two contiguous
+            // runs. These were scalar element loops, which is O(resident keys) of
+            // load/store pairs on a path that already allocates and rebuilds a
+            // layout per delete — and `delete obj[k]` on a populated object is
+            // perry's worst object-model gap against node (~200x on
+            // `bench_populated_delete.ts`).
+            //
+            // GC_STORE_AUDIT(INIT): the destination is a freshly allocated, still
+            // UNPUBLISHED keys array whose layout is rebuilt before it is
+            // published — which is why the per-element writes carried no barrier
+            // either. Source and destination are distinct allocations, so the
+            // copies cannot overlap.
+            if i > 0 {
+                std::ptr::copy_nonoverlapping(src_elements, dst_elements, i);
+            }
+            if new_count > i {
+                // GC_STORE_AUDIT(INIT): same unpublished destination as the run
+                // above — freshly allocated keys array, layout rebuilt before
+                // `set_object_keys_array` publishes it, distinct allocations.
+                std::ptr::copy_nonoverlapping(
+                    src_elements.add(i + 1),
+                    dst_elements.add(i),
+                    new_count - i,
+                );
+            }
+            (*keys_cloned).length = new_count as u32;
+            super::rebuild_array_layout_from_slots(keys_cloned);
+            // Carry the key index onto the clone by shifting slots, instead of
+            // letting the new address miss `indices` and re-hash every surviving
+            // property name. On a 500-key object that rebuild ran on EVERY delete.
+            // A wrong index can only cause a miss — `shape_slot_lookup` validates
+            // the stored key against the requested bytes before returning a slot.
+            let index_migrated = super::shapes::shape_index_migrate_after_delete(
+                keys as usize,
+                keys_cloned as usize,
+                i as u32,
+                key_count as u32,
             );
-        }
-        (*keys_cloned).length = new_count as u32;
-        super::rebuild_array_layout_from_slots(keys_cloned);
-        // Carry the key index onto the clone by shifting slots, instead of
-        // letting the new address miss `indices` and re-hash every surviving
-        // property name. On a 500-key object that rebuild ran on EVERY delete.
-        // A wrong index can only cause a miss — `shape_slot_lookup` validates
-        // the stored key against the requested bytes before returning a slot.
-        let index_migrated = super::shapes::shape_index_migrate_after_delete(
-            keys as usize,
-            keys_cloned as usize,
-            i as u32,
-            key_count as u32,
-        );
-        // `set_object_keys_array` publishes the cloned edge while preserving
-        // the predecessor's semantic generation and object kind.
-        set_object_keys_array(obj, keys_cloned);
+            // `set_object_keys_array` publishes the cloned edge while preserving
+            // the predecessor's semantic generation and object kind.
+            set_object_keys_array(obj, keys_cloned);
+            index_migrated
+        };
 
         // 1) Shift values down: for slot j in i..new_count, copy slot j+1
         //    into slot j. Inline reads/writes for j < alloc_limit;

@@ -129,6 +129,41 @@ pub(crate) fn record_shape_scan_outcome(
 ///
 /// Returns whether the index was actually carried over: the delete tail uses
 /// that to skip the `shape_drop` that would otherwise discard it immediately.
+/// Shift a key index in place after an IN-PLACE delete.
+///
+/// Twin of [`shape_index_migrate_after_delete`] for an OWNED keys array (no
+/// `GC_FLAG_SHAPE_SHARED`), which is compacted in place and therefore keeps
+/// its address — and hence its `indices` key. Same shift, same safety net:
+/// `shape_slot_lookup` re-validates the stored key against the requested
+/// bytes, so a wrong index yields a miss, never a wrong property.
+///
+/// Returns whether the index is now current, so the caller can skip the
+/// `shape_drop` that would otherwise discard it.
+#[must_use]
+pub(crate) fn shape_index_shift_in_place(
+    keys_id: usize,
+    removed_slot: u32,
+    old_key_count: u32,
+) -> bool {
+    if keys_id == 0 {
+        return false;
+    }
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    let Some(index) = inner.indices.get_mut(&keys_id) else {
+        return false;
+    };
+    if index.indexed_len < old_key_count {
+        inner.indices.remove(&keys_id);
+        return false;
+    }
+    index.slots.retain(|_, list| {
+        list.retain_shift(removed_slot);
+        !list.is_empty()
+    });
+    index.indexed_len = old_key_count - 1;
+    true
+}
+
 #[must_use]
 pub(crate) fn shape_index_migrate_after_delete(
     old_keys_id: usize,
