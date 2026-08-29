@@ -1145,9 +1145,13 @@ mod sso_tests_1781 {
 fn object_tombstone_deletes_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        matches!(
+        // Default ON (#9029 shipped the mechanism flag-gated; the walker
+        // audit and churn-bound tests are the default-on prerequisites).
+        // `PERRY_OBJECT_TOMBSTONES=0` is the kill switch, mirroring the
+        // moving-scavenge rollout's `PERRY_GC_MOVING_LOOP_POLLS=0` pattern.
+        !matches!(
             std::env::var("PERRY_OBJECT_TOMBSTONES").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+            Ok("0") | Ok("off") | Ok("false")
         )
     })
 }
