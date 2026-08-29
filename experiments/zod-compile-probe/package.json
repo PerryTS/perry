@@ -1,0 +1,8 @@
+{
+  "name": "perry-zod-compile-probe",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "zod": "4.5.0-canary.20260820T155656"
+  }
+}

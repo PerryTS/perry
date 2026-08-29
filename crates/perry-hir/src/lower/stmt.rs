@@ -454,6 +454,17 @@ pub(crate) fn lower_stmt(
                     let mutable = var_decl.kind != ast::VarDeclKind::Const;
                     let is_var = var_decl.kind == ast::VarDeclKind::Var;
                     for decl in &var_decl.decls {
+                        // Retain a compiler-only description of a static Zod
+                        // schema.  Its ordinary runtime initializer is still
+                        // lowered below; this side table is consumed only if a
+                        // later `z.compile(schema)` site can be specialized.
+                        let zod_schema_ir = match (&decl.name, &decl.init) {
+                            (ast::Pat::Ident(ident), Some(init)) => {
+                                super::zod_aot::extract_schema_ir(ctx, init)
+                                    .map(|ir| (ident.id.sym.to_string(), ir))
+                            }
+                            _ => None,
+                        };
                         // Check if this is a Widget({...}) call from perry/widget
                         if let Some(init) = &decl.init {
                             if let ast::Expr::Call(call_expr) = init.as_ref() {
@@ -949,6 +960,11 @@ pub(crate) fn lower_stmt(
                         // not handled by the direct `class` fast path above.
                         record_chained_class_self_aliases(ctx, decl);
                         let stmts = lower_var_decl_with_destructuring(ctx, decl, mutable, is_var)?;
+                        if let Some((name, ir)) = zod_schema_ir {
+                            if let Some(id) = ctx.lookup_local(&name) {
+                                ctx.zod_schema_irs.insert(id, ir);
+                            }
+                        }
                         // `var` is function-scoped: mark defined locals so
                         // `pop_block_scope` preserves them when leaving an inner block.
                         if is_var {

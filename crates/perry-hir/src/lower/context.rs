@@ -183,6 +183,7 @@ impl LoweringContext {
             namespace_import_locals: HashSet::new(),
             fetch_call_response_locals: HashSet::new(),
             namespace_import_sources: std::collections::HashMap::new(),
+            zod_schema_irs: HashMap::new(),
             generator_func_names: HashSet::new(),
             async_generator_func_names: HashSet::new(),
             nested_generator_forward_referenced: HashSet::new(),

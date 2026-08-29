@@ -85,6 +85,7 @@ mod template;
 pub(crate) use template::*;
 mod widget_decl;
 pub(crate) use widget_decl::*;
+mod zod_aot;
 
 // Newly-extracted topical siblings (split out from the previously
 // ~2,700-LOC `mod.rs` body). Each is re-exported by *explicit name*

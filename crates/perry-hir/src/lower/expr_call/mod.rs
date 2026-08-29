@@ -220,6 +220,13 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         return Ok(desugared);
     }
 
+    // Prototype schema-aware AOT path.  A supported static `z.compile(...)`
+    // becomes native Perry HIR here, before the npm call and Zod's
+    // `new Function` implementation are lowered.
+    if let Some(expr) = super::zod_aot::try_lower_zod_compile(ctx, call)? {
+        return Ok(expr);
+    }
+
     // Compile-time intrinsics + legacy CJS/UMD bare-callee shapes
     // (require/embedWasm/IIFE.call/Function('return this')/RegExp).
     if let Some(expr) = try_require_literal(ctx, call)? {

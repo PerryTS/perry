@@ -667,6 +667,10 @@ pub struct LoweringContext {
     /// symbol in the importer and drop every namespace member. Closes the zod
     /// `import { z }` breakage (zod's index does `import * as z; export { z }`).
     pub(crate) namespace_import_sources: std::collections::HashMap<String, String>,
+    /// Prototype Zod AOT schemas keyed by the local that holds the runtime
+    /// schema object.  The value is compiler-only: `z.compile(schema)` lowers
+    /// it directly to ordinary HIR and never exposes it to the executable.
+    pub(crate) zod_schema_irs: HashMap<LocalId, super::zod_aot::ZodSchemaIr>,
     /// Names of functions declared with `function*` — used to detect generator
     /// calls in `for...of` so the iterator protocol loop is emitted instead of
     /// the array-index loop.
