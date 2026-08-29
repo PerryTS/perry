@@ -226,9 +226,17 @@ pub(crate) unsafe fn publish_object_shape_holes(
     if generation == 0 {
         super::shape_id_exhausted_abort();
     }
+    // The key count comes from the ARRAY, not the lineage: the O(1) hole
+    // delete leaves the length untouched (array == lineage), but the squeeze
+    // shrinks it in place before republishing — carrying the lineage count
+    // there left a descriptor disagreeing with the authoritative keys edge,
+    // which the very next parity assert caught (#9108: reserved_floor
+    // at-scale SIGABRT took the whole suite down behind it).
+    let keys_ptr = current.keys as usize as *mut super::ArrayHeader;
+    let logical_key_count = crate::array::keys_array_len_capped_to_capacity(keys_ptr) as u32;
     let id = super::publish_shape_result(super::shape_descriptor_ensure_with_holes(
-        current.keys as usize as *mut super::ArrayHeader,
-        current.logical_key_count,
+        keys_ptr,
+        logical_key_count,
         current.live_inline_slot_count,
         generation,
         current.object_kind,

@@ -1252,7 +1252,14 @@ unsafe fn squeeze_holes_and_delete(
         crate::gc::runtime_write_barrier_external_slot_span(keys as usize, elements as usize, out);
     }
     super::rebuild_array_layout_from_slots(keys);
-    set_object_live_slot_count(obj, std::cmp::min(out, alloc_limit) as u32);
+    // Publish the squeezed shape BEFORE touching the live-slot bound: the
+    // squeeze changed the keys array's length in place, and
+    // `set_object_live_slot_count`'s unchanged-bound early return asserts
+    // parity against the STAMPED descriptor — which still carries the
+    // pre-squeeze logical_key_count until the publish below runs. At scale
+    // the floored bound is usually unchanged, so that assert fired mid-
+    // transition (#9108, reserved_floor at-scale test SIGABRT).
+    //
     // Slots moved: the per-array key index and any stale descriptors for the
     // pre-squeeze states are wrong now. Drop the index (rebuilt on demand)
     // and publish the squeezed shape at exactly the surviving hole count —
@@ -1260,4 +1267,5 @@ unsafe fn squeeze_holes_and_delete(
     // for an iterator-family one.
     crate::object::shapes::shape_drop(keys);
     super::shapes::publish_object_shape_holes(obj, floor as u32);
+    set_object_live_slot_count(obj, std::cmp::min(out, alloc_limit) as u32);
 }
