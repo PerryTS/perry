@@ -146,9 +146,18 @@ fn lower_map_entry_at_inline(
         let live = blk.icmp_eq(I8, &forwarded, "0");
         let size_ptr = blk.inttoptr(I64, &m_handle);
         let size = blk.load(I32, &size_ptr);
+        // Tombstoned deletes leave `used > size`; a raw entry read is only
+        // dense-correct with no holes present, so a holey map falls back to
+        // the runtime helper — which compacts, after which this admission
+        // holds again (the lane self-heals).
+        let used_addr = blk.add(I64, &m_handle, "32");
+        let used_ptr = blk.inttoptr(I64, &used_addr);
+        let used = blk.load(I32, &used_ptr);
+        let dense = blk.icmp_eq(I32, &used, &size);
         let in_range = blk.icmp_ult(I32, &i_i32, &size);
         let a = blk.and(I1, &is_map, &live);
-        let admitted = blk.and(I1, &a, &in_range);
+        let b = blk.and(I1, &a, &dense);
+        let admitted = blk.and(I1, &b, &in_range);
         blk.cond_br(&admitted, &fast_label, &slow_label);
     }
     ctx.current_block = fast_idx;

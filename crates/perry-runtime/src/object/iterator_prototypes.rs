@@ -264,11 +264,6 @@ fn build_family_proto(
 }
 
 /// Lazily build the prototypes (idempotent). Cheap after the first call.
-/// Whether any iterator-prototype tower has been materialized on this thread.
-#[cfg(test)]
-pub(crate) fn iterator_prototypes_materialized() -> bool {
-    ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) != 0
-}
 
 pub(crate) fn ensure_iterator_prototypes() {
     if ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == 0 {

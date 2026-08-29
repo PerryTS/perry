@@ -265,26 +265,34 @@ unsafe fn dispatch_map_iterator_method_emit(
             }
             let cursor = f64::from_bits(js_object_get_field(iter_obj(), 1).bits()) as u32;
             let last_key = js_object_get_field(iter_obj(), 4);
-            let size = crate::map::js_map_size(map());
+            let used = crate::map::map_used_entries(map());
             // Is the last-returned key still at cursor-1? (SameValueZero, so a
             // NaN key matches itself.) If so, no delete shifted an entry at/below
             // the cursor.
             let in_place = cursor > 0 && {
-                let prev = crate::map::js_map_entry_key_at(map(), cursor - 1);
+                let prev = crate::map::map_entry_key_raw(map(), cursor - 1);
                 crate::value::js_jsvalue_same_value_zero(prev, f64::from_bits(last_key.bits())) != 0
             };
-            let idx = next_read_index(cursor, in_place, || {
+            let mut idx = next_read_index(cursor, in_place, || {
                 crate::map::find_key_index(map(), f64::from_bits(last_key.bits()))
             });
-            if idx >= size {
-                js_object_set_field(iter_obj(), 1, JSValue::number(size as f64));
+            // Tombstoned deletes leave holes in the raw entry order; the
+            // cursor walks raw indices, so step over them here.
+            while idx < used
+                && crate::map::map_entry_key_raw(map(), idx).to_bits()
+                    == crate::map::MAP_HOLE_KEY_BITS
+            {
+                idx += 1;
+            }
+            if idx >= used {
+                js_object_set_field(iter_obj(), 1, JSValue::number(used as f64));
                 // Once a collection iterator is exhausted it stays exhausted,
                 // even if entries are appended later.
                 js_object_set_field(iter_obj(), 0, JSValue::undefined());
                 return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
             }
 
-            let entry_key = crate::map::js_map_entry_key_at(map(), idx);
+            let entry_key = crate::map::map_entry_key_raw(map(), idx);
             // Record state for the next re-derive BEFORE any allocation below.
             js_object_set_field(iter_obj(), 1, JSValue::number((idx + 1) as f64));
             js_object_set_field(iter_obj(), 4, JSValue::from_bits(entry_key.to_bits()));
@@ -292,10 +300,10 @@ unsafe fn dispatch_map_iterator_method_emit(
             let value = match kind {
                 KIND_KEYS => JSValue::from_bits(entry_key.to_bits()),
                 KIND_VALUES => {
-                    JSValue::from_bits(crate::map::js_map_entry_value_at(map(), idx).to_bits())
+                    JSValue::from_bits(crate::map::map_entry_value_raw(map(), idx).to_bits())
                 }
                 _ => {
-                    let val = crate::map::js_map_entry_value_at(map(), idx);
+                    let val = crate::map::map_entry_value_raw(map(), idx);
                     JSValue::from_bits(make_pair_array(entry_key, val).to_bits())
                 }
             };
