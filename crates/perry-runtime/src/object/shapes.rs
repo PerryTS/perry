@@ -1630,6 +1630,21 @@ unsafe fn index_range(shape: &mut ShapeIndex, keys: *const ArrayHeader, key_coun
 /// historical thresholds: write path ≥ `KEYS_INDEX_THRESHOLD`, read path
 /// ≥ `WIDE_KEY_INDEX_MIN_KEYS`) — but an entry that already exists is
 /// consulted regardless, so a read may reuse the index a write built.
+/// A key-index consultation's answer, distinguishing "this COMPLETE index
+/// proves the key absent" from "the index cannot answer".
+pub(crate) enum KeysIndexVerdict {
+    Found(u32),
+    /// The index covers every slot of the array (`indexed_len == key_count`)
+    /// and holds no entry for this key: the key is not present, and the
+    /// caller may skip its linear backstop scan. Trusting absence is what
+    /// makes tombstone-delete churn O(1) — the re-add's find-before-append
+    /// otherwise pays a full scan per delete, measured at 60.4% of the
+    /// flag-on `bench_populated_delete` profile.
+    Absent,
+    /// No index, a partial build, or a declined consult — scan.
+    Unindexed,
+}
+
 pub(crate) unsafe fn shape_slot_lookup(
     keys: *const ArrayHeader,
     key_bytes: &[u8],
@@ -1637,6 +1652,19 @@ pub(crate) unsafe fn shape_slot_lookup(
     key_count: u32,
     build: bool,
 ) -> Option<u32> {
+    match shape_slot_lookup_verdict(keys, key_bytes, key_hash, key_count, build) {
+        KeysIndexVerdict::Found(slot) => Some(slot),
+        _ => None,
+    }
+}
+
+pub(crate) unsafe fn shape_slot_lookup_verdict(
+    keys: *const ArrayHeader,
+    key_bytes: &[u8],
+    key_hash: u64,
+    key_count: u32,
+    build: bool,
+) -> KeysIndexVerdict {
     let keys_id = keys as usize;
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     let shape = match inner.indices.get_mut(&keys_id) {
@@ -1644,13 +1672,13 @@ pub(crate) unsafe fn shape_slot_lookup(
             if s.indexed_len > key_count {
                 // Shrink (delete/compaction): slots are untrustworthy.
                 inner.indices.remove(&keys_id);
-                return None;
+                return KeysIndexVerdict::Unindexed;
             }
             s
         }
         None => {
             if !build {
-                return None;
+                return KeysIndexVerdict::Unindexed;
             }
             inner.indices.entry(keys_id).or_insert(ShapeIndex {
                 indexed_len: 0,
@@ -1661,7 +1689,15 @@ pub(crate) unsafe fn shape_slot_lookup(
     if shape.indexed_len < key_count {
         index_range(shape, keys, key_count);
     }
-    let candidates = shape.slots.get(&key_hash)?;
+    let complete = shape.indexed_len == key_count;
+    let absent = if complete {
+        KeysIndexVerdict::Absent
+    } else {
+        KeysIndexVerdict::Unindexed
+    };
+    let Some(candidates) = shape.slots.get(&key_hash) else {
+        return absent;
+    };
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let (slots, slot_len) = super::keys_array_dense_slots(keys);
     for &i in candidates.iter() {
@@ -1671,11 +1707,13 @@ pub(crate) unsafe fn shape_slot_lookup(
         let v = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
         if let Some(stored) = crate::string::js_string_key_bytes(v, &mut sso) {
             if stored == key_bytes {
-                return Some(i);
+                return KeysIndexVerdict::Found(i);
             }
         }
     }
-    None
+    // Hash-bucket candidates existed but none matched: with a complete index
+    // that still proves absence (the bucket held colliding OTHER keys).
+    absent
 }
 
 /// Record a freshly appended key: `keys` (the POST-append array — a clone

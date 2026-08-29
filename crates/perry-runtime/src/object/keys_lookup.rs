@@ -80,12 +80,19 @@ pub(crate) unsafe fn keys_find_slot_by_bytes(
         // (1570 -> 3064 ms measured). Appends maintain the index incrementally
         // (shape_note_append), so stable-shape workloads still hit; churny
         // ones fall back to the raw dense scan below instead of thrashing.
-        if let Some(slot) = shapes::shape_slot_lookup(keys, key_bytes, h, key_count, false) {
-            return Some(slot);
+        match shapes::shape_slot_lookup_verdict(keys, key_bytes, h, key_count, false) {
+            shapes::KeysIndexVerdict::Found(slot) => return Some(slot),
+            // A COMPLETE index (indexed_len == key_count) proves absence:
+            // every present key is indexed, holes index as nothing, and a
+            // stale bucket entry for a tombstoned key fails its content
+            // validation without disproving completeness. Skipping the
+            // backstop here is what makes tombstone-delete churn cheap — the
+            // re-add's find-before-append otherwise linear-scanned up to 2x
+            // the live keys per delete (60.4% of the flag-on
+            // bench_populated_delete profile in one symbol).
+            shapes::KeysIndexVerdict::Absent => return None,
+            shapes::KeysIndexVerdict::Unindexed => {}
         }
-        // A miss from a fully built index is authoritative in the common case,
-        // but the index can decline (shrunk arrays, partial builds); the raw
-        // scan below is cheap enough to serve as the correctness backstop.
     }
     let (slots, slot_len) = keys_array_dense_slots(keys);
     if slots.is_null() {
