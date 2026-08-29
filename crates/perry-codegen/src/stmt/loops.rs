@@ -517,6 +517,83 @@ fn lower_numeric_range_add_loop(
     Ok(true)
 }
 
+/// Collect the body's numeric reduce accumulators for a packed fast clone
+/// and emit one Number tag test each in the current (fast preheader) block,
+/// branching to the slow preheader when any holds a non-Number — the
+/// induction base case, exactly like the stable-packed clone's admission.
+/// The returned ids ride the scope's `PackedF64LoopFact`, where
+/// `is_numeric_expr` consults them so `s += arr[i]` lowers to a native
+/// `fadd` instead of `js_dynamic_string_or_number_add` per iteration.
+/// Range-loop wrapper: accumulators are collected against the loop's single
+/// counter-accessed array (the `arr[counter]` leaf of the accumulator walk).
+/// Multiple counter-accessed arrays decline — no admitted leaf would span
+/// them all.
+fn emit_range_loop_accumulator_admission(
+    ctx: &mut FnCtx<'_>,
+    matched: &PackedF64RangeLoop,
+    body: &[Stmt],
+    slow_pre_label: &str,
+    block_prefix: &str,
+) -> Vec<u32> {
+    let mut counter_arrays = matched
+        .arrays
+        .iter()
+        .filter(|access| access.counter.is_some())
+        .map(|access| access.array_id);
+    let Some(array_id) = counter_arrays.next() else {
+        return Vec::new();
+    };
+    if counter_arrays.next().is_some() {
+        return Vec::new();
+    }
+    emit_packed_numeric_accumulator_admission(
+        ctx,
+        body,
+        array_id,
+        matched.counter_id,
+        slow_pre_label,
+        block_prefix,
+    )
+}
+
+fn emit_packed_numeric_accumulator_admission(
+    ctx: &mut FnCtx<'_>,
+    body: &[Stmt],
+    array_id: u32,
+    counter_id: u32,
+    slow_pre_label: &str,
+    block_prefix: &str,
+) -> Vec<u32> {
+    let accumulators = super::stable_packed_accumulator::collect_numeric_accumulators(
+        ctx, body, array_id, counter_id,
+    );
+    if accumulators.is_empty() {
+        return accumulators;
+    }
+    let mut all_numbers: Option<String> = None;
+    for id in &accumulators {
+        let Some(slot) = ctx.locals.get(id).cloned() else {
+            return Vec::new();
+        };
+        let value = ctx.block().load(DOUBLE, &slot);
+        let is_number = emit_js_value_is_number(ctx, &value);
+        all_numbers = Some(match all_numbers {
+            Some(prev) => ctx.block().and(I1, &prev, &is_number),
+            None => is_number,
+        });
+    }
+    let all_numbers = all_numbers.expect("at least one accumulator");
+    let acc_ok_idx = ctx.new_block(&format!("{block_prefix}.acc.ok"));
+    let acc_ok_label = ctx.block_label(acc_ok_idx);
+    // A non-Number accumulator (a string total, a BigInt) takes the slow
+    // clone before the first fast iteration; nothing has run yet, so the
+    // slow clone sees pristine state.
+    ctx.block()
+        .cond_br(&all_numbers, &acc_ok_label, slow_pre_label);
+    ctx.current_block = acc_ok_idx;
+    accumulators
+}
+
 fn lower_packed_f64_versioned_for(
     ctx: &mut FnCtx<'_>,
     init: Option<&Stmt>,
@@ -585,6 +662,14 @@ fn lower_packed_f64_versioned_for(
     let packed_scope_id = ctx.next_loop_proof_scope_id();
 
     ctx.current_block = fast_pre_idx;
+    let numeric_accumulators = emit_packed_numeric_accumulator_admission(
+        ctx,
+        body,
+        matched.array_id,
+        matched.counter_id,
+        &slow_pre_label,
+        loop_label,
+    );
     ctx.packed_f64_loop_facts.push(PackedF64LoopFact {
         index_local_id: matched.counter_id,
         array_local_id: matched.array_id,
@@ -594,6 +679,7 @@ fn lower_packed_f64_versioned_for(
         array_kind: matched.array_kind,
         allow_holes: false,
         window_validated: false,
+        numeric_accumulators,
     });
     lower_for_after_init(
         ctx,
@@ -1575,6 +1661,7 @@ fn push_packed_f64_range_facts(
     slow_pre_label: &str,
     values_i32: bool,
     allow_masked_stores: bool,
+    numeric_accumulators: &[u32],
 ) {
     for access in &matched.arrays {
         if access.counter.is_some() {
@@ -1590,6 +1677,7 @@ fn push_packed_f64_range_facts(
                 // hole-tolerant.
                 allow_holes: !matched.dense,
                 window_validated: true,
+                numeric_accumulators: numeric_accumulators.to_vec(),
             });
         }
         if let Some((lo, hi)) = access.stat {
@@ -1997,6 +2085,13 @@ fn lower_packed_f64_range_versioned_for(
 
             ctx.current_block = fast_i32_pre_idx;
             let scope_i32 = ctx.next_loop_proof_scope_id();
+            let range_numeric_accumulators = emit_range_loop_accumulator_admission(
+                ctx,
+                &matched,
+                body,
+                &slow_pre_label,
+                "packed_f64_range.fast_i32",
+            );
             push_packed_f64_range_facts(
                 ctx,
                 &matched,
@@ -2005,6 +2100,7 @@ fn lower_packed_f64_range_versioned_for(
                 &slow_pre_label,
                 true,
                 false,
+                &range_numeric_accumulators,
             );
             lower_for_after_init_with_i32_bound(
                 ctx,
@@ -2026,6 +2122,13 @@ fn lower_packed_f64_range_versioned_for(
 
         ctx.current_block = fast_pre_idx;
         let scope_f64 = ctx.next_loop_proof_scope_id();
+        let range_numeric_accumulators = emit_range_loop_accumulator_admission(
+            ctx,
+            &matched,
+            body,
+            &slow_pre_label,
+            "packed_f64_range.fast",
+        );
         push_packed_f64_range_facts(
             ctx,
             &matched,
@@ -2034,6 +2137,7 @@ fn lower_packed_f64_range_versioned_for(
             &slow_pre_label,
             false,
             has_stores,
+            &range_numeric_accumulators,
         );
         lower_for_after_init_with_i32_bound(
             ctx,
@@ -2065,6 +2169,13 @@ fn lower_packed_f64_range_versioned_for(
         let packed_scope_id = ctx.next_loop_proof_scope_id();
 
         ctx.current_block = fast_pre_idx;
+        let range_numeric_accumulators = emit_range_loop_accumulator_admission(
+            ctx,
+            &matched,
+            body,
+            &slow_pre_label,
+            "packed_f64_range.classic",
+        );
         push_packed_f64_range_facts(
             ctx,
             &matched,
@@ -2073,6 +2184,7 @@ fn lower_packed_f64_range_versioned_for(
             &slow_pre_label,
             false,
             false,
+            &range_numeric_accumulators,
         );
         lower_for_after_init_with_i32_bound(
             ctx,
@@ -4278,12 +4390,24 @@ fn match_packed_f64_versioned_loop(
     }
     let store_array_kind =
         supported_packed_numeric_loop_store_kind(ctx, body, hoist.arr_id, hoist.counter_id);
-    // The relaxed classifier above exists only for the exact guarded store
-    // loop. Other loop bodies keep the ordinary materialization-hazard gate.
-    if ordinary_hoist.is_none() && store_array_kind.is_none() {
+    // A call-free READ body earns the same relaxation the store arm below
+    // documents: the entry guard revalidates the actual receiver/layout and
+    // the matched body cannot call out or invalidate it, so the conservative
+    // whole-function materialization hazard (tripped by the very
+    // `new Array(n).fill(0)` construction calls that build these buffers) is
+    // not load-bearing. A wrong static hint is one failed guard -> slow
+    // clone, never a wrong answer.
+    let read_body_is_safe = store_array_kind.is_none()
+        && body
+            .iter()
+            .all(|stmt| stmt_is_packed_f64_loop_safe(ctx, stmt, hoist.arr_id, hoist.counter_id));
+    // The relaxed classifier above once served only the exact guarded store
+    // loop; call-free read bodies now qualify by the argument above. Every
+    // other body keeps the ordinary materialization-hazard gate.
+    if ordinary_hoist.is_none() && store_array_kind.is_none() && !read_body_is_safe {
         return None;
     }
-    let binding_is_eligible = if store_array_kind.is_some() {
+    let binding_is_eligible = if store_array_kind.is_some() || read_body_is_safe {
         // A helper call that produced the binding marks it with the
         // conservative whole-function materialization hazard. For this exact
         // store-loop shape that history is irrelevant: the entry guard
@@ -4316,7 +4440,12 @@ fn match_packed_f64_versioned_loop(
         && local_is_u32_array(ctx, hoist.arr_id)
     {
         PackedNumericLoopKind::U32
-    } else if ctx.native_facts.proves_packed_f64_array(hoist.arr_id) {
+    } else if ctx.native_facts.proves_packed_f64_array(hoist.arr_id) || read_body_is_safe {
+        // Same relaxation as the binding gate above: for a call-free read
+        // body the F64 guard re-proves the packed layout at entry, so the
+        // whole-function provenance fact is a hint, not a requirement. (The
+        // declared number-array check below still applies; a mis-hinted
+        // non-packed array fails the guard into the slow clone.)
         PackedNumericLoopKind::F64
     } else {
         return None;
@@ -4324,10 +4453,7 @@ fn match_packed_f64_versioned_loop(
     if !local_is_number_array(ctx, hoist.arr_id) {
         return None;
     }
-    let body_is_supported = store_array_kind.is_some()
-        || body
-            .iter()
-            .all(|stmt| stmt_is_packed_f64_loop_safe(ctx, stmt, hoist.arr_id, hoist.counter_id));
+    let body_is_supported = store_array_kind.is_some() || read_body_is_safe;
     if !body_is_supported {
         return None;
     }

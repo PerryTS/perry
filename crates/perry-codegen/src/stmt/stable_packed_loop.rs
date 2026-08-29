@@ -62,8 +62,17 @@ fn target_below_numeric_operator(
     if matches!(expr, Expr::Closure { .. }) {
         return false;
     }
-    let child_numeric_context =
-        numeric_context || matches!(expr, Expr::Binary { .. } | Expr::NumberCoerce(_));
+    // Compare counts: a relational/equality test against the other operand
+    // consumes the element numerically for admission purposes. If the
+    // elements turn out non-numeric at runtime, the entry guard's
+    // `require_numeric` arm fails and the generic loop runs — a wrong hint
+    // here is a failed admission, never a wrong answer (same contract as
+    // `Binary`).
+    let child_numeric_context = numeric_context
+        || matches!(
+            expr,
+            Expr::Binary { .. } | Expr::NumberCoerce(_) | Expr::Compare { .. }
+        );
     let mut found = false;
     perry_hir::walker::walk_expr_children(expr, &mut |child| {
         if !found
@@ -136,6 +145,9 @@ fn leading_read_requires_numeric(body: &[Stmt], array_id: u32, counter_id: u32) 
         | Stmt::Expr(expr)
         | Stmt::Throw(expr)
         | Stmt::Return(Some(expr)) => expr,
+        // `if (arr[i] < 0) ...`: the leading read lives in the CONDITION.
+        // A read only in the branches keeps the conservative answer.
+        Stmt::If { condition, .. } => condition,
         _ => return false,
     };
     target_below_numeric_operator(expr, array_id, counter_id, false)
@@ -187,6 +199,29 @@ fn stmt_flags(stmt: &Stmt, array_id: u32, counter_id: u32) -> (bool, bool) {
         | Stmt::Throw(expr)
         | Stmt::Return(Some(expr)) => {
             expr_flags(expr, array_id, counter_id, &mut target, &mut call);
+        }
+        // A conditional's reads and calls count — in the CONDITION and in
+        // both branches. Invisible `If`s made `if (arr[i] < 0) count++`
+        // unmatchable as a leading read, and (worse) hid later reads inside
+        // branches from the replay-safety check below.
+        Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            expr_flags(condition, array_id, counter_id, &mut target, &mut call);
+            for inner in then_branch {
+                let (t, c) = stmt_flags(inner, array_id, counter_id);
+                target |= t;
+                call |= c;
+            }
+            if let Some(else_branch) = else_branch {
+                for inner in else_branch {
+                    let (t, c) = stmt_flags(inner, array_id, counter_id);
+                    target |= t;
+                    call |= c;
+                }
+            }
         }
         _ => {}
     }
@@ -1327,10 +1362,34 @@ pub(crate) fn has_numeric_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     let Expr::IndexGet { object, index } = expr else {
         return false;
     };
-    let (Expr::LocalGet(array_id), Expr::LocalGet(counter_id)) = (object.as_ref(), index.as_ref())
-    else {
+    let Expr::LocalGet(array_id) = object.as_ref() else {
         return false;
     };
+    // Masked-window reads inside a dense/range fast clone: the entry guard
+    // proved every in-window slot numeric (dense) or the load hole-checks and
+    // side-exits BEFORE producing a value (hole-tolerant range), so the value
+    // an enclosing expression consumes is always a genuine number. Without
+    // this, `s += a[i & K]` inside the clone lowered its `+` through
+    // `js_dynamic_string_or_number_add` on every iteration.
+    if crate::expr::masked_window::masked_window_fact_for_index(ctx, *array_id, index.as_ref())
+        .is_some()
+    {
+        return true;
+    }
+    let Expr::LocalGet(counter_id) = index.as_ref() else {
+        return false;
+    };
+    // Versioned / range packed-f64 clone facts carry the same proof for the
+    // exact `a[counter]` read: the packed load's hole/value check side-exits
+    // to the slow clone before the value is consumed. I32/U32 kinds
+    // materialize via sitofp/uitofp — numeric by construction.
+    if ctx
+        .packed_f64_loop_facts
+        .iter()
+        .any(|fact| fact.array_local_id == *array_id && fact.index_local_id == *counter_id)
+    {
+        return true;
+    }
     ctx.stable_packed_loop_facts.iter().rev().any(|fact| {
         fact.numeric_elements
             && fact.array_local_id == *array_id

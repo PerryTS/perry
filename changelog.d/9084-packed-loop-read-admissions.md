@@ -1,0 +1,1 @@
+Packed-loop read admissions: if-condition reads admit the stable clone; the plain packed clones gain reduce-accumulator proofs and guarded-read numeric facts (`s += a[i]` is a bare fadd, `if (a[i] < 0)` a bare fcmp inside fast clones); call-free read bodies take the store arm's relaxed hazard eligibility so locally-built arrays version — count loops 4.6 → 1.6 ns/element.

@@ -176,6 +176,15 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 // the BigInt-aware `js_dynamic_mul`. This set proves the
                 // value is a Number from the WRITES, so reassignment is fine.
                 || ctx.number_by_construction_locals.contains(id)
+                // The packed-f64 clone twin of the stable-packed arm above:
+                // tag-tested in the versioned/range fast preheader, and every
+                // in-clone write is numeric-preserving by the accumulator
+                // walk.
+                || ctx
+                    .packed_f64_loop_facts
+                    .iter()
+                    .rev()
+                    .any(|fact| fact.numeric_accumulators.contains(id))
         }
         // NOTE: Expr::Compare is NOT numeric — it produces a NaN-boxed
         // TAG_TRUE/TAG_FALSE which `fcmp one cond, 0.0` would handle

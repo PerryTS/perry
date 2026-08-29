@@ -534,17 +534,37 @@ fn packed_i32_read_loop_uses_i32_specific_loop_guard_and_no_slow_helper_in_fast_
 }
 
 #[test]
-fn packed_f64_read_loop_rejects_prior_array_alias() {
+fn packed_f64_read_loop_accepts_prior_array_alias_behind_guard() {
+    // A prior alias binding once rejected the packed-f64 READ version
+    // outright. The store arm has accepted this hazard for a while, and the
+    // read arm now follows the same argument: the entry guard revalidates
+    // the ACTUAL array, and the matched call-free body cannot use the alias
+    // to reshape it mid-loop (stores/calls are rejected by the body walk).
+    // The version must therefore EXIST — guard plus fast and slow clones —
+    // never an unguarded fast path.
     let ir = compile_ir(
         "packed_f64_read_loop_alias_hazard.ts",
         packed_read_sum_loop_body(vec![array_alias_let(2, "alias", 1)]),
     );
 
-    assert_no_packed_f64_loop(&ir);
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "aliased read loop should version behind the loop guard:\n{ir}"
+    );
+    assert!(
+        ir.contains("for.packed_f64_fast") && ir.contains("for.packed_f64_slow"),
+        "aliased read loop should emit both clones:\n{ir}"
+    );
 }
 
 #[test]
-fn preloop_dynamic_call_invalidates_cached_and_packed_array_proofs() {
+fn preloop_dynamic_call_versions_packed_read_loop_behind_guard() {
+    // A pre-loop dynamic call once rejected the packed-f64 READ version
+    // outright (whole-function materialization hazard). The guard runs
+    // AFTER the call and validates whatever state the call left behind, and
+    // the call-free body cannot invalidate it mid-loop — the same contract
+    // `guarded_put_value_store_loop_accepts_conservative_preloop_call_hazard`
+    // pins for stores. The version must exist, behind the guard.
     let body = packed_read_sum_loop_body(vec![Stmt::Expr(extern_call(
         "native_touch",
         Vec::new(),
@@ -553,11 +573,22 @@ fn preloop_dynamic_call_invalidates_cached_and_packed_array_proofs() {
     let opts = native_library_opts(vec![("native_touch", vec![], "void")]);
 
     let ir = compile_ir_with_opts("preloop_dynamic_call_array_hazard.ts", body, opts);
-    assert_no_packed_f64_loop(&ir);
-    let cond_ir = block_between(&ir, "\nfor.cond.", "\nfor.body.");
     assert!(
-        cond_ir.contains("plen."),
-        "pre-loop dynamic escape should block cached array length reuse:\n{cond_ir}"
+        ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "pre-loop-call read loop should version behind the loop guard:\n{ir}"
+    );
+    assert!(
+        ir.contains("for.packed_f64_fast") && ir.contains("for.packed_f64_slow"),
+        "pre-loop-call read loop should emit both clones:\n{ir}"
+    );
+    // The SLOW clone keeps the uncached per-iteration length read — the
+    // hazard still blocks static length reuse outside the guarded clone.
+    let slow_start = ir
+        .find("\nfor.packed_f64_slow")
+        .expect("expected slow clone");
+    assert!(
+        ir[slow_start..].contains("plen."),
+        "slow clone must keep the uncached length read:\n{ir}"
     );
 }
 

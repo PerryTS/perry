@@ -1912,6 +1912,15 @@ pub(crate) struct PackedF64LoopFact {
     /// RHS is numeric bits (side-exiting otherwise) and skip the per-iteration
     /// store guard — the range guard already proved bounds and mutability.
     pub allow_holes: bool,
+    /// Plain locals the packed fast preheader proved to hold a Number (one
+    /// tag test per admitted accumulator) whose every in-body write is
+    /// numeric-preserving — the packed twin of
+    /// `StablePackedLoopFact::numeric_accumulators`. `is_numeric_expr`
+    /// consults this for `LocalGet`, which is what lets `s += arr[i]` inside
+    /// the fast clone lower to a native `fadd` instead of
+    /// `js_dynamic_string_or_number_add` on every iteration. Scope-safe by
+    /// construction: the fact is pushed around the fast-clone lowering only.
+    pub numeric_accumulators: Vec<u32>,
     /// True when a *range* guard (hole-tolerant or dense) validated the whole
     /// constant-offset index window `[start + min_offset, bound + max_offset)`
     /// at loop entry — `arr[i ± c]` loads may use non-zero offsets even
@@ -2611,7 +2620,7 @@ mod fs_await;
 mod index_get;
 #[cfg(test)]
 mod index_get_claim_tests;
-mod masked_window;
+pub(crate) mod masked_window;
 #[cfg(test)]
 mod null_default_numeric_add_tests;
 

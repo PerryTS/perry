@@ -433,6 +433,15 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
             .as_ref()
             .is_some_and(crate::typed_shape::type_is_raw_f64_candidate),
         Expr::IndexGet { object, .. } => {
+            // Inside a packed/stable fast clone the guarded read either
+            // produces a genuine raw double or side-exits to the slow clone
+            // BEFORE the value is consumed — there is no boxed fallback edge
+            // at all, so the hazard is off. This is what lets
+            // `if (a[i] < 0)` in a versioned clone keep the bare `fcmp`
+            // instead of `js_rel_lt` per iteration.
+            if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, expr) {
+                return false;
+            }
             receiver_class_name(ctx, object)
                 .as_deref()
                 .is_some_and(crate::type_analysis::is_numeric_typed_array_class)
