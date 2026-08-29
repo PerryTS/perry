@@ -49,14 +49,6 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // `disable-tail-calls` before the optimizer. It changes the generated
     // code of the functions it trips on, so it is a cache input.
     "PERRY_LL_TRE_MAX_ALLOCA_WALK",
-    // #9026: gates the once-per-closure-entry resolution of read-only boxed
-    // capture cells — flipping it changes every closure body that qualifies.
-    "PERRY_BOX_CAPTURE_ENTRY_CELLS",
-    // The guarded-preinline IR-size ceiling: functions on either side of the
-    // budget inline differently, so a run with a raised ceiling must not be
-    // served objects a default run produced (same rule as the RS4GC budget
-    // above).
-    "PERRY_GUARDED_PREINLINE_MAX_IR_BYTES",
     // #8583: the relocation estimate above which a function spills its GC roots
     // to a shadow frame. It changes which functions carry statepoints, so it
     // changes the generated code and must be a cache input.
