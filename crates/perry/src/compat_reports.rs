@@ -105,15 +105,13 @@ impl ReportSink for QueueSink {
     }
 }
 
-/// Read the active `compatibility_reports` mode for this process,
-/// honouring env-level overrides (`PERRY_NO_TELEMETRY=1`, `CI=true`).
+/// Read the active `compatibility_reports` mode for this process, honouring
+/// the master consent and env-level overrides (`PERRY_NO_TELEMETRY=1`,
+/// `CI=true`).
 pub(crate) fn active_mode() -> CompatibilityReports {
-    if telemetry::should_skip_telemetry() {
-        return CompatibilityReports::Off;
-    }
-    load_telemetry_config()
-        .map(|c| c.compatibility_reports)
-        .unwrap_or(CompatibilityReports::Ask)
+    telemetry::active_telemetry_config()
+        .map(|config| config.compatibility_reports)
+        .unwrap_or(CompatibilityReports::Off)
 }
 
 /// Install the diagnostic sink so HIR/codegen emission sites enqueue
@@ -435,6 +433,10 @@ fn persist_mode(mode: CompatibilityReports) {
 /// POST a single compatibility report to Chirp. Best-effort; failures are
 /// silently swallowed (this is opt-in background telemetry).
 fn send_compat_report(report: &CompatibilityReport) {
+    if !telemetry::is_telemetry_enabled() {
+        return;
+    }
+
     let body = match serde_json::to_value(report) {
         Ok(v) => v,
         Err(_) => return,
@@ -442,6 +444,12 @@ fn send_compat_report(report: &CompatibilityReport) {
     let client_id = report.client_id.clone();
 
     std::thread::spawn(move || {
+        // The master opt-out may have changed while this report was queued.
+        // Check again at the network boundary and fail closed.
+        if !telemetry::is_telemetry_enabled() {
+            return;
+        }
+
         let client = match reqwest::blocking::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(3))
             .timeout(std::time::Duration::from_secs(5))

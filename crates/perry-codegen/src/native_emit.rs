@@ -1056,6 +1056,47 @@ mod tests {
         );
     }
 
+    /// #9050: exercise the exact Apple arm64 hot-TLS instruction through the
+    /// migration harness's real verdict: object bytes from text parsing and
+    /// native dialect construction must match. The void barrier remains in
+    /// the same fixture as a control for the original inline-asm form.
+    #[test]
+    fn typed_inline_asm_matches_text_object_on_apple_arm64() {
+        const TARGET: &str = "arm64-apple-darwin";
+        let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
+        let mut module = LlModule::new(TARGET);
+        let function = module.define_function("read_tpidrro", I64, vec![]);
+        let entry = function.create_block("entry");
+        entry.emit_raw(
+            "%r = call i64 asm sideeffect \"mrs $0, tpidrro_el0\", \"=r\"() \
+             \"gc-leaf-function\"",
+        );
+        entry.emit_raw("call void asm sideeffect \"\", \"\"() \"gc-leaf-function\"");
+        entry.ret(I64, "%r");
+
+        let text_ir = module.to_ir();
+        assert!(
+            text_ir.contains(
+                "call i64 asm sideeffect \"mrs $0, tpidrro_el0\", \"=r\"() \
+                 \"gc-leaf-function\""
+            ),
+            "fixture lost the exact hot-TLS inline asm:\n{text_ir}"
+        );
+        assert!(
+            text_ir.contains("call void asm sideeffect \"\", \"\"() \"gc-leaf-function\""),
+            "fixture lost the void barrier control:\n{text_ir}"
+        );
+
+        let text = crate::linker::compile_ll_to_object(&text_ir, Some(TARGET))
+            .expect("trusted text arm emits an Apple arm64 object");
+        let native = compile_module_native(&mut module, Some(TARGET), "typed_inline_asm_fixture")
+            .expect("native reader emits an Apple arm64 object");
+        assert_eq!(
+            native, text,
+            "typed inline asm must emit byte-identical objects through text and native readers"
+        );
+    }
+
     /// #8596: whole-module generated-callee effects must reach both emission
     /// transports. The text path spells the string attribute inline; LLVM's
     /// C API prints it through an attribute group. RS4GC is the final arbiter:

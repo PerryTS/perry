@@ -2445,19 +2445,37 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
         ir.contains("for.packed_f64_fast") && ir.contains("for.packed_f64_slow"),
         "safe store-update loop should emit fast and slow clones:\n{ir}"
     );
+    // The fast clone's store is the inline range store: a nanbox tag check on
+    // the RHS value plus a raw `store double` — NO per-store runtime call. The
+    // per-iteration `js_typed_feedback_numeric_array_index_set_guard` (and the
+    // `js_array_numeric_value_to_raw_f64` canonicalization call) it used to
+    // keep made the "fast" clone slower than the plain per-store diamond
+    // (9.1 vs 3.3 ns/store); every check the guard performed is proven by the
+    // loop-entry guard + the loop bound (`i < arr.length`, offset-0 index).
+    let fast_start = ir
+        .find("for.packed_f64_fast")
+        .expect("expected packed-f64 fast clone");
+    let fast_end = ir
+        .find("for.packed_f64_slow")
+        .expect("expected packed-f64 slow clone");
+    let fast_clone = &ir[fast_start..fast_end];
     assert!(
-        ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),
-        "fast store should keep a runtime numeric/layout store guard:\n{ir}"
+        !fast_clone.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),
+        "packed fast clone must not keep a per-store runtime guard call:\n{fast_clone}\n\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_array_numeric_value_to_raw_f64"),
-        "fast store should canonicalize numeric values before raw f64 storage:\n{ir}"
+        !fast_clone.contains("call double @js_array_numeric_value_to_raw_f64"),
+        "packed fast clone must not canonicalize per store — boxed values side-exit:\n{fast_clone}\n\n{ir}"
+    );
+    assert!(
+        fast_clone.contains("packed_f64_range_store.fast"),
+        "packed fast clone should store through the inline range-store block:\n{fast_clone}\n\n{ir}"
     );
 
     let fallback_start = ir
-        .find("\npacked_f64_loop_store.fallback.")
+        .find("\npacked_f64_range_store.side_exit.")
         .map(|pos| pos + 1)
-        .expect("expected packed-f64 store fallback block");
+        .expect("expected packed-f64 store side-exit block");
     let fallback_tail = &ir[fallback_start..];
     let fallback_end = fallback_tail
         .find("\n\n")
@@ -2466,7 +2484,7 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
     let fallback_block = &ir[fallback_start..fallback_end];
     assert!(
         fallback_block.contains("br label %packed_f64.loop.slow.preheader."),
-        "packed store guard failure must side-exit to the slow clone preheader:\n{fallback_block}\n\n{ir}"
+        "packed store value-check failure must side-exit to the slow clone preheader:\n{fallback_block}\n\n{ir}"
     );
     assert!(
         !fallback_block.contains("js_typed_feedback_array_index_set_fallback_boxed"),
@@ -2512,8 +2530,8 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
     );
     assert!(
         records.iter().any(|record| {
-            record["expr_kind"] == "PackedF64LoopStore"
-                && record["consumer"] == "packed_f64_loop_store"
+            record["expr_kind"] == "PackedF64RangeLoopStore"
+                && record["consumer"] == "packed_f64_range_loop_store"
                 && record["access_mode"] == "checked_native"
                 && record["notes"].as_array().is_some_and(|notes| {
                     notes
@@ -2522,12 +2540,12 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
                 })
                 && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
         }),
-        "expected checked packed raw-f64 loop store record:\n{artifact:#}"
+        "expected checked packed raw-f64 range-store record:\n{artifact:#}"
     );
     assert!(
         records.iter().any(|record| {
-            record["expr_kind"] == "PackedF64LoopStore"
-                && record["consumer"] == "packed_f64_loop_store_side_exit"
+            record["expr_kind"] == "PackedF64RangeLoopStore"
+                && record["consumer"] == "packed_f64_range_loop_store_side_exit"
                 && record["access_mode"] == "dynamic_fallback"
                 && record["materialization_reason"] == "runtime_api"
                 && record["fallback_reason"] == "runtime_api"
@@ -2537,7 +2555,6 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
                         .any(|note| note == "store_guard_failure=side_exit_slow_restart")
                 })
                 && record_has_raw_f64_layout_fact(record, "rejected_facts", "rejected")
-                && record_has_raw_f64_layout_fact(record, "rejected_facts", "invalidated")
         }),
         "expected packed store side-exit fallback evidence:\n{artifact:#}"
     );
@@ -2965,15 +2982,28 @@ fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
         !fast_body.contains("js_math_to_number"),
         "packed fast body must not route Math.abs(arr[i]) through JSValue ToNumber:\n{fast_body}\n\n{ir}"
     );
+    // The fast clone stores through the inline range store (see the
+    // store-update twin above): no per-store guard call remains in it.
+    let fast_start = ir
+        .find("for.packed_f64_fast")
+        .expect("expected packed-f64 fast clone");
+    let fast_end = ir
+        .find("for.packed_f64_slow")
+        .expect("expected packed-f64 slow clone");
+    let fast_clone = &ir[fast_start..fast_end];
     assert!(
-        ir.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),
-        "fast unary math store should keep a runtime numeric/layout store guard:\n{ir}"
+        !fast_clone.contains("call i32 @js_typed_feedback_numeric_array_index_set_guard"),
+        "unary math packed fast clone must not keep a per-store runtime guard call:\n{fast_clone}\n\n{ir}"
+    );
+    assert!(
+        fast_clone.contains("packed_f64_range_store.fast"),
+        "unary math packed fast clone should store through the inline range-store block:\n{fast_clone}\n\n{ir}"
     );
 
     let fallback_start = ir
-        .find("\npacked_f64_loop_store.fallback.")
+        .find("\npacked_f64_range_store.side_exit.")
         .map(|pos| pos + 1)
-        .expect("expected packed-f64 store fallback block");
+        .expect("expected packed-f64 store side-exit block");
     let fallback_tail = &ir[fallback_start..];
     let fallback_end = fallback_tail
         .find("\n\n")
@@ -3009,8 +3039,8 @@ fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
     );
     assert!(
         records.iter().any(|record| {
-            record["expr_kind"] == "PackedF64LoopStore"
-                && record["consumer"] == "packed_f64_loop_store"
+            record["expr_kind"] == "PackedF64RangeLoopStore"
+                && record["consumer"] == "packed_f64_range_loop_store"
                 && record["access_mode"] == "checked_native"
                 && record["notes"].as_array().is_some_and(|notes| {
                     notes
@@ -3022,17 +3052,16 @@ fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
                 })
                 && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
         }),
-        "expected checked packed raw-f64 loop store record for unary math RHS:\n{artifact:#}"
+        "expected checked packed raw-f64 range-store record for unary math RHS:\n{artifact:#}"
     );
     assert!(
         records.iter().any(|record| {
-            record["expr_kind"] == "PackedF64LoopStore"
-                && record["consumer"] == "packed_f64_loop_store_side_exit"
+            record["expr_kind"] == "PackedF64RangeLoopStore"
+                && record["consumer"] == "packed_f64_range_loop_store_side_exit"
                 && record["access_mode"] == "dynamic_fallback"
                 && record["materialization_reason"] == "runtime_api"
                 && record["fallback_reason"] == "runtime_api"
                 && record_has_raw_f64_layout_fact(record, "rejected_facts", "rejected")
-                && record_has_raw_f64_layout_fact(record, "rejected_facts", "invalidated")
         }),
         "expected unary math packed store side-exit fallback evidence:\n{artifact:#}"
     );
@@ -3080,7 +3109,12 @@ fn packed_f64_loop_rejects_coercive_unary_math_store_rhs() {
         !records.iter().any(|record| {
             matches!(
                 record["expr_kind"].as_str(),
-                Some("PackedF64LoopGuard" | "PackedF64LoopStore" | "PackedF64LoopLoad")
+                Some(
+                    "PackedF64LoopGuard"
+                        | "PackedF64LoopStore"
+                        | "PackedF64RangeLoopStore"
+                        | "PackedF64LoopLoad"
+                )
             )
         }),
         "coercive unary math store loop should not record packed-f64 loop facts:\n{artifact:#}"
@@ -6514,7 +6548,12 @@ fn packed_f64_loop_rejects_nonnumeric_store_then_later_read() {
         !records.iter().any(|record| {
             matches!(
                 record["expr_kind"].as_str(),
-                Some("PackedF64LoopGuard" | "PackedF64LoopStore" | "PackedF64LoopLoad")
+                Some(
+                    "PackedF64LoopGuard"
+                        | "PackedF64LoopStore"
+                        | "PackedF64RangeLoopStore"
+                        | "PackedF64LoopLoad"
+                )
             )
         }),
         "nonnumeric store/read loop should not record packed-f64 loop facts:\n{artifact:#}"
@@ -6582,7 +6621,12 @@ fn packed_f64_loop_rejects_store_then_read_invalidation_shape() {
         !records.iter().any(|record| {
             matches!(
                 record["expr_kind"].as_str(),
-                Some("PackedF64LoopGuard" | "PackedF64LoopStore" | "PackedF64LoopLoad")
+                Some(
+                    "PackedF64LoopGuard"
+                        | "PackedF64LoopStore"
+                        | "PackedF64RangeLoopStore"
+                        | "PackedF64LoopLoad"
+                )
             )
         }),
         "store-bearing loop should not record packed-f64 loop facts:\n{artifact:#}"

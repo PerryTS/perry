@@ -439,9 +439,9 @@ fn main_inner() -> Result<()> {
     };
 
     // #849: install the compat-report sink so diagnostic emission sites
-    // can enqueue reports. Honors `compatibility_reports = "off"` (skips
-    // installation entirely) and `PERRY_NO_TELEMETRY=1`/`CI=true` (same
-    // env overrides as the generic telemetry channel).
+    // can enqueue reports. The first-run `telemetry.enabled` consent is the
+    // master gate; `compatibility_reports = "off"` and the environment-level
+    // overrides can disable this channel further.
     compat_reports::install_sink();
 
     // Resolve the update policy ONCE, here, and use it at both hook sites.

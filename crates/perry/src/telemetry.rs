@@ -1,7 +1,8 @@
 //! Anonymous usage statistics for Perry CLI
 //!
 //! Opt-in telemetry via Chirp API. On first interactive run, the user is asked
-//! once if stats collection is OK (default: yes). All telemetry is fire-and-forget
+//! once if stats collection is OK (default: yes). Declining that prompt is a
+//! master opt-out for every telemetry channel. All telemetry is fire-and-forget
 //! on background threads — never slows down the CLI.
 
 use serde::{Deserialize, Serialize};
@@ -22,9 +23,9 @@ const CHIRP_KEY: &str = "testkey123";
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Tri-state setting for the #849 opt-in compatibility-report channel.
-/// Decoupled from `enabled` (generic usage analytics) so users can opt in
-/// to one without the other.
+/// Tri-state setting for the #849 compatibility-report channel.
+/// `TelemetryConfig::enabled` is the master gate; this setting can further
+/// restrict compatibility reports after telemetry has been enabled.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum CompatibilityReports {
@@ -53,24 +54,21 @@ pub(crate) struct TelemetryConfig {
     pub(crate) enabled: bool,
     #[serde(default)]
     pub(crate) client_id: String,
-    /// #849: opt-in compatibility reports. Off by default in code (`Ask`
-    /// is the variant default but `#[serde(default)]` means existing
-    /// installs without the field get `Off` until they upgrade — see
-    /// `compatibility_reports_default`).
+    /// #849: compatibility reports. This setting is ignored unless the
+    /// master `enabled` consent is true.
     #[serde(default = "compatibility_reports_default")]
     pub(crate) compatibility_reports: CompatibilityReports,
 }
 
-/// Existing users (config.toml predates #849) get `Ask` so they see the
-/// prompt next time a gap is hit. New installs running through
-/// `init_and_check_consent()` also land on `Ask`. Set explicitly to `Off`
-/// to opt out at the file level.
+/// Telemetry-enabled users whose config predates #849 get `Ask` so they see
+/// the focused prompt next time a compatibility gap is hit. Master opt-outs
+/// remain off regardless of this default.
 fn compatibility_reports_default() -> CompatibilityReports {
     CompatibilityReports::Ask
 }
 
 /// Returns true if telemetry should be skipped entirely (explicit opt-out).
-pub(crate) fn should_skip_telemetry() -> bool {
+fn should_skip_telemetry() -> bool {
     if std::env::var("PERRY_NO_TELEMETRY").is_ok_and(|v| v == "1" || v == "true") {
         return true;
     }
@@ -78,6 +76,28 @@ pub(crate) fn should_skip_telemetry() -> bool {
         return true;
     }
     false
+}
+
+fn apply_master_consent(
+    config: Option<TelemetryConfig>,
+    environment_opt_out: bool,
+) -> Option<TelemetryConfig> {
+    if environment_opt_out {
+        return None;
+    }
+    config.filter(|config| config.enabled)
+}
+
+/// Return the telemetry config only after the user has granted the master
+/// consent and no environment-level override disables it. Every network
+/// telemetry path must use this gate, including paths that do not go through
+/// `main`'s `telemetry_active` flag.
+pub(crate) fn active_telemetry_config() -> Option<TelemetryConfig> {
+    apply_master_consent(load_telemetry_config(), should_skip_telemetry())
+}
+
+pub(crate) fn is_telemetry_enabled() -> bool {
+    active_telemetry_config().is_some()
 }
 
 /// Returns true if we should skip the interactive consent prompt
@@ -146,18 +166,24 @@ fn prompt_consent() -> bool {
         .interact()
         .unwrap_or(false);
 
-    let config = TelemetryConfig {
-        enabled: consent,
-        client_id: generate_client_id(),
-        // Generic analytics consent prompt doesn't speak for the
-        // separate #849 compat-report channel — leave it on `Ask` so
-        // the user gets a focused, in-context prompt the first time
-        // a gap actually fires.
-        compatibility_reports: CompatibilityReports::Ask,
-    };
-    save_telemetry_config(&config);
+    save_telemetry_config(&config_for_consent(consent));
 
     consent
+}
+
+fn config_for_consent(consent: bool) -> TelemetryConfig {
+    TelemetryConfig {
+        enabled: consent,
+        client_id: generate_client_id(),
+        // A no at the first-run prompt means no telemetry of any kind.
+        // Opted-in users still get the focused, in-context prompt before
+        // the first compatibility report is sent.
+        compatibility_reports: if consent {
+            CompatibilityReports::Ask
+        } else {
+            CompatibilityReports::Off
+        },
+    }
 }
 
 /// Check skip conditions, load config, prompt if needed.
@@ -178,9 +204,9 @@ pub(crate) fn init_and_check_consent() -> bool {
 /// Send an event on a background thread. The thread is tracked so `flush()`
 /// can wait for it before process exit. All errors are silently ignored.
 pub(crate) fn send_event(event: &str, dims: &[(&str, &str)]) {
-    let config = match load_telemetry_config() {
-        Some(c) if c.enabled => c,
-        _ => return,
+    let config = match active_telemetry_config() {
+        Some(config) => config,
+        None => return,
     };
 
     let event = event.to_string();
@@ -228,6 +254,12 @@ pub(crate) fn flush() {
 /// Actual HTTP POST to Chirp API.
 /// Chirp expects `dims` object with known keys (platform, target, version, status, etc.).
 fn send_event_blocking(event: &str, dims: &[(String, String)], client_id: &str) {
+    // Re-check immediately before constructing the HTTP client. This keeps an
+    // opt-out made while a background event is queued from racing with send.
+    if !is_telemetry_enabled() {
+        return;
+    }
+
     let client = match reqwest::blocking::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
@@ -254,4 +286,51 @@ fn send_event_blocking(event: &str, dims: &[(String, String)], client_id: &str) 
         .header("X-Chirp-Client", client_id)
         .json(&body)
         .send();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn declined_master_consent_disables_compatibility_reports() {
+        let config = config_for_consent(false);
+
+        assert!(!config.enabled);
+        assert_eq!(config.compatibility_reports, CompatibilityReports::Off);
+    }
+
+    #[test]
+    fn master_opt_out_rejects_even_an_enabled_compatibility_channel() {
+        let config = TelemetryConfig {
+            enabled: false,
+            client_id: "anonymous-id".into(),
+            compatibility_reports: CompatibilityReports::On,
+        };
+
+        assert!(apply_master_consent(Some(config), false).is_none());
+        assert!(apply_master_consent(None, false).is_none());
+    }
+
+    #[test]
+    fn environment_opt_out_overrides_stored_consent() {
+        let config = TelemetryConfig {
+            enabled: true,
+            client_id: "anonymous-id".into(),
+            compatibility_reports: CompatibilityReports::On,
+        };
+
+        let active = apply_master_consent(Some(config.clone()), false)
+            .expect("stored master consent should enable telemetry");
+        assert_eq!(active.compatibility_reports, CompatibilityReports::On);
+        assert!(apply_master_consent(Some(config), true).is_none());
+    }
+
+    #[test]
+    fn accepted_master_consent_keeps_compatibility_reports_opt_in() {
+        let config = config_for_consent(true);
+
+        assert!(config.enabled);
+        assert_eq!(config.compatibility_reports, CompatibilityReports::Ask);
+    }
 }
