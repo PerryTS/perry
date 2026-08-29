@@ -180,29 +180,17 @@ jobs:
       # `pr-gate` is the single required context, so a red step here is as
       # blocking as a red job was -- and one fewer job is one fewer runner
       # slot on a 20-slot org.
+      # Runs on every tier, not just PRs, so the gate's own logic is exercised
+      # even when the enforcement step below is inapplicable.
+      - name: Changeset gate self-test
+        if: ${{ !cancelled() }}
+        run: ./scripts/check_changeset_fragment.sh --self-test
+
       - name: Require a changelog.d/ fragment for crates/ changes
         if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'skip-changelog')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate > files.json
-          # jq -e, no pipes: `lint` is a registered gate (gc_gate_wiring_check)
-          # and `jq | grep -q` under pipefail can fail on SIGPIPE when grep
-          # closes early on the first match.
-          # `-s` + `[.[][]]`: --paginate emits one JSON array per page, and
-          # `jq -e` reports only the LAST array's verdict without the slurp.
-          if ! jq -s -e '[.[][]] | any(.filename | startswith("crates/"))' files.json > /dev/null; then
-            echo "No crates/ changes — gate not applicable."; exit 0
-          fi
-          # The fragment must be ADDED in this PR (editing a leftover file
-          # doesn't count) and match the root-level <digits>-<slug>.md shape
-          # cut_release_notes.sh folds at release time.
-          if jq -s -e '[.[][]] | any(.status == "added" and (.filename | test("^changelog\\.d/[0-9]+-[^/]+\\.md$")))' files.json > /dev/null; then
-            exit 0
-          fi
-          echo "::error::This PR changes crates/ but adds no changelog.d/ fragment. Add changelog.d/<PR>-<slug>.md (see changelog.d/README.md) or apply the 'skip-changelog' label."
-          exit 1
+        run: ./scripts/check_changeset_fragment.sh "${{ github.repository }}" "${{ github.event.pull_request.number }}"
 
       - name: Setup Node.js for benchmark harness tests
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
