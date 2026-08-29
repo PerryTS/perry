@@ -595,13 +595,30 @@ fn lower_packed_f64_versioned_for(
         allow_holes: false,
         window_validated: false,
     });
-    lower_for_after_init(
+    // The guard just proved a live, non-forwarded plain array, and the
+    // matched body cannot change its length (in-bounds stores only, no
+    // calls/closures/awaits) — so hoist the length ONCE as the fast clone's
+    // i32 bound instead of re-evaluating `i < arr.length` per iteration
+    // (the un-hoisted condition paid ~20 inline instructions per iteration:
+    // handle decode + GC-header checks + the length load, which LLVM cannot
+    // hoist past the body's raw element stores). A mid-loop GC move changes
+    // the array's ADDRESS, never its length, so the hoisted VALUE stays
+    // correct. Same mechanism as the range-versioned fast copy (#6011).
+    let hoisted_len_i32 = {
+        let blk = ctx.block();
+        let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+        let arr_handle = blk.and(I64, &arr_bits, crate::nanbox::POINTER_MASK_I64);
+        let len_ptr = blk.inttoptr(I64, &arr_handle);
+        blk.load(I32, &len_ptr)
+    };
+    lower_for_after_init_with_i32_bound(
         ctx,
         init,
         condition,
         update,
         body,
         &format!("for.{loop_label}_fast"),
+        Some((matched.counter_id, hoisted_len_i32)),
     )?;
     ctx.packed_f64_loop_facts
         .retain(|fact| fact.scope_id != packed_scope_id);
@@ -1227,6 +1244,23 @@ fn dense_masked_store_rhs_is_admissible(
                 && crate::collectors::static_index_window(index)
                     .is_some_and(|(lo, hi)| lo >= 0 && hi < i64::from(i32::MAX))
         }
+        // Float arithmetic over admitted operands — see the lowering-side
+        // twin (`masked_store_rhs_is_genuine_f64`) for the argument. `%`/`**`
+        // stay excluded (runtime-helper lowerings).
+        Expr::Binary { op, left, right } => {
+            matches!(
+                op,
+                perry_hir::BinaryOp::Add
+                    | perry_hir::BinaryOp::Sub
+                    | perry_hir::BinaryOp::Mul
+                    | perry_hir::BinaryOp::Div
+            ) && dense_masked_store_rhs_is_admissible(ctx, left, counter_id, _accesses)
+                && dense_masked_store_rhs_is_admissible(ctx, right, counter_id, _accesses)
+        }
+        Expr::Unary {
+            op: perry_hir::UnaryOp::Neg,
+            operand,
+        } => dense_masked_store_rhs_is_admissible(ctx, operand, counter_id, _accesses),
         _ => false,
     }
 }

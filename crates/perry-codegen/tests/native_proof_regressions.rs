@@ -2642,6 +2642,84 @@ fn masked_window_dense_store_inlines_raw_store_without_calls() {
 }
 
 #[test]
+fn masked_window_dense_store_admits_float_arithmetic_rhs() {
+    // `a[i & 7] = a[(i + 1) & 7] + 0.5` — arithmetic over admitted operands
+    // (an in-window masked load and a literal). The fast clone must stay
+    // call-free: the RHS lowers to a raw in-window load plus a bare `fadd`,
+    // and the store stays the inline range store. This pins the predicate's
+    // central claim — that admitted arithmetic never routes through a
+    // boxed-result helper.
+    let bitand = |left: Expr, right: Expr| Expr::Binary {
+        op: BinaryOp::BitAnd,
+        left: Box::new(left),
+        right: Box::new(right),
+    };
+    let module = module_with_classes_and_params(
+        "masked_window_dense_store_arith.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Number,
+        vec![
+            number_array_let(1, "values", vec![1, 2, 3, 4, 5, 6, 7, 8]),
+            for_loop(
+                4,
+                int(64),
+                vec![array_set(
+                    1,
+                    bitand(local(4), int(7)),
+                    add(
+                        index_get(1, bitand(add(local(4), int(1)), int(7))),
+                        number(0.5),
+                    ),
+                )],
+            ),
+            Stmt::Return(Some(index_get(1, int(0)))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_packed_f64_range_loop_guard_dense"),
+        "arith masked store loop should get the f64 dense range guard:\n{ir}"
+    );
+    let fast_start = ir
+        .find("\nfor.packed_f64_range_fast")
+        .map(|pos| pos + 1)
+        .expect("expected dense fast clone");
+    let fast_region_end = ir[fast_start..]
+        .find("\nfor.packed_f64_range_slow")
+        .map(|off| fast_start + off)
+        .unwrap_or(ir.len());
+    let fast_clone = &ir[fast_start..fast_region_end];
+    for forbidden in [
+        "js_typed_feedback_numeric_array_index_set_guard",
+        "js_typed_feedback_array_set_f64_extend",
+        "js_add",
+        "js_dyn_index_set_strict",
+    ] {
+        assert!(
+            !fast_clone.contains(forbidden),
+            "arith dense fast clone must not call {forbidden}:\n{fast_clone}\n\n{ir}"
+        );
+    }
+    assert!(
+        fast_clone.contains("fadd double") && fast_clone.contains("store double"),
+        "arith dense fast clone should be a raw load + fadd + raw store:\n{fast_clone}\n\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MaskedWindowStore"
+                && record["consumer"] == "packed_f64_masked_window_store"
+                && record["access_mode"] == "checked_native"
+        }),
+        "expected a checked masked-window store record for the arith RHS:\n{artifact:#}"
+    );
+}
+
+#[test]
 fn masked_window_dense_store_rejects_unproven_rhs() {
     // Same loop, but the RHS is a plain number PARAMETER — numeric by type
     // yet potentially INT32-boxed at runtime, and dense mode has no side

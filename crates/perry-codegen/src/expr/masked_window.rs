@@ -225,13 +225,19 @@ pub(crate) fn masked_window_store_fact_for_index(
 ///   raw-f64 number (and TA-tier loads materialize via `sitofp`/`uitofp` /
 ///   raw f64 loads).
 ///
-/// Deliberately NO binary/unary arithmetic in this v1: an operand typed `Any`
-/// can route `+` through a runtime helper whose result is boxed. Arithmetic
-/// over genuine doubles is a candidate extension once its lowering is pinned.
+/// Float arithmetic (`+ - * /`, unary negation) over these operands is also
+/// admitted: both sides being genuine doubles pins the numeric lowering to a
+/// bare float instruction (the boxed-`+`-helper hazard needs a non-numeric
+/// operand, and every admitted operand is numeric by construction), and the
+/// pinning test asserts the fast clone stays call-free so a lowering change
+/// that broke this would go red, not silent. `%` and `**` stay excluded —
+/// they can lower through runtime helpers.
 ///
 /// Closed under IEEE semantics: a raw-f64 slot never holds a payload-NaN in
 /// the box tag range (that is the raw-f64 invariant canonicalization exists
-/// to maintain), and none of these shapes fabricates one.
+/// to maintain), none of these shapes fabricates one, and a float op over
+/// canonical operands produces the default quiet NaN (0x7FF8...), which is a
+/// genuine double.
 pub(crate) fn masked_store_rhs_is_genuine_f64(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
         Expr::Number(_) | Expr::Integer(_) => true,
@@ -242,6 +248,20 @@ pub(crate) fn masked_store_rhs_is_genuine_f64(ctx: &FnCtx<'_>, expr: &Expr) -> b
             }
             _ => false,
         },
+        Expr::Binary { op, left, right } => {
+            matches!(
+                op,
+                perry_hir::BinaryOp::Add
+                    | perry_hir::BinaryOp::Sub
+                    | perry_hir::BinaryOp::Mul
+                    | perry_hir::BinaryOp::Div
+            ) && masked_store_rhs_is_genuine_f64(ctx, left)
+                && masked_store_rhs_is_genuine_f64(ctx, right)
+        }
+        Expr::Unary {
+            op: perry_hir::UnaryOp::Neg,
+            operand,
+        } => masked_store_rhs_is_genuine_f64(ctx, operand),
         _ => false,
     }
 }

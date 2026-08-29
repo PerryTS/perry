@@ -1,0 +1,1 @@
+Hoisted the packed versioned loop's `arr.length` bound to a single pre-validated i32 read (length-bound store loops 1.3 → 0.7 ns), and extended masked-window dense stores to float-arithmetic values — `a[i & K] = b[i & K] + c` now lowers to a raw load, one float op, and a raw store (15.9 → 0.5 ns, ahead of Node).
