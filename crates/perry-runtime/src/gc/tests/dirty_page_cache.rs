@@ -114,12 +114,17 @@ fn test_7187b_repeat_marks_hit_the_cache_and_a_new_page_still_gets_recorded() {
     assert_eq!(remembered_dirty_page_count(), 2);
     assert!(old_page_dirty_for(page_a) && old_page_dirty_for(page_b));
 
-    // Returning to the first page misses (one entry), re-marks, and — this is
-    // the property that matters — does not lose or duplicate anything.
+    // Returning to the first page HITS: the direct-mapped ways hold both
+    // pages (adjacent page numbers land in distinct ways), which is exactly
+    // the alternating-store pattern the one-entry cache thrashed on. The
+    // completeness property is unchanged — nothing lost, nothing duplicated.
     let back = unsafe { barriered_young_store(parent, fields, first_index) };
     assert_eq!(back, page_a);
     let counters = take_write_barrier_trace_counters();
-    assert_eq!(counters.dirty_page_cache_hits, 0);
+    assert_eq!(
+        counters.dirty_page_cache_hits, 1,
+        "both alternating pages must stay cached"
+    );
     assert_eq!(counters.new_dirty_pages, 0, "page A was already recorded");
     assert_eq!(remembered_dirty_page_count(), 2);
 

@@ -36,6 +36,44 @@ pub fn is_class_getter(
 /// Mirror of `is_class_getter` for setters — used on the PropertySet/
 /// PropertyUpdate paths where a setter dispatch (vs. a plain field write)
 /// likewise needs a real `this` pointer.
+/// Does `class_name` (or an ancestor) declare `property` as a FIELD?
+///
+/// Scalar replacement gives each declared field its own alloca, so a write to a
+/// property the class does not declare has nowhere to go: the store is silently
+/// dropped and every later read answers `undefined` (#9024). Callers use this to
+/// escape such a receiver instead, so it takes the ordinary heap path.
+pub fn class_chain_has_field(
+    classes: &std::collections::HashMap<String, &perry_hir::Class>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    let mut cur = Some(class_name.to_string());
+    let mut seen = std::collections::HashSet::new();
+    let mut depth = 0usize;
+    while let Some(name) = cur {
+        if !seen.insert(name.clone()) || depth > 64 {
+            break;
+        }
+        depth += 1;
+        let Some(class) = classes.get(&name) else {
+            // An unmodeled base: cannot prove the field is absent, so do not
+            // claim it is. Fail toward "has it" and leave escaping to the
+            // unmodeled-base check that already exists.
+            return true;
+        };
+        if class.fields.iter().any(|f| f.name == property) {
+            return true;
+        }
+        // A computed or dynamically-keyed member means the declared list is not
+        // authoritative for this class.
+        if !class.computed_members.is_empty() || class.fields.iter().any(|f| f.key_expr.is_some()) {
+            return true;
+        }
+        cur = class.extends_name.clone();
+    }
+    false
+}
+
 pub fn is_class_setter(
     classes: &std::collections::HashMap<String, &perry_hir::Class>,
     class_name: &str,

@@ -28,6 +28,12 @@
 //!   differ). Literals already containing accessor/spread/computed/method
 //!   props are left untouched entirely — an appended key could otherwise
 //!   turn a setter invocation into a redefinition.
+//! - A module that mutates `Object.prototype` through the standard descriptor
+//!   APIs is excluded. An inherited setter or non-writable data descriptor
+//!   makes `o.k = v` observably different from `{ k: v }`: the former performs
+//!   `[[Set]]`, while the latter defines an own data property. Runtime write
+//!   guards cannot protect a fold because the assignment no longer exists in
+//!   HIR (#9034).
 //! - Only `Pat::Ident` bindings qualify; the declarator may carry any type
 //!   annotation. Exported declarations are skipped (scope kept tight).
 //!
@@ -35,6 +41,7 @@
 //! exactly as before.
 
 use swc_ecma_ast as ast;
+use swc_ecma_visit::{Visit, VisitWith};
 
 /// Fold cap per literal — beyond this the object is dictionary-like and the
 /// literal machinery's inline-slot benefits taper off anyway.
@@ -43,13 +50,107 @@ const MAX_FOLDED_PROPS: usize = 64;
 /// Returns a folded clone when at least one builder sequence was folded;
 /// `None` means "nothing to do — lower the original".
 pub(crate) fn fold_builder_sequences(module: &ast::Module) -> Option<ast::Module> {
-    if !module_has_candidate(module) {
+    if !module_has_candidate(module) || module_mutates_object_prototype_descriptors(module) {
         return None;
     }
     let mut folded = module.clone();
     let mut changed = false;
     process_module_items(&mut folded.body, &mut changed);
     changed.then_some(folded)
+}
+
+/// Whether this module can make assignment to a fresh ordinary object invoke
+/// inherited descriptor semantics on the canonical `Object.prototype`.
+///
+/// This is deliberately module-wide and conservative. Descriptor mutation is
+/// rare, while trying to prove source ordering across nested closures and
+/// static-import execution would be brittle. A false positive only preserves
+/// the original dynamic writes; a false negative changes JavaScript behavior.
+fn module_mutates_object_prototype_descriptors(module: &ast::Module) -> bool {
+    struct Finder {
+        found: bool,
+    }
+
+    impl Visit for Finder {
+        fn visit_call_expr(&mut self, call: &ast::CallExpr) {
+            if self.found {
+                return;
+            }
+            if call_mutates_object_prototype_descriptors(call) {
+                self.found = true;
+                return;
+            }
+            call.visit_children_with(self);
+        }
+    }
+
+    let mut finder = Finder { found: false };
+    module.visit_with(&mut finder);
+    finder.found
+}
+
+fn call_mutates_object_prototype_descriptors(call: &ast::CallExpr) -> bool {
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return false;
+    };
+    let ast::Expr::Member(member) = strip_transparent_expr(callee) else {
+        return false;
+    };
+    let Some(method) = static_member_name(member) else {
+        return false;
+    };
+
+    // Legacy Annex-B mutation APIs operate directly on Object.prototype.
+    if matches!(method, "__defineGetter__" | "__defineSetter__")
+        && is_object_prototype_expr(&member.obj)
+    {
+        return true;
+    }
+
+    let descriptor_api = (is_ident_expr(&member.obj, "Object")
+        && matches!(method, "defineProperty" | "defineProperties"))
+        || (is_ident_expr(&member.obj, "Reflect") && method == "defineProperty");
+    descriptor_api
+        && call
+            .args
+            .first()
+            .is_some_and(|arg| arg.spread.is_none() && is_object_prototype_expr(&arg.expr))
+}
+
+fn strip_transparent_expr(mut expr: &ast::Expr) -> &ast::Expr {
+    loop {
+        expr = match expr {
+            ast::Expr::Paren(v) => &v.expr,
+            ast::Expr::TsAs(v) => &v.expr,
+            ast::Expr::TsNonNull(v) => &v.expr,
+            ast::Expr::TsTypeAssertion(v) => &v.expr,
+            ast::Expr::TsConstAssertion(v) => &v.expr,
+            ast::Expr::TsSatisfies(v) => &v.expr,
+            _ => return expr,
+        };
+    }
+}
+
+fn static_member_name(member: &ast::MemberExpr) -> Option<&str> {
+    match &member.prop {
+        ast::MemberProp::Ident(name) => Some(name.sym.as_ref()),
+        ast::MemberProp::Computed(key) => match strip_transparent_expr(&key.expr) {
+            ast::Expr::Lit(ast::Lit::Str(value)) => value.value.as_str(),
+            _ => None,
+        },
+        ast::MemberProp::PrivateName(_) => None,
+    }
+}
+
+fn is_ident_expr(expr: &ast::Expr, expected: &str) -> bool {
+    matches!(strip_transparent_expr(expr), ast::Expr::Ident(id) if id.sym.as_ref() == expected)
+}
+
+fn is_object_prototype_expr(expr: &ast::Expr) -> bool {
+    let ast::Expr::Member(member) = strip_transparent_expr(expr) else {
+        return false;
+    };
+    static_member_name(member) == Some("prototype") && is_ident_expr(&member.obj, "Object")
 }
 
 /// Cheap read-only pre-scan: is any statement list anywhere (including

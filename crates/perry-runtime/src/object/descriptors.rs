@@ -1625,6 +1625,19 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
         let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for i in 0..len {
             let key_val = crate::array::js_array_get(keys, pos(i));
+            // Tombstoned slot from an O(1) delete: not a key. Same raw-push
+            // hole hazard as `js_object_keys`' fast path — this loop emitted
+            // the marker itself (visible as `null` in getOwnPropertyNames).
+            if key_val.bits() == crate::value::TAG_HOLE
+                || key_val.bits() == crate::value::TAG_UNDEFINED
+            {
+                // Tombstoned slot from an O(1) delete. `js_array_get` translates
+                // TAG_HOLE to `undefined` per OrdinaryGet (#323), so the marker
+                // arrives here in EITHER form — and `undefined` is never a legal
+                // key, so both are skips. Comparing TAG_HOLE alone was dead code
+                // and let the hole reach the output as JSON `null`.
+                continue;
+            }
             if hide_private || hide_wasi_state {
                 if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
                     if super::field_get_set::is_internal_runtime_key_bytes(b)

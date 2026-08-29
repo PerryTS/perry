@@ -246,6 +246,14 @@ pub fn check_escapes_in_expr(
                         check_escapes_in_expr(value, candidates, classes, escaped);
                         return;
                     }
+                    // #9024: same rule as the `PutValueSet` arm below — a
+                    // write to an UNDECLARED property has no scalar slot, so the
+                    // store would be dropped and later reads answer `undefined`.
+                    if !crate::collectors::class_accessors::class_chain_has_field(
+                        classes, class_name, property,
+                    ) {
+                        escaped.insert(*id);
+                    }
                     // Object position is safe. But check if value contains
                     // LocalGet(id) — that would be self-referential escape.
                     if expr_contains_local_get(value, *id) {
@@ -275,6 +283,15 @@ pub fn check_escapes_in_expr(
                             escaped.insert(*id);
                             check_escapes_in_expr(value, candidates, classes, escaped);
                             return;
+                        }
+                        // #9024: scalar replacement gives each DECLARED field
+                        // an alloca. A write to a property the class does not
+                        // declare has no slot, so the store is dropped and every
+                        // later read answers `undefined`. Escape instead.
+                        if !crate::collectors::class_accessors::class_chain_has_field(
+                            classes, class_name, property,
+                        ) {
+                            escaped.insert(*id);
                         }
                         if expr_contains_local_get(value, *id) {
                             escaped.insert(*id);
