@@ -61,7 +61,7 @@ fn iterator_class_id(addr: usize) -> Option<u32> {
 unsafe fn alloc_iterator(class_id: u32, coll_nanboxed: f64, kind: i32) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let coll_h = scope.root_nanbox_f64(coll_nanboxed);
-    let obj_h = scope.root_raw_mut_ptr(js_object_alloc(class_id, 5));
+    let obj_h = scope.root_raw_mut_ptr(js_object_alloc(class_id, 6));
     let obj = || obj_h.across_mut::<ObjectHeader, _>(|| ()).1;
     // Field 0: backing collection (NaN-boxed pointer so the GC scanner keeps it).
     js_object_set_field(
@@ -81,6 +81,11 @@ unsafe fn alloc_iterator(class_id: u32, coll_nanboxed: f64, kind: i32) -> f64 {
     // Field 4: the KEY of the last-returned entry (a Map key / Set value), used
     // to re-derive the cursor after a delete-shift. Undefined until started.
     js_object_set_field(obj(), 4, JSValue::undefined());
+    // Field 5: the recycled `{value, done}` result the FUSED for-of driver
+    // mutates in place (one allocation per loop, not per element). Manual
+    // `.next()` calls never touch it — they keep returning fresh objects, so
+    // a caller that retains results observes spec behavior.
+    js_object_set_field(obj(), 5, JSValue::undefined());
     // Link `[[Prototype]]` to the shared `%MapIteratorPrototype%` /
     // `%SetIteratorPrototype%` singleton so `Object.getPrototypeOf(it)` and the
     // inherited `.next` read resolve.
@@ -233,6 +238,14 @@ fn next_read_index(cursor: u32, last_key_in_place: bool, find_last: impl FnOnce(
 
 /// Dispatch `.next()` / `[Symbol.iterator]()` on a Map iterator object.
 pub unsafe fn dispatch_map_iterator_method(iter_obj: *mut ObjectHeader, method_name: &str) -> f64 {
+    dispatch_map_iterator_method_emit(iter_obj, method_name, false)
+}
+
+unsafe fn dispatch_map_iterator_method_emit(
+    iter_obj: *mut ObjectHeader,
+    method_name: &str,
+    emit_cached: bool,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter_h = scope.root_nanbox_f64(js_nanbox_pointer(iter_obj as i64));
     let iter_obj = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
@@ -248,7 +261,7 @@ pub unsafe fn dispatch_map_iterator_method(iter_obj: *mut ObjectHeader, method_n
             let map = || js_nanbox_get_pointer(map_h.get_nanbox_f64()) as *const MapHeader;
             let kind = f64::from_bits(js_object_get_field(iter_obj(), 2).bits()) as i32;
             if map().is_null() {
-                return make_iter_result(JSValue::undefined(), true);
+                return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
             }
             let cursor = f64::from_bits(js_object_get_field(iter_obj(), 1).bits()) as u32;
             let last_key = js_object_get_field(iter_obj(), 4);
@@ -268,7 +281,7 @@ pub unsafe fn dispatch_map_iterator_method(iter_obj: *mut ObjectHeader, method_n
                 // Once a collection iterator is exhausted it stays exhausted,
                 // even if entries are appended later.
                 js_object_set_field(iter_obj(), 0, JSValue::undefined());
-                return make_iter_result(JSValue::undefined(), true);
+                return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
             }
 
             let entry_key = crate::map::js_map_entry_key_at(map(), idx);
@@ -286,7 +299,7 @@ pub unsafe fn dispatch_map_iterator_method(iter_obj: *mut ObjectHeader, method_n
                     JSValue::from_bits(make_pair_array(entry_key, val).to_bits())
                 }
             };
-            make_iter_result(value, false)
+            emit_iter_result(&scope, &iter_h, emit_cached, value, false)
         }
         "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj() as i64),
         "return" | "throw" => make_iter_result(JSValue::undefined(), true),
@@ -296,6 +309,14 @@ pub unsafe fn dispatch_map_iterator_method(iter_obj: *mut ObjectHeader, method_n
 
 /// Dispatch `.next()` / `[Symbol.iterator]()` on a Set iterator object.
 pub unsafe fn dispatch_set_iterator_method(iter_obj: *mut ObjectHeader, method_name: &str) -> f64 {
+    dispatch_set_iterator_method_emit(iter_obj, method_name, false)
+}
+
+unsafe fn dispatch_set_iterator_method_emit(
+    iter_obj: *mut ObjectHeader,
+    method_name: &str,
+    emit_cached: bool,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter_h = scope.root_nanbox_f64(js_nanbox_pointer(iter_obj as i64));
     let iter_obj = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
@@ -311,7 +332,7 @@ pub unsafe fn dispatch_set_iterator_method(iter_obj: *mut ObjectHeader, method_n
             let set = || js_nanbox_get_pointer(set_h.get_nanbox_f64()) as *const SetHeader;
             let kind = f64::from_bits(js_object_get_field(iter_obj(), 2).bits()) as i32;
             if set().is_null() {
-                return make_iter_result(JSValue::undefined(), true);
+                return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
             }
             let cursor = f64::from_bits(js_object_get_field(iter_obj(), 1).bits()) as u32;
             let last_val = js_object_get_field(iter_obj(), 4);
@@ -326,7 +347,7 @@ pub unsafe fn dispatch_set_iterator_method(iter_obj: *mut ObjectHeader, method_n
             if idx >= size {
                 js_object_set_field(iter_obj(), 1, JSValue::number(size as f64));
                 js_object_set_field(iter_obj(), 0, JSValue::undefined());
-                return make_iter_result(JSValue::undefined(), true);
+                return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
             }
 
             let elem = crate::set::js_set_value_at(set(), idx);
@@ -338,10 +359,188 @@ pub unsafe fn dispatch_set_iterator_method(iter_obj: *mut ObjectHeader, method_n
                 KIND_ENTRIES => JSValue::from_bits(make_pair_array(elem, elem).to_bits()),
                 _ => JSValue::from_bits(elem.to_bits()),
             };
-            make_iter_result(value, false)
+            emit_iter_result(&scope, &iter_h, emit_cached, value, false)
         }
         "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj() as i64),
         "return" | "throw" => make_iter_result(JSValue::undefined(), true),
         _ => f64::from_bits(TAG_UNDEFINED),
+    }
+}
+
+/// Emit a `{value, done}` iterator result.
+///
+/// `emit_cached == false` (every manual `.next()` and both public
+/// dispatchers) allocates a fresh object per call, exactly as before —
+/// results a caller retains behave per spec.
+///
+/// `emit_cached == true` is reserved for [`js_for_of_next`], whose only
+/// caller is the compiler's `for…of` desugar. There the result local is a
+/// compiler temporary the loop body cannot name, read for `done`/`value`
+/// before the next advance — so mutating one cached object per ITERATOR is
+/// unobservable, and it deletes the per-element allocation that dominated
+/// generic iteration. The cache lives in the iterator object's field 5, so
+/// the GC traces and rewrites it like any other field.
+unsafe fn emit_iter_result(
+    scope: &crate::gc::RuntimeHandleScope,
+    iter_h: &crate::gc::RuntimeHandle,
+    emit_cached: bool,
+    value: JSValue,
+    done: bool,
+) -> f64 {
+    let iter_obj = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
+    if !emit_cached {
+        return make_iter_result(value, done);
+    }
+    let cached = js_object_get_field(iter_obj(), 5);
+    if JSValue::from_bits(cached.bits()).is_pointer() {
+        let res = js_nanbox_get_pointer(f64::from_bits(cached.bits())) as *mut ObjectHeader;
+        // Barriered field stores: the iterator (and its cached result) may be
+        // tenured while `value` is young.
+        js_object_set_field(res, 0, value);
+        js_object_set_field(res, 1, JSValue::bool(done));
+        return js_nanbox_pointer(res as i64);
+    }
+    // First fused advance on this iterator: build the result once and cache
+    // it. `make_iter_result` allocates, so root `value` across it.
+    let value_h = scope.root_nanbox_u64(value.bits());
+    let res = make_iter_result(JSValue::from_bits(value_h.get_nanbox_u64()), done);
+    let res_h = scope.root_nanbox_f64(res);
+    js_object_set_field(
+        iter_obj(),
+        5,
+        JSValue::from_bits(res_h.get_nanbox_f64().to_bits()),
+    );
+    res_h.get_nanbox_f64()
+}
+
+/// One fused `IteratorNext` for the `for…of` desugar: advance + result in a
+/// single runtime call.
+///
+/// A builtin Map/Set iterator advances in place and reuses its cached result
+/// object (see [`emit_iter_result`]); the override probe inside the
+/// dispatcher still runs first, so a patched `next` wins exactly as it does
+/// on the manual path. Every other receiver — array iterators, generators,
+/// user iterators — takes the arm at the bottom, which is byte-for-byte the
+/// two-call desugar this entry replaces: the dynamic `.next()` dispatch
+/// followed by spec IteratorNext result validation.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_for_of_next(iter: f64) -> f64 {
+    let jv = JSValue::from_bits(iter.to_bits());
+    if jv.is_pointer() {
+        let raw = js_nanbox_get_pointer(iter) as usize;
+        if raw != 0 && !crate::value::addr_class::is_small_handle(raw) {
+            if let Some(header) = crate::value::addr_class::try_read_gc_header(raw) {
+                if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+                    let obj = raw as *mut ObjectHeader;
+                    let class_id = (*obj).class_id;
+                    if class_id == MAP_ITERATOR_CLASS_ID {
+                        return dispatch_map_iterator_method_emit(obj, "next", true);
+                    }
+                    if class_id == SET_ITERATOR_CLASS_ID {
+                        return dispatch_set_iterator_method_emit(obj, "next", true);
+                    }
+                }
+            }
+        }
+    }
+    let result = crate::object::js_native_call_method(
+        iter,
+        b"next".as_ptr() as *const i8,
+        4,
+        std::ptr::null(),
+        0,
+    );
+    crate::symbol::js_iterator_result_validate(result)
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_FOR_OF_NEXT: unsafe extern "C-unwind" fn(f64) -> f64 = js_for_of_next;
+
+#[cfg(test)]
+mod fused_for_of_tests {
+    use super::*;
+
+    unsafe fn value_of(res: f64) -> f64 {
+        f64::from_bits(
+            js_object_get_field(js_nanbox_get_pointer(res) as *mut ObjectHeader, 0).bits(),
+        )
+    }
+    unsafe fn done_of(res: f64) -> bool {
+        JSValue::from_bits(
+            js_object_get_field(js_nanbox_get_pointer(res) as *mut ObjectHeader, 1).bits(),
+        )
+        .as_bool()
+    }
+
+    /// The fused driver must walk a Set in insertion order, terminate, and
+    /// keep its recycled result in the iterator's field 5 — while the manual
+    /// dispatcher keeps allocating fresh results a caller may retain.
+    #[test]
+    fn fused_next_walks_a_set_and_recycles_its_result() {
+        unsafe {
+            let set = crate::set::js_set_alloc(4);
+            for v in [10.0f64, 20.0, 30.0] {
+                crate::set::js_set_add(set, v);
+            }
+            let iter = js_nanbox_pointer(js_set_values_iter_obj(set));
+
+            let r1 = js_for_of_next(iter);
+            assert_eq!(value_of(r1), 10.0);
+            assert!(!done_of(r1));
+            let cached = js_object_get_field(js_nanbox_get_pointer(iter) as *mut ObjectHeader, 5);
+            assert!(
+                JSValue::from_bits(cached.bits()).is_pointer(),
+                "the first fused advance must install the recycled result"
+            );
+            assert_eq!(value_of(js_for_of_next(iter)), 20.0);
+            assert_eq!(value_of(js_for_of_next(iter)), 30.0);
+            assert!(done_of(js_for_of_next(iter)), "exhausted after three");
+            assert!(done_of(js_for_of_next(iter)), "stays exhausted");
+
+            // The manual path still returns fresh, independent results.
+            let m1 = dispatch_set_iterator_method(
+                js_nanbox_get_pointer(js_nanbox_pointer(js_set_values_iter_obj(set)))
+                    as *mut ObjectHeader,
+                "next",
+            );
+            assert_eq!(value_of(m1), 10.0);
+        }
+    }
+
+    /// Mid-iteration delete: the cursor-repair contract (#6075) must hold on
+    /// the fused path because it runs the SAME advance code as the manual one.
+    #[test]
+    fn fused_next_survives_a_mid_iteration_delete() {
+        unsafe {
+            let map = crate::map::js_map_alloc(8);
+            for k in [1.0f64, 2.0, 3.0, 4.0] {
+                crate::map::js_map_set(map, k, k * 10.0);
+            }
+            let iter = js_nanbox_pointer(js_map_keys_iter_obj(map));
+            assert_eq!(value_of(js_for_of_next(iter)), 1.0);
+            // Deleting an EARLIER entry shifts the survivors down; the fused
+            // next must not skip or repeat.
+            crate::map::js_map_delete(map, 1.0);
+            assert_eq!(value_of(js_for_of_next(iter)), 2.0);
+            assert_eq!(value_of(js_for_of_next(iter)), 3.0);
+            assert_eq!(value_of(js_for_of_next(iter)), 4.0);
+            assert!(done_of(js_for_of_next(iter)));
+        }
+    }
+
+    /// A non-collection receiver takes the generic arm: dynamic `.next()`
+    /// dispatch plus validation — here, an array VALUES iterator object.
+    #[test]
+    fn fused_next_routes_other_iterators_through_the_generic_arm() {
+        unsafe {
+            let arr = crate::array::js_array_alloc(2);
+            crate::array::js_array_push_f64(arr, 7.0);
+            crate::array::js_array_push_f64(arr, 8.0);
+            let iter = crate::array::array_values_iter(js_nanbox_pointer(arr as i64));
+            assert_eq!(value_of(js_for_of_next(iter)), 7.0);
+            assert_eq!(value_of(js_for_of_next(iter)), 8.0);
+            assert!(done_of(js_for_of_next(iter)));
+        }
     }
 }

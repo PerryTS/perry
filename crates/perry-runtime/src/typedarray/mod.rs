@@ -1093,6 +1093,16 @@ fn to_uint32_bits(value: f64) -> u32 {
     m as u32
 }
 
+/// Coerce a NaN-boxed JS value for a Uint8Array/Buffer element store.
+///
+/// Perry represents `Uint8Array` with `BufferHeader`, outside the generic
+/// `TypedArrayHeader` registry. Dynamic stores still receive a full JS value,
+/// so they must perform the same ToNumber + modulo narrowing as the generic
+/// typed-array path before calling the integer-only buffer accessor.
+pub(crate) fn jsvalue_to_uint8(value: f64) -> u8 {
+    to_uint32_bits(jsvalue_to_f64(value)) as u8
+}
+
 /// Store a number into the typed array slot, performing the per-kind cast.
 pub(crate) unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
     let kind = (*ta).kind;
