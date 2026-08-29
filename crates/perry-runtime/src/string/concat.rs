@@ -137,14 +137,67 @@ fn bytes_all_ascii(data: *const u8, len: u32) -> bool {
 pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
     let mut scratch_l = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let mut scratch_r = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let (Some(l), Some(r)) = (
-        str_bytes_from_jsvalue(l_value, &mut scratch_l),
-        str_bytes_from_jsvalue(r_value, &mut scratch_r),
-    ) else {
-        // `str_bytes_from_jsvalue` returns `None` for exactly the non-string
-        // values, so this is the annotation-lie arm and nothing else.
-        return unsafe { crate::value::js_dynamic_string_or_number_add(l_value, r_value) };
-    };
+    // A PLAIN-F64 small-integer operand next to a string operand is the
+    // template-literal hot shape (`` `id-${i}` ``): itoa it into a stack
+    // buffer and flow it through the same SSO/heap assembly the two-string
+    // case uses, instead of handing the pair to the full dynamic `+` (whose
+    // ToPrimitive round trip and `format!` formatting were the template
+    // path's entire overhead). Only exact spec-identical cases are taken:
+    // an integral value in 0..=999_999_999 prints identically under itoa
+    // and `Number::toString`; anything else — fractional, negative, huge,
+    // NaN-boxed — keeps the dynamic arm. One side must still be a REAL
+    // string, so the annotation-lie semantics of the dynamic arm are
+    // unchanged for number+number.
+    #[inline]
+    fn itoa_operand(bits_value: f64, buf: &mut [u8; 32]) -> Option<(*const u8, u32)> {
+        let bits = bits_value.to_bits();
+        let tag = bits >> 48;
+        let is_plain_f64 = tag < 0x7FF8 || (tag == 0x7FF8 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0);
+        if is_plain_f64
+            && bits_value.fract() == 0.0
+            && (0.0..=999_999_999.0).contains(&bits_value)
+        {
+            let len = fast_itoa_u32(bits_value as u32, buf);
+            Some((buf.as_ptr(), len as u32))
+        } else {
+            None
+        }
+    }
+    let l_str = str_bytes_from_jsvalue(l_value, &mut scratch_l);
+    let r_str = str_bytes_from_jsvalue(r_value, &mut scratch_r);
+    if let (Some(l), Some(r)) = (l_str, r_str) {
+        // Two real strings: straight to assembly, no number buffer touched
+        // (the itoa scratch below would cost this path a 32-byte memset).
+        return concat_byte_parts(l, r);
+    }
+    // Exactly one side can be a string here, so a single itoa buffer serves
+    // both mixed arms; it must outlive the call since `concat_byte_parts`
+    // reads through the raw pointer.
+    let mut num_buf = [0u8; 32];
+    match (l_str, r_str) {
+        (Some(l), None) => {
+            if let Some(r) = itoa_operand(r_value, &mut num_buf) {
+                return concat_byte_parts(l, r);
+            }
+        }
+        (None, Some(r)) => {
+            if let Some(l) = itoa_operand(l_value, &mut num_buf) {
+                return concat_byte_parts(l, r);
+            }
+        }
+        _ => {}
+    }
+    // `str_bytes_from_jsvalue` returns `None` for exactly the non-string
+    // values, so every remaining pair — number+number included — is the
+    // annotation-lie arm and nothing else.
+    unsafe { crate::value::js_dynamic_string_or_number_add(l_value, r_value) }
+}
+
+/// Shared tail of [`js_string_concat_box`]: assemble two raw byte slices
+/// (each a real string's payload or an itoa'd integer) into an SSO immediate
+/// when the total fits five ASCII bytes, a heap `StringHeader` otherwise.
+#[inline(always)]
+fn concat_byte_parts(l: (*const u8, u32), r: (*const u8, u32)) -> f64 {
     let total_blen = l.1 + r.1;
 
     // SSO encodes its length tag as the JS `.length`, so it is only sound for
