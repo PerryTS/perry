@@ -337,7 +337,7 @@ fn is_primitive_value(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
     jsval.is_any_string()
         || jsval.is_number()
-        || jsval.is_int32()
+        || (jsval.is_int32() && crate::object::class_ref_id(value).is_none())
         || jsval.is_bool()
         || jsval.is_null()
         || jsval.is_undefined()

@@ -168,9 +168,22 @@ unsafe fn is_nonprimitive_object_value(value: f64) -> bool {
 
 unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
     let jsval = JSValue::from_bits(value.to_bits());
-    if !jsval.is_pointer() || is_symbol_value(value) {
+    let is_class_ref = crate::object::class_ref_id(value).is_some();
+    if (!jsval.is_pointer() && !is_class_ref) || is_symbol_value(value) {
         return value;
     }
+
+    // #9087: a declared class used as a value is an Object even though Perry
+    // stores it as an INT32-tagged class id. It must therefore participate in
+    // ToPrimitive instead of reaching the numeric int32 arm below. Perform the
+    // ordinary Function-object valueOf/toString sequence; the
+    // inherited toString produces the class's synthetic function source and
+    // makes the addition concatenate. This also preserves an own static
+    // valueOf/toString override.
+    if is_class_ref {
+        return crate::value::ordinary_to_primitive_for_toprimitive(value, false);
+    }
+
     let ptr = jsval.as_pointer::<u8>() as usize;
     if ptr < 0x1000 {
         return value;
