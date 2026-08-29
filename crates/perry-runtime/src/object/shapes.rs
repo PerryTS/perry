@@ -34,6 +34,7 @@ use std::cell::RefCell;
 #[path = "shapes_slot_list.rs"]
 mod shapes_slot_list;
 pub(crate) use shapes_slot_list::{
+    debug_assert_object_shape_parity, debug_assert_object_shape_parity_for_keys,
     object_shape_hole_count, publish_object_shape_holes, record_shape_scan_outcome,
     shape_index_migrate_after_delete, shape_index_shift_in_place, SlotList,
 };
@@ -1491,40 +1492,6 @@ unsafe fn object_header_key_count(obj: *const crate::object::ObjectHeader) -> u3
         0
     } else {
         crate::array::keys_array_len_capped_to_capacity(keys) as u32
-    }
-}
-
-/// #8113: the live-slot bound is no longer independently observable, so parity
-/// is now exactly "the stamp resolves, and its structural keys facts match the
-/// keys edge the receiver is about to carry". The bound cannot disagree with
-/// itself.
-#[inline]
-pub(crate) unsafe fn debug_assert_object_shape_parity(obj: *const crate::object::ObjectHeader) {
-    debug_assert_object_shape_parity_for_keys(obj, crate::object::object_keys_array(obj));
-}
-
-/// Parity against an EXPLICIT keys edge.
-///
-/// `publish_object_shape_from` stamps the successor before the header store
-/// (that is what makes the keys mutation mint-then-stamp), so for that one
-/// window the authoritative edge is the caller's argument, not the header word.
-#[inline]
-pub(crate) unsafe fn debug_assert_object_shape_parity_for_keys(
-    obj: *const crate::object::ObjectHeader,
-    keys: *mut ArrayHeader,
-) {
-    let id = object_shape_stamp(obj);
-    if id != 0 {
-        let key_count = if keys.is_null() {
-            0
-        } else {
-            crate::array::keys_array_len_capped_to_capacity(keys) as u32
-        };
-        debug_assert!(
-            shape_descriptor_by_id(id)
-                .is_some_and(|d| { d.keys == keys as u64 && d.logical_key_count == key_count }),
-            "published ShapeId disagrees with authoritative ObjectHeader facts"
-        );
     }
 }
 

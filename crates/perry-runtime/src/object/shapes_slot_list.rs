@@ -306,3 +306,37 @@ pub(super) fn install_external_shape_id(
     super::insert_descriptor_id_sorted(inner.ids_by_keys.entry(descriptor.keys).or_default(), id);
     true
 }
+
+/// #8113: the live-slot bound is no longer independently observable, so parity
+/// is now exactly "the stamp resolves, and its structural keys facts match the
+/// keys edge the receiver is about to carry". The bound cannot disagree with
+/// itself.
+#[inline]
+pub(crate) unsafe fn debug_assert_object_shape_parity(obj: *const crate::object::ObjectHeader) {
+    debug_assert_object_shape_parity_for_keys(obj, crate::object::object_keys_array(obj));
+}
+
+/// Parity against an EXPLICIT keys edge.
+///
+/// `publish_object_shape_from` stamps the successor before the header store
+/// (that is what makes the keys mutation mint-then-stamp), so for that one
+/// window the authoritative edge is the caller's argument, not the header word.
+#[inline]
+pub(crate) unsafe fn debug_assert_object_shape_parity_for_keys(
+    obj: *const crate::object::ObjectHeader,
+    keys: *mut crate::array::ArrayHeader,
+) {
+    let id = super::object_shape_stamp(obj);
+    if id != 0 {
+        let key_count = if keys.is_null() {
+            0
+        } else {
+            crate::array::keys_array_len_capped_to_capacity(keys) as u32
+        };
+        debug_assert!(
+            super::shape_descriptor_by_id(id)
+                .is_some_and(|d| { d.keys == keys as u64 && d.logical_key_count == key_count }),
+            "published ShapeId disagrees with authoritative ObjectHeader facts"
+        );
+    }
+}
