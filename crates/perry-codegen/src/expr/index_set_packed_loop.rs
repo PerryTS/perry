@@ -101,7 +101,67 @@ pub(super) fn lower_packed_f64_range_loop_index_set(
     guard_id: &str,
     side_exit_label: &str,
 ) -> Result<String> {
+    // A RHS that provably materializes a genuine double by construction —
+    // a literal, the canonical-i32 counter, an in-window guarded load, or
+    // float arithmetic over those (the masked store's admission predicate)
+    // — needs no runtime value check at all: the nanbox tag test below
+    // (fmov + tag math + compare + branch, five per-element instructions)
+    // exists only for values that could be boxed at runtime.
+    let statically_genuine =
+        crate::expr::masked_window::masked_store_rhs_is_genuine_f64(ctx, value);
     let (val_double, rhs_notes) = lower_packed_f64_loop_store_value(ctx, arr_id, value)?;
+    if statically_genuine {
+        let arr_expr = Expr::LocalGet(arr_id);
+        let arr_box = lower_expr(ctx, &arr_expr)?;
+        let arr_handle = super::packed_receiver_handle_i64(ctx, Some(arr_id), &arr_box);
+        let blk = ctx.block();
+        let idx_i64 = blk.zext(I32, idx_i32, I64);
+        let byte_offset = blk.shl(I64, &idx_i64, "3");
+        let with_header = blk.add(I64, &byte_offset, "8");
+        let element_addr = blk.add(I64, &arr_handle, &with_header);
+        let element_ptr = blk.inttoptr(I64, &element_addr);
+        // GC_STORE_AUDIT(POINTER_FREE): statically-genuine packed store —
+        // the RHS predicate proves an unboxed double, never a heap pointer.
+        blk.store(DOUBLE, &val_double, &element_ptr);
+        let stored = LoweredValue {
+            semantic: SemanticKind::JsNumber,
+            rep: NativeRep::F64,
+            llvm_ty: DOUBLE,
+            value: val_double.clone(),
+        };
+        ctx.record_lowered_value_with_access_mode_and_facts(
+            "PackedF64RangeLoopStore",
+            Some(arr_id),
+            "packed_f64_range_loop_store",
+            &stored,
+            Some(BoundsState::Guarded {
+                guard_id: guard_id.to_string(),
+            }),
+            None,
+            Some(BufferAccessMode::CheckedNative),
+            None,
+            None,
+            None,
+            vec![
+                array_kind_fact(Some(arr_id), "consumed", "packed_f64", None),
+                raw_f64_layout_fact(Some(arr_id), "consumed", guard_id, None),
+            ],
+            Vec::new(),
+            false,
+            false,
+            {
+                let mut notes = vec![
+                    "rhs_numeric_guard=static_genuine_f64_proof".to_string(),
+                    "index_range=range_guarded_i32_window".to_string(),
+                    "storage_layout=raw_f64_or_hole_slots".to_string(),
+                ];
+                notes.extend(rhs_notes);
+                notes
+            },
+        );
+        let _ = side_exit_label;
+        return Ok(val_double);
+    }
 
     let fast_idx = ctx.new_block("packed_f64_range_store.fast");
     let exit_idx = ctx.new_block("packed_f64_range_store.side_exit");
@@ -164,9 +224,8 @@ pub(super) fn lower_packed_f64_range_loop_index_set(
     {
         let arr_expr = Expr::LocalGet(arr_id);
         let arr_box = lower_expr(ctx, &arr_expr)?;
+        let arr_handle = super::packed_receiver_handle_i64(ctx, Some(arr_id), &arr_box);
         let blk = ctx.block();
-        let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");
         let with_header = blk.add(I64, &byte_offset, "8");

@@ -1,0 +1,1 @@
+Packed fast clones: poll-scoped receiver/handle caching with a strided armed check, scope-local i32 deferral for count accumulators, and check-free stores of provably-genuine values — every row of the isolated array-operation matrix (count/reduce/store loops across local, module-global, and masked receivers) now runs ahead of Node on the quiet bench host.

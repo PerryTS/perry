@@ -543,6 +543,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(f64_slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
                     return Ok(ctx.block().load(DOUBLE, &f64_slot));
                 }
+                // Poll-scoped receiver cache (packed fast clones): the
+                // receiver box lives in a promotable alloca, refreshed on
+                // every armed poll — see `packed_receiver_box_slots`.
+                if let Some(box_slot) = ctx.packed_receiver_box_slots.get(id).cloned() {
+                    return Ok(ctx.block().load(DOUBLE, &box_slot));
+                }
                 if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
                     let i = ctx.block().load(I32, &i32_slot);
                     let v = if ctx.unsigned_i32_locals.contains(id) {
@@ -1109,6 +1115,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let new = blk.sitofp(I32, &new_i32, DOUBLE);
                 super::record_int_facts_for_update(ctx, *id, *op);
                 return Ok(if *prefix { new } else { old });
+            }
+            // Packed-clone integer accumulator: touch ONLY the i32 slot —
+            // the double slot stays stale until the clone exits re-sync it
+            // (see `deferred_integer_update_accumulators`). The returned
+            // value materializes via `sitofp` for the rare expression
+            // position; in statement position it is DCE'd.
+            if ctx.deferred_integer_update_accumulators.contains(id) {
+                if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
+                    let (old_i32, new_i32) = {
+                        let blk = ctx.block();
+                        let old_i32 = blk.load(I32, &i32_slot);
+                        let delta = match op {
+                            UpdateOp::Increment => "1",
+                            UpdateOp::Decrement => "-1",
+                        };
+                        let new_i32 = blk.add(I32, &old_i32, delta);
+                        blk.store(I32, &new_i32, &i32_slot);
+                        (old_i32, new_i32)
+                    };
+                    super::record_int_facts_for_update(ctx, *id, *op);
+                    let ret_i32 = if *prefix { &new_i32 } else { &old_i32 };
+                    return Ok(ctx.block().sitofp(I32, ret_i32, DOUBLE));
+                }
             }
             let (storage, storage_is_root) = if let Some(slot) = ctx.locals.get(id).cloned() {
                 (slot, false)

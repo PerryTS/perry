@@ -1149,6 +1149,11 @@ pub(super) fn compile_function(
             .collect(),
         i32_counter_slots: spec_i32_param_slots,
         numeric_accumulator_f64_slots: HashMap::new(),
+        packed_receiver_box_slots: HashMap::new(),
+        packed_receiver_refresh: Vec::new(),
+        packed_receiver_handle_slots: HashMap::new(),
+        poll_stride_counter_slot: None,
+        deferred_integer_update_accumulators: HashSet::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
         // #7109 split the FIELD out of `repsel_context_allows_canonical_i32`;
         // #7128 split the VALUE, which is what the knob actually reads. Until

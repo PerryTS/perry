@@ -1061,6 +1061,47 @@ pub(crate) struct FnCtx<'a> {
     /// so no conversion exists on either edge; the stale number left in the
     /// root slot during the clone is harmless to a GC scan.
     pub numeric_accumulator_f64_slots: std::collections::HashMap<u32, String>,
+    /// Poll-scoped receiver cache, active only while a packed fast clone is
+    /// being lowered: array local id -> plain (addrspace-0) F64 alloca
+    /// holding the receiver BOX. Every in-clone `LocalGet` of the receiver
+    /// reads this alloca instead of the GC-root slot, so mem2reg promotes it
+    /// and LLVM hoists the handle mask + element base math out of the loop —
+    /// the per-access root re-derive was 3-5 instructions on every packed
+    /// load and store. The cache refreshes from the real root on the ARMED
+    /// arm of every loop poll (`emit_armed_gc_loop_safepoint`), which is the
+    /// only place a call-free clone can collect, so a moving GC cannot
+    /// strand it; entries in `packed_receiver_refresh` drive that reload for
+    /// EVERY active scope, which keeps nested clones' outer caches fresh
+    /// when an inner loop's poll fires.
+    pub packed_receiver_box_slots: std::collections::HashMap<u32, String>,
+    /// (alloca, source ref, source-is-module-global) reload recipes for the
+    /// poll-arm refresh of `packed_receiver_box_slots`.
+    pub packed_receiver_refresh: Vec<(String, String)>,
+    /// Masked-handle twin of `packed_receiver_box_slots`: array id -> i64
+    /// alloca holding `box & POINTER_MASK`. The hot packed lanes' address
+    /// math consults it via `packed_receiver_handle_i64`, removing the
+    /// per-element mask that LLVM cannot PRE across the poll's refresh phi.
+    pub packed_receiver_handle_slots: std::collections::HashMap<u32, String>,
+    /// When set, `emit_armed_gc_loop_safepoint` gates its VOLATILE armed
+    /// load on `(counter & 63) == 0`, so the poll's serialization cost (and
+    /// the receiver-cache re-derive it forces on every element) is paid once
+    /// per 64 iterations instead of per iteration. Sound because the clone
+    /// body is call-free — the poll is its only collection point, and a
+    /// 64-iteration drain delay on a sub-nanosecond loop body is far inside
+    /// the poll contract's tolerance. Holds the counter's i32 slot; set and
+    /// cleared by the packed fast-clone lowering.
+    pub poll_stride_counter_slot: Option<String>,
+    /// Update-only INTEGER accumulators (`c++` count loops) inside a packed
+    /// fast clone: while a local id is in this set, `Expr::Update` touches
+    /// ONLY its parallel i32 slot (a promotable alloca — the loop-carried
+    /// value becomes a 1-cycle integer add instead of the double slot's
+    /// load→fadd→store chain, which cost the count loops ~5 cycles/element
+    /// of pure latency). The double slot goes stale for the clone's duration
+    /// and is re-synced (`sitofp` + store) at every clone exit. Admission
+    /// (packed preheader): writes are Update-only, the local is an
+    /// integer-local with an i32 slot, and an entry range test proves
+    /// |value| < 2^30 so `bound <= 16M` iterations cannot wrap the i32.
+    pub deferred_integer_update_accumulators: std::collections::HashSet<u32>,
 
     /// Representation-selection Phase 1 (RFC `docs/representation-selection-
     /// rfc.md`): LocalId → selected slot representation. Absent = `Boxed`
@@ -1963,6 +2004,25 @@ pub(crate) enum MaskedWindowElem {
     TaU32 { data_ptr: String },
     /// Float64Array: `load double` at `data_ptr + idx * 8`.
     TaF64 { data_ptr: String },
+}
+
+/// The pointer-masked receiver handle for a packed-lane access: the cached
+/// pre-masked value when the clone hoisted it, else the inline
+/// bitcast-and-mask. One i64 load vs two ALU ops — the win is that the load
+/// is loop-invariant to LLVM while the mask of a poll-refreshed phi is not.
+pub(crate) fn packed_receiver_handle_i64(
+    ctx: &mut FnCtx<'_>,
+    arr_id: Option<u32>,
+    arr_box: &str,
+) -> String {
+    if let Some(id) = arr_id {
+        if let Some(slot) = ctx.packed_receiver_handle_slots.get(&id).cloned() {
+            return ctx.block().load(crate::types::I64, &slot);
+        }
+    }
+    let blk = ctx.block();
+    let bits = blk.bitcast_double_to_i64(arr_box);
+    blk.and(crate::types::I64, &bits, crate::nanbox::POINTER_MASK_I64)
 }
 
 /// Read-only masked-index window fact for the dense packed-f64 range loop:

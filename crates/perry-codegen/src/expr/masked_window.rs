@@ -45,10 +45,14 @@ pub(crate) fn masked_window_fact_for_index(
 
 /// Emit the raw in-window f64 element load of the plain-array tiers:
 /// `header + 8 + idx * 8` on the pointer-masked array handle.
-fn emit_raw_window_load(ctx: &mut FnCtx<'_>, arr_box: &str, idx_i32: &str) -> String {
+fn emit_raw_window_load(
+    ctx: &mut FnCtx<'_>,
+    arr_id: Option<u32>,
+    arr_box: &str,
+    idx_i32: &str,
+) -> String {
+    let arr_handle = super::packed_receiver_handle_i64(ctx, arr_id, arr_box);
     let blk = ctx.block();
-    let arr_bits = blk.bitcast_double_to_i64(arr_box);
-    let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
     let idx_i64 = blk.zext(I32, idx_i32, I64);
     let byte_offset = blk.shl(I64, &idx_i64, "3");
     let with_header = blk.add(I64, &byte_offset, "8");
@@ -86,7 +90,9 @@ fn emit_window_load_f64(
     fact: &MaskedWindowArrayFact,
 ) -> String {
     match &fact.elem {
-        MaskedWindowElem::PlainF64 => emit_raw_window_load(ctx, arr_box, idx_i32),
+        MaskedWindowElem::PlainF64 => {
+            emit_raw_window_load(ctx, Some(fact.array_local_id), arr_box, idx_i32)
+        }
         MaskedWindowElem::TaI32 { data_ptr } => {
             let data_ptr = data_ptr.clone();
             let raw = emit_ta_window_load(ctx, &data_ptr, idx_i32, "2", I32);
@@ -283,9 +289,8 @@ pub(crate) fn lower_masked_window_index_set(
     fact: &MaskedWindowArrayFact,
 ) {
     {
+        let arr_handle = super::packed_receiver_handle_i64(ctx, Some(arr_id), arr_box);
         let blk = ctx.block();
-        let arr_bits = blk.bitcast_double_to_i64(arr_box);
-        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");
         let with_header = blk.add(I64, &byte_offset, "8");
@@ -369,7 +374,7 @@ pub(crate) fn lower_masked_window_index_get_i32(
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
     let (value, materialization_note) = match &fact.elem {
         MaskedWindowElem::PlainF64 => {
-            let raw_f64 = emit_raw_window_load(ctx, &arr_box, &idx_i32);
+            let raw_f64 = emit_raw_window_load(ctx, Some(fact.array_local_id), &arr_box, &idx_i32);
             (
                 ctx.block().fptosi(DOUBLE, &raw_f64, I32),
                 "integer_materialization=fptosi_guarded_dense_i32",

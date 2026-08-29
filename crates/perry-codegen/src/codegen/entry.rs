@@ -881,6 +881,11 @@ pub(super) fn compile_module_entry(
             element_shape_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
             numeric_accumulator_f64_slots: HashMap::new(),
+            packed_receiver_box_slots: HashMap::new(),
+            packed_receiver_refresh: Vec::new(),
+            packed_receiver_handle_slots: HashMap::new(),
+            poll_stride_counter_slot: None,
+            deferred_integer_update_accumulators: HashSet::new(),
             local_slot_reps: HashMap::new(),
             // #7109: this entry body selects canonical i32/u32/Str on the same
             // per-value rules as a function body. Phase 1 (#6903) excluded it
@@ -1599,6 +1604,11 @@ pub(super) fn compile_module_entry(
             element_shape_loop_facts: Vec::new(),
             i32_counter_slots: HashMap::new(),
             numeric_accumulator_f64_slots: HashMap::new(),
+            packed_receiver_box_slots: HashMap::new(),
+            packed_receiver_refresh: Vec::new(),
+            packed_receiver_handle_slots: HashMap::new(),
+            poll_stride_counter_slot: None,
+            deferred_integer_update_accumulators: HashSet::new(),
             local_slot_reps: HashMap::new(),
             // #7109: this entry body selects canonical i32/u32/Str on the same
             // per-value rules as a function body. Phase 1 (#6903) excluded it

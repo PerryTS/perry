@@ -564,7 +564,13 @@ fn emit_range_loop_accumulator_admission(
 struct PackedAccumulatorScope {
     accumulators: Vec<u32>,
     unboxed: Vec<(u32, String, String)>,
+    /// Update-only integer accumulators deferred to the i32 slot for the
+    /// clone: (id, i32 slot, double slot) — exits re-sync the double.
+    deferred_integer: Vec<(u32, String, String)>,
     side_exit_override: Option<String>,
+    /// Receiver ids this scope cached into promotable allocas (see
+    /// `FnCtx::packed_receiver_box_slots`); cleared by `finish`.
+    hoisted_receivers: Vec<u32>,
 }
 
 impl PackedAccumulatorScope {
@@ -572,8 +578,158 @@ impl PackedAccumulatorScope {
         Self {
             accumulators: Vec::new(),
             unboxed: Vec::new(),
+            deferred_integer: Vec::new(),
             side_exit_override: None,
+            hoisted_receivers: Vec::new(),
         }
+    }
+}
+
+/// Admit Update-only INTEGER accumulators (`c++`) for i32-slot deferral:
+/// writes all Updates, an integer local with a live i32 slot (the
+/// authoritative in-clone storage — reads already prefer it), not the
+/// loop counter, plain-local storage. An entry range test
+/// (|value| < 2^30) branches to the slow clone so `bound <= 16M`
+/// iterations of `add i32` cannot wrap; the i32 and double slots are in
+/// sync at entry by the Update/LocalSet mirror invariant, so the i32
+/// value IS the number.
+fn admit_integer_update_accumulators(
+    ctx: &mut FnCtx<'_>,
+    body: &[Stmt],
+    counter_id: u32,
+    slow_pre_label: &str,
+    block_prefix: &str,
+) -> Vec<(u32, String, String)> {
+    let mut writes = std::collections::BTreeMap::new();
+    super::stable_packed_accumulator::collect_local_writes(body, &mut writes);
+    let mut in_range: Option<String> = None;
+    let mut admitted: Vec<(u32, String, String)> = Vec::new();
+    for (id, ws) in &writes {
+        if *id == counter_id
+            || ws.is_empty()
+            || !ws.iter().all(|w| w.is_none())
+            || !ctx.integer_locals.contains(id)
+            || ctx.boxed_vars.contains(id)
+            || ctx.closure_captures.contains_key(id)
+            || ctx.module_globals.contains_key(id)
+        {
+            continue;
+        }
+        let Some(dbl_slot) = ctx.locals.get(id).cloned() else {
+            continue;
+        };
+        // Count accumulators are rarely index-used, so most have no i32
+        // slot yet — create a scope-local one here: range-test the (integer
+        // by `integer_locals` invariant) double value, seed the slot with
+        // its exact `fptosi`, and REGISTER it so every in-clone read takes
+        // the i32-first `LocalGet` arm. `finish`/the trampoline unregister
+        // it and sync the double back.
+        let created_slot = if ctx.i32_counter_slots.contains_key(id) {
+            None
+        } else {
+            Some(ctx.func.alloca_entry(I32))
+        };
+        let existing_slot = ctx.i32_counter_slots.get(id).cloned();
+        let blk = ctx.block();
+        let (value_i32, ok) = if let Some(new_slot) = &created_slot {
+            let dbl = blk.load(DOUBLE, &dbl_slot);
+            let below = blk.fcmp("olt", &dbl, "1073741824.0");
+            let above = blk.fcmp("ogt", &dbl, "-1073741824.0");
+            let ok = blk.and(I1, &below, &above);
+            let as_i32 = blk.fptosi(DOUBLE, &dbl, I32);
+            blk.store(I32, &as_i32, new_slot);
+            (new_slot.clone(), ok)
+        } else {
+            let slot = existing_slot.expect("checked contains_key above");
+            let value = blk.load(I32, &slot);
+            let below = blk.icmp_slt(I32, &value, "1073741824");
+            let above = blk.icmp_sgt(I32, &value, "-1073741824");
+            (slot, blk.and(I1, &below, &above))
+        };
+        in_range = Some(match in_range {
+            Some(prev) => ctx.block().and(I1, &prev, &ok),
+            None => ok,
+        });
+        if let Some(new_slot) = created_slot {
+            ctx.i32_counter_slots.insert(*id, new_slot);
+        }
+        admitted.push((*id, value_i32, dbl_slot));
+    }
+    if admitted.is_empty() {
+        return admitted;
+    }
+    let ok_idx = ctx.new_block(&format!("{block_prefix}.intacc.ok"));
+    let ok_label = ctx.block_label(ok_idx);
+    let in_range = in_range.expect("at least one admitted");
+    ctx.block().cond_br(&in_range, &ok_label, slow_pre_label);
+    ctx.current_block = ok_idx;
+    for (id, _, _) in &admitted {
+        ctx.deferred_integer_update_accumulators.insert(*id);
+    }
+    admitted
+}
+
+impl PackedAccumulatorScope {
+    /// Cache each receiver's box in a promotable alloca for this fast
+    /// clone. Receivers here are matcher-validated plain locals or module
+    /// globals (never captures/boxes), and the clone body is call-free, so
+    /// the only collection point is the loop poll — whose armed arm reloads
+    /// every entry in `packed_receiver_refresh`.
+    fn hoist_receivers(&mut self, ctx: &mut FnCtx<'_>, array_ids: &[u32]) {
+        for arr_id in array_ids {
+            if ctx.packed_receiver_box_slots.contains_key(arr_id) {
+                continue;
+            }
+            let source_ref = if let Some(slot) = ctx.locals.get(arr_id) {
+                slot.clone()
+            } else if let Some(global_name) = ctx.module_globals.get(arr_id) {
+                format!("@{}", global_name)
+            } else {
+                continue;
+            };
+            let current = ctx.block().load(DOUBLE, &source_ref);
+            let alloca = ctx.func.alloca_entry(DOUBLE);
+            let handle_alloca = ctx.func.alloca_entry(I64);
+            {
+                let blk = ctx.block();
+                blk.store(DOUBLE, &current, &alloca);
+                let bits = blk.bitcast_double_to_i64(&current);
+                let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+                blk.store(I64, &handle, &handle_alloca);
+            }
+            ctx.packed_receiver_box_slots
+                .insert(*arr_id, alloca.clone());
+            ctx.packed_receiver_handle_slots
+                .insert(*arr_id, handle_alloca);
+            ctx.packed_receiver_refresh.push((alloca, source_ref));
+            self.hoisted_receivers.push(*arr_id);
+        }
+    }
+
+    /// Integer-only scopes still need the side-exit write-back trampoline
+    /// (the double slot is stale mid-clone); build it and set the override.
+    fn with_deferred_trampoline(
+        mut self,
+        ctx: &mut FnCtx<'_>,
+        slow_pre_label: &str,
+        block_prefix: &str,
+    ) -> Self {
+        if self.deferred_integer.is_empty() {
+            return self;
+        }
+        let tramp_idx = ctx.new_block(&format!("{block_prefix}.intacc.writeback_exit"));
+        let saved = ctx.current_block;
+        ctx.current_block = tramp_idx;
+        for (_, i32_slot, dbl_slot) in &self.deferred_integer {
+            let blk = ctx.block();
+            let value = blk.load(I32, i32_slot);
+            let as_double = blk.sitofp(I32, &value, DOUBLE);
+            blk.store(DOUBLE, &as_double, dbl_slot);
+        }
+        ctx.block().br(slow_pre_label);
+        ctx.current_block = saved;
+        self.side_exit_override = Some(ctx.block_label(tramp_idx));
+        self
     }
 
     /// The label packed facts should carry as their side exit: the
@@ -603,6 +759,27 @@ impl PackedAccumulatorScope {
             }
             ctx.numeric_accumulator_f64_slots.remove(id);
         }
+        for (id, i32_slot, dbl_slot) in &self.deferred_integer {
+            if emit_writeback {
+                let blk = ctx.block();
+                let value = blk.load(I32, i32_slot);
+                let as_double = blk.sitofp(I32, &value, DOUBLE);
+                blk.store(DOUBLE, &as_double, dbl_slot);
+            }
+            ctx.deferred_integer_update_accumulators.remove(id);
+            // A slot this scope created is scope-local: unregister it so
+            // post-loop reads go back to the (now re-synced) double slot.
+            if ctx.i32_counter_slots.get(id) == Some(i32_slot) {
+                ctx.i32_counter_slots.remove(id);
+            }
+        }
+        for arr_id in &self.hoisted_receivers {
+            if let Some(alloca) = ctx.packed_receiver_box_slots.remove(arr_id) {
+                ctx.packed_receiver_refresh
+                    .retain(|(slot, _)| slot != &alloca);
+            }
+            ctx.packed_receiver_handle_slots.remove(arr_id);
+        }
     }
 }
 
@@ -617,8 +794,22 @@ fn emit_packed_numeric_accumulator_admission(
     let accumulators = super::stable_packed_accumulator::collect_numeric_accumulators(
         ctx, body, array_id, counter_id,
     );
-    if accumulators.is_empty() {
+    // Integer (`c++`) accumulators admit independently of the float set —
+    // a pure count loop has no float accumulator at all.
+    let scope_deferred_integer =
+        admit_integer_update_accumulators(ctx, body, counter_id, slow_pre_label, block_prefix);
+    if accumulators.is_empty() && scope_deferred_integer.is_empty() {
         return PackedAccumulatorScope::empty();
+    }
+    if accumulators.is_empty() {
+        return PackedAccumulatorScope {
+            accumulators,
+            unboxed: Vec::new(),
+            deferred_integer: scope_deferred_integer,
+            side_exit_override: None,
+            hoisted_receivers: Vec::new(),
+        }
+        .with_deferred_trampoline(ctx, slow_pre_label, block_prefix);
     }
     let mut loaded: Vec<(u32, String, String)> = Vec::new();
     let mut all_numbers: Option<String> = None;
@@ -674,7 +865,7 @@ fn emit_packed_numeric_accumulator_admission(
         ctx.numeric_accumulator_f64_slots.insert(id, alloca.clone());
         unboxed.push((id, alloca, slot));
     }
-    let side_exit_override = if unboxed.is_empty() {
+    let side_exit_override = if unboxed.is_empty() && scope_deferred_integer.is_empty() {
         None
     } else {
         // Side-exit trampoline: any mid-iteration exit (a hole-checked load,
@@ -688,6 +879,12 @@ fn emit_packed_numeric_accumulator_admission(
             let value = ctx.block().load(DOUBLE, alloca);
             ctx.block().store(DOUBLE, &value, real_slot);
         }
+        for (_, i32_slot, dbl_slot) in &scope_deferred_integer {
+            let blk = ctx.block();
+            let value = blk.load(I32, i32_slot);
+            let as_double = blk.sitofp(I32, &value, DOUBLE);
+            blk.store(DOUBLE, &as_double, dbl_slot);
+        }
         ctx.block().br(slow_pre_label);
         ctx.current_block = saved;
         Some(ctx.block_label(tramp_idx))
@@ -695,7 +892,9 @@ fn emit_packed_numeric_accumulator_admission(
     PackedAccumulatorScope {
         accumulators,
         unboxed,
+        deferred_integer: scope_deferred_integer,
         side_exit_override,
+        hoisted_receivers: Vec::new(),
     }
 }
 
@@ -767,7 +966,7 @@ fn lower_packed_f64_versioned_for(
     let packed_scope_id = ctx.next_loop_proof_scope_id();
 
     ctx.current_block = fast_pre_idx;
-    let acc_scope = emit_packed_numeric_accumulator_admission(
+    let mut acc_scope = emit_packed_numeric_accumulator_admission(
         ctx,
         body,
         matched.array_id,
@@ -775,6 +974,7 @@ fn lower_packed_f64_versioned_for(
         &slow_pre_label,
         loop_label,
     );
+    acc_scope.hoist_receivers(ctx, &[matched.array_id]);
     ctx.packed_f64_loop_facts.push(PackedF64LoopFact {
         index_local_id: matched.counter_id,
         array_local_id: matched.array_id,
@@ -802,6 +1002,8 @@ fn lower_packed_f64_versioned_for(
         let len_ptr = blk.inttoptr(I64, &arr_handle);
         blk.load(I32, &len_ptr)
     };
+    let saved_stride = ctx.poll_stride_counter_slot.take();
+    ctx.poll_stride_counter_slot = ctx.i32_counter_slots.get(&matched.counter_id).cloned();
     lower_for_after_init_with_i32_bound(
         ctx,
         init,
@@ -811,6 +1013,7 @@ fn lower_packed_f64_versioned_for(
         &format!("for.{loop_label}_fast"),
         Some((matched.counter_id, hoisted_len_i32)),
     )?;
+    ctx.poll_stride_counter_slot = saved_stride;
     ctx.packed_f64_loop_facts
         .retain(|fact| fact.scope_id != packed_scope_id);
     acc_scope.finish(ctx);
@@ -2225,13 +2428,19 @@ fn lower_packed_f64_range_versioned_for(
 
             ctx.current_block = fast_i32_pre_idx;
             let scope_i32 = ctx.next_loop_proof_scope_id();
-            let acc_scope = emit_range_loop_accumulator_admission(
+            let mut acc_scope = emit_range_loop_accumulator_admission(
                 ctx,
                 &matched,
                 body,
                 &slow_pre_label,
                 "packed_f64_range.fast_i32",
             );
+            let range_receiver_ids: Vec<u32> = matched
+                .arrays
+                .iter()
+                .map(|access| access.array_id)
+                .collect();
+            acc_scope.hoist_receivers(ctx, &range_receiver_ids);
             let fact_side_exit = acc_scope.fact_side_exit(&slow_pre_label);
             push_packed_f64_range_facts(
                 ctx,
@@ -2243,6 +2452,8 @@ fn lower_packed_f64_range_versioned_for(
                 false,
                 &acc_scope.accumulators,
             );
+            let saved_stride = ctx.poll_stride_counter_slot.take();
+            ctx.poll_stride_counter_slot = ctx.i32_counter_slots.get(&matched.counter_id).cloned();
             lower_for_after_init_with_i32_bound(
                 ctx,
                 init,
@@ -2252,6 +2463,7 @@ fn lower_packed_f64_range_versioned_for(
                 "for.packed_f64_range_fast_i32",
                 Some((matched.counter_id, bound_i32.clone())),
             )?;
+            ctx.poll_stride_counter_slot = saved_stride;
             ctx.packed_f64_loop_facts
                 .retain(|fact| fact.scope_id != scope_i32);
             ctx.masked_window_array_facts
@@ -2264,13 +2476,19 @@ fn lower_packed_f64_range_versioned_for(
 
         ctx.current_block = fast_pre_idx;
         let scope_f64 = ctx.next_loop_proof_scope_id();
-        let acc_scope = emit_range_loop_accumulator_admission(
+        let mut acc_scope = emit_range_loop_accumulator_admission(
             ctx,
             &matched,
             body,
             &slow_pre_label,
             "packed_f64_range.fast",
         );
+        let range_receiver_ids: Vec<u32> = matched
+            .arrays
+            .iter()
+            .map(|access| access.array_id)
+            .collect();
+        acc_scope.hoist_receivers(ctx, &range_receiver_ids);
         let fact_side_exit = acc_scope.fact_side_exit(&slow_pre_label);
         push_packed_f64_range_facts(
             ctx,
@@ -2282,6 +2500,8 @@ fn lower_packed_f64_range_versioned_for(
             has_stores,
             &acc_scope.accumulators,
         );
+        let saved_stride = ctx.poll_stride_counter_slot.take();
+        ctx.poll_stride_counter_slot = ctx.i32_counter_slots.get(&matched.counter_id).cloned();
         lower_for_after_init_with_i32_bound(
             ctx,
             init,
@@ -2291,6 +2511,7 @@ fn lower_packed_f64_range_versioned_for(
             "for.packed_f64_range_fast",
             Some((matched.counter_id, bound_i32.clone())),
         )?;
+        ctx.poll_stride_counter_slot = saved_stride;
         ctx.packed_f64_loop_facts
             .retain(|fact| fact.scope_id != scope_f64);
         ctx.masked_window_array_facts
@@ -2313,13 +2534,19 @@ fn lower_packed_f64_range_versioned_for(
         let packed_scope_id = ctx.next_loop_proof_scope_id();
 
         ctx.current_block = fast_pre_idx;
-        let acc_scope = emit_range_loop_accumulator_admission(
+        let mut acc_scope = emit_range_loop_accumulator_admission(
             ctx,
             &matched,
             body,
             &slow_pre_label,
             "packed_f64_range.classic",
         );
+        let range_receiver_ids: Vec<u32> = matched
+            .arrays
+            .iter()
+            .map(|access| access.array_id)
+            .collect();
+        acc_scope.hoist_receivers(ctx, &range_receiver_ids);
         let fact_side_exit = acc_scope.fact_side_exit(&slow_pre_label);
         push_packed_f64_range_facts(
             ctx,
@@ -2331,6 +2558,8 @@ fn lower_packed_f64_range_versioned_for(
             false,
             &acc_scope.accumulators,
         );
+        let saved_stride = ctx.poll_stride_counter_slot.take();
+        ctx.poll_stride_counter_slot = ctx.i32_counter_slots.get(&matched.counter_id).cloned();
         lower_for_after_init_with_i32_bound(
             ctx,
             init,
@@ -2340,6 +2569,7 @@ fn lower_packed_f64_range_versioned_for(
             "for.packed_f64_range_fast",
             Some((matched.counter_id, bound_i32.clone())),
         )?;
+        ctx.poll_stride_counter_slot = saved_stride;
         ctx.packed_f64_loop_facts
             .retain(|fact| fact.scope_id != packed_scope_id);
         ctx.masked_window_array_facts
@@ -6123,6 +6353,29 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
     let done_idx = ctx.new_block("gcpoll.done");
     let poll_label = ctx.block_label(poll_idx);
     let done_label = ctx.block_label(done_idx);
+    // Packed fast clones stride the poll: the VOLATILE armed load
+    // serializes, and its clobber potential forces the receiver-cache base
+    // math to be re-derived on EVERY element (disassembly: the `ldr w, [x]`
+    // + `cbz` pair plus a re-mask/re-add per element were the last fat in
+    // an otherwise branchless fcsel loop). Gate it on `(i & 63) == 0` —
+    // plain scalar ops LLVM folds through its unroller — so the volatile
+    // load runs once per 64 iterations. Sound: the clone body is call-free,
+    // the poll is its only collection point, and a 64-iteration drain delay
+    // on a sub-nanosecond body is far inside the poll contract's tolerance
+    // (the arm/drain handshake has no fixed-latency requirement, only
+    // eventual progress — see gc/poll_arm.rs).
+    if let Some(counter_slot) = ctx.poll_stride_counter_slot.clone() {
+        let check_idx = ctx.new_block("gcpoll.stride_check");
+        let check_label = ctx.block_label(check_idx);
+        {
+            let blk = ctx.block();
+            let i = blk.load(I32, &counter_slot);
+            let masked = blk.and(I32, &i, "63");
+            let due_slot = blk.icmp_eq(I32, &masked, "0");
+            blk.cond_br(&due_slot, &check_label, &done_label);
+        }
+        ctx.current_block = check_idx;
+    }
     {
         let blk = ctx.block();
         let armed = blk.load_volatile(I32, "@PERRY_GC_POLL_ARMED");
@@ -6131,8 +6384,32 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
     }
     ctx.current_block = poll_idx;
     {
+        let refresh = ctx.packed_receiver_refresh.clone();
+        let handle_pairs: Vec<(String, String)> = ctx
+            .packed_receiver_handle_slots
+            .iter()
+            .filter_map(|(id, handle_slot)| {
+                ctx.packed_receiver_box_slots
+                    .get(id)
+                    .map(|box_slot| (handle_slot.clone(), box_slot.clone()))
+            })
+            .collect();
         let blk = ctx.block();
         blk.call_void("js_gc_loop_safepoint", &[]);
+        // A fired poll may have MOVED every cached packed receiver — reload
+        // each active cache (all scopes: an inner loop's poll must refresh
+        // outer clones' caches too) from its GC-updated root before any
+        // cached-base access runs again.
+        for (alloca, source_ref) in &refresh {
+            let fresh = blk.load(DOUBLE, source_ref);
+            blk.store(DOUBLE, &fresh, alloca);
+        }
+        for (handle_slot, box_slot) in &handle_pairs {
+            let fresh = blk.load(DOUBLE, box_slot);
+            let bits = blk.bitcast_double_to_i64(&fresh);
+            let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+            blk.store(I64, &handle, handle_slot);
+        }
         blk.br(&done_label);
     }
     ctx.current_block = done_idx;
@@ -6392,10 +6669,20 @@ fn classify_for_length_hoist_impl(
         _ => return None,
     };
     let receiver_is_eligible = if allow_materialization_hazard {
-        ctx.locals.contains_key(&arr_id)
+        // Module globals qualify alongside plain locals: the storage is a
+        // registered root cell read with one load (the same addressable set
+        // `packed_loop_array_binding_storage_is_addressable` admits), the
+        // matched body is call-free so nothing can rebind the global
+        // mid-loop, and the entry guard revalidates the live array either
+        // way. Excluding them silently kept every module-global receiver's
+        // `i < g.length` loop off the versioned clones (probe: 8.1 ns/el
+        // for a count loop the local-receiver twin runs at 1.6).
+        let plain_local = ctx.locals.contains_key(&arr_id)
             && !ctx.boxed_vars.contains(&arr_id)
-            && !ctx.module_globals.contains_key(&arr_id)
-            && !ctx.scalar_replaced_arrays.contains_key(&arr_id)
+            && !ctx.module_globals.contains_key(&arr_id);
+        let module_global =
+            !ctx.locals.contains_key(&arr_id) && ctx.module_globals.contains_key(&arr_id);
+        (plain_local || module_global) && !ctx.scalar_replaced_arrays.contains_key(&arr_id)
     } else {
         array_length_receiver_is_loop_local(ctx, arr_id)
     };
