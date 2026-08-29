@@ -48,6 +48,14 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      # These archives embed the Perry commit, while the builder treats an
+      # existing archive as fresh. Keep the broader target cache warm, but
+      # force this commit-stamped subtree to be rebuilt after every restore.
+      - name: Invalidate cached Geisterhand archives (#9037)
+        run: |
+          rm -rf target/geisterhand
+          test ! -e target/geisterhand
+
       - name: Build perry + iOS UI lib
         run: |
           cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
