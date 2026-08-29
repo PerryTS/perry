@@ -1408,15 +1408,25 @@ fn expr_is_safe(
             return false;
         }
         Expr::Closure {
+            body,
             captures,
             mutable_captures,
             ..
-        } if captures
-            .iter()
-            .chain(mutable_captures.iter())
-            .any(|id| *id == array_id || aliases.contains_key(id)) =>
-        {
-            return false;
+        } => {
+            // Module-scope locals are intentionally omitted from a closure's
+            // capture lists, but the closure body still refers to their
+            // LocalIds directly. The generic expression walker does not enter
+            // closure statement bodies, so inspect them explicitly before
+            // deleting a scalarized carrier (#9048).
+            let body_refs = collect_stmt_refs(body);
+            if captures
+                .iter()
+                .chain(mutable_captures.iter())
+                .chain(body_refs.iter())
+                .any(|id| *id == array_id || aliases.contains_key(id))
+            {
+                return false;
+            }
         }
         Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }
             if matches!(
@@ -1832,6 +1842,45 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+        });
+
+        run(&mut module);
+
+        assert!(module.init.iter().any(|stmt| {
+            matches!(
+                stmt,
+                Stmt::Let {
+                    id: 1,
+                    init: Some(Expr::Array(_)),
+                    ..
+                }
+            )
+        }));
+    }
+
+    #[test]
+    fn module_local_reference_from_closure_body_keeps_materialized_aggregate() {
+        let mut module = aggregate_fixture(false);
+        *module.init.last_mut().expect("observer statement") = Stmt::Expr(Expr::Closure {
+            func_id: 99,
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(property(
+                Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::Integer(0)),
+                },
+                "component",
+            )))],
+            captures: Vec::new(),
+            mutable_captures: Vec::new(),
+            captures_this: false,
+            captures_new_target: false,
+            enclosing_class: None,
+            is_arrow: true,
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
         });
 
         run(&mut module);
