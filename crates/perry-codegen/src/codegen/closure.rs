@@ -1306,6 +1306,23 @@ pub(super) fn compile_closure(
         super::arguments::ArgumentsCallee::CurrentClosure,
     );
 
+    // #9060 follow-up: resolve loop-called immutable callee bindings once at
+    // entry — parameters, captured bindings, and module globals (the
+    // module-wide reassignment oracle is in scope here). `%this_closure` is a
+    // live parameter of every closure body, so capture-slot reads are direct.
+    // Skipped for async bodies: entry SSA values do not survive the CPS
+    // rewrite.
+    if !is_async {
+        let param_ids: std::collections::HashSet<u32> = params.iter().map(|p| p.id).collect();
+        super::helpers::emit_callee_binding_resolutions(
+            &mut ctx,
+            body,
+            &param_ids,
+            Some(module_reassigned_locals),
+            true,
+        );
+    }
+
     if is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, body)
             .with_context(|| format!("lowering async closure body func_id={}", func_id))?;

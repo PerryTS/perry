@@ -69,7 +69,9 @@ pub(crate) use hir_facts::{
     collect_native_region_fact_graph, collect_native_region_fact_graph_with_spec_params,
     NativeRegionFactGraph,
 };
-pub(crate) use hoisted_callback_calls::collect_hoisted_callback_calls;
+pub(crate) use hoisted_callback_calls::{
+    collect_hoisted_callback_calls, collect_loop_called_callee_bindings,
+};
 pub(crate) use hot_callees::{
     collect_alloc_hot_functions, collect_hot_loop_callees, collect_recursion_participants,
     collect_self_recursive_allocators,

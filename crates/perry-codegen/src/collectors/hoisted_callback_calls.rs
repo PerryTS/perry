@@ -254,3 +254,160 @@ pub(crate) fn collect_hoisted_callback_calls(method: &Function) -> Vec<HoistedCa
 
     result.into_iter().collect()
 }
+
+/// #9060 follow-up: loop-called callee BINDINGS beyond method callback params.
+///
+/// A call `f(args)` through a `LocalGet` callee reaches the guarded
+/// direct-dispatch arm in `lower_call/early_branches.rs` whenever the binding
+/// carries a `Function` type hint, and that arm consults
+/// `resolved_arrow_callback_targets` — but only method bodies ever populated
+/// the map, so a captured arrow, a module-global arrow, or a plain function's
+/// callback parameter paid `js_closure_callN` (two runtime boundaries plus
+/// strategy dispatch) on every call of every loop iteration.
+///
+/// This collector returns the `(binding, arity)` pairs worth resolving once at
+/// body entry: the callee is a parameter, a captured binding, or a module
+/// global; it is never assigned in this body NOR anywhere else in the module
+/// (`module_reassigned` — a capture or global can be written by other bodies,
+/// and an immutable binding is what makes the entry resolution's identity
+/// argument hold); and at least one of its call sites sits inside a loop, so
+/// the per-entry resolver call has iterations to amortize over. The emission
+/// site re-checks the `Function` type hint against the SAME predicate the
+/// call-site arm uses, so resolution and consumption cannot disagree.
+///
+/// Nested closures are not descended (their calls lower in their own bodies
+/// with their own maps), matching `walk_expr` above.
+pub(crate) fn collect_loop_called_callee_bindings(
+    body: &[Stmt],
+    param_ids: &std::collections::HashSet<u32>,
+    capture_ids: &std::collections::HashSet<u32>,
+    module_global_ids: &std::collections::HashSet<u32>,
+    module_reassigned: &std::collections::HashSet<u32>,
+) -> Vec<(u32, usize)> {
+    let body_reassigned = super::reassigned_locals(body);
+    let mut in_loop: BTreeSet<(u32, usize)> = BTreeSet::new();
+    fn scan_expr(expr: &Expr, loop_depth: usize, out: &mut BTreeSet<(u32, usize)>) {
+        if matches!(expr, Expr::Closure { .. }) {
+            return;
+        }
+        if let Expr::Call { callee, args, .. } = expr {
+            if let Expr::LocalGet(id) = callee.as_ref() {
+                if loop_depth > 0 && args.len() <= 16 {
+                    out.insert((*id, args.len()));
+                }
+            }
+        }
+        perry_hir::walker::walk_expr_children(expr, &mut |child| {
+            scan_expr(child, loop_depth, out);
+        });
+    }
+    fn scan_stmt(stmt: &Stmt, loop_depth: usize, out: &mut BTreeSet<(u32, usize)>) {
+        match stmt {
+            Stmt::While { condition, body } => {
+                scan_expr(condition, loop_depth + 1, out);
+                for s in body {
+                    scan_stmt(s, loop_depth + 1, out);
+                }
+            }
+            Stmt::DoWhile { body, condition } => {
+                for s in body {
+                    scan_stmt(s, loop_depth + 1, out);
+                }
+                scan_expr(condition, loop_depth + 1, out);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    scan_stmt(init, loop_depth, out);
+                }
+                if let Some(condition) = condition {
+                    scan_expr(condition, loop_depth + 1, out);
+                }
+                if let Some(update) = update {
+                    scan_expr(update, loop_depth + 1, out);
+                }
+                for s in body {
+                    scan_stmt(s, loop_depth + 1, out);
+                }
+            }
+            Stmt::Let {
+                init: Some(expr), ..
+            } => scan_expr(expr, loop_depth, out),
+            Stmt::Expr(expr) | Stmt::Throw(expr) => scan_expr(expr, loop_depth, out),
+            Stmt::Return(Some(expr)) => scan_expr(expr, loop_depth, out),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                scan_expr(condition, loop_depth, out);
+                for s in then_branch {
+                    scan_stmt(s, loop_depth, out);
+                }
+                if let Some(body) = else_branch {
+                    for s in body {
+                        scan_stmt(s, loop_depth, out);
+                    }
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                for s in body {
+                    scan_stmt(s, loop_depth, out);
+                }
+                if let Some(catch) = catch {
+                    for s in &catch.body {
+                        scan_stmt(s, loop_depth, out);
+                    }
+                }
+                if let Some(body) = finally {
+                    for s in body {
+                        scan_stmt(s, loop_depth, out);
+                    }
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                scan_expr(discriminant, loop_depth, out);
+                for case in cases {
+                    if let Some(test) = &case.test {
+                        scan_expr(test, loop_depth, out);
+                    }
+                    for s in &case.body {
+                        scan_stmt(s, loop_depth, out);
+                    }
+                }
+            }
+            Stmt::Labeled { body, .. } => scan_stmt(body, loop_depth, out),
+            Stmt::Let { init: None, .. }
+            | Stmt::Return(None)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
+        }
+    }
+    for stmt in body {
+        scan_stmt(stmt, 0, &mut in_loop);
+    }
+    in_loop
+        .into_iter()
+        .filter(|(id, _)| {
+            (param_ids.contains(id) || capture_ids.contains(id) || module_global_ids.contains(id))
+                && !body_reassigned.contains(id)
+                && !module_reassigned.contains(id)
+        })
+        .collect()
+}

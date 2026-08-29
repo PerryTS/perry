@@ -1397,6 +1397,15 @@ pub(super) fn compile_function(
         }
     }
 
+    // #9060 follow-up: resolve loop-called immutable callee bindings once at
+    // entry (parameters only here — the plain-function path has no module-wide
+    // reassignment oracle in scope for captures/globals). Skipped for async
+    // bodies: their entry SSA values do not survive the CPS rewrite.
+    if !f.is_async {
+        let param_ids: std::collections::HashSet<u32> = f.params.iter().map(|p| p.id).collect();
+        super::helpers::emit_callee_binding_resolutions(&mut ctx, &f.body, &param_ids, None, false);
+    }
+
     if f.is_async {
         stmt::lower_async_rejecting_top_level_stmts(&mut ctx, &f.body)
             .with_context(|| format!("lowering async body of '{}'", f.name))?;

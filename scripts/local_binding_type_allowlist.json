@@ -18,6 +18,14 @@
       "reason": "The module map is copied into the closure's source-type metadata; representation consumers use the separate runtime-proof map or emit a live-value guard."
     },
     {
+      "path": "crates/perry-codegen/src/codegen/helpers.rs",
+      "function": "emit_callee_binding_resolutions",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The declared function type only narrows which loop-called bindings are ATTEMPTED for entry resolution; it licenses no call. The resolution itself goes through js_closure_resolve_arrow_direct_call(handle, arity), which validates the value is an arrow closure of that arity at runtime, so a wrong or stale declared type yields a failed resolution and the ordinary dynamic call, never a wrong callee. Async and generator function types are excluded at this read."
+    },
+    {
       "path": "crates/perry-codegen/src/codegen/mod.rs",
       "function": "compile_module",
       "access": "raw:module_local_types",
@@ -172,18 +180,18 @@
     {
       "path": "crates/perry-codegen/src/expr/property_get.rs",
       "function": "lower",
-      "access": "stable_local_type_proof",
-      "count": 1,
-      "classification": "representation-proven",
-      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
-    },
-    {
-      "path": "crates/perry-codegen/src/expr/property_get.rs",
-      "function": "lower",
       "access": "local_type_hint",
       "count": 1,
       "classification": "runtime-validated",
       "reason": "The hint only recognizes the compiler-private synthetic arguments-length marker type; that binding exists solely in direct-call-only clones whose caller materialized the boxed actual-argument count, and the public method retains ordinary Arguments semantics."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/property_get.rs",
+      "function": "lower",
+      "access": "stable_local_type_proof",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
     },
     {
       "path": "crates/perry-codegen/src/expr/property_set.rs",

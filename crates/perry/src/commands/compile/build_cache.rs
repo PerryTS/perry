@@ -49,6 +49,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // `disable-tail-calls` before the optimizer. It changes the generated
     // code of the functions it trips on, so it is a cache input.
     "PERRY_LL_TRE_MAX_ALLOCA_WALK",
+    // #9071: gates resolving a loop-called immutable callee binding once at
+    // body entry instead of per call — the two settings emit different call
+    // sequences, so a cached object from one must not serve the other.
+    "PERRY_CALLEE_BINDING_RESOLUTION",
     // #9060: gates whether a reduce accumulator earns the stable-packed fast
     // clone's numeric proof — with it on, `s += arr[i]` lowers to an inline
     // fadd instead of `js_dynamic_string_or_number_add`, so the two settings

@@ -1692,3 +1692,117 @@ mod native_roots_target_tests {
         );
     }
 }
+
+/// `PERRY_CALLEE_BINDING_RESOLUTION` gate (default on): resolve loop-called
+/// immutable callee bindings once at body entry. `=0`/`off`/`false` restores
+/// per-call `js_closure_callN` dispatch for A/B bisection.
+pub(super) fn callee_binding_resolution_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_CALLEE_BINDING_RESOLUTION").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// Populate `resolved_arrow_callback_targets` for loop-called immutable callee
+/// bindings — the generalization of `codegen/method.rs`'s callback-parameter
+/// resolution to plain function and closure bodies, and to captured bindings
+/// and module globals.
+///
+/// Every read here is RAW and cannot throw: a parameter or plain local is a
+/// slot load; a captured binding is a capture-slot load (plus a
+/// `js_box_get_bits` cell read for a boxed capture — the untrusted entry,
+/// which returns the TDZ sentinel rather than throwing); a module global is a
+/// global load. A sentinel or non-closure value simply resolves to null and
+/// every call keeps its full-dispatcher fallback, so a body that runs before a
+/// captured binding initializes behaves exactly as before. The binding being
+/// unassigned module-wide (the collector's admission) is what makes the
+/// entry-resolved identity stand for every later call.
+///
+/// The `Function` type-hint check mirrors the guarded direct-dispatch arm in
+/// `lower_call/early_branches.rs` — the ONLY consumer of the map — so a
+/// resolution is never emitted for a binding whose call sites cannot use it.
+pub(super) fn emit_callee_binding_resolutions(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    body: &[perry_hir::Stmt],
+    param_ids: &std::collections::HashSet<u32>,
+    // `None` = the caller has no module-wide reassignment oracle; only
+    // parameters (whose writes are all in this body) are admitted then.
+    module_reassigned: Option<&std::collections::HashSet<u32>>,
+    this_closure_available: bool,
+) {
+    use crate::types::{DOUBLE, I32, I64, PTR};
+    if !callee_binding_resolution_enabled() {
+        return;
+    }
+    let empty = std::collections::HashSet::new();
+    let (capture_ids, module_global_ids) = if module_reassigned.is_some() {
+        (
+            ctx.closure_captures.keys().copied().collect(),
+            ctx.module_globals.keys().copied().collect(),
+        )
+    } else {
+        (empty.clone(), empty.clone())
+    };
+    let candidates = crate::collectors::collect_loop_called_callee_bindings(
+        body,
+        param_ids,
+        &capture_ids,
+        &module_global_ids,
+        module_reassigned.unwrap_or(&empty),
+    );
+    for (id, arity) in candidates {
+        if ctx
+            .resolved_arrow_callback_targets
+            .contains_key(&(id, arity))
+        {
+            continue;
+        }
+        if !matches!(
+            ctx.local_type_hint(&id),
+            Some(perry_hir::types::Type::Function(function))
+                if !function.is_async && !function.is_generator
+        ) {
+            continue;
+        }
+        let value_box = if let Some(&capture_idx) = ctx.closure_captures.get(&id) {
+            if !this_closure_available {
+                continue;
+            }
+            let offset = crate::target_layout::closure_header_size_bytes(ctx.target_triple)
+                + 8 * u64::from(capture_idx);
+            let blk = ctx.block();
+            let slot_addr = blk.add(I64, "%this_closure", &offset.to_string());
+            let slot_ptr = blk.inttoptr(I64, &slot_addr);
+            let bits = blk.load(I64, &slot_ptr);
+            if ctx.boxed_vars.contains(&id) {
+                let blk = ctx.block();
+                let cell_bits = blk.call(I64, "js_box_get_bits", &[(I64, &bits)]);
+                ctx.block().bitcast_i64_to_double(&cell_bits)
+            } else {
+                ctx.block().bitcast_i64_to_double(&bits)
+            }
+        } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {
+            let g_ref = format!("@{global_name}");
+            ctx.block().load(DOUBLE, &g_ref)
+        } else if let Some(slot) = ctx.locals.get(&id).cloned() {
+            if ctx.boxed_vars.contains(&id) {
+                continue;
+            }
+            ctx.block().load(DOUBLE, &slot)
+        } else {
+            continue;
+        };
+        let handle = crate::expr::unbox_to_i64(ctx.block(), &value_box);
+        let fn_ptr = ctx.block().call(
+            PTR,
+            "js_closure_resolve_arrow_direct_call",
+            &[(I64, &handle), (I32, &arity.to_string())],
+        );
+        ctx.resolved_arrow_callback_targets
+            .insert((id, arity), fn_ptr);
+    }
+}
