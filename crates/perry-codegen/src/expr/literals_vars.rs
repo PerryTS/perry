@@ -865,8 +865,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // stays a BigInt (`let i = 10n; i++` → `11n`, not the Number `11`
             // which would make a later `i + 87n` throw a mixed-type
             // TypeError; test262 BigInt/prototype/toString/a-z).
-            let needs_numeric_coerce =
-                !ctx.integer_locals.contains(id) && !ctx.unsigned_i32_locals.contains(id);
+            //
+            // #8105's number-by-construction fact retires both calls for a
+            // reassigned NON-integer counter too (`for (let j = a.length - 1;
+            // j >= 0; j--)` — `j`'s init is not an Integer literal, so the
+            // integer fact never admits it). The fact is already trusted for a
+            // strictly harder claim (a bare `load double` with no value
+            // check), and for a value that IS a Number both calls are the
+            // identity this inline arm computes: `js_to_numeric` routes a
+            // non-BigInt through `js_number_coerce` (identity on a Number) and
+            // `js_numeric_step`'s non-BigInt arm is exactly `numeric ± 1.0`.
+            // Boxed and captured locals are never in the set, so the capture
+            // arms below keep their calls.
+            let needs_numeric_coerce = !ctx.integer_locals.contains(id)
+                && !ctx.unsigned_i32_locals.contains(id)
+                && !ctx.number_by_construction_locals.contains(id);
             let is_increment_arg = match op {
                 UpdateOp::Increment => "1",
                 UpdateOp::Decrement => "0",
