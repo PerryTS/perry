@@ -114,6 +114,14 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     let immutable_closure_bindings: std::collections::HashMap<u32, (u32, usize)> =
         crate::collectors::spec_abi_sites::single_binding_closure_locals(hir)
             .into_iter()
+            // A closure with a trusted-box clone is better served by the
+            // ENTRY-RESOLVED path: `js_closure_resolve_arrow_direct_call`
+            // hands back the trusted clone with its entry-cached box-capture
+            // pointers, which beats the known arm's public/typed call for
+            // capturing bodies (measured: 2.5 vs 5.1 ns). Seeding such an id
+            // would also make the resolution emitter skip it, robbing the
+            // call of the faster path.
+            .filter(|(_, func_id)| !trusted_box_closures.contains_key(func_id))
             .filter_map(|(id, func_id)| {
                 closure_param_counts
                     .get(&func_id)
