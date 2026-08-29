@@ -9,7 +9,7 @@
 
 use super::*;
 
-thread_local! {
+crate::perry_thread_local! {
     static FOREACH_DELETE_VISITS: std::cell::RefCell<Vec<(u64, u64)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
