@@ -1,0 +1,1 @@
+Kept the inferred array type through builtin methods chained on `new Array<T>(n)` — `new Array<number>(n).fill(0)` now infers `number[]` instead of `Any`, so index stores on such arrays take the inline guarded lane (34.6 → 3.4 ns per store).

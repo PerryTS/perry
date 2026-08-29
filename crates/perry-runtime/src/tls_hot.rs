@@ -169,9 +169,12 @@ pub(crate) struct HotTls {
     /// aarch64 reads and writes it at the fixed byte offset
     /// [`HOT_TLS_IMPLICIT_THIS_OFFSET`] (see `hot_tls_layout_is_what_codegen_assumes`).
     pub(crate) implicit_this: Cell<u64>,
-    /// `gc::dirty_page_cache` — the one-entry dirty-page cache
-    /// (`usize::MAX` = nothing cached).
-    pub(crate) last_dirty_old_page: Cell<usize>,
+    /// `gc::dirty_page_cache` — the direct-mapped dirty-page cache, indexed
+    /// by the page number's low bits (`usize::MAX` = way empty). Sixteen ways
+    /// because real store patterns interleave a handful of pages: an ECS
+    /// component-update sweep alternates between each component column's
+    /// current page, which a single entry can never hold.
+    pub(crate) dirty_old_pages: [Cell<usize>; 16],
     /// `gc::barrier::mark_dirty_external_slot_page` — the last `(page, header)`
     /// pair recorded in `EXTERNAL_DIRTY_SLOT_PAGES` (`usize::MAX` = none).
     /// Same invariant discipline as the inline-slot cache: valid exactly while
@@ -245,7 +248,7 @@ impl HotTls {
         learned_inline_fields: std::ptr::null_mut(),
         temp_roots: std::ptr::null_mut(),
         implicit_this: Cell::new(crate::value::TAG_UNDEFINED),
-        last_dirty_old_page: Cell::new(usize::MAX),
+        dirty_old_pages: [const { Cell::new(usize::MAX) }; 16],
         last_external_dirty_page: Cell::new(usize::MAX),
         last_external_dirty_header: Cell::new(usize::MAX),
         prototype_addrs: [const { Cell::new(usize::MAX) }; INLINE_PROTOTYPE_ADDR_ROWS],
@@ -354,26 +357,6 @@ pub(crate) mod darwin_tsd {
     /// # Safety
     /// `slot` must be a key returned by `pthread_key_create`, so that the index
     /// lands inside the thread's TSD array.
-    /// This thread's TSD base — the per-thread constant [`get`] indexes from,
-    /// exposed so a hot reader can *identify* the calling thread with one
-    /// `mrs` and no memory access at all (the write barrier's dirty-page
-    /// cache mirrors its value under the writing thread's base). Same asm and
-    /// the same NOT-`pure` discipline as [`get`]: the value must be re-read
-    /// wherever execution can resume on another thread.
-    #[inline(always)]
-    pub(crate) fn base() -> usize {
-        let base: usize;
-        // SAFETY: reads a user-readable system register; no memory touched.
-        unsafe {
-            core::arch::asm!(
-                "mrs {b}, tpidrro_el0",
-                b = out(reg) base,
-                options(nomem, nostack, preserves_flags)
-            );
-        }
-        base & !0b111
-    }
-
     #[inline(always)]
     pub(super) unsafe fn get(slot: usize) -> *mut u8 {
         let base: usize;

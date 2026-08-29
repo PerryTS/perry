@@ -311,6 +311,7 @@ fn bump_max(slot: &AtomicU64, value: u64) {
 #[inline]
 pub(crate) fn note_budgeted_step_duration(us: u64) {
     bump_max(&STEP_MAX_US, us);
+    STEP_TOTAL_US.fetch_add(us, Ordering::Relaxed);
 }
 
 /// Record one atomic final-remark's wall duration.
@@ -318,6 +319,62 @@ pub(crate) fn note_budgeted_step_duration(us: u64) {
 pub(crate) fn note_final_remark_duration(us: u64) {
     bump_max(&REMARK_MAX_US, us);
     REMARK_COUNT.fetch_add(1, Ordering::Relaxed);
+    REMARK_TOTAL_US.fetch_add(us, Ordering::Relaxed);
+}
+
+// ---------------------------------------------------------------------------
+// Cumulative mutator-visible GC time — the concurrent-GC decision number.
+//
+// The maxima above answer "how bad is the worst pause"; these answer "what
+// FRACTION of the run went to collection at all", which is the
+// measurement-first gate for taking marking off the mutator thread: if the
+// share on real workloads is single-digit percent, a concurrent collector
+// has nothing worth hiding. Relaxed atomics, always on — one fetch_add per
+// GC event is noise next to the event itself.
+//
+// `full_collect_total_us` measures the SYNCHRONOUS `js_gc_collect` entry
+// wall-clock; a forced full that internally drives budgeted steps also
+// charges those steps, so the sum of the four buckets can double-count that
+// path. Report the buckets separately and let the reader add what applies —
+// on the workloads this exists for (cc/pi), forced fulls are rare to absent.
+// ---------------------------------------------------------------------------
+
+/// Total microseconds spent in budgeted incremental steps.
+static STEP_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+/// Total microseconds spent in atomic final remarks.
+static REMARK_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+/// Total microseconds spent in copying minor scavenges.
+static MINOR_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+/// Total microseconds spent inside synchronous `js_gc_collect` calls.
+static FULL_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+
+/// Record one copying minor's pause duration.
+#[inline]
+pub(crate) fn note_copying_minor_pause_us(us: u64) {
+    MINOR_TOTAL_US.fetch_add(us, Ordering::Relaxed);
+}
+
+/// Record one synchronous full collection's wall duration.
+#[inline]
+pub(crate) fn note_full_collect_us(us: u64) {
+    FULL_TOTAL_US.fetch_add(us, Ordering::Relaxed);
+}
+
+/// (budgeted-step, final-remark, copying-minor, synchronous-full) cumulative
+/// microseconds since process start.
+pub fn gc_time_totals_us() -> (u64, u64, u64, u64) {
+    (
+        STEP_TOTAL_US.load(Ordering::Relaxed),
+        REMARK_TOTAL_US.load(Ordering::Relaxed),
+        MINOR_TOTAL_US.load(Ordering::Relaxed),
+        FULL_TOTAL_US.load(Ordering::Relaxed),
+    )
+}
+
+/// Microseconds since the first call in this process (the same epoch the
+/// mark-barrier timer uses) — the wall-clock denominator for the share line.
+pub(crate) fn wall_us_since_epoch() -> u64 {
+    process_epoch_us()
 }
 
 /// Record the FinalizationRegistry records one weak-processing step charged,

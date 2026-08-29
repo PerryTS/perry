@@ -1236,6 +1236,25 @@ pub(crate) fn infer_call_return_type(callee: &ast::Expr, ctx: &LoweringContext) 
                     return Type::Any;
                 }
                 let obj_ty = infer_type_from_expr(&member.obj, ctx);
+                // `new Array<T>(n)` types as `Generic { base: "Array", [T] }`
+                // (the explicit-type-args early return above) — the same array
+                // `T[]` denotes, and downstream consumers already treat the
+                // two as one (`typed_parse.rs`, `stmt_loops.rs`,
+                // `element_shape_loop.rs`). This table must too: without the
+                // rebind, `new Array<number>(n).fill(0)` inferred `Any`, the
+                // binding lost its array type, and every later `a[i] = v` on
+                // it took the generic feedback store instead of the inline
+                // guarded lane — 34.6 vs 3.7 ns per store, for the array's
+                // whole life.
+                let obj_ty = match obj_ty {
+                    Type::Generic {
+                        ref base,
+                        ref type_args,
+                    } if base == "Array" && type_args.len() == 1 => {
+                        Type::Array(Box::new(type_args[0].clone()))
+                    }
+                    other => other,
+                };
 
                 // Phase 4.1: user class methods. When the receiver is typed
                 // as `Type::Named(C)` (e.g., a local declared as `p: Point` or

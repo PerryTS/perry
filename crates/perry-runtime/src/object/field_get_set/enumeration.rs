@@ -1302,6 +1302,20 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
             let out = crate::array::js_array_alloc(len as u32);
             for j in 0..len {
                 let key_val = crate::array::js_array_get(keys, pos(j));
+                // Tombstoned slot from an O(1) delete: not a key. The slow
+                // path below skips holes for free (`js_string_key_bytes`
+                // rejects them); this raw-push path must skip explicitly or
+                // `Object.keys` would emit the hole marker itself.
+                if key_val.bits() == crate::value::TAG_HOLE
+                    || key_val.bits() == crate::value::TAG_UNDEFINED
+                {
+                    // Tombstoned slot from an O(1) delete. `js_array_get` translates
+                    // TAG_HOLE to `undefined` per OrdinaryGet (#323), so the marker
+                    // arrives here in EITHER form — and `undefined` is never a legal
+                    // key, so both are skips. Comparing TAG_HOLE alone was dead code
+                    // and let the hole reach the output as JSON `null`.
+                    continue;
+                }
                 crate::array::js_array_push_f64(out, f64::from_bits(key_val.bits()));
             }
             return out;

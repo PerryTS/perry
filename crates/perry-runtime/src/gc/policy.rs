@@ -3617,7 +3617,9 @@ pub extern "C" fn js_gc_collect() {
     if defer_gc_request(DeferredGcRequest::Collect(GcTriggerKind::Manual)) {
         return;
     }
+    let start = std::time::Instant::now();
     manual_gc_collect_now();
+    super::instruments::note_full_collect_us(start.elapsed().as_micros() as u64);
 }
 
 /// Run an explicit (`gc()`) full collection, with **precise roots** — the same
