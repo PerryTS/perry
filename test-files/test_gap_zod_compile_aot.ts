@@ -3,6 +3,10 @@
 // to Zod so its normal issue construction remains authoritative.
 import * as z from "zod";
 
+// Keep Zod's older object-parser JIT out of this test. The feature under test
+// is the explicit z.compile() call below, which Perry replaces before runtime.
+z.config({ jitless: true });
+
 const Player = z.object({
   name: z.string(),
   score: z.number().int().min(0).max(100),

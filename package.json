@@ -23,7 +23,7 @@
     "mongodb": "^7.0.0",
     "rate-limiter-flexible": "^11.2.0",
     "slugify": "^1.6.9",
-    "zod": "^4.5.0-canary.20260820T155656"
+    "zod": "^4.5.2"
   },
   "dependencies": {
     "ethers": "^6.17.0",

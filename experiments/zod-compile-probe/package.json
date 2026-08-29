@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "zod": "4.5.0-canary.20260820T155656"
+    "zod": "4.5.2"
   }
 }

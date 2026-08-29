@@ -1,5 +1,8 @@
 import * as z from "zod";
 
+// Isolate explicit z.compile() from Zod's older object-parser JIT.
+z.config({ jitless: true });
+
 const Player = z.object({
   username: z.string(),
   displayName: z.string(),
