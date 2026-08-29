@@ -111,6 +111,12 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             _ => None,
         })
         .collect();
+    // `PERRY_CALL_DEVIRT=0`/`off`/`false` empties the map, restoring the
+    // entry-resolved indirect path for every binding (A/B bisection).
+    let call_devirt_enabled = !matches!(
+        std::env::var("PERRY_CALL_DEVIRT").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    );
     let immutable_closure_bindings: std::collections::HashMap<u32, (u32, usize)> =
         crate::collectors::spec_abi_sites::single_binding_closure_locals(hir)
             .into_iter()
@@ -121,6 +127,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             // capturing bodies (measured: 2.5 vs 5.1 ns). Seeding such an id
             // would also make the resolution emitter skip it, robbing the
             // call of the faster path.
+            .filter(|_| call_devirt_enabled)
             .filter(|(_, func_id)| !trusted_box_closures.contains_key(func_id))
             .filter_map(|(id, func_id)| {
                 closure_param_counts
