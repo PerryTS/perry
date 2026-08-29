@@ -466,12 +466,16 @@ pub(crate) fn set_field_by_name_object_tail(
         // transition-cache fast path, whose `prev_shape_id` is read AFTER
         // this — then appends at the floor. Seeding allocates, so every raw
         // local is re-read through its handle.
-        if keys.is_null()
-            && crate::object::reserved_slot_floor_for_class_id((*obj).class_id) != 0
-            && crate::object::ensure_reserved_floor_keys(obj)
-        {
+        if keys.is_null() && crate::object::reserved_slot_floor_for_class_id((*obj).class_id) != 0 {
+            let seeded = crate::object::ensure_reserved_floor_keys(obj);
             refresh_roots_after_alloc!();
             keys = crate::object::object_keys_array(obj);
+            if !seeded && keys.is_null() {
+                // Seed failed (allocation refused): DROP the write rather
+                // than run the append below, whose index-0 slot is the
+                // backing-collection pointer.
+                return;
+            }
         }
 
         let mut prev_keys_usize = keys as usize;

@@ -371,7 +371,23 @@ pub(crate) unsafe fn call_overridden_iterator_next(
     // matching IteratorNext's GetV+Call — it must never fall through to the
     // builtin advance, which would ignore the patch the user installed.
     let own = super::js_object_get_own_field_or_undef(iter.get_nanbox_f64(), b"next".as_ptr(), 4);
-    if own.to_bits() != crate::value::TAG_UNDEFINED {
+    // `it.next = undefined` is PRESENT but non-callable (GetV yields the
+    // stored undefined, Call throws), which the value read alone cannot
+    // distinguish from absence. The bytes-based keys scan allocates nothing,
+    // and an unpatched iterator's keys edge is null, so the hot path pays
+    // one null check.
+    let own_present = own.to_bits() != crate::value::TAG_UNDEFINED || {
+        let obj = crate::value::js_nanbox_get_pointer(iter.get_nanbox_f64()) as *const ObjectHeader;
+        let keys = super::object_keys_array(obj);
+        !keys.is_null()
+            && super::keys_find_slot_by_bytes(
+                keys,
+                crate::array::js_array_length(keys) as u32,
+                b"next",
+            )
+            .is_some()
+    };
+    if own_present {
         if !JSValue::from_bits(own.to_bits()).is_pointer() {
             crate::closure::throw_not_callable();
         }

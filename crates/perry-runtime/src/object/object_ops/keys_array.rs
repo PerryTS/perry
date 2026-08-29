@@ -32,11 +32,15 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
         // accessor installs, which claim a keys slot with no data write)
         // can never take a raw internal field's index. The seeded receiver
         // then falls through to the ordinary existing-keys append below.
-        if crate::object::reserved_slot_floor_for_class_id((*obj).class_id) != 0
-            && crate::object::ensure_reserved_floor_keys(obj)
-        {
+        if crate::object::reserved_slot_floor_for_class_id((*obj).class_id) != 0 {
+            let seeded = crate::object::ensure_reserved_floor_keys(obj);
             refresh_define_property_roots!();
             keys = crate::object::object_keys_array(obj);
+            if !seeded && keys.is_null() {
+                // Seed failed (allocation refused): drop the key claim
+                // rather than let it take a raw internal field's index.
+                return;
+            }
         } else {
             let new_keys = crate::array::js_array_alloc(4);
             refresh_define_property_roots!();

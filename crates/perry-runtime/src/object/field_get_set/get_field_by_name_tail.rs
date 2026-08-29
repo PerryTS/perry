@@ -1227,36 +1227,17 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
-        // #2856: a property READ (not a call) of `next` on a Map/Set
-        // iterator object must yield a callable (so `typeof it.next ===
-        // "function"` and `const n = it.next; n()` work). The iterators
-        // dispatch via class id and store no `next` field, so bind the
-        // method to the receiver. Also bind the self-iterator methods.
+        // #2856 synthetic method reads + #9019 own-field shadowing for
+        // Map/Set iterator receivers — body in
+        // `accessors::map_set_iterator_property`. `None` means the key is
+        // `next` with no own patch: the generic scans below resolve the
+        // prototype thunk.
         if !key.is_null()
             && ((*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
                 || (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID)
         {
-            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let key_len = (*key).byte_len as usize;
-            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-            // `next` is an ordinary prototype method.  Do not bind it to the
-            // iterator at property-read time: `iterator.next.call(other)` must
-            // receive `other` and perform the spec brand check.  The remaining
-            // legacy synthetic methods still use the bound-method path.
-            let bind_name: Option<&'static [u8]> = match key_bytes {
-                b"return" => Some(b"return"),
-                b"throw" => Some(b"throw"),
-                b"@@iterator" => Some(b"@@iterator"),
-                _ => None,
-            };
-            if let Some(name) = bind_name {
-                let this_f64 =
-                    f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
-                let result = js_class_method_bind(this_f64, name.as_ptr(), name.len());
-                return JSValue::from_bits(result.to_bits());
-            }
-            if key_bytes != b"next" {
-                return JSValue::undefined();
+            if let Some(v) = super::accessors::map_set_iterator_property(obj, key) {
+                return v;
             }
         }
 

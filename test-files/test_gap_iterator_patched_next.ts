@@ -115,3 +115,39 @@
   for (const v of it) got.push(v as number);
   console.log("L", got.join(","));
 }
+
+// N: user data properties are readable at scale, survive a hole-squeeze
+// (12 adds, 10 deletes), and never disturb iteration state.
+{
+  const s = new Set<number>([5, 6]);
+  const it: any = s.values();
+  for (let i = 0; i < 12; i++) it["p" + i] = i * 100;
+  console.log("N1", it.p0, it.p11);
+  for (let i = 0; i < 10; i++) delete it["p" + i];
+  console.log("N2", JSON.stringify(Object.keys(it)), it.p10, it.p11);
+  const r = it.next();
+  console.log("N3", r.value, r.done);
+}
+
+// O: an own `return` assignment shadows the builtin on the read path.
+{
+  const s = new Set<number>([1]);
+  const it: any = s.values();
+  it.ret0 = 7;
+  (it as any).return = 1234;
+  console.log("O", it.return, it.ret0);
+}
+
+// P: an own next EXPLICITLY set to undefined is present-but-non-callable —
+// for-of must throw, not fall back to the builtin advance.
+{
+  const s = new Set<number>([1]);
+  const it: any = s.values();
+  it.next = undefined;
+  try {
+    for (const v of it) console.log("P-unexpected", v);
+    console.log("P", "no-throw");
+  } catch (e: any) {
+    console.log("P", e instanceof TypeError);
+  }
+}

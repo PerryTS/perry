@@ -272,6 +272,64 @@ mod tests {
         assert_eq!(reserved_slot_floor_for_class_id(42), 0);
     }
 
+    /// #9066 review: user properties must be READABLE, not merely stored.
+    /// The Map/Set-iterator GET arm used to answer `undefined` for every
+    /// non-`next` key without consulting own fields, which made the seeded
+    /// storage write-only — 12 properties written, all reading back
+    /// undefined, and squeeze survivors appearing to "lose" values that
+    /// were in the overflow spill all along.
+    #[test]
+    fn user_properties_read_back_through_the_get_path_at_scale() {
+        unsafe {
+            let iter = set_iter_with_10_20_30();
+            let backing_before = js_object_get_field(iter, 0).bits();
+            for i in 0..12 {
+                js_object_set_field_by_name(iter, key(&format!("p{i}")), (i as f64) * 100.0);
+            }
+            for i in 0..12 {
+                let got = f64::from_bits(
+                    crate::object::js_object_get_field_by_name(iter, key(&format!("p{i}"))).bits(),
+                );
+                assert_eq!(got, (i as f64) * 100.0, "p{i} must read back by name");
+            }
+            // Delete ten (crossing the hole-squeeze threshold) — the two
+            // survivors keep their VALUES and the raw fields stay intact.
+            for i in 0..10 {
+                assert_eq!(
+                    crate::object::js_object_delete_field(iter, key(&format!("p{i}"))),
+                    1
+                );
+            }
+            for i in 10..12 {
+                let got = f64::from_bits(
+                    crate::object::js_object_get_field_by_name(iter, key(&format!("p{i}"))).bits(),
+                );
+                assert_eq!(got, (i as f64) * 100.0, "survivor p{i} must keep its value");
+            }
+            assert_eq!(
+                js_object_get_field(iter, 0).bits(),
+                backing_before,
+                "raw fields survive the churn"
+            );
+            let r = crate::collection_iter_object::dispatch_set_iterator_method(iter, "next");
+            assert_eq!(result_value(r), 10.0);
+        }
+    }
+
+    /// An own `return` patch shadows the synthetic bound method on the GET
+    /// path (ordinary [[Get]] order).
+    #[test]
+    fn own_return_patch_shadows_the_synthetic_binding() {
+        unsafe {
+            let iter = set_iter_with_10_20_30();
+            js_object_set_field_by_name(iter, key("return"), 1234.0);
+            let got = f64::from_bits(
+                crate::object::js_object_get_field_by_name(iter, key("return")).bits(),
+            );
+            assert_eq!(got, 1234.0, "own value must shadow the bound method");
+        }
+    }
+
     /// Deleting the patch tombstones it without disturbing the reserved
     /// prefix, and the builtin advance resumes.
     #[test]

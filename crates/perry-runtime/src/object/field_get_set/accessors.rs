@@ -136,6 +136,46 @@ pub(crate) unsafe fn own_data_field_by_name(
     None
 }
 
+/// #2856 synthetic method reads + #9019 own-field shadowing for a Map/Set
+/// iterator receiver's property GET (extracted from
+/// `get_field_by_name_tail.rs`, which sits at the file-size cap).
+///
+/// Ordinary [[Get]] order: an OWN property — user code can store one past
+/// the reserved floor since #9019 — shadows every synthetic method. This is
+/// also what makes user data properties on iterators readable at all: the
+/// old arm returned `undefined` for every non-`next` key without consulting
+/// own fields, so a stored value was write-only. Then the legacy bound
+/// synthetic methods (`return`/`throw`/`@@iterator`); `next` deliberately
+/// resolves through the caller's generic scans (`None`) so
+/// `iterator.next.call(other)` receives `other` and brand-checks; any other
+/// key is absent (`Some(undefined)`).
+pub(crate) unsafe fn map_set_iterator_property(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<JSValue> {
+    if let Some(v) = own_data_field_by_name(obj, key) {
+        return Some(v);
+    }
+    let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+    let key_len = (*key).byte_len as usize;
+    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+    let bind_name: Option<&'static [u8]> = match key_bytes {
+        b"return" => Some(b"return"),
+        b"throw" => Some(b"throw"),
+        b"@@iterator" => Some(b"@@iterator"),
+        _ => None,
+    };
+    if let Some(name) = bind_name {
+        let this_f64 = f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+        let result = super::super::js_class_method_bind(this_f64, name.as_ptr(), name.len());
+        return Some(JSValue::from_bits(result.to_bits()));
+    }
+    if key_bytes == b"next" {
+        return None;
+    }
+    Some(JSValue::undefined())
+}
+
 crate::perry_thread_local! {
     static OBJECT_PROTOTYPE_LOOKUP_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
