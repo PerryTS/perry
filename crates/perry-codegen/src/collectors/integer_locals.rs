@@ -767,13 +767,6 @@ fn int32_producing_deps(
             deps.insert(*id);
             true
         }
-        // #7700: a byte read, hence integer-valued, only when the KEY is a
-        // number. `const it = u8[Symbol.iterator]` is a function; answering
-        // `true` here gave it an i32 slot and `typeof it` reported `number`.
-        Expr::Uint8ArrayGet { index, .. } => {
-            super::uint8array_get_reads_a_byte(index, &mut |id| numeric_locals.contains(&id))
-        }
-        Expr::BufferIndexGet { .. } => true,
         Expr::MathImul(_, _) => true,
         // Issue #50 bridge: element access on a flat-const 2D int array
         // produces i32. The flat-const facts are immutable within this
@@ -1032,8 +1025,6 @@ pub fn collect_flat_row_aliases(
 ///   - (issue #49) `LocalGet(id)` when `id` is itself in `known_int_locals` —
 ///     enables the accumulator pattern `acc = acc + int_expr` without
 ///     requiring a `| 0` wrapper on every write.
-///   - (issue #49) `Uint8ArrayGet` / `BufferIndexGet`: typed-array byte
-///     reads return u8 values; always fit in i32.
 ///   - (issue #49) `Add` / `Sub` / `Mul` when both operands are
 ///     int-producing. The sum/product may overflow i32, but the existing
 ///     i32-slot machinery already accepts this risk — the double slot is
@@ -1101,11 +1092,6 @@ pub fn is_int32_producing_expr(
                 | BinaryOp::UShr
         ),
         Expr::LocalGet(id) => known_int_locals.contains(id),
-        // #7700: a byte read, hence integer-valued, only with a numeric key.
-        Expr::Uint8ArrayGet { index, .. } => {
-            super::uint8array_get_reads_a_byte(index, &mut |id| numeric_locals.contains(&id))
-        }
-        Expr::BufferIndexGet { .. } => true,
         Expr::MathImul(_, _) => true, // Math.imul always returns i32
         // Issue #50 bridge: element access on a flat-const 2D int array
         // produces i32. Two shapes:

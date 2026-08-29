@@ -25,8 +25,8 @@
 //! An integer typed-array or guarded numeric-array element read is numeric only
 //! **in-bounds**. An OOB / negative / fractional index yields **`undefined`**
 //! (a NaN-boxed value), NOT an integer.
-//! (`Uint8ArrayGet` is safely integer-valued because its accessor returns `0`
-//! OOB — a general typed-array read does not.) So marking such a local i32
+//! (`Uint8ArrayGet` / `BufferIndexGet` have the same Number-or-`undefined`
+//! contract as a general typed-array read.) So marking such a local i32
 //! unconditionally would let `let x = S[oob]; console.log(x)` print a number
 //! (`fptosi(undefined)` garbage / the seeded `0`) where JS prints `undefined`.
 //!
@@ -157,6 +157,19 @@ fn uint8array_get_is_byte_read(index: &Expr, numeric_locals: &HashSet<u32>) -> b
     super::uint8array_get_reads_a_byte(index, &mut |id| numeric_locals.contains(&id))
 }
 
+/// Byte element reads have the same possibly-OOB `undefined` seed semantics
+/// as the general integer typed-array reads above. Keep them out of the
+/// unconditional integer-local proof and admit them only through this
+/// analysis, whose observation walk proves that `undefined` and its i32 image
+/// `0` cannot be distinguished.
+fn is_byte_i32_image_seed_read(e: &Expr, numeric_locals: &HashSet<u32>) -> bool {
+    match e {
+        Expr::Uint8ArrayGet { index, .. } => uint8array_get_is_byte_read(index, numeric_locals),
+        Expr::BufferIndexGet { .. } => true,
+        _ => false,
+    }
+}
+
 fn is_bitwise_binop(op: BinaryOp) -> bool {
     matches!(
         op,
@@ -187,7 +200,9 @@ fn write_is_i32_producing_safe(
         // already guarantees every observation is ToInt32-coercing — so an
         // `undefined` write is indistinguishable from the 0 it becomes.
         Expr::Undefined => true,
-        // Byte reads: `0` OOB, always integer — #7700: with a numeric key.
+        // Byte reads are integer in-bounds and `undefined` OOB. Rule (2)
+        // makes the latter observationally equivalent to its i32 image `0`.
+        // #7700: `Uint8ArrayGet` qualifies only with a numeric key.
         Expr::Uint8ArrayGet { index, .. } => uint8array_get_is_byte_read(index, numeric_locals),
         Expr::BufferIndexGet { .. } => true,
         // Int-kind typed-array element read (possibly OOB → `undefined`).
@@ -215,12 +230,10 @@ fn write_establishes_exact_i32(
     e: &Expr,
     types: &HashMap<u32, HirType>,
     ta_lens: &HashMap<u32, i64>,
-    numeric_locals: &HashSet<u32>,
+    _numeric_locals: &HashSet<u32>,
 ) -> bool {
     match e {
         Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
-        Expr::Uint8ArrayGet { index, .. } => uint8array_get_is_byte_read(index, numeric_locals),
-        Expr::BufferIndexGet { .. } => true,
         Expr::IndexGet { object, index } => {
             receiver_is_int_kind_ta(object, types)
                 && matches!(object.as_ref(), Expr::LocalGet(arr)
@@ -271,7 +284,7 @@ struct Facts<'a> {
 /// legs, all enforced by the caller:
 /// - operands must be undefined-free EXACT int32 values — an in-bounds-PROVEN
 ///   int-TA read (static window < known constant length), an i32 literal, a
-///   bitwise/`~`/`Math.imul` result, a byte read, or another wrap-i32/strict
+///   bitwise/`~`/`Math.imul` result, or another wrap-i32/strict
 ///   candidate (whose slot holds the ToInt32 image by induction);
 /// - the additive write must be STRAIGHT-LINE (not inside any loop): a
 ///   loop-carried additive chain grows the true float unboundedly until f64
@@ -293,9 +306,6 @@ fn additive_write_admissible(
     match e {
         Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
         Expr::LocalGet(id) => pool.contains(id),
-        // #7700: a byte read only with a numeric key.
-        Expr::Uint8ArrayGet { index, .. } => uint8array_get_is_byte_read(index, numeric_locals),
-        Expr::BufferIndexGet { .. } => true,
         // In-bounds-proven int-kind typed-array read: never `undefined`.
         Expr::IndexGet { object, index } => {
             receiver_is_int_kind_ta(object, types)
@@ -343,10 +353,6 @@ pub(super) fn write_establishes_number(
 ) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) => true,
-        // Byte reads return `0` OOB — always a number, with a numeric key
-        // (#7700).
-        Expr::Uint8ArrayGet { index, .. } => uint8array_get_is_byte_read(index, numeric_locals),
-        Expr::BufferIndexGet { .. } => true,
         // Bitwise / `~` / `Math.imul` are number-or-throw (a throw means the
         // write never completes).
         Expr::Binary { op, .. } if is_bitwise_binop(*op) => true,
@@ -681,6 +687,18 @@ pub fn collect_int_valued_ta_locals(
         false,
         &mut facts,
     );
+    // The ordinary integer-local proof cannot admit byte reads because their
+    // value is `undefined` out of bounds. Seed them here instead, beside the
+    // general int-typed-array reads, so coercing-only users retain the i32
+    // optimization while bare consumers preserve the boxed value.
+    facts
+        .seeded
+        .extend(facts.writes.iter().filter_map(|(id, writes)| {
+            writes
+                .iter()
+                .any(|(write, _)| is_byte_i32_image_seed_read(write, &numeric_locals))
+                .then_some(*id)
+        }));
     // Flow leg of the wrap-i32 additive extension: targets of additive-shaped
     // writes whose spine operands were not provably NUMBERS at the write site
     // (an `undefined`-able operand breaks `image == ToInt32(true)` through a

@@ -35,6 +35,13 @@ fn idx_get(arr_id: u32, idx: Expr) -> Expr {
     }
 }
 
+fn u8_get(arr_id: u32, idx: Expr) -> Expr {
+    Expr::Uint8ArrayGet {
+        array: Box::new(Expr::LocalGet(arr_id)),
+        index: Box::new(idx),
+    }
+}
+
 /// Params: `arr: Int32Array` (id 0), `off: number` (id 1) unless overridden.
 fn int32_array_param(id: u32) -> Param {
     Param {
@@ -200,6 +207,64 @@ fn returned_bitwise_result_keeps_local_eligible() {
         got.contains(&5),
         "bitwise-only local wrongly excluded: {got:?}"
     );
+}
+
+fn assert_byte_read_uses_observation_constrained_i32_proof(read: Expr) {
+    let bare_push = vec![
+        let_stmt(5, HirType::Any, Some(read.clone())),
+        Stmt::Expr(Expr::ArrayPush {
+            array_id: 6,
+            value: Box::new(Expr::LocalGet(5)),
+            field_writeback: None,
+        }),
+    ];
+    let ordinary = super::super::integer_locals::collect_integer_locals(
+        &bare_push,
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    assert!(
+        !ordinary.contains(&5),
+        "an OOB-capable byte read must not enter the unconditional proof: {ordinary:?}"
+    );
+    assert!(
+        !run(&bare_push, &[]).contains(&5),
+        "a bare push observes undefined-vs-zero"
+    );
+
+    let coerced = vec![
+        let_stmt(5, HirType::Any, Some(read)),
+        Stmt::Return(Some(bin(
+            BinaryOp::BitOr,
+            Expr::LocalGet(5),
+            Expr::Integer(0),
+        ))),
+    ];
+    assert!(
+        run(&coerced, &[]).contains(&5),
+        "a ToInt32-only observation should retain the byte-read i32 image"
+    );
+}
+
+#[test]
+fn uint8array_read_uses_observation_constrained_i32_proof() {
+    // `u8[99]` is `undefined`, not the byte accessor's native `0` sentinel.
+    // A bare array push observes that distinction, while `u8[99] | 0` does
+    // not. The ordinary integer proof must reject both; only this analysis may
+    // recover the coercing case.
+    assert_byte_read_uses_observation_constrained_i32_proof(u8_get(0, Expr::Integer(99)));
+}
+
+#[test]
+fn buffer_read_uses_observation_constrained_i32_proof() {
+    // Buffer has the same OOB value contract and native byte sentinel as
+    // Uint8Array, so it must follow the same representation proof.
+    assert_byte_read_uses_observation_constrained_i32_proof(Expr::BufferIndexGet {
+        buffer: Box::new(Expr::LocalGet(0)),
+        index: Box::new(Expr::Integer(99)),
+    });
 }
 
 #[test]
