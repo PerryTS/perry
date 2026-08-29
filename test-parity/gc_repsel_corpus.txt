@@ -535,6 +535,18 @@ test_gap_gc_symbol_local_rooting
 # into one `bad N`.
 test_gap_gc_dynamic_construct_receiver_rooting
 
+# --- #9081: INLINED CONSTRUCTOR BODIES — spliced locals need the SPLICING ----
+# frame's slots. The super() parent-body inline, the `new`-site own/inherited
+# ctor inlines, and let_stmt's scalar-ctor variants all lower a ctor body into
+# the enclosing function, whose shadow-slot map was computed from that
+# function's own body alone — the spliced body's pointer locals (and bound
+# ctor params) sat in plain entry allocas the collector never rewrites. This
+# is how three.js `new WebGLRenderTarget()` lost RenderTarget's `texture`
+# local across `this.textures = []` under a small nursery. The test's
+# parity-env quarantine turns the stale deref into a SIGSEGV on a regression;
+# the stamp read-back catches it by value when the pages were recycled.
+test_gap_gc_inlined_ctor_body_locals_rooting
+
 # --- #7280: OPTIONAL PARAMETERS — the residual that held #7161's stopgap -----
 # THE file for #7154's surviving residual. zod `util.ts`'s
 # `clone(inst, def?, params?: { parent: boolean })` gave `params` no shadow slot

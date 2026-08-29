@@ -1502,6 +1502,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     super_args,
                     parent_capture_fill,
                 );
+                // #9081: the parent body is lowered into THIS function's
+                // frame, but the frame's slot map never saw the parent's
+                // locals — root them (and the params just bound) before any
+                // statement of the body can allocate.
+                crate::expr::root_inlined_ctor_pointer_locals(
+                    ctx,
+                    &parent_ctor.params,
+                    &parent_ctor.body,
+                );
 
                 let parent_is_derived = effective_parent_class.extends.is_some()
                     || effective_parent_class.extends_name.is_some()

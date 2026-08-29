@@ -1,9 +1,9 @@
 use super::let_buffer_views::{math_min_length_buffer_ids, register_noalias_buffer_view};
 use super::let_object_facts::{is_object_literal_init, record_imported_object_alias};
 use super::let_stmt_facts::{
-    buffer_local_alias_source, collect_scalar_class_data, native_i32_alias_source,
-    note_ptr_shape_scalar_replaced, pod_view_count_source, record_array_length_snapshot,
-    record_pod_rejection, record_scalar_aggregate_field,
+    buffer_local_alias_source, collect_scalar_class_data, is_global_this_value,
+    native_i32_alias_source, note_ptr_shape_scalar_replaced, pod_view_count_source,
+    record_array_length_snapshot, record_pod_rejection, record_scalar_aggregate_field,
 };
 use super::unused_expr::lower_unused_expr;
 use super::*;
@@ -18,16 +18,6 @@ use crate::native_value::{
 };
 use crate::type_analysis::is_string_expr;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
-
-fn is_global_this_value(expr: &perry_hir::Expr) -> bool {
-    matches!(expr, perry_hir::Expr::GlobalGet(_))
-        || matches!(
-            expr,
-            perry_hir::Expr::PropertyGet { object, property, .. }
-                if matches!(object.as_ref(), perry_hir::Expr::GlobalGet(_))
-                    && property == "globalThis"
-        )
-}
 
 pub(crate) fn lower_let(
     ctx: &mut FnCtx<'_>,
@@ -1088,6 +1078,9 @@ pub(crate) fn lower_let(
                             ctx.proven_local_types.insert(param.id, proof.clone());
                         }
                     }
+                    // #9081: the body is spliced into the enclosing frame,
+                    // whose slot map never saw the ctor's locals.
+                    crate::expr::root_inlined_ctor_pointer_locals(ctx, &ctor.params, &ctor.body);
                     crate::stmt::lower_stmts(ctx, &ctor.body)?;
                     ctx.locals = saved_locals;
                     ctx.local_types = saved_local_types;
@@ -1126,6 +1119,13 @@ pub(crate) fn lower_let(
                                 }
                                 ctx.class_stack.pop();
                                 ctx.class_stack.push(pname.clone());
+                                // #9081: same frame-splice rooting as the
+                                // own-ctor inline above.
+                                crate::expr::root_inlined_ctor_pointer_locals(
+                                    ctx,
+                                    &parent_ctor.params,
+                                    &parent_ctor.body,
+                                );
                                 crate::stmt::lower_stmts(ctx, &parent_ctor.body)?;
                                 ctx.class_stack.pop();
                                 ctx.class_stack.push(class_name.clone());

@@ -345,6 +345,55 @@ pub(crate) fn emit_persistent_shadow_root_barrier(ctx: &mut FnCtx<'_>, value_bit
     ctx.current_block = done_idx;
 }
 
+/// #9081: root the pointer locals of a constructor body spliced inline into
+/// the CURRENT function — the `super(...)` parent-body inline, the `new`-site
+/// own/inherited-ctor inline, and `let_stmt`'s scalar-ctor variants.
+///
+/// The enclosing function's `shadow_slot_map` was computed by
+/// `collect_pointer_typed_locals` over that function's OWN params and body;
+/// an inlined constructor body's locals are invisible to it. Its `Let`s then
+/// land in plain entry allocas that are neither shadow slots nor temp roots,
+/// so a moving minor during the body leaves them holding the pre-move
+/// address (three.js: `RenderTarget`'s `const texture = new Texture(...)`
+/// inlined into `WebGLRenderTarget_constructor`, stale by `texture.clone()`).
+///
+/// Runs the same collector over the spliced params+body and extends the map
+/// through `reserve_shadow_slot`, which grows the already-emitted frame in
+/// place on both root backends (stack-map count and shadow-frame push).
+/// `Let`/assignment sites then mirror stores through the ordinary bind path.
+/// An id already in `ctx.locals` (a ctor param bound by the caller before
+/// this runs) is bound here — unconditionally, because a second inline of
+/// the same constructor in this function binds fresh param allocas that must
+/// re-point the existing slot. Local ids are module-unique, so extending the
+/// map never aliases an enclosing local.
+pub(crate) fn root_inlined_ctor_pointer_locals(
+    ctx: &mut FnCtx<'_>,
+    params: &[perry_hir::Param],
+    body: &[perry_hir::Stmt],
+) {
+    if !crate::codegen::helpers::precise_root_analysis_enabled() {
+        return;
+    }
+    let flat_const_ids: std::collections::HashSet<u32> =
+        ctx.flat_const_arrays.keys().copied().collect();
+    let pointer_locals =
+        crate::collectors::collect_pointer_typed_locals(params, body, &flat_const_ids);
+    // Slot indices must not depend on HashMap iteration order.
+    let mut ids: Vec<u32> = pointer_locals.keys().copied().collect();
+    ids.sort_unstable();
+    for id in ids {
+        if !ctx.shadow_slot_map.contains_key(&id) {
+            let Some(slot_idx) = ctx.func.reserve_shadow_slot() else {
+                return;
+            };
+            ctx.shadow_slot_map.insert(id, slot_idx);
+        }
+        if ctx.locals.contains_key(&id) {
+            emit_shadow_slot_bind_for_local(ctx, id);
+        }
+    }
+}
+
 pub(crate) fn emit_shadow_slot_update_for_expr(
     ctx: &mut FnCtx<'_>,
     local_id: u32,

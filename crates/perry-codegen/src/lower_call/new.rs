@@ -1125,6 +1125,12 @@ fn lower_new_impl_inner<'a>(
     let mut saved_scope_for_ctor = class.constructor.as_ref().map(|ctor| {
         bind_inline_constructor_params(ctx, &ctor.params, &lowered_args, args, ctor_capture_fill)
     });
+    // #9081: the ctor body below is lowered into the CALLER's frame, whose
+    // slot map never saw the ctor's locals. Root them (and the params just
+    // bound) before the field initializers or body can allocate.
+    if let Some(ctor) = &class.constructor {
+        crate::expr::root_inlined_ctor_pointer_locals(ctx, &ctor.params, &ctor.body);
+    }
 
     // A dynamic parent constructor owns the fields above its registered edge.
     // Every local class from the edge owner through the leaf is derived, so
@@ -1228,6 +1234,13 @@ fn lower_new_impl_inner<'a>(
                         &lowered_args,
                         args,
                         parent_capture_fill,
+                    );
+                    // #9081: same frame-splice rooting as the own-ctor
+                    // inline above, for the inherited body.
+                    crate::expr::root_inlined_ctor_pointer_locals(
+                        ctx,
+                        &parent_ctor.params,
+                        &parent_ctor.body,
                     );
 
                     // Push the parent class name so `this` inside the

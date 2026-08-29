@@ -180,3 +180,15 @@ pub(super) fn note_ptr_shape_scalar_replaced(ctx: &crate::expr::FnCtx<'_>, id: u
         )),
     });
 }
+
+/// `globalThis` (or `globalThis.globalThis`) as an init value — moved here
+/// from `let_stmt.rs` for the 2000-line cap; no behavior change.
+pub(super) fn is_global_this_value(expr: &perry_hir::Expr) -> bool {
+    matches!(expr, perry_hir::Expr::GlobalGet(_))
+        || matches!(
+            expr,
+            perry_hir::Expr::PropertyGet { object, property, .. }
+                if matches!(object.as_ref(), perry_hir::Expr::GlobalGet(_))
+                    && property == "globalThis"
+        )
+}

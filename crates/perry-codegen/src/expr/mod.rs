@@ -210,7 +210,7 @@ pub(crate) use shadow_slot::{
     current_closure_ptr_value, emit_persistent_shadow_root_barrier,
     emit_shadow_slot_bind_for_local, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
     enable_persistent_shadow_slot_for_array_alias, expr_is_known_non_pointer_shadow_value,
-    try_current_closure_ptr_value,
+    root_inlined_ctor_pointer_locals, try_current_closure_ptr_value,
 };
 
 /// One in-flight inline-constructor return target. See
