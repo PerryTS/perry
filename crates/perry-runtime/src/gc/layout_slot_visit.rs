@@ -215,6 +215,7 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
         GcRewriteDescriptorKind::Map => {
             let map = user_ptr as *mut crate::map::MapHeader;
             let size = (*map).size;
+            let used = (*map).used;
             let capacity = (*map).capacity;
             // Corruption guard only: mirror Set's 16M bound (set.rs
             // gc_element_slot_range). Every GC walk (mark, copy, rewrite,
@@ -222,7 +223,7 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             // lower cap makes larger maps invisible to the collector —
             // entries reachable only through a >cap map would be swept
             // while live and never rewritten after a move.
-            if size > capacity || size > 16_000_000 || (*map).entries.is_null() {
+            if size > used || used > capacity || used > 16_000_000 || (*map).entries.is_null() {
                 return;
             }
             // Defensive tripwire (# fabricated-Map): if a fabricated Map
@@ -248,7 +249,7 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
                 return;
             }
             visit(GcMutableSlotDescriptor::Range {
-                range: HeapSlotRange::new((*map).entries as *mut u64, size as usize * 2),
+                range: HeapSlotRange::new((*map).entries as *mut u64, used as usize * 2),
                 layout_kind: None,
             });
             // #6759 phase 1: the metadata edge. This arm is the MARK path as

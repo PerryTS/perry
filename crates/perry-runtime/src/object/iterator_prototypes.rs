@@ -263,7 +263,41 @@ fn build_family_proto(
     proto
 }
 
+/// Whether any iterator-prototype tower has been materialized on this thread.
+#[cfg(test)]
+pub(crate) fn iterator_prototypes_materialized() -> bool {
+    ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) != 0
+}
+
+#[cfg(test)]
+mod override_probe_premise_tests {
+    use super::*;
+
+    /// The fast path in `call_overridden_iterator_next` returns `None` on a
+    /// null tower, treating that as PROOF that no override exists. That is only
+    /// sound if every route to the prototype object materializes the tower —
+    /// this pins the route user code takes, `Object.getPrototypeOf(iter)`,
+    /// which lands in `iterator_prototype_for_class_id`.
+    ///
+    /// Deliberately one-directional: `perry-runtime`'s suite shares process
+    /// globals, so asserting the tower starts null would make this depend on
+    /// test order. The implication is what the fast path actually relies on.
+    #[test]
+    fn reaching_an_iterator_prototype_materializes_the_tower() {
+        assert!(
+            iterator_prototype_for_class_id(crate::array::ARRAY_ITERATOR_CLASS_ID).is_some(),
+            "array iterator must have a prototype to reach",
+        );
+        assert!(
+            iterator_prototypes_materialized(),
+            "reaching a prototype must materialize the tower, or a null tower \
+             would no longer prove the absence of an override",
+        );
+    }
+}
+
 /// Lazily build the prototypes (idempotent). Cheap after the first call.
+
 pub(crate) fn ensure_iterator_prototypes() {
     if ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == 0 {
         build_iterator_prototypes();
@@ -323,7 +357,16 @@ pub(crate) unsafe fn call_overridden_iterator_next(
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(iter_obj as i64));
     let previous = scope.root_nanbox_f64(super::js_implicit_this_get());
-    ensure_iterator_prototypes();
+    // An override can only be installed through the prototype OBJECT, and the
+    // only way user code obtains that object is `Object.getPrototypeOf(iter)`
+    // (or a direct prototype write), both of which materialize the tower. A
+    // null tower therefore PROVES no override exists — and building the tower
+    // here, as this probe used to, made every builtin `.next()` allocate a
+    // "next" key string and run a by-name prototype lookup just to learn
+    // nothing was patched.
+    if ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == 0 {
+        return None;
+    }
     let (slot, canonical): (&crate::object::RealmAtomicI64, *const u8) = match class_id {
         crate::array::ARRAY_ITERATOR_CLASS_ID => (
             &ARRAY_ITERATOR_PROTOTYPE_PTR,
