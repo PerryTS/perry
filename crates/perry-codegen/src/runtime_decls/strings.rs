@@ -709,6 +709,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // `js_string_char_at` / `js_array_get_f64` / `js_object_get_field_by_name_f64`
     // based on the receiver's NaN-box tag at runtime. Used by IndexGet's
     // fallback path when codegen can't statically prove the receiver type.
+    // By-value computed read: key arrives NaN-boxed so an SSO key can be
+    // answered from the read stub without being materialised to the heap.
+    module.declare_function(
+        "js_typed_feedback_object_get_field_by_value_f64",
+        DOUBLE,
+        &[I64, I64, DOUBLE],
+    );
     module.declare_function("js_dyn_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
     // #8655: guarded packed-array / dense Array-subclass read before the
     // fully generic dynamic dispatcher. Used by unknown-receiver loop reads.
