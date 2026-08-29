@@ -1071,6 +1071,37 @@ fn nested_class_shadowing_outer_var_constructs_the_class_not_the_local() {
     );
 }
 
+/// Self-construction is lowered before a named class expression's capture
+/// union is known. The post-body pass appends the lexical self cell, and must
+/// also mark it as a capture argument so constructor binding does not discard
+/// it as an ordinary user argument.
+#[test]
+fn named_class_expr_self_new_records_appended_capture_provenance() {
+    let source = r#"
+        const make = () => class c {
+            static create(): any { return new c(); }
+            constructor() { if (c === null) throw new Error("unreachable"); }
+        };
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let create = hir
+        .classes
+        .iter()
+        .find(|class| class.name.starts_with("c__class_expr_"))
+        .expect("named class expression is lowered")
+        .static_methods
+        .iter()
+        .find(|method| method.name == "create")
+        .expect("static create method is lowered");
+    let body = format!("{:#?}", create.body);
+
+    assert!(
+        body.contains("cap_args_appended: 1"),
+        "the appended lexical-self cell must be identified as a capture arg: {body}"
+    );
+}
+
 /// A sibling class declaration is already a known lexical binding while an
 /// earlier class method is lowered, even though its registry entry is emitted
 /// later. The unresolved-constructor guard must preserve that forward binding.

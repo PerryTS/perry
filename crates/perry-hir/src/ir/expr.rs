@@ -288,6 +288,9 @@ pub enum Expr {
         /// wire values: 0=field, 1=method, 2=getter, 3=setter, 4=get+set.
         kind: u8,
         is_static: bool,
+        /// The receiver is a named class expression's lexical self-binding,
+        /// so its evaluated value is also the static brand owner.
+        receiver_is_brand_owner: bool,
         object: Box<Expr>,
     },
 
@@ -319,6 +322,11 @@ pub enum Expr {
         field_name: String,
         kind: u8,
         op: u8,
+        /// The receiver is a named class expression's lexical self-binding.
+        /// Codegen reuses the once-evaluated receiver as the brand owner,
+        /// allowing a nested class to access its captured outer class while
+        /// retaining exact per-evaluation static-private identity.
+        receiver_is_brand_owner: bool,
         object: Box<Expr>,
     },
 
@@ -559,6 +567,12 @@ pub enum Expr {
     /// expression runs. Top-level class DECLARATIONS keep `INT32(class_id)`.
     ClassExprFresh {
         template: String,
+        /// Compiler-private local that represents this named class
+        /// expression's lexical self-binding. Codegen stores the allocated
+        /// class object here before evaluating computed names, captures, or
+        /// static initializers, matching ClassDefinitionEvaluation's binding
+        /// initialization order.
+        evaluation_owner: Option<LocalId>,
         named_statics: Vec<(String, Expr)>,
         computed_keys: Vec<(String, Expr)>,
         /// (hidden resolved-key slot name, initializer)

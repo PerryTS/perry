@@ -15,12 +15,15 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
                     anyhow!("Private name brand check is only supported inside its declaring class")
                 })?;
             let object = Box::new(lower_expr(ctx, &bin.right)?);
+            let receiver_is_brand_owner =
+                super::super::expr_member::is_class_expr_self_binding(ctx, &object);
             return Ok(Expr::PrivateBrandCheck {
                 class_name,
                 class_id,
                 field_name,
                 kind: member.kind as u8,
                 is_static: member.is_static,
+                receiver_is_brand_owner,
                 object,
             });
         }

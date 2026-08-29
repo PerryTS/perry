@@ -1553,6 +1553,9 @@ pub(crate) fn apply_class_expr_capture_refreshes(
                 init: Some(Expr::Undefined),
             });
         }
+        if ids.is_empty() {
+            continue;
+        }
         let refresh = Stmt::Expr(Expr::RefreshClassExprCaptures {
             class_value: Box::new(Expr::LocalGet(owner)),
             captures: ids.iter().map(|id| Expr::LocalGet(*id)).collect(),

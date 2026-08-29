@@ -39,7 +39,8 @@ pub(crate) use native_dispatch::{
     is_stream_api_member, is_url_pattern_data_property, is_worker_instance_value_property,
 };
 pub(crate) use private_guard::{
-    private_storage_property, wrap_private_guard, PRIV_OP_READ, PRIV_OP_WRITE,
+    is_class_expr_self_binding, private_storage_property, wrap_private_guard, PRIV_OP_READ,
+    PRIV_OP_WRITE,
 };
 pub(crate) use process_literals::{process_allowed_node_flags_literal, process_features_literal};
 pub(crate) use process_props::{

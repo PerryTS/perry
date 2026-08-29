@@ -10,6 +10,8 @@ pub(crate) fn lower_class_expr(
     class_expr: &ast::ClassExpr,
 ) -> Result<Expr> {
     let assignment_name = ctx.assignment_inferred_name.clone();
+    let source_inner_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
+    let at_module_top = ctx.scope_depth == 0 && ctx.inside_block_scope == 0;
     let ident_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
     // A NAMED class EXPRESSION used as a VALUE whose name collides
     // with an existing module-scope class — a TOP-LEVEL `class X`
@@ -104,8 +106,35 @@ pub(crate) fn lower_class_expr(
     };
     // Record the source-level inner binding name for the const-assignment
     // guard (assigning to it inside the body throws a TypeError).
-    ctx.pending_class_inner_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
-    let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
+    ctx.pending_class_inner_name = source_inner_name.clone();
+    // A named class expression evaluated in a function needs a real lexical
+    // value for its inner binding. Register a compiler-private local while its
+    // body is lowered: members can capture their own evaluation, and a nested
+    // class can capture the outer evaluated class rather than re-deriving the
+    // shared template ref. Module-top expressions evaluate once and retain the
+    // cheaper ClassRef representation.
+    let self_binding = if !at_module_top {
+        source_inner_name.as_ref().map(|source_name| {
+            let id = ctx.define_local(
+                format!("__perry_class_expr_self_{synthetic_name}"),
+                crate::types::Type::Any,
+            );
+            ctx.class_expr_self_bindings
+                .push((source_name.clone(), ctx.scope_depth, id));
+            id
+        })
+    } else {
+        None
+    };
+    let class_result = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false);
+    if let Some(self_id) = self_binding {
+        let (_, _, popped_id) = ctx
+            .class_expr_self_bindings
+            .pop()
+            .expect("named class-expression self binding is balanced");
+        debug_assert_eq!(popped_id, self_id);
+    }
+    let class = class_result?;
     let has_private_elements = class.has_private_elements();
     if let Some(display) = display_override {
         ctx.class_display_names.insert(class.id, display);
@@ -183,6 +212,19 @@ pub(crate) fn lower_class_expr(
         .filter(|m| m.name.starts_with("__perry_static_init_"))
         .map(|m| m.name.clone())
         .collect();
+    let self_binding_used = self_binding.is_some_and(|self_id| {
+        let uses_self = |expr: &Expr| {
+            let mut refs = Vec::new();
+            let mut visited = std::collections::HashSet::new();
+            crate::analysis::collect_local_refs_expr(expr, &mut refs, &mut visited);
+            refs.contains(&self_id)
+        };
+        captured_args.iter().any(&uses_self)
+            || named_statics.iter().any(|(_, value)| uses_self(value))
+            || computed_keys.iter().any(|(_, key)| uses_self(key))
+            || computed_statics.iter().any(|(_, value)| uses_self(value))
+            || computed_name_evaluations.iter().any(uses_self)
+    });
     ctx.pending_classes.push(class);
     // #1772/#5893: a class EXPRESSION that carries per-evaluation static
     // fields, captures, or private elements lowers to a
@@ -199,7 +241,6 @@ pub(crate) fn lower_class_expr(
     // to the class-ref. The `ClassExprFresh` path is reserved for class
     // expressions inside a function body (factories like effect's
     // `make()`), which produce a distinct class object per call.
-    let at_module_top = ctx.scope_depth == 0 && ctx.inside_block_scope == 0;
     if !at_module_top && has_private_elements {
         // `const C = class { #x }` normally records C as an inferred static
         // class alias, which makes `new C()` bypass the local class VALUE.
@@ -227,12 +268,20 @@ pub(crate) fn lower_class_expr(
     // update only the object that was actually evaluated in this invocation.
     // Module top is skipped — module-level ids are stripped from capture lists
     // by `filter_module_level_captures`, so there is nothing to refresh.
-    let capture_owner = if !at_module_top && !captured_args.is_empty() {
+    let capture_owner = if !at_module_top && (!captured_args.is_empty() || self_binding_used) {
         let ids = ctx
             .lookup_class_captures(&synthetic_name)
             .map(<[_]>::to_vec)
             .unwrap_or_default();
-        if ids.is_empty() {
+        if self_binding_used {
+            let owner = self_binding.expect("used class-expression self binding has a local");
+            // Even an empty capture list needs the owner declaration: static
+            // initializers can read the self-binding before ClassExprFresh
+            // returns. Empty entries materialize that local without emitting a
+            // capture refresh.
+            ctx.body_class_expr_captures.push((owner, ids));
+            Some(owner)
+        } else if ids.is_empty() {
             None
         } else {
             let owner = ctx.define_local(
@@ -250,7 +299,8 @@ pub(crate) fn lower_class_expr(
             || !computed_keys.is_empty()
             || !captured_args.is_empty()
             || !static_block_names.is_empty()
-            || has_private_elements)
+            || has_private_elements
+            || self_binding_used)
     {
         // #6438: a class expression WITH heritage (`class extends <expr>`) used
         // to be excluded here and fell back to the shared-template `ClassRef`
@@ -289,6 +339,7 @@ pub(crate) fn lower_class_expr(
         // the captures are still live.
         let fresh_expr = Expr::ClassExprFresh {
             template: synthetic_name.clone(),
+            evaluation_owner: self_binding.filter(|_| self_binding_used),
             named_statics,
             computed_keys,
             computed_statics,

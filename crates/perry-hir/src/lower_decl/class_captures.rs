@@ -818,6 +818,7 @@ pub(crate) fn append_new_args_expr(
     if let Expr::New {
         class_name: cn,
         args,
+        cap_args_appended,
         ..
     } = expr
     {
@@ -832,6 +833,9 @@ pub(crate) fn append_new_args_expr(
                 for (_, fresh) in cap_args {
                     args.push(Expr::LocalGet(*fresh));
                 }
+            }
+            if !cap_args.is_empty() {
+                *cap_args_appended = cap_args.len() as u32;
             }
         }
     }

@@ -1172,12 +1172,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             field_name,
             kind,
             is_static,
+            receiver_is_brand_owner,
             object,
         } => {
             let obj = lower_expr(ctx, object)?;
             // The rooting window between these two operands is empty:
             // lowering `this` only reads the current binding and cannot GC.
-            let brand_owner = lower_expr(ctx, &Expr::This)?;
+            let brand_owner = if *receiver_is_brand_owner {
+                obj.clone()
+            } else {
+                lower_expr(ctx, &Expr::This)?
+            };
             let class_id = if *declaring_class_id != 0 {
                 *declaring_class_id
             } else {
@@ -1204,6 +1209,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             field_name,
             kind,
             op,
+            receiver_is_brand_owner,
             object,
         } => {
             // Evaluate the receiver once, brand+kind check it, and return it
@@ -1212,7 +1218,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let obj = lower_expr(ctx, object)?;
             // The rooting window between these two operands is empty:
             // lowering `this` only reads the current binding and cannot GC.
-            let brand_owner = lower_expr(ctx, &Expr::This)?;
+            let brand_owner = if *receiver_is_brand_owner {
+                obj.clone()
+            } else {
+                lower_expr(ctx, &Expr::This)?
+            };
             // Prefer the declaring class's unique HIR id carried on the node.
             // Resolving `class_name` through `class_ids` is ambiguous: that map
             // is keyed by name (last-writer-wins), so a minified bundle that

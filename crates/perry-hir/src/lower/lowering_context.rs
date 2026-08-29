@@ -297,6 +297,12 @@ pub struct LoweringContext {
     /// binding name (the synthetic dedup key it receives is not the
     /// user-visible name). Consumed (taken) at the start of lowering.
     pub(crate) pending_class_inner_name: Option<String>,
+    /// Active lexical self-bindings for named class expressions that can be
+    /// evaluated more than once. The source name is deliberately separate
+    /// from the compiler-private local so the binding remains visible only
+    /// while lowering that ClassBody, while nested classes can still capture
+    /// an outer class expression's evaluated value.
+    pub(crate) class_expr_self_bindings: Vec<(String, usize, LocalId)>,
     /// True while lowering a static class member body.
     pub(crate) current_class_member_is_static: bool,
     /// Lexical stack of private-name scopes — one entry per enclosing class

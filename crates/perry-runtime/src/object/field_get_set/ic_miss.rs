@@ -981,6 +981,10 @@ fn current_private_lexical_brand(declaring_class_id: u32) -> Option<u64> {
     })
 }
 
+pub(crate) fn current_private_lexical_brand_value(declaring_class_id: u32) -> Option<f64> {
+    current_private_lexical_brand(declaring_class_id).map(f64::from_bits)
+}
+
 /// Stamp an instance constructed through a `ClassExprFresh` value with the
 /// identity of that particular class evaluation. The brand lives in the
 /// object's traced metadata record so it neither shifts user field slots nor

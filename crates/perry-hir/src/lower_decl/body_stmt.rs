@@ -417,6 +417,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                         ty: Type::Any,
                         init: Some(Expr::ClassExprFresh {
                             template: template_name,
+                            evaluation_owner: None,
                             named_statics,
                             computed_keys,
                             computed_statics,

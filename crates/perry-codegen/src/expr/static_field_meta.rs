@@ -432,6 +432,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // the object is GC-traced + collected when unreachable (no leak).
         Expr::ClassExprFresh {
             template,
+            evaluation_owner,
             named_statics,
             computed_keys,
             computed_statics,
@@ -521,6 +522,38 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 || !block_fns.is_empty();
             with_rooted_group(ctx, 1, |ctx, group| {
                 let rooted = group.adopt_emitted(ctx, Repr::Ptr, &obj, protect_handle);
+                // A named class expression's lexical self-binding is
+                // initialized immediately after the class value is created,
+                // before computed names and static initializers run. The
+                // compiler-private owner let was emitted at body entry, so its
+                // slot is already shadow-bound and remains a GC root while the
+                // initializer sequence allocates.
+                if let Some(owner) = evaluation_owner {
+                    if let Some(slot) = ctx.locals.get(owner).cloned() {
+                        let obj = group.reread_emitted(ctx, rooted);
+                        let obj_box = nanbox_pointer_inline(ctx.block(), &obj);
+                        if matches!(
+                            ctx.local_type_hint(owner),
+                            Some(perry_hir::types::Type::Array(_))
+                        ) {
+                            // Shared-mutable capture rewriting turns a self
+                            // binding captured by its own methods into a
+                            // one-element cell. Initialize the cell's value,
+                            // preserving the handle stored in the local slot.
+                            let cell_box = ctx.block().load(DOUBLE, &slot);
+                            let cell_bits = ctx.block().bitcast_double_to_i64(&cell_box);
+                            let cell =
+                                ctx.block()
+                                    .and(I64, &cell_bits, crate::nanbox::POINTER_MASK_I64);
+                            ctx.block().call_void(
+                                "js_array_set_f64",
+                                &[(I64, &cell), (I32, "0"), (DOUBLE, &obj_box)],
+                            );
+                        } else {
+                            ctx.block().store(DOUBLE, &obj_box, &slot);
+                        }
+                    }
+                }
                 // Resolve all ComputedPropertyNames before any static field
                 // initializer, preserving class-body order. Hidden own slots
                 // carry the resulting PropertyKeys for both the static phase

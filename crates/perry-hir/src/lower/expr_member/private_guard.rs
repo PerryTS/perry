@@ -30,6 +30,14 @@ pub(crate) fn private_storage_property(ctx: &LoweringContext, field_name: &str) 
     }
 }
 
+pub(crate) fn is_class_expr_self_binding(ctx: &LoweringContext, object: &Expr) -> bool {
+    matches!(
+        object,
+        Expr::LocalGet(id)
+            if ctx.class_expr_self_bindings.iter().any(|(_, _, binding_id)| binding_id == id)
+    )
+}
+
 /// Wrap the receiver of a private member access `obj.#name` in a brand+kind
 /// guard so an access on a non-conforming receiver throws `TypeError`. If the
 /// name cannot be resolved to a declaring class in scope, the object is
@@ -47,12 +55,14 @@ pub(crate) fn wrap_private_guard(
         // Static members get a static brand (op + 2); instance members the
         // ordinary op code.
         let op = if member.is_static { op + 2 } else { op };
+        let receiver_is_brand_owner = is_class_expr_self_binding(ctx, &object);
         return Box::new(Expr::PrivateGuard {
             class_name,
             class_id,
             field_name: field_name.to_string(),
             kind: member.kind as u8,
             op,
+            receiver_is_brand_owner,
             object,
         });
     }

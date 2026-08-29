@@ -55,6 +55,14 @@ pub extern "C" fn js_class_capture_value_for_receiver(
     class_id: u32,
     index: u32,
 ) -> f64 {
+    // A static method's outer lexical captures belong to the class evaluation
+    // that created the method value, not to an arbitrary receiver supplied by
+    // Function.prototype.call/apply. Dispatch restores that evaluated class
+    // either as the private lexical brand (method-value dispatch) or as the
+    // static private owner (ordinary static dispatch); prefer it when present.
+    let receiver = super::field_get_set::current_private_lexical_brand_value(class_id)
+        .or_else(super::static_private_owner_current)
+        .unwrap_or(receiver);
     if super::class_registry::is_class_object_value(receiver) {
         let caps_value =
             super::js_object_get_own_field_or_undef(receiver, b"__perry_ctor_caps".as_ptr(), 17);

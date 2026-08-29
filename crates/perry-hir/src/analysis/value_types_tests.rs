@@ -473,6 +473,7 @@ fn infers_passthrough_expression_types() {
                 field_name: "value".to_string(),
                 kind: 0,
                 op: 0,
+                receiver_is_brand_owner: false,
                 object: Box::new(Expr::LocalGet(1)),
             },
             &env,
@@ -1178,6 +1179,7 @@ fn infers_class_prototype_and_super_meta_value_shapes() {
         infer_expr_type(
             &Expr::ClassExprFresh {
                 template: "Widget".to_string(),
+                evaluation_owner: None,
                 named_statics: Vec::new(),
                 computed_keys: Vec::new(),
                 computed_statics: Vec::new(),
