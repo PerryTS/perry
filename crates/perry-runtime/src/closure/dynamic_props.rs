@@ -1039,6 +1039,10 @@ mod tests_1802 {
         unsafe {
             let message = crate::string::js_string_from_bytes(b"survives".as_ptr(), 8);
             let error = crate::error::js_error_new_with_message(message);
+            // GC_STORE_AUDIT(POINTER_FREE): writes the u32 magic constant into
+            // an ErrorHeader's padding on purpose, so the assertion below proves
+            // the GC kind outranks look-alike bytes. No heap pointer is stored,
+            // so there is nothing for a barrier to track.
             std::ptr::write_unaligned(
                 (error as *mut u8).add(CLOSURE_TYPE_TAG_OFFSET) as *mut u32,
                 CLOSURE_MAGIC,
