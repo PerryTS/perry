@@ -90,6 +90,8 @@ pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("class_field_set", StemKind::PointerTestedStore),
     ("ctor_prologue", StemKind::ValueAndGenerationTested),
     ("idxset.inbounds", StemKind::ValueAndGenerationTested),
+    ("idxset.recv_captured", StemKind::ValueAndGenerationTested),
+    ("idxset.recv_global", StemKind::ValueAndGenerationTested),
     ("idxset.recv_prop", StemKind::ValueAndGenerationTested),
     ("put.pic", StemKind::PointerTestedStore),
 ];
@@ -452,6 +454,177 @@ fn idxset_inbounds_ir() -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+/// `let g = []` at module level, `probe(v) { for (let i = 0; i < 8; i++)
+/// g[i] = v }` — a receiver that resolves through `ctx.module_globals`
+/// instead of `ctx.locals` is what routes the store into the
+/// `idxset.recv_global` arm of `emit_guarded_inbounds_array_store` (the
+/// module-global inline lane this census entry witnesses). Counter and
+/// `v: Any` reasoning as in `idxset_inbounds_ir`.
+fn idxset_recv_global_ir() -> String {
+    const G_ID: u32 = 30;
+    let mut m = Module::new("idxset_recv_global_census.ts");
+    m.init = vec![Stmt::Let {
+        id: G_ID,
+        name: "g".to_string(),
+        // An ARRAY-typed global is what keeps the store on the typed lane at
+        // all (`Type::Any` here sent it to `js_dyn_index_set_strict`, never
+        // reaching the receiver ladder this stem lives in).
+        ty: Type::Array(Box::new(Type::Any)),
+        mutable: true,
+        init: Some(Expr::Array(Vec::new())),
+    }];
+    m.functions = vec![Function {
+        id: 1,
+        name: "probe".to_string(),
+        type_params: Vec::new(),
+        params: vec![Param {
+            id: VAL_ID,
+            name: "v".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }],
+        return_type: Type::Any,
+        body: vec![
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: IDX_ID,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(IDX_ID)),
+                    right: Box::new(Expr::Integer(8)),
+                }),
+                update: Some(Expr::Update {
+                    id: IDX_ID,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::IndexSet {
+                    object: Box::new(Expr::LocalGet(G_ID)),
+                    index: Box::new(Expr::LocalGet(IDX_ID)),
+                    value: Box::new(Expr::LocalGet(VAL_ID)),
+                })],
+            },
+            Stmt::Return(Some(Expr::LocalGet(G_ID))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }];
+    m.init_kind = ModuleInitKind::Eager;
+    String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
+        .expect("LLVM IR should be UTF-8")
+}
+
+/// `probe(v) { let a = []; const fill = () => { for (...) a[i] = v };
+/// fill(); return a }` — inside the closure the receiver id is neither a
+/// stack local nor a module global, which is the `idxset.recv_captured`
+/// arm. The capture is NON-mutable (`a` is never reassigned; element stores
+/// mutate the array, not the binding), so the closure reads the captured
+/// pointer directly rather than through a box.
+fn idxset_recv_captured_ir() -> String {
+    const FILL_ID: u32 = 31;
+    let mut m = Module::new("idxset_recv_captured_census.ts");
+    m.functions = vec![Function {
+        id: 1,
+        name: "probe".to_string(),
+        type_params: Vec::new(),
+        params: vec![Param {
+            id: VAL_ID,
+            name: "v".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }],
+        return_type: Type::Any,
+        body: vec![
+            Stmt::Let {
+                id: ARR_ID,
+                name: "a".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Array(Vec::new())),
+            },
+            Stmt::Let {
+                id: FILL_ID,
+                name: "fill".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Closure {
+                    func_id: 2,
+                    params: Vec::new(),
+                    return_type: Type::Any,
+                    body: vec![Stmt::For {
+                        init: Some(Box::new(Stmt::Let {
+                            id: IDX_ID,
+                            name: "i".to_string(),
+                            ty: Type::Number,
+                            mutable: true,
+                            init: Some(Expr::Integer(0)),
+                        })),
+                        condition: Some(Expr::Compare {
+                            op: CompareOp::Lt,
+                            left: Box::new(Expr::LocalGet(IDX_ID)),
+                            right: Box::new(Expr::Integer(8)),
+                        }),
+                        update: Some(Expr::Update {
+                            id: IDX_ID,
+                            op: UpdateOp::Increment,
+                            prefix: false,
+                        }),
+                        body: vec![Stmt::Expr(Expr::IndexSet {
+                            object: Box::new(Expr::LocalGet(ARR_ID)),
+                            index: Box::new(Expr::LocalGet(IDX_ID)),
+                            value: Box::new(Expr::LocalGet(VAL_ID)),
+                        })],
+                    }],
+                    captures: vec![ARR_ID, VAL_ID],
+                    mutable_captures: Vec::new(),
+                    captures_this: false,
+                    captures_new_target: false,
+                    enclosing_class: None,
+                    is_arrow: true,
+                    is_async: false,
+                    is_generator: false,
+                    is_strict: false,
+                }),
+            },
+            Stmt::Expr(Expr::Call {
+                callee: Box::new(Expr::LocalGet(FILL_ID)),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }];
+    m.init_kind = ModuleInitKind::Eager;
+    String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
+        .expect("LLVM IR should be UTF-8")
+}
+
 /// `const a = []; a.push({v: 1})` — the pointer-valued push whose barrier
 /// #7511 gates (same fixture as `array_push.rs::parent_gate_tests`).
 fn apush_ir() -> String {
@@ -507,6 +680,8 @@ fn probe_ir(stem: &str) -> String {
         "class_field_set" => super::class_field_barrier_tests::ir(),
         "ctor_prologue" => ctor_prologue_ir(),
         "idxset.inbounds" => idxset_inbounds_ir(),
+        "idxset.recv_captured" => idxset_recv_captured_ir(),
+        "idxset.recv_global" => idxset_recv_global_ir(),
         "idxset.recv_prop" => super::index_set_barrier_tests::ir(),
         "put.pic" => super::write_pic_barrier_tests::census_put_pic_ir(),
         other => panic!(

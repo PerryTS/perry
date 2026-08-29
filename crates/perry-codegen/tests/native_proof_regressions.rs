@@ -3109,7 +3109,12 @@ fn packed_f64_loop_rejects_coercive_unary_math_store_rhs() {
         !records.iter().any(|record| {
             matches!(
                 record["expr_kind"].as_str(),
-                Some("PackedF64LoopGuard" | "PackedF64LoopStore" | "PackedF64LoopLoad")
+                Some(
+                    "PackedF64LoopGuard"
+                        | "PackedF64LoopStore"
+                        | "PackedF64RangeLoopStore"
+                        | "PackedF64LoopLoad"
+                )
             )
         }),
         "coercive unary math store loop should not record packed-f64 loop facts:\n{artifact:#}"
@@ -6543,7 +6548,12 @@ fn packed_f64_loop_rejects_nonnumeric_store_then_later_read() {
         !records.iter().any(|record| {
             matches!(
                 record["expr_kind"].as_str(),
-                Some("PackedF64LoopGuard" | "PackedF64LoopStore" | "PackedF64LoopLoad")
+                Some(
+                    "PackedF64LoopGuard"
+                        | "PackedF64LoopStore"
+                        | "PackedF64RangeLoopStore"
+                        | "PackedF64LoopLoad"
+                )
             )
         }),
         "nonnumeric store/read loop should not record packed-f64 loop facts:\n{artifact:#}"
@@ -6611,7 +6621,12 @@ fn packed_f64_loop_rejects_store_then_read_invalidation_shape() {
         !records.iter().any(|record| {
             matches!(
                 record["expr_kind"].as_str(),
-                Some("PackedF64LoopGuard" | "PackedF64LoopStore" | "PackedF64LoopLoad")
+                Some(
+                    "PackedF64LoopGuard"
+                        | "PackedF64LoopStore"
+                        | "PackedF64RangeLoopStore"
+                        | "PackedF64LoopLoad"
+                )
             )
         }),
         "store-bearing loop should not record packed-f64 loop facts:\n{artifact:#}"
