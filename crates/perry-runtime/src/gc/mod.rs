@@ -1128,6 +1128,11 @@ pub extern "C" fn js_gc_init() {
     // call lands. A host that loads several application images on several
     // threads gets one image per thread; a plain executable gets one.
     crate::object::class_image::enter_current_thread_image();
+    // Prime the process wall-clock epoch NOW: it lazily initializes on first
+    // read, and the first read is otherwise whatever GC event happens to
+    // consult it — which would make the exit-time GC-share denominator start
+    // at that event instead of at program start.
+    let _ = instruments::wall_us_since_epoch();
     // Parse LLVM stack-map metadata before the first collection. The parser
     // allocates its immutable index once; root scans themselves must remain
     // allocation-free while the collector owns the heap.
@@ -1245,6 +1250,23 @@ fn emit_incremental_liveness_diag() {
         poll_arm::poll_armed_count(),
     );
     emit_step_bounds_diag();
+    emit_gc_time_share_diag();
+}
+
+/// `PERRY_GC_DIAG=1`: cumulative mutator-visible collection time and its
+/// share of the wall clock — the measurement the concurrent-GC decision
+/// gates on. Buckets are reported separately (a forced synchronous full can
+/// internally drive budgeted steps, so summing all four may double-count
+/// that rare path); `share` sums steps+remarks+minors, the buckets that are
+/// disjoint by construction.
+fn emit_gc_time_share_diag() {
+    let (step_us, remark_us, minor_us, full_us) = instruments::gc_time_totals_us();
+    let wall_us = instruments::wall_us_since_epoch().max(1);
+    let pause_us = step_us + remark_us + minor_us;
+    eprintln!(
+        "[gc-time] wall_us={wall_us} step_us={step_us} remark_us={remark_us} minor_us={minor_us} full_sync_us={full_us} share_permille={}",
+        pause_us.saturating_mul(1000) / wall_us,
+    );
 }
 
 /// What the "time-budgeted" collector actually cost, as opposed to what it was

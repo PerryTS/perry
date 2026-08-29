@@ -527,6 +527,25 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) => true,
+        // An integer-provenance local holds an integer-valued double by
+        // dataflow: it can never be NaN, so its bits can never fall inside the
+        // NaN-box tag window — which is the entire hazard this predicate
+        // guards (a raw-f64 store whose bits alias a tag). This is the
+        // `a.push(i)` loop-counter shape: without the arm, a statically
+        // numeric receiver routed every such push through the three-call
+        // guarded-numeric tier, slower than the untyped receiver's inline
+        // store — the push-side twin of the read inversion #6904 retired.
+        // The storage conditions mirror
+        // `local_get_produces_non_pointer_bits_by_dataflow`: plain slot, not
+        // boxed, captured, or a module global (those can be rebound by code
+        // the dataflow walk cannot see).
+        Expr::LocalGet(id) => {
+            (ctx.i32_counter_slots.contains_key(id) || ctx.integer_locals.contains(id))
+                && (ctx.locals.contains_key(id) || ctx.local_slot_reps.contains_key(id))
+                && !ctx.boxed_vars.contains(id)
+                && !ctx.closure_captures.contains_key(id)
+                && !ctx.module_globals.contains_key(id)
+        }
         Expr::IndexGet { .. }
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e) =>
         {

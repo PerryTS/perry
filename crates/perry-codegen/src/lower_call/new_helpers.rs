@@ -11,6 +11,47 @@ use perry_hir::{Class, Expr};
 use crate::expr::FnCtx;
 use crate::types::{DOUBLE, I32};
 
+/// The class whose registered runtime parent must receive a synthesized
+/// default-constructor call for `class Leaf extends ... {}`.
+///
+/// A dynamic heritage edge can sit above one or more constructor-free static
+/// edges: `Leaf extends Mid`, while `Mid extends <captured value>`. Walking only
+/// `extends_name` reaches `Mid` and then silently stops, because the
+/// authoritative parent of `Mid` lives in `extends_expr`. Return the owner of
+/// that first dynamic edge so both inline `new` lowering and standalone
+/// constructor generation can dispatch through its registered parent value.
+/// Any real local/imported constructor encountered first owns the remaining
+/// `super()` chain and therefore stops this search.
+pub(crate) fn default_ctor_dynamic_parent_owner(ctx: &FnCtx<'_>, class: &Class) -> Option<String> {
+    if class.constructor.is_some() {
+        return None;
+    }
+    if class.extends_expr.is_some() {
+        return Some(class.name.clone());
+    }
+
+    let mut parent = class.extends_name.as_deref();
+    for _ in 0..64 {
+        let parent_name = parent?;
+        if ctx
+            .imported_class_ctors
+            .get(parent_name)
+            .is_some_and(|ctor| ctor.stops_constructor_walk())
+        {
+            return None;
+        }
+        let parent_class = ctx.classes.get(parent_name).copied()?;
+        if parent_class.constructor.is_some() {
+            return None;
+        }
+        if parent_class.extends_expr.is_some() {
+            return Some(parent_class.name.clone());
+        }
+        parent = parent_class.extends_name.as_deref();
+    }
+    None
+}
+
 /// The native base classes perry models by STAMPING state onto the INSTANCE at
 /// construction time instead of giving it a real builtin prototype: the instance
 /// is a plain `ObjectHeader`, and `super()` installs the base's surface on it —

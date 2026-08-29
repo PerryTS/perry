@@ -461,6 +461,12 @@ pub(crate) enum FieldInitMode {
     /// constructor body, so there is no SuperCall site to apply intermediate
     /// class fields.
     AfterRoot,
+    /// Apply the named class and every descendant through the leaf. Used when
+    /// a constructor-free static chain reaches a dynamic-parent edge: the
+    /// runtime parent constructor initializes everything above `start_at`, and
+    /// the local default-derived chain must then initialize the dynamic-edge
+    /// owner and its descendants in order.
+    FromInclusive(String),
 }
 
 /// Whether a named public field initializer can populate the allocation's
@@ -529,6 +535,7 @@ pub(crate) fn apply_field_initializers_recursive(
     //   UpToInclusive(stop_at): keep chain[0..=index_of(stop_at)]
     //   BetweenExclusiveTo(stop_at): keep chain[index_of(stop_at)+1..]
     //   AfterRoot: keep chain[1..]
+    //   FromInclusive(start_at): keep chain[index_of(start_at)..]
     let chain: Vec<String> = match &mode {
         FieldInitMode::All => chain,
         FieldInitMode::AncestorsOnly => {
@@ -590,6 +597,13 @@ pub(crate) fn apply_field_initializers_recursive(
                 // `this.arr.includes(x)` on an unset field threw
                 // `Cannot read properties of undefined`.
                 chain
+            }
+        }
+        FieldInitMode::FromInclusive(start_at) => {
+            if let Some(idx) = chain.iter().position(|n| n == start_at) {
+                chain[idx..].to_vec()
+            } else {
+                Vec::new()
             }
         }
     };
