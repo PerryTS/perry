@@ -1851,6 +1851,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: gc-repsel-matrix-shard-*
+          merge-multiple: true
           path: gc-repsel-shards
       - name: Merge shards and enforce complete coverage + liveness
         env:
@@ -1863,7 +1864,7 @@ jobs:
             --expect "$EXPECT" \
             --mode "$MODE" \
             --output gc-repsel-matrix.json \
-            gc-repsel-shards/gc-repsel-matrix-shard-*/gc-repsel-matrix-*.json
+            gc-repsel-shards/gc-repsel-matrix-*.json
 
       # The remaining GC stress arms are aggregate-only. Repeating them in
       # every matrix shard would add cost without increasing their coverage.
