@@ -2,6 +2,74 @@
 
 use super::*;
 
+thread_local! {
+    static FOREACH_DELETE_VISITS: std::cell::RefCell<Vec<u64>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+extern "C" fn delete_current_set_value(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    _value_again: f64,
+    collection: f64,
+) -> f64 {
+    FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().push(value.to_bits()));
+    let set = crate::value::js_nanbox_get_pointer(collection) as *mut SetHeader;
+    js_set_delete(set, value);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+extern "C" fn delete_earlier_set_value(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    _value_again: f64,
+    collection: f64,
+) -> f64 {
+    FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().push(value.to_bits()));
+    if value == 2.0 {
+        let set = crate::value::js_nanbox_get_pointer(collection) as *mut SetHeader;
+        js_set_delete(set, 1.0);
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+fn take_foreach_delete_visits() -> Vec<f64> {
+    FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().drain(..).map(f64::from_bits).collect())
+}
+
+fn foreach_callback(func: *const u8) -> f64 {
+    FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().clear());
+    let callback = crate::closure::js_closure_alloc(func, 0);
+    crate::value::js_nanbox_pointer(callback as i64)
+}
+
+#[test]
+fn foreach_skips_tombstones_created_by_callback_deletes() {
+    let set = js_set_alloc(4);
+    for value in [1.0, 2.0] {
+        js_set_add(set, value);
+    }
+    js_set_foreach(
+        set,
+        foreach_callback(delete_current_set_value as *const u8),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+    assert_eq!(take_foreach_delete_visits(), vec![1.0, 2.0]);
+    assert_eq!(js_set_size(set), 0);
+
+    let set = js_set_alloc(4);
+    for value in [1.0, 2.0, 3.0] {
+        js_set_add(set, value);
+    }
+    js_set_foreach(
+        set,
+        foreach_callback(delete_earlier_set_value as *const u8),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+    assert_eq!(take_foreach_delete_visits(), vec![1.0, 2.0, 3.0]);
+    assert_eq!(js_set_size(set), 2);
+}
+
 #[test]
 fn ordered_delete_preserves_order_and_lookup_across_holes() {
     let set = js_set_alloc(8);

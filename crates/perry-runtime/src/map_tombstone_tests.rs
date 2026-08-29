@@ -9,6 +9,49 @@
 
 use super::*;
 
+thread_local! {
+    static FOREACH_DELETE_VISITS: std::cell::RefCell<Vec<(u64, u64)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+extern "C" fn delete_current_map_entry(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    key: f64,
+    collection: f64,
+) -> f64 {
+    FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().push((key.to_bits(), value.to_bits())));
+    let map = crate::value::js_nanbox_get_pointer(collection) as *mut MapHeader;
+    js_map_delete(map, key);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[test]
+fn foreach_skips_tombstones_created_by_callback_deletes() {
+    let map = js_map_alloc(4);
+    for (key, value) in [(1.0, 10.0), (2.0, 20.0), (3.0, 30.0)] {
+        js_map_set(map, key, value);
+    }
+    FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().clear());
+    let callback = crate::closure::js_closure_alloc(delete_current_map_entry as *const u8, 0);
+
+    js_map_foreach(
+        map,
+        crate::value::js_nanbox_pointer(callback as i64),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+
+    let visits = FOREACH_DELETE_VISITS.with(|visits| {
+        visits
+            .borrow_mut()
+            .drain(..)
+            .map(|(key, value)| (f64::from_bits(key), f64::from_bits(value)))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(visits, vec![(1.0, 10.0), (2.0, 20.0), (3.0, 30.0)]);
+    assert_eq!(js_map_size(map), 0);
+}
+
 #[test]
 fn ordered_delete_preserves_order_and_lookup_across_holes() {
     let map = js_map_alloc(8);

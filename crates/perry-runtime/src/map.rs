@@ -3052,16 +3052,15 @@ fn js_map_foreach_impl(
         // The collection itself is the third callback argument and the
         // identity user code compares `self === m` against.
         // ECMA-262 24.1.3.5: forEach iterates [[MapData]] in insertion order,
-        // re-reading the live entry count each step. Entries appended during
-        // the callback (`map.set` inside the callback) MUST be visited, so the
-        // loop bound is re-evaluated against `(*map).size` every iteration
-        // rather than snapshotting the initial size — see the
-        // `iterates-values-added-after-foreach-begins` / `deleted-values`
-        // Test262 cases.
+        // and `used` is the raw [[MapData]] extent. It includes tombstones left
+        // by callback-side deletes, while `size` is only the live count. Walk
+        // the raw extent, skip holes, and re-read it each step so callback-side
+        // appends are visited too. Bounding the walk by `size` exposed holes
+        // and truncated later entries (#9072).
         let mut i = 0usize;
         loop {
             let map = map_handle.get_raw_const_ptr::<MapHeader>();
-            if i >= (*map).size as usize {
+            if i >= (*map).used as usize {
                 break;
             }
             // Re-derive the collection identity each step from a rooted handle
@@ -3075,9 +3074,10 @@ fn js_map_foreach_impl(
             let entries = entries_ptr(map);
             let key = ptr::read(entries.add(i * 2));
             let value = ptr::read(entries.add(i * 2 + 1));
-            // Root the visited key so the post-callback slot comparison below
-            // stays valid across a GC move during the callback.
-            let key_handle = scope.root_nanbox_f64(key);
+            i += 1;
+            if key.to_bits() == MAP_HOLE_KEY_BITS {
+                continue;
+            }
             let args = [value, key, map_value];
             let cb = callback_handle.get_nanbox_f64();
             let this_v = this_handle.get_nanbox_f64();
@@ -3087,19 +3087,6 @@ fn js_map_foreach_impl(
             let prev_this = crate::object::js_implicit_this_set(this_v);
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
             crate::object::js_implicit_this_set(prev_this);
-            // Deleting an entry compacts the backing vector (later entries
-            // shift left). If the callback deleted the just-visited entry (or
-            // an earlier one), slot `i` now holds the NEXT unvisited entry —
-            // advancing would skip it (ECMA-262 visits every not-yet-deleted
-            // entry; mirrors the `js_set_foreach_impl` fix). Only advance when
-            // slot `i` still holds the key just visited.
-            let map = map_handle.get_raw_const_ptr::<MapHeader>();
-            if i < (*map).size as usize {
-                let now_key = ptr::read(entries_ptr(map).add(i * 2));
-                if now_key.to_bits() == key_handle.get_nanbox_f64().to_bits() {
-                    i += 1;
-                }
-            }
         }
     }
 }
