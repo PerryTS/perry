@@ -357,26 +357,6 @@ pub(crate) mod darwin_tsd {
     /// # Safety
     /// `slot` must be a key returned by `pthread_key_create`, so that the index
     /// lands inside the thread's TSD array.
-    /// This thread's TSD base — the per-thread constant [`get`] indexes from,
-    /// exposed so a hot reader can *identify* the calling thread with one
-    /// `mrs` and no memory access at all (the write barrier's dirty-page
-    /// cache mirrors its value under the writing thread's base). Same asm and
-    /// the same NOT-`pure` discipline as [`get`]: the value must be re-read
-    /// wherever execution can resume on another thread.
-    #[inline(always)]
-    pub(crate) fn base() -> usize {
-        let base: usize;
-        // SAFETY: reads a user-readable system register; no memory touched.
-        unsafe {
-            core::arch::asm!(
-                "mrs {b}, tpidrro_el0",
-                b = out(reg) base,
-                options(nomem, nostack, preserves_flags)
-            );
-        }
-        base & !0b111
-    }
-
     #[inline(always)]
     pub(super) unsafe fn get(slot: usize) -> *mut u8 {
         let base: usize;
