@@ -1327,6 +1327,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // and a type-preserving step by 1n/1.0. Keeps `let i = 10n; i++` a BigInt.
     module.declare_function("js_to_numeric", DOUBLE, &[DOUBLE]);
     module.declare_function("js_numeric_step", DOUBLE, &[DOUBLE, I32]);
+    module.declare_function("js_box_capture_cell_ptr", I64, &[I64]);
     // Refs #486: dispatch path for `+` when neither operand has a static
     // type (string|number|bigint). Per JS spec, string concat takes
     // priority; otherwise BigInt or numeric add. Hono's
@@ -1542,7 +1543,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_with_implicit_read", DOUBLE, &[DOUBLE, DOUBLE]);
     // Iterator-protocol result validation (for-of lazy loop).
     module.declare_function("js_iterator_result_validate", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_for_of_next", DOUBLE, &[DOUBLE]);
     module.declare_function("js_global_get_or_throw_unresolved", DOUBLE, &[DOUBLE]);
     // Ambient `require` for compiled external / compilePackages modules (#5373):
     // bind a bare `require` to a createRequire-backed closure instead of throwing

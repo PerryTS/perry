@@ -4039,3 +4039,18 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
         _ => Ok(None),
     }
 }
+
+/// `PERRY_BOX_CAPTURE_ENTRY_CELLS` gate (default on): resolve a read-only
+/// boxed capture's cell pointer once at closure entry instead of calling
+/// `js_box_get_bits` per read. `=0`/`off`/`false` restores the per-read calls
+/// for A/B bisection.
+pub(crate) fn box_capture_entry_cells_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_BOX_CAPTURE_ENTRY_CELLS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}

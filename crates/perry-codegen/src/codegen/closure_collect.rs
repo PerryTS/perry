@@ -358,6 +358,176 @@ pub(super) fn count_body_nodes(body: &[perry_hir::Stmt]) -> usize {
     body.iter().map(count_stmt_nodes).sum()
 }
 
+/// Per-binding use profile of one closure BODY, for the entry-cached box-cell
+/// read optimization. Nested `Expr::Closure` bodies are deliberately not
+/// entered: their capture reads lower in their own functions through their own
+/// maps, and a write there mutates the shared CELL, which the per-use cell
+/// load in this body observes anyway.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct CaptureUse {
+    pub(crate) reads: u32,
+    pub(crate) writes: u32,
+    pub(crate) loop_reads: u32,
+}
+
+fn scan_capture_use_expr(
+    expr: &perry_hir::Expr,
+    in_loop: bool,
+    uses: &mut std::collections::HashMap<u32, CaptureUse>,
+) {
+    match expr {
+        perry_hir::Expr::LocalGet(id) => {
+            if let Some(u) = uses.get_mut(id) {
+                u.reads += 1;
+                if in_loop {
+                    u.loop_reads += 1;
+                }
+            }
+        }
+        perry_hir::Expr::LocalSet(id, value) => {
+            if let Some(u) = uses.get_mut(id) {
+                u.writes += 1;
+            }
+            scan_capture_use_expr(value, in_loop, uses);
+        }
+        perry_hir::Expr::Update { id, .. } => {
+            if let Some(u) = uses.get_mut(id) {
+                u.writes += 1;
+            }
+        }
+        perry_hir::Expr::Closure { .. } => {}
+        other => {
+            perry_hir::walker::walk_expr_children(other, &mut |child| {
+                scan_capture_use_expr(child, in_loop, uses);
+            });
+        }
+    }
+}
+
+fn scan_capture_use_stmt(
+    stmt: &perry_hir::Stmt,
+    in_loop: bool,
+    uses: &mut std::collections::HashMap<u32, CaptureUse>,
+) {
+    match stmt {
+        perry_hir::Stmt::Let { init, .. } => {
+            if let Some(init) = init {
+                scan_capture_use_expr(init, in_loop, uses);
+            }
+        }
+        perry_hir::Stmt::Expr(expr) | perry_hir::Stmt::Throw(expr) => {
+            scan_capture_use_expr(expr, in_loop, uses);
+        }
+        perry_hir::Stmt::Return(expr) => {
+            if let Some(expr) = expr {
+                scan_capture_use_expr(expr, in_loop, uses);
+            }
+        }
+        perry_hir::Stmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            scan_capture_use_expr(condition, in_loop, uses);
+            for s in then_branch {
+                scan_capture_use_stmt(s, in_loop, uses);
+            }
+            if let Some(body) = else_branch {
+                for s in body {
+                    scan_capture_use_stmt(s, in_loop, uses);
+                }
+            }
+        }
+        perry_hir::Stmt::While { condition, body } => {
+            scan_capture_use_expr(condition, true, uses);
+            for s in body {
+                scan_capture_use_stmt(s, true, uses);
+            }
+        }
+        perry_hir::Stmt::DoWhile { body, condition } => {
+            for s in body {
+                scan_capture_use_stmt(s, true, uses);
+            }
+            scan_capture_use_expr(condition, true, uses);
+        }
+        perry_hir::Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            if let Some(init) = init {
+                scan_capture_use_stmt(init, in_loop, uses);
+            }
+            if let Some(condition) = condition {
+                scan_capture_use_expr(condition, true, uses);
+            }
+            if let Some(update) = update {
+                scan_capture_use_expr(update, true, uses);
+            }
+            for s in body {
+                scan_capture_use_stmt(s, true, uses);
+            }
+        }
+        perry_hir::Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            for s in body {
+                scan_capture_use_stmt(s, in_loop, uses);
+            }
+            if let Some(catch) = catch {
+                for s in &catch.body {
+                    scan_capture_use_stmt(s, in_loop, uses);
+                }
+            }
+            if let Some(body) = finally {
+                for s in body {
+                    scan_capture_use_stmt(s, in_loop, uses);
+                }
+            }
+        }
+        perry_hir::Stmt::Switch {
+            discriminant,
+            cases,
+        } => {
+            scan_capture_use_expr(discriminant, in_loop, uses);
+            for case in cases {
+                if let Some(test) = &case.test {
+                    scan_capture_use_expr(test, in_loop, uses);
+                }
+                for s in &case.body {
+                    scan_capture_use_stmt(s, in_loop, uses);
+                }
+            }
+        }
+        perry_hir::Stmt::Labeled { body, .. } => scan_capture_use_stmt(body, in_loop, uses),
+        perry_hir::Stmt::Break
+        | perry_hir::Stmt::Continue
+        | perry_hir::Stmt::LabeledBreak(_)
+        | perry_hir::Stmt::LabeledContinue(_)
+        | perry_hir::Stmt::PreallocateBoxes(_)
+        | perry_hir::Stmt::PreallocateTdzBoxes(_)
+        | perry_hir::Stmt::ReleaseBoxes(_) => {}
+    }
+}
+
+/// Profile how `candidate_ids` are used in `body`. Only pre-seeded ids are
+/// counted, so the walk stays O(body) with no per-node allocation.
+pub(crate) fn collect_capture_use(
+    body: &[perry_hir::Stmt],
+    candidate_ids: impl Iterator<Item = u32>,
+) -> std::collections::HashMap<u32, CaptureUse> {
+    let mut uses: std::collections::HashMap<u32, CaptureUse> = candidate_ids
+        .map(|id| (id, CaptureUse::default()))
+        .collect();
+    for stmt in body {
+        scan_capture_use_stmt(stmt, false, &mut uses);
+    }
+    uses
+}
+
 pub(crate) fn select_trusted_box_closures(
     closures: &[(perry_hir::types::FuncId, perry_hir::Expr)],
     direct_call_closures: &std::collections::HashSet<u32>,

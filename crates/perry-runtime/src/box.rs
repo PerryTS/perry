@@ -1036,6 +1036,37 @@ pub extern "C" fn js_box_get_bits(ptr: *mut Box) -> i64 {
 /// `ptr` must be non-null and must name a live Perry box cell whose capture
 /// edge remains live for the duration of the call. The exact-arrow resolver
 /// establishes this before selecting the only generated callers.
+/// The immutable cell [`js_box_capture_cell_ptr`] substitutes for an
+/// unregistered capture slot. It permanently holds `TAG_UNDEFINED`, mirroring
+/// `js_box_get_bits`'s answer for an invalid box pointer (#4926: a
+/// read-before-initialization boxed variable reads as `undefined`), and it is
+/// NEVER written: the codegen that caches cell pointers admits only bindings
+/// its body never assigns, so no store can reach a substituted cell.
+static BOX_CAPTURE_UNDEFINED_CELL: Box = Box {
+    value: crate::value::TAG_UNDEFINED,
+};
+
+/// Resolve a closure capture slot's raw bits to a readable box CELL address,
+/// once per closure invocation.
+///
+/// A registered box answers its own address: the cell contents may change (the
+/// binding is mutable through other closures), but the CELL never moves — the
+/// collector rewrites the value inside the box, never the box address, and box
+/// memory is never returned to the allocator while a capturing closure is live
+/// (the #8208 argument `expr/literals_vars.rs` already relies on across
+/// `js_to_numeric`). An unregistered pointer answers the shared immutable
+/// `undefined` cell above, so every subsequent read through the cached address
+/// yields exactly what `js_box_get_bits` would have returned per-read.
+#[no_mangle]
+pub extern "C" fn js_box_capture_cell_ptr(bits: i64) -> i64 {
+    let ptr = bits as usize as *mut Box;
+    if is_registered_box_ptr(ptr) {
+        bits
+    } else {
+        &BOX_CAPTURE_UNDEFINED_CELL as *const Box as i64
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_box_get_bits_trusted(ptr: *mut Box) -> i64 {
     let bits = unsafe { (*ptr).value };
