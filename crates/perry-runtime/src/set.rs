@@ -13,6 +13,40 @@ use std::ptr;
 
 crate::perry_thread_local! {
     static SET_ITERATOR_ARRAYS: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+    /// Backing Sets whose `forEach` raw-index walk is currently in flight.
+    /// Deletes may leave holes but must not compact them while a cursor still
+    /// names the old raw layout (#9082). Nested walks are kept as a stack so
+    /// exception savepoints can discard precisely the frames a throw skips.
+    static SET_FOREACH_STACK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+#[inline]
+fn set_foreach_is_active(set: *const SetHeader) -> bool {
+    let addr = set as usize;
+    SET_FOREACH_STACK.with(|stack| stack.borrow().contains(&addr))
+}
+
+fn set_foreach_enter(set: *const SetHeader) {
+    SET_FOREACH_STACK.with(|stack| stack.borrow_mut().push(set as usize));
+}
+
+/// Pop one completed walk. Returns true when this was the outermost walk of
+/// this Set, at which point deferred compaction is safe again.
+fn set_foreach_leave(set: *const SetHeader) -> bool {
+    let addr = set as usize;
+    SET_FOREACH_STACK.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        debug_assert_eq!(stack.pop(), Some(addr));
+        !stack.contains(&addr)
+    })
+}
+
+pub(crate) fn set_foreach_stack_savepoint() -> usize {
+    SET_FOREACH_STACK.with(|stack| stack.borrow().len())
+}
+
+pub(crate) fn set_foreach_stack_restore(depth: usize) {
+    SET_FOREACH_STACK.with(|stack| stack.borrow_mut().truncate(depth));
 }
 
 fn mark_set_iterator_array(arr: *mut crate::array::ArrayHeader) {
@@ -374,6 +408,13 @@ pub(crate) fn set_header_moved_for_gc(old_addr: usize, new_addr: usize) {
         idx.remove(&new_addr);
         if let Some(slot) = idx.remove(&old_addr) {
             idx.insert(new_addr, slot);
+        }
+    });
+    SET_FOREACH_STACK.with(|stack| {
+        for addr in stack.borrow_mut().iter_mut() {
+            if *addr == old_addr {
+                *addr = new_addr;
+            }
         }
     });
 }
@@ -918,10 +959,22 @@ unsafe fn find_value_index_cold(set: *const SetHeader, value: f64) -> i32 {
 /// Grow the elements array if needed (header stays at same address)
 unsafe fn ensure_capacity(set: *mut SetHeader) -> bool {
     let size = (*set).size;
+    let used = (*set).used;
     let capacity = (*set).capacity;
 
-    if size < capacity {
+    if used < capacity {
         return false;
+    }
+
+    // A full raw extent can still contain holes. Reclaim them before growing,
+    // except while `forEach` has a cursor into this layout: moving survivors
+    // then would skip entries. The active walk instead grows the buffer and
+    // compacts once its outermost frame finishes.
+    if size < used && !set_foreach_is_active(set) {
+        compact_set_elements(set);
+        if (*set).used < capacity {
+            return false;
+        }
     }
 
     // Double the capacity
@@ -1408,7 +1461,7 @@ pub extern "C" fn js_set_delete(set: *mut SetHeader, value: f64) -> i32 {
         });
 
         let used = (*set).used;
-        if used >= 16 && (*set).size < used / 2 {
+        if used >= 16 && (*set).size < used / 2 && !set_foreach_is_active(set) {
             compact_set_elements(set);
         }
         1
@@ -1547,15 +1600,36 @@ pub extern "C" fn js_set_clear(set: *mut SetHeader) {
         return;
     }
     unsafe {
+        let active_foreach = set_foreach_is_active(set);
         // The side-table mirrors the elements exactly, so an already-empty
         // set has nothing to reset — half of a change set's per-entity
         // `adds.clear(); removes.clear()` — and skips the table probe.
         if (*set).size == 0 {
-            (*set).used = 0;
+            if !active_foreach {
+                (*set).used = 0;
+            }
             return;
         }
         (*set).size = 0;
-        (*set).used = 0;
+        if active_foreach {
+            // ECMA-262 keeps the current [[SetData]] list in place while a
+            // forEach is walking it. Mark every live slot empty so the cursor
+            // skips them; values appended after clear remain after this raw
+            // extent and are therefore still visited.
+            let used = (*set).used as usize;
+            let elements = elements_ptr_mut(set);
+            for i in 0..used {
+                if ptr::read(elements.add(i)).to_bits() != SET_HOLE_VALUE_BITS {
+                    crate::gc::runtime_store_external_jsvalue_slot(
+                        set as usize,
+                        elements.add(i) as usize,
+                        SET_HOLE_VALUE_BITS,
+                    );
+                }
+            }
+        } else {
+            (*set).used = 0;
+        }
     }
     SET_INDEX.with(|idx| {
         let mut idx = idx.borrow_mut();
@@ -1818,7 +1892,7 @@ fn js_set_foreach_impl(
     // the raw marker AND the walk ended early, dropping live elements past it.
     unsafe {
         let resolved = clean_set_ptr(set);
-        if !resolved.is_null() {
+        if !resolved.is_null() && !set_foreach_is_active(resolved) {
             compact_if_holey_set(resolved as *mut SetHeader);
         }
     }
@@ -1835,6 +1909,7 @@ fn js_set_foreach_impl(
     let this_handle = scope.root_nanbox_f64(this_arg);
     let has_override = collection_override.to_bits() != crate::value::TAG_UNDEFINED;
     let collection_handle = scope.root_nanbox_f64(collection_override);
+    set_foreach_enter(set);
     unsafe {
         // ECMA-262 24.2.3.6: Set.prototype.forEach iterates [[SetData]] in
         // insertion order. `used` is the raw [[SetData]] extent: unlike `size`,
@@ -1869,6 +1944,10 @@ fn js_set_foreach_impl(
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
             crate::object::js_implicit_this_set(prev_this);
         }
+    }
+    let set = set_handle.get_raw_const_ptr::<SetHeader>();
+    if set_foreach_leave(set) {
+        unsafe { compact_if_holey_set(set as *mut SetHeader) };
     }
 }
 

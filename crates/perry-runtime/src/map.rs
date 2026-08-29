@@ -16,6 +16,38 @@ const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
 crate::perry_thread_local! {
     static MAP_ITERATOR_ARRAYS: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+    /// Backing Maps whose `forEach` raw-entry walk is currently active. A
+    /// compaction would move entries behind those cursors (#9082).
+    static MAP_FOREACH_STACK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+#[inline]
+fn map_foreach_is_active(map: *const MapHeader) -> bool {
+    let addr = map as usize;
+    MAP_FOREACH_STACK.with(|stack| stack.borrow().contains(&addr))
+}
+
+fn map_foreach_enter(map: *const MapHeader) {
+    MAP_FOREACH_STACK.with(|stack| stack.borrow_mut().push(map as usize));
+}
+
+/// Pop one completed walk. Returns true when this was the outermost walk of
+/// this Map, at which point deferred compaction is safe again.
+fn map_foreach_leave(map: *const MapHeader) -> bool {
+    let addr = map as usize;
+    MAP_FOREACH_STACK.with(|stack| {
+        let mut stack = stack.borrow_mut();
+        debug_assert_eq!(stack.pop(), Some(addr));
+        !stack.contains(&addr)
+    })
+}
+
+pub(crate) fn map_foreach_stack_savepoint() -> usize {
+    MAP_FOREACH_STACK.with(|stack| stack.borrow().len())
+}
+
+pub(crate) fn map_foreach_stack_restore(depth: usize) {
+    MAP_FOREACH_STACK.with(|stack| stack.borrow_mut().truncate(depth));
 }
 
 fn mark_map_iterator_array(arr: *mut crate::array::ArrayHeader) {
@@ -787,6 +819,13 @@ pub(crate) fn map_header_moved_for_gc(old_addr: usize, new_addr: usize) {
         idx.remove(&new_addr);
         if let Some(slot) = idx.remove(&old_addr) {
             idx.insert(new_addr, slot);
+        }
+    });
+    MAP_FOREACH_STACK.with(|stack| {
+        for addr in stack.borrow_mut().iter_mut() {
+            if *addr == old_addr {
+                *addr = new_addr;
+            }
         }
     });
 }
@@ -1745,7 +1784,7 @@ unsafe fn ensure_capacity(map: *mut MapHeader) -> bool {
     // Full by EXTENT. Squeeze tombstones out first — reclaiming holes is
     // cheaper than doubling, and it keeps a delete-heavy map from growing on
     // dead weight.
-    if (*map).size < (*map).used {
+    if (*map).size < (*map).used && !map_foreach_is_active(map) {
         compact_map_entries(map);
         if (*map).used < (*map).capacity {
             return false;
@@ -2425,7 +2464,7 @@ unsafe fn delete_entry_at_index(map: *mut MapHeader, idx: i32) -> i32 {
     forget_map_index_entry(map, deleted_key, idx as u32);
 
     let used = (*map).used;
-    if used >= 16 && (*map).size < used / 2 {
+    if used >= 16 && (*map).size < used / 2 && !map_foreach_is_active(map) {
         compact_map_entries(map);
     }
     1
@@ -2524,6 +2563,9 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
     let size = unsafe { (*map).size };
     let used = unsafe { (*map).used };
     if size == 0 {
+        if !map_foreach_is_active(map) {
+            unsafe { (*map).used = 0 };
+        }
         return;
     }
     // The string and pointer side-tables hold an entry only for a string or
@@ -2542,7 +2584,29 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
         };
     unsafe {
         (*map).size = 0;
-        (*map).used = 0;
+        if map_foreach_is_active(map) {
+            // Preserve the raw [[MapData]] extent while a forEach cursor names
+            // it. Clearing turns each live pair into a tombstone; entries
+            // appended by the callback remain after the old extent and are
+            // visited by the continuing walk.
+            let entries = entries_ptr_mut(map);
+            for i in 0..used as usize {
+                if ptr::read(entries.add(i * 2)).to_bits() != MAP_HOLE_KEY_BITS {
+                    crate::gc::runtime_store_external_jsvalue_slot(
+                        map as usize,
+                        entries.add(i * 2) as usize,
+                        MAP_HOLE_KEY_BITS,
+                    );
+                    crate::gc::runtime_store_external_jsvalue_slot(
+                        map as usize,
+                        entries.add(i * 2 + 1) as usize,
+                        crate::value::TAG_UNDEFINED,
+                    );
+                }
+            }
+        } else {
+            (*map).used = 0;
+        }
     }
     unsafe {
         if let Some(index) = (*map).numeric_index.as_mut() {
@@ -3039,7 +3103,9 @@ fn js_map_foreach_impl(
     if map.is_null() {
         return;
     }
-    unsafe { compact_if_holey(map as *mut MapHeader) };
+    if !map_foreach_is_active(map) {
+        unsafe { compact_if_holey(map as *mut MapHeader) };
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let map_handle = scope.root_raw_const_ptr(map);
     let callback_handle = scope.root_nanbox_f64(callback);
@@ -3048,6 +3114,7 @@ fn js_map_foreach_impl(
     // survives a GC triggered inside the callback.
     let has_override = collection_override.to_bits() != crate::value::TAG_UNDEFINED;
     let collection_handle = scope.root_nanbox_f64(collection_override);
+    map_foreach_enter(map);
     unsafe {
         // The collection itself is the third callback argument and the
         // identity user code compares `self === m` against.
@@ -3088,6 +3155,10 @@ fn js_map_foreach_impl(
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
             crate::object::js_implicit_this_set(prev_this);
         }
+    }
+    let map = map_handle.get_raw_const_ptr::<MapHeader>();
+    if map_foreach_leave(map) {
+        unsafe { compact_if_holey(map as *mut MapHeader) };
     }
 }
 

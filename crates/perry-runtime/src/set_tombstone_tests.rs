@@ -26,9 +26,9 @@ extern "C" fn delete_earlier_set_value(
     collection: f64,
 ) -> f64 {
     FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().push(value.to_bits()));
-    if value == 2.0 {
+    if value > 0.0 {
         let set = crate::value::js_nanbox_get_pointer(collection) as *mut SetHeader;
-        js_set_delete(set, 1.0);
+        js_set_delete(set, value - 1.0);
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -44,9 +44,10 @@ fn foreach_callback(func: *const u8) -> f64 {
 }
 
 #[test]
-fn foreach_skips_tombstones_created_by_callback_deletes() {
+fn foreach_survives_delete_compaction_threshold() {
+    let expected = (0..20).map(|value| value as f64).collect::<Vec<_>>();
     let set = js_set_alloc(4);
-    for value in [1.0, 2.0] {
+    for &value in &expected {
         js_set_add(set, value);
     }
     js_set_foreach(
@@ -54,20 +55,40 @@ fn foreach_skips_tombstones_created_by_callback_deletes() {
         foreach_callback(delete_current_set_value as *const u8),
         f64::from_bits(crate::value::TAG_UNDEFINED),
     );
-    assert_eq!(take_foreach_delete_visits(), vec![1.0, 2.0]);
+    assert_eq!(take_foreach_delete_visits(), expected);
     assert_eq!(js_set_size(set), 0);
+    unsafe {
+        assert_eq!(
+            (*set).used,
+            0,
+            "the completed walk runs deferred compaction"
+        )
+    };
 
     let set = js_set_alloc(4);
-    for value in [1.0, 2.0, 3.0] {
-        js_set_add(set, value);
+    for value in 0..20 {
+        js_set_add(set, value as f64);
     }
     js_set_foreach(
         set,
         foreach_callback(delete_earlier_set_value as *const u8),
         f64::from_bits(crate::value::TAG_UNDEFINED),
     );
-    assert_eq!(take_foreach_delete_visits(), vec![1.0, 2.0, 3.0]);
-    assert_eq!(js_set_size(set), 2);
+    assert_eq!(take_foreach_delete_visits(), expected);
+    assert_eq!(js_set_size(set), 1);
+}
+
+#[test]
+fn caught_throw_restores_set_foreach_compaction_state() {
+    let set = js_set_alloc(4);
+    let base = set_foreach_stack_savepoint();
+    let _ = crate::exception::js_try_push();
+    set_foreach_enter(set);
+    assert!(set_foreach_is_active(set));
+    crate::exception::test_unwind_innermost_shadow_restore();
+    assert_eq!(set_foreach_stack_savepoint(), base);
+    assert!(!set_foreach_is_active(set));
+    crate::exception::js_try_end();
 }
 
 #[test]

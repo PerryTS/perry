@@ -26,30 +26,84 @@ extern "C" fn delete_current_map_entry(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-#[test]
-fn foreach_skips_tombstones_created_by_callback_deletes() {
-    let map = js_map_alloc(4);
-    for (key, value) in [(1.0, 10.0), (2.0, 20.0), (3.0, 30.0)] {
-        js_map_set(map, key, value);
+extern "C" fn delete_earlier_map_entry(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    key: f64,
+    collection: f64,
+) -> f64 {
+    FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().push((key.to_bits(), value.to_bits())));
+    if key > 0.0 {
+        let map = crate::value::js_nanbox_get_pointer(collection) as *mut MapHeader;
+        js_map_delete(map, key - 1.0);
     }
-    FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().clear());
-    let callback = crate::closure::js_closure_alloc(delete_current_map_entry as *const u8, 0);
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
 
-    js_map_foreach(
-        map,
-        crate::value::js_nanbox_pointer(callback as i64),
-        f64::from_bits(crate::value::TAG_UNDEFINED),
-    );
-
-    let visits = FOREACH_DELETE_VISITS.with(|visits| {
+fn take_foreach_delete_visits() -> Vec<(f64, f64)> {
+    FOREACH_DELETE_VISITS.with(|visits| {
         visits
             .borrow_mut()
             .drain(..)
             .map(|(key, value)| (f64::from_bits(key), f64::from_bits(value)))
-            .collect::<Vec<_>>()
-    });
-    assert_eq!(visits, vec![(1.0, 10.0), (2.0, 20.0), (3.0, 30.0)]);
+            .collect()
+    })
+}
+
+fn foreach_callback(func: *const u8) -> f64 {
+    FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().clear());
+    let callback = crate::closure::js_closure_alloc(func, 0);
+    crate::value::js_nanbox_pointer(callback as i64)
+}
+
+#[test]
+fn foreach_survives_delete_compaction_threshold() {
+    let map = js_map_alloc(4);
+    let expected = (0..20)
+        .map(|key| (key as f64, (key * 10) as f64))
+        .collect::<Vec<_>>();
+    for &(key, value) in &expected {
+        js_map_set(map, key, value);
+    }
+    js_map_foreach(
+        map,
+        foreach_callback(delete_current_map_entry as *const u8),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+    assert_eq!(take_foreach_delete_visits(), expected);
     assert_eq!(js_map_size(map), 0);
+    unsafe {
+        assert_eq!(
+            (*map).used,
+            0,
+            "the completed walk runs deferred compaction"
+        )
+    };
+
+    let map = js_map_alloc(4);
+    for &(key, value) in &expected {
+        js_map_set(map, key, value);
+    }
+    js_map_foreach(
+        map,
+        foreach_callback(delete_earlier_map_entry as *const u8),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+    assert_eq!(take_foreach_delete_visits(), expected);
+    assert_eq!(js_map_size(map), 1);
+}
+
+#[test]
+fn caught_throw_restores_map_foreach_compaction_state() {
+    let map = js_map_alloc(4);
+    let base = map_foreach_stack_savepoint();
+    let _ = crate::exception::js_try_push();
+    map_foreach_enter(map);
+    assert!(map_foreach_is_active(map));
+    crate::exception::test_unwind_innermost_shadow_restore();
+    assert_eq!(map_foreach_stack_savepoint(), base);
+    assert!(!map_foreach_is_active(map));
+    crate::exception::js_try_end();
 }
 
 #[test]
