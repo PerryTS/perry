@@ -780,6 +780,18 @@ pub(super) fn compile_method(
         if dynamic_parent_owner.is_none() {
             let init_mode = if class.extends_name.is_some() {
                 crate::lower_call::FieldInitMode::AncestorsOnly
+            } else if class.extends_expr.is_some() {
+                // Dynamic parent (`class X extends someExpr`) with an OWN
+                // ctor: the body's `super()` lowering stages the self fields
+                // after the parent returns (spec order). Staging `All` here
+                // ran every initializer TWICE — silent double side effects
+                // for public fields, and a thrown "initialize twice" for
+                // private ones (pi's startup died on the mixin pattern).
+                // The static ancestor chain of a purely dynamic parent is
+                // empty, so AncestorsOnly stages nothing, which is correct:
+                // everything above the edge belongs to the runtime parent
+                // constructor.
+                crate::lower_call::FieldInitMode::AncestorsOnly
             } else {
                 crate::lower_call::FieldInitMode::All
             };
