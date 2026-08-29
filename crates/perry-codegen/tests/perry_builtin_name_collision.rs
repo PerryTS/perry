@@ -121,6 +121,7 @@ fn module_with(imports: Vec<Import>, init: Vec<Stmt>) -> Module {
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
         init,
+        classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),
         exported_objects: Vec::new(),

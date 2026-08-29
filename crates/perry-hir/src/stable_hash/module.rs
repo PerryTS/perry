@@ -23,6 +23,7 @@ impl SH for Module {
             references_global_this,
             annexb_global_undefined_names,
             init,
+            classic_for_lexical_bindings,
             exported_native_instances,
             exported_func_return_native_instances,
             exported_objects,
@@ -60,6 +61,9 @@ impl SH for Module {
         references_global_this.hash(h);
         annexb_global_undefined_names.hash(h);
         init.hash(h);
+        let mut classic_for_ids: Vec<u32> = classic_for_lexical_bindings.iter().copied().collect();
+        classic_for_ids.sort_unstable();
+        classic_for_ids.hash(h);
         exported_native_instances.hash(h);
         exported_func_return_native_instances.hash(h);
         exported_objects.hash(h);

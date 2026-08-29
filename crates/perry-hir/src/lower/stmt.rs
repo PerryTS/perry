@@ -1570,7 +1570,18 @@ pub(crate) fn lower_stmt(
                             }
                             None
                         } else {
-                            for decl in var_decl.decls.iter().skip(1) {
+                            // A multi-declarator lexical head cannot fit in the
+                            // HIR's single `For::init` slot. Lower the complete
+                            // head into the loop-scoped prelude in source order,
+                            // registering each binding before the next
+                            // initializer is lowered.
+                            let has_multiple_decls = var_decl.decls.len() > 1;
+                            for decl in
+                                var_decl
+                                    .decls
+                                    .iter()
+                                    .skip(if has_multiple_decls { 0 } else { 1 })
+                            {
                                 if let Some(init_ast) = decl.init.as_ref() {
                                     module.init.extend(predeclare_implicit_assignment_targets(
                                         ctx, init_ast,
@@ -1591,6 +1602,12 @@ pub(crate) fn lower_stmt(
                                     let stmts = crate::destructuring::lower_pattern_binding(
                                         ctx, &decl.name, init_expr, true, false,
                                     )?;
+                                    for stmt in &stmts {
+                                        crate::lower_decl::collect_let_decls_in_stmt(
+                                            stmt,
+                                            &mut ctx.classic_for_lexical_bindings,
+                                        );
+                                    }
                                     module.init.extend(stmts);
                                     continue;
                                 }
@@ -1603,6 +1620,7 @@ pub(crate) fn lower_stmt(
                                     ty.clone(),
                                     decl.name.span(),
                                 );
+                                ctx.classic_for_lexical_bindings.insert(id);
                                 module.init.push(Stmt::Let {
                                     id,
                                     name,
@@ -1611,7 +1629,9 @@ pub(crate) fn lower_stmt(
                                     init: init_expr,
                                 });
                             }
-                            if let Some(decl) = var_decl.decls.first() {
+                            if has_multiple_decls {
+                                None
+                            } else if let Some(decl) = var_decl.decls.first() {
                                 if let Some(init_ast) = decl.init.as_ref() {
                                     module.init.extend(predeclare_implicit_assignment_targets(
                                         ctx, init_ast,

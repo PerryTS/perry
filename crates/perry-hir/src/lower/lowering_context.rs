@@ -73,6 +73,9 @@ pub struct LoweringContext {
     /// User-visible declaration spans keyed by the `LocalId` allocated during
     /// lowering. Synthetic compiler locals intentionally have no entry.
     pub(crate) local_source_spans: HashMap<LocalId, LocalSourceSpan>,
+    /// Bindings lowered out of a multi-declarator classic `for` head and into
+    /// its loop-scoped prelude. Copied to `Module` for capture analysis.
+    pub(crate) classic_for_lexical_bindings: HashSet<LocalId>,
     /// Counter for generating unique global IDs
     // #854: initialized in `new` but not yet read by the lowerer (globals are
     // allocated through a different path today). Kept for the ID-counter set.

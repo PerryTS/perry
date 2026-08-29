@@ -143,6 +143,7 @@ fn module_with_recursive_constructor_return() -> Module {
             byte_offset: 0,
             cap_args_appended: 0,
         })],
+        classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),
         exported_objects: Vec::new(),
