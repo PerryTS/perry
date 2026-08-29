@@ -474,6 +474,7 @@ pub extern "C" fn js_object_delete_field(
                 keys_cloned as usize,
                 i as u32,
                 key_count as u32,
+                !keys_owned,
             );
             // `set_object_keys_array` publishes the cloned edge while preserving
             // the predecessor's semantic generation and object kind.
