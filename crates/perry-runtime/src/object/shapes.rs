@@ -31,6 +31,42 @@
 use crate::array::ArrayHeader;
 use std::cell::RefCell;
 
+/// Slots sharing one content hash.
+///
+/// Almost always exactly one: the key is an FNV-1a hash of distinct property
+/// names, so a bucket with two entries is a genuine hash collision. Storing
+/// that common case inline removes a heap allocation PER KEY from every index
+/// build — and the index is rebuilt on every populated delete, so a 500-key
+/// object was making ~500 `Vec` allocations per `delete`. Allocator and page
+/// churn is the dominant cost on that benchmark (`clear_page_erms` 5.6%,
+/// `mi_free` 4.2%, `RawVecInner::finish_grow` 2.9%), well above the lookup
+/// work itself.
+#[derive(Clone, Debug)]
+pub(crate) enum SlotList {
+    One(u32),
+    Many(Vec<u32>),
+}
+
+impl SlotList {
+    #[inline]
+    fn push(&mut self, slot: u32) {
+        match self {
+            SlotList::One(existing) => {
+                *self = SlotList::Many(vec![*existing, slot]);
+            }
+            SlotList::Many(v) => v.push(slot),
+        }
+    }
+
+    #[inline]
+    fn iter(&self) -> impl Iterator<Item = &u32> {
+        match self {
+            SlotList::One(slot) => std::slice::from_ref(slot).iter(),
+            SlotList::Many(v) => v.iter(),
+        }
+    }
+}
+
 pub(crate) struct ShapeIndex {
     /// Key count covered by `slots`. Longer live array ⟹ catch up
     /// incrementally (append-only while shared); shorter ⟹ a delete
@@ -45,7 +81,7 @@ pub(crate) struct ShapeIndex {
     /// `bench_populated_delete.ts` — perry's worst object-model gap against
     /// node — `hash_one::<&usize>` plus `sip::Hasher::write` were **14.7% of
     /// self time**, second only to the lookup that performs them.
-    slots: crate::fast_hash::PtrHashMap<u64, Vec<u32>>,
+    slots: crate::fast_hash::PtrHashMap<u64, SlotList>,
 }
 
 /// Immutable facts named by one ShapeId.
@@ -1601,7 +1637,12 @@ unsafe fn index_range(shape: &mut ShapeIndex, keys: *const ArrayHeader, key_coun
         let v = crate::JSValue::from_bits((*slots.add(i as usize)).to_bits());
         if let Some(b) = crate::string::js_string_key_bytes(v, &mut sso) {
             let h = super::key_bytes_hash(b.as_ptr(), b.len());
-            shape.slots.entry(h).or_default().push(i);
+            match shape.slots.entry(h) {
+                std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().push(i),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(SlotList::One(i));
+                }
+            }
         }
     }
     shape.indexed_len = key_count;
@@ -1649,7 +1690,7 @@ pub(crate) unsafe fn shape_slot_lookup(
     let candidates = shape.slots.get(&key_hash)?;
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let (slots, slot_len) = super::keys_array_dense_slots(keys);
-    for &i in candidates {
+    for &i in candidates.iter() {
         if (i as usize) >= slot_len || i >= key_count {
             continue;
         }
@@ -1676,7 +1717,12 @@ pub(crate) fn shape_note_append(
     if let Some(shape) = inner.indices.get_mut(&(keys as usize)) {
         if shape.indexed_len + 1 == new_count {
             shape.indexed_len = new_count;
-            shape.slots.entry(key_hash).or_default().push(slot);
+            match shape.slots.entry(key_hash) {
+                std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().push(slot),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(SlotList::One(slot));
+                }
+            }
         }
     }
 }
@@ -1686,7 +1732,12 @@ pub(crate) fn shape_note_append(
 pub(crate) fn shape_note_hit(keys: *const ArrayHeader, key_hash: u64, slot: u32) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     if let Some(shape) = inner.indices.get_mut(&(keys as usize)) {
-        shape.slots.entry(key_hash).or_default().push(slot);
+        match shape.slots.entry(key_hash) {
+            std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().push(slot),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(SlotList::One(slot));
+            }
+        }
     }
 }
 
