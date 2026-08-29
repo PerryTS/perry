@@ -34,8 +34,8 @@ use std::cell::RefCell;
 #[path = "shapes_slot_list.rs"]
 mod shapes_slot_list;
 pub(crate) use shapes_slot_list::{
-    record_shape_scan_outcome, shape_index_migrate_after_delete, shape_index_shift_in_place,
-    SlotList,
+    object_shape_hole_count, publish_object_shape_holes, record_shape_scan_outcome,
+    shape_index_migrate_after_delete, shape_index_shift_in_place, SlotList,
 };
 
 pub(crate) struct ShapeIndex {
@@ -115,6 +115,10 @@ pub(crate) struct ShapeDescriptor {
     /// the authoritative descriptor rather than `GcHeader::_reserved`, whose
     /// bits belong to the GC layout/age protocol and object feature flags.
     pub(crate) object_kind: ShapeObjectKind,
+    /// Tombstoned key slots (`TAG_HOLE`) left by O(1) deletes; the live key
+    /// count is `logical_key_count - hole_count`. Immutable per id like every
+    /// other identity fact — a hole-delete publishes a successor id.
+    pub(crate) hole_count: u32,
 }
 
 /// Shape identity is the FACTS, never the storage address. A descriptor value
@@ -207,6 +211,11 @@ struct ShapeFacts {
     live_inline_slot_count: u32,
     semantic_generation: u64,
     object_kind: ShapeObjectKind,
+    /// Tombstoned key slots in the keys array (`TAG_HOLE` markers left by
+    /// O(1) deletes). Part of identity: two shapes over the same array with
+    /// different hole sets must be distinct ids, or a stale IC entry for a
+    /// deleted key would keep hitting.
+    hole_count: u32,
 }
 
 struct ShapeTableInner {
@@ -319,6 +328,7 @@ fn descriptor_facts(descriptor: ShapeDescriptor) -> ShapeFacts {
         live_inline_slot_count: descriptor.live_inline_slot_count,
         semantic_generation: descriptor.semantic_generation,
         object_kind: descriptor.object_kind,
+        hole_count: descriptor.hole_count,
     }
 }
 
@@ -329,6 +339,7 @@ fn descriptor_facts_with_keys(descriptor: ShapeDescriptor, keys: u64) -> ShapeFa
         live_inline_slot_count: descriptor.live_inline_slot_count,
         semantic_generation: descriptor.semantic_generation,
         object_kind: descriptor.object_kind,
+        hole_count: descriptor.hole_count,
     }
 }
 
@@ -491,6 +502,27 @@ fn shape_descriptor_ensure_with_generation(
     semantic_generation: u64,
     object_kind: ShapeObjectKind,
 ) -> Result<u32, ShapeDescriptorError> {
+    shape_descriptor_ensure_with_holes(
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation,
+        object_kind,
+        0,
+    )
+}
+
+/// [`shape_descriptor_ensure_with_generation`] with an explicit tombstone
+/// count — the publish half of an O(1) hole-delete, which must mint a shape
+/// identity distinct from every hole state of the same array.
+fn shape_descriptor_ensure_with_holes(
+    keys: *const ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    semantic_generation: u64,
+    object_kind: ShapeObjectKind,
+    hole_count: u32,
+) -> Result<u32, ShapeDescriptorError> {
     let keys_id = keys as usize;
     if keys_id == 0 && logical_key_count != 0 {
         return Err(ShapeDescriptorError::InvalidFacts);
@@ -501,6 +533,7 @@ fn shape_descriptor_ensure_with_generation(
         live_inline_slot_count,
         semantic_generation,
         object_kind,
+        hole_count,
     };
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     if let Some(id) = inner
@@ -522,6 +555,7 @@ fn shape_descriptor_ensure_with_generation(
         live_inline_slot_count,
         semantic_generation,
         object_kind,
+        hole_count,
     };
     // Publish by-id first, then the reverse accelerator. An ObjectHeader is
     // stamped only after this function returns, so a visible id always has a
@@ -789,7 +823,7 @@ pub extern "C" fn js_object_shape_id_for_keys(keys: u64, key_count: u32) -> u32 
 /// slot representations must never share a pre-baked GC descriptor.
 pub(crate) fn mint_registered_typed_shape_id(keys: *const ArrayHeader, key_count: u32) -> u32 {
     let id = alloc_shape_id().unwrap_or_else(|_| shape_id_exhausted_abort());
-    if !install_external_shape_id(id, keys, key_count, key_count) {
+    if !shapes_slot_list::install_external_shape_id(id, keys, key_count, key_count) {
         invalid_shape_facts_abort();
     }
     id
@@ -802,56 +836,7 @@ pub(crate) fn install_registered_typed_shape_id(
     keys: *const ArrayHeader,
     key_count: u32,
 ) -> bool {
-    install_external_shape_id(id, keys, key_count, key_count)
-}
-
-/// Install a process-global id into this agent's local descriptor table.
-/// Module globals are initialized once per process, while workers own distinct
-/// runtime state and moving keys pointers. Global id uniqueness makes a local
-/// first installation unambiguous; an existing different descriptor fails
-/// closed and the caller mints a fresh local id instead.
-fn install_external_shape_id(
-    id: u32,
-    keys: *const ArrayHeader,
-    logical_key_count: u32,
-    live_inline_slot_count: u32,
-) -> bool {
-    if !is_shape_id(id) || (keys.is_null() && logical_key_count != 0) {
-        return false;
-    }
-    let descriptor = ShapeDescriptor {
-        keys: keys as usize as u64,
-        indexed_keys: keys as usize as u64,
-        record: 0,
-        old_carrier: false,
-        old_carrier_seen: false,
-        cache_carrier: false,
-        logical_key_count,
-        live_inline_slot_count,
-        semantic_generation: 0,
-        object_kind: ShapeObjectKind::Ordinary,
-    };
-    let facts = descriptor_facts(descriptor);
-    let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    if let Some(existing) = inner.descriptors.get(&id) {
-        return **existing == descriptor;
-    }
-    // A worker can have minted an equivalent local descriptor before module
-    // initialization installs the process-global codegen id. Keep both id
-    // descriptors valid for already-published objects and make the external
-    // id canonical for subsequent births in this agent.
-    //
-    // This is the one insert that can REPLACE a live id with a fresh box, so
-    // the lookup_ways cache has to be invalidated here (the fresh-id insert in
-    // `intern_shape_descriptor` cannot, and deliberately does not).
-    invalidate_shape_lookup_cache();
-    inner.descriptors.insert(id, box_descriptor(descriptor));
-    // An equivalent local descriptor can predate module initialization. Keep
-    // both reverse-index entries and prefer the external id for subsequent
-    // births in this agent; already-published local ids remain resolvable.
-    inner.ids_by_facts.entry(facts).or_default().insert(0, id);
-    insert_descriptor_id_sorted(inner.ids_by_keys.entry(descriptor.keys).or_default(), id);
-    true
+    shapes_slot_list::install_external_shape_id(id, keys, key_count, key_count)
 }
 
 // ---------------------------------------------------------------------------
@@ -1121,7 +1106,12 @@ pub(crate) unsafe fn birth_stamp_object_shape(
     let key_count = current.logical_key_count;
     let supplied_id_is_local =
         descriptor_matches_object(runtime_shape_id, obj, live_inline_slot_count)
-            || install_external_shape_id(runtime_shape_id, keys, key_count, live_inline_slot_count);
+            || shapes_slot_list::install_external_shape_id(
+                runtime_shape_id,
+                keys,
+                key_count,
+                live_inline_slot_count,
+            );
     if supplied_id_is_local {
         (*obj).parent_class_id = runtime_shape_id;
         debug_assert_object_shape_parity(obj);
@@ -1378,6 +1368,19 @@ pub(crate) unsafe fn transition_object_shape_semantics(
     debug_assert_object_shape_parity(obj);
     id
 }
+
+/// Publish the successor shape for an O(1) hole-delete on `obj`'s CURRENT
+/// keys array: same address, same surviving slots, one more tombstone.
+///
+/// Modeled on [`transition_object_shape_semantics`]: the structural facts are
+/// unchanged except `hole_count`, and the fresh process-unique generation is
+/// what retires every cached `(token, key)` pair for this receiver — a
+/// deleted key must stop hitting even though the array address and every
+/// surviving slot are byte-identical, or a stale IC hit would return the
+/// cleared slot instead of walking the prototype chain.
+///
+/// Returns the successor id, or 0 when the object is not stamped/shaped —
+/// the caller falls back to the compacting delete.
 
 /// Turn a class-expression object into a class receiver. The kind is part of
 /// the exact immutable descriptor, so it cannot alias GC layout bits and every

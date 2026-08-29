@@ -191,3 +191,118 @@ pub(crate) fn shape_index_migrate_after_delete(
     inner.indices.insert(new_keys_id, index);
     true
 }
+
+/// The receiver's current tombstone count, 0 when unshaped.
+pub(crate) unsafe fn object_shape_hole_count(obj: *const crate::object::ObjectHeader) -> u32 {
+    super::object_shape_descriptor(obj)
+        .map(|d| d.hole_count)
+        .unwrap_or(0)
+}
+
+pub(crate) unsafe fn publish_object_shape_holes(
+    obj: *mut crate::object::ObjectHeader,
+    hole_count: u32,
+) -> u32 {
+    if obj.is_null() || !super::shape_word_is_writable(obj) {
+        return 0;
+    }
+    let Some(current) = super::object_shape_descriptor(obj) else {
+        return 0;
+    };
+    let generation = super::SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if generation == 0 {
+        super::shape_id_exhausted_abort();
+    }
+    let id = super::publish_shape_result(super::shape_descriptor_ensure_with_holes(
+        current.keys as usize as *mut super::ArrayHeader,
+        current.logical_key_count,
+        current.live_inline_slot_count,
+        generation,
+        current.object_kind,
+        hole_count,
+    ));
+    (*obj).parent_class_id = id;
+    // Retire the predecessor. Its keys array is OWNED (the tombstone path is
+    // gated on that), so this object is the only carrier of the old stamp and
+    // the id becomes unreachable the moment the header word above is written:
+    // stale IC tokens already miss on the stamp compare, and
+    // `shape_descriptor_by_id` of a removed id is `None`. Without this, a
+    // delete-churn loop minted one descriptor per delete against ONE stable
+    // address forever — the reverse-index Vec under that address grew by one
+    // per delete and every later publish walked it, which measured as a 26x
+    // slowdown (2.06 s → 53.6 s) on `bench_populated_delete` before this
+    // line existed.
+    {
+        let mut inner = crate::state::state().shapes.inner.borrow_mut();
+        // Sweep EVERY other id for this keys address, not just the direct
+        // predecessor: the delete-then-re-add cycle publishes an id on the
+        // APPEND side too, and nothing else retires those — the post-trace
+        // dead-key pruning only fires when the keys ARRAY dies, and this
+        // array lives at a stable address for the object's whole life.
+        // Retiring only the predecessor halved the descriptor pile-up
+        // (53.6 s → 25.1 s on the churn benchmark) but ids still accumulated
+        // one per iteration from the append publish.
+        let stale: Vec<u32> = inner
+            .ids_by_keys
+            .get(&(current.keys))
+            .map(|ids| ids.iter().copied().filter(|&other| other != id).collect())
+            .unwrap_or_default();
+        for other in stale {
+            super::remove_descriptor_and_reverse_indices(&mut inner, other);
+        }
+    }
+    super::debug_assert_object_shape_parity(obj);
+    id
+}
+
+/// Install a process-global id into this agent's local descriptor table.
+/// Module globals are initialized once per process, while workers own distinct
+/// runtime state and moving keys pointers. Global id uniqueness makes a local
+/// first installation unambiguous; an existing different descriptor fails
+/// closed and the caller mints a fresh local id instead.
+pub(super) fn install_external_shape_id(
+    id: u32,
+    keys: *const super::ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+) -> bool {
+    if !super::is_shape_id(id) || (keys.is_null() && logical_key_count != 0) {
+        return false;
+    }
+    let descriptor = super::ShapeDescriptor {
+        keys: keys as usize as u64,
+        indexed_keys: keys as usize as u64,
+        record: 0,
+        old_carrier: false,
+        old_carrier_seen: false,
+        cache_carrier: false,
+        logical_key_count,
+        live_inline_slot_count,
+        semantic_generation: 0,
+        object_kind: super::ShapeObjectKind::Ordinary,
+        hole_count: 0,
+    };
+    let facts = super::descriptor_facts(descriptor);
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    if let Some(existing) = inner.descriptors.get(&id) {
+        return **existing == descriptor;
+    }
+    // A worker can have minted an equivalent local descriptor before module
+    // initialization installs the process-global codegen id. Keep both id
+    // descriptors valid for already-published objects and make the external
+    // id canonical for subsequent births in this agent.
+    //
+    // This is the one insert that can REPLACE a live id with a fresh box, so
+    // the lookup_ways cache has to be invalidated here (the fresh-id insert in
+    // `intern_shape_descriptor` cannot, and deliberately does not).
+    super::invalidate_shape_lookup_cache();
+    inner
+        .descriptors
+        .insert(id, super::box_descriptor(descriptor));
+    // An equivalent local descriptor can predate module initialization. Keep
+    // both reverse-index entries and prefer the external id for subsequent
+    // births in this agent; already-published local ids remain resolvable.
+    inner.ids_by_facts.entry(facts).or_default().insert(0, id);
+    super::insert_descriptor_id_sorted(inner.ids_by_keys.entry(descriptor.keys).or_default(), id);
+    true
+}

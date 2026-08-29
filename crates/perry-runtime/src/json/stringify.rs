@@ -1244,6 +1244,10 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     };
     for j in 0..actual_fields {
         let f = pos(j);
+        // Tombstoned slot from an O(1) delete: not a key, not serialized.
+        if key_at(f).to_bits() == crate::value::TAG_HOLE {
+            continue;
+        }
         // Private elements (`#x`) live in a class instance's keys_array but are
         // not serializable own properties. (`has_prototype_chain` == class_id != 0.)
         if has_prototype_chain

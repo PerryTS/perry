@@ -490,7 +490,7 @@ mod descriptor_tests_8067 {
         let local = shape_descriptor_ensure(keys as *const ArrayHeader, 1, 1)
             .expect("shape range unexpectedly exhausted");
         let external = alloc_shape_id().expect("shape range unexpectedly exhausted");
-        assert!(install_external_shape_id(
+        assert!(shapes_slot_list::install_external_shape_id(
             external,
             keys as *const ArrayHeader,
             1,
@@ -563,7 +563,7 @@ mod descriptor_tests_8067 {
             .expect("shape range unexpectedly exhausted");
         let worker_keys = 0x8067_0000_0000_1900usize;
         std::thread::spawn(move || {
-            assert!(install_external_shape_id(
+            assert!(shapes_slot_list::install_external_shape_id(
                 module_id,
                 worker_keys as *const ArrayHeader,
                 2,
@@ -827,6 +827,7 @@ fn shape_facts_hash_folds_every_field() {
         live_inline_slot_count: 3,
         semantic_generation: 9,
         object_kind: ShapeObjectKind::Ordinary,
+        hole_count: 0,
     };
 
     let variants = [
@@ -855,6 +856,13 @@ fn shape_facts_hash_folds_every_field() {
             "semantic_generation",
             ShapeFacts {
                 semantic_generation: 10,
+                ..base
+            },
+        ),
+        (
+            "hole_count",
+            ShapeFacts {
+                hole_count: 1,
                 ..base
             },
         ),

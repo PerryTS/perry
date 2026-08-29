@@ -376,7 +376,10 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             "descriptor is the authoritative edge since #8112"
         )
 
-    ensure = function_body(shapes, "shape_descriptor_ensure_with_generation")
+    # The insert/reverse-index body lives in the `_with_holes` variant since
+    # the tombstone-delete work; `_with_generation` is a thin forwarding
+    # wrapper. The authority ordering is checked where the writes are.
+    ensure = function_body(shapes, "shape_descriptor_ensure_with_holes")
     assert_before(
         ensure,
         "inner.descriptors.insert",
