@@ -124,6 +124,10 @@ fn private_guard_uses_declaring_class_id_not_name_collided_id() {
         field_name: "#v".to_string(),
         kind: 0, // field
         op: 0,   // instance read
+        // Not a named class expression's self-binding: this guard's receiver
+        // is a plain expression, so the declaring class id stays the brand
+        // owner — which is exactly what this test pins.
+        receiver_is_brand_owner: false,
         object: Box::new(Expr::Integer(0)),
     };
     let ir = String::from_utf8(

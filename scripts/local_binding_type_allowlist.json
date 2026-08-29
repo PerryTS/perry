@@ -640,6 +640,14 @@
       "count": 1,
       "classification": "metadata-only",
       "reason": "This indexed scope-stack iteration performs lexical name resolution during HIR construction and does not establish a codegen runtime representation."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/static_field_meta.rs",
+      "function": "lower",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The Array hint on a named class expression's compiler-private self binding is not a user annotation: the shared-mutable capture rewrite is what both sets it and allocates the one-element cell, in the same pass, so the cell representation holds by construction wherever the hint is present. The raw POINTER_MASK_I64 decode and js_array_set_f64 below are therefore reaching a cell the compiler itself created; the else arm stores the plain value for an unrewritten binding."
     }
   ]
 }
