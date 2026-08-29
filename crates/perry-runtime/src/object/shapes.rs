@@ -41,6 +41,7 @@ pub(crate) use shapes_slot_list::{
     shape_index_migrate_after_delete, shape_index_shift_in_place, SlotList,
 };
 
+#[derive(Clone)]
 pub(crate) struct ShapeIndex {
     /// Key count covered by `slots`. Longer live array ⟹ catch up
     /// incrementally (append-only while shared); shorter ⟹ a delete

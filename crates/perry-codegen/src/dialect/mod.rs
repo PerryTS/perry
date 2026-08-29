@@ -780,7 +780,7 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
     }
 
     /// Calls: direct `@f(...)`, indirect `%fp(...)` (with or without a
-    /// pre-opaque `(sig)*` type), and the inline-asm barrier.
+    /// pre-opaque `(sig)*` type), and Perry-emitted inline asm.
     fn call(&mut self, dst: Option<&str>, rest: &str) -> Result<Option<BasicValueEnum<'ctx>>> {
         // Optional fast-math prefix tokens on float-returning calls.
         let rest = rest
@@ -788,16 +788,21 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             .trim_start_matches("contract ")
             .trim_start();
 
-        // Inline asm: `void asm sideeffect "ASM", "CONSTRAINTS"(ARGS)`
-        if let Some(asm_rest) = rest.strip_prefix("void asm ") {
-            return self.call_asm(asm_rest).map(|_| None);
-        }
-
         // #8175: explicit calling-convention token before the return type.
         let (rest, preserve_none) = match rest.strip_prefix(crate::inst::PRESERVE_NONE_CC) {
             Some(tail) => (tail.trim_start(), true),
             None => (rest, false),
         };
+
+        // Inline asm: `RET asm sideeffect "ASM", "CONSTRAINTS"(ARGS)`.
+        // Validate the whole prefix as a return type before committing to
+        // this branch: an ordinary quoted callee or operand may itself
+        // contain the substring ` asm `.
+        if let Some((ret_tok, asm_rest)) = rest.split_once(" asm ") {
+            if ret_tok == "void" || basic_type(self.ctx, ret_tok).is_ok() {
+                return self.call_asm(dst, ret_tok, asm_rest, preserve_none);
+            }
+        }
 
         // Return type is the first top-level token; everything from the
         // callee marker on is `CALLEE(ARGS)[ #attrs]`.
@@ -889,29 +894,86 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
         }
     }
 
-    fn call_asm(&mut self, rest: &str) -> Result<()> {
-        // `sideeffect "ASM", "CONSTR"()` — the only asm perry emits is the
-        // empty barrier, but parse the strings properly anyway.
-        let sideeffect = rest.trim_start().starts_with("sideeffect");
-        let mut strings = rest.split('"');
-        let asm = strings.nth(1).unwrap_or("").to_string();
-        let constraints = strings.nth(1).unwrap_or("").to_string();
-        let void_fn = self.ctx.void_type().fn_type(&[], false);
+    fn call_asm(
+        &mut self,
+        dst: Option<&str>,
+        ret_tok: &str,
+        rest: &str,
+        preserve_none: bool,
+    ) -> Result<Option<BasicValueEnum<'ctx>>> {
+        let rest = rest.trim_start();
+        let (sideeffect, rest) = match rest.strip_prefix("sideeffect") {
+            Some(tail) if tail.starts_with(char::is_whitespace) => (true, tail.trim_start()),
+            _ => (false, rest),
+        };
+        let (asm, rest) = take_quoted(rest, "inline-asm template")?;
+        let rest = rest
+            .trim_start()
+            .strip_prefix(',')
+            .ok_or_else(|| anyhow!("inline asm missing constraint separator"))?;
+        let (constraints, rest) = take_quoted(rest, "inline-asm constraints")?;
+        let args_and_attrs = rest.trim_start();
+        if !args_and_attrs.starts_with('(') {
+            bail!("inline asm missing argument list");
+        }
+        let close = rmatch_paren(args_and_attrs, 0)?;
+        let args_str = &args_and_attrs[1..close];
+        let trailing_attr = args_and_attrs[close + 1..].trim();
+
+        let mut args: Vec<BasicMetadataValueEnum> = Vec::new();
+        let mut arg_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
+        for arg in split_top_level(args_str) {
+            let (aty, atok) = ty_and_val(&arg)?;
+            let ty = basic_type(self.ctx, aty)?;
+            args.push(self.val(ty, atok)?.into());
+            arg_types.push(ty.into());
+        }
+
+        let fn_ty = fn_type_of(self.ctx, ret_tok, &arg_types)?;
         let ptr =
             self.ctx
-                .create_inline_asm(void_fn, asm, constraints, sideeffect, false, None, false);
+                .create_inline_asm(fn_ty, asm, constraints, sideeffect, false, None, false);
+        let name = dst.map(|d| d.trim_start_matches('%')).unwrap_or("");
         let site = self
             .builder
-            .build_indirect_call(void_fn, ptr, &[], "")
+            .build_indirect_call(fn_ty, ptr, &args, name)
             .map_err(be)?;
+        if preserve_none {
+            site.set_call_convention(LLVM_CC_PRESERVE_NONE);
+        }
+
+        let mut has_gc_leaf = false;
+        match trailing_attr {
+            "" => {}
+            other if other.starts_with('"') => {
+                let (k, v) = match other.split_once("\"=\"") {
+                    Some((k, v)) => (k.trim_matches('"'), v.trim_matches('"')),
+                    None => (other.trim_matches('"'), ""),
+                };
+                if k.is_empty() {
+                    bail!("malformed inline-asm callsite string attribute `{other}`");
+                }
+                has_gc_leaf = k == "gc-leaf-function";
+                site.add_attribute(
+                    inkwell::attributes::AttributeLoc::Function,
+                    self.ctx.create_string_attribute(k, v),
+                );
+            }
+            other => bail!("unknown inline-asm callsite attribute `{other}`"),
+        }
         // Perry-emitted inline asm never calls back into the runtime, so it
         // can never reach a safepoint. Without this, RS4GC statepoint-wraps
         // the call and produces IR the verifier rejects (#8121).
-        site.add_attribute(
-            inkwell::attributes::AttributeLoc::Function,
-            self.ctx.create_string_attribute("gc-leaf-function", ""),
-        );
-        Ok(())
+        if !has_gc_leaf {
+            site.add_attribute(
+                inkwell::attributes::AttributeLoc::Function,
+                self.ctx.create_string_attribute("gc-leaf-function", ""),
+            );
+        }
+        match site.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(v) => Ok(Some(v)),
+            _ => Ok(None),
+        }
     }
 
     fn binary_or_cast(&mut self, dst: &str, op: &str, rest: &str) -> Result<BasicValueEnum<'ctx>> {
@@ -1787,6 +1849,21 @@ fn be(e: inkwell::builder::BuilderError) -> anyhow::Error {
 
 fn unquote(s: &str) -> String {
     s.trim_matches('"').to_string()
+}
+
+/// Consume one LLVM quoted string. Perry's emitted templates and constraint
+/// strings use LLVM's `\XX` byte escapes rather than embedded quote
+/// characters, so the next quote is the structural terminator and the bytes
+/// between can be passed to `create_inline_asm` unchanged.
+fn take_quoted<'a>(s: &'a str, what: &str) -> Result<(String, &'a str)> {
+    let s = s.trim_start();
+    let body = s
+        .strip_prefix('"')
+        .ok_or_else(|| anyhow!("{what} is not quoted"))?;
+    let end = body
+        .find('"')
+        .ok_or_else(|| anyhow!("unterminated {what}"))?;
+    Ok((body[..end].to_string(), &body[end + 1..]))
 }
 
 /// Find the matching `)` for the `(` at `open` in `s`.

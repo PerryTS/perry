@@ -85,6 +85,11 @@ pub(crate) fn collect_module_boxed_vars(hir: &HirModule) -> std::collections::Ha
         }
     }
     module_boxed_vars.extend(collect_boxed_vars(&hir.init));
+    // Multi-declarator lexical `for` heads live in the loop-scoped prelude
+    // because HIR has only one `For::init` slot. They still have the same
+    // fresh-binding-per-iteration capture semantics as a binding represented
+    // directly in that slot, so keep them on the snapshot-capture path.
+    module_boxed_vars.retain(|id| !hir.classic_for_lexical_bindings.contains(id));
     module_boxed_vars
 }
 

@@ -1783,6 +1783,7 @@ pub fn lower_module_full(
     }
 
     module.local_source_spans = std::mem::take(&mut ctx.local_source_spans);
+    module.classic_for_lexical_bindings = std::mem::take(&mut ctx.classic_for_lexical_bindings);
 
     Ok((module, ctx.next_class_id))
 }

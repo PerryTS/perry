@@ -1,10 +1,12 @@
 # Privacy & Telemetry
 
-Perry ships **two independent opt-in channels** for sending data home —
-nothing leaves your machine without an explicit `enabled = true` or `on` in
-`~/.perry/config.toml`. Both honour `PERRY_NO_TELEMETRY=1` and `CI=true`.
+Perry sends no telemetry unless you accept the first-run prompt (or explicitly
+set `telemetry.enabled = true` in `~/.perry/config.toml`). This setting is the
+master consent gate for every telemetry channel. If it is false or missing,
+nothing is sent, even when `compatibility_reports = "on"`. The environment
+overrides `PERRY_NO_TELEMETRY=1` and `CI=true` always win as well.
 
-## 1. Generic usage analytics — `telemetry.enabled`
+## 1. Master consent and generic usage analytics — `telemetry.enabled`
 
 Counts `perry compile`, `perry init`, `perry publish` invocations on a
 background HTTP POST. Sends: command name, platform (`darwin`/`linux`/...),
@@ -12,8 +14,9 @@ Perry version, success/error status, and an anonymous client UUID.
 
 ## 2. Compatibility reports — `telemetry.compatibility_reports` (#849)
 
-Separate opt-in for "I hit an unsupported TS/Node feature and bailed." Sends
-a structured report when the compiler emits one of these diagnostic codes:
+Additional opt-in for "I hit an unsupported TS/Node feature and bailed."
+This channel is available only while the master `enabled` consent is true.
+It sends a structured report when the compiler emits one of these diagnostic codes:
 `UnsupportedBinaryOp`, `UnsupportedExpression`, `UnsupportedStatement`,
 `DynamicPropertyAccess`, `ImplicitCoercion`, `UnresolvedImport`, `NoOpStub`.
 
@@ -64,8 +67,8 @@ To opt out at the file level, edit `~/.perry/config.toml`:
 
 ```toml
 [telemetry]
-enabled = false                  # generic analytics off
-compatibility_reports = "off"    # #849 compat reports off
+enabled = false                  # all telemetry off
+compatibility_reports = "off"    # optional; master opt-out already wins
 ```
 
 See also the [`PERRY_NO_TELEMETRY` row in the perry.toml reference](perry-toml.md).

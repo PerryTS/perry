@@ -68,6 +68,25 @@ fn debug_hir_uses_string_normalization(hir_debug: &str) -> bool {
         || hir_debug.contains("property: \"Collator\"")
 }
 
+fn debug_hir_uses_global_math_member(hir_debug: &str) -> bool {
+    // Value-form reads such as `const cos = Math.cos` lose the `Math`
+    // receiver during lowering and reach final HIR as a property read from
+    // the shared GlobalGet(0) builtin sentinel. Match every member reified by
+    // `install_math_namespace`. A same-named property on another object is a
+    // benign false positive (a slightly larger runtime), while a false
+    // negative leaves the extracted function undefined.
+    const MEMBERS: &[&str] = &[
+        "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "ceil", "clz32",
+        "cos", "cosh", "exp", "expm1", "f16round", "floor", "fround", "hypot", "imul", "log",
+        "log1p", "log2", "log10", "max", "min", "pow", "random", "round", "sign", "sin", "sinh",
+        "sqrt", "tan", "tanh", "trunc",
+    ];
+
+    MEMBERS
+        .iter()
+        .any(|member| hir_debug.contains(&format!(r#"property: "{member}""#)))
+}
+
 fn imports_fs_promises_glob(hir_module: &perry_hir::Module) -> bool {
     hir_module.imports.iter().any(|import| {
         !import.type_only
@@ -397,10 +416,18 @@ pub(super) fn detect_optional_feature_usage(
         // lower to codegen intrinsics that never touch these tables, so a
         // surviving mention of the name means the namespace may be used as a
         // VALUE (`const m = Math`, `Object.keys(JSON)`) — exactly when the
-        // members must exist. Bare-substring matching keeps this
-        // over-approximate on purpose (a user identifier containing the name
-        // only costs size).
-        if hir_debug.contains("\"Math\"") {
+        // members must exist. Math value reads lose that name entirely, so
+        // also scan its supported member names. Class bodies are stored
+        // separately from init/functions; include them for Math so an
+        // extracted method in a constructor, method, accessor, or field
+        // initializer cannot be pruned. Bare matching stays over-approximate
+        // on purpose (a false positive only costs size).
+        let class_hir_debug = format!("{:?}", &hir_module.classes);
+        if hir_debug.contains("\"Math\"")
+            || class_hir_debug.contains("\"Math\"")
+            || debug_hir_uses_global_math_member(&hir_debug)
+            || debug_hir_uses_global_math_member(&class_hir_debug)
+        {
             ctx.uses_global_math = true;
         }
         if hir_debug.contains("\"JSON\"") {
@@ -568,7 +595,7 @@ pub(super) fn detect_optional_feature_usage(
 #[cfg(test)]
 mod tests {
     use super::{
-        debug_hir_uses_get_builtin_module, debug_hir_uses_regex,
+        debug_hir_uses_get_builtin_module, debug_hir_uses_global_math_member, debug_hir_uses_regex,
         debug_hir_uses_string_normalization, debug_hir_uses_zlib_brotli, debug_hir_uses_zlib_zstd,
         imports_fs_promises_glob,
     };
@@ -642,6 +669,23 @@ mod tests {
         ));
         assert!(!debug_hir_uses_string_normalization(
             r#"StringMethod { method: "toLowerCase" }"#
+        ));
+    }
+
+    #[test]
+    fn global_math_gate_detects_extracted_members_but_not_direct_intrinsics() {
+        assert!(debug_hir_uses_global_math_member(
+            r#"PropertyGet { object: GlobalGet(0), property: "cos", optional: false }"#
+        ));
+        assert!(debug_hir_uses_global_math_member(
+            r#"PropertyGet { object: GlobalGet(0), property: "imul", optional: false }"#
+        ));
+        assert!(debug_hir_uses_global_math_member(
+            r#"PropertyGet { object: GlobalGet(0), property: "f16round", optional: false }"#
+        ));
+        assert!(!debug_hir_uses_global_math_member("MathCos(Number(0.0))"));
+        assert!(!debug_hir_uses_global_math_member(
+            r#"PropertyGet { object: GlobalGet(0), property: "stringify", optional: false }"#
         ));
     }
 

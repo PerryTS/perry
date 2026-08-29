@@ -71,6 +71,7 @@ impl LoweringContext {
         Self {
             next_local_id: 0,
             local_source_spans: HashMap::new(),
+            classic_for_lexical_bindings: HashSet::new(),
             next_global_id: 0,
             next_func_id: 0,
             next_class_id: start_class_id, // Start from the provided ID to avoid collisions across modules

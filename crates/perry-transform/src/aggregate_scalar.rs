@@ -20,7 +20,7 @@
 use std::collections::{HashMap, HashSet};
 
 use perry_hir::types::{LocalId, Type};
-use perry_hir::{Expr, Function, Module, Stmt};
+use perry_hir::{Export, Expr, Function, Module, Stmt};
 
 const MAX_SCALAR_AGGREGATE_LEN: usize = 8;
 const MAX_SCALAR_AGGREGATE_FIELDS: usize = 16;
@@ -89,6 +89,11 @@ pub fn run(module: &mut Module) {
                 .map(|member| collect_function_refs(&member.function)),
         );
     }
+    // An exported binding has consumers outside this module that cannot appear
+    // as LocalGet references in its HIR. Model that unknown consumer as one
+    // additional region so the existing cross-region escape barrier keeps the
+    // carrier materialized.
+    region_refs.push(collect_exported_local_ids(module));
     let mut reference_region_counts: HashMap<LocalId, usize> = HashMap::new();
     for refs in &region_refs {
         for id in refs {
@@ -195,6 +200,26 @@ fn collect_function_refs(function: &Function) -> HashSet<LocalId> {
     let mut refs = collect_stmt_refs(&function.body);
     refs.extend(function.captures.iter().copied());
     refs
+}
+
+fn collect_exported_local_ids(module: &Module) -> HashSet<LocalId> {
+    let mut exported_names: HashSet<&str> =
+        module.exported_objects.iter().map(String::as_str).collect();
+    exported_names.extend(module.exports.iter().filter_map(|export| match export {
+        Export::Named { local, .. } => Some(local.as_str()),
+        Export::ReExport { .. } | Export::ExportAll { .. } | Export::NamespaceReExport { .. } => {
+            None
+        }
+    }));
+
+    module
+        .init
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::Let { id, name, .. } if exported_names.contains(name.as_str()) => Some(*id),
+            _ => None,
+        })
+        .collect()
 }
 
 fn scalarize_stmts(
@@ -1711,7 +1736,7 @@ mod tests {
         }
     }
 
-    fn aggregate_fixture(observe_identity: bool) -> Module {
+    pub(super) fn aggregate_fixture(observe_identity: bool) -> Module {
         let mut module = Module::new("aggregate-scalar.ts");
         module.init = vec![
             Stmt::Let {
@@ -1822,79 +1847,6 @@ mod tests {
                 )
             }));
         }
-    }
-
-    #[test]
-    fn reference_from_generated_function_keeps_materialized_aggregate() {
-        let mut module = aggregate_fixture(false);
-        module.functions.push(Function {
-            id: 99,
-            name: "__obj_method_computed".to_string(),
-            type_params: Vec::new(),
-            params: Vec::new(),
-            return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::LocalGet(1)))],
-            is_async: false,
-            is_generator: false,
-            is_strict: false,
-            is_exported: false,
-            captures: Vec::new(),
-            decorators: Vec::new(),
-            was_plain_async: false,
-            was_unrolled: false,
-        });
-
-        run(&mut module);
-
-        assert!(module.init.iter().any(|stmt| {
-            matches!(
-                stmt,
-                Stmt::Let {
-                    id: 1,
-                    init: Some(Expr::Array(_)),
-                    ..
-                }
-            )
-        }));
-    }
-
-    #[test]
-    fn module_local_reference_from_closure_body_keeps_materialized_aggregate() {
-        let mut module = aggregate_fixture(false);
-        *module.init.last_mut().expect("observer statement") = Stmt::Expr(Expr::Closure {
-            func_id: 99,
-            params: Vec::new(),
-            return_type: Type::Any,
-            body: vec![Stmt::Return(Some(property(
-                Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(0)),
-                },
-                "component",
-            )))],
-            captures: Vec::new(),
-            mutable_captures: Vec::new(),
-            captures_this: false,
-            captures_new_target: false,
-            enclosing_class: None,
-            is_arrow: true,
-            is_async: false,
-            is_generator: false,
-            is_strict: true,
-        });
-
-        run(&mut module);
-
-        assert!(module.init.iter().any(|stmt| {
-            matches!(
-                stmt,
-                Stmt::Let {
-                    id: 1,
-                    init: Some(Expr::Array(_)),
-                    ..
-                }
-            )
-        }));
     }
 
     fn shape_new(name: &str, args: Vec<Expr>) -> Expr {
@@ -2012,3 +1964,11 @@ mod tests {
         assert!(format!("{stmts:?}").contains("__AnonShape_short"));
     }
 }
+
+#[cfg(test)]
+#[path = "aggregate_scalar_export_tests.rs"]
+mod export_tests;
+
+#[cfg(test)]
+#[path = "aggregate_scalar_closure_tests.rs"]
+mod closure_tests;

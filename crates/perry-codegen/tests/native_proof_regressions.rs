@@ -123,6 +123,7 @@ fn module_with_classes_and_params(
             was_unrolled: false,
         }],
         init: Vec::new(),
+        classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),
         exported_objects: Vec::new(),
@@ -2557,6 +2558,132 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
                 && record_has_raw_f64_layout_fact(record, "rejected_facts", "rejected")
         }),
         "expected packed store side-exit fallback evidence:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn masked_window_dense_store_inlines_raw_store_without_calls() {
+    // `for (let i = 0; i < 64; i++) a[i & 7] = i` — a masked static-window
+    // store whose RHS is the canonical-i32 counter. The dense range loop must
+    // admit it: ONE f64 dense guard at entry (never the i32 tier — a store
+    // could break its all-slots-i32 loading proof), and a fast clone whose
+    // store is a bare in-window `store double` with NO per-store runtime
+    // call, no value check, no barrier.
+    let bitand = |left: Expr, right: Expr| Expr::Binary {
+        op: BinaryOp::BitAnd,
+        left: Box::new(left),
+        right: Box::new(right),
+    };
+    let module = module_with_classes_and_params(
+        "masked_window_dense_store.ts",
+        Vec::new(),
+        Vec::new(),
+        Type::Number,
+        vec![
+            number_array_let(1, "values", vec![1, 2, 3, 4, 5, 6, 7, 8]),
+            for_loop(
+                4,
+                int(64),
+                vec![array_set(1, bitand(local(4), int(7)), local(4))],
+            ),
+            Stmt::Return(Some(index_get(1, int(0)))),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_packed_f64_range_loop_guard_dense"),
+        "masked store loop should get the f64 dense range guard:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i32 @js_typed_feedback_packed_f64_range_loop_guard_dense_i32"),
+        "a store-admitting dense loop must skip the i32 guard tier:\n{ir}"
+    );
+    // Line-anchored: label REFERENCES (`br label %for.packed_f64_range_fast...`)
+    // appear mid-line long before the block definitions, which start at
+    // column 0.
+    let fast_start = ir
+        .find("\nfor.packed_f64_range_fast")
+        .map(|pos| pos + 1)
+        .expect("expected dense fast clone");
+    let fast_region_end = ir[fast_start..]
+        .find("\nfor.packed_f64_range_slow")
+        .map(|off| fast_start + off)
+        .unwrap_or(ir.len());
+    let fast_clone = &ir[fast_start..fast_region_end];
+    for forbidden in [
+        "js_typed_feedback_numeric_array_index_set_guard",
+        "js_typed_feedback_array_set_f64_extend",
+        "js_array_numeric_value_to_raw_f64",
+        "js_dyn_index_set_strict",
+        "js_write_barrier",
+    ] {
+        assert!(
+            !fast_clone.contains(forbidden),
+            "dense fast clone must not call {forbidden}:\n{fast_clone}\n\n{ir}"
+        );
+    }
+    assert!(
+        fast_clone.contains("store double"),
+        "dense fast clone should store raw doubles inline:\n{fast_clone}\n\n{ir}"
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "MaskedWindowStore"
+                && record["consumer"] == "packed_f64_masked_window_store"
+                && record["access_mode"] == "checked_native"
+                && record_has_raw_f64_layout_fact(record, "consumed_facts", "consumed")
+        }),
+        "expected a checked masked-window store record:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn masked_window_dense_store_rejects_unproven_rhs() {
+    // Same loop, but the RHS is a plain number PARAMETER — numeric by type
+    // yet potentially INT32-boxed at runtime, and dense mode has no side
+    // exits to catch that. The matcher must refuse the store (no
+    // masked-store record, no dense store admission); the store keeps a
+    // guarded/generic lowering instead.
+    let bitand = |left: Expr, right: Expr| Expr::Binary {
+        op: BinaryOp::BitAnd,
+        left: Box::new(left),
+        right: Box::new(right),
+    };
+    let module = module_with_classes_and_params(
+        "masked_window_dense_store_reject.ts",
+        Vec::new(),
+        vec![Param {
+            id: 9,
+            name: "v".to_string(),
+            ty: Type::Number,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }],
+        Type::Number,
+        vec![
+            number_array_let(1, "values", vec![1, 2, 3, 4, 5, 6, 7, 8]),
+            for_loop(
+                4,
+                int(64),
+                vec![array_set(1, bitand(local(4), int(7)), local(9))],
+            ),
+            Stmt::Return(Some(index_get(1, int(0)))),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        !records
+            .iter()
+            .any(|record| record["expr_kind"] == "MaskedWindowStore"),
+        "an unproven RHS must not reach the masked-window raw store:\n{artifact:#}"
     );
 }
 
@@ -7931,6 +8058,7 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
             },
         ],
         init: Vec::new(),
+        classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),
         exported_objects: Vec::new(),
@@ -8106,6 +8234,7 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
             },
         ],
         init: Vec::new(),
+        classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),
         exported_objects: Vec::new(),
@@ -8199,6 +8328,7 @@ fn typed_string_clone_test_module(case: &str) -> Module {
             },
         ],
         init: Vec::new(),
+        classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),
         exported_objects: Vec::new(),
@@ -8314,6 +8444,7 @@ fn typed_i1_numeric_predicate_module() -> Module {
             },
         ],
         init: Vec::new(),
+        classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),
         exported_objects: Vec::new(),
@@ -8392,6 +8523,7 @@ fn typed_i1_i32_predicate_module() -> Module {
             },
         ],
         init: Vec::new(),
+        classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),
         exported_objects: Vec::new(),
@@ -8519,6 +8651,7 @@ fn typed_i32_return_module(case: &str) -> Module {
             },
         ],
         init: Vec::new(),
+        classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),
         exported_objects: Vec::new(),

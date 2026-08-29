@@ -1321,6 +1321,8 @@ fn finish_revalidated_read(
         .phi(DOUBLE, &[(&direct, &direct_end), (&generic, &fallback_end)])
 }
 
+use super::stable_packed_accumulator::collect_numeric_accumulators;
+
 pub(crate) fn has_numeric_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     let Expr::IndexGet { object, index } = expr else {
         return false;
@@ -1598,6 +1600,41 @@ pub(super) fn lower(
     } else {
         None
     };
+    // Reduce accumulators: one tag test each here in the fast preheader (the
+    // induction base case), then the fact below carries the proof through the
+    // fast clone so `s += arr[counter]` lowers to a native `fadd`. Admission
+    // requires `numeric_elements` — without the element proof the accumulator
+    // walk's `array[counter]` leaf has nothing to stand on.
+    let numeric_accumulators = if candidate.numeric_elements {
+        collect_numeric_accumulators(ctx, body, candidate.array_id, candidate.counter_id)
+    } else {
+        Vec::new()
+    };
+    if !numeric_accumulators.is_empty() {
+        let mut all_numbers: Option<String> = None;
+        for id in &numeric_accumulators {
+            let slot = ctx
+                .locals
+                .get(id)
+                .cloned()
+                .expect("admitted accumulator has a plain slot");
+            let value = ctx.block().load(DOUBLE, &slot);
+            let is_number = super::loops::emit_js_value_is_number(ctx, &value);
+            all_numbers = Some(match all_numbers {
+                Some(prev) => ctx.block().and(I1, &prev, &is_number),
+                None => is_number,
+            });
+        }
+        let all_numbers = all_numbers.expect("at least one accumulator");
+        let acc_ok_idx = ctx.new_block("stable_packed.acc.ok");
+        let acc_ok_label = ctx.block_label(acc_ok_idx);
+        // A non-Number accumulator (a string total, a BigInt) takes the slow
+        // clone before the first fast iteration; nothing has run yet, so the
+        // slow clone sees pristine state.
+        ctx.block()
+            .cond_br(&all_numbers, &acc_ok_label, &slow_pre_label);
+        ctx.current_block = acc_ok_idx;
+    }
     let revalidation_dirty_slot = candidate
         .nested_requires_access_revalidation
         .then(|| ctx.func.alloca_entry(I1));
@@ -1653,6 +1690,7 @@ pub(super) fn lower(
             .map(|installed| installed.common_length.clone()),
         u32_out_of_bounds_label: None,
         numeric_access,
+        numeric_accumulators,
         derived_locals: std::collections::HashSet::new(),
         u32_view_derived_locals: std::collections::HashMap::new(),
     });
