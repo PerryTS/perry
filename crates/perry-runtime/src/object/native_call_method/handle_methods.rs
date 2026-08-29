@@ -804,6 +804,22 @@ pub(super) unsafe fn dispatch_handle(
                     ),
                 );
             }
+            // #9068: Array/Map/Set/String iterator objects expose lazy helper
+            // methods through Iterator.prototype. Their class-id dispatchers
+            // only implement protocol methods (`next`, `return`, ...), so route
+            // helper names through the wrapper before those early-return arms.
+            if crate::array::is_builtin_iterator_class_id(obj as usize) {
+                if let Some(result) =
+                    crate::iterator_helpers::maybe_dispatch_helper_on_builtin_iterator(
+                        obj as *mut ObjectHeader,
+                        method_name,
+                        args_ptr,
+                        args_len,
+                    )
+                {
+                    return Some(result);
+                }
+            }
             // Issue #1206: Buffer iterators returned from `buf.values()` etc.
             // have a dedicated class id so `.next()` lands here and dispatches
             // to the iterator-protocol helper without paying the generic

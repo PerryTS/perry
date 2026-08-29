@@ -2109,6 +2109,11 @@
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "ITERATOR_HELPER_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
       "name": "ITERATOR_PROTOTYPE_PTR_SLOT"
     },
     {

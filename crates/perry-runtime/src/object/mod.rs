@@ -1241,9 +1241,9 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     }
     async_generator_queue::scan_async_generator_queue_roots_mut(visitor);
     collection_proto_thunks::scan_builtin_collection_method_roots_mut(visitor);
-    // Shared `%IteratorPrototype%`-style singletons for Array/Map/Set/String
-    // iterator objects. Each iterator instance's `[[Prototype]]` points here, so
-    // these must stay live for the lifetime of any iterator.
+    // Shared `%IteratorPrototype%`-style singletons for builtin iterator
+    // objects. Each iterator instance's `[[Prototype]]` points here, so these
+    // must stay live for the lifetime of any iterator.
     for slot in [
         &iterator_prototypes::ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::ARRAY_ITERATOR_PROTOTYPE_PTR,
@@ -1251,6 +1251,7 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         &iterator_prototypes::SET_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
+        &iterator_prototypes::ITERATOR_HELPER_PROTOTYPE_PTR,
     ] {
         slot.with_slot(|slot| {
             visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);

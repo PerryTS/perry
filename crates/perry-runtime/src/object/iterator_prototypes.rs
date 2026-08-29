@@ -1,5 +1,6 @@
 //! Shared `%IteratorPrototype%`-style prototype singletons for the built-in
-//! iterator objects (Array / Map / Set / String iterators).
+//! iterator objects (Array / Map / Set / String / RegExp-string / Iterator
+//! Helper iterators).
 //!
 //! test262's `verifyProperty` suite (built-ins/{Array,Map,Set,String}
 //! IteratorPrototype) requires that:
@@ -47,6 +48,7 @@ crate::perry_thread_local! {
     static SET_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static STRING_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
     static REGEXP_STRING_ITERATOR_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
+    static ITERATOR_HELPER_PROTOTYPE_PTR_SLOT: AtomicI64 = const { AtomicI64::new(0) };
 }
 
 pub(crate) static ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
@@ -61,6 +63,24 @@ pub(crate) static STRING_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
     super::RealmAtomicI64::new(&STRING_ITERATOR_PROTOTYPE_PTR_SLOT);
 pub(crate) static REGEXP_STRING_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
     super::RealmAtomicI64::new(&REGEXP_STRING_ITERATOR_PROTOTYPE_PTR_SLOT);
+pub(crate) static ITERATOR_HELPER_PROTOTYPE_PTR: super::RealmAtomicI64 =
+    super::RealmAtomicI64::new(&ITERATOR_HELPER_PROTOTYPE_PTR_SLOT);
+
+/// Resolve and validate the implicit-`this` object shared by the family
+/// prototype thunks. Keeping the raw-address probe here gives both the generic
+/// family dispatcher and the helper-specific brand check one audited path.
+unsafe fn implicit_this_iterator_object() -> Option<*mut ObjectHeader> {
+    let this = super::js_implicit_this_get();
+    let jv = JSValue::from_bits(this.to_bits());
+    if !jv.is_pointer() {
+        return None;
+    }
+    let obj = jv.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    if obj.is_null() || !super::is_valid_obj_ptr(obj as *const u8) {
+        return None;
+    }
+    Some(obj)
+}
 
 /// Dispatch `method` on the implicit-`this` iterator instance, routing by class
 /// id to the matching existing iterator dispatcher. Shared by the per-family
@@ -69,15 +89,9 @@ pub(crate) static REGEXP_STRING_ITERATOR_PROTOTYPE_PTR: super::RealmAtomicI64 =
 /// throw when `this` is not a recognized iterator (test262 `this-not-object` /
 /// `does-not-have-...-internal-slots` brand checks).
 unsafe fn dispatch_on_implicit_this(method: &str) -> f64 {
-    let this = super::js_implicit_this_get();
-    let jv = JSValue::from_bits(this.to_bits());
-    if !jv.is_pointer() {
+    let Some(obj) = implicit_this_iterator_object() else {
         return brand_type_error(method);
-    }
-    let obj = jv.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
-    if obj.is_null() || !super::is_valid_obj_ptr(obj as *const u8) {
-        return brand_type_error(method);
-    }
+    };
     let class_id = (*obj).class_id;
     // The `_builtin` variants skip the own-`next` override probe (#9019):
     // these thunks ARE the canonical prototype `next` functions, so invoking
@@ -143,6 +157,24 @@ extern "C" fn regexp_string_iterator_next_thunk(
     unsafe { dispatch_on_implicit_this("next") }
 }
 
+/// `%Iterator Helper Prototype%.next` has a helper-specific brand check. Use
+/// the intrinsic algorithm directly rather than the general method dispatcher:
+/// a saved/bound canonical method must not re-enter a later `next` override.
+extern "C" fn iterator_helper_next_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    unsafe {
+        let Some(obj) = implicit_this_iterator_object() else {
+            return brand_type_error("next");
+        };
+        if (*obj).class_id != crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID {
+            return brand_type_error("next");
+        }
+        crate::iterator_helpers::iterator_helper_next_builtin(obj)
+    }
+}
+
 /// `%IteratorPrototype%[Symbol.iterator]()` returns `this` (the iterator).
 extern "C" fn iterator_proto_symbol_iterator_thunk(
     _c: *const crate::closure::ClosureHeader,
@@ -199,6 +231,8 @@ fn build_iterator_prototypes() {
         "RegExp String Iterator",
         shared,
     );
+    let iterator_helper_proto =
+        build_family_proto(iterator_helper_next_thunk, "Iterator Helper", shared);
 
     ITERATOR_PROTOTYPE_PTR.store(shared as i64, Ordering::Release);
     ARRAY_ITERATOR_PROTOTYPE_PTR.store(array_proto as i64, Ordering::Release);
@@ -206,6 +240,7 @@ fn build_iterator_prototypes() {
     SET_ITERATOR_PROTOTYPE_PTR.store(set_proto as i64, Ordering::Release);
     STRING_ITERATOR_PROTOTYPE_PTR.store(string_proto as i64, Ordering::Release);
     REGEXP_STRING_ITERATOR_PROTOTYPE_PTR.store(regexp_string_proto as i64, Ordering::Release);
+    ITERATOR_HELPER_PROTOTYPE_PTR.store(iterator_helper_proto as i64, Ordering::Release);
 }
 
 /// Install `[Symbol.iterator]` on the shared parent as a real method whose
@@ -319,6 +354,7 @@ pub(crate) fn iterator_prototype_for_class_id(class_id: u32) -> Option<f64> {
         crate::collection_iter_object::SET_ITERATOR_CLASS_ID => &SET_ITERATOR_PROTOTYPE_PTR,
         crate::string::STRING_ITERATOR_CLASS_ID => &STRING_ITERATOR_PROTOTYPE_PTR,
         crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID => &REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
+        crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID => &ITERATOR_HELPER_PROTOTYPE_PTR,
         _ => return None,
     };
     let ptr = slot.load(Ordering::Acquire);
@@ -344,6 +380,7 @@ pub(crate) fn attach_iterator_prototype(obj_ptr: *mut ObjectHeader, class_id: u3
         crate::collection_iter_object::SET_ITERATOR_CLASS_ID => &SET_ITERATOR_PROTOTYPE_PTR,
         crate::string::STRING_ITERATOR_CLASS_ID => &STRING_ITERATOR_PROTOTYPE_PTR,
         crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID => &REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
+        crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID => &ITERATOR_HELPER_PROTOTYPE_PTR,
         _ => return,
     };
     let proto_ptr = slot.load(Ordering::Acquire);

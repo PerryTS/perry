@@ -207,15 +207,13 @@ fn chain_roots_at_stream(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
     }
 }
 
-/// #2874: does this expression's method chain originate from
-/// `Iterator.from(...)` (optionally through lazy helpers `map`/`filter`/
-/// `take`/`drop`/`flatMap`)? Such a chain yields a lazy iterator-helper
-/// OBJECT, not an array, so it must NOT be folded into `Expr::Array<Method>`
-/// ops — `js_array_map` would read garbage out of the helper's header. Keep it
-/// on dynamic dispatch so `dispatch_iterator_helper_method` runs. Mirrors
-/// `chain_roots_at_stream`; AST-only (no type info), so it catches the common
-/// inline-chain form.
-fn chain_roots_at_iterator_from(expr: &ast::Expr) -> bool {
+/// #2874 / #9068: does this expression's method chain originate from a builtin
+/// iterator producer (`Iterator.from(...)` or an Array's `.values()` / `.keys()`
+/// / `.entries()`), optionally through lazy iterator helpers? Such a chain
+/// yields an iterator OBJECT, not an array, so it must NOT be folded into
+/// `Expr::Array<Method>` ops. Keep it on dynamic dispatch so the iterator-helper
+/// dispatcher runs. Mirrors `chain_roots_at_stream`.
+fn chain_roots_at_builtin_iterator(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
     let expr = unwrap_transparent_expr(expr);
     let ast::Expr::Call(call) = expr else {
         return false;
@@ -235,8 +233,14 @@ fn chain_roots_at_iterator_from(expr: &ast::Expr) -> bool {
             unwrap_transparent_expr(m.obj.as_ref()),
             ast::Expr::Ident(i) if i.sym.as_ref() == "Iterator"
         ),
+        // Array iterator factories are lazy iterator objects. Require a proven
+        // Array root so a user object's unrelated `values()` method is not
+        // captured by this builtin-only guard.
+        "values" | "keys" | "entries" => chain_roots_at_array(ctx, &m.obj),
         // Lazy helpers preserve the helper — recurse into the receiver.
-        "map" | "filter" | "take" | "drop" | "flatMap" => chain_roots_at_iterator_from(&m.obj),
+        "map" | "filter" | "take" | "drop" | "flatMap" => {
+            chain_roots_at_builtin_iterator(ctx, &m.obj)
+        }
         _ => false,
     }
 }
@@ -624,7 +628,7 @@ pub(super) fn try_array_only_methods(
                 // dynamic dispatch so the runtime's iterator-helper stubs run.
                 let recv_is_class = recv_is_class
                     || chain_roots_at_stream(ctx, member_obj)
-                    || chain_roots_at_iterator_from(member_obj)
+                    || chain_roots_at_builtin_iterator(ctx, member_obj)
                     || is_util_mime_params_receiver(ctx, member_obj);
                 // thisArg routing: the dense `Expr::Array<Method>` fast paths
                 // carry only the callback and silently drop a 2nd positional

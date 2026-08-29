@@ -1101,11 +1101,11 @@ fn infers_array_methods_from_receiver_facts() {
     );
     assert_eq!(
         infer_expr_type(&Expr::ArrayValues(Box::new(Expr::LocalGet(1))), &env),
-        Type::Array(Box::new(Type::String))
+        Type::Object(Default::default())
     );
     assert_eq!(
         infer_expr_type(&Expr::ArrayEntries(Box::new(Expr::LocalGet(1))), &env),
-        Type::Array(Box::new(Type::Tuple(vec![Type::Number, Type::String])))
+        Type::Object(Default::default())
     );
     assert_eq!(
         infer_expr_type(

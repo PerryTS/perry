@@ -221,6 +221,11 @@ unsafe fn alloc_helper(op: i32, source: f64, arg: f64) -> f64 {
         _ => f64::from_bits(TAG_UNDEFINED),
     };
     js_object_set_field(obj, 3, JSValue::from_bits(state.to_bits()));
+    // Helper objects have their own `%Iterator Helper Prototype%`, whose
+    // intrinsic `next` is readable as a function value. This also gives every
+    // helper the shared `%IteratorPrototype%` parent used by the other builtin
+    // iterator families.
+    crate::object::attach_iterator_prototype(obj, ITERATOR_HELPER_CLASS_ID);
     js_nanbox_pointer(obj as i64)
 }
 
@@ -346,6 +351,14 @@ unsafe fn helper_next(obj: *mut ObjectHeader) -> f64 {
     }
 }
 
+/// Run the intrinsic `Iterator Helper.prototype.next` algorithm without
+/// consulting instance or prototype overrides. The canonical prototype thunk
+/// uses this entry point so a saved `helper.next.bind(helper)` keeps advancing
+/// the helper it captured even if user code later replaces a `next` property.
+pub(crate) unsafe fn iterator_helper_next_builtin(obj: *mut ObjectHeader) -> f64 {
+    helper_next(obj)
+}
+
 /// Drain the helper iterator fully into a `*mut ArrayHeader` (NaN-box yourself).
 unsafe fn helper_to_array(obj: *mut ObjectHeader) -> f64 {
     let mut arr = crate::array::js_array_alloc(8);
@@ -415,6 +428,31 @@ pub unsafe fn maybe_dispatch_helper_on_iterator(
     }
     let self_f64 = js_nanbox_pointer(obj as i64);
     let wrapped = js_iterator_from(self_f64);
+    let wrapped_ptr = js_nanbox_get_pointer(wrapped) as *mut ObjectHeader;
+    Some(dispatch_iterator_helper_method(
+        wrapped_ptr,
+        method_name,
+        args_ptr,
+        args_len,
+    ))
+}
+
+/// Dispatch an iterator-helper method on a runtime builtin iterator object.
+/// The native iterator class-id arms normally handle protocol methods such as
+/// `next` directly; helper names must instead wrap that iterator and enter the
+/// lazy helper dispatcher. Callers have already verified the builtin iterator
+/// class id before reaching this function.
+pub unsafe fn maybe_dispatch_helper_on_builtin_iterator(
+    obj: *mut ObjectHeader,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    if !is_iterator_helper_method(method_name) {
+        return None;
+    }
+    let source = js_nanbox_pointer(obj as i64);
+    let wrapped = js_iterator_from(source);
     let wrapped_ptr = js_nanbox_get_pointer(wrapped) as *mut ObjectHeader;
     Some(dispatch_iterator_helper_method(
         wrapped_ptr,

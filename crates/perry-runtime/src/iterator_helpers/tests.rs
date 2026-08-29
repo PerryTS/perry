@@ -230,6 +230,88 @@ fn iterator_from_on_an_existing_helper_returns_it_unchanged() {
 }
 
 #[test]
+fn helper_inherits_a_callable_next_from_its_shared_prototype() {
+    unsafe {
+        let h = helper_over(&[1.0]);
+        let obj = crate::value::js_nanbox_get_pointer(h) as *const ObjectHeader;
+        let expected = crate::object::iterator_prototype_for_class_id(ITERATOR_HELPER_CLASS_ID)
+            .expect("iterator-helper class id must have a prototype");
+        assert_eq!(
+            crate::object::prototype_chain::object_static_prototype(obj as usize),
+            Some(expected.to_bits()),
+            "a helper allocation must attach the helper-family prototype"
+        );
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(h).to_bits(),
+            expected.to_bits(),
+            "Object.getPrototypeOf(helper) must return the helper-family prototype"
+        );
+
+        let next_key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
+        let next = crate::object::js_object_get_field_by_name(obj, next_key);
+        let next_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(next.bits()));
+        assert!(
+            crate::closure::is_closure_ptr(next_ptr as usize),
+            "helper.next must resolve to a callable inherited method"
+        );
+    }
+}
+
+#[test]
+fn helper_created_from_a_raw_iterator_inherits_the_same_next() {
+    unsafe {
+        let array = number_array(&[1.0]);
+        let array_iter = crate::array::array_values_iter(array);
+        let helper = tower(array_iter, "map", &[closure1(double_it)]);
+        let obj = crate::value::js_nanbox_get_pointer(helper) as *const ObjectHeader;
+        assert_eq!((*obj).class_id, ITERATOR_HELPER_CLASS_ID);
+
+        let expected = crate::object::iterator_prototype_for_class_id(ITERATOR_HELPER_CLASS_ID)
+            .expect("iterator-helper class id must have a prototype");
+        assert_eq!(
+            crate::object::prototype_chain::object_static_prototype(obj as usize),
+            Some(expected.to_bits()),
+            "raw-iterator helper dispatch must preserve the helper prototype"
+        );
+        let next_key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
+        let next = crate::object::js_object_get_field_by_name(obj, next_key);
+        let next_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(next.bits()));
+        assert!(crate::closure::is_closure_ptr(next_ptr as usize));
+    }
+}
+
+#[test]
+fn helper_next_rejects_a_non_helper_iterator_receiver() {
+    unsafe {
+        let array_iter = crate::array::array_values_iter(number_array(&[9.0]));
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let array_iter_h = scope.root_nanbox_f64(array_iter);
+
+        let helper = helper_over(&[1.0]);
+        let helper_obj = crate::value::js_nanbox_get_pointer(helper) as *const ObjectHeader;
+        let next_key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
+        let next = crate::object::js_object_get_field_by_name(helper_obj, next_key);
+        let next_h = scope.root_nanbox_f64(f64::from_bits(next.bits()));
+
+        // This is the runtime equivalent of `helper.next.call(arrayIter)`. The
+        // canonical helper method must enforce the Iterator Helper brand; it
+        // cannot fall through to the array iterator's own `next` algorithm.
+        let rebound = crate::closure::clone_closure_rebind_this(
+            next_h.get_nanbox_u64(),
+            array_iter_h.get_nanbox_f64(),
+        );
+        let rebound_h = scope.root_nanbox_f64(f64::from_bits(rebound));
+        let result = crate::exception::js_call_catching(|| {
+            crate::closure::js_native_call_value(rebound_h.get_nanbox_f64(), std::ptr::null(), 0)
+        });
+        assert!(
+            result.is_err(),
+            "%Iterator Helper Prototype%.next must throw on an array iterator receiver"
+        );
+    }
+}
+
+#[test]
 fn map_returns_a_helper_and_transforms_lazily() {
     unsafe {
         let m = tower(helper_over(&[1.0, 2.0, 3.0]), "map", &[closure1(double_it)]);

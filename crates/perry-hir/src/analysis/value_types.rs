@@ -778,12 +778,13 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         Expr::ArrayReverseValue { receiver } | Expr::ArrayCopyWithinValue { receiver, .. } => {
             infer_expr_type(receiver, env)
         }
-        Expr::ArrayEntries(array) => Type::Array(Box::new(Type::Tuple(vec![
-            Type::Number,
-            array_element_type_from_expr(array, env),
-        ]))),
-        Expr::ArrayKeys(_) => Type::Array(Box::new(Type::Number)),
-        Expr::ArrayValues(array) => array_type_from_expr(array, env),
+        // These HIR nodes lower to real `.next()`-bearing Array Iterator
+        // objects, not eager arrays (#2384). Keeping an Array type here makes
+        // codegen devirtualize chained helper calls such as
+        // `[1].values().map(f)` back into `Array.prototype.map` (#9068).
+        Expr::ArrayEntries(_) | Expr::ArrayKeys(_) | Expr::ArrayValues(_) => {
+            Type::Object(ObjectType::default())
+        }
         Expr::ArrayPop(array_id) | Expr::ArrayShift(array_id) => {
             optional_type(array_element_type_from_local(*array_id, env))
         }

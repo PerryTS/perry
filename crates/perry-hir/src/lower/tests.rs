@@ -52,6 +52,25 @@ fn array_inference_is_revoked_after_plain_object_assignment() {
 }
 
 #[test]
+fn array_iterator_helper_chain_is_not_lowered_as_array_map() {
+    let source = "const helper = [1, 2].values().map((x) => x * 2);";
+    let module =
+        perry_parser::parse_typescript(source, "iterator-helper-map.ts").expect("source parses");
+    let hir = super::lower_module(&module, "iterator-helper-map", "iterator-helper-map.ts")
+        .expect("source lowers");
+    let dump = format!("{hir:#?}");
+
+    assert!(
+        dump.contains("ArrayValues"),
+        "the Array iterator producer must remain in the lowered chain: {dump}"
+    );
+    assert!(
+        !dump.contains("ArrayMap"),
+        "an iterator's `.map()` must use dynamic helper dispatch, not Array.prototype.map: {dump}"
+    );
+}
+
+#[test]
 fn local_declaration_span_survives_ast_to_hir_lowering() {
     let source = "function build() {\n  const boxed = makeValue();\n  return boxed;\n}\n";
     let module = perry_parser::parse_typescript(source, "span.ts").expect("source parses");

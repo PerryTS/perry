@@ -363,6 +363,21 @@ pub(super) unsafe fn dispatch_raw_pointer(
                     ),
                 );
             }
+            // #9068: raw-pointer builtin iterators need lazy helper methods to
+            // enter the iterator-helper dispatcher before their protocol-only
+            // class-id dispatchers return `undefined` for the method name.
+            if crate::array::is_builtin_iterator_class_id(obj as usize) {
+                if let Some(result) =
+                    crate::iterator_helpers::maybe_dispatch_helper_on_builtin_iterator(
+                        obj as *mut ObjectHeader,
+                        method_name,
+                        args_ptr,
+                        args_len,
+                    )
+                {
+                    return Some(result);
+                }
+            }
             // Issue #1206: same class-id check as the NaN-boxed path above
             // so a raw-pointer iterator value (uncommon, but possible after
             // a bitcast) still routes through the iterator dispatcher.

@@ -1743,9 +1743,9 @@ pub enum Expr {
         start: Box<Expr>,
         end: Option<Box<Expr>>,
     }, // Array.prototype.copyWithin.call(arrayLike, target, start, end?) -> same receiver
-    ArrayEntries(Box<Expr>), // arr.entries() -> Array<[index, value]> (eager materialization)
-    ArrayKeys(Box<Expr>),    // arr.keys() -> Array<index>
-    ArrayValues(Box<Expr>),  // arr.values() -> Array<value> (essentially clone)
+    ArrayEntries(Box<Expr>), // arr.entries() -> Array Iterator object
+    ArrayKeys(Box<Expr>),    // arr.keys() -> Array Iterator object
+    ArrayValues(Box<Expr>),  // arr.values() -> Array Iterator object
 
     /// `Array.prototype.<method>.call/apply(receiver, ...args)` (and the
     /// bound-local form `const m = [].map; m.call(receiver, ...)`) dispatched

@@ -435,11 +435,14 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::ArrayWith { .. }
         | Expr::ObjectValues(_)
         | Expr::ObjectEntries(_)
-        | Expr::ArrayEntries { .. }
-        | Expr::ArrayKeys { .. }
-        | Expr::ArrayValues { .. }
         | Expr::StringMatch { .. } => hir_inferred_refinable_type(ctx, init)
             .or_else(|| Some(HirType::Array(Box::new(HirType::Any)))),
+        // #9068: these are iterator objects, despite their Array-producing
+        // receivers. Refining them to Array makes a later `.map()` emit
+        // `js_array_map` against the iterator object's header.
+        Expr::ArrayEntries { .. } | Expr::ArrayKeys { .. } | Expr::ArrayValues { .. } => {
+            Some(HirType::Object(Default::default()))
+        }
         Expr::StringMatchAll { .. } => Some(HirType::Any),
         // TextEncoder.encode(str) — runtime returns a BufferHeader with
         // packed u8 bytes (same shape as `new Uint8Array([...])`). Refining

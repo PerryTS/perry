@@ -192,6 +192,10 @@ pub(crate) fn test_realm_owned_root_snapshot() -> Vec<(&'static str, usize, u64)
             "REGEXP_STRING_ITERATOR_PROTOTYPE_PTR",
             &iterator_prototypes::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
         ),
+        (
+            "ITERATOR_HELPER_PROTOTYPE_PTR",
+            &iterator_prototypes::ITERATOR_HELPER_PROTOTYPE_PTR,
+        ),
     ] {
         roots.push((
             name,
