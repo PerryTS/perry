@@ -25,18 +25,32 @@ pub(crate) unsafe fn ensure_key_in_keys_array(
         }};
     }
     // If no keys array exists, create one with this key.
-    let keys = crate::object::object_keys_array(obj);
+    let mut keys = crate::object::object_keys_array(obj);
     if keys.is_null() {
-        let new_keys = crate::array::js_array_alloc(4);
-        refresh_define_property_roots!();
-        let new_keys = crate::array::js_array_push(new_keys, JSValue::string_ptr(key as *mut _));
-        refresh_define_property_roots!();
-        set_object_keys_array(obj, new_keys);
-        if crate::object::object_live_slot_count(obj) == 0 {
-            set_object_live_slot_count(obj, 1);
+        // #9019: a reserved-layout iterator receiver seeds its floor of
+        // tombstones first, so a defineProperty key (this arm also serves
+        // accessor installs, which claim a keys slot with no data write)
+        // can never take a raw internal field's index. The seeded receiver
+        // then falls through to the ordinary existing-keys append below.
+        if crate::object::reserved_slot_floor_for_class_id((*obj).class_id) != 0
+            && crate::object::ensure_reserved_floor_keys(obj)
+        {
+            refresh_define_property_roots!();
+            keys = crate::object::object_keys_array(obj);
+        } else {
+            let new_keys = crate::array::js_array_alloc(4);
+            refresh_define_property_roots!();
+            let new_keys =
+                crate::array::js_array_push(new_keys, JSValue::string_ptr(key as *mut _));
+            refresh_define_property_roots!();
+            set_object_keys_array(obj, new_keys);
+            if crate::object::object_live_slot_count(obj) == 0 {
+                set_object_live_slot_count(obj, 1);
+            }
+            return;
         }
-        return;
     }
+    let keys = keys;
     // Validate keys array pointer. The bare high-bits/low-address checks let
     // through values that are non-null and tag-free yet still not real heap
     // pointers (e.g. a stray `0x20_0000_0203` left in a miscompiled object's
