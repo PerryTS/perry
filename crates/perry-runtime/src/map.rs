@@ -1454,6 +1454,10 @@ unsafe fn compact_map_entries(map: *mut MapHeader) {
             continue;
         }
         if out != i {
+            // GC_STORE_AUDIT(EXTERNAL_BARRIERED): the dirty-span barrier below
+            // covers every surviving slot this pass writes. Overlap-safe by
+            // construction -- `out <= i` always, so a live pair only ever moves
+            // DOWN within the one buffer, never onto an unread source.
             ptr::write(entries.add(out * 2), key);
             ptr::write(entries.add(out * 2 + 1), ptr::read(entries.add(i * 2 + 1)));
         }

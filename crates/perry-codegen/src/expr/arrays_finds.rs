@@ -91,6 +91,18 @@ use super::index_get::numeric_index_has_integer_array_index_proof;
 /// other shape — a subclass instance, a plain object, an out-of-range or
 /// negative index, an unpublished handle — takes the runtime helper exactly
 /// as before, so the two paths are equivalent by construction.
+/// Byte offset of `MapHeader::used`, which the tombstoned-delete lane loads to
+/// check `used == size` (no holes) before admitting a raw entry read.
+///
+/// `perry-codegen` does not depend on `perry-runtime`, so nothing binds this
+/// literal to the struct it describes. The runtime pins the offset with an
+/// `offset_of!` assertion, which catches a field REORDER — but the natural fix
+/// for that assertion is to update its expected value, which leaves this string
+/// stale and still compiling, and generated code would then load the wrong word
+/// of the header. `map_header_used_offset_is_what_codegen_assumes` ties the two
+/// together by reading the runtime source, exactly as `hot_tls.rs` does.
+const MAP_HEADER_USED_OFFSET: &str = "32";
+
 fn lower_map_entry_at_inline(
     ctx: &mut FnCtx<'_>,
     m_box: &str,
@@ -150,7 +162,7 @@ fn lower_map_entry_at_inline(
         // dense-correct with no holes present, so a holey map falls back to
         // the runtime helper — which compacts, after which this admission
         // holds again (the lane self-heals).
-        let used_addr = blk.add(I64, &m_handle, "32");
+        let used_addr = blk.add(I64, &m_handle, MAP_HEADER_USED_OFFSET);
         let used_ptr = blk.inttoptr(I64, &used_addr);
         let used = blk.load(I32, &used_ptr);
         let dense = blk.icmp_eq(I32, &used, &size);
@@ -1429,5 +1441,30 @@ pub(crate) fn lower(
         // through to the previous stub behavior so the program at
         // least compiles. Those cases need their own follow-up.
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
+    }
+}
+
+#[cfg(test)]
+mod map_header_layout_tests {
+    /// The offset the runtime pins with `offset_of!(MapHeader, used) == N`.
+    fn runtime_map_used_offset() -> usize {
+        let src = include_str!("../../../perry-runtime/src/map.rs");
+        let needle = "offset_of!(MapHeader, used) == ";
+        let rest = src
+            .split_once(needle)
+            .expect("MapHeader::used offset assertion not found in map.rs - was it renamed?")
+            .1;
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().expect("offset is a decimal literal")
+    }
+
+    #[test]
+    fn map_header_used_offset_is_what_codegen_assumes() {
+        assert_eq!(
+            super::MAP_HEADER_USED_OFFSET.parse::<usize>().unwrap(),
+            runtime_map_used_offset(),
+            "codegen emits a stale MapHeader::used offset; the tombstone lane \
+             would read the wrong header word and mis-admit holey maps",
+        );
     }
 }
