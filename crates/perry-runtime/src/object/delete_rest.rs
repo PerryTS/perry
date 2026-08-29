@@ -1143,6 +1143,13 @@ mod sso_tests_1781 {
 /// while the walker audit and differentials bake; the sibling Map tombstones
 /// (#9020) shipped default-on after the same sequence.
 fn object_tombstone_deletes_enabled() -> bool {
+    // Test override first: the OnceLock latches at the FIRST delete anywhere
+    // in the test process, which is long before a tombstone test's own
+    // `set_var` — so tests opt in through this cell instead of the env.
+    #[cfg(test)]
+    if let Some(forced) = TOMBSTONE_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return forced;
+    }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
         // Default ON (#9029 shipped the mechanism flag-gated; the walker
@@ -1154,6 +1161,20 @@ fn object_tombstone_deletes_enabled() -> bool {
             Ok("0") | Ok("off") | Ok("false")
         )
     })
+}
+
+#[cfg(test)]
+thread_local! {
+    static TOMBSTONE_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force the tombstone-delete flag for the CURRENT THREAD's asserts,
+/// bypassing the env-latched OnceLock. Pass `None` to restore env behavior;
+/// callers must do so before returning (tests share threads).
+#[cfg(test)]
+pub(crate) fn test_set_tombstone_deletes(forced: Option<bool>) {
+    TOMBSTONE_TEST_OVERRIDE.with(|cell| cell.set(forced));
 }
 
 /// Threshold compaction for a tombstoned keys array: squeeze every hole AND

@@ -1053,12 +1053,15 @@ pub(crate) unsafe fn stamp_object_shape(
         debug_assert_object_shape_parity(obj);
         return id;
     };
-    let id = publish_shape_result(shape_descriptor_ensure_with_generation(
+    let id = publish_shape_result(shape_descriptor_ensure_with_holes(
         keys,
         key_count,
         lineage.live_inline_slot_count,
         lineage.semantic_generation,
         lineage.object_kind,
+        // Same-array restamp: physical holes persist, so must the count
+        // (see the lineage publish below for the churn-growth rationale).
+        lineage.hole_count,
     ));
     if id != (*obj).parent_class_id {
         // Read-side lookup_ways also calls `stamp_object_shape` to populate its
@@ -1325,12 +1328,19 @@ pub(crate) unsafe fn publish_object_shape_from(
     let object_kind = lineage
         .map(|descriptor| descriptor.object_kind)
         .unwrap_or(ShapeObjectKind::Ordinary);
-    let id = publish_shape_result(shape_descriptor_ensure_with_generation(
+    // Tombstones (#9029): an append or grow-realloc keeps every hole slot
+    // physically in the array, so the successor must inherit the count — a
+    // reset would let delete/re-add churn dodge the squeeze threshold
+    // forever and grow the array unbounded. Only the squeeze itself (which
+    // physically removes the holes) publishes 0, explicitly.
+    let hole_count = lineage.map(|descriptor| descriptor.hole_count).unwrap_or(0);
+    let id = publish_shape_result(shape_descriptor_ensure_with_holes(
         keys,
         key_count,
         live_inline_slot_count,
         semantic_generation,
         object_kind,
+        hole_count,
     ));
     (*obj).parent_class_id = id;
     debug_assert_object_shape_parity_for_keys(obj, keys);

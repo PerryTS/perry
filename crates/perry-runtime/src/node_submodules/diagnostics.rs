@@ -692,6 +692,12 @@ pub fn error_user_props(error_ptr: usize) -> Vec<(String, f64)> {
         let mut out = Vec::with_capacity(len);
         for i in 0..len {
             let key_val = crate::array::js_array_get_f64(keys, i as u32);
+            // A tombstoned key slot (#9029) reads back as undefined through
+            // the hole canonicalization (#323); stringifying it would mint a
+            // phantom "undefined" prop. Undefined is never a legal key.
+            if key_val.to_bits() == crate::value::TAG_UNDEFINED {
+                continue;
+            }
             let name_ptr = crate::value::js_jsvalue_to_string(key_val);
             if name_ptr.is_null() {
                 continue;

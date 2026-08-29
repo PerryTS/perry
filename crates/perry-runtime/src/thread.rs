@@ -633,11 +633,31 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
     };
     let field_count = crate::object::object_live_slot_count(obj) as usize;
 
+    // Tombstoned key slots (#9029, flag-gated deletes) must not cross the
+    // thread boundary: the worker-side rebuild is positional (key i pairs
+    // with field i), so serializing a hole would materialize a phantom
+    // empty-string key on the worker. Skip the PAIR — key slot and value
+    // slot — which keeps the surviving pairs aligned and matches node
+    // (postMessage of an object with deleted keys carries only live keys).
+    let hole_at = |i: usize| -> bool {
+        let keys_arr = crate::object::object_keys_array(obj);
+        if keys_arr.is_null() || i >= (*keys_arr).length as usize {
+            return false;
+        }
+        let keys_elements = (keys_arr as *const u8)
+            .add(std::mem::size_of::<crate::array::ArrayHeader>())
+            as *const f64;
+        (*keys_elements.add(i)).to_bits() == crate::value::TAG_HOLE
+    };
+
     // Serialize field values
     let fields_ptr =
         (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *const f64;
     let mut fields = Vec::with_capacity(field_count);
     for i in 0..field_count {
+        if hole_at(i) {
+            continue;
+        }
         let field_bits = (*fields_ptr.add(i)).to_bits();
         fields.push(serialize_nanbox_for_thread(field_bits));
     }
@@ -652,6 +672,10 @@ unsafe fn serialize_object(obj: *const crate::object::ObjectHeader) -> Serialize
         let mut key_strings = Vec::with_capacity(keys_len);
         for i in 0..keys_len {
             let key_bits = (*keys_elements.add(i)).to_bits();
+            if key_bits == crate::value::TAG_HOLE {
+                // Paired with the `hole_at` skip in the fields loop above.
+                continue;
+            }
             let key_tag = key_bits & TAG_MASK;
             if key_tag == STRING_TAG {
                 let str_ptr = (key_bits & POINTER_MASK) as *const crate::string::StringHeader;

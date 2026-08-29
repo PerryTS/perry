@@ -11,7 +11,7 @@ pub(crate) mod ipc_transport;
 #[cfg(windows)]
 mod windows_fork;
 // #2130: V8 structured-clone codec for `serialization: 'advanced'` IPC.
-mod v8_serde;
+pub(crate) mod v8_serde;
 // #2555: sync buffered `input`, `timeout`, and `maxBuffer` execution options.
 mod sync_run;
 // #3079: setup-time command/file/args validation (`ERR_INVALID_ARG_TYPE`).
