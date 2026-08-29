@@ -66,7 +66,14 @@ for step in steps:
     run = step.get("run")
     if not run:
         continue
-    for line in run.split("\n"):
+    # Join backslash continuations FIRST. Without this a multi-line gate is
+    # extracted as its first line only and then RUN that way -- truncated, with
+    # a trailing backslash -- which is #8929: the ci_cargo_test_shard.py step
+    # failed for everyone. Joining is safe for the ratchet steps, whose
+    # "git cat-file ... || git fetch ..." prelude is a SEPARATE logical command
+    # from the "python3 scripts/..." gate on the line below it.
+    joined = re.sub(r"\\\n[ \t]*", " ", run)
+    for line in joined.split("\n"):
         line = line.strip()
         if not re.match(r"^(python3 scripts/|\./scripts/|cargo fmt)", line):
             continue
@@ -76,12 +83,33 @@ for step in steps:
         if line in seen:
             continue
         seen.add(line)
-        print(line)
+        # A GitHub Actions expression is substituted in CI and never locally,
+        # so running such a gate here passes an empty value and fails for
+        # reasons that say nothing about the tree. Report it as SKIPPED and
+        # name it -- a gate silently dropped from the list would be worse than
+        # one that is permanently red.
+        #
+        # Built by concatenation on purpose, and NOT written literally: this
+        # heredoc sits inside a process substitution, and bash 3.2 (macOS)
+        # parses the body far enough to treat a literal dollar-brace-brace as
+        # an unterminated parameter expansion -- the whole script then dies
+        # with "unexpected EOF while looking for matching quote".
+        gha_expr = "$" + "{" + "{"
+        if gha_expr in line:
+            print("#skip# " + line)
+        else:
+            print(line)
 PY
 )
 
 if [[ "${1:-}" == "--list" ]]; then
-    printf '%s\n' "${CMDS[@]}"
+    for _c in "${CMDS[@]}"; do
+        if [[ "$_c" == "#skip# "* ]]; then
+            printf 'SKIP (CI-only expression, not run locally): %s\n' "${_c#\#skip\# }"
+        else
+            printf '%s\n' "$_c"
+        fi
+    done
     echo "(${#CMDS[@]} gate commands, derived from .github/workflows/test.yml)"
     exit 0
 fi
@@ -90,7 +118,14 @@ echo "run_lint_gates: ${#CMDS[@]} gate commands derived from the lint job"
 echo
 
 failed=()
+skipped=0
 for cmd in "${CMDS[@]}"; do
+    if [[ "$cmd" == "#skip# "* ]]; then
+        skipped=$((skipped + 1))
+        printf '  skip  %s\n' "${cmd#\#skip\# }"
+        printf '        (carries a CI-only expression; substituted by GitHub Actions, not here)\n'
+        continue
+    fi
     if out="$(eval "$cmd" 2>&1)"; then
         printf '  ok    %s\n' "$cmd"
     else
@@ -133,10 +168,11 @@ else
     fi
 fi
 
-total=${#CMDS[@]}
+total=$(( ${#CMDS[@]} - skipped ))
 ((compile_ran)) && total=$((total + 2))
 suffix=""
 ((compile_ran)) || suffix=" (compile tier SKIPPED)"
+((skipped)) && suffix="${suffix}; ${skipped} CI-only skipped"
 
 echo
 if ((${#failed[@]})); then
