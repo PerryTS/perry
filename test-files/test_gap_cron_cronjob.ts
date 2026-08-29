@@ -33,7 +33,10 @@ async function main() {
   );
 
   job.start();
-  await new Promise((resolve) => setTimeout(resolve, 3200));
+  const tickDeadline = Date.now() + 10_000;
+  while ((ticks < 2 || autoTicks < 2) && Date.now() < tickDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   job.stop();
   auto.stop();
 
