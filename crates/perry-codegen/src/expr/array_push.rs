@@ -917,136 +917,136 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 super::typed_feedback_emission_enabled() || !inline_value_shape;
             if require_numeric_layout && keep_guarded_numeric_push {
                 if let Some(home) = PushReceiverHome::resolve(ctx, *array_id) {
-                let feedback_site_id = emit_typed_feedback_register_site(
-                    ctx,
-                    TypedFeedbackKind::ArrayElement,
-                    "array.push",
-                    TypedFeedbackContract::numeric_array_push(),
-                );
-                let fast_idx = ctx.new_block("apush.numeric_fast");
-                let fallback_idx = ctx.new_block("apush.numeric_fallback");
-                let merge_idx = ctx.new_block("apush.numeric_merge");
-                let fast_label = ctx.block_label(fast_idx);
-                let fallback_label = ctx.block_label(fallback_idx);
-                let merge_label = ctx.block_label(merge_idx);
-
-                let guard_ok = {
-                    let blk = ctx.block();
-                    let guard_i32 = blk.call(
-                        I32,
-                        "js_typed_feedback_numeric_array_push_guard",
-                        &[(I64, &feedback_site_id), (DOUBLE, &arr_box), (DOUBLE, &v)],
+                    let feedback_site_id = emit_typed_feedback_register_site(
+                        ctx,
+                        TypedFeedbackKind::ArrayElement,
+                        "array.push",
+                        TypedFeedbackContract::numeric_array_push(),
                     );
-                    blk.icmp_ne(I32, &guard_i32, "0")
-                };
-                ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
+                    let fast_idx = ctx.new_block("apush.numeric_fast");
+                    let fallback_idx = ctx.new_block("apush.numeric_fallback");
+                    let merge_idx = ctx.new_block("apush.numeric_merge");
+                    let fast_label = ctx.block_label(fast_idx);
+                    let fallback_label = ctx.block_label(fallback_idx);
+                    let merge_label = ctx.block_label(merge_idx);
 
-                ctx.current_block = fast_idx;
-                {
-                    let blk = ctx.block();
-                    let arr_handle = unbox_to_i64(blk, &arr_box);
-                    let new_handle = blk.call(
-                        I64,
-                        "js_array_numeric_push_f64_unboxed",
-                        &[(I64, &arr_handle), (DOUBLE, &v)],
-                    );
-                    let new_box = nanbox_pointer_inline(blk, &new_handle);
-                    home.store_head(blk, &new_box);
-                    blk.br(&merge_label);
-                }
-                let pushed = LoweredValue {
-                    semantic: SemanticKind::JsNumber,
-                    rep: NativeRep::F64,
-                    llvm_ty: DOUBLE,
-                    value: v.clone(),
-                };
-                ctx.record_lowered_value_with_access_mode_and_facts(
-                    "NumericArrayPush",
-                    Some(*array_id),
-                    "js_array_numeric_push_f64_unboxed",
-                    &pushed,
-                    Some(BoundsState::Guarded {
-                        guard_id: "numeric_array_push_guard".to_string(),
-                    }),
-                    None,
-                    Some(BufferAccessMode::CheckedNative),
-                    None,
-                    None,
-                    None,
-                    vec![raw_f64_layout_fact(
+                    let guard_ok = {
+                        let blk = ctx.block();
+                        let guard_i32 = blk.call(
+                            I32,
+                            "js_typed_feedback_numeric_array_push_guard",
+                            &[(I64, &feedback_site_id), (DOUBLE, &arr_box), (DOUBLE, &v)],
+                        );
+                        blk.icmp_ne(I32, &guard_i32, "0")
+                    };
+                    ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
+
+                    ctx.current_block = fast_idx;
+                    {
+                        let blk = ctx.block();
+                        let arr_handle = unbox_to_i64(blk, &arr_box);
+                        let new_handle = blk.call(
+                            I64,
+                            "js_array_numeric_push_f64_unboxed",
+                            &[(I64, &arr_handle), (DOUBLE, &v)],
+                        );
+                        let new_box = nanbox_pointer_inline(blk, &new_handle);
+                        home.store_head(blk, &new_box);
+                        blk.br(&merge_label);
+                    }
+                    let pushed = LoweredValue {
+                        semantic: SemanticKind::JsNumber,
+                        rep: NativeRep::F64,
+                        llvm_ty: DOUBLE,
+                        value: v.clone(),
+                    };
+                    ctx.record_lowered_value_with_access_mode_and_facts(
+                        "NumericArrayPush",
                         Some(*array_id),
-                        "consumed",
-                        "numeric_array_push_guard",
+                        "js_array_numeric_push_f64_unboxed",
+                        &pushed,
+                        Some(BoundsState::Guarded {
+                            guard_id: "numeric_array_push_guard".to_string(),
+                        }),
                         None,
-                    )],
-                    Vec::new(),
-                    false,
-                    false,
-                    Vec::new(),
-                );
-
-                ctx.current_block = fallback_idx;
-                {
-                    let blk = ctx.block();
-                    crate::expr::emit_typed_feedback_record_call(
-                        blk,
-                        "js_typed_feedback_record_fallback_call",
-                        &[(I64, &feedback_site_id)],
-                    );
-                    let arr_handle = unbox_to_i64(blk, &arr_box);
-                    let new_handle = blk.call(
-                        I64,
-                        "js_array_push_f64_spec",
-                        &[(I64, &arr_handle), (DOUBLE, &v)],
-                    );
-                    let new_box = nanbox_pointer_inline(blk, &new_handle);
-                    home.store_head(blk, &new_box);
-                    blk.br(&merge_label);
-                }
-                let fallback = LoweredValue {
-                    semantic: SemanticKind::JsValue,
-                    rep: NativeRep::JsValue,
-                    llvm_ty: DOUBLE,
-                    value: v.clone(),
-                };
-                ctx.record_lowered_value_with_access_mode_and_facts(
-                    "NumericArrayPush",
-                    Some(*array_id),
-                    "js_array_push_f64_spec",
-                    &fallback,
-                    Some(BoundsState::Unknown),
-                    None,
-                    Some(BufferAccessMode::DynamicFallback),
-                    Some(MaterializationReason::RuntimeApi),
-                    None,
-                    None,
-                    Vec::new(),
-                    vec![
-                        raw_f64_layout_fact(
+                        Some(BufferAccessMode::CheckedNative),
+                        None,
+                        None,
+                        None,
+                        vec![raw_f64_layout_fact(
                             Some(*array_id),
-                            "rejected",
+                            "consumed",
                             "numeric_array_push_guard",
-                            Some(MaterializationReason::RuntimeApi),
-                        ),
-                        raw_f64_layout_fact(
-                            Some(*array_id),
-                            "invalidated",
-                            "runtime_api",
-                            Some(MaterializationReason::RuntimeApi),
-                        ),
-                    ],
-                    false,
-                    false,
-                    Vec::new(),
-                );
+                            None,
+                        )],
+                        Vec::new(),
+                        false,
+                        false,
+                        Vec::new(),
+                    );
 
-                ctx.current_block = merge_idx;
-                if value_discarded {
-                    // Skip the slot reload too — it only feeds the length.
-                    return Ok(double_literal(0.0));
-                }
-                let current_box = home.load_head(ctx.block());
-                return Ok(emit_array_box_length(ctx, &current_box, false));
+                    ctx.current_block = fallback_idx;
+                    {
+                        let blk = ctx.block();
+                        crate::expr::emit_typed_feedback_record_call(
+                            blk,
+                            "js_typed_feedback_record_fallback_call",
+                            &[(I64, &feedback_site_id)],
+                        );
+                        let arr_handle = unbox_to_i64(blk, &arr_box);
+                        let new_handle = blk.call(
+                            I64,
+                            "js_array_push_f64_spec",
+                            &[(I64, &arr_handle), (DOUBLE, &v)],
+                        );
+                        let new_box = nanbox_pointer_inline(blk, &new_handle);
+                        home.store_head(blk, &new_box);
+                        blk.br(&merge_label);
+                    }
+                    let fallback = LoweredValue {
+                        semantic: SemanticKind::JsValue,
+                        rep: NativeRep::JsValue,
+                        llvm_ty: DOUBLE,
+                        value: v.clone(),
+                    };
+                    ctx.record_lowered_value_with_access_mode_and_facts(
+                        "NumericArrayPush",
+                        Some(*array_id),
+                        "js_array_push_f64_spec",
+                        &fallback,
+                        Some(BoundsState::Unknown),
+                        None,
+                        Some(BufferAccessMode::DynamicFallback),
+                        Some(MaterializationReason::RuntimeApi),
+                        None,
+                        None,
+                        Vec::new(),
+                        vec![
+                            raw_f64_layout_fact(
+                                Some(*array_id),
+                                "rejected",
+                                "numeric_array_push_guard",
+                                Some(MaterializationReason::RuntimeApi),
+                            ),
+                            raw_f64_layout_fact(
+                                Some(*array_id),
+                                "invalidated",
+                                "runtime_api",
+                                Some(MaterializationReason::RuntimeApi),
+                            ),
+                        ],
+                        false,
+                        false,
+                        Vec::new(),
+                    );
+
+                    ctx.current_block = merge_idx;
+                    if value_discarded {
+                        // Skip the slot reload too — it only feeds the length.
+                        return Ok(double_literal(0.0));
+                    }
+                    let current_box = home.load_head(ctx.block());
+                    return Ok(emit_array_box_length(ctx, &current_box, false));
                 }
             }
 
