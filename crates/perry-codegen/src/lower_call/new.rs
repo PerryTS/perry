@@ -18,7 +18,8 @@ use super::new_ctor_args::{
 use super::new_helpers::{
     collect_decl_local_ids, ctor_body_calls_super, ctor_body_closure_calls_super,
     ctor_body_has_value_return, ctor_body_uses_this, ctor_chain_uses_new_target,
-    emit_promise_subclass_init, local_constructor_symbol_exists, node_stream_parent_kind,
+    default_ctor_dynamic_parent_owner, emit_promise_subclass_init, local_constructor_symbol_exists,
+    node_stream_parent_kind,
 };
 use crate::expr::{lower_expr, lower_js_args_array, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
@@ -1036,7 +1037,18 @@ fn lower_new_impl_inner<'a>(
     // name and a runtime heritage value must construct through that runtime
     // value. The source module's standalone ctor owns all imported-parent
     // field initialization; this module must only replay the local leaf.
-    let defer_to_dynamic_parent = class.extends_expr.is_some() && !has_imported_ctor;
+    // #9043: the dynamic heritage edge may belong to a constructor-free
+    // ANCESTOR rather than the leaf itself (`Leaf -> Mid -> <captured Base>`).
+    // The registered runtime parent is keyed by that edge's owner (`Mid`), and
+    // the edge remains authoritative across every static default-ctor hop below
+    // it. Keep the owner name for the dispatch and use the boolean everywhere
+    // the old direct-leaf-only path deferred static/imported construction.
+    let dynamic_parent_owner = if has_imported_ctor {
+        None
+    } else {
+        default_ctor_dynamic_parent_owner(ctx, class)
+    };
+    let defer_to_dynamic_parent = dynamic_parent_owner.is_some();
     let builtin_parent_runtime = if !has_own_ctor && !has_imported_ctor {
         match class.extends_name.as_deref() {
             Some("Writable") => Some("js_node_stream_writable_subclass_init"),
@@ -1081,6 +1093,9 @@ fn lower_new_impl_inner<'a>(
                     found = Some(pname.to_string());
                     break;
                 }
+                if parent_class.extends_expr.is_some() {
+                    break;
+                }
                 walker = parent_class.extends_name.as_deref();
             } else {
                 break;
@@ -1111,12 +1126,21 @@ fn lower_new_impl_inner<'a>(
         bind_inline_constructor_params(ctx, &ctor.params, &lowered_args, args, ctor_capture_fill)
     });
 
-    if let Some(stop_at) = inherited_ctor_class.clone() {
-        apply_field_initializers_recursive(ctx, class_name, FieldInitMode::UpToInclusive(stop_at))?;
-    } else {
-        apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AncestorsOnly)?;
+    // A dynamic parent constructor owns the fields above its registered edge.
+    // Every local class from the edge owner through the leaf is derived, so
+    // their fields run only after that runtime `super(...args)` returns.
+    if dynamic_parent_owner.is_none() {
+        if let Some(stop_at) = inherited_ctor_class.clone() {
+            apply_field_initializers_recursive(
+                ctx,
+                class_name,
+                FieldInitMode::UpToInclusive(stop_at),
+            )?;
+        } else {
+            apply_field_initializers_recursive(ctx, class_name, FieldInitMode::AncestorsOnly)?;
+        }
     }
-    if !has_extends {
+    if !has_extends && class.extends_expr.is_none() {
         // Base class — no super(), apply own fields now (before body).
         apply_field_initializers_recursive(ctx, class_name, FieldInitMode::SelfOnly)?;
     }
@@ -1290,6 +1314,12 @@ fn lower_new_impl_inner<'a>(
                     // duplicate private-element installation.
                     found_inherited_ctor = true;
                     break; // Found and inlined the parent ctor.
+                }
+                // A dynamic heritage expression is the authoritative next
+                // edge. Following its optional static metadata would skip the
+                // runtime class value and can call the wrong constructor.
+                if parent_class.extends_expr.is_some() {
+                    break;
                 }
                 parent_name = parent_class.extends_name.as_deref();
             } else {
@@ -1757,18 +1787,29 @@ fn lower_new_impl_inner<'a>(
         // builtin still emits the call, but the runtime backstops it by value —
         // `js_fetch_or_value_super` no-ops the same builtin set via
         // `is_uncallable_builtin_super_parent` (perry-runtime, kept in lockstep).
-        let parent_is_uncallable_builtin = class
-            .extends_name
+        let parent_is_uncallable_builtin = dynamic_parent_owner
             .as_deref()
+            .and_then(|owner| ctx.classes.get(owner).copied())
+            .and_then(|owner| owner.extends_name.as_deref())
             .map(crate::expr::is_other_builtin_constructor_name)
             .unwrap_or(false)
             // SharedArrayBuffer construction now returns a real branded
             // buffer and honors the subclass newTarget/prototype in the
             // runtime dispatcher. It must run rather than retaining Perry's
             // provisional plain-object receiver.
-            && class.extends_name.as_deref() != Some("SharedArrayBuffer");
-        if !found_inherited_ctor && class.extends_expr.is_some() && !parent_is_uncallable_builtin {
-            if let Some(cid) = ctx.class_ids.get(class_name).copied().filter(|c| *c != 0) {
+            && dynamic_parent_owner
+                .as_deref()
+                .and_then(|owner| ctx.classes.get(owner).copied())
+                .and_then(|owner| owner.extends_name.as_deref())
+                != Some("SharedArrayBuffer");
+        if !found_inherited_ctor && dynamic_parent_owner.is_some() && !parent_is_uncallable_builtin
+        {
+            if let Some(cid) = dynamic_parent_owner
+                .as_deref()
+                .and_then(|owner| ctx.class_ids.get(owner))
+                .copied()
+                .filter(|c| *c != 0)
+            {
                 let parent_val = ctx.block().call(
                     DOUBLE,
                     "js_get_dynamic_parent_value",
@@ -1858,8 +1899,13 @@ fn lower_new_impl_inner<'a>(
     // static `extends_name`, so include the `extends_expr` case (SelfOnly,
     // mirroring the explicit-`SuperCall` dynamic-parent arm in this_super_call.rs).
     if !has_own_ctor && (has_extends || class.extends_expr.is_some()) && !has_imported_ctor {
-        if defer_to_dynamic_parent
-            || builtin_parent_runtime.is_some()
+        if let Some(owner) = dynamic_parent_owner {
+            apply_field_initializers_recursive(
+                ctx,
+                class_name,
+                FieldInitMode::FromInclusive(owner),
+            )?;
+        } else if builtin_parent_runtime.is_some()
             || fetch_parent_runtime.is_some()
             || promise_parent_runtime
             || usp_parent_runtime

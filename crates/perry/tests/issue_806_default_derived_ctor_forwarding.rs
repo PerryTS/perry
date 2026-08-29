@@ -159,6 +159,42 @@ console.log(build("T"));
     assert_eq!(out, "T/one/two\n");
 }
 
+/// The same dynamic-ancestor barrier must work when the leaf class escapes its
+/// factory and construction goes through the standalone `Leaf_constructor`
+/// symbol. Intermediate derived fields run after the dynamic Base constructor,
+/// in root-to-leaf order.
+#[test]
+fn two_hop_dynamic_construct_forwards_args_and_orders_fields() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = compile_and_run(
+        dir.path(),
+        r#"
+function make(tag: string) {
+  class Base {
+    s: string;
+    constructor(a: string, b: string) {
+      this.s = tag + "/" + a + "/" + b;
+    }
+  }
+  class Mid extends Base {
+    mid = this.s + "/mid";
+  }
+  class Leaf extends Mid {
+    leaf = this.mid + "/leaf";
+  }
+  return Leaf;
+}
+
+const C = make("T");
+const value = new C("one", "two");
+console.log(value.s);
+console.log(value.mid);
+console.log(value.leaf);
+"#,
+    );
+    assert_eq!(out, "T/one/two\nT/one/two/mid\nT/one/two/mid/leaf\n");
+}
+
 /// Guard the CAPTURING-leaf path (zod chains): a capturing subclass gets a
 /// synthesized forwarding ctor and takes the own-ctor path, whose tail-split
 /// derives from its own appended caps. Both the subclass's snapshot and the
