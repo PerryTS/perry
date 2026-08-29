@@ -1,11 +1,10 @@
 //! Prototype Zod schema IR and direct HIR lowering.
 //!
-//! This deliberately does not compile Zod's generated JavaScript.  It reads a
-//! closed, static schema expression into [`ZodSchemaIr`] and emits the same
-//! happy-path contract as `z.compile`: a schema clone whose `_zod.run` first
-//! calls a native specialized parser and delegates failures to the original
-//! runtime parser.  The fallback preserves Zod's issue construction and keeps
-//! unsupported/error paths out of this proof of concept.
+//! This deliberately does not compile Zod's generated JavaScript. It reads a
+//! closed, static schema expression into [`ZodSchemaIr`] and emits only a
+//! native specialized parser. Zod's `compileFromParser` integration point owns
+//! the schema clone, parse-context bypasses, public methods, and runtime
+//! fallback. Unsupported/error paths stay entirely in Zod.
 
 use anyhow::Result;
 use swc_ecma_ast as ast;
@@ -76,6 +75,12 @@ fn is_zod_namespace(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
     let ast::Expr::Ident(id) = peel_expr(expr) else {
         return false;
     };
+    // Namespace imports are not local-slot bindings in Perry's HIR. Any local
+    // with the same spelling therefore proves that this occurrence resolves
+    // to a shadowing user binding instead of the imported Zod namespace.
+    if ctx.lookup_local(id.sym.as_ref()).is_some() {
+        return false;
+    }
     matches!(
         ctx.namespace_import_sources
             .get(id.sym.as_ref())
@@ -173,6 +178,7 @@ pub(crate) fn extract_schema_ir(ctx: &LoweringContext, expr: &ast::Expr) -> Opti
     };
 
     let mut fields = Vec::with_capacity(shape.props.len());
+    let mut keys = std::collections::HashSet::with_capacity(shape.props.len());
     for property in &shape.props {
         let ast::PropOrSpread::Prop(property) = property else {
             return None;
@@ -181,7 +187,7 @@ pub(crate) fn extract_schema_ir(ctx: &LoweringContext, expr: &ast::Expr) -> Opti
             return None;
         };
         let key = object_key(&kv.key)?;
-        if key == "__proto__" {
+        if key == "__proto__" || !keys.insert(key.clone()) {
             return None;
         }
         fields.push(ZodFieldIr {
@@ -232,10 +238,10 @@ fn not(expr: Expr) -> Expr {
     }
 }
 
-fn return_undefined_if(condition: Expr) -> Stmt {
+fn return_invalid_if(condition: Expr, invalid_id: u32) -> Stmt {
     Stmt::If {
         condition,
-        then_branch: vec![Stmt::Return(Some(Expr::Undefined))],
+        then_branch: vec![Stmt::Return(Some(Expr::LocalGet(invalid_id)))],
         else_branch: None,
     }
 }
@@ -276,7 +282,7 @@ fn closure(
     }
 }
 
-fn lower_native_parser(ctx: &mut LoweringContext, ir: &ZodSchemaIr) -> Expr {
+fn lower_native_parser(ctx: &mut LoweringContext, ir: &ZodSchemaIr, invalid_id: u32) -> Expr {
     let input_id = ctx.fresh_local();
     let mut body = Vec::new();
     let fields = match ir {
@@ -290,11 +296,14 @@ fn lower_native_parser(ctx: &mut LoweringContext, ir: &ZodSchemaIr) -> Expr {
     );
     let null_input = compare(CompareOp::Eq, Expr::LocalGet(input_id), Expr::Null);
     let array_input = Expr::ArrayIsArray(Box::new(Expr::LocalGet(input_id)));
-    body.push(return_undefined_if(logical(
-        LogicalOp::Or,
-        logical(LogicalOp::Or, not_object, null_input),
-        array_input,
-    )));
+    body.push(return_invalid_if(
+        logical(
+            LogicalOp::Or,
+            logical(LogicalOp::Or, not_object, null_input),
+            array_input,
+        ),
+        invalid_id,
+    ));
 
     let mut output_fields = Vec::with_capacity(fields.len());
     for field in fields {
@@ -325,7 +334,7 @@ fn lower_native_parser(ctx: &mut LoweringContext, ir: &ZodSchemaIr) -> Expr {
             ),
             _ => wrong_type,
         };
-        body.push(return_undefined_if(invalid_type));
+        body.push(return_invalid_if(invalid_type, invalid_id));
 
         if let ZodValueIr::Number {
             integer,
@@ -334,23 +343,30 @@ fn lower_native_parser(ctx: &mut LoweringContext, ir: &ZodSchemaIr) -> Expr {
         } = field.value
         {
             if integer {
-                body.push(return_undefined_if(not(Expr::NumberIsInteger(Box::new(
-                    Expr::LocalGet(field_id),
-                )))));
+                body.push(return_invalid_if(
+                    not(Expr::NumberIsInteger(Box::new(Expr::LocalGet(field_id)))),
+                    invalid_id,
+                ));
             }
             if let Some(minimum) = minimum {
-                body.push(return_undefined_if(compare(
-                    CompareOp::Lt,
-                    Expr::LocalGet(field_id),
-                    Expr::Number(minimum),
-                )));
+                body.push(return_invalid_if(
+                    compare(
+                        CompareOp::Lt,
+                        Expr::LocalGet(field_id),
+                        Expr::Number(minimum),
+                    ),
+                    invalid_id,
+                ));
             }
             if let Some(maximum) = maximum {
-                body.push(return_undefined_if(compare(
-                    CompareOp::Gt,
-                    Expr::LocalGet(field_id),
-                    Expr::Number(maximum),
-                )));
+                body.push(return_invalid_if(
+                    compare(
+                        CompareOp::Gt,
+                        Expr::LocalGet(field_id),
+                        Expr::Number(maximum),
+                    ),
+                    invalid_id,
+                ));
             }
         }
 
@@ -365,83 +381,49 @@ fn lower_native_parser(ctx: &mut LoweringContext, ir: &ZodSchemaIr) -> Expr {
         func_id,
         vec![param(input_id, "input")],
         body,
-        Vec::new(),
+        vec![invalid_id],
         ctx.current_strict_mode(),
     )
 }
 
-fn lower_compiled_schema_wrapper(
+fn lower_compiled_schema_install(
     ctx: &mut LoweringContext,
+    runtime_namespace: Expr,
     runtime_schema: Expr,
+    runtime_options: Expr,
     ir: &ZodSchemaIr,
 ) -> Expr {
     let strict = ctx.current_strict_mode();
+    let namespace_id = ctx.fresh_local();
     let source_id = ctx.fresh_local();
-    let clone_id = ctx.fresh_local();
-    let original_run_id = ctx.fresh_local();
+    let options_id = ctx.fresh_local();
+    let invalid_id = ctx.fresh_local();
     let parser_id = ctx.fresh_local();
 
-    let parser = lower_native_parser(ctx, ir);
-
-    let payload_id = ctx.fresh_local();
-    let parse_ctx_id = ctx.fresh_local();
-    let output_id = ctx.fresh_local();
-    let wrapper_body = vec![
-        Stmt::Let {
-            id: output_id,
-            name: "__zod_output".to_string(),
-            ty: Type::Any,
-            mutable: false,
-            init: Some(call(
-                Expr::LocalGet(parser_id),
-                vec![property(Expr::LocalGet(payload_id), "value")],
-            )),
-        },
-        Stmt::If {
-            condition: compare(CompareOp::Ne, Expr::LocalGet(output_id), Expr::Undefined),
-            then_branch: vec![
-                Stmt::Expr(Expr::PropertySet {
-                    object: Box::new(Expr::LocalGet(payload_id)),
-                    property: "value".to_string(),
-                    value: Box::new(Expr::LocalGet(output_id)),
-                }),
-                Stmt::Return(Some(Expr::LocalGet(payload_id))),
-            ],
-            else_branch: None,
-        },
-        Stmt::Return(Some(call(
-            Expr::LocalGet(original_run_id),
-            vec![Expr::LocalGet(payload_id), Expr::LocalGet(parse_ctx_id)],
-        ))),
-    ];
-    let wrapped_run_func = ctx.fresh_func();
-    ctx.closure_display_names
-        .insert(wrapped_run_func, "__perry_zod_wrapped_run".to_string());
-    let wrapped_run = closure(
-        wrapped_run_func,
-        vec![param(payload_id, "payload"), param(parse_ctx_id, "ctx")],
-        wrapper_body,
-        vec![parser_id, original_run_id],
-        strict,
-    );
+    let parser = lower_native_parser(ctx, ir, invalid_id);
 
     let outer_body = vec![
-        Stmt::Let {
-            id: clone_id,
-            name: "__zod_clone".to_string(),
-            ty: Type::Any,
-            mutable: false,
-            init: Some(call(
-                property(Expr::LocalGet(source_id), "clone"),
-                Vec::new(),
-            )),
+        Stmt::If {
+            condition: compare(
+                CompareOp::Ne,
+                Expr::TypeOf(Box::new(property(
+                    Expr::LocalGet(namespace_id),
+                    "compileFromParser",
+                ))),
+                Expr::String("function".to_string()),
+            ),
+            then_branch: vec![Stmt::Return(Some(call(
+                property(Expr::LocalGet(namespace_id), "compile"),
+                vec![Expr::LocalGet(source_id), Expr::LocalGet(options_id)],
+            )))],
+            else_branch: None,
         },
         Stmt::Let {
-            id: original_run_id,
-            name: "__zod_original_run".to_string(),
+            id: invalid_id,
+            name: "__zod_invalid".to_string(),
             ty: Type::Any,
             mutable: false,
-            init: Some(property(property(Expr::LocalGet(source_id), "_zod"), "run")),
+            init: Some(property(Expr::LocalGet(namespace_id), "INVALID")),
         },
         Stmt::Let {
             id: parser_id,
@@ -450,24 +432,29 @@ fn lower_compiled_schema_wrapper(
             mutable: false,
             init: Some(parser),
         },
-        Stmt::Expr(Expr::PropertySet {
-            object: Box::new(property(Expr::LocalGet(clone_id), "_zod")),
-            property: "run".to_string(),
-            value: Box::new(wrapped_run),
-        }),
-        Stmt::Return(Some(Expr::LocalGet(clone_id))),
+        Stmt::Return(Some(call(
+            property(Expr::LocalGet(namespace_id), "compileFromParser"),
+            vec![Expr::LocalGet(source_id), Expr::LocalGet(parser_id)],
+        ))),
     ];
     let outer_func = ctx.fresh_func();
     ctx.closure_display_names
-        .insert(outer_func, "__perry_zod_compile".to_string());
+        .insert(outer_func, "__perry_zod_install_parser".to_string());
     let outer = closure(
         outer_func,
-        vec![param(source_id, "schema")],
+        vec![
+            param(namespace_id, "zod"),
+            param(source_id, "schema"),
+            param(options_id, "options"),
+        ],
         outer_body,
         Vec::new(),
         strict,
     );
-    call(outer, vec![runtime_schema])
+    call(
+        outer,
+        vec![runtime_namespace, runtime_schema, runtime_options],
+    )
 }
 
 fn strict_options_only(call: &ast::CallExpr) -> bool {
@@ -520,10 +507,17 @@ pub(crate) fn try_lower_zod_compile(
     let Some(ir) = ir else {
         return Ok(None);
     };
+    let runtime_namespace = lower_expr(ctx, receiver)?;
     let runtime_schema = lower_expr(ctx, schema_expr)?;
-    Ok(Some(lower_compiled_schema_wrapper(
+    let runtime_options = match call_expr.args.get(1) {
+        Some(options) => lower_expr(ctx, &options.expr)?,
+        None => Expr::Undefined,
+    };
+    Ok(Some(lower_compiled_schema_install(
         ctx,
+        runtime_namespace,
         runtime_schema,
+        runtime_options,
         &ir,
     )))
 }
@@ -544,11 +538,7 @@ mod tests {
         let parsed = perry_parser::parse_typescript(source, "zod-aot.ts").expect("source parses");
         let hir = crate::lower_module(&parsed, "zod-aot", "zod-aot.ts").expect("source lowers");
 
-        for expected in [
-            "__perry_zod_compile",
-            "__perry_zod_wrapped_run",
-            "__perry_zod_native_parser",
-        ] {
+        for expected in ["__perry_zod_install_parser", "__perry_zod_native_parser"] {
             assert!(
                 hir.closure_display_names
                     .values()
@@ -561,6 +551,9 @@ mod tests {
         let dump = format!("{hir:#?}");
         assert!(dump.contains("NumberIsFinite"), "{dump}");
         assert!(dump.contains("NumberIsInteger"), "{dump}");
+        assert!(dump.contains("compileFromParser"), "{dump}");
+        assert!(dump.contains("INVALID"), "{dump}");
+        assert!(!dump.contains("__perry_zod_wrapped_run"), "{dump}");
         assert!(dump.contains("0.0"), "{dump}");
         assert!(dump.contains("100.0"), "{dump}");
     }
@@ -582,6 +575,75 @@ mod tests {
                 .values()
                 .all(|name| !name.starts_with("__perry_zod_")),
             "unsupported schemas must not be partly specialized: {:#?}",
+            hir.closure_display_names
+        );
+    }
+
+    #[test]
+    fn mutable_schema_keeps_the_regular_zod_call() {
+        let source = r#"
+            import * as z from "zod";
+            let Player = z.object({ name: z.string() });
+            Player = z.object({ name: z.string() });
+            export const Compiled = z.compile(Player);
+        "#;
+        let parsed =
+            perry_parser::parse_typescript(source, "zod-mutable.ts").expect("source parses");
+        let hir =
+            crate::lower_module(&parsed, "zod-mutable", "zod-mutable.ts").expect("source lowers");
+
+        assert!(
+            hir.closure_display_names
+                .values()
+                .all(|name| !name.starts_with("__perry_zod_")),
+            "mutable schemas must not be specialized: {:#?}",
+            hir.closure_display_names
+        );
+    }
+
+    #[test]
+    fn shadowed_zod_namespace_keeps_the_regular_call() {
+        let source = r#"
+            import * as z from "zod";
+            function compileLocal() {
+                const z = makeLocalSchemaLibrary();
+                const Player = z.object({ name: z.string() });
+                return z.compile(Player);
+            }
+        "#;
+        let parsed =
+            perry_parser::parse_typescript(source, "zod-shadow.ts").expect("source parses");
+        let hir =
+            crate::lower_module(&parsed, "zod-shadow", "zod-shadow.ts").expect("source lowers");
+
+        assert!(
+            hir.closure_display_names
+                .values()
+                .all(|name| !name.starts_with("__perry_zod_")),
+            "shadowed namespace bindings must not be specialized: {:#?}",
+            hir.closure_display_names
+        );
+    }
+
+    #[test]
+    fn duplicate_object_keys_keep_the_regular_zod_call() {
+        let source = r#"
+            import * as z from "zod";
+            export const Compiled = z.compile(z.object({
+                name: z.string(),
+                name: z.string(),
+            }));
+        "#;
+        let parsed =
+            perry_parser::parse_typescript(source, "zod-duplicate.ts").expect("source parses");
+        let hir = crate::lower_module(&parsed, "zod-duplicate", "zod-duplicate.ts")
+            .expect("source lowers");
+
+        assert!(
+            hir.closure_display_names
+                .values()
+                .all(|name| !name.starts_with("__perry_zod_")),
+            "duplicate keys must not be specialized: {:#?}",
             hir.closure_display_names
         );
     }

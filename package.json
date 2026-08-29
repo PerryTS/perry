@@ -23,10 +23,16 @@
     "mongodb": "^7.0.0",
     "rate-limiter-flexible": "^11.2.0",
     "slugify": "^1.6.9",
-    "zod": "^4.5.2"
+    "zod": "git+https://github.com/proggeramlug/zod.git#ee27e77ad86238199cfa0c262cfa2c7dfc125e49"
   },
   "dependencies": {
     "ethers": "^6.17.0",
     "node-cron": "^4.2.1"
+  },
+  "perry": {
+    "compilePackages": ["zod"],
+    "allow": {
+      "compilePackages": ["zod"]
+    }
   }
 }

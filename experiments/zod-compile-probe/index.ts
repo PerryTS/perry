@@ -90,6 +90,16 @@ const invalid = CompiledPlayer.safeParse(invalidPlayer);
 
 console.log(`compiledClone=${CompiledPlayer !== Player}`);
 console.log(`compiledRunChanged=${CompiledPlayer._zod.run !== Player._zod.run}`);
+console.log(
+  `wrapperOwnedByZod=${
+    (CompiledPlayer._zod.run as typeof Player._zod.run & {
+      __originalRun?: typeof Player._zod.run;
+    }).__originalRun === Player._zod.run
+  }`,
+);
+console.log(
+  `fallbackOwnedByZod=${CompiledPlayer._zod.bag.fallbackRun === Player._zod.run}`,
+);
 console.log(`validSuccess=${valid.success}`);
 console.log(`validAvoidedFallback=${fallbackRunsAfterValid === 0}`);
 console.log(

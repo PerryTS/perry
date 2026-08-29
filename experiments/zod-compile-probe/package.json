@@ -3,6 +3,12 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "zod": "4.5.2"
+    "zod": "git+https://github.com/proggeramlug/zod.git#ee27e77ad86238199cfa0c262cfa2c7dfc125e49"
+  },
+  "perry": {
+    "compilePackages": ["zod"],
+    "allow": {
+      "compilePackages": ["zod"]
+    }
   }
 }

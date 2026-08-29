@@ -458,12 +458,16 @@ pub(crate) fn lower_stmt(
                         // schema.  Its ordinary runtime initializer is still
                         // lowered below; this side table is consumed only if a
                         // later `z.compile(schema)` site can be specialized.
-                        let zod_schema_ir = match (&decl.name, &decl.init) {
-                            (ast::Pat::Ident(ident), Some(init)) => {
-                                super::zod_aot::extract_schema_ir(ctx, init)
-                                    .map(|ir| (ident.id.sym.to_string(), ir))
+                        let zod_schema_ir = if var_decl.kind == ast::VarDeclKind::Const {
+                            match (&decl.name, &decl.init) {
+                                (ast::Pat::Ident(ident), Some(init)) => {
+                                    super::zod_aot::extract_schema_ir(ctx, init)
+                                        .map(|ir| (ident.id.sym.to_string(), ir))
+                                }
+                                _ => None,
                             }
-                            _ => None,
+                        } else {
+                            None
                         };
                         // Check if this is a Widget({...}) call from perry/widget
                         if let Some(init) = &decl.init {

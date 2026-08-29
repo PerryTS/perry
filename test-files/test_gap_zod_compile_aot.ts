@@ -36,6 +36,12 @@ const invalid = CompiledPlayer.safeParse({
 
 console.log(CompiledPlayer !== Player);
 console.log(CompiledPlayer._zod.run !== Player._zod.run);
+console.log(
+  (CompiledPlayer._zod.run as typeof Player._zod.run & {
+    __originalRun?: typeof Player._zod.run;
+  }).__originalRun === Player._zod.run,
+);
+console.log(CompiledPlayer._zod.bag.fallbackRun === Player._zod.run);
 console.log(valid.success);
 console.log(fallbackRunsAfterValid === 0);
 console.log(valid.success && !("unknown" in valid.data));

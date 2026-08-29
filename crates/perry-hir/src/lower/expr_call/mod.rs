@@ -220,9 +220,9 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         return Ok(desugared);
     }
 
-    // Prototype schema-aware AOT path.  A supported static `z.compile(...)`
-    // becomes native Perry HIR here, before the npm call and Zod's
-    // `new Function` implementation are lowered.
+    // Prototype schema-aware AOT path. A supported static `z.compile(...)`
+    // becomes a native Perry parser passed into Zod's own installer, before
+    // the npm call reaches Zod's `new Function` implementation.
     if let Some(expr) = super::zod_aot::try_lower_zod_compile(ctx, call)? {
         return Ok(expr);
     }

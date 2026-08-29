@@ -1562,6 +1562,59 @@ mod declaration_sidecar_tests {
     }
 
     #[test]
+    fn compile_package_resolves_source_without_built_exports_target() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let package_dir = root.join("node_modules/source-only");
+        std::fs::create_dir_all(package_dir.join("src")).expect("mkdir package src");
+        std::fs::write(
+            package_dir.join("package.json"),
+            serde_json::json!({
+                "name": "source-only",
+                "type": "module",
+                "exports": {
+                    ".": {
+                        "import": "./index.js",
+                        "require": "./index.cjs"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("write package.json");
+        let source = package_dir.join("src/index.ts");
+        std::fs::write(&source, "export const answer = 42;\n").expect("write source");
+        let importer = root.join("main.ts");
+        std::fs::write(&importer, "import { answer } from 'source-only';\n")
+            .expect("write importer");
+
+        assert!(
+            resolve_import(
+                "source-only",
+                &importer,
+                root,
+                &HashSet::new(),
+                &BTreeSet::new(),
+            )
+            .is_none(),
+            "normal package resolution must still honor its missing exports target"
+        );
+
+        let compile_packages = HashSet::from(["source-only".to_string()]);
+        let resolved = resolve_import(
+            "source-only",
+            &importer,
+            root,
+            &compile_packages,
+            &BTreeSet::new(),
+        )
+        .expect("compilePackages should admit the source tree directly");
+
+        assert_eq!(resolved.1, ModuleKind::NativeCompiled);
+        assert_eq!(resolved.0, source.canonicalize().expect("canonical source"));
+    }
+
+    #[test]
     fn compile_package_membership_uses_path_components() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path();

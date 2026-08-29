@@ -1490,39 +1490,43 @@ pub(super) fn resolve_import(
             if !package_dir.is_dir() {
                 continue;
             }
-            let Some(entry) = resolve_package_entry(&package_dir, subpath.as_deref()) else {
-                continue;
-            };
+            let entry = resolve_package_entry(&package_dir, subpath.as_deref());
             // Packages with perry.nativeLibrary are compiled natively (Rust FFI)
             if has_perry_native_library(&package_dir) {
-                return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+                if let Some(entry) = entry.as_ref() {
+                    return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+                }
             }
             // Packages with perry.nativeModule: true contain Perry-compatible
             // TypeScript that must be compiled natively (e.g. perry-react).
             if has_perry_native_module(&package_dir) {
-                return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+                if let Some(entry) = entry.as_ref() {
+                    return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+                }
             }
             // Packages listed in perry.compilePackages are compiled natively
             if compile_packages.contains(&package_name) {
-                // Prefer TypeScript source over compiled JS
+                // Prefer TypeScript source over compiled JS. Do this even
+                // when the package's normal exports target is absent: source-
+                // only installs can deliberately ship `src/index.ts` while
+                // retaining published-package `import`/`require` metadata.
                 if let Some(src_entry) =
                     resolve_package_source_entry(&package_dir, subpath.as_deref())
                 {
                     return Some((src_entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
                 }
                 // Fall back to normal resolution but still mark as NativeCompiled
-                if let Some(fallback_entry) =
-                    resolve_package_entry(&package_dir, subpath.as_deref())
-                {
+                if let Some(fallback_entry) = entry {
                     return Some((
                         fallback_entry.canonicalize().ok()?,
                         ModuleKind::NativeCompiled,
                     ));
                 }
-                // The entry resolved above is the same package instance and is
-                // kept as the final fallback for unusual package metadata.
-                return Some((entry.canonicalize().ok()?, ModuleKind::NativeCompiled));
+                continue;
             }
+            let Some(entry) = entry else {
+                continue;
+            };
             // For other node_modules packages, classify by file
             // extension. `.ts` / `.tsx` sources are compiled natively.
             // `.js` / `.mjs` / `.cjs` and other shapes stay Interpreted;
