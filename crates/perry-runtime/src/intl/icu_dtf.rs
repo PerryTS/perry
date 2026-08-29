@@ -260,18 +260,33 @@ pub(crate) fn format_components(req: &CompReq) -> Option<String> {
     }
 
     let prefs = prefs(req.locale, req.hour_cycle, req.hour12)?;
+    let has_time = time_precision.is_some();
     let mut builder = FieldSetBuilder::default();
     builder.date_fields = date_fields;
     // A spelled month wins the length; else the weekday's; else Medium.
     builder.length = month_len.or(weekday_len).or(Some(Length::Medium));
     builder.time_precision = time_precision;
-    let fieldset = builder.build_composite_datetime().ok()?;
 
     let date = Date::try_new_iso(req.year, req.month.into(), req.day.into()).ok()?;
     let time = Time::try_new(req.hour, req.minute, req.second, 0).ok()?;
     let dt = DateTime { date, time };
-    let dtf = DateTimeFormatter::try_new(prefs, fieldset).ok()?;
-    Some(normalize(&dtf.format(&dt).to_string()))
+    let formatted = match (has_date, has_time) {
+        (true, true) => {
+            let dtf =
+                DateTimeFormatter::try_new(prefs, builder.build_date_and_time().ok()?).ok()?;
+            dtf.format(&dt).to_string()
+        }
+        (true, false) => {
+            let dtf = DateTimeFormatter::try_new(prefs, builder.build_date().ok()?).ok()?;
+            dtf.format(&dt.date).to_string()
+        }
+        (false, true) => {
+            let dtf = DateTimeFormatter::try_new(prefs, builder.build_time().ok()?).ok()?;
+            dtf.format(&dt.time).to_string()
+        }
+        (false, false) => return None,
+    };
+    Some(normalize(&formatted))
 }
 
 #[cfg(test)]
@@ -437,6 +452,7 @@ mod tests {
             ),
             ("ja", n, Some("long"), n, None, "2026年1月5日"),
             ("fr", None, Some("long"), n, Some("long"), "lundi 5 janvier"),
+            ("de", None, None, None, Some("long"), "Montag"),
             ("de", None, Some("long"), n, None, "5. Januar"),
             ("ko", n, Some("long"), n, None, "2026년 1월 5일"),
             ("en-GB", None, Some("short"), n, Some("short"), "Mon 5 Jan"),

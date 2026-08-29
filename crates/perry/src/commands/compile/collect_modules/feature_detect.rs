@@ -61,7 +61,11 @@ fn debug_hir_uses_string_normalization(hir_debug: &str) -> bool {
     // `localeCompare` has several static/dynamic HIR spellings. A bare match
     // deliberately over-includes the tables for a same-named user identifier;
     // feature detection permits size-only false positives, not false negatives.
-    hir_debug.contains("property: \"normalize\"") || hir_debug.contains("localeCompare")
+    // Intl.Collator uses the same normalization tables for canonical
+    // equivalence and locale-primary weights.
+    hir_debug.contains("property: \"normalize\"")
+        || hir_debug.contains("localeCompare")
+        || hir_debug.contains("property: \"Collator\"")
 }
 
 fn imports_fs_promises_glob(hir_module: &perry_hir::Module) -> bool {
@@ -351,8 +355,8 @@ pub(super) fn detect_optional_feature_usage(
         }
     }
 
-    // Detect `String.prototype.normalize` / `localeCompare` (both need
-    // `unicode-normalization`, ~113 KB) and `Intl.Segmenter` (gates
+    // Detect `String.prototype.normalize` / `localeCompare` / `Intl.Collator`
+    // (all need `unicode-normalization`, ~113 KB) and `Intl.Segmenter` (gates
     // `unicode-segmentation`, ~73 KB).
     // `normalize` and `Segmenter` lower to nodes carrying the name as a
     // `property`, so those use the exact `property: "<name>"` token.
@@ -632,6 +636,9 @@ mod tests {
         ));
         assert!(debug_hir_uses_string_normalization(
             r#"StringMethod { method: "localeCompare" }"#
+        ));
+        assert!(debug_hir_uses_string_normalization(
+            r#"PropertyGet { property: "Collator" }"#
         ));
         assert!(!debug_hir_uses_string_normalization(
             r#"StringMethod { method: "toLowerCase" }"#

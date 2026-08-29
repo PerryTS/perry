@@ -32,72 +32,79 @@ pub(crate) fn resolved_date_time_zone(options: f64) -> String {
     }
 }
 
-/// Structurally validate + canonicalize a named IANA time zone. Perry has no
-/// tz database, so this checks the identifier shape (and a table of legacy
-/// single-component zones) rather than membership. Returns `None` for a
-/// malformed / unrecognized identifier.
+/// Validate and canonicalize a named IANA time zone. `intl-datetime` builds use
+/// Perry's compiled database; minimal builds retain the structural fallback
+/// (including legacy single-component names). Returns `None` for a malformed or
+/// unrecognized identifier.
 pub(crate) fn canonicalize_named_time_zone(tz: &str) -> Option<String> {
     if tz.eq_ignore_ascii_case("UTC") || tz.eq_ignore_ascii_case("Etc/UTC") {
         return Some("UTC".to_string());
     }
-    if !tz.is_ascii() {
-        return None;
+    #[cfg(feature = "intl-datetime")]
+    {
+        return crate::date::canonicalize_tzdb_name(tz);
     }
-    // Legacy single-component IANA zones / links that carry no '/'.
-    const SINGLE_WORD_ZONES: &[&str] = &[
-        "GMT",
-        "GMT0",
-        "Zulu",
-        "Universal",
-        "UCT",
-        "Greenwich",
-        "Navajo",
-        "Eire",
-        "Iceland",
-        "Cuba",
-        "Egypt",
-        "Hongkong",
-        "Iran",
-        "Israel",
-        "Japan",
-        "Jamaica",
-        "Libya",
-        "Poland",
-        "Portugal",
-        "PRC",
-        "Singapore",
-        "Turkey",
-        "ROC",
-        "ROK",
-        "W-SU",
-        "Factory",
-        "EST",
-        "MST",
-        "HST",
-        "EST5EDT",
-        "CST6CDT",
-        "MST7MDT",
-        "PST8PDT",
-    ];
-    if SINGLE_WORD_ZONES.iter().any(|z| z.eq_ignore_ascii_case(tz)) {
-        return Some(tz.to_string());
-    }
-    let segments: Vec<&str> = tz.split('/').collect();
-    if segments.len() < 2 {
-        return None;
-    }
-    let mut has_alpha = false;
-    for seg in &segments {
-        if seg.is_empty() {
+    #[cfg(not(feature = "intl-datetime"))]
+    {
+        if !tz.is_ascii() {
             return None;
         }
-        for b in seg.bytes() {
-            if b.is_ascii_alphabetic() {
-                has_alpha = true;
-            } else if !(b.is_ascii_alphanumeric() || b == b'_' || b == b'+' || b == b'-') {
+        // Legacy single-component IANA zones / links that carry no '/'.
+        const SINGLE_WORD_ZONES: &[&str] = &[
+            "GMT",
+            "GMT0",
+            "Zulu",
+            "Universal",
+            "UCT",
+            "Greenwich",
+            "Navajo",
+            "Eire",
+            "Iceland",
+            "Cuba",
+            "Egypt",
+            "Hongkong",
+            "Iran",
+            "Israel",
+            "Japan",
+            "Jamaica",
+            "Libya",
+            "Poland",
+            "Portugal",
+            "PRC",
+            "Singapore",
+            "Turkey",
+            "ROC",
+            "ROK",
+            "W-SU",
+            "Factory",
+            "EST",
+            "MST",
+            "HST",
+            "EST5EDT",
+            "CST6CDT",
+            "MST7MDT",
+            "PST8PDT",
+        ];
+        if SINGLE_WORD_ZONES.iter().any(|z| z.eq_ignore_ascii_case(tz)) {
+            return Some(tz.to_string());
+        }
+        let segments: Vec<&str> = tz.split('/').collect();
+        if segments.len() < 2 {
+            return None;
+        }
+        let mut has_alpha = false;
+        for seg in &segments {
+            if seg.is_empty() {
                 return None;
             }
+            for b in seg.bytes() {
+                if b.is_ascii_alphabetic() {
+                    has_alpha = true;
+                } else if !(b.is_ascii_alphanumeric() || b == b'_' || b == b'+' || b == b'-') {
+                    return None;
+                }
+            }
         }
+        has_alpha.then(|| tz.to_string())
     }
-    has_alpha.then(|| tz.to_string())
 }

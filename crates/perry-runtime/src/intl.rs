@@ -1159,8 +1159,9 @@ fn make_instance(closure: *const ClosureHeader, kind: &str, locales: f64, option
             // and an explicit invalid zone is a RangeError while an unrecognized
             // host default falls back to UTC. `resolved_date_time_zone` is the
             // single source of that logic (it canonicalizes offsets to `±HH:mm`
-            // for FormatOffsetTimeZoneIdentifier and validates named zones
-            // structurally, Perry having no tz database).
+            // for FormatOffsetTimeZoneIdentifier and validates/canonicalizes
+            // named zones against the compiled IANA database when the
+            // `intl-datetime` feature is present).
             let time_zone = resolved_date_time_zone(current_options());
             set_internal_field_from_raw_handle(
                 &obj_handle,

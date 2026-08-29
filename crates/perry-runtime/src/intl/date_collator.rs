@@ -1075,6 +1075,7 @@ fn format_components(
     use_24h: bool,
 ) -> String {
     let has_date = year_opt.is_some() || month_opt.is_some() || day_opt.is_some();
+    let has_weekday = weekday_opt.is_some();
     let has_time = hour_opt.is_some()
         || minute_opt.is_some()
         || second_opt.is_some()
@@ -1087,7 +1088,7 @@ fn format_components(
     // combos, and we skip it when era/fractional-second options are in play
     // (unmodeled) or a time part is present (hour-cycle handling stays on the
     // fallback) — so those fall through unchanged.
-    if has_date && !has_time && era_opt.is_none() && fractional_digits.is_none() {
+    if (has_date || has_weekday) && !has_time && era_opt.is_none() && fractional_digits.is_none() {
         if let Some(s) = icu_components(
             locale,
             year,

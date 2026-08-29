@@ -320,15 +320,51 @@ fn parse_fixed_offset(tz: &str) -> Option<i64> {
     Some(sign * (h * 3600 + m * 60))
 }
 
+#[cfg(feature = "intl-datetime")]
+fn compiled_tzdb() -> &'static timezone_provider::tzif::CompiledTzdbProvider {
+    use std::sync::OnceLock;
+    static PROVIDER: OnceLock<timezone_provider::tzif::CompiledTzdbProvider> = OnceLock::new();
+    PROVIDER.get_or_init(Default::default)
+}
+
+/// Resolve a named zone through the compiled IANA database and return its
+/// canonical identifier. This is also the membership check used by
+/// `Intl.DateTimeFormat`: a structurally plausible but unknown name must not be
+/// reported from `resolvedOptions()` as though Perry can format it.
+#[cfg(feature = "intl-datetime")]
+pub(crate) fn canonicalize_tzdb_name(tz: &str) -> Option<String> {
+    use timezone_provider::provider::TimeZoneProvider;
+
+    let provider = compiled_tzdb();
+    let id = provider.get(tz.as_bytes()).ok()?;
+    let canonical = provider.canonicalized(id).ok()?;
+    provider
+        .identifier(canonical)
+        .ok()
+        .map(|name| name.into_owned())
+}
+
+#[cfg(feature = "intl-datetime")]
+fn compiled_zone_offset_seconds(tz: &str, secs: i64) -> Option<i64> {
+    use timezone_provider::provider::TimeZoneProvider;
+
+    let provider = compiled_tzdb();
+    let id = provider.get(tz.as_bytes()).ok()?;
+    let epoch_ns = i128::from(secs).checked_mul(1_000_000_000)?;
+    provider
+        .transition_nanoseconds_for_utc_epoch_nanoseconds(id, epoch_ns)
+        .ok()
+        .map(|offset| offset.0)
+}
+
 /// UTC offset (seconds east of UTC) for time-zone `tz` at instant `secs`,
 /// DST-aware, matching the OS tz database — the amount to add to a UTC timestamp
 /// to get the wall-clock time in `tz`. `UTC`/`GMT`/empty are 0; a fixed numeric
 /// offset is parsed directly; the process's own host zone is read straight from
-/// libc (thread-safe — it uses the process `TZ`). A named zone that is NOT the
-/// host zone can't be resolved without mutating the global libc `TZ` state
-/// (unsafe in a threaded runtime), so it falls back to 0 (UTC) — callers that
-/// need arbitrary named zones should gate a tzdb path. The common cases —
-/// default (host) zone, explicit host zone, UTC, and numeric offsets — are exact.
+/// libc (thread-safe — it uses the process `TZ`). `intl-datetime` builds resolve
+/// every other named zone through the compiled IANA database, without mutating
+/// process-global state. Minimal builds without that feature retain the UTC
+/// fallback for non-host named zones.
 pub fn zone_offset_seconds(tz: &str, secs: i64) -> i64 {
     if tz.is_empty()
         || tz.eq_ignore_ascii_case("UTC")
@@ -345,6 +381,10 @@ pub fn zone_offset_seconds(tz: &str, secs: i64) -> i64 {
         // The process is already running in this zone; libc localtime applies
         // the correct (DST-aware) offset for `secs`.
         return timestamp_to_local_components(secs).6;
+    }
+    #[cfg(feature = "intl-datetime")]
+    if let Some(offset) = compiled_zone_offset_seconds(tz, secs) {
+        return offset;
     }
     0
 }
@@ -1718,6 +1758,21 @@ mod tests {
         // Test 2024-01-15 12:30:45 UTC (timestamp: 1705321845)
         let (y, m, d, h, min, s) = timestamp_to_components(1705321845);
         assert_eq!((y, m, d, h, min, s), (2024, 1, 15, 12, 30, 45));
+    }
+
+    #[cfg(feature = "intl-datetime")]
+    #[test]
+    fn compiled_tzdb_resolves_named_zone_and_dst() {
+        assert_eq!(
+            canonicalize_tzdb_name("europe/berlin").as_deref(),
+            Some("Europe/Berlin")
+        );
+        assert_eq!(canonicalize_tzdb_name("Mars/Olympus"), None);
+
+        // 2026-01-07T06:05Z is CET (+01:00); 2026-09-07T06:05Z is
+        // CEST (+02:00). Both are explicit non-host zone lookups.
+        assert_eq!(zone_offset_seconds("Europe/Berlin", 1_767_765_900), 3_600);
+        assert_eq!(zone_offset_seconds("Europe/Berlin", 1_788_761_100), 7_200);
     }
 
     #[test]

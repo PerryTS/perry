@@ -210,8 +210,9 @@ proc-ipc = []
 # runtime carries no duplicate tables. A hand-rolled fallback covers the off
 # case for size-optimized builds.
 intl-locale = ["dep:icu_locale", "dep:icu_locale_core"]
-# CLDR-accurate Intl.DateTimeFormat / toLocaleString date-time patterns.
-intl-datetime = ["dep:icu_datetime", "dep:icu_time", "dep:icu_calendar", "dep:icu_locale_core"]
+# CLDR-accurate Intl.DateTimeFormat / toLocaleString date-time patterns and a
+# compiled IANA database for explicit named `timeZone` options.
+intl-datetime = ["dep:icu_datetime", "dep:icu_time", "dep:icu_calendar", "dep:icu_locale_core", "dep:timezone_provider"]
 # `full` only opt-ins the small Node-API helpers (os.hostname / os.homedir).
 # `postgres`, `redis`, `whoami` were previously listed here but were either
 # unimported (postgres, whoami) or only used by a now-deleted `redis_client.rs`
@@ -313,6 +314,7 @@ perry-diagnostics = { path = "../perry-diagnostics", optional = true }
 # output binary. Perry supplies its own CF-free host system in `temporal::now`
 # (clock via `SystemTime`, zone via `crate::date::host_time_zone_name`).
 temporal_rs = { version = "0.2.3", default-features = false, features = ["std", "compiled_data"], optional = true }
+timezone_provider = { version = "0.2.6", default-features = false, features = ["tzif"], optional = true }
 
 serde.workspace = true
 serde_json.workspace = true
