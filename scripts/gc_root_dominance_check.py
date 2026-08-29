@@ -1360,6 +1360,17 @@ POLL_CAPABLE_RUNTIME = {
     #       reads the caller's options object and writes the result)
     "js_builtin_subclass_construct",
     "js_tls_create_secure_context", "js_tls_secure_context_new",
+    # Fourth wave. #8965 added `js_string_concat_value_box` on 2026-08-28 —
+    # AFTER #8823 cleared the third wave — and the audit went red again the
+    # same day, which is the recurrence this list is designed to catch rather
+    # than a new kind of problem.
+    #
+    # It is the exact analogue of `js_string_concat_box` above: an SSO fast arm
+    # that returns content-stable bits, then `js_string_concat_value(prefix,
+    # value)` as the fallback (string/concat.rs:496) — and that callee is
+    # already listed. So the entry is an omission at introduction, not a
+    # judgement call.
+    "js_string_concat_value_box",
     # `js_private_brand_add` is the referent-with-no-name that NEITHER audit can
     # ask for: `--audit-poll-reach` only walks symbols `ALLOC_RE` matches, and
     # `js_private_brand_add` matches no alloc/new/create convention, so the one

@@ -407,6 +407,28 @@ jobs:
           python3 scripts/gc_runtime_root_holders.py --self-test
           python3 scripts/gc_runtime_root_holders.py
 
+      # #8821. The poll-reach audit is static, build-free and sub-second, but it
+      # lived ONLY in `gc-root-dominance.yml`, which is label-gated behind
+      # `run-extended-tests` — so it is skipped on every PR and speaks only on
+      # scheduled `main` runs, after the fact. It is also an early step there,
+      # ahead of the compiler build, so its failure masks the corpus and checker
+      # that workflow exists for: red from 2026-08-15, cleared by #8823, red
+      # again on 2026-08-28 when #8965 added `js_string_concat_value_box`.
+      #
+      # Same argument as the holder audit above — cheap and build-free, so it
+      # belongs in `lint`, which IS a required context. Running it here PREVENTS
+      # the omission at PR time rather than reporting it days later, and leaves
+      # the expensive corpus arms where they are.
+      #
+      # `--self-test` first, and it is not decoration: it PLANTS a fixture that
+      # makes the audit report, so a green run says the detector works rather
+      # than that nothing happened to be wrong today.
+      - name: Poll-capable reach audit (GC root dominance)
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/gc_root_dominance_check.py --self-test
+          python3 scripts/gc_root_dominance_check.py --audit-poll-reach
+
       # #8530. Mutable-root scanner registries are thread-local, so guarding a
       # registration call with a process-global Once/OnceLock/AtomicBool (or a
       # mutex boolean) leaves every heap after the first without those roots.
