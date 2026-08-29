@@ -144,11 +144,12 @@ pub(crate) unsafe fn own_data_field_by_name(
 /// the reserved floor since #9019 — shadows every synthetic method. This is
 /// also what makes user data properties on iterators readable at all: the
 /// old arm returned `undefined` for every non-`next` key without consulting
-/// own fields, so a stored value was write-only. Then the legacy bound
-/// synthetic methods (`return`/`throw`/`@@iterator`); `next` deliberately
-/// resolves through the caller's generic scans (`None`) so
-/// `iterator.next.call(other)` receives `other` and brand-checks; any other
-/// key is absent (`Some(undefined)`).
+/// own fields, so a stored value was write-only. `@@iterator` remains the only
+/// synthetic bound method: ordinary collection iterators do not have the
+/// generator-only `return`/`throw` methods (#9086). `next`, `return`, and
+/// `throw` deliberately resolve through the caller's generic scans (`None`),
+/// so the prototype chain remains authoritative; any other key is absent
+/// (`Some(undefined)`).
 pub(crate) unsafe fn map_set_iterator_property(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
@@ -160,8 +161,6 @@ pub(crate) unsafe fn map_set_iterator_property(
     let key_len = (*key).byte_len as usize;
     let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
     let bind_name: Option<&'static [u8]> = match key_bytes {
-        b"return" => Some(b"return"),
-        b"throw" => Some(b"throw"),
         b"@@iterator" => Some(b"@@iterator"),
         _ => None,
     };
@@ -170,7 +169,7 @@ pub(crate) unsafe fn map_set_iterator_property(
         let result = super::super::js_class_method_bind(this_f64, name.as_ptr(), name.len());
         return Some(JSValue::from_bits(result.to_bits()));
     }
-    if key_bytes == b"next" {
+    if matches!(key_bytes, b"next" | b"return" | b"throw") {
         return None;
     }
     Some(JSValue::undefined())
