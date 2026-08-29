@@ -445,7 +445,16 @@ pub unsafe fn dispatch_iterator_helper_method(
     };
 
     match method_name {
-        "next" => helper_next(obj),
+        // #9019: an own `next` assigned onto the helper instance wins over
+        // the builtin advance, exactly as on the Map/Set path.
+        "next" => {
+            if let Some(result) =
+                crate::object::call_overridden_iterator_next(obj, ITERATOR_HELPER_CLASS_ID)
+            {
+                return result;
+            }
+            helper_next(obj)
+        }
         "Symbol.iterator" | "@@iterator" => self_f64,
         "return" | "throw" => make_iter_result(JSValue::undefined(), true),
         // Lazy helpers — return a new helper wrapping `self`.

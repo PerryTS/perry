@@ -154,6 +154,7 @@ pub use self::iter_methods::{
     js_array_map_discard, js_array_reduce, js_array_some, js_array_some_captureless,
     js_array_to_locale_string, js_validate_array_callback, js_validate_array_map_callback,
 };
+pub(crate) use self::iter_object::dispatch_array_iterator_method_builtin;
 pub use self::iter_object::{
     arguments_values_iter, array_entries_iter, array_keys_iter, array_values_iter,
     array_values_iter_null_done, dispatch_array_iterator_method, js_array_entries_iter_obj,
