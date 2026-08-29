@@ -162,7 +162,7 @@ pub(crate) use new_ctor_args::{
 // super-must-be-called.
 pub(crate) use new_helpers::{
     ctor_body_calls_super, ctor_body_closure_calls_super, ctor_body_has_value_return,
-    ctor_body_uses_this, ctor_chain_can_replace_this,
+    ctor_body_uses_this, ctor_chain_can_replace_this, default_ctor_dynamic_parent_owner,
 };
 // #6325 / #6326: the class-chain walk to a native base whose surface perry
 // stamps onto the instance, plus its init emitter. Shared by the implicit
