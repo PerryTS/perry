@@ -196,6 +196,122 @@ pub(crate) fn lower_masked_window_index_get(
     value
 }
 
+/// Look up an active masked-window fact that admits STORES for
+/// `(arr, index-expr)`: same window containment as
+/// [`masked_window_fact_for_index`], but only facts from a store-admitting
+/// dense scope qualify, and only the plain raw-f64 tier (the TA tiers'
+/// hoisted pointers serve reads only; the i32 tier's all-slots-i32 proof
+/// would not survive a double store).
+pub(crate) fn masked_window_store_fact_for_index(
+    ctx: &FnCtx<'_>,
+    arr_id: u32,
+    index: &Expr,
+) -> Option<MaskedWindowArrayFact> {
+    let fact = masked_window_fact_for_index(ctx, arr_id, index)?;
+    if !fact.allows_stores || !matches!(fact.elem, MaskedWindowElem::PlainF64) {
+        return None;
+    }
+    Some(fact)
+}
+
+/// True when lowering `expr` provably materializes a genuine (unboxed)
+/// double — never a NaN-boxed value — so a raw in-window `store double` of it
+/// cannot corrupt a dense raw-f64 window and needs no per-store value check:
+///
+/// * number/integer literals lower to constant doubles;
+/// * a local with a shared i32 shadow slot (a versioned-loop counter) reads
+///   as `sitofp i32 -> double`;
+/// * an in-window masked load reads a slot the dense guard proved holds a
+///   raw-f64 number (and TA-tier loads materialize via `sitofp`/`uitofp` /
+///   raw f64 loads).
+///
+/// Deliberately NO binary/unary arithmetic in this v1: an operand typed `Any`
+/// can route `+` through a runtime helper whose result is boxed. Arithmetic
+/// over genuine doubles is a candidate extension once its lowering is pinned.
+///
+/// Closed under IEEE semantics: a raw-f64 slot never holds a payload-NaN in
+/// the box tag range (that is the raw-f64 invariant canonicalization exists
+/// to maintain), and none of these shapes fabricates one.
+pub(crate) fn masked_store_rhs_is_genuine_f64(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    match expr {
+        Expr::Number(_) | Expr::Integer(_) => true,
+        Expr::LocalGet(id) => ctx.i32_counter_slots.contains_key(id),
+        Expr::IndexGet { object, index } => match object.as_ref() {
+            Expr::LocalGet(arr_id) => {
+                masked_window_fact_for_index(ctx, *arr_id, index.as_ref()).is_some()
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Emit the in-window element STORE for a store-admitting fact: the dense
+/// entry guard proved a plain, integrity-clean raw-f64 numeric array with the
+/// whole static window in bounds and hole-free, and the caller proved the
+/// value is a genuine double — so this is a bare `store double`, no guard
+/// call, no value check, no side exit. A number carries no heap edge, so no
+/// write barrier and no layout note; the array pointer is re-derived from the
+/// receiver box per store (root-slot reload), exactly like the plain-tier
+/// loads, so a loop-poll GC move cannot strand it.
+pub(crate) fn lower_masked_window_index_set(
+    ctx: &mut FnCtx<'_>,
+    arr_id: u32,
+    arr_box: &str,
+    idx_i32: &str,
+    val_double: &str,
+    fact: &MaskedWindowArrayFact,
+) {
+    {
+        let blk = ctx.block();
+        let arr_bits = blk.bitcast_double_to_i64(arr_box);
+        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+        let idx_i64 = blk.zext(I32, idx_i32, I64);
+        let byte_offset = blk.shl(I64, &idx_i64, "3");
+        let with_header = blk.add(I64, &byte_offset, "8");
+        let element_addr = blk.add(I64, &arr_handle, &with_header);
+        let element_ptr = blk.inttoptr(I64, &element_addr);
+        // GC_STORE_AUDIT(POINTER_FREE): masked-window dense store — the
+        // matcher/lowering proved `val_double` is a genuine (unboxed) double,
+        // never a heap pointer, so the slot carries no edge.
+        blk.store(DOUBLE, val_double, &element_ptr);
+    }
+    let stored = LoweredValue {
+        semantic: SemanticKind::JsNumber,
+        rep: NativeRep::F64,
+        llvm_ty: DOUBLE,
+        value: val_double.to_string(),
+    };
+    ctx.record_lowered_value_with_access_mode_and_facts(
+        "MaskedWindowStore",
+        Some(arr_id),
+        "packed_f64_masked_window_store",
+        &stored,
+        Some(BoundsState::Guarded {
+            guard_id: fact.guard_id.clone(),
+        }),
+        None,
+        Some(BufferAccessMode::CheckedNative),
+        None,
+        None,
+        None,
+        vec![raw_f64_layout_fact(
+            Some(arr_id),
+            "consumed",
+            &fact.guard_id,
+            None,
+        )],
+        Vec::new(),
+        false,
+        false,
+        vec![
+            "index_range=static_window_guarded".to_string(),
+            "rhs_numeric_guard=static_genuine_f64_proof".to_string(),
+            "storage_layout=raw_f64_numeric_slots".to_string(),
+        ],
+    );
+}
+
 /// True when `object[index]` matches an active i32-tier masked-window fact —
 /// the dense-i32 range guard proved every window slot is an i32-representable
 /// integer, so the load can produce a native `i32` with a bare exact `fptosi`.

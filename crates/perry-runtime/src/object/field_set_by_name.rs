@@ -184,6 +184,14 @@ pub extern "C" fn js_object_set_field_by_name(
                     if crate::object::object_is_regular(o)
                         && class_id != 0
                         && class_id != NATIVE_MODULE_CLASS_ID
+                        // #9019: reserved-layout iterator receivers must
+                        // reach the tail so their floor seed runs before
+                        // any transition is consulted — an unseeded one
+                        // shares its keyless birth ShapeId with every
+                        // other keyless object of the same live bound, so
+                        // a cached edge here could hand it a foreign slot
+                        // index below the floor.
+                        && crate::object::reserved_slot_floor_for_class_id(class_id) == 0
                         && !super::prototype_chain::object_has_prototype_override(raw)
                         && super::prop_plan::store_plan_check(class_id, key as usize)
                     {

@@ -79,22 +79,27 @@ unsafe fn dispatch_on_implicit_this(method: &str) -> f64 {
         return brand_type_error(method);
     }
     let class_id = (*obj).class_id;
+    // The `_builtin` variants skip the own-`next` override probe (#9019):
+    // these thunks ARE the canonical prototype `next` functions, so invoking
+    // one directly (`proto.next.call(it)`, or a `.bind(it)` taken before a
+    // patch landed) must run the builtin algorithm — probing here would send
+    // a patch that delegates to its bound original into infinite recursion.
     match class_id {
         crate::array::ARRAY_ITERATOR_CLASS_ID => {
-            crate::array::dispatch_array_iterator_method(obj, method)
+            crate::array::dispatch_array_iterator_method_builtin(obj, method)
         }
         crate::collection_iter_object::MAP_ITERATOR_CLASS_ID => {
-            crate::collection_iter_object::dispatch_map_iterator_method(obj, method)
+            crate::collection_iter_object::dispatch_map_iterator_method_builtin(obj, method)
         }
         crate::collection_iter_object::SET_ITERATOR_CLASS_ID => {
-            crate::collection_iter_object::dispatch_set_iterator_method(obj, method)
+            crate::collection_iter_object::dispatch_set_iterator_method_builtin(obj, method)
         }
         crate::string::STRING_ITERATOR_CLASS_ID => {
-            crate::string::dispatch_string_iterator_method(obj, method)
+            crate::string::dispatch_string_iterator_method_builtin(obj, method)
         }
         #[cfg(feature = "regex-engine")]
         crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID => {
-            crate::regex::dispatch_regexp_string_iterator_method(obj, method)
+            crate::regex::dispatch_regexp_string_iterator_method_builtin(obj, method)
         }
         _ => brand_type_error(method),
     }
@@ -357,6 +362,37 @@ pub(crate) unsafe fn call_overridden_iterator_next(
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(iter_obj as i64));
     let previous = scope.root_nanbox_f64(super::js_implicit_this_get());
+    // #9019: an OWN `next` (`it.next = fn`, stored past the reserved floor
+    // by `object/reserved_floor.rs`) shadows the prototype thunk and exists
+    // independently of the tower, so probe it BEFORE the tower-null
+    // early-out — the assignment alone materializes nothing. For every
+    // unpatched iterator the probe is one descriptor lookup ending at a
+    // null keys edge. A PRESENT own value that is not a closure throws,
+    // matching IteratorNext's GetV+Call — it must never fall through to the
+    // builtin advance, which would ignore the patch the user installed.
+    let own = super::js_object_get_own_field_or_undef(iter.get_nanbox_f64(), b"next".as_ptr(), 4);
+    if own.to_bits() != crate::value::TAG_UNDEFINED {
+        if !JSValue::from_bits(own.to_bits()).is_pointer() {
+            crate::closure::throw_not_callable();
+        }
+        let own_raw = crate::value::js_nanbox_get_pointer(own);
+        // `is_closure_ptr` self-validates the address (handle band + heap
+        // floor + magic probe), so a null or mis-boxed value throws rather
+        // than faulting.
+        if !crate::closure::is_closure_ptr(own_raw as usize) {
+            crate::closure::throw_not_callable();
+        }
+        let method = scope.root_nanbox_f64(own);
+        super::js_implicit_this_set(iter.get_nanbox_f64());
+        let result = crate::exception::js_call_catching(|| {
+            crate::closure::js_native_call_value(method.get_nanbox_f64(), std::ptr::null(), 0)
+        });
+        super::js_implicit_this_set(previous.get_nanbox_f64());
+        return match result {
+            Ok(value) => Some(value),
+            Err(error) => crate::exception::js_throw(error),
+        };
+    }
     // An override can only be installed through the prototype OBJECT, and the
     // only way user code obtains that object is `Object.getPrototypeOf(iter)`
     // (or a direct prototype write), both of which materialize the tower. A

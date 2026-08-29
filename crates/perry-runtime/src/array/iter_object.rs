@@ -621,6 +621,26 @@ pub unsafe fn dispatch_array_iterator_method(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
 ) -> f64 {
+    dispatch_array_iterator_method_inner(iter_obj, method_name, true)
+}
+
+/// Builtin advance only — the canonical prototype thunk's entry (#9019):
+/// `%ArrayIteratorPrototype%.next.call(it)` (or a pre-patch `.bind(it)`)
+/// runs the builtin algorithm even when the instance carries an own patched
+/// `next`, or a patch delegating to the bound original would re-enter
+/// itself forever.
+pub(crate) unsafe fn dispatch_array_iterator_method_builtin(
+    iter_obj: *mut ObjectHeader,
+    method_name: &str,
+) -> f64 {
+    dispatch_array_iterator_method_inner(iter_obj, method_name, false)
+}
+
+unsafe fn dispatch_array_iterator_method_inner(
+    iter_obj: *mut ObjectHeader,
+    method_name: &str,
+    honor_override: bool,
+) -> f64 {
     // #7475: the raw `iter_obj` parameter is not a GC root, and this function
     // allocates in several places — `js_object_set_field` (shape transition /
     // storage growth), `make_pair_array`, and the two result constructors. A
@@ -645,10 +665,13 @@ pub unsafe fn dispatch_array_iterator_method(
     };
     match method_name {
         "next" => {
-            if let Some(result) =
-                crate::object::call_overridden_iterator_next(iter_obj(), ARRAY_ITERATOR_CLASS_ID)
-            {
-                return result;
+            if honor_override {
+                if let Some(result) = crate::object::call_overridden_iterator_next(
+                    iter_obj(),
+                    ARRAY_ITERATOR_CLASS_ID,
+                ) {
+                    return result;
+                }
             }
             if kind == KIND_VALUES_NULL_DONE {
                 let epoch_ptr = js_nanbox_get_pointer(f64::from_bits(

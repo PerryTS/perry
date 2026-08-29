@@ -41,6 +41,7 @@ pub(crate) use shapes_slot_list::{
     shape_index_migrate_after_delete, shape_index_shift_in_place, SlotList,
 };
 
+#[derive(Clone)]
 pub(crate) struct ShapeIndex {
     /// Key count covered by `slots`. Longer live array ⟹ catch up
     /// incrementally (append-only while shared); shorter ⟹ a delete
@@ -517,8 +518,10 @@ fn shape_descriptor_ensure_with_generation(
 
 /// [`shape_descriptor_ensure_with_generation`] with an explicit tombstone
 /// count — the publish half of an O(1) hole-delete, which must mint a shape
-/// identity distinct from every hole state of the same array.
-fn shape_descriptor_ensure_with_holes(
+/// identity distinct from every hole state of the same array. Also the mint
+/// for #9019's reserved-floor seed (`object/reserved_floor.rs`), whose keys
+/// array is BORN with `floor` leading holes.
+pub(crate) fn shape_descriptor_ensure_with_holes(
     keys: *const ArrayHeader,
     logical_key_count: u32,
     live_inline_slot_count: u32,
@@ -606,7 +609,7 @@ fn shape_descriptor_error_abort(error: ShapeDescriptorError) -> ! {
 }
 
 #[inline]
-fn publish_shape_result(result: Result<u32, ShapeDescriptorError>) -> u32 {
+pub(crate) fn publish_shape_result(result: Result<u32, ShapeDescriptorError>) -> u32 {
     match result {
         Ok(id) => id,
         Err(error) => shape_descriptor_error_abort(error),

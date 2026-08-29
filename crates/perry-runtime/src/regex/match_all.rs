@@ -343,8 +343,35 @@ pub unsafe fn dispatch_regexp_string_iterator_method(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
 ) -> f64 {
+    dispatch_regexp_string_iterator_method_inner(iter_obj, method_name, true)
+}
+
+/// Builtin advance only — the canonical prototype thunk's entry (#9019); see
+/// `dispatch_array_iterator_method_builtin` for the recursion rationale.
+pub(crate) unsafe fn dispatch_regexp_string_iterator_method_builtin(
+    iter_obj: *mut ObjectHeader,
+    method_name: &str,
+) -> f64 {
+    dispatch_regexp_string_iterator_method_inner(iter_obj, method_name, false)
+}
+
+unsafe fn dispatch_regexp_string_iterator_method_inner(
+    iter_obj: *mut ObjectHeader,
+    method_name: &str,
+    honor_override: bool,
+) -> f64 {
     match method_name {
         "next" => {
+            // #9019: an own `next` assigned onto the iterator instance wins
+            // over the builtin advance, exactly as on the Map/Set path.
+            if honor_override {
+                if let Some(result) = crate::object::call_overridden_iterator_next(
+                    iter_obj,
+                    REGEXP_STRING_ITERATOR_CLASS_ID,
+                ) {
+                    return result;
+                }
+            }
             let backing = f64::from_bits(crate::object::js_object_get_field(iter_obj, 0).bits());
             let arr = js_nanbox_get_pointer(backing) as *const ArrayHeader;
             let idx = f64::from_bits(crate::object::js_object_get_field(iter_obj, 1).bits()) as u32;

@@ -84,15 +84,35 @@ pub unsafe fn dispatch_string_iterator_method(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
 ) -> f64 {
+    dispatch_string_iterator_method_inner(iter_obj, method_name, true)
+}
+
+/// Builtin advance only — the canonical prototype thunk's entry (#9019);
+/// see `dispatch_array_iterator_method_builtin` for the recursion rationale.
+pub(crate) unsafe fn dispatch_string_iterator_method_builtin(
+    iter_obj: *mut ObjectHeader,
+    method_name: &str,
+) -> f64 {
+    dispatch_string_iterator_method_inner(iter_obj, method_name, false)
+}
+
+unsafe fn dispatch_string_iterator_method_inner(
+    iter_obj: *mut ObjectHeader,
+    method_name: &str,
+    honor_override: bool,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter_h = scope.root_nanbox_f64(js_nanbox_pointer(iter_obj as i64));
     let iter_obj = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
     match method_name {
         "next" => {
-            if let Some(result) =
-                crate::object::call_overridden_iterator_next(iter_obj(), STRING_ITERATOR_CLASS_ID)
-            {
-                return result;
+            if honor_override {
+                if let Some(result) = crate::object::call_overridden_iterator_next(
+                    iter_obj(),
+                    STRING_ITERATOR_CLASS_ID,
+                ) {
+                    return result;
+                }
             }
             let backing = f64::from_bits(js_object_get_field(iter_obj(), 0).bits());
             let arr_h = scope.root_nanbox_f64(backing);

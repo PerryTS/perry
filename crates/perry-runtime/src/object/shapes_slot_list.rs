@@ -159,8 +159,15 @@ pub(crate) fn shape_index_shift_in_place(
 /// Safe against a mistake by construction: [`shape_slot_lookup`] re-validates
 /// the stored key against the requested bytes before returning a slot, so an
 /// index that is wrong produces a MISS and the caller's own fallback, never a
-/// wrong property. Only a fully-built index is carried over; a partially built
-/// one is dropped and rebuilt as before.
+/// wrong property. Only a fully-built index is carried over. A partial owned
+/// index is dropped with its dying source; a partial shared index remains in
+/// place and the clone rebuilds as before.
+///
+/// A shared source remains live on sibling objects, so its index is cloned
+/// before shifting. An owned source is about to die and its index can be moved.
+/// This mirrors the keys-array ownership rule itself: forking a shared array is
+/// a genuine shape transition, while replacing an owned array transfers its
+/// identity.
 ///
 /// Returns whether the index was actually carried over: the delete tail uses
 /// that to skip the `shape_drop` that would otherwise discard it immediately.
@@ -170,12 +177,18 @@ pub(crate) fn shape_index_migrate_after_delete(
     new_keys_id: usize,
     removed_slot: u32,
     old_key_count: u32,
+    old_keys_shared: bool,
 ) -> bool {
     if old_keys_id == 0 || new_keys_id == 0 || old_keys_id == new_keys_id {
         return false;
     }
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    let Some(mut index) = inner.indices.remove(&old_keys_id) else {
+    let source_index = if old_keys_shared {
+        inner.indices.get(&old_keys_id).cloned()
+    } else {
+        inner.indices.remove(&old_keys_id)
+    };
+    let Some(mut index) = source_index else {
         return false;
     };
     if index.indexed_len < old_key_count {
@@ -357,4 +370,87 @@ pub(crate) fn shape_id_owns_keys_slot(shape_id: u32, slot: *mut u64) -> bool {
         .descriptors
         .get(&shape_id)
         .is_some_and(|record| std::ptr::addr_of!(record.keys) as *mut u64 == slot)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::*;
+
+    /// #9006: deleting from one object must copy the shared shape accelerator
+    /// to its private keys-array clone, not move it away from untouched siblings.
+    #[test]
+    fn shared_delete_preserves_the_sibling_shape_index() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            const KEY_COUNT: usize = 40;
+            let mut packed = Vec::new();
+            for i in 0..KEY_COUNT {
+                packed.extend_from_slice(format!("shared9006_{i:02}").as_bytes());
+                packed.push(0);
+            }
+            let deleting = crate::object::js_object_alloc_with_shape(
+                0x9006_0001,
+                KEY_COUNT as u32,
+                packed.as_ptr(),
+                packed.len() as u32,
+            );
+            let sibling = crate::object::js_object_alloc_with_shape(
+                0x9006_0001,
+                KEY_COUNT as u32,
+                packed.as_ptr(),
+                packed.len() as u32,
+            );
+            let shared_keys = crate::object::object_keys_array(deleting);
+            assert_eq!(shared_keys, crate::object::object_keys_array(sibling));
+            let keys_gc = crate::value::addr_class::try_read_gc_header(shared_keys as usize)
+                .expect("test premise: shared keys must be a live GC allocation");
+            assert_ne!(
+                keys_gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED,
+                0,
+                "test premise: the source keys array must be shared"
+            );
+
+            let survivor = b"shared9006_39";
+            let survivor_hash = crate::object::key_bytes_hash(survivor.as_ptr(), survivor.len());
+            assert_eq!(
+                shape_slot_lookup(shared_keys, survivor, survivor_hash, KEY_COUNT as u32, true),
+                Some(39),
+                "test premise: build the shared source index"
+            );
+
+            let victim = b"shared9006_10";
+            let victim_key =
+                crate::string::js_string_from_bytes(victim.as_ptr(), victim.len() as u32);
+            assert_eq!(
+                crate::object::js_object_delete_field(deleting, victim_key),
+                1
+            );
+            let private_keys = crate::object::object_keys_array(deleting);
+            assert_ne!(private_keys, shared_keys);
+            assert_eq!(crate::object::object_keys_array(sibling), shared_keys);
+
+            assert_eq!(
+                shape_slot_lookup(
+                    shared_keys,
+                    survivor,
+                    survivor_hash,
+                    KEY_COUNT as u32,
+                    false,
+                ),
+                Some(39),
+                "deleting a sibling stole the shared source index"
+            );
+            assert_eq!(
+                shape_slot_lookup(
+                    private_keys,
+                    survivor,
+                    survivor_hash,
+                    (KEY_COUNT - 1) as u32,
+                    false,
+                ),
+                Some(38),
+                "the deleting object did not receive the shifted index"
+            );
+        }
+    }
 }

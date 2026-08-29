@@ -1964,6 +1964,15 @@ pub(crate) struct MaskedWindowArrayFact {
     pub values_i32: bool,
     /// Storage layout the guard proved — selects the inline load shape.
     pub elem: MaskedWindowElem,
+    /// True only in a dense fast-loop scope whose matcher admitted masked
+    /// STORES (plain-f64 tier, `values_i32 == false`): the body walk proved
+    /// every store's RHS produces a genuine (unboxed) double by construction,
+    /// so an in-window raw `store double` needs no value check, no side
+    /// exit, no barrier, and cannot break the window's dense raw-f64 claim.
+    /// The i32 tier and the TA tiers never set this — a store could break
+    /// the i32 tier's all-slots-i32 materialization proof, and the TA tiers'
+    /// hoisted data pointers serve reads only.
+    pub allows_stores: bool,
 }
 
 /// #5093: one fact per (receiver, versioned loop). See

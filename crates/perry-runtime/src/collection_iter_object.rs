@@ -238,23 +238,39 @@ fn next_read_index(cursor: u32, last_key_in_place: bool, find_last: impl FnOnce(
 
 /// Dispatch `.next()` / `[Symbol.iterator]()` on a Map iterator object.
 pub unsafe fn dispatch_map_iterator_method(iter_obj: *mut ObjectHeader, method_name: &str) -> f64 {
-    dispatch_map_iterator_method_emit(iter_obj, method_name, false)
+    dispatch_map_iterator_method_emit(iter_obj, method_name, false, true)
+}
+
+/// Builtin advance only — the canonical prototype thunk's entry (#9019).
+/// `%MapIteratorPrototype%.next.call(it)` (including a `.bind(it)` taken
+/// before a patch was installed) must run the builtin algorithm even when
+/// the instance carries an own patched `next`: honoring the override there
+/// would make a patch that delegates to the bound original re-enter itself
+/// forever, and it is also not what the spec function does.
+pub(crate) unsafe fn dispatch_map_iterator_method_builtin(
+    iter_obj: *mut ObjectHeader,
+    method_name: &str,
+) -> f64 {
+    dispatch_map_iterator_method_emit(iter_obj, method_name, false, false)
 }
 
 unsafe fn dispatch_map_iterator_method_emit(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
     emit_cached: bool,
+    honor_override: bool,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter_h = scope.root_nanbox_f64(js_nanbox_pointer(iter_obj as i64));
     let iter_obj = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
     match method_name {
         "next" => {
-            if let Some(result) =
-                crate::object::call_overridden_iterator_next(iter_obj(), MAP_ITERATOR_CLASS_ID)
-            {
-                return result;
+            if honor_override {
+                if let Some(result) =
+                    crate::object::call_overridden_iterator_next(iter_obj(), MAP_ITERATOR_CLASS_ID)
+                {
+                    return result;
+                }
             }
             let backing = f64::from_bits(js_object_get_field(iter_obj(), 0).bits());
             let map_h = scope.root_nanbox_f64(backing);
@@ -317,23 +333,34 @@ unsafe fn dispatch_map_iterator_method_emit(
 
 /// Dispatch `.next()` / `[Symbol.iterator]()` on a Set iterator object.
 pub unsafe fn dispatch_set_iterator_method(iter_obj: *mut ObjectHeader, method_name: &str) -> f64 {
-    dispatch_set_iterator_method_emit(iter_obj, method_name, false)
+    dispatch_set_iterator_method_emit(iter_obj, method_name, false, true)
+}
+
+/// Builtin advance only — see [`dispatch_map_iterator_method_builtin`].
+pub(crate) unsafe fn dispatch_set_iterator_method_builtin(
+    iter_obj: *mut ObjectHeader,
+    method_name: &str,
+) -> f64 {
+    dispatch_set_iterator_method_emit(iter_obj, method_name, false, false)
 }
 
 unsafe fn dispatch_set_iterator_method_emit(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
     emit_cached: bool,
+    honor_override: bool,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter_h = scope.root_nanbox_f64(js_nanbox_pointer(iter_obj as i64));
     let iter_obj = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
     match method_name {
         "next" => {
-            if let Some(result) =
-                crate::object::call_overridden_iterator_next(iter_obj(), SET_ITERATOR_CLASS_ID)
-            {
-                return result;
+            if honor_override {
+                if let Some(result) =
+                    crate::object::call_overridden_iterator_next(iter_obj(), SET_ITERATOR_CLASS_ID)
+                {
+                    return result;
+                }
             }
             let backing = f64::from_bits(js_object_get_field(iter_obj(), 0).bits());
             let set_h = scope.root_nanbox_f64(backing);
@@ -448,11 +475,20 @@ pub unsafe extern "C-unwind" fn js_for_of_next(iter: f64) -> f64 {
                 if header.obj_type == crate::gc::GC_TYPE_OBJECT {
                     let obj = raw as *mut ObjectHeader;
                     let class_id = (*obj).class_id;
+                    // Spec IteratorNext validation applies on the fused arms
+                    // too: a builtin advance always returns an object, but a
+                    // patched own `next` (#9019) can return anything, and
+                    // `for…of` must throw the same TypeError the generic arm
+                    // throws rather than hand the desugar a primitive.
                     if class_id == MAP_ITERATOR_CLASS_ID {
-                        return dispatch_map_iterator_method_emit(obj, "next", true);
+                        return crate::symbol::js_iterator_result_validate(
+                            dispatch_map_iterator_method_emit(obj, "next", true, true),
+                        );
                     }
                     if class_id == SET_ITERATOR_CLASS_ID {
-                        return dispatch_set_iterator_method_emit(obj, "next", true);
+                        return crate::symbol::js_iterator_result_validate(
+                            dispatch_set_iterator_method_emit(obj, "next", true, true),
+                        );
                     }
                 }
             }

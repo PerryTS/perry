@@ -398,7 +398,15 @@ pub extern "C" fn js_object_delete_field(
                 // Threshold: squeeze every hole plus this key in one pass,
                 // then continue through the ordinary compaction bookkeeping
                 // is unnecessary — the squeeze does its own.
-                squeeze_holes_and_delete(obj, keys, i, key_count, alloc_limit, field_count);
+                squeeze_holes_and_delete(
+                    obj,
+                    keys,
+                    i,
+                    key_count,
+                    alloc_limit,
+                    field_count,
+                    crate::object::reserved_slot_floor_for_class_id((*obj).class_id) as usize,
+                );
                 return 1;
             }
         }
@@ -474,6 +482,7 @@ pub extern "C" fn js_object_delete_field(
                 keys_cloned as usize,
                 i as u32,
                 key_count as u32,
+                !keys_owned,
             );
             // `set_object_keys_array` publishes the cloned edge while preserving
             // the predecessor's semantic generation and object kind.
@@ -1193,12 +1202,20 @@ unsafe fn squeeze_holes_and_delete(
     key_count: usize,
     alloc_limit: usize,
     field_count: u32,
+    // #9019: a reserved-layout receiver's leading `floor` slots are
+    // STRUCTURAL tombstones guarding its raw internal fields — squeezing
+    // them would slide user keys back under the floor and re-open the
+    // field-0 alias. They are exempt from compaction; only churn holes at
+    // or past the floor are squeezed. (`delete_slot` is always >= floor
+    // there: the reserved slots hold no key a delete could match.)
+    reserved_floor: usize,
 ) {
     let keys = keys as *mut crate::ArrayHeader;
     let elements = (keys as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
     let fields_ptr = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-    let mut out = 0usize;
-    for s in 0..key_count {
+    let floor = reserved_floor.min(key_count);
+    let mut out = floor;
+    for s in floor..key_count {
         let kv = std::ptr::read(elements.add(s));
         if s == delete_slot || kv.to_bits() == crate::value::TAG_HOLE {
             continue;
@@ -1238,7 +1255,9 @@ unsafe fn squeeze_holes_and_delete(
     set_object_live_slot_count(obj, std::cmp::min(out, alloc_limit) as u32);
     // Slots moved: the per-array key index and any stale descriptors for the
     // pre-squeeze states are wrong now. Drop the index (rebuilt on demand)
-    // and publish the squeezed shape at hole_count = 0.
+    // and publish the squeezed shape at exactly the surviving hole count —
+    // zero for an ordinary receiver, the structural reserved floor (#9019)
+    // for an iterator-family one.
     crate::object::shapes::shape_drop(keys);
-    super::shapes::publish_object_shape_holes(obj, 0);
+    super::shapes::publish_object_shape_holes(obj, floor as u32);
 }
