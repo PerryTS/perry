@@ -54,6 +54,7 @@
 use anyhow::{anyhow, Result};
 use perry_hir::Expr;
 
+use crate::block::LlBlock;
 use crate::nanbox::double_literal;
 use crate::native_value::{
     BoundsState, BufferAccessMode, ExpectedNativeRep, LoweredValue, MaterializationReason,
@@ -432,6 +433,56 @@ fn emit_push_writeback(
         return Err(anyhow!("{}({}): local not in scope", what, array_id));
     }
     Ok(())
+}
+
+/// Where an inline push tier's receiver binding lives: a stack slot or a
+/// module-global root cell. Both inline tiers below need exactly two binding
+/// operations — a head write-back after a slow/realloc arm, and a head reload
+/// at the merge for the returned `length` — and both were hard-coded to
+/// `ctx.locals`, which silently excluded module-global receivers from BOTH
+/// tiers: a global `out.push(v)` fell to a bare `js_array_push_f64_spec` call
+/// per push (~26 ns vs 2.5 on the isolated append). The write-back twin
+/// (`emit_push_writeback`) has handled globals all along; this mirrors its
+/// two arms for the tiers. #8617 precedent: extending an inline lane's
+/// admission from slot locals to module-global bindings.
+enum PushReceiverHome {
+    Slot(String),
+    Global(String),
+}
+
+impl PushReceiverHome {
+    fn resolve(ctx: &FnCtx<'_>, array_id: u32) -> Option<Self> {
+        if ctx.boxed_vars.contains(&array_id) || ctx.closure_captures.contains_key(&array_id) {
+            return None;
+        }
+        if let Some(slot) = ctx.locals.get(&array_id) {
+            return Some(Self::Slot(slot.clone()));
+        }
+        if let Some(name) = ctx.module_globals.get(&array_id) {
+            return Some(Self::Global(format!("@{}", name)));
+        }
+        None
+    }
+
+    fn store_head(&self, blk: &mut LlBlock, new_box: &str) {
+        match self {
+            Self::Slot(slot) => {
+                blk.store(DOUBLE, new_box, slot);
+            }
+            Self::Global(g_ref) => {
+                // GC_STORE_AUDIT(ROOT): module global array slot is a
+                // registered mutable GC root.
+                emit_root_nanbox_store_on_block(blk, new_box, g_ref);
+            }
+        }
+    }
+
+    fn load_head(&self, blk: &mut LlBlock) -> String {
+        match self {
+            Self::Slot(slot) => blk.load(DOUBLE, slot),
+            Self::Global(g_ref) => blk.load(DOUBLE, g_ref),
+        }
+    }
 }
 
 fn lower_array_push_value(
@@ -864,13 +915,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
             let keep_guarded_numeric_push =
                 super::typed_feedback_emission_enabled() || !inline_value_shape;
-            if require_numeric_layout
-                && keep_guarded_numeric_push
-                && !ctx.boxed_vars.contains(array_id)
-                && !ctx.closure_captures.contains_key(array_id)
-                && ctx.locals.contains_key(array_id)
-            {
-                let slot = ctx.locals.get(array_id).cloned().unwrap();
+            if require_numeric_layout && keep_guarded_numeric_push {
+                if let Some(home) = PushReceiverHome::resolve(ctx, *array_id) {
                 let feedback_site_id = emit_typed_feedback_register_site(
                     ctx,
                     TypedFeedbackKind::ArrayElement,
@@ -905,7 +951,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                         &[(I64, &arr_handle), (DOUBLE, &v)],
                     );
                     let new_box = nanbox_pointer_inline(blk, &new_handle);
-                    blk.store(DOUBLE, &new_box, &slot);
+                    home.store_head(blk, &new_box);
                     blk.br(&merge_label);
                 }
                 let pushed = LoweredValue {
@@ -954,7 +1000,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                         &[(I64, &arr_handle), (DOUBLE, &v)],
                     );
                     let new_box = nanbox_pointer_inline(blk, &new_handle);
-                    blk.store(DOUBLE, &new_box, &slot);
+                    home.store_head(blk, &new_box);
                     blk.br(&merge_label);
                 }
                 let fallback = LoweredValue {
@@ -999,8 +1045,9 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     // Skip the slot reload too — it only feeds the length.
                     return Ok(double_literal(0.0));
                 }
-                let current_box = ctx.block().load(DOUBLE, &slot);
+                let current_box = home.load_head(ctx.block());
                 return Ok(emit_array_box_length(ctx, &current_box, false));
+                }
             }
 
             // Fast path: local-bound, non-captured, non-boxed array.
@@ -1029,11 +1076,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
             // array pointer doesn't change unless we grow. The slow
             // branches both update the slot via the existing
             // boxed/captured/local fall-through below.
-            if !ctx.boxed_vars.contains(array_id)
-                && !ctx.closure_captures.contains_key(array_id)
-                && ctx.locals.contains_key(array_id)
-            {
-                let slot = ctx.locals.get(array_id).cloned().unwrap();
+            if let Some(home) = PushReceiverHome::resolve(ctx, *array_id) {
                 let apush_meta_offset =
                     crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple)
                         .to_string();
@@ -1164,7 +1207,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                         &[(I64, &arr_handle), (DOUBLE, &v)],
                     );
                     let new_box = nanbox_pointer_inline(blk, &new_handle);
-                    blk.store(DOUBLE, &new_box, &slot);
+                    home.store_head(blk, &new_box);
                     blk.br(&merge_label);
                 }
 
@@ -1420,7 +1463,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                         &[(I64, &arr_handle), (DOUBLE, &v)],
                     );
                     let new_box = nanbox_pointer_inline(blk, &new_handle);
-                    blk.store(DOUBLE, &new_box, &slot);
+                    home.store_head(blk, &new_box);
                     blk.br(&merge_label);
                 }
 
@@ -1429,7 +1472,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     // Skip the slot reload too — it only feeds the length.
                     return Ok(double_literal(0.0));
                 }
-                let current_box = ctx.block().load(DOUBLE, &slot);
+                let current_box = home.load_head(ctx.block());
                 return Ok(emit_array_box_length(ctx, &current_box, false));
             }
 

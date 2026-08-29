@@ -228,7 +228,24 @@ pub(super) fn lower_packed_numeric_loop_index_set(
     array_kind: PackedNumericLoopKind,
     allow_holes: bool,
 ) -> Result<String> {
-    if allow_holes && matches!(array_kind, PackedNumericLoopKind::F64) {
+    if matches!(array_kind, PackedNumericLoopKind::F64) {
+        // Both F64 fact kinds route to the inline-check store. The
+        // hole-tolerant range fact always did; the versioned-loop fact
+        // (`allow_holes=false`, bound = `arr.length`) used to keep a
+        // per-iteration `js_typed_feedback_numeric_array_index_set_guard`
+        // CALL in its fast body — plus the store's own
+        // `js_array_numeric_value_to_raw_f64` call — costing 9.1 vs 3.3
+        // ns/store against the same loop with a constant bound, i.e. the
+        // "fast" version ran slower than the plain per-store diamond. Every
+        // check that call performed is already proven here: the loop-entry
+        // guard proved the dense RawF64 layout and the body walk proved
+        // nothing in the loop can invalidate it; the fact only ever matches
+        // offset-0 indices (`packed_f64_loop_fact_for_index` rejects offsets
+        // on non-holes facts), so the loop condition `i < arr.length`
+        // (re-read each iteration) proves the store in bounds; and the RHS
+        // value check is the range store's inline nanbox tag test — a boxed
+        // value side-exits to the slow loop exactly as the guard's failure
+        // arm did, before the store, so nothing double-applies.
         return lower_packed_f64_range_loop_index_set(
             ctx,
             arr_id,
@@ -238,6 +255,7 @@ pub(super) fn lower_packed_numeric_loop_index_set(
             side_exit_label,
         );
     }
+    let _ = allow_holes;
     let (val_double, native_value, rhs_notes) =
         lower_packed_numeric_loop_store_value(ctx, arr_id, value, array_kind)?;
     let arr_expr = Expr::LocalGet(arr_id);
