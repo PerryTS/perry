@@ -181,6 +181,15 @@ unsafe fn class_ref_has_inherited_static_data(
     let mut child = class_id;
     let mut depth = 0usize;
     while depth < 32 {
+        // The constructor's own `[[Prototype]]` (`Object.setPrototypeOf(Ctor,
+        // obj)`) provides statics for presence purposes exactly like a pinned
+        // class-expression parent does.
+        let static_proto = super::super::class_registry::class_static_prototype(child);
+        if !static_proto.is_null()
+            && ordinary_has_property(static_proto as *const ObjectHeader, key)
+        {
+            return true;
+        }
         let proto = super::super::class_registry::class_prototype_object(child);
         if !proto.is_null() && ordinary_has_property(proto as *const ObjectHeader, key) {
             return true;

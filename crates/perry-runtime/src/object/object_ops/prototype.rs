@@ -361,6 +361,19 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     };
     if top16 == 0x7FFE {
         let class_id = (bits & 0xFFFF_FFFF) as u32;
+        // An explicit `Object.setPrototypeOf(Ctor, obj)` wins over every
+        // derived answer below — it IS the constructor's [[Prototype]].
+        if super::super::class_prototype_ref_id(obj_value).is_none() {
+            let static_proto = super::super::class_registry::class_static_prototype(class_id);
+            if !static_proto.is_null() {
+                return f64::from_bits(
+                    crate::value::js_nanbox_pointer(static_proto as i64).to_bits(),
+                );
+            }
+            if super::super::class_registry::class_static_prototype_is_nulled(class_id) {
+                return f64::from_bits(TAG_NULL);
+            }
+        }
         if super::super::class_prototype_ref_id(obj_value).is_none() {
             // A class whose heritage is a runtime function value has no Perry
             // parent class id. Its constructor's [[Prototype]] is that exact

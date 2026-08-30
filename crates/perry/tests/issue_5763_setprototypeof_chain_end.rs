@@ -211,3 +211,93 @@ console.log("cycle detected:", threw);
         "a genuine prototype cycle must still be rejected with a TypeError"
     );
 }
+
+/// `Object.setPrototypeOf(Ctor, obj)` sets the CONSTRUCTOR's [[Prototype]].
+/// It must not put `obj` on the chain instances inherit from, and it must not
+/// mutate `obj` itself. Perry records the link in CLASS_STATIC_PROTOTYPES for
+/// exactly that reason: `CLASS_PROTOTYPE_OBJECTS` means "what instances inherit
+/// from", so storing it there made `new Opaque().ast` resolve the static and
+/// made prototype-method mirroring write into the user's object.
+#[test]
+fn set_prototype_of_class_ref_is_invisible_to_instances() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+const schema = { ast: "STATIC-ONLY", greet() { return "static-only"; } };
+class Opaque {}
+Object.setPrototypeOf(Opaque, schema);
+
+const inst = new Opaque();
+console.log(inst.ast);
+console.log(typeof inst.greet);
+try { inst.greet(); console.log("NO THROW"); } catch (e) { console.log("throws " + e.constructor.name); }
+console.log("ast" in inst, "greet" in inst);
+console.log(JSON.stringify(inst));
+
+// The constructor side still sees them.
+console.log(Opaque.ast, typeof Opaque.greet, Opaque.greet());
+
+// Installing a prototype method must not write into `schema`.
+Opaque.prototype.added = function () { return "proto-method"; };
+console.log(JSON.stringify(Object.keys(schema)));
+console.log(Object.prototype.hasOwnProperty.call(schema, "added"));
+"#,
+    );
+    assert_eq!(
+        stdout,
+        concat!(
+            "undefined\n",
+            "undefined\n",
+            "throws TypeError\n",
+            "false false\n",
+            "{}\n",
+            "STATIC-ONLY function static-only\n",
+            "[\"ast\",\"greet\"]\n",
+            "false\n",
+        ),
+        "the constructor's [[Prototype]] must stay off the instance chain and \
+         out of the user's object"
+    );
+}
+
+/// The static side of the same link: an inherited static DATA read, a direct
+/// static METHOD call on the class ref (which used to throw "is not a
+/// function"), and `Object.getPrototypeOf` all resolve through it.
+#[test]
+fn set_prototype_of_class_ref_serves_the_whole_static_side() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+const schema = { ast: 1, make(x) { return x + 1; } };
+class Opaque {}
+Object.setPrototypeOf(Opaque, schema);
+class Derived extends Opaque {}
+
+console.log(Object.getPrototypeOf(Opaque) === schema);
+console.log(Opaque.ast, Derived.ast);
+console.log(Opaque.make(1), Derived.make(2));
+console.log("ast" in Opaque, "make" in Derived, "nope" in Derived);
+
+const alias = Opaque;
+console.log(alias.make(10));
+
+Object.setPrototypeOf(Opaque, null);
+console.log(Opaque.ast, Derived.ast, Object.getPrototypeOf(Opaque));
+"#,
+    );
+    assert_eq!(
+        stdout,
+        concat!(
+            "true\n",
+            "1 1\n",
+            "2 3\n",
+            "true true false\n",
+            "11\n",
+            "undefined undefined null\n",
+        ),
+        "static reads, static calls, `in`, and getPrototypeOf must all route \
+         through the recorded constructor prototype, and clear with it"
+    );
+}

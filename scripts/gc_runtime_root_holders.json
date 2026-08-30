@@ -1790,6 +1790,19 @@
       "name": "WINDOW_ROOTS",
       "verdict": "not_a_gc_pointer",
       "why": "Window-root registry maps numeric window handles to numeric root-widget handles; neither value is a JavaScript heap pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_STATIC_PROTOTYPES",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::class_registry::gc_roots::scan_class_side_table_roots_mut and its budgeted step twin (class_side_table_root_snapshot enumerates ClassSideTableRootSlot::StaticPrototype; scan_class_side_table_root_slot visits that slot)",
+      "why": "Constructor-side [[Prototype]] recorded by Object.setPrototypeOf(Ctor, obj) on a declared class. Holds a real heap ObjectHeader address as usize, so it is visited with visit_usize_slot in BOTH the full and budgeted class-side-table walks, exactly like the CLASS_DECL_PROTOTYPE_OBJECTS entries beside it, and class_static_prototype_root_store fires runtime_write_barrier_root_raw_ptr on the stored pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_STATIC_PROTOTYPE_NULLED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Set of class ids whose constructor [[Prototype]] was explicitly set to null, so Object.getPrototypeOf answers null rather than the default Function.prototype. Stores u32 class ids only \u2014 no heap address, nothing to trace or forward."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core perry_thread_local! declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

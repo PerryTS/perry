@@ -1583,6 +1583,39 @@ pub unsafe extern "C" fn js_class_static_method_call(
     {
         return result;
     }
+    // `Object.setPrototypeOf(Ctor, obj)` put a plain object on the
+    // CONSTRUCTOR's prototype chain, so `Ctor.method(...)` resolves through it
+    // (Effect's `Schema.Opaque`). Walk the registered parent chain the same way
+    // the static FIELD lookup above does, reading each level's recorded
+    // constructor prototype, and invoke the first callable found with `this`
+    // bound to the original receiver.
+    {
+        let mut cid = class_id;
+        let mut depth = 0u32;
+        while cid != 0 && depth < 32 {
+            let static_proto = super::class_static_prototype(cid);
+            if !static_proto.is_null() {
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                let member = super::super::field_get_set::js_object_get_field_by_name(
+                    static_proto as *const ObjectHeader,
+                    key,
+                );
+                let member = f64::from_bits(member.bits());
+                let mv = crate::value::JSValue::from_bits(member.to_bits());
+                if !mv.is_undefined() && !mv.is_null() {
+                    let prev_this = crate::object::js_implicit_this_set(receiver);
+                    let result = crate::closure::js_native_call_value(member, args_ptr, args_len);
+                    crate::object::js_implicit_this_set(prev_this);
+                    return result;
+                }
+            }
+            match get_parent_class_id(cid) {
+                Some(parent) if parent != 0 && parent != cid => cid = parent,
+                _ => break,
+            }
+            depth += 1;
+        }
+    }
     // `class X extends Promise` — inherited builtin static (`X.all(...)`,
     // `X.resolve(...)`, …). Dispatch the spec static with `this` = the subclass
     // receiver so `NewPromiseCapability(X)` constructs the subclass. Resolves the

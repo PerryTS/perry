@@ -1349,6 +1349,19 @@ pub extern "C" fn js_object_get_field_by_name(
                         let mut child = class_id;
                         let mut depth = 0usize;
                         while depth < 32 {
+                            // The constructor's own `[[Prototype]]`, set by
+                            // `Object.setPrototypeOf(Ctor, obj)`. Checked first:
+                            // it is the nearest static-side link, and unlike
+                            // `class_prototype_object` it is never on an
+                            // instance's chain.
+                            let static_proto =
+                                super::super::class_registry::class_static_prototype(child);
+                            if !static_proto.is_null() {
+                                let v = js_object_get_field_by_name(static_proto as *const _, key);
+                                if !v.is_undefined() {
+                                    return v;
+                                }
+                            }
                             let proto = super::super::class_registry::class_prototype_object(child);
                             if !proto.is_null() {
                                 let v = js_object_get_field_by_name(proto as *const _, key);

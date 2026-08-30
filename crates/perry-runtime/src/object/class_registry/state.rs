@@ -319,6 +319,38 @@ crate::perry_thread_local! {
 }
 
 crate::perry_thread_local! {
+    /// The CONSTRUCTOR's `[[Prototype]]`, set by `Object.setPrototypeOf(Ctor, obj)`
+    /// on a declared class (perry represents those as INT32 ClassRefs, not heap
+    /// Function objects, so they have no closure prototype slot to write).
+    ///
+    /// Deliberately its own table. `CLASS_PROTOTYPE_OBJECTS` means "the object
+    /// INSTANCES of this class inherit from", and the method-dispatch and
+    /// field-read walks read it for exactly that purpose — parking a
+    /// constructor-side link there makes `new Ctor()` inherit the constructor's
+    /// statics and makes prototype-method mirroring write into the user's
+    /// object. Only the static-side lookups consult this table:
+    /// `js_object_get_field_by_name`'s ClassRef arm, the generic `in` presence
+    /// walk, static method dispatch, and `Object.getPrototypeOf`.
+    ///
+    /// Effect's `Schema.Opaque` is the motivating shape (`Schema.ts:1887`,
+    /// `:5874`): `class Opaque {}; Object.setPrototypeOf(Opaque, schema)`, then
+    /// `class Partial extends Opaque {}` reads `Partial.ast` through the chain.
+    ///
+    /// Stored as `usize` for the same Send + Sync reason as the tables above.
+    pub static CLASS_STATIC_PROTOTYPES: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+}
+
+crate::perry_thread_local! {
+    /// Class ids whose constructor `[[Prototype]]` was explicitly set to `null`
+    /// (`Object.setPrototypeOf(Ctor, null)`). Absence from CLASS_STATIC_PROTOTYPES
+    /// alone cannot express this: "never linked" must still report the default
+    /// `Function.prototype`, while an explicit null must report `null`. Holds
+    /// class ids only, so the collector has nothing to trace here.
+    pub static CLASS_STATIC_PROTOTYPE_NULLED: RwLock<Option<std::collections::HashSet<u32>>> =
+        RwLock::new(None);
+}
+
+crate::perry_thread_local! {
     /// Lazily materialized `Class.prototype` objects for declared ES classes.
     /// These are separate from `CLASS_PROTOTYPE_OBJECTS`: that older table is
     /// intentionally overloaded for synthetic prototype sources and static
@@ -468,17 +500,77 @@ pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut O
     crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
 }
 
-pub(crate) fn class_prototype_object_root_clear(class_id: u32) {
+pub(crate) fn class_static_prototype_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {
+    if class_id == 0 || proto_ptr.is_null() {
+        return;
+    }
+    CLASS_STATIC_PROTOTYPES.with(|table| {
+        let mut guard = table.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(HashMap::new());
+        }
+        guard.as_mut().unwrap().insert(class_id, proto_ptr as usize);
+    });
+    CLASS_STATIC_PROTOTYPE_NULLED.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(set) = guard.as_mut() {
+                set.remove(&class_id);
+            }
+        }
+    });
+    crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
+}
+
+pub(crate) fn class_static_prototype_root_clear(class_id: u32) {
     if class_id == 0 {
         return;
     }
-    CLASS_PROTOTYPE_OBJECTS.with(|table| {
+    CLASS_STATIC_PROTOTYPES.with(|table| {
         if let Ok(mut guard) = table.write() {
             if let Some(map) = guard.as_mut() {
                 map.remove(&class_id);
             }
         }
     });
+    CLASS_STATIC_PROTOTYPE_NULLED.with(|table| {
+        let mut guard = table.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(std::collections::HashSet::new());
+        }
+        guard.as_mut().unwrap().insert(class_id);
+    });
+}
+
+/// True when `Object.setPrototypeOf(Ctor, null)` explicitly severed the
+/// constructor's prototype chain, as opposed to never having linked one.
+pub(crate) fn class_static_prototype_is_nulled(class_id: u32) -> bool {
+    if class_id == 0 {
+        return false;
+    }
+    let class_id = crate::object::class_generic_origin(class_id).unwrap_or(class_id);
+    CLASS_STATIC_PROTOTYPE_NULLED.with(|table| {
+        table
+            .read()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|set| set.contains(&class_id)))
+            .unwrap_or(false)
+    })
+}
+
+/// The constructor-side `[[Prototype]]` recorded for `class_id`, or null.
+pub(crate) fn class_static_prototype(class_id: u32) -> *mut ObjectHeader {
+    if class_id == 0 {
+        return std::ptr::null_mut();
+    }
+    let class_id = crate::object::class_generic_origin(class_id).unwrap_or(class_id);
+    CLASS_STATIC_PROTOTYPES.with(|table| {
+        if let Ok(read) = table.read() {
+            if let Some(map) = read.as_ref() {
+                return map.get(&class_id).copied().unwrap_or(0) as *mut ObjectHeader;
+            }
+        }
+        std::ptr::null_mut()
+    })
 }
 
 pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {

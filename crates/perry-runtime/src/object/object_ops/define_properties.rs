@@ -371,13 +371,18 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
     //   Partial.ast
     //
     // Ordinary object and closure targets already have prototype side tables,
-    // but the ClassRef previously fell through as a no-op. The class-static
-    // inheritance walk already consults CLASS_PROTOTYPE_OBJECTS, so record an
-    // ordinary object prototype there. A null prototype clears an earlier
-    // link. Other valid prototype kinds retain their existing behavior.
+    // but the ClassRef previously fell through as a no-op. Record it in
+    // CLASS_STATIC_PROTOTYPES — the CONSTRUCTOR-side table.
+    //
+    // It must not go in CLASS_PROTOTYPE_OBJECTS: that table means "what
+    // INSTANCES of this class inherit from", so parking a constructor link
+    // there makes `new Opaque().ast` resolve the static (Node: undefined) and
+    // makes prototype-method mirroring write into `schema` itself. A null
+    // prototype clears an earlier link. Other valid prototype kinds retain
+    // their existing behavior.
     if let Some(class_id) = super::super::class_ref_id(obj_value) {
         if proto_is_null {
-            super::super::class_registry::class_prototype_object_root_clear(class_id);
+            super::super::class_registry::class_static_prototype_root_clear(class_id);
             return obj_value;
         }
         if (proto_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {
@@ -396,7 +401,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
                 }
                 && is_valid_obj_ptr(proto_ptr as *const u8)
             {
-                super::super::class_registry::class_prototype_object_root_store(
+                super::super::class_registry::class_static_prototype_root_store(
                     class_id, proto_ptr,
                 );
                 return obj_value;
