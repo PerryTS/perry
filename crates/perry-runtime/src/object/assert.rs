@@ -267,6 +267,11 @@ fn expected_error_matches(thrown: f64, expected: f64) -> bool {
         if !is_null_or_undefined(message) && regex_test_value(expected, message).unwrap_or(false) {
             return true;
         }
+        // A RegExp is a complete matcher category. Falling through would
+        // incorrectly pass the RegExp object to `instanceof`, which throws a
+        // TypeError instead of letting assert.throws/assert.rejects report an
+        // AssertionError for a non-matching pattern.
+        return false;
     }
     // A plain object validator (e.g. `{ code: "ERR_X" }`) is a property-bag
     // matcher, never a constructor — its own enumerable keys must each equal
@@ -1303,4 +1308,47 @@ pub extern "C" fn js_assert_if_error(value: f64) -> f64 {
         return undefined_f64();
     }
     throw_assertion(if_error_message(value), value, null_f64(), "ifError", false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    extern "C" fn throw_nope(_closure: *const crate::closure::ClosureHeader) -> f64 {
+        let message = crate::string::js_string_from_bytes(b"nope".as_ptr(), 4);
+        let error = crate::error::js_error_new_with_message(message);
+        crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    }
+
+    #[test]
+    fn throws_non_matching_regexp_reports_assertion_error() {
+        let block = crate::closure::js_closure_alloc(throw_nope as *const u8, 0);
+        crate::closure::js_register_closure_arity(throw_nope as *const u8, 0);
+        let pattern = crate::string::js_string_from_bytes(b"will-not-match".as_ptr(), 14);
+        let flags = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
+        let regexp = crate::regex::js_regexp_new(pattern, flags);
+
+        let trap = crate::exception::js_try_push();
+        let jumped = unsafe { crate::ffi::setjmp::setjmp(trap as *mut c_int) };
+        if jumped == 0 {
+            js_assert_throws(
+                crate::value::js_nanbox_pointer(block as i64),
+                crate::value::js_nanbox_pointer(regexp as i64),
+                undefined_f64(),
+            );
+            panic!("a non-matching RegExp must throw");
+        }
+
+        crate::exception::js_try_end();
+        let error = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        assert_eq!(
+            value_to_string(read_property(error, "name")),
+            "AssertionError"
+        );
+        assert_eq!(
+            value_to_string(read_property(error, "code")),
+            "ERR_ASSERTION"
+        );
+    }
 }
