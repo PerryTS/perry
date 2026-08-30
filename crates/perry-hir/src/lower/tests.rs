@@ -1102,6 +1102,41 @@ fn named_class_expr_self_new_records_appended_capture_provenance() {
     );
 }
 
+/// A private update wraps its receiver twice: once for the read and once for
+/// the write. Both guards must preserve the named class expression's lexical
+/// self binding, including when that binding is captured by a nested arrow.
+#[test]
+fn named_class_expr_static_private_update_in_arrow_keeps_lexical_brand_owner() {
+    let source = r#"
+        const make = () => class c {
+            static #v = 0;
+            static f() { return (() => { c.#v++; return c.#v; })(); }
+        };
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let method = hir
+        .classes
+        .iter()
+        .find(|class| class.name.starts_with("c__class_expr_"))
+        .expect("named class expression is lowered")
+        .static_methods
+        .iter()
+        .find(|method| method.name == "f")
+        .expect("static f method is lowered");
+    let body = format!("{:#?}", method.body);
+
+    assert_eq!(
+        body.matches("receiver_is_brand_owner: true").count(),
+        3,
+        "the update's read/write guards and the following read must identify the lexical class owner: {body}"
+    );
+    assert!(
+        !body.contains("receiver_is_brand_owner: false"),
+        "both guards around the private update must retain the lexical class owner: {body}"
+    );
+}
+
 /// A sibling class declaration is already a known lexical binding while an
 /// earlier class method is lowered, even though its registry entry is emitted
 /// later. The unresolved-constructor guard must preserve that forward binding.

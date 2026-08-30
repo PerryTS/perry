@@ -31,6 +31,14 @@ pub(crate) fn private_storage_property(ctx: &LoweringContext, field_name: &str) 
 }
 
 pub(crate) fn is_class_expr_self_binding(ctx: &LoweringContext, object: &Expr) -> bool {
+    let object = match object {
+        // A private update (`c.#v++`) applies a read guard and then a write
+        // guard to the same receiver. Preserve the lexical-brand-owner bit
+        // through the inner guard so the outer guard does not fall back to the
+        // surrounding function's `this` (which is absent in a nested arrow).
+        Expr::PrivateGuard { object, .. } => object.as_ref(),
+        other => other,
+    };
     matches!(
         object,
         Expr::LocalGet(id)
