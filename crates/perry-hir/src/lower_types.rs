@@ -462,13 +462,14 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                         Type::Any
                     }
                 }
+                // One rule with the HIR-level `??` inference: an unknown left
+                // stays unknown, only a nullish left takes the right type.
+                // Pre-fix this arm answered the RIGHT type for an `Any` left,
+                // so `opts?.masks ?? null` (an `OptChain` left, which has no
+                // arm here) declared its binding `Null` — see `coalesce_type`.
                 NullishCoalescing => {
                     let left = infer_type_from_expr(&bin.left, ctx);
-                    if !matches!(left, Type::Any) {
-                        left
-                    } else {
-                        infer_type_from_expr(&bin.right, ctx)
-                    }
+                    crate::analysis::coalesce_type(left, || infer_type_from_expr(&bin.right, ctx))
                 }
             }
         }

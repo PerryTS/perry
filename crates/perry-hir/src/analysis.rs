@@ -18,6 +18,7 @@ mod uses_this;
 pub(crate) use uses_this::{closure_uses_new_target, closure_uses_this, uses_this_stmt};
 
 mod value_types;
+pub(crate) use value_types::coalesce_type;
 pub use value_types::{infer_expr_type, infer_refinable_expr_type, HirTypeEnv, HirTypeFacts};
 
 /// Whether a function BODY reads the dynamic `this` binding — directly via

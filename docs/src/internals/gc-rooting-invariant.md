@@ -60,7 +60,7 @@ wrong:
 Four instances shipped in a single day. The detection lag, not the fix, was the
 cost every time.
 
-## The five ways it has actually broken
+## The six ways it has actually broken
 
 ### 1. Slot index past the frame (#7184)
 
@@ -128,6 +128,35 @@ reads emitted LLVM IR and cannot see a runtime table. The instruments that catch
 are `PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`
 on a real workload. When adding a cache of a heap pointer, register it in
 `gc_register_mutable_root_scanner` in `gc/mod.rs` in the same commit.
+
+### 6. The root decision trusted a structural type inference (`?? null`)
+
+`const masks = opts?.masks ?? null`, from a Three.js world builder. Optional
+chaining lowers the left side to an `Any`-typed conditional, and the `??`
+inference rule (`analysis/value_types.rs`, with an AST-level twin in
+`lower_types.rs`) answered the RIGHT operand's type for an unknown left, so the
+binding was declared `Null`. `collectors/pointer_locals.rs` distrusts declared
+types on purpose (#7846) and proves pointer-ness from the initializer — but its
+generic `expr_value_type` fallback ran that same inference and took `Null` as
+proof. No shadow slot, so no `ptr addrspace(1)` retype and nothing for
+`root_reload` to reload: the array's NaN-boxed address sat in a plain
+`alloca double` across the loop back-edge poll, the copying minor moved the
+array, and `masks[0]` read from-space (SIGBUS under
+`PERRY_GC_PROTECT_FROMSPACE=1`, silent garbage otherwise).
+
+An explicit `number[] | null` annotation changed the HIR type and nothing else.
+A plain ternary was rooted all along, because the collector's `Conditional` arm
+fails closed when either branch is unclassifiable — which is how the `??` path
+was isolated. The fix is both halves: `coalesce_type` keeps an unknown left
+unknown, and the collector's `Logical` arm requires both operands to classify
+before it answers, so a root decision never again rides on the inference.
+
+*Tell:* a local whose HIR type is `Null`, `Void` or `Number` while its
+initializer reads a property, calls, or coalesces. `--unrooted-allocas` was
+silent here: the stored value's provenance is a property read
+(`js_object_get_field_*`, an inline-cache slot load), which its heap-source
+vocabulary does not include — the same one-load gap #7664 closed for string
+handles, still open for field reads.
 
 ## How to check your work
 

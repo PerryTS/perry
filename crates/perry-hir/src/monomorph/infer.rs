@@ -107,9 +107,14 @@ fn infer_expr_type(expr: &Expr, module: &Module, idx: &ModuleIndex) -> Option<Ty
                         .or_else(|| infer_expr_type(right, module, idx))
                 }
                 LogicalOp::Coalesce => {
-                    // Returns non-null operand
-                    infer_expr_type(left, module, idx)
-                        .or_else(|| infer_expr_type(right, module, idx))
+                    // `a ?? b` is `a` unless `a` is nullish. An un-inferable
+                    // left says nothing about the selected value, so the
+                    // answer stays `None` rather than borrowing the right
+                    // operand's type (see `analysis::coalesce_type`).
+                    match infer_expr_type(left, module, idx)? {
+                        Type::Null | Type::Void => infer_expr_type(right, module, idx),
+                        left_ty => Some(left_ty),
+                    }
                 }
             }
         }

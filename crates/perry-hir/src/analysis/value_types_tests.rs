@@ -1646,6 +1646,105 @@ fn logical_and_or_unions_both_operands() {
     assert_eq!(infer_expr_type(&same, &env), Type::String);
 }
 
+/// `a ?? b` selects `a` unless `a` is nullish. An UNKNOWN left may be a
+/// non-nullish heap value, so the result must stay unknown: the previous rule
+/// answered the right operand's type, which typed `opts?.masks ?? null` as
+/// `Null` and cost that local its GC root (see `coalesce_type`).
+#[test]
+fn nullish_coalescing_keeps_an_unknown_left_operand_unknown() {
+    let env = empty_env();
+    // An unresolved local is `Any`.
+    let unknown = Expr::Logical {
+        op: LogicalOp::Coalesce,
+        left: Box::new(Expr::LocalGet(999)),
+        right: Box::new(Expr::Null),
+    };
+    assert_eq!(infer_expr_type(&unknown, &env), Type::Any);
+
+    // The exact lowering of `opts?.masks ?? null` on a receiver whose type the
+    // environment does not know: `opts == null ? undefined : opts.masks`.
+    let optional_chain = Expr::Logical {
+        op: LogicalOp::Coalesce,
+        left: Box::new(Expr::Conditional {
+            condition: Box::new(Expr::Compare {
+                op: CompareOp::LooseEq,
+                left: Box::new(Expr::LocalGet(5)),
+                right: Box::new(Expr::Null),
+            }),
+            then_expr: Box::new(Expr::Undefined),
+            else_expr: Box::new(Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(5)),
+                property: "masks".to_string(),
+                byte_offset: 0,
+            }),
+        }),
+        right: Box::new(Expr::Null),
+    };
+    assert_eq!(infer_expr_type(&optional_chain, &env), Type::Any);
+}
+
+#[test]
+fn nullish_coalescing_takes_the_right_operand_only_for_a_nullish_left() {
+    let env = empty_env();
+    let coalesce = |left: Expr, right: Expr| Expr::Logical {
+        op: LogicalOp::Coalesce,
+        left: Box::new(left),
+        right: Box::new(right),
+    };
+    assert_eq!(
+        infer_expr_type(&coalesce(Expr::Null, Expr::Integer(1)), &env),
+        Type::Number
+    );
+    assert_eq!(
+        infer_expr_type(
+            &coalesce(Expr::Undefined, Expr::String("x".to_string())),
+            &env
+        ),
+        Type::String
+    );
+    // A never-nullish left makes the right operand unreachable.
+    assert_eq!(
+        infer_expr_type(
+            &coalesce(Expr::Integer(1), Expr::String("x".to_string())),
+            &env
+        ),
+        Type::Number
+    );
+}
+
+#[test]
+fn coalesce_type_widens_a_nullable_union_by_the_right_operand() {
+    let nullable_array = Type::Union(vec![Type::Array(Box::new(Type::Number)), Type::Null]);
+    // `(number[] | null) ?? null` — the right adds nothing new.
+    assert_eq!(
+        coalesce_type(nullable_array.clone(), || Type::Null),
+        nullable_array
+    );
+    // `(number | undefined) ?? "x"` can be a string.
+    assert_eq!(
+        coalesce_type(Type::Union(vec![Type::Number, Type::Void]), || Type::String),
+        Type::Union(vec![Type::Number, Type::Void, Type::String])
+    );
+    // A nested union on the right is merged member-wise.
+    assert_eq!(
+        coalesce_type(Type::Union(vec![Type::Number, Type::Void]), || Type::Union(
+            vec![Type::Number, Type::String]
+        )),
+        Type::Union(vec![Type::Number, Type::Void, Type::String])
+    );
+    // An unknown right on a nullable left is unknown.
+    assert_eq!(
+        coalesce_type(Type::Union(vec![Type::Number, Type::Void]), || Type::Any),
+        Type::Any
+    );
+    // A union with no nullish member never reaches the right operand.
+    assert_eq!(
+        coalesce_type(Type::Union(vec![Type::Number, Type::String]), || Type::Null),
+        Type::Union(vec![Type::Number, Type::String])
+    );
+    assert_eq!(coalesce_type(Type::Unknown, || Type::Null), Type::Unknown);
+}
+
 #[test]
 fn resolves_this_and_super_in_class_context() {
     let mut module = Module::new("test");

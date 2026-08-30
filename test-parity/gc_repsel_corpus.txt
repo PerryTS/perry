@@ -836,3 +836,12 @@ test_gap_gc_string_copy_source_rooting
 # #8443: `String.prototype.repeat` held its receiver unrooted across a
 # re-entrant count coercion. Same reason.
 test_gap_gc_string_repeat_reentrant_count
+
+# --- `?? null` local rooting ------------------------------------------------
+# `const masks = opts?.masks ?? null` was declared `Null` by the `??` inference
+# rule (an unknown left took the RIGHT operand's type), and the pointer-locals
+# collector accepted that as proof the local holds no pointer: no shadow slot,
+# a from-space array address in a plain `alloca double` across the loop poll.
+# Pre-fix: SIGBUS after the first copying minor under
+# PERRY_GC_PROTECT_FROMSPACE=1; post-fix: `600000 0.35 0.25 0.1 100000 0.35`.
+test_gap_gc_coalesce_local_root

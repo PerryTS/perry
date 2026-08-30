@@ -362,6 +362,33 @@ pub fn collect_pointer_typed_locals(
                     None
                 }
             }
+            // `a ?? b` / `a || b` / `a && b` select one OPERAND, so the result
+            // is classifiable only when both operands are — the same `?`
+            // discipline as `Conditional` below. This arm exists so the answer
+            // never comes from the generic `infer_expr_type` fallback at the
+            // bottom: that inference is structural, and it typed
+            // `const masks = opts?.masks ?? null` as `Null` (the left is an
+            // `Any`-typed conditional, and the old `??` rule answered the
+            // right operand for an unknown left). `Null` is definitely
+            // non-pointer, so the local lost its shadow slot and the array's
+            // pre-collection address sat in a plain `alloca double` across the
+            // loop poll. The HIR rule is fixed too, but a root decision must
+            // not depend on it: an unclassifiable operand keeps the slot.
+            Expr::Logical { op, left, right } => {
+                let left_ty =
+                    expr_value_type(left, local_types, local_value_types, non_pointer_locals)?;
+                let right_ty =
+                    expr_value_type(right, local_types, local_value_types, non_pointer_locals)?;
+                match op {
+                    perry_hir::LogicalOp::Coalesce
+                        if matches!(left_ty, Type::Null | Type::Void) =>
+                    {
+                        Some(right_ty)
+                    }
+                    _ if left_ty == right_ty => Some(left_ty),
+                    _ => Some(Type::Union(vec![left_ty, right_ty])),
+                }
+            }
             Expr::Conditional {
                 then_expr,
                 else_expr,
@@ -1369,6 +1396,105 @@ mod tests {
         let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
         assert!(!slots.contains_key(&1));
         assert!(slots.contains_key(&2));
+    }
+
+    /// The `Accum.add` shape from the Claude-of-Duty native profile — the
+    /// exact HIR `--trace hir` printed for
+    ///
+    /// ```ts
+    /// add(count: number, opts: { masks: number[] } | null) {
+    ///   const masks = opts?.masks ?? null;
+    /// ```
+    ///
+    /// HIR typed the binding `Null` (the old `??` rule answered the right
+    /// operand for an `Any` left), and `expr_value_type`'s generic fallback
+    /// accepted that as proof the local holds no pointer. The local then sat
+    /// in a plain `alloca double` across the loop poll, the copying minor moved
+    /// the array, and `masks[0]` dereferenced from-space (SIGBUS under
+    /// `PERRY_GC_PROTECT_FROMSPACE=1`).
+    ///
+    /// Two things are pinned on purpose: the `Let` type stays `Null`, so the
+    /// collector must not need the HIR fix to keep the slot; and the receiver
+    /// is a PARAMETER, whose type never enters `local_value_types`, so the
+    /// property read is unclassifiable exactly as it was in the failing build.
+    #[test]
+    fn a_coalesced_optional_chain_read_keeps_its_shadow_slot() {
+        let params = vec![Param {
+            id: 5,
+            name: "opts".to_string(),
+            ty: Type::Union(vec![Type::Object(Default::default()), Type::Null]),
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }];
+        let stmts = vec![Stmt::Let {
+            id: 6,
+            name: "masks".to_string(),
+            ty: Type::Null,
+            mutable: false,
+            init: Some(Expr::Logical {
+                op: perry_hir::LogicalOp::Coalesce,
+                left: Box::new(Expr::Conditional {
+                    condition: Box::new(Expr::Compare {
+                        op: perry_hir::CompareOp::LooseEq,
+                        left: Box::new(Expr::LocalGet(5)),
+                        right: Box::new(Expr::Null),
+                    }),
+                    then_expr: Box::new(Expr::Undefined),
+                    else_expr: Box::new(Expr::PropertyGet {
+                        object: Box::new(Expr::LocalGet(5)),
+                        property: "masks".to_string(),
+                        byte_offset: 0,
+                    }),
+                }),
+                right: Box::new(Expr::Null),
+            }),
+        }];
+
+        let slots = collect_pointer_typed_locals(&params, &stmts, &HashSet::new());
+        assert!(
+            slots.contains_key(&6),
+            "`opts?.masks ?? null` can bind a heap array; without a shadow slot the local \
+             keeps the pre-collection address across the loop poll"
+        );
+    }
+
+    /// The precision the `Logical` arm must keep: a `??` / `||` over two
+    /// proven scalars is still a scalar and pays no slot.
+    #[test]
+    fn a_logical_operator_over_proven_scalars_still_pays_no_slot() {
+        let stmts = vec![
+            Stmt::Let {
+                id: 1,
+                name: "n".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Logical {
+                    op: perry_hir::LogicalOp::Coalesce,
+                    left: Box::new(Expr::Integer(1)),
+                    right: Box::new(Expr::Integer(2)),
+                }),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "m".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Logical {
+                    op: perry_hir::LogicalOp::Or,
+                    left: Box::new(Expr::Integer(0)),
+                    right: Box::new(Expr::Bool(true)),
+                }),
+            },
+        ];
+
+        let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
+        assert!(!slots.contains_key(&1), "`1 ?? 2` is a proven number");
+        assert!(
+            !slots.contains_key(&2),
+            "`0 || true` is a proven scalar union"
+        );
     }
 
     #[test]

@@ -1717,12 +1717,53 @@ fn infer_logical_type<F: HirTypeFacts + ?Sized>(
         }
         LogicalOp::Coalesce => {
             let left_ty = infer_expr_type(left, env);
-            if matches!(left_ty, Type::Any | Type::Null | Type::Void) {
-                infer_expr_type(right, env)
-            } else {
-                left_ty
-            }
+            coalesce_type(left_ty, || infer_expr_type(right, env))
         }
+    }
+}
+
+/// Result type of `left ?? right`, given the left operand's type and the
+/// right's on demand.
+///
+/// `a ?? b` evaluates to `a` unless `a` is nullish, so the right operand only
+/// contributes on the path where the left is `null`/`undefined`:
+///
+/// * a left that is definitely nullish yields the right type;
+/// * a left that MAY be nullish (a union with a `Null`/`Void` member) keeps its
+///   members and gains the right type; an unknown right collapses to `Any`;
+/// * a left that is UNKNOWN (`Any`/`Unknown`) stays unknown. It may be a
+///   non-nullish heap value, and the right operand says nothing about it.
+///   Both copies of this rule (here and `lower_types::infer_type_from_expr`)
+///   used to answer the RIGHT type for an unknown left, which typed
+///   `const masks = opts?.masks ?? null` as `Null` — optional chaining lowers
+///   its left side to an `Any`-typed conditional. The codegen pointer analysis
+///   (`collectors/pointer_locals.rs`) took that as proof the local holds no
+///   pointer and dropped its GC root, so an evacuating minor at the loop poll
+///   left the array's from-space address in a plain `alloca double` and the
+///   next `masks[0]` read from-space;
+/// * any other left is never nullish, so the right operand is unreachable.
+pub(crate) fn coalesce_type(left: Type, right: impl FnOnce() -> Type) -> Type {
+    match left {
+        Type::Any | Type::Unknown => left,
+        Type::Null | Type::Void => right(),
+        Type::Union(mut variants)
+            if variants
+                .iter()
+                .any(|variant| matches!(variant, Type::Null | Type::Void)) =>
+        {
+            let members = match right() {
+                Type::Any | Type::Unknown => return Type::Any,
+                Type::Union(members) => members,
+                other => vec![other],
+            };
+            for member in members {
+                if !variants.contains(&member) {
+                    variants.push(member);
+                }
+            }
+            Type::Union(variants)
+        }
+        other => other,
     }
 }
 
