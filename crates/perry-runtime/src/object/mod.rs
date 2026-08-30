@@ -1870,6 +1870,10 @@ pub(super) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
     crate::gc::layout_mark_unknown(obj as *mut u8);
 }
 
+/// #9180: the receiver `[[Set]]` own-key probe, split out to keep `tests.rs`
+/// under the 2000-line cap.
+#[cfg(test)]
+mod own_key_probe_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
