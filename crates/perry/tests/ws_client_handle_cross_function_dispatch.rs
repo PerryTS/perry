@@ -26,14 +26,15 @@ fn perry_bin() -> PathBuf {
 
 /// Compile `source` and return the concatenated LLVM IR text of all emitted
 /// modules (via `PERRY_SAVE_LL`). Asserts the compile succeeds.
-fn compile_to_ir(dir: &Path, source: &str) -> String {
+fn compile_to_ir_impl(dir: &Path, source: &str, link: bool) -> String {
     let entry = dir.join("main.ts");
     let output = dir.join("main_bin");
     let ll_dir = dir.join("ll");
     std::fs::create_dir_all(&ll_dir).expect("mk ll dir");
     std::fs::write(&entry, source).expect("write entry");
 
-    let compile = Command::new(perry_bin())
+    let mut command = Command::new(perry_bin());
+    command
         .current_dir(dir)
         .arg("compile")
         .arg(&entry)
@@ -43,9 +44,20 @@ fn compile_to_ir(dir: &Path, source: &str) -> String {
         // actually written for this build.
         .env("PERRY_SAVE_LL", &ll_dir)
         .env("PERRY_LLVM_KEEP_IR", "1")
-        .env("PERRY_NO_CACHE", "1")
-        .output()
-        .expect("run perry compile");
+        .env("PERRY_NO_CACHE", "1");
+    if link {
+        // Only the semantic nested-scope test needs an executable. Keep its
+        // provider set deterministic without making this HIR suite test
+        // automatic well-known binding discovery too.
+        command.env("PERRY_FORCE_WELL_KNOWN", "http,ws");
+    } else {
+        // IR-only assertions do not need runtime or extension archives.
+        command
+            .arg("--no-auto-optimize")
+            .arg("--no-link")
+            .env("PERRY_DISABLE_WELL_KNOWN", "1");
+    }
+    let compile = command.output().expect("run perry compile");
     assert!(
         compile.status.success(),
         "perry compile failed\nstdout:\n{}\nstderr:\n{}",
@@ -63,6 +75,14 @@ fn compile_to_ir(dir: &Path, source: &str) -> String {
     }
     assert!(!ir.is_empty(), "no .ll IR was emitted");
     ir
+}
+
+fn compile_to_ir(dir: &Path, source: &str) -> String {
+    compile_to_ir_impl(dir, source, false)
+}
+
+fn compile_to_ir_and_link(dir: &Path, source: &str) -> String {
+    compile_to_ir_impl(dir, source, true)
 }
 
 /// True if the IR contains a `call` instruction targeting `@<symbol>` (i.e. a
@@ -348,7 +368,7 @@ server.listen(0, () => {});
 #[test]
 fn same_named_function_is_not_cross_tagged() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let ir = compile_to_ir(
+    let ir = compile_to_ir_and_link(
         dir.path(),
         r#"
 import { createServer } from "node:http";
