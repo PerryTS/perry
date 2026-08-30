@@ -214,8 +214,7 @@ fn stmt_is_hoist_safe(stmt: &Stmt, recv_id: u32) -> bool {
             update,
             body,
         } => {
-            init.as_ref()
-                .is_none_or(|s| stmt_is_hoist_safe(s, recv_id))
+            init.as_ref().is_none_or(|s| stmt_is_hoist_safe(s, recv_id))
                 && condition
                     .as_ref()
                     .is_none_or(|e| expr_is_hoist_safe(e, recv_id))
@@ -300,7 +299,9 @@ fn stmt_reads_property(stmt: &Stmt, recv_id: u32, property: &str) -> bool {
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
             expr_reads_property(condition, recv_id, property)
-                || body.iter().any(|s| stmt_reads_property(s, recv_id, property))
+                || body
+                    .iter()
+                    .any(|s| stmt_reads_property(s, recv_id, property))
         }
         Stmt::For {
             init,
@@ -316,7 +317,9 @@ fn stmt_reads_property(stmt: &Stmt, recv_id: u32, property: &str) -> bool {
                 || update
                     .as_ref()
                     .is_some_and(|e| expr_reads_property(e, recv_id, property))
-                || body.iter().any(|s| stmt_reads_property(s, recv_id, property))
+                || body
+                    .iter()
+                    .any(|s| stmt_reads_property(s, recv_id, property))
         }
         Stmt::Labeled { body, .. } => stmt_reads_property(body, recv_id, property),
         Stmt::Return(value) => value
@@ -440,9 +443,7 @@ fn rewrite_stmt(stmt: &Stmt, recv_id: u32, property: &str, hoist_id: u32) -> Stm
                 .as_ref()
                 .map(|e| rewrite_expr(e, recv_id, property, hoist_id)),
         ),
-        Stmt::Throw(value) => {
-            Stmt::Throw(rewrite_expr(value, recv_id, property, hoist_id))
-        }
+        Stmt::Throw(value) => Stmt::Throw(rewrite_expr(value, recv_id, property, hoist_id)),
         other => other.clone(),
     }
 }
