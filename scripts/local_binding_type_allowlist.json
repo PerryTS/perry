@@ -170,7 +170,7 @@
       "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
     },
     {
-      "path": "crates/perry-codegen/src/expr/property_get.rs",
+      "path": "crates/perry-codegen/src/expr/property_get/helpers.rs",
       "function": "guarded_declared_class_get_candidate",
       "access": "local_type_hint",
       "count": 1,
