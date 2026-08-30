@@ -110,7 +110,8 @@ unsafe fn try_fast_install(
     // allocates — the first possible collection point, hence the rooted
     // re-reads below). Admission proved the key is a string, so no user
     // `toString` runs here.
-    let key_str = crate::builtins::js_string_coerce(key_handle.get_nanbox_f64());
+    let (_, key_value) = key_handle.across_nanbox(|| ());
+    let key_str = crate::builtins::js_string_coerce(key_value);
     if key_str.is_null() {
         return None;
     }
@@ -120,12 +121,12 @@ unsafe fn try_fast_install(
     if obj.is_null() {
         return None;
     }
-    let mut key_str = key_str_handle.get_raw_const_ptr::<crate::StringHeader>();
+    let (_, mut key_str) = key_str_handle.across_const::<crate::StringHeader, _>(|| ());
 
     // The key as a Rust-heap string for the descriptor side tables — immune
     // to evacuation, safe across every call below.
     let key_rust: String = {
-        let name_ptr = (key_str as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        let name_ptr = crate::string::string_data(key_str);
         let name_len = (*key_str).byte_len as usize;
         std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
             .ok()?
@@ -143,7 +144,8 @@ unsafe fn try_fast_install(
     // allocate — refresh before the next deref.)
     obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
     obj = extract_obj_ptr(obj_value);
-    key_str = key_str_handle.get_raw_const_ptr::<crate::StringHeader>();
+    let (_, refreshed_key_str) = key_str_handle.across_const::<crate::StringHeader, _>(|| ());
+    key_str = refreshed_key_str;
     if present || obj.is_null() {
         return None;
     }
@@ -163,7 +165,7 @@ unsafe fn try_fast_install(
     // `clone_closure_rebind_this` clones-and-rebinds CAPTURES_THIS closures
     // and passes every other value through untouched — identical to the
     // generic arm's treatment of the descriptor's `get` field.
-    let getter = getter_handle.get_nanbox_f64();
+    let (_, getter) = getter_handle.across_nanbox(|| ());
     let get_bits = if crate::JSValue::from_bits(getter.to_bits()).is_undefined() {
         0
     } else {
@@ -235,21 +237,17 @@ pub extern "C" fn js_object_define_get_accessor(
         }
         let desc_handle = scope.root_raw_mut_ptr(desc);
         let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
-        js_object_set_field_by_name(
-            desc_handle.get_raw_mut_ptr::<ObjectHeader>(),
-            get_key,
-            getter_handle.get_nanbox_f64(),
-        );
+        desc_handle.with_mut_ptr(|desc: *mut ObjectHeader| {
+            js_object_set_field_by_name(desc, get_key, getter_handle.get_nanbox_f64())
+        });
         let enum_key = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
         let true_v = f64::from_bits(crate::JSValue::bool(true).bits());
-        js_object_set_field_by_name(
-            desc_handle.get_raw_mut_ptr::<ObjectHeader>(),
-            enum_key,
-            true_v,
-        );
-        let desc_val = f64::from_bits(
-            crate::JSValue::pointer(desc_handle.get_raw_mut_ptr::<u8>() as *const u8).bits(),
-        );
+        desc_handle.with_mut_ptr(|desc: *mut ObjectHeader| {
+            js_object_set_field_by_name(desc, enum_key, true_v)
+        });
+        let desc_val = desc_handle.with_mut_ptr(|desc: *mut u8| {
+            f64::from_bits(crate::JSValue::pointer(desc as *const u8).bits())
+        });
         js_object_define_property(
             f64::from_bits(obj_handle.get_heap_word_u64()),
             key_handle.get_nanbox_f64(),

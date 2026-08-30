@@ -38,7 +38,7 @@ pub(crate) unsafe fn describe_value_for_type_error(value: f64) -> String {
         return String::new();
     }
     let len = (*s).byte_len as usize;
-    let data = (s as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
+    let data = crate::string::string_data(s);
     let bytes = std::slice::from_raw_parts(data, len);
     std::str::from_utf8(bytes).unwrap_or("").to_string()
 }
