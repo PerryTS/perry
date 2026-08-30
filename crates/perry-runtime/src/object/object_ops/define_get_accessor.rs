@@ -110,8 +110,7 @@ unsafe fn try_fast_install(
     // allocates — the first possible collection point, hence the rooted
     // re-reads below). Admission proved the key is a string, so no user
     // `toString` runs here.
-    let (_, key_value) = key_handle.across_nanbox(|| ());
-    let key_str = crate::builtins::js_string_coerce(key_value);
+    let key_str = crate::builtins::js_string_coerce(key_handle.get_nanbox_f64());
     if key_str.is_null() {
         return None;
     }
@@ -121,31 +120,35 @@ unsafe fn try_fast_install(
     if obj.is_null() {
         return None;
     }
-    let (_, mut key_str) = key_str_handle.across_const::<crate::StringHeader, _>(|| ());
-
     // The key as a Rust-heap string for the descriptor side tables — immune
-    // to evacuation, safe across every call below.
-    let key_rust: String = {
-        let name_ptr = crate::string::string_data(key_str);
-        let name_len = (*key_str).byte_len as usize;
-        std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
-            .ok()?
-            .to_string()
-    };
+    // to evacuation, safe across every call below. The accompanying indexed
+    // presence probe is non-allocating, so both uses share one scoped read.
+    let (key_rust, indexed_present) =
+        key_str_handle.with_const_ptr(|key_str: *const crate::StringHeader| {
+            let name_ptr = crate::string::string_data(key_str);
+            let name_len = (*key_str).byte_len as usize;
+            let key_rust = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len))
+                .ok()?
+                .to_string();
+            Some((key_rust, own_key_present_via_index(obj, key_str)))
+        })?;
 
     // Brand-new keys only: a redefinition carries the non-configurable
     // validation and omitted-field retention semantics the generic arm owns.
     // Same presence probe, same order, as the generic `existing_attrs` read.
-    let present = match own_key_present_via_index(obj, key_str) {
-        Some(present) => present,
-        None => super::super::obj_value_has_own_key(obj_value, key_handle.get_nanbox_f64()),
+    let (present, refreshed_key_str) = match indexed_present {
+        Some(present) => (present, None),
+        None => {
+            let (present, key_str) = key_str_handle.across_const::<crate::StringHeader, _>(|| {
+                super::super::obj_value_has_own_key(obj_value, key_handle.get_nanbox_f64())
+            });
+            (present, Some(key_str))
+        }
     };
     // (`obj_value_has_own_key` string-coerces its key internally and can
     // allocate — refresh before the next deref.)
     obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
     obj = extract_obj_ptr(obj_value);
-    let (_, refreshed_key_str) = key_str_handle.across_const::<crate::StringHeader, _>(|| ());
-    key_str = refreshed_key_str;
     if present || obj.is_null() {
         return None;
     }
@@ -153,8 +156,15 @@ unsafe fn try_fast_install(
     // ---- Committed: mirror the generic ordinary-object accessor arm. ----
     super::super::mark_object_dynamic_shape_unknown(obj);
     // Make the key discoverable (hasOwn / keys / getOwnPropertyNames) — the
-    // accessor itself lives in the side table, not in a value slot.
-    ensure_key_in_keys_array(obj, key_str);
+    // accessor itself lives in the side table, not in a value slot. The entry
+    // point roots both arguments before its first possible allocation.
+    if let Some(key_str) = refreshed_key_str {
+        ensure_key_in_keys_array(obj, key_str);
+    } else {
+        key_str_handle.with_const_ptr(|key_str: *const crate::StringHeader| {
+            ensure_key_in_keys_array(obj, key_str)
+        });
+    }
     obj_value = f64::from_bits(obj_handle.get_heap_word_u64());
     obj = extract_obj_ptr(obj_value);
     if obj.is_null() {
@@ -165,7 +175,7 @@ unsafe fn try_fast_install(
     // `clone_closure_rebind_this` clones-and-rebinds CAPTURES_THIS closures
     // and passes every other value through untouched — identical to the
     // generic arm's treatment of the descriptor's `get` field.
-    let (_, getter) = getter_handle.across_nanbox(|| ());
+    let getter = getter_handle.get_nanbox_f64();
     let get_bits = if crate::JSValue::from_bits(getter.to_bits()).is_undefined() {
         0
     } else {
