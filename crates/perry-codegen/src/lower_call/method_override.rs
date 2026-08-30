@@ -213,6 +213,19 @@ fn total_value_truthy(ctx: &mut FnCtx<'_>, value: &str) -> String {
 /// and its exact `(class_id, ShapeId)` pair still matches the
 /// compiler-published pair. Any failed proof takes the unchanged dynamic
 /// method fallback.
+/// Kill switch for the probe-before-runtime-guard emission
+/// (`PERRY_METHOD_INLINE_PROBE=0` restores the guard-first form for A/B).
+fn method_inline_probe_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_METHOD_INLINE_PROBE").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
 pub(crate) fn emit_inline_direct_method_shape_guard(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
@@ -979,6 +992,22 @@ pub(super) fn emit_guarded_direct_method_call(
     // single-arm sites retain the runtime helper.
     let multi_arm = !subclass_arms.is_empty();
     let inline_single_arm = shape_only_guard && !multi_arm;
+    // #9105's dispensation, applied to METHOD sites: normal builds do not
+    // collect typed feedback, so the runtime guard's observation half is
+    // inert — yet every monomorphic hit still paid its full contract check
+    // (an RwLock read plus TWO SipHash HashMap probes in
+    // `vtable_method_matches`, ~180-390 ns/call on a typed-param receiver).
+    // Decide the monomorphic case with the SAME inline probe the shape-only
+    // sites emit — its prototype-override latches are exactly what the
+    // shape-only direct dispatch already trusts for calling this method
+    // body — and keep the out-of-line guard (which records the observation
+    // and handles forwarding/exotic receivers) as the probe-MISS edge, so
+    // nothing is lost. Emission-enabled builds keep the guard first so the
+    // feedback stream still sees every call.
+    let probe_before_runtime_guard = !shape_only_guard
+        && !multi_arm
+        && !crate::expr::typed_feedback_emission_enabled()
+        && method_inline_probe_enabled();
     if multi_arm {
         let (cid, shape_id) =
             emit_inline_direct_method_shape_probe(ctx, recv_box, &method_guard_slot_str);
@@ -1017,6 +1046,20 @@ pub(super) fn emit_guarded_direct_method_call(
             &fast_label,
             &fallback_label,
         );
+    }
+    if probe_before_runtime_guard {
+        let runtime_guard_idx = ctx.new_block("method_direct.runtime_guard");
+        let runtime_guard_label = ctx.block_label(runtime_guard_idx);
+        emit_inline_direct_method_shape_guard(
+            ctx,
+            recv_box,
+            &expected_class_id_str,
+            &expected_shape_id,
+            &method_guard_slot_str,
+            &fast_label,
+            &runtime_guard_label,
+        );
+        ctx.current_block = runtime_guard_idx;
     }
     let guard_ok = if multi_arm || inline_single_arm {
         // The chain above already terminated the guard block and every test

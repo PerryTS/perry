@@ -12648,6 +12648,14 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
     let method_guard = caller_ir
         .find("call i32 @js_typed_feedback_method_direct_call_guard")
         .unwrap_or_else(|| panic!("caller should use the full method-direct guard:\n{caller_ir}"));
+    // The method-direct PROOF that dominates the fast arm is the inline
+    // shape probe (its first block loads the prototype-override latch) —
+    // the runtime guard is that probe's miss edge and is emitted after the
+    // fast arm in text order. Either form is the same proof; take whichever
+    // comes first so the ordering assertion below is about the proof, not
+    // about which emission shape carried it.
+    let inline_probe = caller_ir.find("@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED");
+    let method_proof = inline_probe.map_or(method_guard, |p| p.min(method_guard));
     let field_guard = caller_ir
         .find("call i32 @js_typed_feedback_class_field_get_guard")
         .unwrap_or_else(|| panic!("caller should guard raw-f64 receiver fields:\n{caller_ir}"));
@@ -12655,7 +12663,7 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
         .find(&format!("call double @{typed}(i64 "))
         .unwrap_or_else(|| panic!("caller should call the receiver clone:\n{caller_ir}"));
     assert!(
-        method_guard < field_guard && field_guard < typed_call,
+        method_proof < field_guard && field_guard < typed_call,
         "receiver clone must run only after method-direct and raw-f64 field guards:\n{caller_ir}"
     );
     // #7506: this used to assert the guard-failure edge calls `$generic` BY
