@@ -5063,9 +5063,26 @@ fn stmt_is_packed_f64_loop_safe(
                     .as_ref()
                     .is_none_or(|expr| expr_is_packed_f64_loop_safe(ctx, expr, arr_id, counter_id))
         }
-        // `throw` stays out: the thrown value is typically constructed
-        // (`throw new Error(…)`), which is a call in the loop body.
-        Stmt::Throw(_) => packed_loop_abrupt_enabled(),
+        // `throw` stays out. Admitting it (#9185) was a silent wrong answer:
+        // `break`/`continue`/`return` leave the clone through normal CFG edges
+        // that flush the loop-carried locals back to their frame slots, but an
+        // unwind edge does not, so anything reading such a local AFTER the
+        // throw saw its stale pre-loop value:
+        //
+        //     let s = 0;
+        //     try { for (let i = 0; i < arr.length; i++) {
+        //             if (arr[i] === 40) throw PRE; s += arr[i]; } }
+        //     catch (e) { return s; }   // gave 0, node gives 780
+        //
+        // #9185's tests missed it because none of them read a loop-carried
+        // local after unwinding — they read the thrown value (which IS the
+        // clone's live value, and was correct) or an untouched variable. A
+        // closure-captured accumulator was also correct, being boxed rather
+        // than register-promoted, which is what kept the bug this narrow.
+        //
+        // Re-admitting this needs the writeback emitted at the throw site, not
+        // just the admission; see #9210.
+        Stmt::Throw(_) => false,
         Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
         | Stmt::While { .. }
