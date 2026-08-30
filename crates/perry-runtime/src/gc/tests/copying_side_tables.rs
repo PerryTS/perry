@@ -155,6 +155,62 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     }
 }
 
+/// The range filter in front of `SYMBOL_POINTERS` must admit a symbol's NEW
+/// address after the collector moves it.
+///
+/// `is_registered_symbol` rejects an out-of-range pointer WITHOUT consulting
+/// the set, so a moved symbol whose new address fell outside the bounds its
+/// allocation established would be a live, registered symbol that the probe
+/// reports as "not a symbol" — losing `typeof`, symbol-keyed property lookup
+/// and `Symbol.iterator` dispatch.
+///
+/// The sibling test above asserts membership with
+/// `test_symbol_pointer_root_contains`, which reads the set directly and so
+/// cannot see this: the entry IS in the set. This one goes through the public
+/// probe, and resets the range first so exactly one registration defines it —
+/// otherwise a wide range left by earlier tests in this binary would admit the
+/// moved address by luck and the assertion would be vacuous.
+#[test]
+fn test_copying_minor_keeps_moved_symbol_visible_to_the_range_filter() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    crate::symbol::test_clear_symbol_side_table_roots();
+    gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
+
+    // Reset AFTER the clear above, and register exactly one symbol, so the
+    // range is the single point that symbol sits at.
+    let _range = crate::symbol::SymbolAddrRangeGuard::reset();
+
+    let sym_key = unsafe { alloc_nursery_test_symbol() };
+    crate::symbol::test_seed_symbol_pointer_root(sym_key);
+    js_shadow_slot_set(0, ptr_bits(sym_key));
+
+    let (lo_before, hi_before) = crate::symbol::test_symbol_addr_range();
+    assert_eq!(
+        (lo_before, hi_before),
+        (sym_key, sym_key),
+        "fixture must start with a single-point range, or the move below \
+         cannot land outside it and the assertion is vacuous"
+    );
+
+    let _ = gc_collect_minor();
+
+    let sym_key_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(
+        sym_key_after, sym_key,
+        "fixture must actually MOVE the symbol, or nothing is under test"
+    );
+    assert!(crate::symbol::test_symbol_pointer_root_contains(
+        sym_key_after
+    ));
+    assert!(
+        crate::symbol::is_registered_symbol(sym_key_after),
+        "a symbol evacuated to {sym_key_after:#x}, outside the \
+         [{lo_before:#x}, {hi_before:#x}] range its allocation established, is \
+         still live and registered — the range filter must have been widened \
+         by the forwarding rewrite"
+    );
+}
+
 #[test]
 fn test_copying_minor_rewrites_old_overflow_object_child_without_reentrant_borrow() {
     struct OverflowFieldsRootGuard;

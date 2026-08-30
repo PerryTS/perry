@@ -126,7 +126,7 @@ fn scan_symbol_pointer_metadata_roots_mut(visitor: &mut crate::gc::RuntimeRootVi
     for (old_ptr, new_ptr) in rewrites {
         set.remove(&old_ptr);
         if new_ptr != 0 {
-            set.insert(new_ptr);
+            insert_symbol_pointer_in_set(set, new_ptr);
         }
     }
 }
@@ -346,7 +346,7 @@ fn rewrite_symbol_pointer_metadata_if_forwarded(
     if let Some(set) = guard.as_mut() {
         set.remove(&ptr);
         if new_ptr != 0 {
-            set.insert(new_ptr);
+            insert_symbol_pointer_in_set(set, new_ptr);
         }
     }
 }
@@ -376,7 +376,11 @@ pub(crate) fn test_clear_symbol_side_table_roots() {
     if persistent.is_empty() {
         *guard = None;
     } else {
-        *guard = Some(persistent.into_iter().collect());
+        let mut set = new_ptr_hash_set();
+        for ptr in persistent {
+            insert_symbol_pointer_in_set(&mut set, ptr);
+        }
+        *guard = Some(set);
     }
 }
 
