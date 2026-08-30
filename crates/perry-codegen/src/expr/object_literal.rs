@@ -665,7 +665,10 @@ mod by_name_method_closure_tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let prev = std::env::var_os("PERRY_OBJECT_LITERAL_SHAPE_METHODS");
         std::env::set_var("PERRY_OBJECT_LITERAL_SHAPE_METHODS", value);
-        RoutingPin { prev, _guard: guard }
+        RoutingPin {
+            prev,
+            _guard: guard,
+        }
     }
 
     pub(super) fn method_literal_ir() -> String {
@@ -765,88 +768,83 @@ mod by_name_method_closure_tests {
         body.join("\n")
     }
 
-#[cfg(test)]
-mod shape_method_literal_tests {
-    //! Shape-path twins of `by_name_method_closure_tests`: the DEFAULT
-    //! routing for a `captures_this` method literal since the all-or-nothing
-    //! gate became a kill switch. Same HIR fixture, same hazards pinned —
-    //! deferred patches must run below every store, in source order — plus
-    //! the shape path's own discipline: each patched closure is RE-READ from
-    //! its field slot (`js_object_get_field`) instead of being kept alive in
-    //! a rooted slot, so a patch that reads anything else regresses to the
-    //! moved-from-address bug the by-name arm needed #8809 to fix.
-    use super::{build_fn, method_literal_ir, pin_routing};
+    #[cfg(test)]
+    mod shape_method_literal_tests {
+        //! Shape-path twins of `by_name_method_closure_tests`: the DEFAULT
+        //! routing for a `captures_this` method literal since the all-or-nothing
+        //! gate became a kill switch. Same HIR fixture, same hazards pinned —
+        //! deferred patches must run below every store, in source order — plus
+        //! the shape path's own discipline: each patched closure is RE-READ from
+        //! its field slot (`js_object_get_field`) instead of being kept alive in
+        //! a rooted slot, so a patch that reads anything else regresses to the
+        //! moved-from-address bug the by-name arm needed #8809 to fix.
+        use super::{build_fn, method_literal_ir, pin_routing};
 
-    #[test]
-    fn a_this_capturing_method_selects_the_shape_path() {
-        let _pin = pin_routing("1");
-        let ir = build_fn(&method_literal_ir());
-        assert!(
-            ir.contains("@js_object_alloc_with_shape("),
-            "the method literal must allocate through the shape cache:\n{ir}"
-        );
-        assert_eq!(
-            ir.matches("@js_object_set_field(").count(),
-            4,
-            "every property is stored by INDEX on this path:\n{ir}"
-        );
-        assert_eq!(
-            ir.matches("@js_object_set_field_by_name(").count(),
-            0,
-            "no by-name stores may remain:\n{ir}"
-        );
-    }
+        #[test]
+        fn a_this_capturing_method_selects_the_shape_path() {
+            let _pin = pin_routing("1");
+            let ir = build_fn(&method_literal_ir());
+            assert!(
+                ir.contains("@js_object_alloc_with_shape("),
+                "the method literal must allocate through the shape cache:\n{ir}"
+            );
+            assert_eq!(
+                ir.matches("@js_object_set_field(").count(),
+                4,
+                "every property is stored by INDEX on this path:\n{ir}"
+            );
+            assert_eq!(
+                ir.matches("@js_object_set_field_by_name(").count(),
+                0,
+                "no by-name stores may remain:\n{ir}"
+            );
+        }
 
-    #[test]
-    fn the_patches_run_below_every_store_and_reread_their_closure() {
-        let _pin = pin_routing("1");
-        let ir = build_fn(&method_literal_ir());
-        let last_store = ir
-            .rfind("@js_object_set_field(")
-            .expect("an indexed store");
-        let tail = &ir[last_store..];
-        assert_eq!(
-            tail.matches("@js_closure_set_capture_bits(").count(),
-            2,
-            "one patch per `this`-capturing method, all below the last store:\n{tail}"
-        );
-        assert_eq!(
-            tail.matches("@js_object_get_field(").count(),
-            2,
-            "each patch must RE-READ its closure from the object's field slot \
+        #[test]
+        fn the_patches_run_below_every_store_and_reread_their_closure() {
+            let _pin = pin_routing("1");
+            let ir = build_fn(&method_literal_ir());
+            let last_store = ir.rfind("@js_object_set_field(").expect("an indexed store");
+            let tail = &ir[last_store..];
+            assert_eq!(
+                tail.matches("@js_closure_set_capture_bits(").count(),
+                2,
+                "one patch per `this`-capturing method, all below the last store:\n{tail}"
+            );
+            assert_eq!(
+                tail.matches("@js_object_get_field(").count(),
+                2,
+                "each patch must RE-READ its closure from the object's field slot \
              (a kept register is stale after an evacuating initializer):\n{tail}"
-        );
-    }
+            );
+        }
 
-    #[test]
-    fn the_patches_are_applied_in_source_order() {
-        let _pin = pin_routing("1");
-        let ir = build_fn(&method_literal_ir());
-        let last_store = ir
-            .rfind("@js_object_set_field(")
-            .expect("an indexed store");
-        let tail = &ir[last_store..];
-        // `add` sits at field index 0, `scale` at field index 2; the re-reads
-        // name the field, so source order is readable off the `i32 <idx>`
-        // argument of each `js_object_get_field`.
-        let idxs: Vec<&str> = tail
-            .lines()
-            .filter(|l| l.contains("@js_object_get_field("))
-            .map(|l| {
-                l.split("i32 ")
-                    .nth(1)
-                    .and_then(|v| v.split(')').next())
-                    .expect("the field index")
-            })
-            .collect();
-        assert_eq!(
-            idxs,
-            vec!["0", "2"],
-            "`add` (field 0) must be patched before `scale` (field 2):\n{tail}"
-        );
+        #[test]
+        fn the_patches_are_applied_in_source_order() {
+            let _pin = pin_routing("1");
+            let ir = build_fn(&method_literal_ir());
+            let last_store = ir.rfind("@js_object_set_field(").expect("an indexed store");
+            let tail = &ir[last_store..];
+            // `add` sits at field index 0, `scale` at field index 2; the re-reads
+            // name the field, so source order is readable off the `i32 <idx>`
+            // argument of each `js_object_get_field`.
+            let idxs: Vec<&str> = tail
+                .lines()
+                .filter(|l| l.contains("@js_object_get_field("))
+                .map(|l| {
+                    l.split("i32 ")
+                        .nth(1)
+                        .and_then(|v| v.split(')').next())
+                        .expect("the field index")
+                })
+                .collect();
+            assert_eq!(
+                idxs,
+                vec!["0", "2"],
+                "`add` (field 0) must be patched before `scale` (field 2):\n{tail}"
+            );
+        }
     }
-}
-
 
     /// Everything the lowering emits after the last property store: the
     /// deferred closure re-reads, the patch loop, and the releases.

@@ -683,7 +683,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         return false;
                     }
                     match &method.key {
-                        ast::PropName::Ident(_) | ast::PropName::Str(_) | ast::PropName::Num(_) => {}
+                        ast::PropName::Ident(_) | ast::PropName::Str(_) | ast::PropName::Num(_) => {
+                        }
                         _ => return false,
                     }
                     if method.function.is_async
