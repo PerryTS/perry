@@ -221,6 +221,13 @@ pub fn gc_collect_minor() -> u64 {
 }
 
 pub(super) fn gc_collect_minor_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    // Build the stack-map index if it is still owed. This is the chokepoint:
+    // every collection funnels through one of these three entries, and here
+    // allocation is still legal — the root scan itself must stay
+    // allocation-free once the collector owns the heap, which is why the build
+    // cannot be deferred any further than this.
+    roots::ensure_stack_maps_built();
+
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Allowed)
 }
 
@@ -246,6 +253,13 @@ pub(super) enum FullEscalation {
 /// (#6946). Refuses the pacing escalation, so the caller gets the moving
 /// collection the knob promises rather than a full sweep that moves nothing.
 pub(super) fn gc_collect_forced_evacuating_minor(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    // Build the stack-map index if it is still owed. This is the chokepoint:
+    // every collection funnels through one of these three entries, and here
+    // allocation is still legal — the root scan itself must stay
+    // allocation-free once the collector owns the heap, which is why the build
+    // cannot be deferred any further than this.
+    roots::ensure_stack_maps_built();
+
     gc_collect_minor_with_trigger_inner(trigger, FullEscalation::Refused)
 }
 
@@ -682,6 +696,13 @@ fn gc_collect_inner_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome
 }
 
 fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    // Build the stack-map index if it is still owed. This is the chokepoint:
+    // every collection funnels through one of these three entries, and here
+    // allocation is still legal — the root scan itself must stay
+    // allocation-free once the collector owns the heap, which is why the build
+    // cannot be deferred any further than this.
+    roots::ensure_stack_maps_built();
+
     // PERRY_GC_SAFEPOINT_ONLY: see gc_collect_minor_with_trigger. Manual
     // gc() engages its own force_full_scan first, which this detects as
     // already-Scan and no-ops.

@@ -649,7 +649,51 @@ pub(in crate::gc) fn record_native_stack_walk_source(
     }
 }
 
+/// Mark the stack-map index as owed, without building it.
+///
+/// Decoding the gc-map section is the single largest cost in process startup
+/// for a big image — 17.4MB, 72,713 functions, 2.15M records and a 117MB index
+/// for claude-code — and a run that never collects never reads any of it.
+/// `cc --version` is exactly that run.
+///
+/// The build is therefore deferred to [`ensure_built`], which every path that
+/// can reach a root scan calls while allocation is still legal. Missing one of
+/// those paths would mean scanning against an unbuilt index, which is
+/// indistinguishable from "this image has no native roots" and frees live
+/// objects silently — so the assert at the top of `visit_stack_map_root_slots`
+/// (#9182) exists to turn that into a loud abort instead. It landed first, on
+/// purpose.
+///
+/// Re-arms on every call: a newly loaded image calls `js_gc_init` again, and
+/// the next collection must decode its section too.
 pub(in crate::gc) fn initialize() {
+    STACK_MAPS_INITIALIZED.store(false, Ordering::Release);
+    if !lazy_stack_maps_enabled() {
+        ensure_built();
+    }
+}
+
+/// `PERRY_LAZY_STACK_MAPS=0` restores the eager decode at `js_gc_init`, for
+/// A/B measurement of what the deferral is worth.
+fn lazy_stack_maps_enabled() -> bool {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_LAZY_STACK_MAPS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// Build the stack-map index if it is owed. Safe to call redundantly.
+///
+/// MUST be called before any path that can reach [`visit_stack_map_root_slots`],
+/// and while allocation is still legal — the parser allocates its index once,
+/// and root scans must stay allocation-free while the collector owns the heap.
+pub(in crate::gc) fn ensure_built() {
+    if STACK_MAPS_INITIALIZED.load(Ordering::Acquire) {
+        return;
+    }
     STACK_MAPS.rebuild();
     // Publish AFTER the rebuild: a reader that observes the flag must be able
     // to observe the index it promises.
