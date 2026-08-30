@@ -103,7 +103,22 @@ fn dispatch_call1_resolved(
 #[no_mangle]
 // Same unwind contract as `js_closure_call1` above: keep `extern "C"`, not
 // `extern "C-unwind"`, so raw JS exceptions can traverse this bridge.
+#[cfg(panic = "abort")]
 pub extern "C" fn js_closure_call1_receiverless(closure: *const ClosureHeader, arg0: f64) -> f64 {
+    js_closure_call1_receiverless_impl(closure, arg0)
+}
+
+#[no_mangle]
+#[cfg(not(panic = "abort"))]
+pub extern "C-unwind" fn js_closure_call1_receiverless(
+    closure: *const ClosureHeader,
+    arg0: f64,
+) -> f64 {
+    js_closure_call1_receiverless_impl(closure, arg0)
+}
+
+#[inline(always)]
+fn js_closure_call1_receiverless_impl(closure: *const ClosureHeader, arg0: f64) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     let strategy = (!func_ptr.is_null()).then(|| resolve_strategy(func_ptr));
     if let Some(arrow_strategy) = strategy.filter(|strategy| strategy.is_arrow()) {
