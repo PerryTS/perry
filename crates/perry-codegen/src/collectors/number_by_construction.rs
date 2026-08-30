@@ -696,5 +696,4 @@ mod tests {
         let numeric = run_fixpoint(&stmts, &HashSet::new());
         assert!(!numeric.contains(&acc));
     }
-
 }
