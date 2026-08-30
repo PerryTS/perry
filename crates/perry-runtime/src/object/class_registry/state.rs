@@ -1,3 +1,4 @@
+use super::decl_prototype_table::DeclPrototypeTable;
 use super::*;
 use crate::object::class_image::{ImageTable, StaticAccessorTable, StaticMethodTable};
 use std::collections::HashMap;
@@ -326,7 +327,7 @@ crate::perry_thread_local! {
     /// inheritance shortcuts. Declared class prototypes need stable heap identity
     /// for `typeof C.prototype`, `Object.getPrototypeOf(new C())`, and
     /// `C.prototype.isPrototypeOf(instance)` without perturbing those paths.
-    pub static CLASS_DECL_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
+    pub static CLASS_DECL_PROTOTYPE_OBJECTS: RwLock<Option<DeclPrototypeTable>> = RwLock::new(None);
 }
 
 crate::perry_thread_local! {
@@ -475,10 +476,9 @@ pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *
     }
     CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
         let mut guard = table.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(HashMap::new());
-        }
-        guard.as_mut().unwrap().insert(class_id, proto_ptr as usize);
+        guard
+            .get_or_insert_with(DeclPrototypeTable::default)
+            .insert(class_id, proto_ptr as usize);
     });
     crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
 }
@@ -531,22 +531,23 @@ pub(crate) fn parent_closure_in_chain(class_id: u32) -> Option<usize> {
 
 /// Reverse lookup: which declared class's `.prototype` is this heap object?
 /// Used by `Object.getOwnPropertyDescriptor(C.prototype, name)` to surface
-/// vtable accessors as own properties of the prototype object. Linear scan —
-/// the table is small (one entry per materialized declared-class prototype)
-/// and this only runs on the reflection slow path.
+/// vtable accessors as own properties of the prototype object, and by
+/// `descriptor_state::disable_inline_guards_for_descriptor_target` on every
+/// `Object.defineProperty`.
+///
+/// #9180: this was a linear scan over every materialized declared-class
+/// prototype, on the strength of a "the table is small and this is a cold
+/// reflection path" comment that a bundled application falsifies twice over
+/// — it was 3.10% of `cc --help`. Callers ask about arbitrary objects, so the
+/// common case is a MISS, and a miss walked the whole table.
+/// [`DeclPrototypeTable`] carries the inverse of the map next to it and keeps
+/// the two in step by construction; see that module for why the invalidation
+/// is structural rather than enumerated.
 pub(crate) fn class_id_for_decl_prototype_object(ptr: usize) -> Option<u32> {
     if ptr == 0 {
         return None;
     }
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-        table
-            .read()
-            .ok()?
-            .as_ref()?
-            .iter()
-            .find(|(_, &p)| p == ptr)
-            .map(|(k, _)| *k)
-    })
+    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| table.read().ok()?.as_ref()?.class_id_for(ptr))
 }
 
 /// #7757: a monomorphized specialization (`Gen$num`) must present the GENERIC's
@@ -572,7 +573,7 @@ pub(crate) fn class_decl_prototype_object(class_id: u32) -> *mut ObjectHeader {
     CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
         if let Ok(read) = table.read() {
             if let Some(map) = read.as_ref() {
-                return map.get(&class_id).copied().unwrap_or(0) as *mut ObjectHeader;
+                return map.get(class_id).unwrap_or(0) as *mut ObjectHeader;
             }
         }
         std::ptr::null_mut()

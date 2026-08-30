@@ -54,9 +54,9 @@ pub fn scan_class_inheritance_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
     CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
         if let Ok(mut guard) = table.write() {
             if let Some(map) = guard.as_mut() {
-                for ptr in map.values_mut() {
+                map.visit_root_slots(|ptr| {
                     visitor.visit_usize_slot(ptr);
-                }
+                });
             }
         }
     });
@@ -85,9 +85,10 @@ pub(crate) fn test_seed_class_inheritance_roots(proto_cid: u32, proto_ptr: usize
 #[cfg(test)]
 pub(crate) fn test_seed_decl_class_prototype_root(class_id: u32, proto_ptr: usize) {
     CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-        let mut guard = table.write().unwrap();
-        guard
-            .get_or_insert_with(std::collections::HashMap::new)
+        table
+            .write()
+            .unwrap()
+            .get_or_insert_with(Default::default)
             .insert(class_id, proto_ptr);
     });
 }
@@ -122,7 +123,7 @@ pub(crate) fn test_decl_class_prototype_root(class_id: u32) -> usize {
             .read()
             .unwrap()
             .as_ref()
-            .and_then(|m| m.get(&class_id).copied())
+            .and_then(|m| m.get(class_id))
             .unwrap_or(0)
     })
 }
@@ -148,7 +149,7 @@ pub(crate) fn test_clear_class_inheritance_roots(proto_cid: u32, closure_cid: u3
     });
     CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
         if let Some(m) = table.write().unwrap().as_mut() {
-            m.remove(&proto_cid);
+            m.remove(proto_cid);
         }
     });
     CLASS_PARENT_CLOSURES.with(|table| {

@@ -119,9 +119,9 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
         if let Ok(mut guard) = table.write() {
             if let Some(map) = guard.as_mut() {
-                for proto_addr in map.values_mut() {
+                map.visit_root_slots(|proto_addr| {
                     visitor.visit_usize_slot(proto_addr);
-                }
+                });
             }
         }
     });
@@ -264,7 +264,7 @@ fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
     CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
         if let Ok(guard) = table.read() {
             if let Some(map) = guard.as_ref() {
-                for &class_id in map.keys() {
+                for class_id in map.class_ids() {
                     slots.push(ClassSideTableRootSlot::DeclPrototypeObject { class_id });
                 }
             }
@@ -397,8 +397,10 @@ fn scan_class_side_table_root_slot(
         ClassSideTableRootSlot::DeclPrototypeObject { class_id } => {
             CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
                 if let Ok(mut guard) = table.write() {
-                    if let Some(proto_addr) = guard.as_mut().and_then(|map| map.get_mut(class_id)) {
-                        visitor.visit_usize_slot(proto_addr);
+                    if let Some(map) = guard.as_mut() {
+                        map.visit_root_slot_for(*class_id, |proto_addr| {
+                            visitor.visit_usize_slot(proto_addr);
+                        });
                     }
                 }
             });
@@ -749,7 +751,7 @@ pub(crate) fn test_class_decl_prototype_object_root_addr(class_id: u32) -> usize
         table
             .read()
             .ok()
-            .and_then(|guard| guard.as_ref().and_then(|map| map.get(&class_id).copied()))
+            .and_then(|guard| guard.as_ref().and_then(|map| map.get(class_id)))
             .unwrap_or(0)
     })
 }

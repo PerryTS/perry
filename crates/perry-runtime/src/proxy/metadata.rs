@@ -319,9 +319,10 @@ mod tests {
         register_test_class(cid);
         let fake_proto_ptr: usize = 0x1_0000; // arbitrary; only used as a map key
         crate::object::CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-            let mut guard = table.write().unwrap();
-            guard
-                .get_or_insert_with(std::collections::HashMap::new)
+            table
+                .write()
+                .unwrap()
+                .get_or_insert_with(Default::default)
                 .insert(cid, fake_proto_ptr);
         });
         let target = f64::from_bits(POINTER_TAG | (fake_proto_ptr as u64 & POINTER_MASK));
