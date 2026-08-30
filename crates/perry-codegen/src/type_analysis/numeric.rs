@@ -205,7 +205,24 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             left,
             right,
         } => is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right),
-        Expr::Binary { op, .. } => !matches!(op, BinaryOp::Add),
+        // Non-`+` arithmetic is numeric only when it cannot successfully
+        // produce a BigInt. With two erased operands, the lowering uses a
+        // BigInt-aware dynamic helper whose result may be a NaN-boxed BigInt;
+        // claiming that value is a raw double lets an enclosing operation
+        // perform native floating-point arithmetic on the box. For example,
+        // #9143's `(a / d) * d + (a % d)` treated both subtrees as doubles and
+        // `fadd` propagated the left NaN payload, silently dropping `% d`.
+        //
+        // One provably non-BigInt operand is enough: a mixed BigInt operation
+        // throws, while every successful result is then a Number. `>>>` is
+        // always Number-producing (or throws on BigInt), regardless of its
+        // operand proofs.
+        Expr::Binary {
+            op: BinaryOp::UShr, ..
+        } => true,
+        Expr::Binary { left, right, .. } => {
+            is_provably_not_bigint(ctx, left) || is_provably_not_bigint(ctx, right)
+        }
         // `x++`/`x--`/`++x`/`--x` evaluates to `ToNumeric(x) ± 1`, a Number —
         // EXCEPT when `x` is a BigInt, where it stays a BigInt (`5n++` → `6n`).
         // So this is NOT unconditionally numeric: mirror the `LocalGet` arm's
@@ -654,12 +671,10 @@ pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         return false;
     }
     // Handle arithmetic/bitwise/unary nodes STRUCTURALLY, before the
-    // `is_numeric_expr` shortcut below. `is_numeric_expr` blanket-treats every
-    // non-`Add` binary and every `-x`/`+x`/`~x` unary as numeric — fine for its
-    // own callers (they guard BigInt upstream), but it would over-approximate
-    // here: `anyA ^ anyB` could be `bigint ^ bigint` (a BigInt result), yet
-    // `is_bigint_expr` can't see it when both operands are `Any`. The
-    // structural rules recurse into the operands instead.
+    // `is_numeric_expr` shortcut below. This avoids a predicate cycle and
+    // directly answers the relevant ToNumeric question: `anyA ^ anyB` could
+    // be `bigint ^ bigint` (a BigInt result), even though `is_bigint_expr`
+    // cannot see it when both operands are `Any`.
     match e {
         // Every arithmetic / bitwise binary op yields a BigInt ONLY when BOTH
         // operands `ToNumeric` to BigInt (a mixed operand throws; a string

@@ -20,9 +20,33 @@ fn any_local(id: u32, name: &str, init: Expr) -> Stmt {
     }
 }
 
+fn erased_bigint_local(id: u32, name: &str, value: &str) -> Vec<Stmt> {
+    vec![
+        Stmt::Let {
+            id,
+            name: name.to_string(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(Expr::Undefined),
+        },
+        Stmt::Expr(Expr::LocalSet(
+            id,
+            Box::new(Expr::BigInt(value.to_string())),
+        )),
+    ]
+}
+
 fn add(left: Expr, right: Expr) -> Expr {
     Expr::Binary {
         op: BinaryOp::Add,
+        left: Box::new(left),
+        right: Box::new(right),
+    }
+}
+
+fn arithmetic(op: BinaryOp, left: Expr, right: Expr) -> Expr {
+    Expr::Binary {
+        op,
         left: Box::new(left),
         right: Box::new(right),
     }
@@ -102,4 +126,33 @@ fn two_leaf_dynamic_add_takes_the_guard_too() {
         1,
         "the cold arm must preserve exact dynamic `+` semantics:\n{ir}"
     );
+}
+
+#[test]
+fn dynamic_arithmetic_results_are_guarded_before_add() {
+    // #9143: for-of element bindings can be `Any` even when their runtime
+    // values are BigInts. The nested arithmetic helpers preserve BigInt, so
+    // their boxed results must not feed an unconditional native `fadd`.
+    let mut body = erased_bigint_local(A, "a", "123456789012345678901234567890");
+    body.extend(erased_bigint_local(B, "d", "1000000007"));
+    let quotient = arithmetic(BinaryOp::Div, Expr::LocalGet(A), Expr::LocalGet(B));
+    let product = arithmetic(BinaryOp::Mul, quotient, Expr::LocalGet(B));
+    let remainder = arithmetic(BinaryOp::Mod, Expr::LocalGet(A), Expr::LocalGet(B));
+    body.push(result(add(product, remainder)));
+    let ir = ir_for("dynamic_bigint_identity_add", body);
+
+    assert!(
+        ir.contains("\nguarded_add.numeric."),
+        "possibly-BigInt arithmetic results need a runtime number guard:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_dynamic_string_or_number_add("),
+        "the non-number arm must preserve BigInt addition:\n{ir}"
+    );
+    for helper in ["js_dynamic_div", "js_dynamic_mul", "js_dynamic_mod"] {
+        assert!(
+            ir.contains(&format!("call double @{helper}(")),
+            "the arithmetic subtree must retain {helper}:\n{ir}"
+        );
+    }
 }
