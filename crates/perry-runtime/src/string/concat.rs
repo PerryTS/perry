@@ -153,9 +153,7 @@ pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
         let bits = bits_value.to_bits();
         let tag = bits >> 48;
         let is_plain_f64 = tag < 0x7FF8 || (tag == 0x7FF8 && (bits & 0x000F_FFFF_FFFF_FFFF) == 0);
-        if is_plain_f64
-            && bits_value.fract() == 0.0
-            && (0.0..=999_999_999.0).contains(&bits_value)
+        if is_plain_f64 && bits_value.fract() == 0.0 && (0.0..=999_999_999.0).contains(&bits_value)
         {
             let len = fast_itoa_u32(bits_value as u32, buf);
             Some((buf.as_ptr(), len as u32))
