@@ -326,12 +326,21 @@ unsafe fn typed_array_from_rooted_snapshot(
     raw: &[crate::gc::RuntimeHandle<'_>],
 ) -> *mut TypedArrayHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let ta = scope.root_raw_mut_ptr(typed_array_alloc(kind, raw.len() as u32));
-    for (i, value) in raw.iter().enumerate() {
-        let coerced = bigint::coerce_for_kind(kind, value.get_nanbox_f64());
-        ta.with_mut_ptr::<TypedArrayHeader, _>(|ta| store_at(ta, i, coerced));
+    let allocated = typed_array_alloc(kind, raw.len() as u32);
+    if raw.is_empty() {
+        return allocated;
     }
-    ta.across_mut::<TypedArrayHeader, _>(|| ()).1
+    let ta = scope.root_raw_mut_ptr(allocated);
+    for (i, value) in raw.iter().enumerate() {
+        let (coerced, ta) = ta.across_mut::<TypedArrayHeader, _>(|| {
+            bigint::coerce_for_kind(kind, value.get_nanbox_f64())
+        });
+        store_at(ta, i, coerced);
+        if i + 1 == raw.len() {
+            return ta;
+        }
+    }
+    unreachable!("non-empty snapshot loop must return its typed array")
 }
 
 /// `Get(obj, name)` for a plain-object or function source value.

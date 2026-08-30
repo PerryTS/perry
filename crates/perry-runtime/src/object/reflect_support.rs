@@ -180,17 +180,11 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         if let Some(present) = crate::process::process_env_has_field(obj, key_str) {
             return present;
         }
-        // #7963 (the second half of #6949's deferred scope note): `js_array_get`
-        // MATERIALIZES a lazy array, so it can allocate and therefore evacuate.
-        // `keys` and `key_str` were raw Rust locals walked across it — neither
-        // shadow slots nor temp roots nor reachable from any registered
-        // scanner, so the collector could neither keep them alive nor rewrite
-        // them, and the very next iteration compared a from-space string
-        // against a from-space slot. Root both and re-read each iteration; the
-        // pre-call addresses are never bound past the call.
-        let keys_handle = scope.root_raw_mut_ptr(crate::object::object_keys_array(obj));
-        let key_handle = scope.root_string_ptr(key_str);
-        let ((), keys) = keys_handle.across_mut::<crate::array::ArrayHeader, _>(|| ());
+        // #9190 replaced the allocating per-element `js_array_get` walk with
+        // the consult-only key index below, so no handle round-trip is needed:
+        // there is no collection point between reading these pointers and
+        // consuming them.
+        let keys = crate::object::object_keys_array(obj);
         // Defence in depth for the class the buffer arm above closes by
         // routing: `keys_array` is only an `ArrayHeader` when `obj` really is
         // an `ObjectHeader`, and a receiver kind with no arm here reaches this
@@ -221,9 +215,7 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         //
         // `keys_find_slot_by_key_ptr` allocates nothing (a consult-only shape
         // probe, then a raw slot compare), so unlike the loop it replaced it
-        // needs no per-iteration re-rooting — the handles above still cover
-        // the `js_string_coerce` that produced `key_str`.
-        let ((), key_str) = key_handle.across_const::<crate::StringHeader, _>(|| ());
+        // needs no per-iteration re-rooting.
         crate::object::keys_find_slot_by_key_ptr(keys, key_count, key_str).is_some()
     }
 }

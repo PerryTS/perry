@@ -83,8 +83,7 @@ unsafe fn alloc_iterator_backing(backing: f64, kind: i32) -> f64 {
     // `Object.getPrototypeOf(it)` and the inherited `.next` read resolve.
     obj_h
         .with_mut_ptr(|obj| crate::object::attach_iterator_prototype(obj, ARRAY_ITERATOR_CLASS_ID));
-    let (_, obj) = obj_h.across_mut::<ObjectHeader, _>(|| ());
-    js_nanbox_pointer(obj as i64)
+    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_nanbox_pointer(obj as i64))
 }
 
 unsafe fn alloc_iterator(arr_ptr: *mut ArrayHeader, kind: i32) -> f64 {

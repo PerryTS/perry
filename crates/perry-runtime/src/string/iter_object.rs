@@ -54,8 +54,7 @@ unsafe fn alloc_iterator(cp_array: *mut ArrayHeader) -> f64 {
     obj_h.with_mut_ptr(|obj| {
         crate::object::attach_iterator_prototype(obj, STRING_ITERATOR_CLASS_ID)
     });
-    let (_, obj) = obj_h.across_mut::<ObjectHeader, _>(|| ());
-    js_nanbox_pointer(obj as i64)
+    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_nanbox_pointer(obj as i64))
 }
 
 /// `''[Symbol.iterator]()` — build a String iterator over `s`'s code points.

@@ -17,12 +17,12 @@ use crate::object::{ObjectHeader, PropertyAttrs};
 use crate::string::StringHeader;
 use crate::value::JSValue;
 
-/// Re-read a rooted raw pointer without recording bare-handle debt.
-/// Prefer pairing a real allocating call via `across_*` when one is present;
-/// this covers final/local reads where the handle is the source of truth.
+/// Keep raw pointers borrowed from runtime handles inside the operation that
+/// consumes them. Callers that need a post-allocation pointer use `across_*`
+/// with that allocation in its closure instead.
 #[inline]
-fn hmut<T>(h: &crate::gc::RuntimeHandle) -> *mut T {
-    h.across_mut::<T, _>(|| ()).1
+fn with_hmut<T, R>(h: &crate::gc::RuntimeHandle, f: impl FnOnce(*mut T) -> R) -> R {
+    h.with_mut_ptr(f)
 }
 
 /// Feature-gated dyn-eval entry points. Product builds (`perry` → runtime with
@@ -343,11 +343,11 @@ fn set_field(obj: *mut ObjectHeader, name: &str, value: f64) {
     let obj = scope.root_raw_mut_ptr(obj);
     let value = scope.root_nanbox_f64(value);
     let key = scope.root_string_ptr(field_key(name));
-    crate::object::js_object_set_field_by_name(
-        hmut::<ObjectHeader>(&obj),
-        hmut::<StringHeader>(&key),
-        value.get_nanbox_f64(),
-    );
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        key.with_mut_ptr::<StringHeader, _>(|key| {
+            crate::object::js_object_set_field_by_name(obj, key, value.get_nanbox_f64())
+        })
+    });
 }
 
 fn get_field(obj: *mut ObjectHeader, name: &str) -> f64 {
@@ -1073,16 +1073,24 @@ fn fresh_intrinsic_global() -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let intrinsics = crate::object::js_object_alloc(0, 0);
     let intrinsics = scope.root_raw_mut_ptr(intrinsics);
-    crate::object::populate_global_this_builtins(hmut::<ObjectHeader>(&intrinsics));
-    crate::object::js_object_delete_field(hmut::<ObjectHeader>(&intrinsics), string_ptr("process"));
-    let intrinsics = hmut::<ObjectHeader>(&intrinsics);
-    let value = object_value(intrinsics);
-    VM_INTRINSIC_GLOBAL.with(|slot| {
-        slot.set(value.to_bits());
-        crate::gc::runtime_write_barrier_root_heap_word(intrinsics as u64);
-        crate::gc::js_gc_register_global_root(slot.as_ptr() as i64);
+    intrinsics.with_mut_ptr::<ObjectHeader, _>(|intrinsics| {
+        crate::object::populate_global_this_builtins(intrinsics)
     });
-    value
+    let process = scope.root_string_ptr(string_ptr("process"));
+    intrinsics.with_mut_ptr::<ObjectHeader, _>(|intrinsics| {
+        process.with_mut_ptr::<StringHeader, _>(|process| {
+            crate::object::js_object_delete_field(intrinsics, process)
+        })
+    });
+    intrinsics.with_mut_ptr::<ObjectHeader, _>(|intrinsics| {
+        let value = object_value(intrinsics);
+        VM_INTRINSIC_GLOBAL.with(|slot| {
+            slot.set(value.to_bits());
+            crate::gc::runtime_write_barrier_root_heap_word(intrinsics as u64);
+            crate::gc::js_gc_register_global_root(slot.as_ptr() as i64);
+        });
+        value
+    })
 }
 
 fn new_context_state(sandbox: f64, dont_contextify: bool, options: ContextOptions) -> ContextState {
@@ -1289,18 +1297,24 @@ fn install_script_method(
     crate::closure::js_register_closure_arity(func_ptr, 2);
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     let closure = scope.root_raw_mut_ptr(closure);
-    crate::object::set_builtin_closure_length(hmut::<ClosureHeader>(&closure) as usize, arity);
-    let value = crate::value::js_nanbox_pointer(hmut::<ClosureHeader>(&closure) as i64);
-    crate::object::js_object_set_field_by_name(
-        hmut::<ObjectHeader>(&obj),
-        hmut::<StringHeader>(&key),
-        value,
-    );
-    crate::object::set_builtin_property_attrs(
-        hmut::<ObjectHeader>(&obj) as usize,
-        name.to_string(),
-        PropertyAttrs::new(true, false, true),
-    );
+    closure.with_mut_ptr::<ClosureHeader, _>(|closure| {
+        crate::object::set_builtin_closure_length(closure as usize, arity)
+    });
+    let value = closure.with_mut_ptr::<ClosureHeader, _>(|closure| {
+        crate::value::js_nanbox_pointer(closure as i64)
+    });
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        key.with_mut_ptr::<StringHeader, _>(|key| {
+            crate::object::js_object_set_field_by_name(obj, key, value)
+        })
+    });
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        crate::object::set_builtin_property_attrs(
+            obj as usize,
+            name.to_string(),
+            PropertyAttrs::new(true, false, true),
+        )
+    });
 }
 
 fn script_receiver() -> f64 {
@@ -1321,77 +1335,86 @@ pub(crate) fn install_script_prototypes(constructor: f64) {
     let proto = scope.root_raw_mut_ptr(proto_ptr);
     let key = scope.root_nanbox_f64(string_value("runInThisContext"));
     if JSValue::from_bits(
-        crate::object::js_object_has_own(
-            object_value(hmut::<ObjectHeader>(&proto)),
-            key.get_nanbox_f64(),
-        )
-        .to_bits(),
+        proto
+            .with_mut_ptr::<ObjectHeader, _>(|proto| {
+                crate::object::js_object_has_own(object_value(proto), key.get_nanbox_f64())
+            })
+            .to_bits(),
     )
     .as_bool()
     {
         return;
     }
     let old_parent = scope.root_nanbox_u64(
-        crate::object::prototype_chain::object_static_prototype(
-            hmut::<ObjectHeader>(&proto) as usize
-        )
-        .unwrap_or(JSValue::null().bits()),
+        proto
+            .with_mut_ptr::<ObjectHeader, _>(|proto| {
+                crate::object::prototype_chain::object_static_prototype(proto as usize)
+            })
+            .unwrap_or(JSValue::null().bits()),
     );
     let base = crate::object::js_object_alloc(0, 0);
     let base = scope.root_raw_mut_ptr(base);
-    crate::object::prototype_chain::object_set_static_prototype(
-        hmut::<ObjectHeader>(&base) as usize,
-        old_parent.get_nanbox_u64(),
-    );
-    crate::object::prototype_chain::object_set_static_prototype(
-        hmut::<ObjectHeader>(&proto) as usize,
-        object_value(hmut::<ObjectHeader>(&base)).to_bits(),
-    );
-    set_field(
-        hmut::<ObjectHeader>(&base),
-        "constructor",
-        constructor.get_nanbox_f64(),
-    );
-    crate::object::set_builtin_property_attrs(
-        hmut::<ObjectHeader>(&base) as usize,
-        "constructor".to_string(),
-        PropertyAttrs::new(true, false, true),
-    );
-    install_script_method(
-        hmut::<ObjectHeader>(&proto),
-        "runInThisContext",
-        vm_script_run_in_this_context_method,
-        1,
-    );
-    install_script_method(
-        hmut::<ObjectHeader>(&proto),
-        "runInContext",
-        vm_script_run_in_context_method,
-        2,
-    );
-    install_script_method(
-        hmut::<ObjectHeader>(&proto),
-        "runInNewContext",
-        vm_script_run_in_new_context_method,
-        2,
-    );
-    install_script_method(
-        hmut::<ObjectHeader>(&base),
-        "runInContext",
-        vm_script_run_in_context_method,
-        2,
-    );
-    install_script_method(
-        hmut::<ObjectHeader>(&base),
-        "createCachedData",
-        vm_script_create_cached_data_method,
-        0,
-    );
-    crate::object::set_builtin_property_attrs(
-        hmut::<ObjectHeader>(&base) as usize,
-        "createCachedData".to_string(),
-        PropertyAttrs::new(true, true, true),
-    );
+    base.with_mut_ptr::<ObjectHeader, _>(|base| {
+        crate::object::prototype_chain::object_set_static_prototype(
+            base as usize,
+            old_parent.get_nanbox_u64(),
+        )
+    });
+    proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+        base.with_mut_ptr::<ObjectHeader, _>(|base| {
+            crate::object::prototype_chain::object_set_static_prototype(
+                proto as usize,
+                object_value(base).to_bits(),
+            )
+        })
+    });
+    base.with_mut_ptr::<ObjectHeader, _>(|base| {
+        set_field(base, "constructor", constructor.get_nanbox_f64())
+    });
+    base.with_mut_ptr::<ObjectHeader, _>(|base| {
+        crate::object::set_builtin_property_attrs(
+            base as usize,
+            "constructor".to_string(),
+            PropertyAttrs::new(true, false, true),
+        )
+    });
+    proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+        install_script_method(
+            proto,
+            "runInThisContext",
+            vm_script_run_in_this_context_method,
+            1,
+        )
+    });
+    proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+        install_script_method(proto, "runInContext", vm_script_run_in_context_method, 2)
+    });
+    proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+        install_script_method(
+            proto,
+            "runInNewContext",
+            vm_script_run_in_new_context_method,
+            2,
+        )
+    });
+    base.with_mut_ptr::<ObjectHeader, _>(|base| {
+        install_script_method(base, "runInContext", vm_script_run_in_context_method, 2)
+    });
+    base.with_mut_ptr::<ObjectHeader, _>(|base| {
+        install_script_method(
+            base,
+            "createCachedData",
+            vm_script_create_cached_data_method,
+            0,
+        )
+    });
+    base.with_mut_ptr::<ObjectHeader, _>(|base| {
+        crate::object::set_builtin_property_attrs(
+            base as usize,
+            "createCachedData".to_string(),
+            PropertyAttrs::new(true, true, true),
+        )
+    });
 }
 
 fn make_script(code: String, options: f64) -> f64 {
@@ -1403,41 +1426,37 @@ fn make_script(code: String, options: f64) -> f64 {
     let source_map_url = extract_source_map_url(&code);
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
-    scripts().lock().unwrap().insert(
-        hmut::<ObjectHeader>(&obj) as usize,
-        ScriptMetadata {
-            source: code,
-            filename: source_options.filename,
-            line_offset: source_options.line_offset,
-            column_offset: source_options.column_offset,
-        },
-    );
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        scripts().lock().unwrap().insert(
+            obj as usize,
+            ScriptMetadata {
+                source: code,
+                filename: source_options.filename,
+                line_offset: source_options.line_offset,
+                column_offset: source_options.column_offset,
+            },
+        )
+    });
     if let Some(url) = source_map_url {
-        set_field(
-            hmut::<ObjectHeader>(&obj),
-            "sourceMapURL",
-            string_value(&url),
-        );
+        let value = string_value(&url);
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| set_field(obj, "sourceMapURL", value));
     }
     if let Some(bytes) = cached_data {
-        set_field(
-            hmut::<ObjectHeader>(&obj),
-            "cachedDataRejected",
-            bool_value(!cache_bytes_accepted(&bytes, CACHE_KIND_SCRIPT, hash)),
-        );
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            set_field(
+                obj,
+                "cachedDataRejected",
+                bool_value(!cache_bytes_accepted(&bytes, CACHE_KIND_SCRIPT, hash)),
+            )
+        });
     } else if produce_cached_data {
-        set_field(
-            hmut::<ObjectHeader>(&obj),
-            "cachedData",
-            cached_data_buffer(CACHE_KIND_SCRIPT, hash),
-        );
-        set_field(
-            hmut::<ObjectHeader>(&obj),
-            "cachedDataProduced",
-            bool_value(true),
-        );
+        let value = cached_data_buffer(CACHE_KIND_SCRIPT, hash);
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| set_field(obj, "cachedData", value));
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            set_field(obj, "cachedDataProduced", bool_value(true))
+        });
     }
-    object_value(hmut::<ObjectHeader>(&obj))
+    obj.with_mut_ptr::<ObjectHeader, _>(object_value)
 }
 
 extern "C" fn vm_script_create_cached_data_method(

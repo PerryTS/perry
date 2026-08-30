@@ -561,7 +561,7 @@ pub unsafe extern "C-unwind" fn js_spread_tail_fallback_args(
     let fixed_handles = scope.root_nanbox_f64_slice(fixed);
     let spread_handle = scope.root_nanbox_f64(spread);
 
-    let (_, rooted_spread) = spread_handle.across_nanbox(|| ());
+    let rooted_spread = spread_handle.get_nanbox_f64();
     // Drive the real iterator protocol on a guard miss. The older
     // `js_array_like_to_array` shortcut reinterprets an Array Proxy handle or
     // object-backed Array-subclass instance as an `ArrayHeader`, making both
@@ -587,7 +587,7 @@ pub unsafe extern "C-unwind" fn js_spread_tail_fallback_args(
     let result_handle = scope.root_raw_mut_ptr(crate::array::js_array_alloc(capacity));
 
     for value in &fixed_handles {
-        let (_, rooted_value) = value.across_nanbox(|| ());
+        let rooted_value = value.get_nanbox_f64();
         let next = result_handle
             .with_mut_ptr(|result| crate::array::js_array_push_f64(result, rooted_value));
         result_handle.set_raw_mut_ptr(next);
@@ -598,7 +598,7 @@ pub unsafe extern "C-unwind" fn js_spread_tail_fallback_args(
         // The push can collect while `value` is otherwise only a Rust local.
         let value_scope = crate::gc::RuntimeHandleScope::new();
         let value_handle = value_scope.root_nanbox_f64(value);
-        let (_, rooted_value) = value_handle.across_nanbox(|| ());
+        let rooted_value = value_handle.get_nanbox_f64();
         let next = result_handle
             .with_mut_ptr(|result| crate::array::js_array_push_f64(result, rooted_value));
         result_handle.set_raw_mut_ptr(next);

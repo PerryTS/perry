@@ -71,35 +71,40 @@ unsafe fn alloc_iterator(class_id: u32, coll_nanboxed: f64, kind: i32) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let coll_h = scope.root_nanbox_f64(coll_nanboxed);
     let obj_h = scope.root_raw_mut_ptr(js_object_alloc(class_id, 6));
-    let obj = || obj_h.across_mut::<ObjectHeader, _>(|| ()).1;
     // Field 0: backing collection (NaN-boxed pointer so the GC scanner keeps it).
-    js_object_set_field(
-        obj(),
-        0,
-        JSValue::from_bits(coll_h.get_nanbox_f64().to_bits()),
-    );
+    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        js_object_set_field(
+            obj,
+            0,
+            JSValue::from_bits(coll_h.get_nanbox_f64().to_bits()),
+        )
+    });
     // Field 1: cursor index (index just past the last-returned entry), starts at 0.
-    js_object_set_field(obj(), 1, JSValue::number(0.0));
+    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_object_set_field(obj, 1, JSValue::number(0.0)));
     // Field 2: iterator kind.
-    js_object_set_field(obj(), 2, JSValue::number(kind as f64));
+    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        js_object_set_field(obj, 2, JSValue::number(kind as f64))
+    });
     // Field 3: collection size observed at the last `next()`. `-1` sentinel means
     // "not started" (no entry returned yet). Used to detect a mid-iteration
     // delete (which compacts the entries array, shifting live entries below the
     // cursor) so the cursor can be re-derived from the last key (#6075).
-    js_object_set_field(obj(), 3, JSValue::number(-1.0));
+    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_object_set_field(obj, 3, JSValue::number(-1.0)));
     // Field 4: the KEY of the last-returned entry (a Map key / Set value), used
     // to re-derive the cursor after a delete-shift. Undefined until started.
-    js_object_set_field(obj(), 4, JSValue::undefined());
+    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_object_set_field(obj, 4, JSValue::undefined()));
     // Field 5: the recycled `{value, done}` result the FUSED for-of driver
     // mutates in place (one allocation per loop, not per element). Manual
     // `.next()` calls never touch it — they keep returning fresh objects, so
     // a caller that retains results observes spec behavior.
-    js_object_set_field(obj(), 5, JSValue::undefined());
+    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_object_set_field(obj, 5, JSValue::undefined()));
     // Link `[[Prototype]]` to the shared `%MapIteratorPrototype%` /
     // `%SetIteratorPrototype%` singleton so `Object.getPrototypeOf(it)` and the
     // inherited `.next` read resolve.
-    crate::object::attach_iterator_prototype(obj(), class_id);
-    js_nanbox_pointer(obj() as i64)
+    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        crate::object::attach_iterator_prototype(obj, class_id)
+    });
+    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_nanbox_pointer(obj as i64))
 }
 
 /// Build a fresh Map iterator object for `map` (raw pointer) of the given
@@ -210,8 +215,7 @@ unsafe fn make_pair_array(a: f64, b: f64) -> f64 {
         (*pair).length = 2;
         crate::array::rebuild_array_layout_exact(pair);
     });
-    let (_, pair) = pair.across_mut::<ArrayHeader, _>(|| ());
-    js_nanbox_pointer(pair as i64)
+    pair.with_mut_ptr::<ArrayHeader, _>(|pair| js_nanbox_pointer(pair as i64))
 }
 
 /// Compute the entries-array index to read next, self-correcting for a

@@ -6,7 +6,7 @@ use super::*;
 fn evaluate_source_module(module: *mut ObjectHeader) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let module = scope.root_raw_mut_ptr(module);
-    let status = module_status(hmut::<ObjectHeader>(&module));
+    let status = with_hmut(&module, module_status);
     if status != STATUS_LINKED && status != STATUS_EVALUATED {
         return throw_vm_status("Module status must be linked");
     }
@@ -14,16 +14,19 @@ fn evaluate_source_module(module: *mut ObjectHeader) -> f64 {
         return undefined_value();
     }
 
-    set_status(hmut::<ObjectHeader>(&module), STATUS_EVALUATING);
-    let Some(namespace) = namespace_for_module(hmut::<ObjectHeader>(&module)) else {
-        set_status(hmut::<ObjectHeader>(&module), STATUS_ERRORED);
+    with_hmut(&module, |module| set_status(module, STATUS_EVALUATING));
+    let Some(namespace) = with_hmut(&module, namespace_for_module) else {
+        with_hmut(&module, |module| set_status(module, STATUS_ERRORED));
         return throw_vm_status("Module namespace is unavailable");
     };
     let namespace = scope.root_raw_mut_ptr(namespace);
 
-    let source = get_string_field(hmut::<ObjectHeader>(&module), FIELD_SOURCE).unwrap_or_default();
-    let context = scope.root_nanbox_f64(get_field(hmut::<ObjectHeader>(&module), FIELD_CONTEXT));
-    for (name, value) in build_import_env(hmut::<ObjectHeader>(&module)) {
+    let source =
+        with_hmut(&module, |module| get_string_field(module, FIELD_SOURCE)).unwrap_or_default();
+    let context = scope.root_nanbox_f64(with_hmut(&module, |module| {
+        get_field(module, FIELD_CONTEXT)
+    }));
+    for (name, value) in with_hmut(&module, build_import_env) {
         set_object_field(context.get_nanbox_f64(), &name, value);
     }
     let executable = split_source_statements(&source)
@@ -41,25 +44,24 @@ fn evaluate_source_module(module: *mut ObjectHeader) -> f64 {
             lexical.get_nanbox_f64(),
         )
     }) {
-        set_field(hmut::<ObjectHeader>(&module), FIELD_ERROR, error);
-        set_status(hmut::<ObjectHeader>(&module), STATUS_ERRORED);
+        with_hmut(&module, |module| set_field(module, FIELD_ERROR, error));
+        with_hmut(&module, |module| set_status(module, STATUS_ERRORED));
         return error;
     }
-    for export in read_exports(hmut::<ObjectHeader>(&module)) {
-        set_field(
-            hmut::<ObjectHeader>(&namespace),
-            &export.name,
-            de::script_binding(lexical.get_nanbox_f64(), &export.name),
-        );
+    for export in with_hmut(&module, read_exports) {
+        let value = de::script_binding(lexical.get_nanbox_f64(), &export.name);
+        with_hmut(&namespace, |namespace| {
+            set_field(namespace, &export.name, value)
+        });
     }
-    set_status(hmut::<ObjectHeader>(&module), STATUS_EVALUATED);
+    with_hmut(&module, |module| set_status(module, STATUS_EVALUATED));
     undefined_value()
 }
 
 fn evaluate_synthetic_module(module: *mut ObjectHeader) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let module = scope.root_raw_mut_ptr(module);
-    let status = module_status(hmut::<ObjectHeader>(&module));
+    let status = with_hmut(&module, module_status);
     if status == STATUS_EVALUATED {
         return undefined_value();
     }
@@ -67,25 +69,24 @@ fn evaluate_synthetic_module(module: *mut ObjectHeader) -> f64 {
         return throw_vm_status("Module status must be linked");
     }
 
-    set_status(hmut::<ObjectHeader>(&module), STATUS_EVALUATING);
-    let callback = scope.root_nanbox_f64(get_field(
-        hmut::<ObjectHeader>(&module),
-        FIELD_EVALUATE_CALLBACK,
-    ));
+    with_hmut(&module, |module| set_status(module, STATUS_EVALUATING));
+    let callback = scope.root_nanbox_f64(with_hmut(&module, |module| {
+        get_field(module, FIELD_EVALUATE_CALLBACK)
+    }));
     let js = JSValue::from_bits(callback.get_nanbox_f64().to_bits());
     if !js.is_undefined() && !js.is_null() {
-        let prev = crate::object::js_implicit_this_set(object_value(hmut::<ObjectHeader>(&module)));
+        let prev = crate::object::js_implicit_this_set(with_hmut(&module, object_value));
         let outcome = crate::exception::js_call_catching(|| unsafe {
             crate::closure::js_native_call_value(callback.get_nanbox_f64(), std::ptr::null(), 0)
         });
         crate::object::js_implicit_this_set(prev);
         if let Err(error) = outcome {
-            set_field(hmut::<ObjectHeader>(&module), FIELD_ERROR, error);
-            set_status(hmut::<ObjectHeader>(&module), STATUS_ERRORED);
+            with_hmut(&module, |module| set_field(module, FIELD_ERROR, error));
+            with_hmut(&module, |module| set_status(module, STATUS_ERRORED));
             return error;
         }
     }
-    set_status(hmut::<ObjectHeader>(&module), STATUS_EVALUATED);
+    with_hmut(&module, |module| set_status(module, STATUS_EVALUATED));
     undefined_value()
 }
 
@@ -131,24 +132,28 @@ fn new_module_base(kind: &str, status: &str, identifier: String) -> *mut ObjectH
     let module = crate::object::js_object_alloc(0, 16);
     let module = scope.root_raw_mut_ptr(module);
     let value = string_value(kind);
-    set_field(hmut::<ObjectHeader>(&module), FIELD_KIND, value);
+    with_hmut(&module, |module| set_field(module, FIELD_KIND, value));
     let value = string_value(status);
-    set_field(hmut::<ObjectHeader>(&module), FIELD_STATUS, value);
+    with_hmut(&module, |module| set_field(module, FIELD_STATUS, value));
     let value = string_value(status);
-    set_field(hmut::<ObjectHeader>(&module), "status", value);
+    with_hmut(&module, |module| set_field(module, "status", value));
     let value = string_value(&identifier);
-    set_field(hmut::<ObjectHeader>(&module), FIELD_IDENTIFIER, value);
+    with_hmut(&module, |module| set_field(module, FIELD_IDENTIFIER, value));
     let value = string_value(&identifier);
-    set_field(hmut::<ObjectHeader>(&module), "identifier", value);
-    set_field(
-        hmut::<ObjectHeader>(&module),
-        FIELD_ERROR,
-        undefined_value(),
-    );
-    set_field(hmut::<ObjectHeader>(&module), "error", undefined_value());
+    with_hmut(&module, |module| set_field(module, "identifier", value));
+    with_hmut(&module, |module| {
+        set_field(module, FIELD_ERROR, undefined_value())
+    });
+    with_hmut(&module, |module| {
+        set_field(module, "error", undefined_value())
+    });
     let value = array_value(crate::array::js_array_alloc(0));
-    set_field(hmut::<ObjectHeader>(&module), FIELD_LINKED_MODULES, value);
-    hmut::<ObjectHeader>(&module)
+    let ((), module) = module.across_mut::<ObjectHeader, _>(|| {
+        with_hmut(&module, |module| {
+            set_field(module, FIELD_LINKED_MODULES, value)
+        })
+    });
+    module
 }
 
 extern "C" fn module_namespace_getter(closure: *const ClosureHeader) -> f64 {
@@ -169,24 +174,28 @@ fn install_module_accessor(
     let closure = crate::closure::js_closure_alloc(getter as *const u8, 1);
     let closure = scope.root_raw_mut_ptr(closure);
     crate::closure::js_register_closure_arity(getter as *const u8, 0);
-    crate::closure::js_closure_set_capture_f64(
-        hmut::<ClosureHeader>(&closure),
-        0,
-        object_value(hmut::<ObjectHeader>(&module)),
-    );
+    with_hmut(&closure, |closure| {
+        with_hmut(&module, |module| {
+            crate::closure::js_closure_set_capture_f64(closure, 0, object_value(module))
+        })
+    });
     unsafe {
-        crate::closure::rebuild_closure_layout_and_barriers(hmut::<ClosureHeader>(&closure), 1);
+        with_hmut(&closure, |closure| {
+            crate::closure::rebuild_closure_layout_and_barriers(closure, 1)
+        });
     }
-    set_field(hmut::<ObjectHeader>(&module), name, undefined_value());
-    crate::object::set_builtin_accessor_descriptor(
-        hmut::<ObjectHeader>(&module) as usize,
-        name.to_string(),
-        crate::object::AccessorDescriptor {
-            get: crate::value::js_nanbox_pointer(hmut::<ClosureHeader>(&closure) as i64).to_bits(),
-            set: 0,
-        },
-        PropertyAttrs::new(false, false, false),
-    );
+    with_hmut(&module, |module| set_field(module, name, undefined_value()));
+    let get = with_hmut(&closure, |closure: *mut ClosureHeader| {
+        crate::value::js_nanbox_pointer(closure as i64).to_bits()
+    });
+    with_hmut(&module, |module: *mut ObjectHeader| {
+        crate::object::set_builtin_accessor_descriptor(
+            module as usize,
+            name.to_string(),
+            crate::object::AccessorDescriptor { get, set: 0 },
+            PropertyAttrs::new(false, false, false),
+        )
+    });
 }
 
 fn set_module_namespace_tag(namespace: *mut ObjectHeader) {
@@ -199,11 +208,15 @@ fn set_module_namespace_tag(namespace: *mut ObjectHeader) {
     let symbol = scope.root_raw_mut_ptr(symbol);
     let tag = scope.root_nanbox_f64(string_value("Module"));
     unsafe {
-        crate::symbol::js_object_set_symbol_property(
-            object_value(hmut::<ObjectHeader>(&namespace)),
-            crate::value::js_nanbox_pointer(hmut::<crate::symbol::SymbolHeader>(&symbol) as i64),
-            tag.get_nanbox_f64(),
-        );
+        with_hmut(&namespace, |namespace| {
+            with_hmut(&symbol, |symbol: *mut crate::symbol::SymbolHeader| {
+                crate::symbol::js_object_set_symbol_property(
+                    object_value(namespace),
+                    crate::value::js_nanbox_pointer(symbol as i64),
+                    tag.get_nanbox_f64(),
+                )
+            })
+        });
     }
 }
 
@@ -237,43 +250,40 @@ pub extern "C" fn js_vm_source_text_module_new(code: f64, options: f64) -> f64 {
     let module = scope.root_raw_mut_ptr(module);
     let namespace = crate::object::js_object_alloc_null_proto(0, parsed.exports.len() as u32);
     let namespace = scope.root_raw_mut_ptr(namespace);
-    set_module_namespace_tag(hmut::<ObjectHeader>(&namespace));
+    with_hmut(&namespace, set_module_namespace_tag);
     for export in &parsed.exports {
-        set_field(
-            hmut::<ObjectHeader>(&namespace),
-            &export.name,
-            undefined_value(),
-        );
+        with_hmut(&namespace, |namespace| {
+            set_field(namespace, &export.name, undefined_value())
+        });
     }
-    set_field(
-        hmut::<ObjectHeader>(&module),
-        FIELD_NAMESPACE,
-        object_value(hmut::<ObjectHeader>(&namespace)),
-    );
-    install_module_accessor(
-        hmut::<ObjectHeader>(&module),
-        "namespace",
-        module_namespace_getter,
-    );
-    install_module_accessor(hmut::<ObjectHeader>(&module), "error", module_error_getter);
-    set_field(
-        hmut::<ObjectHeader>(&module),
-        FIELD_CONTEXT,
-        context.get_nanbox_f64(),
-    );
+    let namespace_value = with_hmut(&namespace, object_value);
+    with_hmut(&module, |module| {
+        set_field(module, FIELD_NAMESPACE, namespace_value)
+    });
+    with_hmut(&module, |module| {
+        install_module_accessor(module, "namespace", module_namespace_getter)
+    });
+    with_hmut(&module, |module| {
+        install_module_accessor(module, "error", module_error_getter)
+    });
+    with_hmut(&module, |module| {
+        set_field(module, FIELD_CONTEXT, context.get_nanbox_f64())
+    });
     let value = string_value(&source);
-    set_field(hmut::<ObjectHeader>(&module), FIELD_SOURCE, value);
+    with_hmut(&module, |module| set_field(module, FIELD_SOURCE, value));
     let value = requests_array(&parsed.requests);
-    set_field(hmut::<ObjectHeader>(&module), FIELD_REQUESTS, value);
+    with_hmut(&module, |module| set_field(module, FIELD_REQUESTS, value));
     let value = strings_array(&parsed.requests);
-    set_field(hmut::<ObjectHeader>(&module), "dependencySpecifiers", value);
+    with_hmut(&module, |module| {
+        set_field(module, "dependencySpecifiers", value)
+    });
     let value = requests_array(&parsed.requests);
-    set_field(hmut::<ObjectHeader>(&module), "moduleRequests", value);
+    with_hmut(&module, |module| set_field(module, "moduleRequests", value));
     let value = imports_array(&parsed.imports);
-    set_field(hmut::<ObjectHeader>(&module), FIELD_IMPORTS, value);
+    with_hmut(&module, |module| set_field(module, FIELD_IMPORTS, value));
     let value = exports_array(&parsed.exports);
-    set_field(hmut::<ObjectHeader>(&module), FIELD_EXPORTS, value);
-    object_value(hmut::<ObjectHeader>(&module))
+    with_hmut(&module, |module| set_field(module, FIELD_EXPORTS, value));
+    with_hmut(&module, object_value)
 }
 
 pub extern "C" fn js_vm_synthetic_module_new(
@@ -309,11 +319,15 @@ pub extern "C" fn js_vm_synthetic_module_new(
     let module = scope.root_raw_mut_ptr(module);
     let namespace = crate::object::js_object_alloc_null_proto(0, 0);
     let namespace = scope.root_raw_mut_ptr(namespace);
-    set_module_namespace_tag(hmut::<ObjectHeader>(&namespace));
-    let len = crate::array::js_array_length(hmut::<ArrayHeader>(&export_names));
+    with_hmut(&namespace, set_module_namespace_tag);
+    let len = with_hmut(&export_names, |export_names| {
+        crate::array::js_array_length(export_names)
+    });
     let mut exports = Vec::new();
     for idx in 0..len {
-        let value = crate::array::js_array_get_f64(hmut::<ArrayHeader>(&export_names), idx);
+        let value = with_hmut(&export_names, |export_names| {
+            crate::array::js_array_get_f64(export_names, idx)
+        });
         let Some(name) = string_from_value(value) else {
             let message = format!(
                 "The \"exportNames[{idx}]\" argument must be of type string. Received {}",
@@ -325,36 +339,37 @@ pub extern "C" fn js_vm_synthetic_module_new(
             name: name.clone(),
             expr: String::new(),
         });
-        set_field(hmut::<ObjectHeader>(&namespace), &name, undefined_value());
+        with_hmut(&namespace, |namespace| {
+            set_field(namespace, &name, undefined_value())
+        });
     }
-    set_field(
-        hmut::<ObjectHeader>(&module),
-        FIELD_NAMESPACE,
-        object_value(hmut::<ObjectHeader>(&namespace)),
-    );
-    install_module_accessor(
-        hmut::<ObjectHeader>(&module),
-        "namespace",
-        module_namespace_getter,
-    );
-    install_module_accessor(hmut::<ObjectHeader>(&module), "error", module_error_getter);
-    set_field(
-        hmut::<ObjectHeader>(&module),
-        FIELD_CONTEXT,
-        context.get_nanbox_f64(),
-    );
+    let namespace_value = with_hmut(&namespace, object_value);
+    with_hmut(&module, |module| {
+        set_field(module, FIELD_NAMESPACE, namespace_value)
+    });
+    with_hmut(&module, |module| {
+        install_module_accessor(module, "namespace", module_namespace_getter)
+    });
+    with_hmut(&module, |module| {
+        install_module_accessor(module, "error", module_error_getter)
+    });
+    with_hmut(&module, |module| {
+        set_field(module, FIELD_CONTEXT, context.get_nanbox_f64())
+    });
     let value = requests_array(&[]);
-    set_field(hmut::<ObjectHeader>(&module), FIELD_REQUESTS, value);
+    with_hmut(&module, |module| set_field(module, FIELD_REQUESTS, value));
     let value = imports_array(&[]);
-    set_field(hmut::<ObjectHeader>(&module), FIELD_IMPORTS, value);
+    with_hmut(&module, |module| set_field(module, FIELD_IMPORTS, value));
     let value = exports_array(&exports);
-    set_field(hmut::<ObjectHeader>(&module), FIELD_EXPORTS, value);
-    set_field(
-        hmut::<ObjectHeader>(&module),
-        FIELD_EVALUATE_CALLBACK,
-        evaluate_callback.get_nanbox_f64(),
-    );
-    object_value(hmut::<ObjectHeader>(&module))
+    with_hmut(&module, |module| set_field(module, FIELD_EXPORTS, value));
+    with_hmut(&module, |module| {
+        set_field(
+            module,
+            FIELD_EVALUATE_CALLBACK,
+            evaluate_callback.get_nanbox_f64(),
+        )
+    });
+    with_hmut(&module, object_value)
 }
 
 pub extern "C" fn js_vm_module_status(module_value: f64) -> f64 {
@@ -401,16 +416,16 @@ pub extern "C" fn js_vm_module_link(module_value: f64, linker: f64) -> f64 {
     let module = scope.root_raw_mut_ptr(module);
     let module_value = scope.root_nanbox_f64(module_value);
     let linker = scope.root_nanbox_f64(linker);
-    if module_kind(hmut::<ObjectHeader>(&module)) == KIND_SYNTHETIC {
-        set_status(hmut::<ObjectHeader>(&module), STATUS_LINKED);
+    if with_hmut(&module, module_kind) == KIND_SYNTHETIC {
+        with_hmut(&module, |module| set_status(module, STATUS_LINKED));
         return undefined_value();
     }
-    if module_status(hmut::<ObjectHeader>(&module)) != STATUS_UNLINKED {
+    if with_hmut(&module, module_status) != STATUS_UNLINKED {
         return undefined_value();
     }
 
-    set_status(hmut::<ObjectHeader>(&module), STATUS_LINKING);
-    let requests = read_requests(hmut::<ObjectHeader>(&module));
+    with_hmut(&module, |module| set_status(module, STATUS_LINKING));
+    let requests = with_hmut(&module, read_requests);
     let mut linked = crate::array::js_array_alloc(requests.len() as u32);
     for specifier in &requests {
         let args = [
@@ -423,12 +438,10 @@ pub extern "C" fn js_vm_module_link(module_value: f64, linker: f64) -> f64 {
         };
         linked = crate::array::js_array_push_f64(linked, dep);
     }
-    set_field(
-        hmut::<ObjectHeader>(&module),
-        FIELD_LINKED_MODULES,
-        array_value(linked),
-    );
-    set_status(hmut::<ObjectHeader>(&module), STATUS_LINKED);
+    with_hmut(&module, |module| {
+        set_field(module, FIELD_LINKED_MODULES, array_value(linked))
+    });
+    with_hmut(&module, |module| set_status(module, STATUS_LINKED));
     undefined_value()
 }
 
@@ -536,11 +549,11 @@ pub extern "C" fn js_vm_synthetic_module_set_export(
     let Some(name) = string_from_value(name_value) else {
         return throw_vm_type("SyntheticModule export name must be a string");
     };
-    let exports = read_exports(hmut::<ObjectHeader>(&module));
+    let exports = with_hmut(&module, read_exports);
     if !exports.iter().any(|export| export.name == name) {
         return throw_reference_error_no_code(&format!("Export '{name}' is not defined in module"));
     }
-    let Some(namespace) = namespace_for_module(hmut::<ObjectHeader>(&module)) else {
+    let Some(namespace) = with_hmut(&module, namespace_for_module) else {
         return throw_vm_status("SyntheticModule namespace is unavailable");
     };
     set_field(namespace, &name, value.get_nanbox_f64());

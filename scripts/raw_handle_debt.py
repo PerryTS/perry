@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ratchet the number of bare raw-pointer reads out of GC root handles.
+"""Ratchet raw-pointer custody debt around GC root handles.
 
 A `RuntimeHandleScope` gives an object liveness -- the collector marks it and
 rewrites the slot. It does nothing for a raw pointer already read out of that
@@ -8,11 +8,13 @@ from-space. Every rooting bug fixed in the #7341 quarantine sweep had rooting
 ALREADY; what was missing was ordering the re-read against the collection point.
 
 `RuntimeHandle::across_{mut,const,nanbox}` expresses that ordering in one call
-and never binds the pre-call address. `with_{mut,const}_ptr` covers the other
+and never binds the pre-call address, provided the call that may allocate is
+inside its closure. An empty `across_*(|| ())` refreshes across nothing and is
+therefore the same debt as a bare read. `with_{mut,const}_ptr` covers the other
 legitimate shape: passing the current pointer directly to a non-allocating
 operation or to an entry point that establishes its own root before it can
-allocate. Each bare `get_raw_*_ptr` is a site where those contracts are a
-review question instead of a shape.
+allocate. Each bare `get_raw_*_ptr` or empty `across_*` is a site where those
+contracts are a review question instead of a shape.
 
 This is a DEBT COUNTER, not a soundness proof. Rust has no effect system to mark
 "this call may allocate", so no signature can reject holding a stale copy. Not
@@ -23,7 +25,7 @@ THE RECORDED NUMBER IS ITSELF A RATCHET
 =======================================
 
 `--update` refuses to raise the baseline, but nothing made CI *run* `--update`.
-A pull request could add bare reads, raise `raw_handle_debt_baseline.txt` and
+A pull request could add debt sites, raise `raw_handle_debt_baseline.txt` and
 the per-module ceilings to match, and the plain check would compare the new
 count against the new baseline and pass. The ratchet measured the diff against
 a number the same diff was allowed to move (#7659).
@@ -43,7 +45,12 @@ import re, subprocess, sys, pathlib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "crates" / "perry-runtime" / "src"
 BASELINE = ROOT / "scripts" / "raw_handle_debt_baseline.txt"
-PAT = re.compile(r"\.get_raw_(?:mut|const)_ptr\b")
+PAT = re.compile(
+    r"\.get_raw_(?:mut|const)_ptr\b"
+    r"|\.across_(?:mut|const|nanbox)"
+    r"(?:\s*::\s*<[^;{}]*>)?"
+    r"\s*\(\s*(?:move\s+)?\|\|\s*(?:\(\s*\)|\{\s*\})\s*\)"
+)
 
 # The accessors and scoped-pointer combinators are DEFINED here and call each
 # other; counting this file would make the ratchet count its own implementation
@@ -91,12 +98,15 @@ def check_per_module(per_file):
     for path, n in sorted(per_file.items()):
         if path not in ceilings:
             bad.append(
-                f"{path}: {n} bare read(s) in a module with no ceiling. New code must "
-                f"use RuntimeHandle::across_{{mut,const,nanbox}} or "
+                f"{path}: {n} raw-handle debt site(s) in a module with no ceiling. "
+                f"New code must put real work inside RuntimeHandle::"
+                f"across_{{mut,const,nanbox}} or use "
                 f"with_{{mut,const}}_ptr; see #7341."
             )
         elif n > ceilings[path]:
-            bad.append(f"{path}: {n} bare reads exceeds its ceiling of {ceilings[path]}")
+            bad.append(
+                f"{path}: raw-handle debt count {n} exceeds its ceiling of {ceilings[path]}"
+            )
     for path, ceiling in sorted(ceilings.items()):
         if path not in per_file:
             bad.append(
@@ -209,10 +219,15 @@ def self_test():
     must_match = [
         "let obj = obj_h.get_raw_mut_ptr::<ObjectHeader>();",
         "src_h.get_raw_const_ptr::<u8>()",
+        "h.across_mut::<ObjectHeader, _>(|| ())",
+        "h.across_const::<crate::StringHeader, _>(\n    || ( )\n)",
+        "h.across_nanbox(|| ())",
+        "h.across_mut::<ObjectHeader, _>(move || {})",
     ]
     must_not_match = [
         "let (found, obj) = h.across_mut::<ObjectHeader, _>(|| f());",
         "h.across_const::<ObjectHeader, _>(|| g())",
+        "h.across_mut::<ObjectHeader, _>(|| { mutate(); })",
         "h.with_mut_ptr::<ObjectHeader, _>(|obj| consume(obj))",
         "h.with_const_ptr::<StringHeader, _>(|key| lookup(key))",
         "h.get_nanbox_f64()",
@@ -310,7 +325,7 @@ def main():
         prev = int(BASELINE.read_text().split()[0]) if BASELINE.exists() else None
         if prev is not None and total > prev:
             print(f"refusing to raise the baseline: {prev} -> {total}")
-            print("the ratchet only goes down; convert sites to across_*/with_* instead")
+            print("the ratchet only goes down; use across_* with a real call or with_* instead")
             return 1
         BASELINE.write_text(f"{total}\n")
         # Rewrite the per-module ceilings too, preserving the header. Entries
@@ -332,7 +347,7 @@ def main():
         print(f"no baseline; run --update. current={total}")
         return 1
     prev = int(BASELINE.read_text().split()[0])
-    print(f"bare raw-handle reads: {total} (baseline {prev})")
+    print(f"raw-handle debt sites: {total} (baseline {prev})")
 
     # Per-module rules run FIRST and unconditionally. They are strictly more
     # specific than the total -- "symbol.rs exceeds its ceiling of 1" names the
@@ -344,16 +359,18 @@ def main():
         print(f"::error::per-module raw-handle rules: {len(module_violations)} violation(s)")
         for b in module_violations:
             print(f"  {b}")
-        print("Use RuntimeHandle::across_{mut,const,nanbox} for a post-call")
-        print("reload, or with_{mut,const}_ptr for a scoped argument to a")
+        print("Put the allocating call inside RuntimeHandle::across_{mut,const,nanbox}")
+        print("for a post-call reload; empty `|| ()` closures are still debt.")
+        print("Use with_{mut,const}_ptr for a scoped argument to a")
         print("non-allocating operation / self-rooting runtime entry point.")
         print("See #7341 and scripts/raw_handle_debt_files.txt.")
         return 1
 
     if total > prev:
         print(f"::error::raw-handle debt rose {prev} -> {total}")
-        print("Use RuntimeHandle::across_{mut,const,nanbox} for a post-call")
-        print("reload, or with_{mut,const}_ptr for a scoped argument to a")
+        print("Put the allocating call inside RuntimeHandle::across_{mut,const,nanbox}")
+        print("for a post-call reload; empty `|| ()` closures are still debt.")
+        print("Use with_{mut,const}_ptr for a scoped argument to a")
         print("non-allocating operation / self-rooting runtime entry point.")
         print("See #7341.")
         for path, n in sorted(per_file.items(), key=lambda kv: -kv[1])[:10]:

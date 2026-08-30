@@ -2999,8 +2999,10 @@ pub extern "C" fn js_map_from_iterable(value: f64) -> *mut MapHeader {
         }
     }
 
-    match constructor_iter(value_handle.get_nanbox_f64()) {
-        ConstructorIter::Empty => map_handle.across_mut::<MapHeader, _>(|| ()).1,
+    let (source, map_after_classify) =
+        map_handle.across_mut::<MapHeader, _>(|| constructor_iter(value_handle.get_nanbox_f64()));
+    match source {
+        ConstructorIter::Empty => map_after_classify,
         ConstructorIter::Array(arr_value) => {
             let arr_handle = scope.root_nanbox_f64(arr_value);
             let arr_ptr = crate::value::js_nanbox_get_pointer(arr_handle.get_nanbox_f64())

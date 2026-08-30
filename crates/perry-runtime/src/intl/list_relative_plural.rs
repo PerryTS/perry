@@ -809,15 +809,17 @@ pub(super) fn configure_plural_rules(
             false,
         )
     });
-    obj_handle.with_mut_ptr(|obj| {
-        install_bound_instance_function(
-            obj,
-            "resolvedOptions",
-            plural_rules_bound_resolved_options_thunk as *const u8,
-            0,
-        )
+    let (_, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
+        obj_handle.with_mut_ptr(|obj| {
+            install_bound_instance_function(
+                obj,
+                "resolvedOptions",
+                plural_rules_bound_resolved_options_thunk as *const u8,
+                0,
+            )
+        })
     });
-    obj_handle.across_mut::<ObjectHeader, _>(|| ()).1
+    obj
 }
 
 /// en plural-category selection. Cardinal: `i == 1 && v == 0` → "one". Ordinal

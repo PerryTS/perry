@@ -1363,9 +1363,10 @@ pub extern "C" fn js_object_define_property(
         // the pre-call address to anything that outlives the call.
         macro_rules! across {
             ($call:expr) => {{
-                let (result, refreshed_obj) = obj_handle.across_mut::<ObjectHeader, _>(|| $call);
-                let ((), refreshed_key) =
-                    key_str_handle.across_mut::<crate::StringHeader, _>(|| ());
+                let ((result, refreshed_obj), refreshed_key) = key_str_handle
+                    .across_mut::<crate::StringHeader, _>(|| {
+                        obj_handle.across_mut::<ObjectHeader, _>(|| $call)
+                    });
                 obj = refreshed_obj;
                 key_str = refreshed_key;
                 obj_value = f64::from_bits(obj_value_handle.get_heap_word_u64());
