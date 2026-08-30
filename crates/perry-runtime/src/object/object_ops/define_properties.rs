@@ -360,6 +360,40 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         }
     }
 
+    // Declared ES classes are represented by INT32-tagged ClassRefs rather
+    // than heap Function objects. Preserve Object.setPrototypeOf on a ClassRef
+    // as the class object's static prototype. Effect's Schema.Opaque depends
+    // on this exact shape:
+    //
+    //   class Opaque {}
+    //   Object.setPrototypeOf(Opaque, schema)
+    //   class Partial extends Opaque {}
+    //   Partial.ast
+    //
+    // Ordinary object and closure targets already have prototype side tables,
+    // but the ClassRef previously fell through as a no-op. The class-static
+    // inheritance walk already consults CLASS_PROTOTYPE_OBJECTS, so record an
+    // ordinary object prototype there. A null prototype clears an earlier
+    // link. Other valid prototype kinds retain their existing behavior.
+    if let Some(class_id) = super::super::class_ref_id(obj_value) {
+        if proto_is_null {
+            super::super::class_registry::class_prototype_object_root_clear(class_id);
+            return obj_value;
+        }
+        if (proto_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {
+            let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
+            if !proto_ptr.is_null()
+                && !crate::closure::is_closure_ptr(proto_ptr as usize)
+                && is_valid_obj_ptr(proto_ptr as *const u8)
+            {
+                super::super::class_registry::class_prototype_object_root_store(
+                    class_id, proto_ptr,
+                );
+                return obj_value;
+            }
+        }
+    }
+
     // #2820: setting the prototype of a primitive target is a spec no-op that
     // returns the (boxed) primitive value. `value_is_object_like` is false for
     // numbers/strings/booleans, and class refs are handled by the recording

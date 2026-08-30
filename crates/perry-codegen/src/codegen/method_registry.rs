@@ -173,9 +173,9 @@ pub(crate) fn build_method_names(
     // registry and pre-declare them as extern LLVM functions so the
     // linker can resolve cross-module method calls.
     for ic in imported_classes {
-        let effective_name = ic.local_alias.as_deref().unwrap_or(&ic.name);
+        let effective_name = ic.effective_name();
         // Skip if locally defined — local methods take precedence.
-        if hir.classes.iter().any(|c| c.name == *effective_name) {
+        if hir.classes.iter().any(|c| c.name == effective_name) {
             continue;
         }
         let src = &ic.source_prefix;
@@ -192,7 +192,7 @@ pub(crate) fn build_method_names(
                 sanitize_member(method_name),
             );
             method_names
-                .entry((effective_name.to_string(), method_name.clone()))
+                .entry((effective_name.clone(), method_name.clone()))
                 .or_insert_with(|| llvm_fn.clone());
 
             // Declare extern: `double method(double this, double arg0, …)`.
@@ -247,7 +247,7 @@ pub(crate) fn build_method_names(
                 &format!("__get_{}", inner_fn_name),
             );
             method_names
-                .entry((effective_name.to_string(), format!("__get_{}", prop)))
+                .entry((effective_name.clone(), format!("__get_{}", prop)))
                 .or_insert_with(|| llvm_fn.clone());
             // Getters take only `this` (NaN-boxed double) and return double.
             llmod.declare_function(&llvm_fn, DOUBLE, &[DOUBLE]);
@@ -263,7 +263,7 @@ pub(crate) fn build_method_names(
                 &format!("__set_{}", inner_fn_name),
             );
             method_names
-                .entry((effective_name.to_string(), format!("__set_{}", prop)))
+                .entry((effective_name.clone(), format!("__set_{}", prop)))
                 .or_insert_with(|| llvm_fn.clone());
             // Setters take `this` plus the new value, both NaN-boxed
             // doubles, and return double (the assigned value).
@@ -301,7 +301,7 @@ pub(crate) fn build_method_names(
                 )
             };
             method_names
-                .entry((effective_name.to_string(), static_method_registry_key(sm)))
+                .entry((effective_name.clone(), static_method_registry_key(sm)))
                 .or_insert_with(|| llvm_fn.clone());
             // Declare conservatively with 6 double params; LLVM's direct-call
             // resolution doesn't require an exact arity match for declarations.

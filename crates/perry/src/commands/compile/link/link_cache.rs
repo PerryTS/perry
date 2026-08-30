@@ -104,7 +104,7 @@ struct SearchDir {
 struct LinkFingerprintContext<'a> {
     cwd: PathBuf,
     exe_path: &'a Path,
-    obj_paths: &'a [PathBuf],
+    object_identities: std::collections::HashSet<String>,
     stats: LinkCacheInputStats,
     lib_dirs: Vec<SearchDir>,
     framework_dirs: Vec<SearchDir>,
@@ -225,7 +225,10 @@ fn compute_link_cache_state(
     let mut ctx = LinkFingerprintContext {
         cwd: cwd.clone(),
         exe_path,
-        obj_paths,
+        object_identities: obj_paths
+            .iter()
+            .map(|path| absolute_path_identity_from(path, &cwd))
+            .collect(),
         stats,
         lib_dirs: library_path_search_dirs(cmd, &cwd),
         framework_dirs: default_framework_search_dirs(cmd, &cwd),
@@ -429,16 +432,9 @@ fn feed_explicit_file_arg(
         feed_hash_field(hasher, role, "<output>");
         return Some(());
     }
-    if ctx
-        .obj_paths
-        .iter()
-        .any(|obj_path| same_path_from(&candidate, obj_path, &ctx.cwd))
-    {
-        feed_hash_field(
-            hasher,
-            role,
-            &absolute_path_identity_from(&candidate, &ctx.cwd),
-        );
+    let candidate_identity = absolute_path_identity_from(&candidate, &ctx.cwd);
+    if ctx.object_identities.contains(&candidate_identity) {
+        feed_hash_field(hasher, role, &candidate_identity);
         return Some(());
     }
     if candidate.is_file() {

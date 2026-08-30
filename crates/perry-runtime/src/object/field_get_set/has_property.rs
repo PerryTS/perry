@@ -157,6 +157,50 @@ fn in_rhs_is_object(obj: f64) -> bool {
         && crate::value::addr_class::is_stream_id_band(f as usize)
 }
 
+/// Presence-only counterpart of the inherited static DATA-field read in
+/// `js_object_get_field_by_name`'s ClassRef arm.
+///
+/// A dynamically-computed string key takes the generic `in` path, so it cannot
+/// benefit from codegen's declared-class static lookup.  Class declarations
+/// inherit static data in two runtime representations:
+///
+/// * ordinary declared parents store fields in `CLASS_DYNAMIC_PROPS` along the
+///   registered parent-class-id chain;
+/// * a class-expression parent (`class D extends make() {}`) is a real heap
+///   class object pinned in `CLASS_PROTOTYPE_OBJECTS`, with per-evaluation
+///   statics in its own keys array.
+///
+/// `in` must test presence without reading a value: an explicitly-undefined
+/// field is still present, and an accessor must not run.  `ordinary_has_property`
+/// provides exactly that operation for a pinned class object.
+unsafe fn class_ref_has_inherited_static_data(
+    class_id: u32,
+    key: *const crate::StringHeader,
+    name: &str,
+) -> bool {
+    let mut child = class_id;
+    let mut depth = 0usize;
+    while depth < 32 {
+        let proto = super::super::class_registry::class_prototype_object(child);
+        if !proto.is_null() && ordinary_has_property(proto as *const ObjectHeader, key) {
+            return true;
+        }
+
+        let parent = match super::super::class_registry::get_parent_class_id(child) {
+            Some(parent) if parent != 0 && parent != child => parent,
+            _ => break,
+        };
+        if !super::super::class_registry::class_is_key_deleted(parent, name)
+            && super::super::class_registry::class_has_own_dynamic_prop(parent, name)
+        {
+            return true;
+        }
+        child = parent;
+        depth += 1;
+    }
+    false
+}
+
 /// The `in` operator: `key in obj`. ECMA-262 13.10.1 (RelationalExpression `in`)
 /// step 5 requires the right operand to be an Object, throwing a `TypeError`
 /// otherwise. This is the dedicated codegen entry point for the source-level
@@ -368,6 +412,15 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                 if let Some(name) = unsafe { crate::string::js_string_key_bytes(key_val, &mut sso) }
                     .and_then(|b| std::str::from_utf8(b).ok())
                 {
+                    let inherited_data = !matches!(name, "name" | "length")
+                        && unsafe {
+                            class_ref_has_inherited_static_data(
+                                class_id,
+                                crate::value::js_get_string_pointer_unified(key)
+                                    as *const crate::StringHeader,
+                                name,
+                            )
+                        };
                     let present = matches!(name, "prototype" | "name" | "length")
                         || (!super::super::class_registry::class_is_key_deleted(class_id, name)
                             && (super::super::class_registry::class_has_own_dynamic_prop(
@@ -379,7 +432,8 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                                 || super::super::class_registry::class_own_static_accessor_ptrs(
                                     class_id, name,
                                 )
-                                .is_some()));
+                                .is_some()
+                                || inherited_data));
                     if present {
                         return nanbox_true;
                     }

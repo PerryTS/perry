@@ -263,12 +263,21 @@ fn module_metadata_affects_hash() {
         module_kind: ModuleKind::NativeCompiled,
         resolved_path: None,
         type_only: false,
+        runtime_erased: false,
         is_dynamic: false,
         is_dynamic_target: false,
         is_deferred_require: false,
         is_adopted_require: false,
     });
     assert_ne!(base_hash, hash_module(&m_imp));
+
+    let mut m_erased = m_imp.clone();
+    m_erased.imports[0].runtime_erased = true;
+    assert_ne!(
+        hash_module(&m_imp),
+        hash_module(&m_erased),
+        "runtime-erased consumers need a distinct object-cache fingerprint"
+    );
 
     // Add a class
     let mut m_class = empty_module();

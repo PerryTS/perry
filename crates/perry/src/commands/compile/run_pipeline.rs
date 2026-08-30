@@ -265,6 +265,7 @@ fn imported_class_from_hir(
     perry_codegen::ImportedClass {
         name: class.name.clone(),
         local_alias,
+        namespace: None,
         source_prefix,
         constructor_param_count: class
             .constructor
@@ -403,6 +404,7 @@ fn imported_object_literal_from_capability(
     perry_codegen::ImportedClass {
         name: capability.class_name.clone(),
         local_alias: Some(receiver_class_name.clone()),
+        namespace: None,
         source_prefix: source_prefix.clone(),
         constructor_param_count: capability.field_names.len(),
         has_own_constructor: true,
@@ -3217,7 +3219,11 @@ pub fn run_with_parse_cache(
                     // `is_deferred_require`: a function-local `require('S')`
                     // (lazy in Node). S must NOT chain into this module's init
                     // — it inits only when the require shim is actually called.
-                    if import.is_dynamic || import.type_only || import.is_deferred_require {
+                    if import.is_dynamic
+                        || import.type_only
+                        || import.runtime_erased
+                        || import.is_deferred_require
+                    {
                         continue;
                     }
                     if let Some(resolved) = &import.resolved_path {
@@ -3418,7 +3424,7 @@ pub fn run_with_parse_cache(
             // value specifiers; the whole-decl flag is the one that
             // makes the entire import a no-op.
             for import in &hir_module.imports {
-                if import.type_only {
+                if import.type_only || import.runtime_erased {
                     continue;
                 }
                 for spec in &import.specifiers {
@@ -3456,7 +3462,7 @@ pub fn run_with_parse_cache(
                 // function/namespace maps, imported vars, native libraries,
                 // or module-init dependencies: those were the collision and
                 // phantom-load hazards #684 removed.
-                if import.type_only {
+                if import.type_only || import.runtime_erased {
                     for spec in &import.specifiers {
                         let perry_hir::ImportSpecifier::Named { imported, local } = spec else {
                             continue;
@@ -3761,14 +3767,20 @@ pub fn run_with_parse_cache(
                                 );
 
                                 let key = (origin_path.clone(), export_name.clone());
+                                let scoped_func_key =
+                                    perry_codegen::namespace_member_func_key(local, export_name);
                                 if let Some(&param_count) = exported_func_param_counts.get(&key) {
                                     imported_param_counts.insert(export_name.clone(), param_count);
+                                    imported_param_counts
+                                        .insert(scoped_func_key.clone(), param_count);
                                 }
                                 if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
                                     imported_has_rest.insert(export_name.clone());
+                                    imported_has_rest.insert(scoped_func_key.clone());
                                 }
                                 if exported_func_synthetic_arguments.contains(&key) {
                                     imported_synthetic_arguments.insert(export_name.clone());
+                                    imported_synthetic_arguments.insert(scoped_func_key);
                                 }
                                 // Issue #636: namespace-imported vars must
                                 // route through the zero-arg getter at
@@ -3781,7 +3793,10 @@ pub fn run_with_parse_cache(
                                 // as the call result instead of invoking
                                 // the closure with `args`. Mirrors the
                                 // named-import branch at the var-detection
-                                // arm below.
+                                // arm below. The key is namespace-qualified:
+                                // a flat `make` entry lets one namespace's
+                                // variable export misclassify another
+                                // namespace's declared function as a getter.
                                 //
                                 // Issue #4841: when the namespace member is a
                                 // re-export of a CJS submodule's `default`
@@ -3806,7 +3821,10 @@ pub fn run_with_parse_cache(
                                         .map(|k| exported_var_names.contains(k))
                                         .unwrap_or(false)
                                 {
-                                    imported_vars.insert(export_name.clone());
+                                    imported_vars.insert(perry_codegen::namespace_member_var_key(
+                                        local,
+                                        export_name,
+                                    ));
                                 }
                                 if let Some(class) = exported_classes.get(&key) {
                                     let class_prefix = canonical_class_source_prefix(
@@ -3820,7 +3838,7 @@ pub fn run_with_parse_cache(
                                     } else {
                                         Some(export_name.clone())
                                     };
-                                    imported_classes.push(imported_class_from_hir(
+                                    let mut imported_class = imported_class_from_hir(
                                         class,
                                         class_prefix,
                                         local_alias,
@@ -3832,7 +3850,14 @@ pub fn run_with_parse_cache(
                                             class,
                                             &class_proven_this_tower_methods,
                                         ),
-                                    ));
+                                    );
+                                    // A namespace member is reachable only as
+                                    // `local.export_name`; it is not a lexical
+                                    // binding named `export_name`. Keeping that
+                                    // ownership explicit prevents same-named
+                                    // classes from replacing direct imports.
+                                    imported_class.namespace = Some(local.clone());
+                                    imported_classes.push(imported_class);
                                 }
                                 if let Some(members) = exported_enums.get(&key) {
                                     imported_enums.push((export_name.clone(), members.clone()));
@@ -3896,7 +3921,9 @@ pub fn run_with_parse_cache(
                                     .entry(member.to_string())
                                     .or_insert_with(|| "default".to_string());
                                 if member == "module.exports" || default_is_var {
-                                    imported_vars.insert(member.to_string());
+                                    imported_vars.insert(perry_codegen::namespace_member_var_key(
+                                        local, member,
+                                    ));
                                 }
                             }
                         }
@@ -4227,23 +4254,33 @@ pub fn run_with_parse_cache(
                                     );
 
                                     let key = (origin_path.clone(), export_name.clone());
+                                    let scoped_func_key =
+                                        perry_codegen::namespace_member_func_key(
+                                            &local_name,
+                                            export_name,
+                                        );
                                     if let Some(&param_count) = exported_func_param_counts.get(&key)
                                     {
                                         imported_param_counts
                                             .insert(export_name.clone(), param_count);
+                                        imported_param_counts
+                                            .insert(scoped_func_key.clone(), param_count);
                                     }
                                     if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
                                         imported_has_rest.insert(export_name.clone());
+                                        imported_has_rest.insert(scoped_func_key.clone());
                                     }
                                     if exported_func_synthetic_arguments.contains(&key) {
                                         imported_synthetic_arguments.insert(export_name.clone());
+                                        imported_synthetic_arguments.insert(scoped_func_key);
                                     }
                                     // Issue #321: NamespaceReExport members
                                     // that are var-shaped exports (the
                                     // canonical `export const succeed = (v) =>
                                     // ...` shape in effect/Effect.ts and
                                     // co-equivalent re-export hubs) must land
-                                    // in `imported_vars` so the codegen's
+                                    // in `imported_vars` under a namespace-
+                                    // qualified key so the codegen's
                                     // StaticMethodCall and namespace-member
                                     // call sites route through the zero-arg
                                     // getter + `js_closure_callN`. Without
@@ -4266,7 +4303,12 @@ pub fn run_with_parse_cache(
                                             .map(|key| exported_var_names.contains(key))
                                             .unwrap_or(false)
                                     {
-                                        imported_vars.insert(export_name.clone());
+                                        imported_vars.insert(
+                                            perry_codegen::namespace_member_var_key(
+                                                &local_name,
+                                                export_name,
+                                            ),
+                                        );
                                     }
                                     if let Some(class) = exported_classes.get(&key) {
                                         let class_prefix = canonical_class_source_prefix(
@@ -4280,7 +4322,7 @@ pub fn run_with_parse_cache(
                                         } else {
                                             Some(export_name.clone())
                                         };
-                                        imported_classes.push(imported_class_from_hir(
+                                        let mut imported_class = imported_class_from_hir(
                                             class,
                                             class_prefix,
                                             local_alias,
@@ -4292,7 +4334,9 @@ pub fn run_with_parse_cache(
                                                 class,
                                                 &class_proven_this_tower_methods,
                                             ),
-                                        ));
+                                        );
+                                        imported_class.namespace = Some(local_name.clone());
+                                        imported_classes.push(imported_class);
                                     }
                                     if let Some(members) = exported_enums.get(&key) {
                                         imported_enums.push((export_name.clone(), members.clone()));
@@ -4757,7 +4801,7 @@ pub fn run_with_parse_cache(
             // a `perry_fn_...` symbol because every codegen site probes
             // `import_function_v8_specifiers` first.
             for import in &hir_module.imports {
-                if import.type_only {
+                if import.type_only || import.runtime_erased {
                     continue;
                 }
                 if import.module_kind != perry_hir::ModuleKind::Interpreted {
@@ -4864,7 +4908,7 @@ pub fn run_with_parse_cache(
             // (`collect_modules.rs::known_node_submodule_key`); they
             // now flow through and land here.
             for import in &hir_module.imports {
-                if import.type_only {
+                if import.type_only || import.runtime_erased {
                     continue;
                 }
                 let submod_key = match self::collect_modules::known_node_submodule_key(&import.source) {

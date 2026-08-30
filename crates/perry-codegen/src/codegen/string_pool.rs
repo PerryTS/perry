@@ -732,11 +732,15 @@ pub(super) fn emit_string_pool(
             // so an apply/dynamic dispatch (`recv.method(...spread)`) bundles
             // the call args into the rest array instead of passing `rest =
             // args[0]` as a scalar (marked's `this.use(...e)` blocker).
+            // A method that reads `arguments` after declaring `...rest` has
+            // two trailing array parameters in HIR: `[...rest, arguments]`.
+            // Looking only at the final (synthetic) slot loses the user-rest
+            // bit, so bound/runtime vtable dispatch packs a single array and
+            // binds the first scalar argument directly to `rest`.
             let has_rest = method
                 .params
-                .last()
-                .map(|p| p.is_rest && p.arguments_object.is_none())
-                .unwrap_or(false);
+                .iter()
+                .any(|p| p.is_rest && p.arguments_object.is_none());
             // Spec `.length`: count leading formal params before the first one
             // with a default or rest (and excluding the synthesized `arguments`
             // slot). Distinct from the total param_count used for call dispatch.
@@ -822,8 +826,14 @@ pub(super) fn emit_string_pool(
         {
             let last = class.constructor.as_ref().and_then(|c| c.params.last());
             let ctor_has_synth = last.map(|p| p.arguments_object.is_some()).unwrap_or(false);
-            let ctor_has_rest = last
-                .map(|p| p.is_rest && p.arguments_object.is_none())
+            let ctor_has_rest = class
+                .constructor
+                .as_ref()
+                .map(|c| {
+                    c.params
+                        .iter()
+                        .any(|p| p.is_rest && p.arguments_object.is_none())
+                })
                 .unwrap_or(false);
             if ctor_has_synth || ctor_has_rest {
                 ctor_flag_regs.push((cid, ctor_has_synth, ctor_has_rest));

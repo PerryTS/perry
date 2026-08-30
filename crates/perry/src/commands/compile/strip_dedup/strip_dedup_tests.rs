@@ -393,6 +393,67 @@ fn coff_archive_dedup_drops_only_fully_provided_members() {
     assert!(!symbols.contains("runtime_canonical"));
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+fn coff_well_known_wrapper_strips_forced_symbols() {
+    use super::{
+        collect_archive_symbols_flat, find_llvm_tool_or_beside_lld, rebuild_archive,
+        strip_duplicate_objects_from_well_known_lib,
+    };
+    use std::path::Path;
+    use std::process::Command;
+
+    fn compile_object(source: &Path, output: &Path) {
+        let rustc = std::env::var_os("RUSTC")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("CARGO")
+                    .map(std::path::PathBuf::from)
+                    .and_then(|cargo| cargo.parent().map(|dir| dir.join("rustc")))
+                    .filter(|candidate| candidate.exists())
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("rustc"));
+        let result = Command::new(rustc)
+            .arg("--crate-name")
+            .arg("well_known_wrapper_fixture")
+            .arg("--crate-type=lib")
+            .arg("--emit=obj")
+            .arg("-Cpanic=abort")
+            .arg(source)
+            .arg("-o")
+            .arg(output)
+            .output()
+            .expect("rustc must run");
+        assert!(
+            result.status.success(),
+            "rustc failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    let temp = tempfile::tempdir().expect("temporary COFF wrapper fixture directory");
+    let source = temp.path().join("wrapper.rs");
+    std::fs::write(
+        &source,
+        "#[no_mangle]\npub extern \"C\" fn __rust_alloc() {}\n\
+         #[no_mangle]\npub extern \"C\" fn wrapper_entry() { __rust_alloc(); }\n",
+    )
+    .unwrap();
+    let object = temp.path().join("wrapper.obj");
+    compile_object(&source, &object);
+
+    let llvm_ar = find_llvm_tool_or_beside_lld("llvm-ar").expect("llvm-ar present");
+    let llvm_nm = find_llvm_tool_or_beside_lld("llvm-nm").expect("llvm-nm present");
+    let wrapper = temp.path().join("perry_ext_fixture.lib");
+    rebuild_archive(&llvm_ar, &wrapper, std::slice::from_ref(&object), true).unwrap();
+
+    let rewritten = strip_duplicate_objects_from_well_known_lib(&wrapper)
+        .expect("COFF well-known symbol rewrite must succeed");
+    let symbols = collect_archive_symbols_flat(&llvm_nm, &rewritten);
+    assert!(symbols.contains("wrapper_entry"));
+    assert!(!symbols.contains("__rust_alloc"));
+}
+
 /// #8455: the dedup evidence set must equal the archives actually on the
 /// link line. A member whose symbols are provided ONLY by perry-stdlib
 /// must be dropped when stdlib is linked and KEPT when it is not — before

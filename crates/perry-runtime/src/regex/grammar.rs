@@ -893,8 +893,17 @@ fn fold_surrogate_pairs(pattern: &str) -> String {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::with_capacity(pattern.len());
     let mut i = 0;
+    let mut in_class = false;
+    let mut escaped = false;
     while i < chars.len() {
-        let at_unit_start = (chars[i] == '\\' && chars.get(i + 1) == Some(&'u')) || chars[i] == '[';
+        // Bare surrogate escapes inside one character class are alternative
+        // members, not a high/low sequence. Leave them for the class-aware
+        // pass below; otherwise the upper endpoint of one range can be folded
+        // with the lower endpoint of the next range (for example
+        // `[\uD800-\uDB7F\uDC00-\uDFFF]`). A complete high-surrogate class at
+        // `[` is still eligible to pair with the following low-surrogate unit.
+        let at_unit_start =
+            !in_class && ((chars[i] == '\\' && chars.get(i + 1) == Some(&'u')) || chars[i] == '[');
         if at_unit_start {
             if let Some((hi, j)) = parse_surrogate_unit(&chars, i) {
                 if hi
@@ -935,6 +944,16 @@ fn fold_surrogate_pairs(pattern: &str) -> String {
             }
         }
         out.push(chars[i]);
+        if escaped {
+            escaped = false;
+        } else {
+            match chars[i] {
+                '\\' => escaped = true,
+                '[' if !in_class => in_class = true,
+                ']' if in_class => in_class = false,
+                _ => {}
+            }
+        }
         i += 1;
     }
     out
@@ -1929,6 +1948,21 @@ mod tests {
         assert!(!re.is_match("\u{1F48E}"));
         // Surrogate-to-nonsurrogate ranges stay untouched (still invalid).
         assert_eq!(js_regex_to_rust("[\\ud800-z]"), "[\\ud800-z]");
+    }
+
+    #[test]
+    fn split_surrogate_class_ranges_compile() {
+        // TypeScript/parser startup code constructs this split surrogate class
+        // dynamically.  Both members are valid JavaScript UTF-16 code-unit
+        // ranges and must be translated before Rust's scalar-only regex parser
+        // sees them.
+        let pat = r"[\uD800-\uDB7F\uDC00-\uDFFF]";
+        let translated = js_regex_to_rust(pat);
+        let re = regex::Regex::new(&translated)
+            .unwrap_or_else(|e| panic!("split surrogate class failed: {translated}: {e}"));
+        assert!(re.is_match("\u{10000}"));
+        assert!(re.is_match("\u{10FFFF}"));
+        assert!(!re.is_match("a"));
     }
 
     #[test]

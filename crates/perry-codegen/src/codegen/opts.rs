@@ -83,6 +83,34 @@ impl FpContractMode {
     }
 }
 
+/// Build the collision-free key used to classify a variable-shaped export
+/// reached through a namespace binding. Bare entries in `imported_vars` are
+/// reserved for named/default imports; namespace members must include their
+/// local namespace or an unrelated `Other.make` can change `Reducer.make`
+/// from a function-body ABI into a zero-argument getter ABI.
+///
+/// JavaScript identifiers cannot contain NUL, so neither component can alias
+/// this internal key format.
+pub fn namespace_member_var_key(namespace: &str, member: &str) -> String {
+    format!("\0perry_namespace_var\0{namespace}\0{member}")
+}
+
+/// Internal key for a class-valued namespace member in the otherwise flat
+/// class-id table. Namespace aliases are local to a module, and the leading
+/// NUL keeps these synthetic entries disjoint from source-level class names.
+pub fn namespace_member_class_key(namespace: &str, member: &str) -> String {
+    format!("\0perry_namespace_class\0{namespace}\0{member}")
+}
+
+/// Internal key for a namespace member's function ABI metadata (declared
+/// parameter count, rest flag, and synthetic `arguments` flag). Those maps are
+/// otherwise keyed by a named import's local binding. A bare member key lets
+/// `FastCheck.tuple(...arbs)` make the unrelated `SchemaAST.tuple(elements,
+/// checks)` look like a rest function in every module that imports both.
+pub fn namespace_member_func_key(namespace: &str, member: &str) -> String {
+    format!("\0perry_namespace_func\0{namespace}\0{member}")
+}
+
 /// Options controlling code generation for a single module.
 #[derive(Debug, Clone, Default)]
 pub struct CompileOptions {
@@ -269,12 +297,15 @@ pub struct CompileOptions {
     pub imported_func_synthetic_arguments: std::collections::HashSet<String>,
     /// Imported function return types, keyed by local function name.
     pub imported_func_return_types: std::collections::HashMap<String, perry_hir::types::Type>,
-    /// Names of imports that are exported VARIABLES (not functions). When an
-    /// `ExternFuncRef` with one of these names appears as a value (not as a
-    /// Call callee), the codegen calls the getter function to fetch the value
-    /// instead of wrapping it as a closure reference. Without this, `import
-    /// { HONE_VERSION } from './version'` followed by `let v = HONE_VERSION`
-    /// would create a closure wrapper around the getter, not the actual string.
+    /// Names of imports that are exported VARIABLES (not functions). Bare keys
+    /// classify named/default bindings. Namespace-member keys are produced by
+    /// `namespace_member_var_key` so equal member names from different
+    /// namespaces cannot contaminate one another. When an `ExternFuncRef` with
+    /// one of the bare names appears as a value (not as a Call callee), the
+    /// codegen calls the getter function to fetch the value instead of wrapping
+    /// it as a closure reference. Without this, `import { HONE_VERSION } from
+    /// './version'` followed by `let v = HONE_VERSION` would create a closure
+    /// wrapper around the getter, not the actual string.
     pub imported_vars: std::collections::HashSet<String>,
 
     // ── Feature plumbing ──
@@ -507,6 +538,11 @@ pub struct ImportedClass {
     pub name: String,
     /// Optional local alias (`import { Foo as Bar }`).
     pub local_alias: Option<String>,
+    /// Namespace that exclusively owns this binding (`import * as ns` or
+    /// `import { NamespaceReExport }`). Namespace members are not lexical
+    /// bindings in the importing module, so they must never be registered
+    /// under either their exported or canonical bare class name.
+    pub namespace: Option<String>,
     /// Symbol prefix of the origin module (for cross-module method calls).
     pub source_prefix: String,
     /// Number of constructor parameters (needed for dispatch).
@@ -634,6 +670,27 @@ pub struct ImportedClass {
     /// JavaScript class imports and are only consumed by the guarded own-method
     /// lowering.
     pub object_literal: Option<ImportedObjectLiteral>,
+}
+
+impl ImportedClass {
+    /// Consumer-side registry key for this class.
+    pub fn effective_name(&self) -> String {
+        let member = self.local_alias.as_deref().unwrap_or(&self.name);
+        self.namespace
+            .as_deref()
+            .map(|namespace| namespace_member_class_key(namespace, member))
+            .unwrap_or_else(|| member.to_string())
+    }
+
+    /// Parent name in the same consumer namespace, when applicable.
+    pub fn effective_parent_name(&self) -> Option<String> {
+        self.parent_name.as_ref().map(|parent| {
+            self.namespace
+                .as_deref()
+                .map(|namespace| namespace_member_class_key(namespace, parent))
+                .unwrap_or_else(|| parent.clone())
+        })
+    }
 }
 
 /// Producer-authored capability for one concrete class method that can be

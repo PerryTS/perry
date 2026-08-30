@@ -55,7 +55,9 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
             let static_targets: Vec<PathBuf> = module
                 .imports
                 .iter()
-                .filter(|i| !i.is_dynamic && !i.type_only && !i.is_deferred_require)
+                .filter(|i| {
+                    !i.is_dynamic && !i.type_only && !i.runtime_erased && !i.is_deferred_require
+                })
                 .filter_map(|i| i.resolved_path.as_ref().map(PathBuf::from))
                 .collect();
             let reexport_sources: Vec<String> = module
@@ -146,7 +148,17 @@ pub(super) fn topo_sort_non_entry_modules(
             // `is_deferred_require`: a function-local `require('S')` is not an
             // init-order edge — S inits lazily when the require shim runs, not
             // as part of this module's eager init.
-            if import.type_only || import.is_deferred_require {
+            // Dynamic imports are lazy evaluation edges, not eager module-init
+            // dependencies. Including one here can manufacture a cycle that
+            // does not exist in ESM's startup graph and reverse a real static
+            // edge when the DFS breaks that cycle. `classify_eager_modules`
+            // and the generated per-module init wrappers both exclude these
+            // edges; the global order must use the same graph.
+            if import.is_dynamic
+                || import.type_only
+                || import.runtime_erased
+                || import.is_deferred_require
+            {
                 continue;
             }
             if let Some(ref resolved) = import.resolved_path {
@@ -248,7 +260,11 @@ pub(super) fn topo_sort_non_entry_modules(
     // alphabetical order for determinism.
     if let Some(entry_module) = ctx.native_modules.get(entry_path) {
         for import in &entry_module.imports {
-            if import.is_dynamic || import.type_only || import.is_deferred_require {
+            if import.is_dynamic
+                || import.type_only
+                || import.runtime_erased
+                || import.is_deferred_require
+            {
                 continue;
             }
             if let Some(ref resolved) = import.resolved_path {

@@ -101,3 +101,33 @@ console.log("method15", obj.f(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
     );
     assert_eq!(stdout, "direct15 26\nmethod15 26\n");
 }
+
+/// y18n exposes its translator as a bound instance method and deliberately
+/// uses both parameter views: `...args` for mutation and `arguments[0]` for
+/// overload selection. HIR therefore gives the method two trailing array
+/// slots. Runtime vtable dispatch must populate both in declaration order.
+#[test]
+fn bound_method_with_user_rest_and_arguments_receives_two_arrays() {
+    let stdout = compile_and_run(
+        r#"
+class Translator {
+  __(...parts: any[]) {
+    const firstFromArguments = arguments[0];
+    const firstFromRest = parts.shift();
+    console.log(
+      Array.isArray(parts),
+      firstFromRest,
+      parts.length,
+      arguments.length,
+      firstFromArguments,
+    );
+  }
+}
+
+const translator = new Translator();
+const bound: any = translator.__.bind(translator);
+bound("Positionals:", "tail");
+"#,
+    );
+    assert_eq!(stdout, "true Positionals: 1 2 Positionals:\n");
+}

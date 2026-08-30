@@ -154,6 +154,7 @@ impl SH for Import {
             module_kind,
             resolved_path,
             type_only,
+            runtime_erased,
             is_dynamic,
             is_dynamic_target,
             is_deferred_require,
@@ -165,6 +166,12 @@ impl SH for Import {
         module_kind.hash(h);
         resolved_path.hash(h);
         type_only.hash(h);
+        // Preserve every pre-existing ordinary-import fingerprint exactly.
+        // Only the newly distinguished all-type specifier form needs a new
+        // cache identity.
+        if *runtime_erased {
+            tag(h, 0x5254);
+        }
         is_dynamic.hash(h);
         is_dynamic_target.hash(h);
         is_deferred_require.hash(h);

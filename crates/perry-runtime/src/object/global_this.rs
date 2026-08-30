@@ -108,6 +108,8 @@ pub(crate) use ctor_thunks::{
     webcrypto_illegal_constructor_thunk, webcrypto_method_value, webcrypto_random_uuid_thunk,
     webcrypto_subtle_getter_thunk,
 };
+#[cfg(test)]
+pub(crate) use fetch_globals::collect_before_global_this_alloc_for_test;
 #[cfg(feature = "temporal")]
 pub(crate) use fetch_globals::temporal_subclass_super;
 pub(crate) use fetch_globals::{

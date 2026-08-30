@@ -402,8 +402,12 @@ pub(crate) fn build_and_run_link(
                         }),
                     None => wk.clone(),
                 };
-                strip_duplicate_objects_from_well_known_lib(&wk).unwrap_or_else(|_| {
+                strip_duplicate_objects_from_well_known_lib(&wk).unwrap_or_else(|error| {
                     cacheable.set(false);
+                    eprintln!(
+                        "[strip-dedup] wrapper symbol rewrite skipped for {} (non-fatal): {error}",
+                        wk.display()
+                    );
                     wk
                 })
             })

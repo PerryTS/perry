@@ -278,7 +278,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     //
                     // Both wildcard imports and namespaces reached through a
                     // re-export use the same getter ABI.
-                    if ctx.imported_vars.contains(method_name) {
+                    if ctx
+                        .imported_vars
+                        .contains(&crate::namespace_member_var_key(class_name, method_name))
+                    {
                         ctx.pending_declares.push((fn_name.clone(), DOUBLE, vec![]));
                         // Preserve JavaScript evaluation order: fetch the
                         // callable namespace member before evaluating any
@@ -345,12 +348,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // arguments as one array parameter; passing the source
                     // arguments directly makes `Event.inventory(...defs)` read
                     // a scalar as an array and return `undefined`.
-                    let declared_count = ctx
+                    let scoped_func_key = crate::namespace_member_func_key(class_name, method_name);
+                    let scoped_declared_count = ctx
                         .imported_func_param_counts
-                        .get(method_name)
-                        .copied()
+                        .get(&scoped_func_key)
+                        .copied();
+                    let declared_count = scoped_declared_count
+                        .or_else(|| ctx.imported_func_param_counts.get(method_name).copied())
                         .unwrap_or(args.len());
-                    if ctx.imported_func_has_rest.contains(method_name) {
+                    let has_rest = if scoped_declared_count.is_some() {
+                        ctx.imported_func_has_rest.contains(&scoped_func_key)
+                    } else {
+                        ctx.imported_func_has_rest.contains(method_name)
+                    };
+                    if has_rest {
                         let fixed_count = declared_count.saturating_sub(1);
                         let (lowered, guard) = crate::lower_call::lower_rest_call_args_rooted(
                             ctx,

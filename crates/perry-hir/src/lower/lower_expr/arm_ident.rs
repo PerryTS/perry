@@ -302,8 +302,9 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
             // call path already provides.
             if ctx.unresolved_ident_as_global {
                 eprintln!(
-                    "  Warning: unknown identifier '{}' — assuming global; resolved by name on globalThis (incl. Object.prototype-inherited members) at runtime",
-                    name
+                    "  Warning: unknown identifier '{}' in {} — assuming global; resolved by name on globalThis (incl. Object.prototype-inherited members) at runtime",
+                    name,
+                    ctx.source_file_path
                 );
             }
             // #5253: localize the `X is not defined` ReferenceError to

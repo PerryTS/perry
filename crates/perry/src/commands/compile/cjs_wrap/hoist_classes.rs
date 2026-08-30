@@ -709,7 +709,17 @@ fn collect_pattern_binding_names(bytes: &[u8], start: usize, names: &mut Vec<Str
 }
 
 fn collect_top_level_let_const_var_names(source: &str) -> Vec<String> {
-    let bytes = source.as_bytes();
+    // Use the shared lexical masker for structural scanning. In particular,
+    // regex literals may contain quote bytes (`/\\\"/g`, `/['\"]/`) that
+    // are not JavaScript string delimiters. Scanning the raw source made such
+    // a quote start the string-skipping arm below, which could hide the braces
+    // that restore top-level depth. Every later `const`/`let`/`var` then looked
+    // nested and was omitted from `iife_locals`, allowing a dependent class to
+    // be hoisted out of the CommonJS factory ahead of its local superclass.
+    // `strip_comments_and_strings` preserves byte positions, identifiers,
+    // delimiters and newlines while masking regex/string/comment contents.
+    let masked_source = super::detect::strip_comments_and_strings(source);
+    let bytes = masked_source.as_bytes();
     let mut names: Vec<String> = Vec::new();
     let mut depth: i32 = 0;
     let mut i = 0usize;

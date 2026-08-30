@@ -177,6 +177,7 @@ fn imported_archetype() -> ImportedClass {
     ImportedClass {
         name: "Archetype".to_string(),
         local_alias: None,
+        namespace: None,
         source_prefix: "archetype_ts".to_string(),
         constructor_param_count: 0,
         has_own_constructor: true,

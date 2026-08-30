@@ -319,6 +319,7 @@ fn enable_react_automatic_jsx(module: &mut Module, ctx: &mut LoweringContext) {
         module_kind: ModuleKind::NativeCompiled,
         resolved_path: None,
         type_only: false,
+        runtime_erased: false,
         is_dynamic: false,
         is_dynamic_target: false,
         is_deferred_require: false,
@@ -883,6 +884,10 @@ pub fn lower_module_full(
     // aliases before any pre-pass extracts annotations or lowers expressions,
     // including when the declaration appears after its first source use.
     module_decl::native_profile_import::pre_register_native_profile_imports(&mut ctx, ast_module);
+    // Static ESM imports are hoisted. Register ordinary source-module value
+    // bindings before any initializer/function body can reference them; the
+    // declaration pass below still records the imports in source order.
+    module_decl::pre_register_static_import_bindings(&mut ctx, ast_module);
     // #6812 (w16): scan the module lowering actually consumes (post-fold) for
     // constant-bounded dynamic-key builder widths; `lower_object` attaches
     // them to the per-site empty-literal classes as alloc_width_hint.
@@ -1133,6 +1138,33 @@ pub fn lower_module_full(
                 // undefined local instead of the class ref. Skip the local so
                 // `Ident("X")` lowers to `Expr::ClassRef("X")`.
                 if decl_init_is_class_expr(decl) {
+                    // A class-expression binding is not represented by a
+                    // pre-registered LocalId (the source-position lowering
+                    // below binds its ClassRef directly), but it still has to
+                    // participate in the module's forward-name pre-scan.
+                    //
+                    // Published ESM commonly emits adjacent declarations such
+                    // as:
+                    //
+                    //   var Builder = class { build() { return new Later() } };
+                    //   var Later = class { ... };
+                    //
+                    // The first class's method body is lowered before the
+                    // second declarator reaches stmt.rs.  Without recording
+                    // `Later` here, that method bakes in an unresolved-global
+                    // lookup and throws at call time even though the binding is
+                    // initialized by then.  `forward_class_names` gives the
+                    // earlier body a ClassRef without allocating the shadowing,
+                    // never-written local that #4461 removed.  Once the
+                    // declarator itself is lowered, its normal value binding
+                    // takes over subsequent lexical reads.
+                    if let ast::Pat::Ident(ident) = &decl.name {
+                        let name = ident.id.sym.to_string();
+                        ctx.forward_class_decl_depth
+                            .entry(name.clone())
+                            .or_insert(0);
+                        ctx.forward_class_names.insert(name);
+                    }
                     continue;
                 }
                 if let ast::Pat::Ident(ident) = &decl.name {

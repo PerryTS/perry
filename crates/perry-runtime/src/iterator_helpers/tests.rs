@@ -378,6 +378,33 @@ fn flat_map_returns_a_helper_and_flattens_one_level() {
 }
 
 #[test]
+fn map_iterator_inherits_flat_map_and_to_array_through_the_tower() {
+    let _serialized = crate::array::test_serialize();
+    unsafe {
+        let map = crate::map::js_map_alloc(2);
+        crate::map::js_map_set(map, 1.0, 1.0);
+        crate::map::js_map_set(map, 2.0, 2.0);
+        let raw_iter = crate::collection_iter_object::js_map_values_iter_obj(map);
+        let iter = crate::value::js_nanbox_pointer(raw_iter);
+
+        let flattened = tower(iter, "flatMap", &[closure1(pair_with_ten_times)]);
+        let helper_ptr = crate::value::js_nanbox_get_pointer(flattened);
+        assert_ne!(
+            helper_ptr, 0,
+            "MapIterator.prototype.flatMap must return a helper object"
+        );
+        assert_eq!(
+            (*(helper_ptr as *const ObjectHeader)).class_id,
+            ITERATOR_HELPER_CLASS_ID
+        );
+        assert_eq!(
+            array_numbers(tower(flattened, "toArray", &[])),
+            vec![1.0, 10.0, 2.0, 20.0]
+        );
+    }
+}
+
+#[test]
 fn chained_helpers_compose() {
     unsafe {
         // Iterator.from([1..6]).map(x => x*2).filter(even).take(2) → [2, 4]

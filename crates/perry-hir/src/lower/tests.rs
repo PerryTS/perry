@@ -8,11 +8,89 @@
 #![cfg(test)]
 
 use super::*;
-use crate::ir::{EnumValue, Expr, Stmt};
+use crate::ir::{EnumValue, Expr, ImportSpecifier, Stmt};
 use crate::types::{Type, TypeParam};
 
 fn make_ctx() -> LoweringContext {
     LoweringContext::new("test.ts")
+}
+
+#[test]
+fn static_source_import_is_visible_before_its_declaration() {
+    let source = r#"
+        export const node = LayerNode.make(42);
+        import { LayerNode } from "./layer-node";
+    "#;
+    let module =
+        perry_parser::parse_typescript(source, "forward-import.ts").expect("source parses");
+    let hir =
+        super::lower_module(&module, "forward-import", "forward-import.ts").expect("source lowers");
+    let dump = format!("{hir:?}");
+    assert!(
+        !dump.contains("js_global_get_or_throw_unresolved"),
+        "the hoisted import was lowered as an unresolved global: {dump}"
+    );
+    assert!(
+        hir.imports.iter().any(|import| import.specifiers.iter().any(
+            |specifier| matches!(specifier, ImportSpecifier::Named { local, .. } if local == "LayerNode")
+        )),
+        "the later import declaration must still be emitted: {dump}"
+    );
+}
+
+#[test]
+fn property_values_call_is_not_assumed_to_be_an_array_iterator() {
+    let source = r#"
+        const backing = new Map<string, number>([["a", 1], ["b", 2]]);
+        const manifest = {
+            Latest: Object.freeze({
+                values: () => backing.values(),
+                [Symbol.iterator]: () => backing[Symbol.iterator](),
+            }),
+        };
+        const schemas = manifest.Latest.values()
+            .flatMap((value) => value === 1 ? [] : [value, value * 10])
+            .toArray();
+        console.log([...schemas]);
+    "#;
+    let module =
+        perry_parser::parse_typescript(source, "readonly-map-facade.ts").expect("source parses");
+    let hir = super::lower_module(&module, "readonly-map-facade", "readonly-map-facade.ts")
+        .expect("source lowers");
+    let dump = format!("{hir:?}");
+    assert!(
+        !dump.contains("ArrayValues"),
+        "a property receiver with its own values() method is not proven to be an Array: {dump}"
+    );
+    assert!(
+        !dump.contains("ArrayFlatMap"),
+        "flatMap() on the returned iterator must stay on dynamic iterator-helper dispatch: {dump}"
+    );
+}
+
+#[test]
+fn all_type_named_specifiers_are_runtime_erased_but_not_whole_type_only() {
+    let source = r#"
+        import { type RpcShape, type RpcEvent } from "./worker";
+    "#;
+    let module = perry_parser::parse_typescript(source, "main.ts").expect("source parses");
+    let hir = super::lower_module(&module, "main", "main.ts").expect("source lowers");
+    let import = hir.imports.first().expect("lowered import");
+    assert!(!import.type_only, "the source remains metadata-collectible");
+    assert!(
+        import.runtime_erased,
+        "all per-specifier type bindings create no runtime init edge"
+    );
+
+    let mixed = r#"
+        import { type RpcShape, createClient } from "./worker";
+    "#;
+    let module = perry_parser::parse_typescript(mixed, "mixed.ts").expect("source parses");
+    let hir = super::lower_module(&module, "mixed", "mixed.ts").expect("source lowers");
+    assert!(
+        !hir.imports[0].runtime_erased,
+        "a mixed declaration keeps its runtime value edge"
+    );
 }
 
 #[test]
@@ -1526,6 +1604,40 @@ fn test_function_require_with_body_still_shadows_the_namespace_fast_path() {
     assert!(
         dump.contains("name: \"net\""),
         "the `net` binding must stay a runtime local under a shadowing require: {dump}"
+    );
+}
+
+/// A compilePackages CJS module receives Perry's synthetic `require` function.
+/// Native npm shims do not materialize a complete runtime namespace object, so
+/// destructuring their constructor from that function must become the same
+/// static native alias as an ESM named import.  hosted-git-info uses this exact
+/// shape for lru-cache at module initialization.
+#[test]
+fn test_cjs_wrapper_lru_cache_destructure_uses_static_constructor() {
+    let source = r#"
+        function __perry_cjs_require_error(kind: string, code: string, message: string): any {
+            return { kind, code, message };
+        }
+        function __perry_cjs_require_is_builtin(specifier: string): boolean {
+            return false;
+        }
+        function require(specifier: string): any {
+            return undefined;
+        }
+        const { LRUCache } = require("lru-cache");
+        const cache = new LRUCache({ max: 2 });
+        cache.set("answer", 42);
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let dump = format!("{hir:?}");
+    assert!(
+        dump.contains("New { class_name: \"LRUCache\""),
+        "the CJS shim destructure must lower to the static LRUCache constructor: {dump}"
+    );
+    assert!(
+        !dump.contains("name: \"LRUCache\", ty: Any") && !dump.contains("NewDynamic"),
+        "the unreified runtime namespace local must not survive: {dump}"
     );
 }
 

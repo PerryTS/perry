@@ -348,6 +348,7 @@ fn key_stable_for_nested_type_hashmap_order() {
     let class_for = |field_type| ImportedClass {
         name: "RowBox".into(),
         local_alias: None,
+        namespace: None,
         source_prefix: "feature_ts".into(),
         constructor_param_count: 0,
         has_own_constructor: false,
@@ -408,6 +409,7 @@ fn key_changes_with_imported_class_signature() {
     a.imported_classes.push(ImportedClass {
         name: "Foo".into(),
         local_alias: None,
+        namespace: None,
         source_prefix: "src".into(),
         constructor_param_count: 1,
         has_own_constructor: true,
@@ -441,6 +443,7 @@ fn key_changes_with_imported_class_signature() {
     b.imported_classes.push(ImportedClass {
         name: "Foo".into(),
         local_alias: None,
+        namespace: None,
         source_prefix: "src".into(),
         constructor_param_count: 2, // different arity
         has_own_constructor: true,
@@ -482,6 +485,7 @@ fn key_changes_with_imported_class_codegen_surface() {
     let base = ImportedClass {
         name: "Foo".into(),
         local_alias: None,
+        namespace: None,
         source_prefix: "src".into(),
         constructor_param_count: 1,
         has_own_constructor: true,
@@ -618,6 +622,10 @@ fn key_changes_with_imported_class_codegen_surface() {
     changed.setter_names = vec!["value".into()];
     assert_ne!(base_key, key_for(changed));
 
+    let mut changed = base.clone();
+    changed.namespace = Some("Plugin".into());
+    assert_ne!(base_key, key_for(changed));
+
     let mut changed = base;
     changed.field_types = vec![perry_hir::types::Type::String];
     assert_ne!(base_key, key_for(changed));
@@ -716,7 +724,6 @@ fn key_changes_with_codegen_env_vars() {
     //
     let opts = empty_opts();
     for var in [
-        "PERRY_DEBUG_INIT",
         "PERRY_DEBUG_SYMBOLS",
         "PERRY_LLVM_CLANG",
         "PERRY_LLVM_INPROCESS",
@@ -786,6 +793,22 @@ fn key_changes_with_codegen_env_vars() {
         assert_ne!(k_unset, k_set, "setting {} must change key", var);
         assert_ne!(k_set, k_two, "changing {} value must change key", var);
     }
+}
+
+#[test]
+fn debug_init_only_invalidates_the_entry_object() {
+    let key = |opts: &CompileOptions, enabled: bool| {
+        compute_object_cache_key_with_env(opts, 1, "0.5.156", |name| {
+            (enabled && name == "PERRY_DEBUG_INIT").then(|| "1".to_string())
+        })
+    };
+
+    let mut entry_opts = empty_opts();
+    entry_opts.is_entry_module = true;
+    assert_ne!(key(&entry_opts, false), key(&entry_opts, true));
+
+    let dependency_opts = empty_opts();
+    assert_eq!(key(&dependency_opts, false), key(&dependency_opts, true));
 }
 
 /// #6439: the FFI manifest must survive a store→lookup round trip, or a

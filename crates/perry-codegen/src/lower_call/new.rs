@@ -1031,7 +1031,16 @@ fn lower_new_impl_inner<'a>(
     // SQLiteBaseInteger's `autoIncrement = this.config.autoIncrement`
     // depends on Column's body running `this.config = config` first).
     let has_own_ctor = class.constructor.is_some();
-    let has_extends = class.extends_name.is_some();
+    // A runtime-valued heritage clause is still real heritage.  Class
+    // expressions whose parent identifier resolves through a lexical binding
+    // intentionally carry only `extends_expr` (no `extends_name`), so treating
+    // them as base classes applies their own fields before the synthesized
+    // `super(...args)`.  Drizzle's emitted `var SQLiteBoolean = class extends
+    // SQLiteBaseInteger { mode = this.config.mode }` then reads `config` before
+    // the Column constructor has installed it.  Stage those fields exactly like
+    // statically named derived classes: ancestors first, dynamic super, self
+    // fields last.
+    let has_extends = class.extends_name.is_some() || class.extends_expr.is_some();
     let has_imported_ctor = ctx.imported_class_ctors.contains_key(class_name);
     // A local class whose imported parent is represented by both a static
     // name and a runtime heritage value must construct through that runtime
@@ -1908,8 +1917,8 @@ fn lower_new_impl_inner<'a>(
     // `extends_expr` (dynamic-parent, e.g. zod 4's `$constructor`) classes also
     // need their own field initializers re-applied here — AFTER the parent body
     // ran via `js_fetch_or_value_super` above. ECMAScript runs derived-class
-    // field initializers after `super()` returns; `has_extends` only covers
-    // static `extends_name`, so include the `extends_expr` case (SelfOnly,
+    // field initializers after `super()` returns; `has_extends` covers both
+    // static `extends_name` and dynamic `extends_expr` heritage (SelfOnly,
     // mirroring the explicit-`SuperCall` dynamic-parent arm in this_super_call.rs).
     if !has_own_ctor && (has_extends || class.extends_expr.is_some()) && !has_imported_ctor {
         if let Some(owner) = dynamic_parent_owner {

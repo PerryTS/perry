@@ -844,10 +844,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Route through the static-field global map populated from
             // `opts.imported_classes` at codegen entry. Refs #420.
             if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
-                let key = (name.clone(), property.clone());
-                if let Some(global_name) = ctx.static_field_globals.get(&key).cloned() {
-                    let g_ref = format!("@{}", global_name);
-                    return Ok(ctx.block().load(DOUBLE, &g_ref));
+                // A namespace binding can have the same local name as a class
+                // exported by that namespace (`import * as Sharding` from a
+                // module that exports `class Sharding`).  The namespace is the
+                // lexical binding, so its first member read must reach the
+                // namespace dispatcher below; treating it as the equal-named
+                // imported class makes `Sharding.layer` read a static field on
+                // the class and return undefined.
+                if !ctx.namespace_imports.contains(name) {
+                    let key = (name.clone(), property.clone());
+                    if let Some(global_name) = ctx.static_field_globals.get(&key).cloned() {
+                        let g_ref = format!("@{}", global_name);
+                        return Ok(ctx.block().load(DOUBLE, &g_ref));
+                    }
                 }
             }
             // Issue #618-followup: dynamic property access on a local class
@@ -863,7 +872,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // discards the INT32 tag during the unbox and ends up returning
             // undefined.
             let is_class_ref_object = matches!(object.as_ref(), Expr::ClassRef(_))
-                || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
+                || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. }
+                    if !ctx.namespace_imports.contains(name) && ctx.class_ids.contains_key(name));
             if is_class_ref_object {
                 let obj_box = lower_expr(ctx, object)?;
                 let key_idx = ctx.strings.intern(property);
@@ -1164,11 +1174,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // misses the class ref and falls back to the global
                     // `Number`, dropping all inherited statics (effect's
                     // `S.Number.ast`).
-                    let class_cid = ctx.class_ids.get(property).copied().or_else(|| {
-                        ctx.import_function_origin_names
-                            .get(property)
-                            .and_then(|origin| ctx.class_ids.get(origin).copied())
-                    });
+                    let class_cid = ctx
+                        .class_ids
+                        .get(&crate::namespace_member_class_key(name, property))
+                        .copied();
                     if let Some(cid) = class_cid {
                         let bits = crate::nanbox::INT32_TAG | (cid as u64 & 0xFFFF_FFFF);
                         return Ok(double_literal(f64::from_bits(bits)));
@@ -1252,16 +1261,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             _ns_lookup_name.as_deref().unwrap_or(""),
                             property,
                         );
-                        if ctx.imported_vars.contains(property) {
+                        if ctx.imported_vars.contains(&crate::namespace_member_var_key(
+                            _ns_lookup_name.as_deref().unwrap_or(""),
+                            property,
+                        )) {
                             let getter = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                             ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
                             return Ok(ctx.block().call(DOUBLE, &getter, &[]));
                         }
                         let target_name = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
                         let wrap_name = format!("__perry_wrap_{}", target_name);
-                        let param_count = ctx
-                            .imported_func_param_counts
-                            .get(property)
+                        let param_count = _ns_lookup_name
+                            .as_deref()
+                            .and_then(|namespace| {
+                                ctx.imported_func_param_counts
+                                    .get(&crate::namespace_member_func_key(namespace, property))
+                            })
+                            .or_else(|| ctx.imported_func_param_counts.get(property))
                             .copied()
                             .unwrap_or(0)
                             .min(5);

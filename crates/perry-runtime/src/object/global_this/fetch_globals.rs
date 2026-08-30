@@ -12,6 +12,25 @@ crate::perry_thread_local! {
     static THREAD_GLOBAL_THIS: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
+crate::perry_thread_local! {
+    /// One-shot regression hook: collect after GC initialization but before
+    /// the first `globalThis` allocation. This is the exact window in which a
+    /// caller's by-value lookup key used to become stale.
+    static TEST_COLLECT_BEFORE_GLOBAL_THIS_ALLOC: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(crate) fn collect_before_global_this_alloc_for_test() {
+    assert_eq!(
+        THREAD_GLOBAL_THIS.with(|c| c.get()),
+        0,
+        "globalThis regression hook must be armed before first access"
+    );
+    TEST_COLLECT_BEFORE_GLOBAL_THIS_ALLOC.with(|c| c.set(true));
+}
+
 crate::perry_thread_local! {
     /// Module top-level `this` (Node-CJS `module.exports` stand-in) — a
     /// lazily-allocated plain object distinct from `globalThis`. See
@@ -62,6 +81,10 @@ pub extern "C" fn js_get_global_this() -> f64 {
     // would reclaim the global mid-use, leaving a dangling intrinsic. No-op in
     // production (already initialized) and inside the GC tests' controlled scopes.
     crate::gc::ensure_gc_initialized();
+    #[cfg(test)]
+    if TEST_COLLECT_BEFORE_GLOBAL_THIS_ALLOC.with(|c| c.replace(false)) {
+        let _ = crate::gc::gc_collect_minor();
+    }
     // First access on this thread — allocate our own global.
     let new_ptr = js_object_alloc(0, 0) as i64;
     THREAD_GLOBAL_THIS.with(|c| c.set(new_ptr));

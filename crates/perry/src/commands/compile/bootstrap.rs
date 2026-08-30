@@ -409,6 +409,7 @@ pub(super) fn enforce_package_default_exports(ctx: &mut CompilationContext) -> R
         .flat_map(|(importer_path, module)| {
             module.imports.iter().filter_map(|import| {
                 if import.type_only
+                    || import.runtime_erased
                     || import.is_dynamic
                     || import.is_native
                     // Issue #5257: an adopted `require('S')` (CJS wrap synthesized
@@ -537,6 +538,7 @@ mod js_runtime_gate_tests {
             module_kind: perry_hir::ModuleKind::NativeCompiled,
             resolved_path: Some(package_path.to_string_lossy().to_string()),
             type_only: false,
+            runtime_erased: false,
             is_dynamic: false,
             is_dynamic_target: false,
             is_deferred_require: false,

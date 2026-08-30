@@ -99,6 +99,12 @@ pub struct Import {
     /// bar }`) is still tracked because the same declaration also has
     /// value specifiers — only the whole-decl flag is runtime-meaningless.
     pub type_only: bool,
+    /// True when a syntactically value-shaped declaration contains only
+    /// per-specifier type imports (`import { type Foo, type Bar }`). Perry
+    /// still collects the source module so its producer-authored type/class
+    /// metadata remains available, but the edge creates no runtime binding or
+    /// module-initialization dependency.
+    pub runtime_erased: bool,
     /// Issue #100: synthesized from a dynamic `import()` call whose path
     /// const-folded to this source. Dynamic edges enter the import graph
     /// but do NOT pin the target as eager — if no static edge reaches it

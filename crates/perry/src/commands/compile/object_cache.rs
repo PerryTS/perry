@@ -570,6 +570,7 @@ fn compute_object_cache_key_with_env(
                 .cmp(&b.name)
                 .then(a.source_prefix.cmp(&b.source_prefix))
                 .then(a.local_alias.cmp(&b.local_alias))
+                .then(a.namespace.cmp(&b.namespace))
         });
         let mut buf = String::new();
         for c in v {
@@ -591,6 +592,15 @@ fn compute_object_cache_key_with_env(
                     .collect::<Vec<_>>()
                     .join(","),
             ));
+            // Preserve pre-namespace cache keys byte-for-byte for ordinary
+            // imported classes. Only namespace-owned bindings can generate
+            // different code under the scoped registry fix, so only those
+            // records need a new cache-key component.
+            if let Some(namespace) = &c.namespace {
+                buf.push_str(":namespace=");
+                buf.push_str(namespace);
+                buf.push('|');
+            }
             buf.push_str("method_rest=");
             buf.push_str(
                 &c.method_has_rest
@@ -950,8 +960,8 @@ fn compute_object_cache_key_with_env(
     // Environment variables read by `perry-codegen` that influence the
     // emitted .o bytes. Not part of `CompileOptions`, but just as real an
     // input to `compile_module` / `compile_ll_to_object`:
-    //   - PERRY_DEBUG_INIT=1 bakes a `puts("INIT: <prefix>")` call into
-    //     every module's `__init` (codegen.rs).
+    //   - PERRY_DEBUG_INIT=1 bakes `puts("INIT: <prefix>")` calls around the
+    //     eager initializer chain in the entry object (entry.rs).
     //   - PERRY_DEBUG_SYMBOLS=1 adds `-g` to clang → embeds DWARF sections
     //     into the object (linker.rs).
     //   - PERRY_LLVM_CLANG selects which clang binary compiles .ll → .o;
@@ -978,10 +988,11 @@ fn compute_object_cache_key_with_env(
     // like PERRY_LLVM_CLANG=/opt/homebrew/opt/llvm/bin/clang in a shell rc
     // still gets cache reuse across runs, while flipping a debug flag on
     // or off cleanly invalidates.
-    h.field(
-        "env_debug_init",
-        env_var("PERRY_DEBUG_INIT").as_deref().unwrap_or(""),
-    );
+    let debug_init = opts
+        .is_entry_module
+        .then(|| env_var("PERRY_DEBUG_INIT"))
+        .flatten();
+    h.field("env_debug_init", debug_init.as_deref().unwrap_or(""));
     h.field(
         "env_debug_symbols",
         env_var("PERRY_DEBUG_SYMBOLS").as_deref().unwrap_or(""),

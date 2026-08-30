@@ -90,6 +90,7 @@ fn debug_hir_uses_global_math_member(hir_debug: &str) -> bool {
 fn imports_fs_promises_glob(hir_module: &perry_hir::Module) -> bool {
     hir_module.imports.iter().any(|import| {
         !import.type_only
+            && !import.runtime_erased
             && import
                 .source
                 .strip_prefix("node:")
@@ -702,6 +703,7 @@ mod tests {
             module_kind: ModuleKind::NativeCompiled,
             resolved_path: None,
             type_only: false,
+            runtime_erased: false,
             is_dynamic: false,
             is_dynamic_target: false,
             is_deferred_require: false,

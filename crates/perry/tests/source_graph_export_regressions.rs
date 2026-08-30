@@ -669,6 +669,59 @@ fn self_namespace_reexport_is_not_treated_as_a_function() {
 }
 
 #[test]
+fn named_self_namespace_import_is_hoisted_before_source_use() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "layer-node.ts",
+        "export function make(value: number) { return value; }\n\
+         export * as LayerNode from './layer-node';\n",
+    );
+    write(
+        dir.path(),
+        "main.ts",
+        "export const node = LayerNode.make(42);\n\
+         import { LayerNode } from './layer-node';\n\
+         console.log(node);\n",
+    );
+
+    assert_eq!(compile_and_run(dir.path(), "main.ts"), "42\n");
+}
+
+#[test]
+fn dynamic_import_does_not_reverse_static_eager_init_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "plugin.ts",
+        "export const node = { name: 'plugin' };\n\
+         export const loadServer = () => import('./server');\n\
+         export * as Plugin from './plugin';\n",
+    );
+    write(
+        dir.path(),
+        "provider-auth.ts",
+        "import { Plugin } from './plugin';\n\
+         export const providerAuth = { dependency: Plugin.node };\n",
+    );
+    write(
+        dir.path(),
+        "server.ts",
+        "import { providerAuth } from './provider-auth';\n\
+         export const server = providerAuth;\n",
+    );
+    write(
+        dir.path(),
+        "main.ts",
+        "import { Plugin } from './plugin';\n\
+         import { providerAuth } from './provider-auth';\n\
+         console.log(Plugin.node.name, providerAuth.dependency.name);\n",
+    );
+
+    assert_eq!(compile_and_run(dir.path(), "main.ts"), "plugin plugin\n");
+}
+
+#[test]
 fn materialized_namespace_keeps_nested_namespace_exports() {
     let dir = tempfile::tempdir().expect("tempdir");
     write(dir.path(), "core.ts", "export const answer = 42;\n");
@@ -790,4 +843,98 @@ fn imported_class_reexport_uses_the_defining_constructor() {
     );
 
     assert_eq!(compile_and_run(dir.path(), "main.ts"), "42\n");
+}
+
+/// OpenCode's bootstrap module imports the `Plugin` namespace before directly
+/// importing its own class named `Service`. A namespace member is not a bare
+/// lexical binding: `Plugin.Service` must not replace that direct `Service`.
+#[test]
+fn namespace_class_does_not_replace_equal_named_direct_import() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "plugin.ts",
+        "export class Service {\n\
+           static identify() { return 'Plugin'; }\n\
+         }\n\
+         export const node = { name: Service.identify() };\n\
+         export * as Plugin from './plugin';\n",
+    );
+    write(
+        dir.path(),
+        "bootstrap-service.ts",
+        "export class Service {\n\
+           static identify() { return 'InstanceBootstrap'; }\n\
+         }\n",
+    );
+    write(
+        dir.path(),
+        "bootstrap.ts",
+        "import { Plugin } from './plugin';\n\
+         import { Service } from './bootstrap-service';\n\
+         export const node = { name: Service.identify(), dependency: Plugin.node };\n\
+         export * as InstanceBootstrap from './bootstrap';\n",
+    );
+    write(
+        dir.path(),
+        "main.ts",
+        "import { Plugin } from './plugin';\n\
+         import { InstanceBootstrap } from './bootstrap';\n\
+         console.log(InstanceBootstrap.node.name);\n\
+         console.log(InstanceBootstrap.node.dependency.name);\n\
+         console.log(Plugin.Service.identify());\n",
+    );
+
+    assert_eq!(
+        compile_and_run(dir.path(), "main.ts"),
+        "InstanceBootstrap\nPlugin\nPlugin\n"
+    );
+}
+
+/// OpenCode's main TUI command imports its worker RPC shape with
+/// `import { type rpc }`. That spelling must not execute the worker module in
+/// the main process (where worker-only globals such as `onmessage` do not
+/// exist).
+#[test]
+fn per_specifier_type_only_import_does_not_initialize_source_module() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "worker.ts",
+        "console.log('worker initialized');\n\
+         export interface RpcShape { answer: number; }\n",
+    );
+    write(
+        dir.path(),
+        "main.ts",
+        "import { type RpcShape } from './worker';\n\
+         const value: RpcShape = { answer: 42 };\n\
+         console.log(value.answer);\n",
+    );
+
+    assert_eq!(compile_and_run(dir.path(), "main.ts"), "42\n");
+}
+
+#[test]
+fn mixed_type_and_value_specifier_import_keeps_runtime_edge() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "dependency.ts",
+        "console.log('dependency initialized');\n\
+         export interface Shape { answer: number; }\n\
+         export const answer = 42;\n",
+    );
+    write(
+        dir.path(),
+        "main.ts",
+        "import { type Shape, answer } from './dependency';\n\
+         const value: Shape = { answer };\n\
+         console.log(value.answer);\n",
+    );
+
+    assert_eq!(
+        compile_and_run(dir.path(), "main.ts"),
+        "dependency initialized\n42\n"
+    );
 }

@@ -416,15 +416,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } = callee.as_ref()
             {
                 if let Expr::ExternFuncRef { name: ns_name, .. } = object.as_ref() {
-                    if ctx.namespace_imports.contains(ns_name)
-                        && ctx.imported_func_has_rest.contains(property)
-                        && ctx
-                            .imported_func_param_counts
-                            .get(property)
-                            .copied()
-                            .unwrap_or(1)
-                            == 1
-                    {
+                    let scoped_func_key = crate::namespace_member_func_key(ns_name, property);
+                    let scoped_declared_count = ctx
+                        .imported_func_param_counts
+                        .get(&scoped_func_key)
+                        .copied();
+                    let declared_count = scoped_declared_count
+                        .or_else(|| ctx.imported_func_param_counts.get(property).copied())
+                        .unwrap_or(1);
+                    let has_rest = if scoped_declared_count.is_some() {
+                        ctx.imported_func_has_rest.contains(&scoped_func_key)
+                    } else {
+                        ctx.imported_func_has_rest.contains(property)
+                    };
+                    if ctx.namespace_imports.contains(ns_name) && has_rest && declared_count == 1 {
                         let source_prefix_opt = ctx
                             .namespace_member_prefixes
                             .get(&(ns_name.clone(), property.clone()))

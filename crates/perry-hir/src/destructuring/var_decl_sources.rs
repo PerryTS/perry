@@ -83,6 +83,47 @@ pub(crate) fn require_is_shadowed_by_local(ctx: &LoweringContext) -> bool {
         || ctx.lookup_imported_func("require").is_some()
 }
 
+/// The CJS-to-ESM wrapper's synthetic `require` is deliberately a real local
+/// function, so the ordinary native-require fast paths must not steal calls
+/// from it (see #8342).  There is one narrower exception: a destructured
+/// constructor supplied by a Perry native npm shim has no runtime namespace
+/// value to destructure in the first place.  The wrapper-generated helper
+/// pair identifies that compiler-owned function without mistaking an ordinary
+/// user `function require(...) { ... }` for the intrinsic.
+fn require_is_perry_cjs_wrapper(ctx: &LoweringContext) -> bool {
+    ctx.lookup_func("require").is_some()
+        && ctx.lookup_func("__perry_cjs_require_error").is_some()
+        && ctx.lookup_func("__perry_cjs_require_is_builtin").is_some()
+}
+
+/// Native npm-shim destructures that can be lowered exactly like named ESM
+/// imports even inside Perry's CJS wrapper.  Keep this an explicit surface:
+/// broadening it to every native module would regress #8342's builtin-module
+/// namespace semantics, while broadening it to arbitrary lru-cache exports
+/// would pretend the partial shim implements API that it does not have.
+fn cjs_wrapper_static_native_destructure(
+    ctx: &LoweringContext,
+    init: &ast::Expr,
+    obj_pat: &ast::ObjectPat,
+) -> bool {
+    if !require_is_perry_cjs_wrapper(ctx)
+        || require_literal_specifier(init).as_deref() != Some("lru-cache")
+    {
+        return false;
+    }
+
+    !obj_pat.props.is_empty()
+        && obj_pat.props.iter().all(|prop| match prop {
+            ast::ObjectPatProp::Assign(assign) => assign.key.sym.as_ref() == "LRUCache",
+            ast::ObjectPatProp::KeyValue(kv) => match &kv.key {
+                ast::PropName::Ident(key) => key.sym.as_ref() == "LRUCache",
+                ast::PropName::Str(key) => key.value.as_str() == Some("LRUCache"),
+                _ => false,
+            },
+            ast::ObjectPatProp::Rest(_) => false,
+        })
+}
+
 /// #5216: the canonical (`node:`-stripped) native module name for a require
 /// specifier `raw`, iff it resolves to a Perry-supported native/Node-builtin
 /// module; otherwise `None`. `node:`-prefixed specifiers must name a real Node
@@ -184,7 +225,10 @@ pub(super) fn register_destructured_stream_ctors(
     // here — the native namespace isn't initialized in a CJS-wrapped module,
     // so the bindings would be undefined at runtime. Let the destructure run
     // off the runtime `require(...)` call result instead.
-    if require_is_shadowed_by_local(ctx) && require_literal_specifier(init).is_some() {
+    if require_is_shadowed_by_local(ctx)
+        && require_literal_specifier(init).is_some()
+        && !cjs_wrapper_static_native_destructure(ctx, init, obj_pat)
+    {
         return Vec::new();
     }
 

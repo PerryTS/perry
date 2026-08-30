@@ -468,6 +468,19 @@ pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut O
     crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
 }
 
+pub(crate) fn class_prototype_object_root_clear(class_id: u32) {
+    if class_id == 0 {
+        return;
+    }
+    CLASS_PROTOTYPE_OBJECTS.with(|table| {
+        if let Ok(mut guard) = table.write() {
+            if let Some(map) = guard.as_mut() {
+                map.remove(&class_id);
+            }
+        }
+    });
+}
+
 pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {
     if class_id == 0 || proto_ptr.is_null() {
         return;

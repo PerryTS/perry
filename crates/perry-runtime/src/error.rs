@@ -1056,6 +1056,13 @@ static KEEP_JS_GLOBAL_GET_OR_THROW_UNRESOLVED: extern "C-unwind" fn(f64) -> f64 
 /// can run when the debug runtime is linked.
 #[no_mangle]
 pub extern "C-unwind" fn js_global_get_or_throw_unresolved(name_value: f64) -> f64 {
+    // `js_get_global_this` lazily builds the realm on first use and can collect
+    // while doing so. Generated code may pass a nursery string here from a
+    // registered module-root slot, but this argument is only a copied NaN-box:
+    // the collector rewrites the slot, not this Rust local. Root it before the
+    // first allocation and reload it at every later GC-capable boundary.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let name_handle = scope.root_nanbox_f64(name_value);
     let g = crate::object::js_get_global_this();
     let gj = crate::value::JSValue::from_bits(g.to_bits());
     if gj.is_pointer() {
@@ -1064,9 +1071,8 @@ pub extern "C-unwind" fn js_global_get_or_throw_unresolved(name_value: f64) -> f
         // was extracted into a raw Rust local *before* the coercion and
         // dereferenced by `js_object_get_field_by_name` after it. Root the
         // receiver and re-derive the header from the refreshed value.
-        let scope = crate::gc::RuntimeHandleScope::new();
         let g_handle = scope.root_heap_word_u64(g.to_bits());
-        let key = crate::builtins::js_string_coerce(name_value);
+        let key = crate::builtins::js_string_coerce(name_handle.get_nanbox_f64());
         let g = f64::from_bits(g_handle.get_heap_word_u64());
         let gptr = (g.to_bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
         if !gptr.is_null() && !key.is_null() {
@@ -1083,14 +1089,14 @@ pub extern "C-unwind" fn js_global_get_or_throw_unresolved(name_value: f64) -> f
             // binding always is) before falling through to the throw.
             let has = crate::object::js_object_has_own(
                 f64::from_bits(g_handle.get_heap_word_u64()),
-                name_value,
+                name_handle.get_nanbox_f64(),
             );
             if crate::value::js_is_truthy(has) != 0 {
                 return f64::from_bits(crate::value::JSValue::undefined().bits());
             }
         }
     }
-    let name = value_to_lossy_string(name_value);
+    let name = value_to_lossy_string(name_handle.get_nanbox_f64());
     let msg = format!("{} is not defined", name);
     let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = js_referenceerror_new(msg_str);
@@ -1121,6 +1127,8 @@ static KEEP_JS_GLOBAL_UPDATE: extern "C" fn(f64, f64, f64) -> f64 = js_global_up
 pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix: f64) -> f64 {
     let is_increment = crate::value::js_is_truthy(is_increment);
     let is_prefix = crate::value::js_is_truthy(is_prefix) != 0;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let name_handle = scope.root_nanbox_f64(name_value);
     let g = crate::object::js_get_global_this();
     let gj = crate::value::JSValue::from_bits(g.to_bits());
     // #6943: `js_string_coerce` allocates for every non-heap-string name, and
@@ -1130,9 +1138,8 @@ pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix
     // from the pre-coercion `gj`) and the coerced key string were raw Rust
     // locals across all of it, and `gptr` is the receiver of the WRITE-BACK at
     // the end. Root both and re-derive the header at each use.
-    let scope = crate::gc::RuntimeHandleScope::new();
     let g_handle = scope.root_heap_word_u64(g.to_bits());
-    let key = crate::builtins::js_string_coerce(name_value);
+    let key = crate::builtins::js_string_coerce(name_handle.get_nanbox_f64());
     let key_handle = scope.root_string_ptr(key);
     let mut present = false;
     let old = if gj.is_pointer() && !key.is_null() {
@@ -1146,7 +1153,7 @@ pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix
             if !v.is_undefined()
                 || crate::object::js_object_has_own(
                     f64::from_bits(g_handle.get_heap_word_u64()),
-                    name_value,
+                    name_handle.get_nanbox_f64(),
                 )
                 .to_bits()
                     == crate::value::TAG_TRUE
@@ -1161,7 +1168,7 @@ pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix
         f64::from_bits(crate::value::TAG_UNDEFINED)
     };
     if !present {
-        let name = value_to_lossy_string(name_value);
+        let name = value_to_lossy_string(name_handle.get_nanbox_f64());
         let msg = format!("{} is not defined", name);
         let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
         let err_ptr = js_referenceerror_new(msg_str);
@@ -1212,6 +1219,9 @@ static KEEP_JS_GLOBAL_ASSIGN_EXISTING_OR_THROW: extern "C" fn(f64, f64) -> f64 =
 /// that may CREATE the binding.
 #[no_mangle]
 pub extern "C" fn js_global_assign_existing_or_throw(name_value: f64, value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let name_handle = scope.root_nanbox_f64(name_value);
+    let value_handle = scope.root_nanbox_f64(value);
     let g = crate::object::js_get_global_this();
     let gj = crate::value::JSValue::from_bits(g.to_bits());
     // #6943: the textbook shape of this family — a receiver AND the value being
@@ -1220,10 +1230,8 @@ pub extern "C" fn js_global_assign_existing_or_throw(name_value: f64, value: f64
     // the not-defined path (`js_string_from_bytes`, `js_referenceerror_new`)
     // allocate on top of that, and `gptr` is the receiver of the final write.
     // Root the global, the coerced key and `value` for the whole helper.
-    let scope = crate::gc::RuntimeHandleScope::new();
     let g_handle = scope.root_heap_word_u64(g.to_bits());
-    let value_handle = scope.root_nanbox_f64(value);
-    let key = crate::builtins::js_string_coerce(name_value);
+    let key = crate::builtins::js_string_coerce(name_handle.get_nanbox_f64());
     let key_handle = scope.root_string_ptr(key);
     let mut present = false;
     if gj.is_pointer() && !key.is_null() {
@@ -1237,7 +1245,7 @@ pub extern "C" fn js_global_assign_existing_or_throw(name_value: f64, value: f64
             if !v.is_undefined()
                 || crate::object::js_object_has_own(
                     f64::from_bits(g_handle.get_heap_word_u64()),
-                    name_value,
+                    name_handle.get_nanbox_f64(),
                 )
                 .to_bits()
                     == crate::value::TAG_TRUE
@@ -1247,7 +1255,7 @@ pub extern "C" fn js_global_assign_existing_or_throw(name_value: f64, value: f64
         }
     }
     if !present {
-        let name = value_to_lossy_string(name_value);
+        let name = value_to_lossy_string(name_handle.get_nanbox_f64());
         let msg = format!("{} is not defined", name);
         let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
         let err_ptr = js_referenceerror_new(msg_str);
@@ -1271,14 +1279,15 @@ pub extern "C" fn js_global_assign_existing_or_throw(name_value: f64, value: f64
 /// property set — #3575) must still be observed.
 #[no_mangle]
 pub extern "C" fn js_global_get_optional(name_value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let name_handle = scope.root_nanbox_f64(name_value);
     let g = crate::object::js_get_global_this();
     let gj = crate::value::JSValue::from_bits(g.to_bits());
     if gj.is_pointer() {
         // #6943: root the global across the GC-capable coercion and re-derive
         // its header afterwards — see `js_global_get_or_throw_unresolved`.
-        let scope = crate::gc::RuntimeHandleScope::new();
         let g_handle = scope.root_heap_word_u64(g.to_bits());
-        let key = crate::builtins::js_string_coerce(name_value);
+        let key = crate::builtins::js_string_coerce(name_handle.get_nanbox_f64());
         let g = f64::from_bits(g_handle.get_heap_word_u64());
         let gptr = (g.to_bits() & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader;
         if !gptr.is_null() && !key.is_null() {
@@ -1861,6 +1870,37 @@ mod tostring_tests {
     fn not_a_function_throw_bridge_is_unwind_capable() {
         let _: extern "C-unwind" fn(*const u8, usize, *const u8, usize) -> ! =
             js_throw_type_error_not_a_function;
+    }
+
+    #[test]
+    fn unresolved_global_name_survives_collection_during_global_this_init() {
+        let _copying_nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+        crate::gc::register_runtime_handle_root_scanner_for_tests();
+
+        // Mirror a generated module string slot: the collector rewrites this
+        // registered root, but it cannot rewrite the by-value f64 copied into
+        // `js_global_get_optional`. That callee must establish its own handle
+        // before lazy global initialization reaches a collection point.
+        let key_ptr = s(b"navigator");
+        let key_before = key_ptr as usize;
+        let mut key_value = f64::from_bits(
+            crate::value::STRING_TAG | (key_before as u64 & crate::value::POINTER_MASK),
+        );
+        crate::gc::js_gc_register_global_root((&mut key_value as *mut f64) as i64);
+        crate::object::collect_before_global_this_alloc_for_test();
+
+        let navigator = js_global_get_optional(key_value);
+        let key_after = (key_value.to_bits() & crate::value::POINTER_MASK) as usize;
+        assert_ne!(
+            key_after, key_before,
+            "the forced collection must relocate the caller's rooted key"
+        );
+        assert!(
+            crate::value::JSValue::from_bits(navigator.to_bits()).is_pointer(),
+            "the refreshed key must still resolve globalThis.navigator"
+        );
     }
 
     fn s(bytes: &[u8]) -> *mut StringHeader {

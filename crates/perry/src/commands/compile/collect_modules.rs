@@ -1020,6 +1020,7 @@ fn collect_module_one(
             module_kind,
             resolved_path: None,
             type_only: false,
+            runtime_erased: false,
             is_dynamic: true,
             is_dynamic_target: false,
             is_deferred_require: false,

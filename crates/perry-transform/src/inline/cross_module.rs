@@ -655,6 +655,7 @@ pub(crate) fn localize_cross_module_functions(
                 module_kind: perry_hir::ModuleKind::NativeCompiled,
                 resolved_path: Some(path),
                 type_only: false,
+                runtime_erased: false,
                 is_dynamic: false,
                 is_dynamic_target: false,
                 is_deferred_require: false,

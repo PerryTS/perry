@@ -126,6 +126,38 @@ console.log("statics linked");
     );
 }
 
+/// Perry represents a declared class as an INT32 ClassRef, not as the heap
+/// function object used for an ordinary function declaration. The ClassRef
+/// therefore needs its own static-prototype recording path. Effect's
+/// `Schema.Opaque` uses this pattern and subclasses must inherit the schema
+/// object's `ast` field through the generated base class.
+#[test]
+fn set_prototype_of_class_ref_links_static_object_properties() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+const schema = { ast: { marker: "schema-ast" } };
+
+function opaque() {
+  class Opaque {}
+  return Object.setPrototypeOf(Opaque, schema);
+}
+
+const Opaque = opaque();
+class PartialRequest extends Opaque {}
+console.log(PartialRequest.ast.marker);
+
+Object.setPrototypeOf(Opaque, null);
+console.log(PartialRequest.ast);
+"#,
+    );
+    assert_eq!(
+        stdout, "schema-ast\nundefined\n",
+        "ClassRef Object.setPrototypeOf must link and clear inherited static object fields"
+    );
+}
+
 /// Bug 2 guard: comment-json's `__extends` feature test. The object-literal
 /// `{ __proto__: [] }` routes through the same cycle walk with an exotic
 /// receiver whose getPrototypeOf reports undefined mid-walk; undefined must

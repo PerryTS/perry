@@ -486,29 +486,69 @@ unsafe fn call_vtable_method_inner(
     // `(number).forEach is not a function`. The synthesized-`arguments` slot
     // holds ALL passed args; a user rest slot holds only args from the rest
     // position onward (so `method(a, ...rest)` keeps `a` positional).
+    // Root the receiver and supplied arguments before allocating either
+    // trailing array. Handles are re-read after a copying collection.
+    let dispatch_scope = crate::gc::RuntimeHandleScope::new();
+    let needs_packed_args = has_synthetic_arguments || has_rest;
+    let this_handle = needs_packed_args.then(|| dispatch_scope.root_nanbox_f64(this_f64));
+    let explicit_private_brand_handle = if needs_packed_args {
+        explicit_private_brand.map(|value| dispatch_scope.root_nanbox_f64(value))
+    } else {
+        None
+    };
+
+    // A user rest parameter and the hidden `arguments` parameter are distinct
+    // ABI slots. A method containing both lowers as
+    // `[fixed..., user_rest, synthetic_arguments]`: the first array contains
+    // only the tail after the fixed formals, while the second contains every
+    // supplied argument. Treating the flags as mutually exclusive bound the
+    // first scalar argument directly to `user_rest`.
     let adjusted_args_storage: Option<Vec<f64>>;
-    let (call_args_ptr, call_args_len) = if has_synthetic_arguments || has_rest {
-        let visible_params = (param_count as usize).saturating_sub(1);
-        let pack_start = if has_synthetic_arguments {
-            0
+    let (call_args_ptr, call_args_len) = if needs_packed_args {
+        let supplied_args: Vec<f64> = (0..args_len)
+            .map(|i| arg_or_undefined(args_ptr, args_len, i))
+            .collect();
+        let supplied_arg_handles = dispatch_scope.root_nanbox_f64_slice(&supplied_args);
+        let trailing_slots = usize::from(has_rest) + usize::from(has_synthetic_arguments);
+        let fixed_params = (param_count as usize).saturating_sub(trailing_slots);
+
+        let user_rest_handle = if has_rest {
+            let refreshed =
+                crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&supplied_arg_handles);
+            let rest_start = fixed_params.min(refreshed.len());
+            Some(
+                dispatch_scope.root_nanbox_f64(crate::closure::build_rest_array(
+                    &refreshed[rest_start..],
+                    false,
+                )),
+            )
         } else {
-            visible_params.min(args_len)
+            None
         };
-        let packed_len = args_len.saturating_sub(pack_start);
-        let raw_args = crate::array::js_array_alloc_with_length(packed_len as u32);
-        for (slot, i) in (pack_start..args_len).enumerate() {
-            crate::array::js_array_set_f64(
-                raw_args,
-                slot as u32,
-                arg_or_undefined(args_ptr, args_len, i),
+
+        let synthetic_arguments_handle = if has_synthetic_arguments {
+            let refreshed =
+                crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&supplied_arg_handles);
+            Some(dispatch_scope.root_nanbox_f64(crate::closure::build_rest_array(&refreshed, true)))
+        } else {
+            None
+        };
+
+        let mut args = Vec::with_capacity(param_count as usize);
+        for i in 0..fixed_params {
+            args.push(
+                supplied_arg_handles
+                    .get(i)
+                    .map(|handle| handle.get_nanbox_f64())
+                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
             );
         }
-        let raw_args_value = crate::value::js_nanbox_pointer(raw_args as i64);
-        let mut args = Vec::with_capacity(param_count as usize);
-        for i in 0..visible_params {
-            args.push(arg_or_undefined(args_ptr, args_len, i));
+        if let Some(handle) = user_rest_handle.as_ref() {
+            args.push(handle.get_nanbox_f64());
         }
-        args.push(raw_args_value);
+        if let Some(handle) = synthetic_arguments_handle.as_ref() {
+            args.push(handle.get_nanbox_f64());
+        }
         adjusted_args_storage = Some(args);
         let adjusted_args = adjusted_args_storage.as_ref().unwrap();
         (adjusted_args.as_ptr(), adjusted_args.len())
@@ -534,7 +574,14 @@ unsafe fn call_vtable_method_inner(
         param_count,
         MAX_VTABLE_DISPATCH_ARITY
     );
-    let private_brand = explicit_private_brand
+    let this_f64 = this_handle
+        .as_ref()
+        .map(|handle| handle.get_nanbox_f64())
+        .unwrap_or(this_f64);
+    let private_brand = explicit_private_brand_handle
+        .as_ref()
+        .map(|handle| handle.get_nanbox_f64())
+        .or(explicit_private_brand)
         .or_else(|| crate::object::private_evaluation_brand_value(this_f64))
         .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
     let derived_super_depth = crate::object::derived_super_binding_stack_savepoint();

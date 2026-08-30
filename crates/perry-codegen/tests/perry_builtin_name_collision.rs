@@ -86,6 +86,7 @@ fn import_from(source: &str, name: &str, kind: ModuleKind) -> Import {
         module_kind: kind,
         resolved_path: Some(source.to_string()),
         type_only: false,
+        runtime_erased: false,
         is_dynamic: false,
         is_dynamic_target: false,
         is_deferred_require: false,

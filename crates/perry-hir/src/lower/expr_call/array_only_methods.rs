@@ -630,6 +630,32 @@ pub(super) fn try_array_only_methods(
                     || chain_roots_at_stream(ctx, member_obj)
                     || chain_roots_at_builtin_iterator(ctx, member_obj)
                     || is_util_mime_params_receiver(ctx, member_obj);
+                // `entries` / `keys` / `values` are not Array-only names.
+                // Maps, Sets, iterator-like facades, and ordinary user objects
+                // can all provide them. In particular, OpenCode's
+                // `EventManifest.Latest` is a frozen plain object implementing
+                // `ReadonlyMap`; folding `Latest.values()` to `ArrayValues`
+                // makes codegen call `js_array_values_iter_obj` on an
+                // ObjectHeader. Its subsequent iterator-helper chain then
+                // reads the malformed result and spread reports "value is not
+                // iterable" during module initialization.
+                //
+                // Dynamic method dispatch is shape-aware and still reaches the
+                // dense Array helpers for a real array, so specialize only
+                // with positive Array evidence. This mirrors the bare-local
+                // gate in `local_array_methods.rs` instead of reviving the old
+                // any-receiver fallback for property/call receivers.
+                let recv_is_proven_array = matches!(method_name, "entries" | "keys" | "values")
+                    && {
+                        let recv_ty = crate::lower_types::infer_type_from_expr(&member.obj, ctx);
+                        matches!(recv_ty, Type::Array(_) | Type::Tuple(_))
+                            || matches!(
+                                &recv_ty,
+                                Type::Generic { base, .. }
+                                    if base == "Array" || base == "ReadonlyArray"
+                            )
+                            || chain_roots_at_array(ctx, &member.obj)
+                    };
                 // thisArg routing: the dense `Expr::Array<Method>` fast paths
                 // carry only the callback and silently drop a 2nd positional
                 // `thisArg` argument, so `[x].every(cb, thisArg)` ran the
@@ -833,40 +859,24 @@ pub(super) fn try_array_only_methods(
                             callback: Box::new(cb),
                         }));
                     }
-                    // #597: arr.entries() / .keys() / .values() on
-                    // any-typed receivers (`function f(arr: any) { for (const [i,v] of arr.entries()) ... }`).
-                    // Pre-fix this fell through to a generic
-                    // `js_native_call_method` dispatch that returned
-                    // an iterator-shaped object whose `.length` was
-                    // 0 / undefined, so the index-based for-of loop
-                    // (the index lowering at lower_decl.rs:4445)
-                    // saw `__arr_N.length === 0` and ran 0 times.
-                    // The static-Array path already folds at
-                    // line 3966 above; this catch-all extends the
-                    // same fold to dynamic-receiver shapes —
-                    // `js_array_entries` / `_keys` / `_values`
-                    // tolerates non-array receivers (returns empty)
-                    // so the lowered loop's behavior on non-array
-                    // values matches Node's empty-iterator semantics.
-                    // recv_is_class gating preserves user classes
-                    // that happen to expose an `entries` method.
-                    // Drizzle's `dialect.buildInsertQuery` uses
-                    // `for (const [valueIndex, value] of values.entries())`
-                    // where `values` arrives via destructuring of an
-                    // any-typed function param.
+                    // #597: proven arrays keep the direct dense-iterator path.
+                    // Ambiguous receivers use generic method dispatch, which
+                    // selects Array/Map/Set or an own user method by runtime
+                    // shape and therefore preserves iterator-helper results.
                     "entries"
                         if args.is_empty()
                             && !recv_is_class
+                            && recv_is_proven_array
                             && !is_fs_dir_receiver(ctx, &member.obj) =>
                     {
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::ArrayEntries(Box::new(array_expr))));
                     }
-                    "keys" if args.is_empty() && !recv_is_class => {
+                    "keys" if args.is_empty() && !recv_is_class && recv_is_proven_array => {
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::ArrayKeys(Box::new(array_expr))));
                     }
-                    "values" if args.is_empty() && !recv_is_class => {
+                    "values" if args.is_empty() && !recv_is_class && recv_is_proven_array => {
                         let array_expr = lower_expr(ctx, &member.obj)?;
                         return Ok(Ok(Expr::ArrayValues(Box::new(array_expr))));
                     }

@@ -1248,6 +1248,10 @@ impl LoweringContext {
     }
 
     pub(crate) fn register_imported_func(&mut self, local_name: String, original_name: String) {
+        if let Some(&idx) = self.imported_functions_index.get(&local_name) {
+            self.imported_functions[idx].1 = original_name;
+            return;
+        }
         let idx = self.imported_functions.len();
         self.imported_functions_index
             .insert(local_name.clone(), idx);

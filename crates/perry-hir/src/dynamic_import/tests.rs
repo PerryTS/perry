@@ -1003,6 +1003,7 @@ fn named_import(source: &str, imported: &str, local: &str) -> crate::ir::Import 
         module_kind: crate::ir::ModuleKind::NativeCompiled,
         resolved_path: None,
         type_only: false,
+        runtime_erased: false,
         is_dynamic: false,
         is_dynamic_target: false,
         is_deferred_require: false,

@@ -485,6 +485,25 @@ pub(super) fn compile_module_entry(
                 (cn, len, prefix.clone())
             })
             .collect();
+        // `PERRY_DEBUG_INIT` is a startup-order diagnostic, so keep all of its
+        // emitted code in the entry object.  The old implementation put a
+        // `puts("INIT: <prefix>")` in every non-entry module body, which made
+        // enabling the diagnostic invalidate every object in a large source
+        // graph.  OpenCode's 7k-module graph consequently needed a full LLVM
+        // rebuild just to identify one failing initializer.  Parallel to the
+        // eager call list below, these constants let the entry print the next
+        // initializer before dispatching it while every dependency object
+        // remains byte-for-byte reusable.
+        let debug_init_chain: Vec<String> = if std::env::var_os("PERRY_DEBUG_INIT").is_some() {
+            let constants = non_entry_module_prefixes
+                .iter()
+                .map(|prefix| llmod.add_string_constant(&format!("INIT: {}\0", prefix)).0)
+                .collect();
+            llmod.declare_function("puts", I32, &[PTR]);
+            constants
+        } else {
+            Vec::new()
+        };
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
@@ -681,9 +700,12 @@ pub(super) fn compile_module_entry(
                     ],
                 );
             }
-            for prefix in non_entry_module_prefixes {
+            for (index, prefix) in non_entry_module_prefixes.iter().enumerate() {
                 if cross_module.deferred_module_prefixes.contains(prefix) {
                     continue;
+                }
+                if let Some(const_name) = debug_init_chain.get(index) {
+                    blk.call_void("puts", &[(PTR, &format!("@{}", const_name))]);
                 }
                 blk.call_void(&format!("{}__init", prefix), &[]);
             }
@@ -1372,15 +1394,6 @@ pub(super) fn compile_module_entry(
         // only the wrapper above ever calls it, both within this module
         // and across modules via the wrapper's external symbol.
         let init_name = init_body_name;
-        // Debug: emit puts("INIT: <prefix>") at the top of each module init
-        let debug_init_const = if std::env::var("PERRY_DEBUG_INIT").is_ok() {
-            let debug_msg = format!("INIT: {}\0", module_prefix);
-            let (const_name, _) = llmod.add_string_constant(&debug_msg);
-            llmod.declare_function("puts", I32, &[PTR]);
-            Some(const_name)
-        } else {
-            None
-        };
         let ic_base = llmod.ic_counter;
         let buffer_alias_base = llmod.buffer_alias_counter;
         let init_fn = llmod.define_function(&init_name, VOID, vec![]);
@@ -1400,9 +1413,6 @@ pub(super) fn compile_module_entry(
         let _ = init_fn.create_block("entry");
         {
             let blk = init_fn.block_mut(0).unwrap();
-            if let Some(ref cname) = debug_init_const {
-                blk.call_void("puts", &[(PTR, &format!("@{}", cname))]);
-            }
             if write_barriers_enabled() {
                 blk.call_void("js_gc_write_barriers_emitted", &[(I32, "1")]);
             }

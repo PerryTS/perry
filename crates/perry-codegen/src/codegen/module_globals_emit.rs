@@ -137,6 +137,7 @@ fn module_shadows_shared_array_buffer_intrinsic(
             .any(|enum_decl| enum_decl.name == "SharedArrayBuffer")
         || hir.imports.iter().any(|import| {
             !import.type_only
+                && !import.runtime_erased
                 && import.specifiers.iter().any(|specifier| match specifier {
                     perry_hir::ImportSpecifier::Named { local, .. }
                     | perry_hir::ImportSpecifier::Default { local }
@@ -147,7 +148,7 @@ fn module_shadows_shared_array_buffer_intrinsic(
         })
         || imported_classes
             .iter()
-            .any(|class| class.local_alias.as_deref().unwrap_or(&class.name) == "SharedArrayBuffer")
+            .any(|class| class.effective_name() == "SharedArrayBuffer")
 }
 
 /// Emit module-level globals (with exported-var getters) and static-class-field
@@ -602,7 +603,7 @@ pub(crate) fn emit_module_globals(
     // (external_globals_emitted is declared above, shared with the local-class
     // loop, to avoid double-declarations.)
     for ic in imported_classes {
-        let effective_name = ic.local_alias.as_deref().unwrap_or(&ic.name);
+        let effective_name = ic.effective_name();
         // Skip imported-class entries whose source matches this module's
         // prefix — the local-class loop above already emitted the defining
         // global. Re-declaring as external would produce a duplicate-symbol
@@ -612,7 +613,7 @@ pub(crate) fn emit_module_globals(
             // Still register in the static_field_globals map so HIR lookups
             // by the imported alias resolve to the local definition.
             for sf_name in &ic.static_field_names {
-                let key = (effective_name.to_string(), sf_name.clone());
+                let key = (effective_name.clone(), sf_name.clone());
                 static_field_globals.entry(key).or_insert_with(|| {
                     let global_name = format!(
                         "perry_static_{}__{}__{}",
@@ -644,10 +645,10 @@ pub(crate) fn emit_module_globals(
             // Register under both the alias (if any) and the source name so
             // either resolves.
             static_field_globals.insert(
-                (effective_name.to_string(), sf_name.clone()),
+                (effective_name.clone(), sf_name.clone()),
                 global_name.clone(),
             );
-            if effective_name != ic.name {
+            if ic.namespace.is_none() && effective_name != ic.name {
                 static_field_globals.insert((ic.name.clone(), sf_name.clone()), global_name);
             }
         }

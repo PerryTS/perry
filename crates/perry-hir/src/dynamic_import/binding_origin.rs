@@ -34,7 +34,7 @@ fn defines_local_binding(module: &Module, name: &str) -> bool {
 /// Native imports are excluded because their source has no compiled HIR owner.
 fn find_import_binding(module: &Module, name: &str) -> Option<(String, ImportBindingKind)> {
     for import in &module.imports {
-        if import.type_only || import.is_native {
+        if import.type_only || import.runtime_erased || import.is_native {
             continue;
         }
         for spec in &import.specifiers {

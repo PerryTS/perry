@@ -1045,8 +1045,39 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
             return;
         }
         // The closure body is a `Vec<Stmt>` the expr walker does not descend.
-        Expr::Closure { body, .. } => {
+        //
+        // A closure nested in a module/function body owns its own parameter
+        // scope. When a parameter is the shared class capture, rewriting its
+        // reads to `param[0]` is only valid after replacing the incoming value
+        // with the one-element cell at closure entry. The top-level Function
+        // path above already did this, but nested arrow/function expressions
+        // did not: `const make = (options?) => { class C { m() { return
+        // options.x } } }` dereferenced `undefined[0]` before optional chaining
+        // could short-circuit. Mirror the Function treatment here and insert
+        // the wrapper only after rewriting the original body, so its initializer
+        // remains the incoming scalar value rather than `param[0]`.
+        Expr::Closure { params, body, .. } => {
+            let shared_params: Vec<LocalId> = params
+                .iter_mut()
+                .filter_map(|param| {
+                    if index_uses.contains(&param.id) {
+                        param.ty = Type::Any;
+                        Some(param.id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
             rewrite_stmts(body, shared, index_uses);
+            for id in shared_params.into_iter().rev() {
+                body.insert(
+                    0,
+                    Stmt::Expr(Expr::LocalSet(
+                        id,
+                        Box::new(Expr::Array(vec![Expr::LocalGet(id)])),
+                    )),
+                );
+            }
             // Param defaults are still visited by walk_expr_children_mut below.
         }
         _ => {}

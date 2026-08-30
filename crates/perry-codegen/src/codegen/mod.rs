@@ -242,7 +242,8 @@ pub(crate) use helpers::{
     module_callable_count, set_full_outline_ic, write_barriers_enabled,
 };
 pub use opts::{
-    AppMetadata, CompileOptions, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
+    namespace_member_class_key, namespace_member_func_key, namespace_member_var_key, AppMetadata,
+    CompileOptions, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
     ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry, NamespaceEntryKind,
     ObjectLiteralMethodCandidate, ShortSpreadMethodCandidate,
 };
@@ -597,10 +598,26 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         let class_id = ic
             .source_class_id
             .unwrap_or_else(|| next_class_id + (idx as u32));
-        let effective_name = ic.local_alias.as_deref().unwrap_or(&ic.name);
+        let effective_name = ic.effective_name();
+        let exported_name = ic.local_alias.as_deref().unwrap_or(&ic.name);
+
+        // Namespace member class identity must be scoped to the namespace.
+        // A flat `class_ids[member]` lookup lets a class exported by one
+        // namespace hijack an equal-named value/function in another (Effect's
+        // SchemaAST.Boolean class versus Schema.Boolean schema value). The
+        // driver already resolved every member to its origin prefix, and an
+        // ImportedClass carries that same prefix plus its consumer-visible
+        // alias, so record the exact `(namespace, member)` identity here.
+        for ((namespace, member), source_prefix) in &opts.namespace_member_prefixes {
+            if source_prefix == &ic.source_prefix && member == exported_name {
+                class_ids
+                    .entry(namespace_member_class_key(namespace, member))
+                    .or_insert(class_id);
+            }
+        }
 
         // Skip if already defined locally (local definition takes precedence).
-        if class_table.contains_key(effective_name) {
+        if class_table.contains_key(&effective_name) {
             // Issue #26 / #321: a locally-shadowed import is still needed for
             // *parent resolution* of OTHER imported classes. Effect's
             // ParseResult.ts declares its own local `class Type`
@@ -614,7 +631,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // can find it WITHOUT polluting the name-keyed dispatch maps.
             if !ic.field_names.is_empty() || ic.parent_name.is_some() {
                 shadowed_parent_stubs.push((
-                    effective_name.to_string(),
+                    effective_name.clone(),
                     ic.source_prefix.clone(),
                     ic.parent_name.clone(),
                     ic.field_names
@@ -644,11 +661,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // must agree, otherwise the method registry builds symbols mixing
         // the FIRST writer's methods with the LAST writer's prefix +
         // canonical name, producing fnames the linker can't resolve.
-        class_ids
-            .entry(effective_name.to_string())
-            .or_insert(class_id);
-        // Also register the canonical name if aliased.
-        if ic.local_alias.is_some() && !class_ids.contains_key(&ic.name) {
+        class_ids.entry(effective_name.clone()).or_insert(class_id);
+        // A lexical alias also exposes the canonical binding for legacy
+        // source-name lookups. Namespace members do not: `ns.Service` must
+        // never claim the unrelated bare `Service` binding in this module.
+        if ic.namespace.is_none() && ic.local_alias.is_some() && !class_ids.contains_key(&ic.name) {
             class_ids.insert(ic.name.clone(), class_id);
         }
 
@@ -703,7 +720,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // their names here keeps dispatch and field inference conservative.
         let stub = perry_hir::Class {
             id: 0, // imported — no local ClassId
-            name: effective_name.to_string(),
+            name: effective_name.clone(),
             // #6812: width hints don't cross module metadata; imported stubs
             // fall back to runtime learned sizing.
             alloc_width_hint: 0,
@@ -713,7 +730,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             specialized_from: None,
             type_params: Vec::new(),
             extends: None,
-            extends_name: ic.parent_name.clone(),
+            extends_name: ic.effective_parent_name(),
             native_extends: None,
             extends_expr: None,
             heritage_lexically_shadowed: false,
@@ -979,8 +996,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // method-registry loop below recover the source name.
     let mut imported_class_source_name: HashMap<String, String> = HashMap::new();
     for ic in &opts.imported_classes {
-        let effective_name = ic.local_alias.as_deref().unwrap_or(&ic.name);
-        if hir.classes.iter().any(|c| c.name == *effective_name) {
+        let effective_name = ic.effective_name();
+        if hir.classes.iter().any(|c| c.name == effective_name) {
             continue;
         }
         // Refs #665: first-writer-wins to match `class_table`'s
@@ -993,11 +1010,11 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         // method symbols mangled under the wrong class — the linker can't
         // resolve them and the build fails with "undefined value".
         imported_class_prefix
-            .entry(effective_name.to_string())
+            .entry(effective_name.clone())
             .or_insert_with(|| ic.source_prefix.clone());
         if effective_name != ic.name {
             imported_class_source_name
-                .entry(effective_name.to_string())
+                .entry(effective_name)
                 .or_insert_with(|| ic.name.clone());
         }
     }
@@ -1619,13 +1636,15 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         }
     }
     for ic in &opts.imported_classes {
-        let effective_name = ic.local_alias.as_deref().unwrap_or(&ic.name).to_string();
+        let effective_name = ic.effective_name();
         for (i, mname) in ic.method_names.iter().enumerate() {
             // Default to 0 if the source side hasn't populated method_param_counts
             // yet (legacy ImportedClass with no parallel Vec). 0 means "no padding".
             let count = ic.method_param_counts.get(i).copied().unwrap_or(0);
             // Register under the canonical class name and the local alias if any.
-            method_param_counts.insert((ic.name.clone(), mname.clone()), count);
+            if ic.namespace.is_none() {
+                method_param_counts.insert((ic.name.clone(), mname.clone()), count);
+            }
             if effective_name != ic.name {
                 method_param_counts.insert((effective_name.clone(), mname.clone()), count);
             }
@@ -1635,7 +1654,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             // args either dropped or silently spread into the next slot —
             // `c.cmd("SET", "k", "v")` reached the callee as `args = "k"`.
             if ic.method_has_rest.get(i).copied().unwrap_or(false) {
-                method_has_rest.insert((ic.name.clone(), mname.clone()), true);
+                if ic.namespace.is_none() {
+                    method_has_rest.insert((ic.name.clone(), mname.clone()), true);
+                }
                 if effective_name != ic.name {
                     method_has_rest.insert((effective_name.clone(), mname.clone()), true);
                 }
@@ -1646,7 +1667,9 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 .copied()
                 .unwrap_or(false)
             {
-                method_has_synthetic_arguments.insert((ic.name.clone(), mname.clone()), true);
+                if ic.namespace.is_none() {
+                    method_has_synthetic_arguments.insert((ic.name.clone(), mname.clone()), true);
+                }
                 if effective_name != ic.name {
                     method_has_synthetic_arguments
                         .insert((effective_name.clone(), mname.clone()), true);
@@ -1668,12 +1691,16 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         for (i, method_name) in ic.static_method_names.iter().enumerate() {
             let registry_name = static_method_registry_key(method_name);
             let count = ic.static_method_param_counts.get(i).copied().unwrap_or(0);
-            method_param_counts.insert((ic.name.clone(), registry_name.clone()), count);
+            if ic.namespace.is_none() {
+                method_param_counts.insert((ic.name.clone(), registry_name.clone()), count);
+            }
             if effective_name != ic.name {
                 method_param_counts.insert((effective_name.clone(), registry_name.clone()), count);
             }
             if ic.static_method_has_rest.get(i).copied().unwrap_or(false) {
-                method_has_rest.insert((ic.name.clone(), registry_name.clone()), true);
+                if ic.namespace.is_none() {
+                    method_has_rest.insert((ic.name.clone(), registry_name.clone()), true);
+                }
                 if effective_name != ic.name {
                     method_has_rest.insert((effective_name.clone(), registry_name.clone()), true);
                 }
@@ -1684,8 +1711,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
                 .copied()
                 .unwrap_or(false)
             {
-                method_has_synthetic_arguments
-                    .insert((ic.name.clone(), registry_name.clone()), true);
+                if ic.namespace.is_none() {
+                    method_has_synthetic_arguments
+                        .insert((ic.name.clone(), registry_name.clone()), true);
+                }
                 if effective_name != ic.name {
                     method_has_synthetic_arguments
                         .insert((effective_name.clone(), registry_name), true);
@@ -2069,11 +2098,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // The tower subset is producer-authored because only the defining module
     // can see enough of the body to price its additional keys-token check.
     for imported in &opts.imported_classes {
-        let effective_name = imported
-            .local_alias
-            .as_deref()
-            .unwrap_or(&imported.name)
-            .to_string();
+        let effective_name = imported.effective_name();
         if hir.classes.iter().any(|class| class.name == effective_name) {
             continue;
         }
@@ -2413,10 +2438,10 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
             .imported_classes
             .iter()
             .map(|ic| {
-                let effective_name = ic.local_alias.as_deref().unwrap_or(&ic.name);
+                let effective_name = ic.effective_name();
                 let ctor_name = format!("{}__{}_constructor", ic.source_prefix, ic.name);
                 (
-                    effective_name.to_string(),
+                    effective_name,
                     ImportedCtor {
                         symbol: ctor_name,
                         param_count: ic.constructor_param_count,

@@ -302,7 +302,10 @@ pub fn try_lower_namespace_member_call(
         property,
     );
     let symbol = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
-    if ctx.imported_vars.contains(property) {
+    if ctx
+        .imported_vars
+        .contains(&crate::namespace_member_var_key(ns_name, property))
+    {
         // Var-shaped export: fetch closure via zero-arg
         // getter, then closure-call with the user args.
         ctx.pending_declares.push((symbol.clone(), DOUBLE, vec![]));
@@ -378,12 +381,19 @@ pub fn try_lower_namespace_member_call(
         return Ok(Some(result));
     }
     // Function-decl-shaped export: direct call with rest bundling.
-    let declared_count = ctx
+    let scoped_func_key = crate::namespace_member_func_key(ns_name, property);
+    let scoped_declared_count = ctx
         .imported_func_param_counts
-        .get(property)
-        .copied()
+        .get(&scoped_func_key)
+        .copied();
+    let declared_count = scoped_declared_count
+        .or_else(|| ctx.imported_func_param_counts.get(property).copied())
         .unwrap_or(args.len());
-    let has_rest = ctx.imported_func_has_rest.contains(property);
+    let has_rest = if scoped_declared_count.is_some() {
+        ctx.imported_func_has_rest.contains(&scoped_func_key)
+    } else {
+        ctx.imported_func_has_rest.contains(property)
+    };
     if has_rest {
         // #7154's accumulator shape, verbatim: `current` was a raw
         // `*mut ArrayHeader` in a bare SSA register holding the only reference

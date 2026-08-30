@@ -486,6 +486,7 @@ fn imported_remote() -> ImportedClass {
     ImportedClass {
         name: "Remote".to_string(),
         local_alias: None,
+        namespace: None,
         source_prefix: "producer_ts".to_string(),
         constructor_param_count: 1,
         has_own_constructor: true,

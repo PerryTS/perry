@@ -163,3 +163,40 @@ fn shared_mutable_method_writes() {
     );
     assert_eq!(out, "1 2\n");
 }
+
+/// A top-level arrow lives as a closure inside the module initializer rather
+/// than in `module.functions`. Its optional parameter's synthesized default
+/// assignment makes the class-capture pass conservatively treat the binding as
+/// mutable. The pass must create the same one-element cell at closure entry
+/// before rewriting reads to `options[0]`.
+#[test]
+fn nested_arrow_optional_parameter_capture_is_boxed_at_entry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = run(
+        dir.path(),
+        r#"
+const make = (
+  tag: string,
+  options?: {
+    success?: number
+    primaryKey?: (value: object) => string
+  }
+) => {
+  const success = options?.success ?? 7
+  let payload: unknown
+  if (options?.primaryKey) {
+    payload = class Payload {
+      key(): string {
+        return options.primaryKey!({})
+      }
+    }
+  }
+  return tag + ":" + success
+}
+
+console.log(make("Ping"))
+console.log(make("Pong", { success: 3 }))
+"#,
+    );
+    assert_eq!(out, "Ping:7\nPong:3\n");
+}

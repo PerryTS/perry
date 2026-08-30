@@ -45,7 +45,7 @@ pub(super) fn synthesized_ctor_param_count(
     while let Some(pname) = cur {
         let imported_ctor_params = imported_classes
             .iter()
-            .find(|i| i.local_alias.as_deref().unwrap_or(&i.name) == pname.as_str())
+            .find(|i| i.effective_name() == pname)
             .map(|ic| ic.constructor_param_count)
             .unwrap_or(0);
         if let Some(pclass) = class_table.get(pname.as_str()) {
