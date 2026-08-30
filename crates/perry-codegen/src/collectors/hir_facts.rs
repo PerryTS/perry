@@ -991,6 +991,27 @@ fn is_owned_u8_buffer_alloc(expr: &Expr, known_length_locals: &HashSet<u32>) -> 
 fn is_fresh_uint8array_length_expr(expr: &Expr, known_length_locals: &HashSet<u32>) -> bool {
     match expr {
         Expr::LocalGet(id) => known_length_locals.contains(id),
+        // `new Uint8Array(SIZE * SIZE)` — a fixed arithmetic combination of
+        // literals and known-length locals is exactly as fixed as either leaf
+        // on its own, and this predicate asks only whether the allocation's
+        // SIZE is fixed, never what it is (`length_source_from_expr` resolves
+        // the value later, with a `FnCtx` in hand, and simply records no
+        // constant length when it cannot).
+        //
+        // Rejecting the product cost the whole buffer-view tier for the
+        // receiver: no view means no inline element load, so every read paid a
+        // `js_uint8array_index_get_value` call —
+        // `benchmarks/suite/bench_int_arithmetic.ts` allocates exactly this way
+        // and spent 54 calls per pixel because of it.
+        Expr::Binary { op, left, right }
+            if matches!(
+                op,
+                perry_hir::BinaryOp::Add | perry_hir::BinaryOp::Sub | perry_hir::BinaryOp::Mul
+            ) =>
+        {
+            is_fresh_uint8array_length_expr(left, known_length_locals)
+                && is_fresh_uint8array_length_expr(right, known_length_locals)
+        }
         _ => is_fresh_uint8array_length_literal(expr),
     }
 }
