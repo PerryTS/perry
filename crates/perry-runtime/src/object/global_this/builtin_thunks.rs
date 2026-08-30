@@ -407,14 +407,28 @@ pub(crate) extern "C" fn global_this_error_is_error_thunk(
 /// `fn`. Unrecognized templates fall back to a non-callable placeholder object
 /// (prior behavior); there is no general eval.
 #[no_mangle]
-// This is a generated-code boundary and the dyn-eval-off refusal below starts
-// a JS unwind to the caller's catch landing pad. A plain `extern "C"` installs
-// an abort-on-unwind guard in debug/static runtimes, turning zod's harmless
-// `new Function("")` capability probe into a process abort (#8958).
+// This generated-code boundary needs different ABI spellings for Perry's two
+// panic strategies. Test/debug runtimes use panic=unwind, where plain `C`
+// installs an RFC-2945 abort guard; `C-unwind` keeps the dyn-eval-off refusal
+// catchable (#8958). Shipping runtimes use panic=abort, where the inverse is
+// true for a raw Perry exception passing through this frame (#8479): marking
+// the frame `C-unwind` installs the guard that aborts an unsupported dyn-eval
+// construct before the generated catch landing pad can receive it (#9207).
+#[cfg(not(panic = "abort"))]
 pub extern "C-unwind" fn js_function_ctor_from_strings(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    js_function_ctor_from_strings_impl(args_ptr, args_len)
+}
+
+#[no_mangle]
+#[cfg(panic = "abort")]
+pub extern "C" fn js_function_ctor_from_strings(args_ptr: *const f64, args_len: usize) -> f64 {
+    js_function_ctor_from_strings_impl(args_ptr, args_len)
+}
+
+fn js_function_ctor_from_strings_impl(args_ptr: *const f64, args_len: usize) -> f64 {
     let arg_str = |i: usize| -> String {
         if i >= args_len || args_ptr.is_null() {
             return String::new();
@@ -517,13 +531,23 @@ extern "C" fn depd_wrapfunction_outer_thunk(
 
 #[cfg(feature = "keepalive-anchors")]
 #[used]
+#[cfg(not(panic = "abort"))]
 static KEEP_JS_FUNCTION_CTOR_FROM_STRINGS: extern "C-unwind" fn(*const f64, usize) -> f64 =
     js_function_ctor_from_strings;
 
-// Keep the unwind-capable ABI checked even in stripped builds that omit the
-// keepalive anchor: this helper conditionally originates, rather than merely
-// passes through, a raw Perry exception.
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+#[cfg(panic = "abort")]
+static KEEP_JS_FUNCTION_CTOR_FROM_STRINGS: extern "C" fn(*const f64, usize) -> f64 =
+    js_function_ctor_from_strings;
+
+// Keep the panic-strategy-specific ABI checked even in stripped builds that
+// omit the keepalive anchor.
+#[cfg(not(panic = "abort"))]
 const _: extern "C-unwind" fn(*const f64, usize) -> f64 = js_function_ctor_from_strings;
+
+#[cfg(panic = "abort")]
+const _: extern "C" fn(*const f64, usize) -> f64 = js_function_ctor_from_strings;
 
 /// #2904: `Error.prepareStackTrace` default — Node leaves a hook here that
 /// formats the stack from structured frames. Perry's stack strings are
