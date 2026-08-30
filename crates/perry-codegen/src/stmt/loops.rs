@@ -4103,6 +4103,13 @@ fn lower_object_array_write_versioned_for(
 
     let fast_call_free = (fast_scan_start..ctx.func.num_blocks())
         .all(|idx| !ctx.func.blocks()[idx].contains_gc_unsafe_call());
+    if !fast_call_free {
+        // Reached when the matcher ADMITTED the loop but an emitted block in
+        // the clone carries a call, so the clone is built and never entered.
+        // That is invisible from the matcher's own rejection reasons, which is
+        // why it gets its own trace line.
+        let _ = packed_loop_reject("fast_clone_not_call_free");
+    }
     ctx.current_block = preheader_idx;
     let mut guard_ok = ctx.block().icmp_ne(I64, &packed_slots, "0");
     for (g_packed, _) in &extra_guards {
@@ -4753,6 +4760,22 @@ fn record_loop_array_length_effect(
     );
 }
 
+/// Diagnostic for `match_packed_f64_versioned_loop`'s rejection points.
+///
+/// The admission decision is a chain of independent conditions, and when a loop
+/// unexpectedly stays on the generic path there is no way to tell WHICH one
+/// declined it by reading the code — three separate attempts on #9151 each
+/// found a different gate by guessing. `PERRY_PACKED_LOOP_TRACE=1` prints the
+/// reason instead, turning that into one run.
+fn packed_loop_reject(reason: &'static str) -> Option<PackedF64VersionedLoop> {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    if *ON.get_or_init(|| std::env::var("PERRY_PACKED_LOOP_TRACE").as_deref() == Ok("1")) {
+        eprintln!("[packed-loop] rejected: {reason}");
+    }
+    None
+}
+
 fn match_packed_f64_versioned_loop(
     ctx: &FnCtx<'_>,
     init: Option<&perry_hir::Stmt>,
@@ -4761,7 +4784,7 @@ fn match_packed_f64_versioned_loop(
     body: &[Stmt],
 ) -> Option<PackedF64VersionedLoop> {
     if !ctx.pending_labels.is_empty() {
-        return None;
+        return packed_loop_reject("pending_labels");
     }
     let ordinary_hoist =
         condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body));
@@ -4769,13 +4792,13 @@ fn match_packed_f64_versioned_loop(
         condition.and_then(|cond| classify_for_length_hoist_impl(ctx, cond, update, body, true))
     })?;
     if !matches!(hoist.op, perry_hir::CompareOp::Lt) || hoist.lhs_addend != 0 {
-        return None;
+        return packed_loop_reject("compare_op_not_lt");
     }
     if !ctx.integer_locals.contains(&hoist.counter_id)
         || !loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
         || !loop_counter_entry_i32_range_is_safe(init, hoist.counter_id)
     {
-        return None;
+        return packed_loop_reject("counter_not_integer");
     }
     let store_array_kind =
         supported_packed_numeric_loop_store_kind(ctx, body, hoist.arr_id, hoist.counter_id);
@@ -4794,7 +4817,7 @@ fn match_packed_f64_versioned_loop(
     // loop; call-free read bodies now qualify by the argument above. Every
     // other body keeps the ordinary materialization-hazard gate.
     if ordinary_hoist.is_none() && store_array_kind.is_none() && !read_body_is_safe {
-        return None;
+        return packed_loop_reject("body_not_admissible");
     }
     let binding_is_eligible = if store_array_kind.is_some() || read_body_is_safe {
         // A helper call that produced the binding marks it with the
@@ -4809,7 +4832,7 @@ fn match_packed_f64_versioned_loop(
         packed_loop_array_binding_is_eligible(ctx, hoist.arr_id)
     };
     if !binding_is_eligible {
-        return None;
+        return packed_loop_reject("binding_not_eligible");
     }
     let array_kind = if let Some(store_array_kind) = store_array_kind {
         // The accepted store body is exactly `arr[i] = <numeric expression>`
@@ -4837,14 +4860,14 @@ fn match_packed_f64_versioned_loop(
         // non-packed array fails the guard into the slow clone.)
         PackedNumericLoopKind::F64
     } else {
-        return None;
+        return packed_loop_reject("array_kind_unknown");
     };
     if !local_is_number_array(ctx, hoist.arr_id) {
-        return None;
+        return packed_loop_reject("guard_emit_declined");
     }
     let body_is_supported = store_array_kind.is_some() || read_body_is_safe;
     if !body_is_supported {
-        return None;
+        return packed_loop_reject("clone_not_call_free");
     }
     Some(PackedF64VersionedLoop {
         counter_id: hoist.counter_id,
