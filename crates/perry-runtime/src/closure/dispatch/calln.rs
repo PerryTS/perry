@@ -10,8 +10,25 @@
 use super::*;
 
 /// Call a closure with 0 arguments, returning f64
+#[cfg(panic = "abort")]
 #[no_mangle]
 pub extern "C" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
+    js_closure_call0_impl(closure)
+}
+
+/// Test/debug builds use Rust unwinding for JS exceptions. Keep this entry
+/// point unwind-capable there so an interpreted throw can reach a generated
+/// caller's catch landing pad. Production builds use the plain-C definition
+/// above because their raw Itanium exceptions must cross it without Rust's
+/// abort-on-unwind guard (#8479).
+#[cfg(not(panic = "abort"))]
+#[no_mangle]
+pub extern "C-unwind" fn js_closure_call0(closure: *const ClosureHeader) -> f64 {
+    js_closure_call0_impl(closure)
+}
+
+#[inline(always)]
+fn js_closure_call0_impl(closure: *const ClosureHeader) -> f64 {
     let func_ptr = get_valid_func_ptr(closure);
     if func_ptr.is_null() {
         return dispatch_proxy_callee_or_throw(closure, &[]);
