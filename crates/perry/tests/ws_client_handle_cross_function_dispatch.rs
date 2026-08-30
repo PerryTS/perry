@@ -73,12 +73,20 @@ fn ir_has_call(ir: &str, symbol: &str) -> bool {
         .any(|l| l.contains("call ") && l.contains(&needle))
 }
 
-/// Number of `call` instructions targeting `@<symbol>`.
-fn ir_call_count(ir: &str, symbol: &str) -> usize {
-    let needle = format!("@{symbol}(");
-    ir.lines()
-        .filter(|l| l.contains("call ") && l.contains(&needle))
-        .count()
+fn run_compiled(dir: &Path) -> String {
+    let output = dir.join("main_bin");
+    let run = Command::new(&output)
+        .current_dir(dir)
+        .output()
+        .expect("run compiled binary");
+    assert!(
+        run.status.success(),
+        "compiled binary failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    String::from_utf8_lossy(&run.stdout).into_owned()
 }
 
 fn compile_and_run(dir: &Path, source: &str) -> String {
@@ -99,18 +107,7 @@ fn compile_and_run(dir: &Path, source: &str) -> String {
         String::from_utf8_lossy(&compile.stdout),
         String::from_utf8_lossy(&compile.stderr)
     );
-    let run = Command::new(&output)
-        .current_dir(dir)
-        .output()
-        .expect("run compiled binary");
-    assert!(
-        run.status.success(),
-        "compiled binary failed\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",
-        run.status,
-        String::from_utf8_lossy(&run.stdout),
-        String::from_utf8_lossy(&run.stderr)
-    );
-    String::from_utf8_lossy(&run.stdout).into_owned()
+    run_compiled(dir)
 }
 
 /// The reported failure: the ONLY `wsId.send` is inside a helper reached as
@@ -345,8 +342,9 @@ server.listen(0, () => {});
 
 /// Review #1: two functions named `pushFrame` — only the upgrade-fed top-level
 /// declaration is tagged; a same-named nested declaration receiving a non-ws
-/// value is keyed by a distinct identity and left untouched (exactly one Client
-/// dispatch in the module).
+/// value is keyed by a distinct identity and left untouched. Do not count
+/// module-wide runtime calls here: specialization may legitimately emit both a
+/// specialized and generic copy of the top-level call (#9138).
 #[test]
 fn same_named_function_is_not_cross_tagged() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -362,22 +360,25 @@ function elsewhere() {
   function pushFrame(x: any) {
     x.send("nope");
   }
-  pushFrame({ send(s: string) { console.log(s); } });
+  pushFrame({ send(s: string) { console.log("nested-own-send:" + s); } });
 }
 
 const server = createServer((req: any, res: any) => { res.statusCode = 200; res.end("ok"); });
 server.on("upgrade", (req: any, wsId: any, _head: any) => {
   pushFrame(wsId, "real");
-  elsewhere();
 });
-server.listen(0, () => {});
+elsewhere();
 "#,
     );
-    assert_eq!(
-        ir_call_count(&ir, "js_ws_send_client_i64"),
-        1,
-        "only the upgrade-fed `pushFrame` dispatches to the Client runtime, not \
-         the same-named nested declaration"
+    assert!(
+        ir_has_call(&ir, "js_ws_send_client_i64"),
+        "the upgrade-fed top-level `pushFrame` must dispatch to the Client runtime"
+    );
+    let out = run_compiled(dir.path());
+    assert!(
+        out.contains("nested-own-send:nope"),
+        "the same-named nested declaration must call the plain object's own \
+         `send` method, not the Client runtime (got: {out:?})"
     );
 }
 
