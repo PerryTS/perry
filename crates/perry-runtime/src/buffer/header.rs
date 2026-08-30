@@ -408,9 +408,23 @@ pub extern "C" fn js_buffer_register_external(addr: usize) {
 #[no_mangle]
 pub extern "C" fn js_buffer_mark_as_uint8array_external(addr: usize) {
     mark_as_uint8array(addr);
-    // Latch BEFORE the insert, matching `js_buffer_register_external`: a
-    // probe that observed the latch after the insert-but-before-the-store
-    // window would skip the mutex and miss an already-registered address.
+    register_external_uint8array(addr);
+}
+
+/// Insert into the process-global external-Uint8Array registry, arming
+/// `EXTERNAL_UINT8ARRAYS_NONEMPTY` first.
+///
+/// Latch BEFORE the insert, matching `js_buffer_register_external`: a probe
+/// that observed the latch in the insert-but-before-the-store window would
+/// skip the mutex and miss an already-registered address.
+///
+/// Both inserters go through here on purpose. `is_uint8array_buffer_slow`
+/// now consults that global map ONLY when the latch is armed, so a path that
+/// inserts without arming makes the map invisible — the entry is there and
+/// the probe answers "no". That is not hypothetical: this registry is global
+/// precisely so an address registered on one thread is visible from another,
+/// and the thread-local set that would otherwise cover it is not.
+fn register_external_uint8array(addr: usize) {
     EXTERNAL_UINT8ARRAYS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
     if let Ok(mut r) = external_uint8arrays().lock() {
         r.insert(addr);
@@ -478,9 +492,7 @@ pub extern "C" fn js_buffer_mark_as_crypto_key_external(
     if let Ok(mut r) = external_buffers().lock() {
         r.insert(addr);
     }
-    if let Ok(mut r) = external_uint8arrays().lock() {
-        r.insert(addr);
-    }
+    register_external_uint8array(addr);
     if let Ok(mut r) = external_crypto_keys().lock() {
         r.insert(
             addr,

@@ -22,6 +22,9 @@ mod exotic_view;
 mod exotic_view_tests;
 mod from;
 mod header;
+/// #9176: the external-Uint8Array latch must be armed by every inserter.
+#[cfg(test)]
+mod header_latch_tests;
 mod iter;
 mod mutate;
 mod numeric;
