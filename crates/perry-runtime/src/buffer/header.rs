@@ -21,7 +21,7 @@ fn buffer_payload_size(capacity: usize) -> usize {
 /// Since BufferHeader has the same layout as ArrayHeader (no type_id field),
 /// we track buffer pointers separately to distinguish them from arrays.
 use crate::fast_hash::{new_ptr_hash_map, new_ptr_hash_set, PtrHashMap, PtrHashSet};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
@@ -33,6 +33,15 @@ static EXTERNAL_BUFFER_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new
 static EXTERNAL_BUFFERS_NONEMPTY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static EXTERNAL_UINT8ARRAY_REGISTRY: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+/// Latched by the first external Uint8Array registration, exactly as
+/// `EXTERNAL_BUFFERS_NONEMPTY` does for buffers.
+///
+/// Without it `is_uint8array_buffer_slow` took the global mutex on every
+/// thread-local MISS — that is, on every value that is not a Uint8Array —
+/// which is the cost `UINT8ARRAY_EVER_MARKED` was added to avoid and which
+/// came straight back the moment any program marked its first Uint8Array.
+static EXTERNAL_UINT8ARRAYS_NONEMPTY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 static EXTERNAL_CRYPTO_KEY_META_REGISTRY: OnceLock<Mutex<HashMap<usize, CryptoKeyMeta>>> =
     OnceLock::new();
 
@@ -78,6 +87,22 @@ pub type CryptoKeyMeta = (u8, u8, u8, bool, u32, u32);
 
 crate::perry_thread_local! {
     static BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+
+    /// Smallest and largest address ever inserted into `BUFFER_REGISTRY` on
+    /// this thread, as a conservative filter in front of the hash lookup.
+    ///
+    /// The latch above answers "has anything EVER been registered?", which
+    /// stops being useful the moment a program registers its first buffer —
+    /// after that all ~216 probe sites pay a TLS access, a `RefCell` borrow
+    /// and a hash lookup to ask whether an arbitrary pointer is a buffer, and
+    /// almost every caller is asking about something that is not one.
+    ///
+    /// The range only ever widens and every registration extends it before
+    /// inserting, so an address outside it cannot be in the set: rejecting is
+    /// sound, and accepting merely falls through to the lookup that was
+    /// already there. Thread-local like the registry it guards, so there is
+    /// no ordering to reason about.
+    static BUFFER_ADDR_RANGE: Cell<(usize, usize)> = const { Cell::new((usize::MAX, 0)) };
     /// `BufferHeader` wrappers whose bytes live in memory owned by native
     /// code. The wrapper itself is an ordinary, non-moving GC object; only
     /// its data pointer is external. `bun:ffi.toArrayBuffer`/`toBuffer` use
@@ -87,6 +112,10 @@ crate::perry_thread_local! {
     /// Buffers that were specifically created via `new Uint8Array(...)` —
     /// formatted as `Uint8Array(N) [ a, b, c ]` instead of `<Buffer aa bb cc>`.
     static UINT8ARRAY_FROM_CTOR: RefCell<PtrHashSet<usize>> = RefCell::new(new_ptr_hash_set());
+
+    /// Address range of `UINT8ARRAY_FROM_CTOR`, on the same terms as
+    /// `BUFFER_ADDR_RANGE`.
+    static UINT8ARRAY_ADDR_RANGE: Cell<(usize, usize)> = const { Cell::new((usize::MAX, 0)) };
     /// Issue #579: buffers allocated as `new ArrayBuffer(n)` — sources that
     /// `new Uint8Array(ab)` should ALIAS rather than copy. Survives across
     /// `mark_as_uint8array` calls so a second view of the same ArrayBuffer
@@ -276,7 +305,12 @@ pub fn register_buffer(ptr: *const BufferHeader) {
     // this buffer is in the registry while `is_registered_buffer` still takes
     // the idle fast path and denies it. See `crate::registry_latch`.
     BUFFER_LIKE_EVER_REGISTERED.arm();
-    BUFFER_REGISTRY.with(|r| r.borrow_mut().insert(ptr as usize));
+    let addr = ptr as usize;
+    BUFFER_ADDR_RANGE.with(|r| {
+        let (lo, hi) = r.get();
+        r.set((lo.min(addr), hi.max(addr)));
+    });
+    BUFFER_REGISTRY.with(|r| r.borrow_mut().insert(addr));
 }
 
 /// Historical tier boundary, retained for callers that size test fixtures
@@ -306,10 +340,30 @@ pub fn is_registered_buffer(addr: usize) -> bool {
     is_registered_buffer_slow(addr)
 }
 
+/// `PERRY_BUFFER_RANGE_FILTER=0` restores the unconditional hash lookup.
+fn buffer_range_filter_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_BUFFER_RANGE_FILTER").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
 /// Out of line so the idle check inlines into its ~200 call sites.
 #[inline(never)]
 fn is_registered_buffer_slow(addr: usize) -> bool {
-    if BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
+    // Outside the registered range ⟹ not in the thread-local set, so skip the
+    // borrow and the hash. The external and shared-SAB registries below keep
+    // their own gates and are unaffected.
+    let (lo, hi) = if buffer_range_filter_enabled() {
+        BUFFER_ADDR_RANGE.with(|r| r.get())
+    } else {
+        (0, usize::MAX)
+    };
+    if addr >= lo && addr <= hi && BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr)) {
         return true;
     }
     if EXTERNAL_BUFFERS_NONEMPTY.load(std::sync::atomic::Ordering::Acquire)
@@ -330,6 +384,10 @@ fn is_registered_buffer_slow(addr: usize) -> bool {
 /// formats as `Uint8Array(N) [ ... ]` rather than `<Buffer ...>`.
 pub fn mark_as_uint8array(addr: usize) {
     UINT8ARRAY_EVER_MARKED.arm();
+    UINT8ARRAY_ADDR_RANGE.with(|r| {
+        let (lo, hi) = r.get();
+        r.set((lo.min(addr), hi.max(addr)));
+    });
     UINT8ARRAY_FROM_CTOR.with(|r| {
         r.borrow_mut().insert(addr);
     });
@@ -350,6 +408,10 @@ pub extern "C" fn js_buffer_register_external(addr: usize) {
 #[no_mangle]
 pub extern "C" fn js_buffer_mark_as_uint8array_external(addr: usize) {
     mark_as_uint8array(addr);
+    // Latch BEFORE the insert, matching `js_buffer_register_external`: a
+    // probe that observed the latch after the insert-but-before-the-store
+    // window would skip the mutex and miss an already-registered address.
+    EXTERNAL_UINT8ARRAYS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
     if let Ok(mut r) = external_uint8arrays().lock() {
         r.insert(addr);
     }
@@ -505,8 +567,19 @@ pub fn is_uint8array_buffer(addr: usize) -> bool {
 
 #[inline(never)]
 fn is_uint8array_buffer_slow(addr: usize) -> bool {
-    UINT8ARRAY_FROM_CTOR.with(|r| r.borrow().contains(&addr))
-        || external_uint8arrays()
+    let (lo, hi) = if buffer_range_filter_enabled() {
+        UINT8ARRAY_ADDR_RANGE.with(|r| r.get())
+    } else {
+        (0, usize::MAX)
+    };
+    if addr >= lo && addr <= hi && UINT8ARRAY_FROM_CTOR.with(|r| r.borrow().contains(&addr)) {
+        return true;
+    }
+    // Only reach for the global mutex once something has actually been
+    // registered externally. This is the gate `is_registered_buffer_slow`
+    // already had and this probe did not.
+    EXTERNAL_UINT8ARRAYS_NONEMPTY.load(std::sync::atomic::Ordering::Acquire)
+        && external_uint8arrays()
             .lock()
             .map(|r| r.contains(&addr))
             .unwrap_or(false)
