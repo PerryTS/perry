@@ -474,18 +474,27 @@ pub(crate) fn lower_object_literal(
             protect_handle,
             |ctx, obj| {
                 for (i, (_, value_expr)) in props.iter().enumerate() {
-                    if let Expr::Closure {
-                        params: cparams,
-                        body: cbody,
-                        captures: ccaps,
-                        captures_this: true,
-                        ..
-                    } = value_expr
-                    {
-                        let auto_caps = compute_auto_captures(ctx, cparams, cbody, ccaps);
-                        shape_this_patches
-                            .borrow_mut()
-                            .push((i as u32, auto_caps.len() as u32));
+                    // A synthesized generator iterator's `{ next, return,
+                    // throw }` closures already capture the generator
+                    // invocation's lexical `this`. Rebinding that reserved
+                    // slot to the iterator object makes `this.method()` inside
+                    // a class generator dispatch against the iterator instead
+                    // of the class instance (#9155). Ordinary object-literal
+                    // methods still need the completed object patched in.
+                    if !generator_iterator_object {
+                        if let Expr::Closure {
+                            params: cparams,
+                            body: cbody,
+                            captures: ccaps,
+                            captures_this: true,
+                            ..
+                        } = value_expr
+                        {
+                            let auto_caps = compute_auto_captures(ctx, cparams, cbody, ccaps);
+                            shape_this_patches
+                                .borrow_mut()
+                                .push((i as u32, auto_caps.len() as u32));
+                        }
                     }
                     let v = lower_expr(ctx, value_expr)?;
                     let idx_str = i.to_string();
