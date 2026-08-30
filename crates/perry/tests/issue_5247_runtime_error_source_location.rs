@@ -57,6 +57,9 @@ fn ensure_runtime_archive() {
 }
 
 fn runtime_dir() -> PathBuf {
+    if let Some(runtime_dir) = std::env::var_os("PERRY_RUNTIME_DIR") {
+        return PathBuf::from(runtime_dir);
+    }
     ensure_runtime_archive();
     target_debug_dir()
 }
