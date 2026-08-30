@@ -328,6 +328,19 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 None if !is_var_decl => Some(Expr::Undefined),
                 other => other,
             };
+            // Remember `const x = { … }` bindings whose initializer became a
+            // closed-shape record class. That is the only proof available that
+            // every property of `x` is a data field rather than an accessor —
+            // `is_closed_shape` rejects getters and setters — and the
+            // loop-invariant property hoist refuses to fire without it.
+            if !mutable {
+                if let Some(Expr::New { class_name, .. }) = init.as_ref() {
+                    if class_name.starts_with("__AnonShape_") {
+                        ctx.closed_shape_literal_locals
+                            .insert(id, class_name.clone());
+                    }
+                }
+            }
             result.push(Stmt::Let {
                 id,
                 name,

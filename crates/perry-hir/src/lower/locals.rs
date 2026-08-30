@@ -81,6 +81,16 @@ impl Locals {
     }
 
     /// `Type` of the innermost binding named `name`, if any. O(1).
+    /// Type of the innermost binding carrying `id`. Needed when a
+    /// transform holds a `LocalId` from already-lowered HIR and has no name.
+    pub(crate) fn lookup_type_by_id(&self, id: LocalId) -> Option<&Type> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|(_, entry_id, _)| *entry_id == id)
+            .map(|(_, _, ty)| ty)
+    }
+
     pub(crate) fn lookup_type(&self, name: &str) -> Option<&Type> {
         self.lookup_index(name).map(|i| &self.entries[i].2)
     }

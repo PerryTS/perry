@@ -873,13 +873,39 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                 .map(|e| lower_expr(ctx, e))
                 .transpose()?;
             let body = lower_body_stmt(ctx, &for_stmt.body)?;
-            ctx.pop_block_scope(for_scope_mark);
-            result.push(Stmt::For {
-                init,
-                condition,
-                update,
-                body,
+            // `for (i = 0; i < holder.arr.length; i++) … holder.arr[i] …`
+            // repeats a by-name property lookup every iteration AND keeps the
+            // loop out of the packed-array machinery entirely, since that
+            // matcher wants a bare local. Hoisting the receiver read is worth
+            // 20.58 ns/iteration versus 0.50 hand-hoisted (node: 0.54). The
+            // pass refuses unless the read is provably side-effect free and
+            // the loop cannot rebind or write it — see the module docs.
+            let hoisted = condition.as_ref().and_then(|cond| {
+                crate::lower::property_array_hoist::hoist_loop_invariant_property_array(
+                    ctx,
+                    cond,
+                    update.as_ref(),
+                    &body,
+                )
             });
+            ctx.pop_block_scope(for_scope_mark);
+            match hoisted {
+                Some((hoist, new_condition, new_body)) => {
+                    result.push(hoist);
+                    result.push(Stmt::For {
+                        init,
+                        condition: Some(new_condition),
+                        update,
+                        body: new_body,
+                    });
+                }
+                None => result.push(Stmt::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                }),
+            }
         }
         ast::Stmt::Try(try_stmt) => {
             // try body is its own lexical scope

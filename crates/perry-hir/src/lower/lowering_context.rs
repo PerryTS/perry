@@ -776,6 +776,15 @@ pub struct LoweringContext {
     /// (e.g. recognizing a bundled mysql2 `createPool(config)` by its option
     /// names) recovers them here.
     pub(crate) anon_shape_fields: HashMap<String, Vec<String>>,
+    /// `const x = { … }` bindings whose initializer lowered to a closed-shape
+    /// record class (`__AnonShape_*`), mapped to that class name. Membership
+    /// is a proof that every property of `x` is a DATA field: `is_closed_shape`
+    /// rejects getters and setters, so reading one is side-effect free. The
+    /// loop-invariant property hoist needs exactly that guarantee, and cannot
+    /// get it from the binding's TYPE — a getter-bearing literal infers as
+    /// `Any`, but an *annotated* structural object type can still be backed by
+    /// an accessor.
+    pub(crate) closed_shape_literal_locals: HashMap<LocalId, String>,
     /// Set while lowering a directly exported binding/default expression.
     /// Eligible method literals consume this flag and retain the seeded IIFE
     /// representation needed to publish an exact cross-module own-method

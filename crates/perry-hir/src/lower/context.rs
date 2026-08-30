@@ -201,6 +201,7 @@ impl LoweringContext {
             mixin_funcs: HashMap::new(),
             anon_shape_classes: HashMap::new(),
             anon_shape_fields: HashMap::new(),
+            closed_shape_literal_locals: HashMap::new(),
             prefer_exported_method_shape_seed: false,
             forward_class_names: std::collections::HashSet::new(),
             forward_class_decl_depth: std::collections::HashMap::new(),
@@ -985,6 +986,10 @@ impl LoweringContext {
 
     pub(crate) fn lookup_local_type(&self, name: &str) -> Option<&Type> {
         self.locals.lookup_type(name)
+    }
+
+    pub(crate) fn lookup_local_type_by_id(&self, id: LocalId) -> Option<&Type> {
+        self.locals.lookup_type_by_id(id)
     }
 
     pub(crate) fn lookup_func(&self, name: &str) -> Option<FuncId> {

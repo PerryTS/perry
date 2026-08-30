@@ -97,6 +97,7 @@ pub(crate) use lowering_context::{
 };
 
 mod locals;
+pub(crate) mod property_array_hoist;
 pub(crate) use locals::Locals;
 
 mod typed_parse;
