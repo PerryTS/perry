@@ -8,7 +8,7 @@ use super::*;
 use anyhow::{anyhow, Result};
 
 use perry_hir::types::Type as HirType;
-use perry_hir::{Expr, UnaryOp};
+use perry_hir::{BinaryOp, Expr, UnaryOp};
 
 use crate::types::{I32, I64, PTR};
 
@@ -82,6 +82,16 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
                 crate::type_analysis::is_provably_not_bigint(ctx, operand)
             }
         },
+        // `+` is the only BinaryOp that can produce a string, so it is the
+        // only one whose result needs its operands proven numeric. Every
+        // other operator applies ToNumeric to both sides and yields a Number
+        // or a BigInt whatever they were — so once BigInt is excluded the
+        // result cannot be a pointer, and an accumulator written by `-=`,
+        // `*=`, `^=` and friends stops paying a write barrier per store for a
+        // case its operator cannot reach.
+        Expr::Binary { op, .. } if !matches!(op, BinaryOp::Add) => {
+            crate::type_analysis::is_provably_not_bigint(ctx, expr)
+        }
         Expr::Binary { .. } => {
             crate::type_analysis::is_numeric_expr(ctx, expr)
                 && crate::type_analysis::is_provably_not_bigint(ctx, expr)
