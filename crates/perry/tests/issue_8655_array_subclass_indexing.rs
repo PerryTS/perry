@@ -111,8 +111,8 @@ fn wolf_ecs_loop_has_a_fallback_free_versioned_fast_copy() {
     let system = function_ir(&ir, "__system(double");
 
     assert!(
-        system.contains("call i32 @js_packed_arraylike_loop_guard("),
-        "the original #8655 fixture must enter through the loop preheader proof"
+        system.contains("call i64 @js_packed_arraylike_loop_guard_live("),
+        "the original #8655 fixture must enter through the live-receiver loop preheader proof"
     );
     assert!(system.contains("stable_packed.loop.fast.preheader"));
     assert!(

@@ -133,10 +133,10 @@ console.log(checksum);
     let read_only = function_ir(&ir, "__scan(");
     assert_eq!(
         read_only
-            .matches("call i32 @js_packed_arraylike_loop_guard(")
+            .matches("call i64 @js_packed_arraylike_loop_guard_live(")
             .count(),
         3,
-        "the outer fast/slow copies each own a preheader-versioned inner loop"
+        "the outer fast/slow copies each own a live-receiver preheader-versioned inner loop"
     );
     assert!(read_only.contains("stable_packed.loop.fast.preheader"));
     assert!(read_only.contains("stable_packed.loop.slow.preheader"));

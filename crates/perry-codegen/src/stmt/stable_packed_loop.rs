@@ -1592,21 +1592,21 @@ pub(super) fn lower(
                 ),
                 (PTR, descriptor.as_str()),
             ];
-            if candidate.capture_index.is_some() {
-                let live_raw =
-                    ctx.block()
-                        .call(I64, "js_packed_arraylike_loop_guard_live", &guard_args);
-                (
-                    ctx.block().icmp_ne(I64, &live_raw, "0"),
-                    Some(live_raw),
-                    None,
-                )
-            } else {
-                let guard = ctx
-                    .block()
-                    .call(I32, "js_packed_arraylike_loop_guard", &guard_args);
-                (ctx.block().icmp_ne(I32, &guard, "0"), None, None)
-            }
+            // An ordinary local can already name an Array growth forwarding
+            // stub when the array was grown across a call boundary. The guard
+            // follows that edge and validates the live target, so codegen must
+            // consume the live address it returns instead of reloading and
+            // de-tagging the stale local for direct fast-clone reads (#9117).
+            // Captured receivers need the same result because their reload is
+            // itself a runtime call that can move the target.
+            let live_raw =
+                ctx.block()
+                    .call(I64, "js_packed_arraylike_loop_guard_live", &guard_args);
+            (
+                ctx.block().icmp_ne(I64, &live_raw, "0"),
+                Some(live_raw),
+                None,
+            )
         };
     // The conservative column matcher proves the cloned body call-free, and
     // `fast_raw` below reloads the rooted derived receiver after every
@@ -1633,18 +1633,10 @@ pub(super) fn lower(
         descriptor_word(ctx, &descriptor, 6)
     };
     let bound_i32 = ctx.block().trunc(I64, &bound64, I32);
-    // A capture reload is itself a runtime call, so its admission returns the
-    // post-call live address. Ordinary addressable bindings retain the old
-    // guard/reload sequence; their reload is a plain load and their clone must
-    // still pass the call-free scan unless it has explicit access revalidation.
-    let fast_raw = if let Some(live_raw) = admitted_live_raw {
-        live_raw
-    } else {
-        let fast_receiver = crate::expr::lower_expr(ctx, &Expr::LocalGet(candidate.array_id))?;
-        let fast_bits = ctx.block().bitcast_double_to_i64(&fast_receiver);
-        ctx.block()
-            .and(I64, &fast_bits, crate::nanbox::POINTER_MASK_I64)
-    };
+    // Every admission returns the post-guard LIVE receiver. Besides captured
+    // reloads, this is required for ordinary locals that still hold an Array
+    // growth forwarding stub (#9117).
+    let fast_raw = admitted_live_raw.expect("every packed-loop admission returns a live receiver");
     let fast_scan_start = ctx.func.num_blocks();
     let installed_typed_array_views = typed_array_admission
         .as_ref()
