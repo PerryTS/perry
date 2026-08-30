@@ -340,6 +340,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 None
             };
 
+            // Bulk-init admission: a fresh closure whose captures are all plain
+            // bits. Box-cell captures keep the per-slot setter path — their
+            // `set_closure_box_capture` bookkeeping has no bulk twin.
+            let bulk_fresh_init = !no_capture_singleton
+                && !captured_singleton
+                && total_caps > 0
+                && !captured_value_bits.is_empty()
+                && auto_captures
+                    .iter()
+                    .all(|cap_id| is_plain_async_step || !ctx.boxed_vars.contains(cap_id));
             let closure_handle = if no_capture_singleton {
                 let blk = ctx.block();
                 blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &func_ref)])
@@ -372,6 +382,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 blk.call(
                     I64,
                     "js_closure_alloc_with_captures_singleton",
+                    &[(PTR, &func_ref), (I32, &cap_count), (PTR, &buf)],
+                )
+            } else if bulk_fresh_init {
+                // Fresh (identity-carrying) closure with plain-bits captures:
+                // ONE runtime call does allocation + slots + layout instead of
+                // `js_closure_alloc` plus a `js_closure_set_capture_bits` per
+                // capture (each re-resolving the header, forwarding, kind
+                // dispatch and the barrier's page classification). The reserved
+                // `this` / `new.target` slots are pre-filled with the pointer-free
+                // sentinel the per-slot path relied on `js_closure_alloc` writing;
+                // the post-create patch below fills them exactly as before.
+                let buf = ctx.func.alloca_entry_array(I64, total_caps);
+                {
+                    let blk = ctx.block();
+                    for i in 0..total_caps {
+                        let slot = blk.gep(I64, &buf, &[(I64, &format!("{}", i))]);
+                        match captured_value_bits.get(i) {
+                            Some(v_bits) => blk.store(I64, v_bits, &slot),
+                            None => blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot),
+                        }
+                    }
+                }
+                let blk = ctx.block();
+                blk.call(
+                    I64,
+                    "js_closure_alloc_init",
                     &[(PTR, &func_ref), (I32, &cap_count), (PTR, &buf)],
                 )
             } else {
@@ -410,6 +446,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             for (idx, val_bits) in captured_value_bits.iter().enumerate() {
                 let track_box_capture = boxed_capture_slots[idx] && !is_plain_async_step;
+                if bulk_fresh_init {
+                    // Every slot was written by `js_closure_alloc_init`.
+                    continue;
+                }
                 if !captured_singleton || track_box_capture {
                     let idx_str = idx.to_string();
                     let setter = if track_box_capture {

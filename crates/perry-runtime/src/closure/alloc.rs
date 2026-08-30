@@ -266,6 +266,80 @@ pub fn closure_alloc_storage(actual_count: usize) -> *mut u8 {
     }
 }
 
+/// [`closure_alloc_storage`] with the no-collect contract: `Some` came out of
+/// the already-open nursery block (nothing moved, no trigger check); `None`
+/// means the caller must take the collecting path.
+#[inline(always)]
+fn closure_alloc_storage_no_collect(actual_count: usize) -> Option<*mut u8> {
+    let payload = closure_payload_size(actual_count);
+    if crate::gc::GC_HEADER_SIZE + payload > crate::gc::LARGE_OBJECT_THRESHOLD_BYTES {
+        return None;
+    }
+    let raw = crate::arena::arena_alloc_gc_no_collect(
+        payload,
+        std::mem::align_of::<ClosureHeader>(),
+        crate::gc::GC_TYPE_CLOSURE,
+    );
+    (!raw.is_null()).then_some(raw)
+}
+
+/// One-call birth of a fresh (non-singleton) capturing closure: allocation,
+/// header, capture slots and layout in a single runtime entry.
+///
+/// Replaces `js_closure_alloc` + one `js_closure_set_capture_bits` per
+/// capture, where every setter re-resolved the header, re-checked forwarding,
+/// re-dispatched on the object kind for the layout note and paid the write
+/// barrier's page-table classification again. Here the slots are copied in
+/// bulk from `captures_ptr`, the layout is classified once from the finished
+/// slots, and the barrier resolves the parent once for all slots. The
+/// pointer-free sentinel fill `js_closure_alloc` performs is unnecessary:
+/// every slot is written before the object is reachable from anywhere.
+///
+/// `captures_ptr` slots are plain capture bits; box-cell captures (which need
+/// `set_closure_box_capture` bookkeeping) keep the per-slot setter path in
+/// codegen and never reach this entry.
+#[no_mangle]
+pub extern "C" fn js_closure_alloc_init(
+    func_ptr: *const u8,
+    capture_count: u32,
+    captures_ptr: *const u64,
+) -> *mut ClosureHeader {
+    crate::promise::bump(&CLOSURE_ALLOC_COUNT);
+    let actual_count = real_capture_count(capture_count) as usize;
+    if actual_count == 0 || captures_ptr.is_null() {
+        return js_closure_alloc(func_ptr, capture_count);
+    }
+    // The no-collect arm keeps `captures_ptr`'s VALUES valid raw: nothing on
+    // the heap moved. The collecting fallback may have moved what those bits
+    // point at, so it re-reads them through roots — exactly the original
+    // per-setter path's contract, kept by taking that path.
+    let raw = match closure_alloc_storage_no_collect(actual_count) {
+        Some(raw) => raw,
+        None => {
+            let closure = js_closure_alloc(func_ptr, capture_count);
+            for i in 0..actual_count {
+                js_closure_set_capture_bits(closure, i as u32, unsafe { *captures_ptr.add(i) });
+            }
+            return closure;
+        }
+    };
+    let ptr = raw as *mut ClosureHeader;
+    unsafe {
+        (*ptr).func_ptr = func_ptr;
+        (*ptr).capture_count = capture_count;
+        (*ptr).type_tag = CLOSURE_MAGIC;
+        let slots = closure_capture_slots_mut(ptr);
+        std::ptr::copy_nonoverlapping(captures_ptr, slots, actual_count);
+        crate::gc::layout_init_from_slots(ptr as *mut u8, slots as *const u64, actual_count);
+        crate::gc::runtime_write_barrier_newborn_slots(
+            ptr as usize,
+            slots as *const u64,
+            actual_count,
+        );
+    }
+    ptr
+}
+
 #[inline]
 pub unsafe fn closure_capture_slots_mut(closure: *mut ClosureHeader) -> *mut u64 {
     (closure as *mut u8).add(std::mem::size_of::<ClosureHeader>()) as *mut u64

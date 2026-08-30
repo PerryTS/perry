@@ -155,6 +155,36 @@ pub(crate) fn runtime_write_barrier_gc_slot(parent_addr: usize, slot_addr: usize
     write_barrier_slot_decoded(parent_addr, slot_addr, child_bits, parent_is_malloc_gc);
 }
 
+/// Barrier for `slot_count` capture/field slots of a NEWBORN parent that were
+/// just bulk-initialized. Same observable contract as calling
+/// [`runtime_write_barrier_gc_slot`] once per slot, but the parent's
+/// generation/malloc classification — a page-table lookup — is resolved once
+/// for the whole run instead of per slot, and when barriers are off the loop
+/// reduces to the incremental-mark shade check per value.
+///
+/// # Safety
+/// `slots` must point at `slot_count` initialized u64 slots inside `parent_addr`.
+pub(crate) unsafe fn runtime_write_barrier_newborn_slots(
+    parent_addr: usize,
+    slots: *const u64,
+    slot_count: usize,
+) {
+    if !write_barriers_enabled() {
+        for i in 0..slot_count {
+            incremental_mark_barrier_value(*slots.add(i));
+        }
+        return;
+    }
+    let parent_is_malloc_gc = matches!(
+        crate::arena::classify_heap_generation(parent_addr),
+        crate::arena::HeapGeneration::Unknown
+    ) && malloc_gc_parent_addr(parent_addr);
+    for i in 0..slot_count {
+        let slot = slots.add(i);
+        write_barrier_slot_decoded(parent_addr, slot as usize, *slot, parent_is_malloc_gc);
+    }
+}
+
 // --- slot-form barrier entry points (moved from `barrier/mod.rs`, #2000-line cap) ---
 
 /// Gen-GC Phase C1: slot-aware write barrier. Called by

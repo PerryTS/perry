@@ -1165,6 +1165,50 @@ pub(super) unsafe fn layout_rebuild_from_slots_with_policy(
     }
 }
 
+/// Layout for a NEWBORN whose slots were just bulk-initialized: the same
+/// classification as [`layout_rebuild_from_slots`] (pointer-free / unknown /
+/// side mask), but with one `layout_forget_object` up front — a recycled
+/// address may carry stale entries — instead of per-table removes interleaved
+/// with the rebuild, and no per-slot `layout_note_slot` round trips (each of
+/// which re-resolved the header, re-checked forwarding and re-dispatched on the
+/// object kind). Callers must treat the object as fully initialized after
+/// this returns.
+pub(crate) unsafe fn layout_init_from_slots(
+    user_ptr: *mut u8,
+    slots: *const u64,
+    slot_count: usize,
+) {
+    let Some(header) = layout_header_for_user(user_ptr as usize) else {
+        return;
+    };
+    layout_forget_object(user_ptr as usize);
+    header_clear_typed_layout_intact(header);
+    if slots.is_null() || slot_count == 0 {
+        set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+        return;
+    }
+    let mut mask = if slot_count <= 64 {
+        LayoutSlotMask::Inline(0)
+    } else {
+        LayoutSlotMask::Heap(vec![0; slot_count.div_ceil(64)])
+    };
+    for i in 0..slot_count {
+        if layout_pointer_bearing_bits(*slots.add(i)) {
+            mask.set_slot(i);
+        }
+    }
+    if mask.is_empty() {
+        set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+    } else if super::layout_tables::immortal_layout_scope_active()
+        || slot_count < super::layout_tables::layout_mask_min_slots()
+    {
+        set_layout_state(header, GC_LAYOUT_UNKNOWN);
+    } else {
+        set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+        slot_masks_insert(user_ptr as usize, mask);
+    }
+}
+
 pub(crate) unsafe fn layout_rebuild_from_slots(
     user_ptr: *mut u8,
     slots: *const u64,
