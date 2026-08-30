@@ -518,6 +518,28 @@ pub unsafe extern "C" fn js_register_anon_shape_class_id(class_id: u32) {
     guard.as_mut().unwrap().insert(class_id);
 }
 
+/// True when `class_id` is marked as an anon shape but is really a DECLARED
+/// class, so reflective lookups must prefer the declared class.
+///
+/// Class ids are handed out per module, so one module's anon-shape id can be
+/// the same number as another module's declared class. When that module's init
+/// runs `js_register_anon_shape_class_id`, every instance of the unrelated
+/// declared class starts reporting `Object.prototype` from
+/// `Object.getPrototypeOf` — and the standard prototype-preserving clone
+/// `Object.create(Object.getPrototypeOf(x), descriptors)` then yields an object
+/// with the fields but none of the methods. Effect's `SchemaAST` hit this: its
+/// monomorphized `Union$AST` collided with an anon-shape id, so
+/// `modifyOwnPropertyDescriptors` produced Unions whose `recur` was gone
+/// ("recur is not a function" at OpenCode startup).
+///
+/// A registered class NAME plus a non-empty prototype vtable is positive
+/// evidence of a real declared class; an anon shape has neither.
+pub fn declared_class_outranks_anon_shape(class_id: u32) -> bool {
+    is_anon_shape_class_id(class_id)
+        && class_name_for_id(class_id).is_some()
+        && !super::class_decl_prototype_method_names(class_id).is_empty()
+}
+
 /// True if `class_id` was registered via `js_register_anon_shape_class_id`.
 pub fn is_anon_shape_class_id(class_id: u32) -> bool {
     if class_id == 0 {
@@ -529,4 +551,77 @@ pub fn is_anon_shape_class_id(class_id: u32) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod anon_shape_collision_tests {
+    use super::*;
+    use crate::object::class_registry::state::{
+        ClassVTable, VTableMethodEntry, CLASS_VTABLE_REGISTRY,
+    };
+    use std::collections::HashMap;
+
+    fn seed_declared_class(class_id: u32, name: &str, method: &str) {
+        unsafe { js_register_class_name(class_id, name.as_ptr(), name.len() as u32) };
+        let mut methods = HashMap::new();
+        methods.insert(
+            method.to_string(),
+            VTableMethodEntry {
+                func_ptr: 0x1000,
+                param_count: 1,
+                has_synthetic_arguments: false,
+                has_rest: false,
+            },
+        );
+        let mut guard = CLASS_VTABLE_REGISTRY.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(HashMap::new());
+        }
+        guard.as_mut().unwrap().insert(
+            class_id,
+            ClassVTable {
+                methods,
+                getters: HashMap::new(),
+                setters: HashMap::new(),
+            },
+        );
+    }
+
+    /// Class ids are allocated per module, so one module's anon-shape id can
+    /// collide with another module's declared class. The declared class must
+    /// keep its reflective prototype, or `Object.getPrototypeOf(instance)`
+    /// starts answering `Object.prototype` and the standard clone
+    /// `Object.create(Object.getPrototypeOf(x), descriptors)` silently drops
+    /// every method (Effect's `Union$AST` → "recur is not a function").
+    #[test]
+    fn declared_class_outranks_a_colliding_anon_shape_id() {
+        let class_id = 0x4321_0001;
+        seed_declared_class(class_id, "Union$AST", "recur");
+
+        assert!(
+            !declared_class_outranks_anon_shape(class_id),
+            "a class that was never marked an anon shape needs no override"
+        );
+
+        unsafe { js_register_anon_shape_class_id(class_id) };
+        assert!(is_anon_shape_class_id(class_id));
+        assert!(
+            declared_class_outranks_anon_shape(class_id),
+            "a named class with a prototype vtable must outrank the colliding \
+             anon-shape marking"
+        );
+    }
+
+    /// A real anon shape has neither a registered name nor a vtable, so it must
+    /// keep reporting the ordinary object prototype.
+    #[test]
+    fn a_genuine_anon_shape_does_not_outrank_itself() {
+        let class_id = 0x4321_0002;
+        unsafe { js_register_anon_shape_class_id(class_id) };
+        assert!(is_anon_shape_class_id(class_id));
+        assert!(
+            !declared_class_outranks_anon_shape(class_id),
+            "an unnamed, vtable-less anon shape must not be treated as declared"
+        );
+    }
 }

@@ -97,11 +97,11 @@ pub(crate) use class_meta::test_text_encoding_stream_new_with_constructor;
 #[cfg(feature = "global-text")]
 pub(crate) use class_meta::text_decoder_bool_option;
 pub use class_meta::{
-    class_length_for_id, class_name_for_id, is_anon_shape_class_id, js_compression_stream_new,
-    js_decompression_stream_new, js_register_anon_shape_class_id, js_register_class_id,
-    js_register_class_length, js_register_class_name, js_text_decoder_stream_new,
-    js_text_encoder_stream_new, js_text_encoding_stream_new, ANON_SHAPE_CLASS_IDS, CLASS_LENGTHS,
-    CLASS_NAMES,
+    class_length_for_id, class_name_for_id, declared_class_outranks_anon_shape,
+    is_anon_shape_class_id, js_compression_stream_new, js_decompression_stream_new,
+    js_register_anon_shape_class_id, js_register_class_id, js_register_class_length,
+    js_register_class_name, js_text_decoder_stream_new, js_text_encoder_stream_new,
+    js_text_encoding_stream_new, ANON_SHAPE_CLASS_IDS, CLASS_LENGTHS, CLASS_NAMES,
 };
 pub(crate) use class_meta::{
     identify_global_builtin_constructor, report_dispatch_miss,
