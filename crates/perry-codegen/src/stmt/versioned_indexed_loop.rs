@@ -579,6 +579,7 @@ pub(super) fn lower(
         &method_guard_slot,
         &fast_pre_label,
         &slow_pre_label,
+        true,
     );
 
     let method_fact = VersionedIndexedMethodFact {

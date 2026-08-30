@@ -234,6 +234,12 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
     method_guard_slot: &str,
     fast_label: &str,
     fallback_label: &str,
+    // `true` at sites whose receiver may arrive in the internal raw-address
+    // form (top word zero); `false` where the receiver is a user-visible
+    // NaN-box, so that a plain double whose bit pattern happens to land in
+    // the heap address range (a positive subnormal) can never reach the
+    // header load — it misses to the runtime guard instead.
+    accept_raw_ptr: bool,
 ) {
     let deref_idx = ctx.new_block("method_direct.inline_deref");
     let deref_label = ctx.block_label(deref_idx);
@@ -263,8 +269,12 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
         // double-sized slot. `normalize_raw_object_addr` accepts exactly this
         // top-word-zero form; all other non-pointer NaN-box tags remain
         // rejected before dereference.
-        let is_raw_ptr = blk.icmp_eq(I64, &tag, "0");
-        let is_ptr = blk.or(I1, &is_tagged_ptr, &is_raw_ptr);
+        let is_ptr = if accept_raw_ptr {
+            let is_raw_ptr = blk.icmp_eq(I64, &tag, "0");
+            blk.or(I1, &is_tagged_ptr, &is_raw_ptr)
+        } else {
+            is_tagged_ptr
+        };
         let above_floor = blk.icmp_uge(I64, &recv_handle, &heap_floor);
         let below_ceiling = blk.icmp_ult(I64, &recv_handle, &heap_ceiling);
         let in_heap_range = blk.and(I1, &above_floor, &below_ceiling);
@@ -1045,6 +1055,7 @@ pub(super) fn emit_guarded_direct_method_call(
             &method_guard_slot_str,
             &fast_label,
             &fallback_label,
+            true,
         );
     }
     if probe_before_runtime_guard {
@@ -1058,6 +1069,7 @@ pub(super) fn emit_guarded_direct_method_call(
             &method_guard_slot_str,
             &fast_label,
             &runtime_guard_label,
+            false,
         );
         ctx.current_block = runtime_guard_idx;
     }
@@ -1122,6 +1134,51 @@ pub(super) fn emit_guarded_direct_method_call(
                     None => ok,
                 });
             }
+            // Same dispensation as the method-direct probe above, for the
+            // receiver FIELD proof: the runtime field guard re-derives, per
+            // field and per call, facts the exact `(class_id, ShapeId)` pair
+            // already pins (slot count, key-at-slot) plus a descriptor lookup
+            // (`shape_descriptor_by_id`, a thread-local map) — it was ~80% of
+            // the probe-first `c.inc()` loop. The inline precheck the
+            // field-GET sites already use proves class/shape + not-forwarded +
+            // the per-OBJECT raw-f64 intact bit in a handful of loads, and
+            // because the intact bit is object-wide, ONE precheck vouches for
+            // every receiver field at once. Its miss edge runs the unchanged
+            // per-field runtime guard chain, so nothing is lost.
+            let inline_fields_proof = !receiver_info.fields.is_empty()
+                && !crate::expr::typed_feedback_emission_enabled()
+                && method_inline_probe_enabled();
+            let (fields_proven_idx, fields_merge_idx) = if inline_fields_proof {
+                let proven_idx = ctx.new_block("typed_f64_recv_method.fields_proven");
+                let proven_label = ctx.block_label(proven_idx);
+                let (obj_bits, obj_handle) = {
+                    let blk = ctx.block();
+                    let obj_bits = blk.bitcast_double_to_i64(recv_box);
+                    let obj_handle = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
+                    (obj_bits, obj_handle)
+                };
+                // Leaves `current_block` at the freshly created guardcall
+                // block, where the per-field runtime chain below is emitted.
+                let _guardcall = crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
+                    ctx,
+                    &obj_bits,
+                    &obj_handle,
+                    &expected_class_id_str,
+                    &expected_shape_id,
+                    true,
+                    None,
+                    &proven_label,
+                    &[],
+                );
+                // Created after the precheck's own blocks so the merge (and the
+                // typed/generic branch it feeds) follows the per-field guard
+                // calls in emission order.
+                let merge_idx = ctx.new_block("typed_f64_recv_method.fields_merge");
+                (Some(proven_idx), Some(merge_idx))
+            } else {
+                (None, None)
+            };
+            let mut fields_chain: Option<String> = None;
             for field in &receiver_info.fields {
                 let site_id = emit_typed_feedback_register_site(
                     ctx,
@@ -1151,9 +1208,33 @@ pub(super) fn emit_guarded_direct_method_call(
                     ],
                 );
                 let ok = ctx.block().icmp_ne(I32, &raw_guard, "0");
+                if inline_fields_proof {
+                    fields_chain = Some(match fields_chain {
+                        Some(prev) => ctx.block().and(I1, &prev, &ok),
+                        None => ok,
+                    });
+                } else {
+                    guard = Some(match guard {
+                        Some(prev) => ctx.block().and(I1, &prev, &ok),
+                        None => ok,
+                    });
+                }
+            }
+            if let (Some(proven_idx), Some(merge_idx)) = (fields_proven_idx, fields_merge_idx) {
+                let merge_label = ctx.block_label(merge_idx);
+                let chain_pred = ctx.block_label(ctx.current_block);
+                let chain_ok = fields_chain.clone().unwrap_or_else(|| "true".to_string());
+                ctx.block().br(&merge_label);
+                ctx.current_block = proven_idx;
+                let proven_pred = ctx.block_label(proven_idx);
+                ctx.block().br(&merge_label);
+                ctx.current_block = merge_idx;
+                let fields_ok = ctx
+                    .block()
+                    .phi(I1, &[("true", &proven_pred), (&chain_ok, &chain_pred)]);
                 guard = Some(match guard {
-                    Some(prev) => ctx.block().and(I1, &prev, &ok),
-                    None => ok,
+                    Some(prev) => ctx.block().and(I1, &prev, &fields_ok),
+                    None => fields_ok,
                 });
             }
 

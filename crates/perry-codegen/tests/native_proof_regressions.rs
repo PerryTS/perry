@@ -12659,11 +12659,17 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
     let field_guard = caller_ir
         .find("call i32 @js_typed_feedback_class_field_get_guard")
         .unwrap_or_else(|| panic!("caller should guard raw-f64 receiver fields:\n{caller_ir}"));
+    // Same for the raw-f64 FIELD proof: one inline class-field precheck
+    // (the field-GET sites' form, first mentioned by its `deref` block in the
+    // branch that enters it) dominates the typed call, and the per-field
+    // runtime guard is that precheck's miss edge.
+    let inline_field_precheck = caller_ir.find("class_field_inline.deref");
+    let field_proof = inline_field_precheck.map_or(field_guard, |p| p.min(field_guard));
     let typed_call = caller_ir
         .find(&format!("call double @{typed}(i64 "))
         .unwrap_or_else(|| panic!("caller should call the receiver clone:\n{caller_ir}"));
     assert!(
-        method_proof < field_guard && field_guard < typed_call,
+        method_proof < field_proof && field_proof < typed_call,
         "receiver clone must run only after method-direct and raw-f64 field guards:\n{caller_ir}"
     );
     // #7506: this used to assert the guard-failure edge calls `$generic` BY
