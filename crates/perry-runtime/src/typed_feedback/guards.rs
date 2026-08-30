@@ -106,6 +106,11 @@ fn method_direct_call_contract(
         );
     };
     let name_hash = hash_bytes(method_bytes);
+    let method_guard_slot = crate::object::class_prototype_method_guard_slot(method_name);
+    if crate::object::class_prototype_fast_guard_invalidated_for_method(method_guard_slot) {
+        return (shape_addr, class_id, gc_type, name_hash, false);
+    }
+
     if object_addr == 0
         || expected_class_id == 0
         || !crate::object::shapes::is_shape_id(expected_shape_id)
