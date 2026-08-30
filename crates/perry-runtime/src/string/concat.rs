@@ -115,6 +115,46 @@ fn bytes_all_ascii(data: *const u8, len: u32) -> bool {
         .all(|&b| b < 0x80)
 }
 
+/// `ptr::copy_nonoverlapping` with a byte loop for short payloads: the libc
+/// `memmove`/`memcpy` PLT call costs more than the copy itself for the
+/// digit-and-slug-sized strings the concat hot paths assemble (a 3-byte
+/// prefix + 3 digits was paying two `_platform_memmove` calls per op, ~24%
+/// of the `"id-" + i` loop in `sample`). 16 is past every SSO/digit shape
+/// while keeping the loop trivially unrollable.
+///
+/// # Safety
+/// Same contract as `ptr::copy_nonoverlapping`: both regions valid for
+/// `len` bytes, non-overlapping.
+#[inline(always)]
+unsafe fn copy_bytes_small(src: *const u8, dst: *mut u8, len: usize) {
+    // Overlapping-window chunk copies, NOT a byte loop: LLVM's loop-idiom
+    // pass recognises a plain byte loop and emits the very `memcpy` call
+    // this helper exists to avoid (verified in `sample`: the loop version
+    // still showed `_platform_memmove`). Each arm reads/writes two windows
+    // that both lie inside `[0, len)`, so nothing outside the regions is
+    // touched even when the windows overlap each other.
+    if len >= 16 {
+        ptr::copy_nonoverlapping(src, dst, len);
+    } else if len >= 8 {
+        let head = src.cast::<u64>().read_unaligned();
+        let tail = src.add(len - 8).cast::<u64>().read_unaligned();
+        dst.cast::<u64>().write_unaligned(head);
+        dst.add(len - 8).cast::<u64>().write_unaligned(tail);
+    } else if len >= 4 {
+        let head = src.cast::<u32>().read_unaligned();
+        let tail = src.add(len - 4).cast::<u32>().read_unaligned();
+        dst.cast::<u32>().write_unaligned(head);
+        dst.add(len - 4).cast::<u32>().write_unaligned(tail);
+    } else if len >= 2 {
+        let head = src.cast::<u16>().read_unaligned();
+        let tail = src.add(len - 2).cast::<u16>().read_unaligned();
+        dst.cast::<u16>().write_unaligned(head);
+        dst.add(len - 2).cast::<u16>().write_unaligned(tail);
+    } else if len == 1 {
+        *dst = *src;
+    }
+}
+
 /// SSO-aware pairwise `a + b` for two operands the codegen believes are
 /// strings. Both operands arrive NaN-boxed so an SSO operand stays inline, and
 /// the result is NaN-boxed too — SSO when the total fits five ASCII bytes, a
@@ -267,10 +307,10 @@ fn concat_byte_parts(l: (*const u8, u32), r: (*const u8, u32)) -> f64 {
 
         init_string_header(ptr, utf16_len, total_blen, total_blen, 0, flags);
         if !l_slice.is_empty() {
-            ptr::copy_nonoverlapping(l.0, data_ptr, l.1 as usize);
+            copy_bytes_small(l.0, data_ptr, l.1 as usize);
         }
         if !r_slice.is_empty() {
-            ptr::copy_nonoverlapping(r.0, data_ptr.add(l.1 as usize), r.1 as usize);
+            copy_bytes_small(r.0, data_ptr.add(l.1 as usize), r.1 as usize);
         }
         // Merge any surrogate pair newly formed across the join boundary
         // (no-op unless the result carries the lone-surrogate flag).
@@ -385,17 +425,16 @@ pub extern "C" fn js_string_concat_value(
     prefix: *const StringHeader,
     value: f64,
 ) -> *mut StringHeader {
-    // #6655: `prefix` is a raw movable heap pointer held across two different
-    // GC-capable operations — `string_storage_alloc` on the fast path below,
-    // and `js_jsvalue_to_string(value)` (an arbitrary user `toString`) on the
-    // slow path. Neither is a GC root, so an evacuating collection during
-    // either would leave the subsequent `(*prefix)` reads and `string_data`
-    // copy pointing at a forwarded address. Root it for the whole body and
-    // re-read it through the handle after anything that can allocate.
-    // (`js_string_concat` already roots its own arguments — that is one frame
-    // too late for this one.)
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let prefix_handle = scope.root_string_ptr(prefix);
+    // #6655: `prefix` is a raw movable heap pointer held across GC-capable
+    // operations — an allocation on the fast path below, and
+    // `js_jsvalue_to_string(value)` (an arbitrary user `toString`) on the
+    // slow path. Rooting used to happen unconditionally here, but the scope
+    // setup + `root_string_ptr` measured ~7% of the `"id-" + i` loop, and the
+    // NUMBER arm only needs it when its allocation cannot use the already-open
+    // nursery block: `string_storage_alloc_no_collect`'s `Some` contract is
+    // "nothing on the heap moved", which keeps every raw read of `prefix`
+    // valid with no root at all. So each arm roots for itself: the number arm
+    // only in its block-boundary fallback, the user-`toString` arm always.
     let prefix_blen = if is_valid_string_ptr(prefix) {
         unsafe { (*prefix).byte_len }
     } else {
@@ -453,13 +492,24 @@ pub extern "C" fn js_string_concat_value(
             num_len = len;
         }
 
-        // Single allocation for prefix + number string
+        // Single allocation for prefix + number string. `Some` from the
+        // no-collect allocator means the open nursery block served it and
+        // nothing moved — `prefix` stays valid raw. `None` (block boundary,
+        // large size, free-list latch) takes the original rooted path:
+        // `string_storage_alloc` → `arena_alloc_gc` can collect and evacuate,
+        // so the incoming `prefix` may have moved — re-read it from its
+        // handle before touching the header or copying the payload (#6655).
         let total_blen = prefix_blen as usize + num_len;
-        let (ptr, data_ptr) = string_storage_alloc(total_blen as u32);
-        // `string_storage_alloc` → `arena_alloc_gc` can collect and evacuate, so
-        // the incoming `prefix` may have moved. Re-read it from its handle
-        // before touching the header or copying the payload (#6655).
-        let prefix = prefix_handle.get_raw_const_ptr::<StringHeader>();
+        let (ptr, data_ptr, prefix) =
+            match crate::string::string_storage_alloc_no_collect(total_blen as u32) {
+                Some((ptr, data_ptr)) => (ptr, data_ptr, prefix),
+                None => {
+                    let scope = crate::gc::RuntimeHandleScope::new();
+                    let prefix_handle = scope.root_string_ptr(prefix);
+                    let (ptr, data_ptr) = string_storage_alloc(total_blen as u32);
+                    (ptr, data_ptr, prefix_handle.get_raw_const_ptr::<StringHeader>())
+                }
+            };
 
         unsafe {
             // Both prefix and number digits are ASCII, so utf16_len == byte_len for the number part
@@ -478,21 +528,19 @@ pub extern "C" fn js_string_concat_value(
             );
 
             if is_valid_string_ptr(prefix) && prefix_blen > 0 {
-                ptr::copy_nonoverlapping(string_data(prefix), data_ptr, prefix_blen as usize);
+                copy_bytes_small(string_data(prefix), data_ptr, prefix_blen as usize);
             }
-            ptr::copy_nonoverlapping(
-                num_buf.as_ptr(),
-                data_ptr.add(prefix_blen as usize),
-                num_len,
-            );
+            copy_bytes_small(num_buf.as_ptr(), data_ptr.add(prefix_blen as usize), num_len);
         }
 
         return ptr;
     }
 
     // Slow path: non-number value — fall back to js_jsvalue_to_string + js_string_concat.
-    // `js_jsvalue_to_string` can run a user `toString` and collect, so reload
-    // `prefix` from its handle afterwards (#6655).
+    // `js_jsvalue_to_string` can run a user `toString` and collect, so root
+    // `prefix` across it and reload from the handle afterwards (#6655).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let prefix_handle = scope.root_string_ptr(prefix);
     let value_str = crate::value::js_jsvalue_to_string(value);
     js_string_concat(prefix_handle.get_raw_const_ptr::<StringHeader>(), value_str)
 }
@@ -531,9 +579,13 @@ pub extern "C" fn js_string_concat_value_box(prefix: *const StringHeader, value:
                 if bytes_all_ascii(data, prefix_blen as u32) {
                     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
                     unsafe {
-                        std::ptr::copy_nonoverlapping(data, sso.as_mut_ptr(), prefix_blen);
+                        copy_bytes_small(data, sso.as_mut_ptr(), prefix_blen);
+                        copy_bytes_small(
+                            num_buf.as_ptr(),
+                            sso.as_mut_ptr().add(prefix_blen),
+                            num_len,
+                        );
                     }
-                    sso[prefix_blen..prefix_blen + num_len].copy_from_slice(&num_buf[..num_len]);
                     return f64::from_bits(
                         crate::value::JSValue::short_string_unchecked(
                             &sso[..prefix_blen + num_len],
@@ -1210,15 +1262,17 @@ pub(crate) fn fast_itoa_u32(mut n: u32, buf: &mut [u8; 32]) -> usize {
         buf[0] = b'0';
         return 1;
     }
-    let mut pos = 31usize;
+    // Size first, then write digits in place back-to-front. The old
+    // write-at-the-end-then-`copy_within` shape paid a libc `memmove` PLT
+    // call per conversion (runtime-length overlapping copy — it showed up
+    // as ~15% of the `"id-" + i` loop in `sample`, inlined into both
+    // concat entry points).
+    let len = n.ilog10() as usize + 1;
+    let mut pos = len;
     while n > 0 {
+        pos -= 1;
         buf[pos] = b'0' + (n % 10) as u8;
         n /= 10;
-        pos -= 1;
     }
-    let start = pos + 1;
-    let len = 32 - start;
-    // Shift digits to front
-    buf.copy_within(start..32, 0);
     len
 }

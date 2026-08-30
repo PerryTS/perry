@@ -696,8 +696,21 @@ fn zero_alignment_padding_tail(raw: *mut u8, requested_payload_size: usize) {
         let header = raw.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let allocated_payload = ((*header).size as usize).saturating_sub(crate::gc::GC_HEADER_SIZE);
         let padding = allocated_payload.saturating_sub(requested_payload_size);
+        // Alignment rounding leaves at most 7 tail bytes; only a free-list or
+        // size-class block can exceed that. A libc `memset` PLT call for those
+        // few bytes measured ~4% of a hot concat loop — zero them inline.
         if padding > 0 {
-            std::ptr::write_bytes(raw.add(requested_payload_size), 0, padding);
+            if padding <= 8 && allocated_payload >= 8 {
+                // One unaligned 8-byte zero store covering the whole tail.
+                // It may reach backward into the payload's last bytes, which
+                // is fine: the payload is uninitialized until the caller
+                // writes it (a byte LOOP here gets idiom-recognized by LLVM
+                // back into the `bzero` PLT call this branch exists to
+                // avoid — a real cost when the padding is 2 bytes).
+                raw.add(allocated_payload - 8).cast::<u64>().write_unaligned(0);
+            } else {
+                std::ptr::write_bytes(raw.add(requested_payload_size), 0, padding);
+            }
         }
     }
 }
