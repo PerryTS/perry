@@ -47,7 +47,7 @@ pub fn show(title_ptr: *const u8, message_ptr: *const u8, arr_ptr: i64, callback
             for i in 0..len {
                 let elem = js_array_get_element(arr_ptr, i);
                 let str_ptr = js_get_string_pointer_unified(elem) as *const u8;
-                let label = unsafe { str_from_header(str_ptr) };
+                let label = str_from_header(str_ptr);
                 let ns_label = NSString::from_str(&label);
                 let _: Retained<AnyObject> = msg_send![&*alert, addButtonWithTitle: &*ns_label];
             }

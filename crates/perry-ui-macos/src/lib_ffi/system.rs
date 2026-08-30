@@ -275,7 +275,7 @@ pub extern "C" fn perry_system_preferences_set(key_ptr: i64, value: f64) {
         if (bits >> 48) == 0x7FFF {
             // NaN-boxed string — extract string pointer
             let str_ptr = js_nanbox_get_pointer(value) as *const u8;
-            let s = unsafe { str_from_header(str_ptr) };
+            let s = str_from_header(str_ptr);
             let ns_str = objc2_foundation::NSString::from_str(&s);
             let _: () = objc2::msg_send![defaults, setObject: &*ns_str, forKey: &*ns_key];
         } else {

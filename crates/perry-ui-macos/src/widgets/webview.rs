@@ -747,7 +747,7 @@ pub fn set_allowed_domains(handle: i64, domains_arr_handle: i64) {
             let elem = js_array_get_element_f64(domains_arr_handle, i);
             let str_ptr = js_get_string_pointer_unified(elem) as *const u8;
             if !str_ptr.is_null() {
-                domains.push(unsafe { str_from_header(str_ptr) }.to_string());
+                domains.push(str_from_header(str_ptr).to_string());
             }
         }
     }

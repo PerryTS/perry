@@ -111,7 +111,7 @@ pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
         let _: () = msg_send![&*combobox, setEditable: true];
         let _: () = msg_send![&*combobox, setNumberOfVisibleItems: 8i64];
 
-        let initial_str = unsafe { str_from_header(initial_ptr) };
+        let initial_str = str_from_header(initial_ptr);
         if !initial_str.is_empty() {
             let ns_initial = NSString::from_str(&initial_str);
             let _: () = msg_send![&*combobox, setStringValue: &*ns_initial];

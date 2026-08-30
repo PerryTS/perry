@@ -93,7 +93,7 @@ pub fn save_dialog(callback: f64, default_name_ptr: *const u8, _allowed_types_pt
 
         // Set default filename if provided
         if !default_name_ptr.is_null() {
-            let name = unsafe { str_from_header(default_name_ptr) };
+            let name = str_from_header(default_name_ptr);
             if !name.is_empty() {
                 let ns_name = NSString::from_str(&name);
                 let _: () = msg_send![&*panel, setNameFieldStringValue: &*ns_name];

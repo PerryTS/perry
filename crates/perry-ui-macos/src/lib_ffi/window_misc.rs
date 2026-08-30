@@ -408,7 +408,7 @@ pub extern "C" fn perry_ui_set_text(id_ptr: i64, value_ptr: i64) {
     let (value_data, value_len) = value
         .as_ref()
         .map_or((std::ptr::null(), 0), |value| (value.as_ptr(), value.len()));
-    unsafe {
+    {
         widgets::text_registry::set_text_handler(id.as_ptr(), id.len(), value_data, value_len);
     }
 }
