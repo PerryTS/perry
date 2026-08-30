@@ -827,6 +827,52 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
             })
         }
 
+        // A function EXPRESSION is the same value as the arrow above for
+        // typing purposes — only `this` / `arguments` / constructability
+        // differ, none of which affect the signature. Without this arm
+        // `const f = function (x: number): number { … }` inferred `Any`, so
+        // the binding lost its `Function(...)` hint and every call site fell
+        // to the fully generic closure path (measured 12.55 ns/call against
+        // 5.69 for the identical arrow; node is 0.51 for both).
+        ast::Expr::Fn(fn_expr) => {
+            let function = &fn_expr.function;
+            let has_explicit_return_annotation = function.return_type.is_some();
+            let annotated = function
+                .return_type
+                .as_ref()
+                .map(|rt| extract_ts_type(&rt.type_ann))
+                .unwrap_or(Type::Any);
+            let return_type = if !has_explicit_return_annotation
+                && matches!(annotated, Type::Any)
+                && !function.is_generator
+            {
+                let inferred = function
+                    .body
+                    .as_ref()
+                    .and_then(|block| infer_body_return_type(&block.stmts, ctx));
+                match inferred {
+                    Some(t) if function.is_async => Type::Promise(Box::new(t)),
+                    Some(t) => t,
+                    None => Type::Any,
+                }
+            } else {
+                annotated
+            };
+            Type::Function(crate::types::FunctionType {
+                params: function
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let name = get_pat_name(&p.pat).unwrap_or_default();
+                        let ty = extract_param_type_with_ctx(&p.pat, None);
+                        (name, ty, false)
+                    })
+                    .collect(),
+                return_type: Box::new(return_type),
+                is_async: function.is_async,
+                is_generator: function.is_generator,
+            })
+        }
         _ => Type::Any,
     }
 }

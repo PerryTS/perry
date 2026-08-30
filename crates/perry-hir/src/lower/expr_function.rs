@@ -633,12 +633,18 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
             continue;
         }
         let is_rest = is_rest_param(&param.pat);
-        let param_id = ctx.define_local_spanned(param_name.clone(), Type::Any, param.span);
+        // Declared parameter types were dropped here while the arrow path
+        // (`lower_arrow`) and the object-method path both keep them. An `Any`
+        // parameter costs the closure its typed clone and its call sites the
+        // guarded direct path — the whole gap between
+        // `const f = function (x: number) { … }` and the identical arrow.
+        let param_ty = crate::lower_patterns::get_pat_type(&param.pat, ctx);
+        let param_id = ctx.define_local_spanned(param_name.clone(), param_ty.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         params.push(Param {
             id: param_id,
             name: param_name,
-            ty: Type::Any,
+            ty: param_ty,
             default: None,
             decorators: Vec::new(),
             is_rest,
