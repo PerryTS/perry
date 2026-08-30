@@ -847,15 +847,22 @@ pub(super) unsafe fn dispatch_handle(
             }
             // #2856: Map/Set iterators returned from a value-level
             // `m.entries()`/`.keys()`/`.values()` / `s.entries()` etc. carry
-            // dedicated class ids so `.next()` lands in the matching iterator
-            // dispatcher (mirroring the array iterator above).
-            if (*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID {
+            // dedicated class ids so intrinsic protocol methods land in the
+            // matching iterator dispatcher (mirroring the array iterator
+            // above). #9098: do not claim `return`, `throw`, or another
+            // non-intrinsic method here. They must reach the ordinary field /
+            // prototype scans below so a user-installed method is invoked.
+            if (*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
+                && crate::collection_iter_object::is_intrinsic_iterator_method(method_name)
+            {
                 return Some(crate::collection_iter_object::dispatch_map_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,
                 ));
             }
-            if (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID {
+            if (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID
+                && crate::collection_iter_object::is_intrinsic_iterator_method(method_name)
+            {
                 return Some(crate::collection_iter_object::dispatch_set_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,

@@ -394,14 +394,20 @@ pub(super) unsafe fn dispatch_raw_pointer(
                     method_name,
                 ));
             }
-            // #2856: same Map/Set-iterator class-id checks as the NaN-boxed path.
-            if (*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID {
+            // #2856/#9098: same intrinsic-only Map/Set iterator class-id
+            // checks as the NaN-boxed path. Non-intrinsic names must continue
+            // into ordinary method lookup so own overrides are callable.
+            if (*obj).class_id == crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
+                && crate::collection_iter_object::is_intrinsic_iterator_method(method_name)
+            {
                 return Some(crate::collection_iter_object::dispatch_map_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,
                 ));
             }
-            if (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID {
+            if (*obj).class_id == crate::collection_iter_object::SET_ITERATOR_CLASS_ID
+                && crate::collection_iter_object::is_intrinsic_iterator_method(method_name)
+            {
                 return Some(crate::collection_iter_object::dispatch_set_iterator_method(
                     obj as *mut ObjectHeader,
                     method_name,

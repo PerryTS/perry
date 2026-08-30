@@ -35,6 +35,15 @@ const KIND_KEYS: i32 = 1;
 const KIND_VALUES: i32 = 0;
 const KIND_ENTRIES: i32 = 2;
 
+/// Methods implemented intrinsically by the Map/Set iterator class-id
+/// dispatcher. `return` and `throw` deliberately are not here: ordinary
+/// collection iterators do not define them, and a user-installed own or
+/// inherited method must flow through ordinary method lookup (#9098).
+#[inline]
+pub(crate) fn is_intrinsic_iterator_method(method_name: &str) -> bool {
+    matches!(method_name, "next" | "Symbol.iterator" | "@@iterator")
+}
+
 /// `true` when `addr` carries a Map iterator object's class id.
 pub fn is_map_iterator_addr(addr: usize) -> bool {
     iterator_class_id(addr) == Some(MAP_ITERATOR_CLASS_ID)
@@ -326,7 +335,6 @@ unsafe fn dispatch_map_iterator_method_emit(
             emit_iter_result(&scope, &iter_h, emit_cached, value, false)
         }
         "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj() as i64),
-        "return" | "throw" => make_iter_result(JSValue::undefined(), true),
         _ => f64::from_bits(TAG_UNDEFINED),
     }
 }
@@ -404,7 +412,6 @@ unsafe fn dispatch_set_iterator_method_emit(
             emit_iter_result(&scope, &iter_h, emit_cached, value, false)
         }
         "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj() as i64),
-        "return" | "throw" => make_iter_result(JSValue::undefined(), true),
         _ => f64::from_bits(TAG_UNDEFINED),
     }
 }
