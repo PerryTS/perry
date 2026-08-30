@@ -4975,6 +4975,15 @@ fn local_is_u32_array(ctx: &FnCtx<'_>, local_id: u32) -> bool {
     )
 }
 
+/// `PERRY_PACKED_LOOP_ABRUPT=0` restores the pre-#9151 behaviour, where any
+/// abrupt statement kept the loop on the generic path.
+fn packed_loop_abrupt_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_PACKED_LOOP_ABRUPT").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 fn stmt_is_packed_f64_loop_safe(
     ctx: &FnCtx<'_>,
     stmt: &Stmt,
@@ -5008,12 +5017,34 @@ fn stmt_is_packed_f64_loop_safe(
         // Conservative: a box release clears cells; keep it out of packed
         // f64 loop bodies (it never appears in one today).
         Stmt::ReleaseBoxes(_) => false,
-        Stmt::Return(_)
-        | Stmt::Throw(_)
-        | Stmt::Break
-        | Stmt::Continue
-        | Stmt::LabeledBreak(_)
+        // Leaving *this* loop early neither calls out nor touches the array, so
+        // the relaxation the caller documents still holds: the entry guard has
+        // already revalidated the receiver, and an iteration that exits simply
+        // performs fewer reads than the guard admitted. `stmt_array_length_effect`
+        // and `stmt_preserves_array_length` already answer `Preserves`/`true`
+        // for these two.
+        //
+        // Unlabeled only. A nested loop is rejected below, so a bare `break` or
+        // `continue` here can only target the loop being analysed, and the fast
+        // clone's exit edge is the right destination. A LABELED break targets an
+        // enclosing loop and must unwind past this one, which the clone does not
+        // do: admitting it made
+        //   outer: for (r…) { for (i…) { s += a[i]; if (a[i] === 10 && r === 2) break outer; } }
+        // return 4032 instead of 4087, silently dropping the partial iteration.
+        Stmt::Break | Stmt::Continue => packed_loop_abrupt_enabled(),
+        // Same argument, once the returned expression itself is safe — it is
+        // evaluated in the loop body like any other operand.
+        Stmt::Return(value) => {
+            packed_loop_abrupt_enabled()
+                && value.as_ref().is_none_or(|expr| {
+                    expr_is_packed_f64_loop_safe(ctx, expr, arr_id, counter_id)
+                })
+        }
+        // `throw` stays out: the thrown value is typically constructed
+        // (`throw new Error(…)`), which is a call in the loop body.
+        Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
+        | Stmt::Throw(_)
         | Stmt::While { .. }
         | Stmt::DoWhile { .. }
         | Stmt::For { .. }
