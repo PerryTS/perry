@@ -185,6 +185,15 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                     .iter()
                     .rev()
                     .any(|fact| fact.numeric_accumulators.contains(id))
+                // #9160: the string-window clone admits the accumulator only
+                // after an entry tag check, and its sole write adds a proven
+                // string length. The fact exists only while lowering that
+                // clone, so the slow copy retains dynamic `+` semantics.
+                || ctx
+                    .string_window_array_facts
+                    .iter()
+                    .rev()
+                    .any(|fact| fact.numeric_accumulator == *id)
         }
         // NOTE: Expr::Compare is NOT numeric — it produces a NaN-boxed
         // TAG_TRUE/TAG_FALSE which `fcmp one cond, 0.0` would handle

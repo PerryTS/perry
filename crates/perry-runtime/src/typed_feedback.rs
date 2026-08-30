@@ -1451,6 +1451,43 @@ fn packed_f64_array_loop_range_guard(
     }
 }
 
+/// #9160: one-time admission for a read-only masked-index string-array loop.
+/// The guarded clone performs raw boxed-slot loads, so validate the ordinary
+/// array semantics that access would otherwise check on every iteration,
+/// prove the complete static window in bounds, and reject any non-string slot.
+#[no_mangle]
+pub extern "C" fn js_string_array_range_loop_guard(
+    receiver: f64,
+    min_idx: i32,
+    max_idx_exclusive: i32,
+) -> i32 {
+    let raw_addr = normalize_raw_object_addr(receiver.to_bits());
+    let arr = raw_addr as *const ArrayHeader;
+    if !plain_array_index_guard(arr, 0, false) || min_idx < 0 || max_idx_exclusive < min_idx {
+        return 0;
+    }
+    unsafe {
+        let len = (*arr).length;
+        if i64::from(max_idx_exclusive) > i64::from(len) {
+            return 0;
+        }
+        let elements =
+            (raw_addr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
+        for index in min_idx..max_idx_exclusive {
+            let value = *elements.add(index as usize);
+            if !crate::value::JSValue::from_bits(value.to_bits()).is_any_string() {
+                return 0;
+            }
+        }
+    }
+    1
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_STRING_ARRAY_RANGE_LOOP_GUARD: extern "C" fn(f64, i32, i32) -> i32 =
+    js_string_array_range_loop_guard;
+
 /// Dense-window variant of [`packed_f64_array_loop_range_guard`] for the
 /// read-only masked-index range loop: identical shape/window validation, but
 /// the window must additionally be hole-free (the guarded loop's inline loads

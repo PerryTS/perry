@@ -1445,6 +1445,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ))
                 });
             }
+            if let Some(value) = super::string_window::try_lower_index_get(ctx, object, index)? {
+                return Ok(value);
+            }
             // #6750 follow-up: a masked-window fact (dense range-loop or
             // straight-line region fast copy) covering this access means the
             // entry guard already proved the receiver's storage layout and

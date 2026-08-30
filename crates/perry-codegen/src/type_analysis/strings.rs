@@ -538,6 +538,9 @@ pub(crate) fn is_declared_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// about answers `false` and gets guarded, which costs one predictable
 /// compare, whereas defaulting the other way costs a silent wrong answer.
 pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    if crate::expr::string_window::proves_index_string(ctx, e) {
+        return true;
+    }
     match e {
         Expr::LocalGet(id) => matches!(
             ctx.stable_local_type_proof(id),

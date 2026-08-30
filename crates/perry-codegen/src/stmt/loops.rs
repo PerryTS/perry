@@ -5576,6 +5576,14 @@ pub(crate) fn lower_for(
         lower_stmt(ctx, init_stmt)?;
     }
 
+    // #9160: `sum += strings[maskedIndex].length`. A one-time receiver,
+    // window, element-tag, and accumulator check admits a clone whose array
+    // access is a raw boxed-slot load and whose length dispatch is SSO/heap
+    // only. The ordinary loop below remains the semantic fallback.
+    if super::string_length_loop::lower(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
+
     // #6809/#6812: validate a dense, same-shape object array once and run a
     // bounded one-to-four-field numeric write nest without receiver/shape
     // guards or runtime calls in either hot loop.

@@ -393,6 +393,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE],
     );
+    module.declare_function("js_string_array_range_loop_guard", I32, &[DOUBLE, I32, I32]);
     // #6011: range-preguarded packed-f64 loop — validates a whole
     // [min_idx, max_idx_exclusive) index window (hole-tolerant) at loop entry.
     module.declare_function(

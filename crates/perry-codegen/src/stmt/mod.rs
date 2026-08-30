@@ -32,6 +32,7 @@ mod prealloc_module_global_tests;
 pub(crate) mod stable_packed_accumulator;
 pub(crate) mod stable_packed_loop;
 mod stable_packed_typed_array;
+mod string_length_loop;
 mod switch_stmt;
 mod try_stmt;
 mod unused_expr;

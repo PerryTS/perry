@@ -421,84 +421,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(ctx.block().load(DOUBLE, &slot));
                 }
             }
-            // `.length` on a statically-string receiver (`string`-typed local,
-            // `string[]` element, string-returning expression). #7128: this
-            // arrived in Phase 3a but keys on `is_string_expr` — the receiver's
-            // static TYPE — and never on a canonical-`Str` selection, so it is
-            // on `PERRY_STATIC_STRING_LOWERING`, not on the `Str` knob.
-            // The receiver bits are freshly
-            // produced with no safepoint before the header read (no
-            // forwarding hazard — evacuation rewrites slots/returns before
-            // the mutator resumes), so the ~18-op generic tower below
-            // (GC-type byte, forwarding flag, handle-band checks) collapses
-            // to a 3-arm tag dispatch: SSO → inline length-byte extract
-            // (`lshr 40; and 0xFF`, matching `js_value_length_f64`'s SSO
-            // branch), heap STRING_TAG → `load i32` of `utf16_len` at
-            // offset 0, anything else (annotation lie, nullable-union
-            // receiver) → the property-semantic slow call used by the
-            // generic tower's slow arm.
-            {
-                if crate::expr::static_string_lowering_enabled()
-                    && is_string_expr(ctx, object)
-                    && !is_array_expr(ctx, object)
-                {
-                    let recv_box = lower_expr(ctx, object)?;
-                    let bits = ctx.block().bitcast_double_to_i64(&recv_box);
-                    let tag = ctx.block().lshr(I64, &bits, "48");
-                    let is_sso =
-                        ctx.block()
-                            .icmp_eq(I64, &tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
-                    let sso_idx = ctx.new_block("strlen.sso");
-                    let chk_idx = ctx.new_block("strlen.chk");
-                    let heap_idx = ctx.new_block("strlen.heap");
-                    let slow_idx = ctx.new_block("strlen.slow");
-                    let merge_idx = ctx.new_block("strlen.merge");
-                    let sso_label = ctx.block_label(sso_idx);
-                    let chk_label = ctx.block_label(chk_idx);
-                    let heap_label = ctx.block_label(heap_idx);
-                    let slow_label = ctx.block_label(slow_idx);
-                    let merge_label = ctx.block_label(merge_idx);
-                    ctx.block().cond_br(&is_sso, &sso_label, &chk_label);
-
-                    ctx.current_block = sso_idx;
-                    let len_shifted = ctx.block().lshr(I64, &bits, "40");
-                    let len_byte = ctx.block().and(I64, &len_shifted, "255");
-                    let sso_len = ctx.block().uitofp(I64, &len_byte, DOUBLE);
-                    let sso_pred = ctx.block().label.clone();
-                    ctx.block().br(&merge_label);
-
-                    ctx.current_block = chk_idx;
-                    let is_heap =
-                        ctx.block()
-                            .icmp_eq(I64, &tag, crate::nanbox::STRING_TAG_TOP16_I64);
-                    ctx.block().cond_br(&is_heap, &heap_label, &slow_label);
-
-                    ctx.current_block = heap_idx;
-                    let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
-                    let len_i32 = ctx.block().safe_load_i32_from_ptr(&handle);
-                    let heap_len = ctx.block().uitofp(I32, &len_i32, DOUBLE);
-                    let heap_pred = ctx.block().label.clone();
-                    ctx.block().br(&merge_label);
-
-                    ctx.current_block = slow_idx;
-                    let slow_len = ctx.block().call(
-                        DOUBLE,
-                        "js_value_length_property_f64",
-                        &[(DOUBLE, &recv_box)],
-                    );
-                    let slow_pred = ctx.block().label.clone();
-                    ctx.block().br(&merge_label);
-
-                    ctx.current_block = merge_idx;
-                    return Ok(ctx.block().phi(
-                        DOUBLE,
-                        &[
-                            (&sso_len, &sso_pred),
-                            (&heap_len, &heap_pred),
-                            (&slow_len, &slow_pred),
-                        ],
-                    ));
-                }
+            if let Some(length) = super::string_length::try_lower(ctx, object)? {
+                return Ok(length);
             }
             // Issue #73: validate the receiver before the inline load.
             // The compile-time condition above fires for Array / String /
