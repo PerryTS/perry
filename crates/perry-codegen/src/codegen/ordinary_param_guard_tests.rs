@@ -911,10 +911,18 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
             && !specialized.contains("js_dynamic_string_or_number_add"),
         "the guarded clone should narrow the discriminated union and add raw:\n{specialized}"
     );
+    // The generic body keeps the dynamic add. Since #9157 it also carries a
+    // guarded `fadd` in a fast arm, so the distinction that matters is not
+    // "has no fadd" but "has no PROOF": its add still dispatches dynamically
+    // whenever the runtime tag test fails, which the specialized clone above
+    // does not even emit.
     assert!(
-        generic.contains("call double @js_dynamic_string_or_number_add(")
-            && !generic.contains("fadd double"),
+        generic.contains("call double @js_dynamic_string_or_number_add("),
         "the unproven body must keep the dynamic add:\n{generic}"
+    );
+    assert!(
+        !generic.contains("fadd double") || generic.contains("guarded_add.numeric"),
+        "an fadd in the unproven body must be guarded:\n{generic}"
     );
 
     // The negative that pins the rule: same union, same discriminant chain,

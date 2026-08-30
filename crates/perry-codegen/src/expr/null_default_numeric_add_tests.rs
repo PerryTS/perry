@@ -66,7 +66,7 @@ fn null_defaulted_dynamic_increment_has_guarded_numeric_fast_path() {
 }
 
 #[test]
-fn arbitrary_dynamic_increment_stays_on_dynamic_dispatch() {
+fn arbitrary_dynamic_increment_is_never_assumed_numeric() {
     let ir = ir_for(
         "arbitrary_dynamic_increment",
         vec![
@@ -75,9 +75,14 @@ fn arbitrary_dynamic_increment_stays_on_dynamic_dispatch() {
         ],
     );
 
+    // #9157 gave two-leaf trees the same guarded diamond three-leaf trees
+    // already had, so an `fadd` now appears here where it previously did not.
+    // The invariant this test exists for is unchanged and is asserted more
+    // directly below: an `Any` is never ASSUMED numeric. It may be TESTED and
+    // then added, because the cold arm still performs the dynamic `+`.
     assert!(
-        !ir.contains("guarded_add.numeric") && !ir.contains("fadd double"),
-        "an unguarded Any value must not be assumed numeric:\n{ir}"
+        ir.contains("guarded_add.numeric") == ir.contains("fadd double"),
+        "an fadd on an Any value must be guarded, never bare:\n{ir}"
     );
     assert!(
         ir.contains("call double @js_dynamic_string_or_number_add("),

@@ -74,19 +74,32 @@ fn three_leaf_dynamic_add_tree_uses_one_shared_guard() {
 }
 
 #[test]
-fn two_leaf_dynamic_add_stays_on_direct_dispatch() {
+fn two_leaf_dynamic_add_takes_the_guard_too() {
+    // This test previously asserted the opposite, on the cost model that "a
+    // single dynamic add should not pay for a separate guard diamond" — the
+    // guard was thought merely to move the helper behind a branch. It does
+    // more: the hot arm becomes an inline `fadd`, and the operands stop going
+    // through `lower_rooted_dynamic_binary`, which roots them. Measured on
+    // `s += v` with both operands numbers at runtime but neither statically
+    // proven, the pair guard is worth 3.44 -> 1.33 ns/op (#9157).
     let mut body = dynamic_locals();
     body.push(result(add(Expr::LocalGet(A), Expr::LocalGet(B))));
     let ir = ir_for("two_leaf_dynamic_add", body);
 
-    assert!(
-        !ir.contains("guarded_add.numeric") && !ir.contains("fadd double"),
-        "a single dynamic add should not pay for a separate guard diamond:\n{ir}"
+    assert_eq!(
+        ir.matches("\nguarded_add.numeric.").count(),
+        1,
+        "a two-leaf tree should get one guard diamond:\n{ir}"
+    );
+    assert_eq!(
+        ir.matches("fadd double").count(),
+        1,
+        "the fast arm must perform the addition inline:\n{ir}"
     );
     assert_eq!(
         ir.matches("call double @js_dynamic_string_or_number_add(")
             .count(),
         1,
-        "a single dynamic add should keep direct dispatch:\n{ir}"
+        "the cold arm must preserve exact dynamic `+` semantics:\n{ir}"
     );
 }

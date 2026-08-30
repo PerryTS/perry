@@ -313,18 +313,36 @@ fn add_tree_leaves<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
 ///
 /// A three-or-more-leaf tree is the common accumulator shape
 /// `sum += row.x + row.y`: lowering each node independently otherwise pays
-/// the dynamic add helper twice even when every runtime value is a number. At
-/// two leaves the guard merely moves the helper behind a branch; starting at
-/// three it can replace two or more helper calls with one shared tag check.
+/// the dynamic add helper twice even when every runtime value is a number,
+/// and one shared tag check replaces both.
+///
+/// Two leaves qualify as well, which the original threshold excluded on the
+/// grounds that the guard "merely moves the helper behind a branch". It does
+/// more than that. On the hot arm the helper call is replaced by an inline
+/// `fadd`, and the operands stop going through `lower_rooted_dynamic_binary`,
+/// which roots them — so a plain `s += v` accumulator was paying a call plus
+/// a write barrier per add and keeping its accumulator in a shadow-frame slot
+/// instead of a register. Measured on `s += v` with both operands numbers at
+/// runtime but neither statically proven: 3.44 -> 0.43 ns/op against node's
+/// 0.35. The cold arm still rebuilds the original tree, so a leaf that turns
+/// out to be a string concatenates exactly as before.
 ///
 /// Do not require a static numeric hint here. The important accumulator case
 /// is often a captured local plus fields read from interface-shaped objects,
 /// so every leaf is `Any` to codegen. The guard itself is the runtime proof;
 /// its cold arm preserves the original tree and exact dynamic `+` semantics.
 fn dynamic_add_tree_benefits_shared_guard(expr: &Expr) -> bool {
+    if matches!(
+        std::env::var("PERRY_DYNAMIC_ADD_PAIR_GUARD").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    ) {
+        let mut leaves = Vec::new();
+        add_tree_leaves(expr, &mut leaves);
+        return leaves.len() >= 3;
+    }
     let mut leaves = Vec::new();
     add_tree_leaves(expr, &mut leaves);
-    leaves.len() >= 3
+    leaves.len() >= 2
 }
 
 /// Rebuild the `+` tree over already-lowered leaf values, node for node, so the
