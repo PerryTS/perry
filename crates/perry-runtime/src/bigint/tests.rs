@@ -545,3 +545,218 @@ fn bigint_from_f64_parses_sso_numeric_strings() {
         assert_eq!(got, s, "BigInt({s:?}) mismatch");
     }
 }
+
+// -- unsigned_div_limbs fast paths: power-of-two divisor, single-limb --
+// -- divisor, and the bit-length-bounded general loop --
+
+/// Read the raw limbs of a freshly-allocated bigint.
+fn limbs_of(p: *const BigIntHeader) -> [u64; BIGINT_LIMBS] {
+    unsafe { (*p).limbs }
+}
+
+/// Build a bigint from the given low limbs (rest zero — non-negative value).
+fn bigint_from_low_limbs(low: &[u64]) -> *mut BigIntHeader {
+    let mut limbs = ZERO_LIMBS;
+    limbs[..low.len()].copy_from_slice(low);
+    bigint_alloc_with_limbs(limbs)
+}
+
+#[test]
+fn pow2_divisor_mod_and_div_multi_limb() {
+    // 192-bit dividend % 2^64: remainder = low limb, quotient = high limbs.
+    let a = bigint_from_low_limbs(&[0xAAAA_AAAA_AAAA_AAAA, 0xBBBB_BBBB_BBBB_BBBB, 0xCCCC]);
+    let two_pow_64 = bigint_from_low_limbs(&[0, 1]);
+
+    let r = limbs_of(js_bigint_mod(a, two_pow_64));
+    assert_eq!(r[0], 0xAAAA_AAAA_AAAA_AAAA);
+    assert!(r[1..].iter().all(|&l| l == 0));
+
+    let q = limbs_of(js_bigint_div(a, two_pow_64));
+    assert_eq!(q[0], 0xBBBB_BBBB_BBBB_BBBB);
+    assert_eq!(q[1], 0xCCCC);
+    assert!(q[2..].iter().all(|&l| l == 0));
+
+    // Non-limb-aligned power of two: % 2^13 keeps the low 13 bits.
+    let two_pow_13 = js_bigint_from_i64(1 << 13);
+    let r = limbs_of(js_bigint_mod(a, two_pow_13));
+    assert_eq!(r[0], 0xAAAA_AAAA_AAAA_AAAA & ((1 << 13) - 1));
+    assert!(r[1..].iter().all(|&l| l == 0));
+
+    // 2^70 (bit 6 of limb 1): quotient must stitch bits across limbs.
+    let two_pow_70 = bigint_from_low_limbs(&[0, 1 << 6]);
+    let q = limbs_of(js_bigint_div(a, two_pow_70));
+    assert_eq!(q[0], (0xBBBB_BBBB_BBBB_BBBBu64 >> 6) | (0xCCCCu64 << 58));
+    assert_eq!(q[1], 0xCCCC >> 6);
+    assert!(q[2..].iter().all(|&l| l == 0));
+}
+
+#[test]
+fn pow2_divisor_mod_sign_of_dividend_and_canonical_zero() {
+    let two_pow_64 = bigint_from_low_limbs(&[0, 1]);
+
+    // -(2^100 + 5) % 2^64 === -5 (sign follows dividend; ECMA remainder).
+    let mag = bigint_from_low_limbs(&[5, 1 << 36]);
+    let a = js_bigint_neg(mag);
+    assert_eq!(read_as_i64(js_bigint_mod(a, two_pow_64)), -5);
+
+    // -(2^100) % 2^64 === 0 with NO negative-zero pattern: all limbs zero.
+    let mag = bigint_from_low_limbs(&[0, 1 << 36]);
+    let a = js_bigint_neg(mag);
+    assert_eq!(limbs_of(js_bigint_mod(a, two_pow_64)), ZERO_LIMBS);
+}
+
+#[test]
+fn pow2_divisor_edge_cases() {
+    let two_pow_64 = bigint_from_low_limbs(&[0, 1]);
+
+    // Dividend smaller than divisor: unchanged. (2^64 exceeds i64, so this
+    // exercises the limb path, not the i64 fast path.)
+    let five = js_bigint_from_i64(5);
+    assert_eq!(read_as_i64(js_bigint_mod(five, two_pow_64)), 5);
+
+    // Dividend == divisor: remainder 0, quotient 1.
+    let a = bigint_from_low_limbs(&[0, 1]);
+    assert_eq!(limbs_of(js_bigint_mod(a, two_pow_64)), ZERO_LIMBS);
+    assert_eq!(read_as_i64(js_bigint_div(a, two_pow_64)), 1);
+
+    // Multi-limb dividend % 1n == 0n, / 1n == dividend.
+    let one = js_bigint_from_i64(1);
+    let big = bigint_from_low_limbs(&[7, 8, 9]);
+    assert_eq!(limbs_of(js_bigint_mod(big, one)), ZERO_LIMBS);
+    assert_eq!(limbs_of(js_bigint_div(big, one)), limbs_of(big));
+}
+
+#[test]
+fn single_limb_divisor_hardware_div() {
+    // (2^64) % FNV prime — expected value computed independently via u128.
+    let prime = 1_099_511_628_211u64;
+    let two_pow_64 = bigint_from_low_limbs(&[0, 1]);
+    let b = js_bigint_from_i64(prime as i64);
+    let expected = ((1u128 << 64) % prime as u128) as u64;
+    let r = limbs_of(js_bigint_mod(two_pow_64, b));
+    assert_eq!(r[0], expected);
+    assert!(r[1..].iter().all(|&l| l == 0));
+
+    // 200+-bit dividend: verify the division identity a == q*b + r, r < b,
+    // using independently-tested mul/add/cmp.
+    let a = bigint_from_low_limbs(&[12345, 0xDEAD_BEEF, 0, 0x1_0000]);
+    let q = js_bigint_div(a, b);
+    let r = js_bigint_mod(a, b);
+    assert_eq!(js_bigint_cmp(r, b), -1);
+    let recomposed = js_bigint_add(js_bigint_mul(q, b), r);
+    assert_eq!(limbs_of(recomposed), limbs_of(a));
+}
+
+#[test]
+fn general_path_multi_limb_divisor_identity() {
+    // Divisor 2^64 + 1: two limbs, not a power of two → general bit loop.
+    let a = bigint_from_low_limbs(&[0x1111_2222_3333_4444, 0x5555, 0, 0, 0xF00D]);
+    let b = bigint_from_low_limbs(&[1, 1]);
+    let q = js_bigint_div(a, b);
+    let r = js_bigint_mod(a, b);
+    assert_eq!(js_bigint_cmp(r, b), -1);
+    let recomposed = js_bigint_add(js_bigint_mul(q, b), r);
+    assert_eq!(limbs_of(recomposed), limbs_of(a));
+}
+
+/// Deterministic xorshift64* — keeps the cross-check reproducible.
+fn xorshift64(state: &mut u64) -> u64 {
+    let mut x = *state;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    *state = x;
+    x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+}
+
+fn limbs_from_i128(v: i128) -> [u64; BIGINT_LIMBS] {
+    let mut limbs = ZERO_LIMBS;
+    write_i128(v, &mut limbs);
+    limbs
+}
+
+fn bigint_from_i128(v: i128) -> *mut BigIntHeader {
+    bigint_alloc_with_limbs(limbs_from_i128(v))
+}
+
+/// Randomized differential check of `js_bigint_div`/`js_bigint_mod` against
+/// host `i128` arithmetic, which has exactly JS BigInt semantics (`/`
+/// truncates toward zero, `%` takes the sign of the dividend). Divisor
+/// shapes are chosen to hit all three `unsigned_div_limbs` tiers:
+/// power-of-two, single-limb, and multi-limb-general.
+#[test]
+fn div_mod_cross_check_against_i128_all_tiers() {
+    let mut s = 0x9E37_79B9_7F4A_7C15u64;
+    for iter in 0..3000u32 {
+        // Dividend: random, width-varied, masked to 127 bits so it is a
+        // non-negative i128 whose negation cannot overflow.
+        let width = (xorshift64(&mut s) % 128) as u32;
+        let a128 =
+            (((xorshift64(&mut s) as u128) << 64) | xorshift64(&mut s) as u128) >> (127 - width);
+        let a_i = (a128 & (u128::MAX >> 1)) as i128;
+
+        // Divisor: cycle the three tiers.
+        let b_i = match iter % 3 {
+            // Tier 1: exact power of two, 2^0 .. 2^126.
+            0 => 1i128 << (xorshift64(&mut s) % 127),
+            // Tier 2: single 64-bit limb (nonzero).
+            1 => (xorshift64(&mut s) | 1) as i128,
+            // Tier 3: two limbs, high limb nonzero (never a power of two
+            // because bit 0 is forced on).
+            _ => {
+                let hi = xorshift64(&mut s) | 1;
+                ((((hi as u128) << 64) | (xorshift64(&mut s) | 1) as u128) & (u128::MAX >> 1))
+                    as i128
+            }
+        };
+        assert!(b_i > 0, "divisor must be positive and nonzero");
+
+        for &(sa, sb) in &[(1i128, 1i128), (-1, 1), (1, -1), (-1, -1)] {
+            let av = sa * a_i;
+            let bv = sb * b_i;
+            let a = bigint_from_i128(av);
+            let b = bigint_from_i128(bv);
+
+            assert_eq!(
+                limbs_of(js_bigint_div(a, b)),
+                limbs_from_i128(av / bv),
+                "div mismatch iter={iter} a={av} b={bv}"
+            );
+            assert_eq!(
+                limbs_of(js_bigint_mod(a, b)),
+                limbs_from_i128(av % bv),
+                "mod mismatch iter={iter} a={av} b={bv}"
+            );
+        }
+    }
+}
+
+#[test]
+fn zero_dividend_and_wide_pow2_edges() {
+    let zero = js_bigint_from_i64(0);
+    let two_pow_64 = bigint_from_low_limbs(&[0, 1]);
+    assert_eq!(limbs_of(js_bigint_mod(zero, two_pow_64)), ZERO_LIMBS);
+    assert_eq!(limbs_of(js_bigint_div(zero, two_pow_64)), ZERO_LIMBS);
+
+    // Dividend one below the divisor: passes straight through.
+    let all_ones = bigint_from_low_limbs(&[u64::MAX]);
+    assert_eq!(limbs_of(js_bigint_mod(all_ones, two_pow_64)), {
+        let mut e = ZERO_LIMBS;
+        e[0] = u64::MAX;
+        e
+    });
+    assert_eq!(limbs_of(js_bigint_div(all_ones, two_pow_64)), ZERO_LIMBS);
+
+    // Near-widest power-of-two divisor: 2^1021, dividend 2^1022 + 12345
+    // (top bit of the top limb stays clear, so the value is positive).
+    // q = 2, r = 12345.
+    let mut b = ZERO_LIMBS;
+    b[BIGINT_LIMBS - 1] = 1u64 << 61; // 2^1021
+    let mut a = ZERO_LIMBS;
+    a[BIGINT_LIMBS - 1] = 1u64 << 62; // 2^1022
+    a[0] = 12345;
+    let a = bigint_alloc_with_limbs(a);
+    let b = bigint_alloc_with_limbs(b);
+    assert_eq!(read_as_i64(js_bigint_mod(a, b)), 12345);
+    assert_eq!(read_as_i64(js_bigint_div(a, b)), 2);
+}

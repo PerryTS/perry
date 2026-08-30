@@ -263,7 +263,31 @@ fn effective_limb_len(limbs: &[u64; BIGINT_LIMBS]) -> usize {
     1
 }
 
-/// Unsigned binary long division on magnitude limbs
+/// Index of the highest set bit across the limbs, or `None` if all zero.
+#[inline(always)]
+fn highest_set_bit(limbs: &[u64; BIGINT_LIMBS]) -> Option<usize> {
+    for i in (0..BIGINT_LIMBS).rev() {
+        if limbs[i] != 0 {
+            return Some(i * 64 + 63 - limbs[i].leading_zeros() as usize);
+        }
+    }
+    None
+}
+
+/// Unsigned binary long division on magnitude limbs.
+///
+/// Callers pass non-negative magnitudes (`b` nonzero — division by zero is
+/// thrown before reaching here) and re-apply signs themselves. Three tiers:
+///
+/// 1. **Power-of-two divisor** (single set bit at position `k`, e.g. the
+///    `% 2^64n` / `% 2^32n` idiom common in JS hashing code such as TypeBox's
+///    FNV-1a `Value.Hash`): remainder = low `k` bits of the dividend,
+///    quotient = dividend `>> k`. O(limbs). `k == 0` means divisor 1 —
+///    remainder 0, quotient = dividend.
+/// 2. **Single-limb divisor** (covers `% prime` for primes < 2^64): one
+///    hardware `u128 / u64` per dividend limb, top-down.
+/// 3. **General case**: bit-at-a-time long division, bounded by the
+///    dividend's actual bit length instead of all 1024 bits.
 fn unsigned_div_limbs(
     a: &[u64; BIGINT_LIMBS],
     b: &[u64; BIGINT_LIMBS],
@@ -271,7 +295,67 @@ fn unsigned_div_limbs(
     let mut quotient = ZERO_LIMBS;
     let mut remainder = ZERO_LIMBS;
 
-    for i in (0..BIGINT_BITS).rev() {
+    let Some(a_top_bit) = highest_set_bit(a) else {
+        // 0 / b == 0 rem 0.
+        return (quotient, remainder);
+    };
+    let Some(b_top_bit) = highest_set_bit(b) else {
+        // Unreachable: `js_bigint_div`/`js_bigint_mod` both throw a RangeError
+        // on a zero divisor before computing magnitudes. Return 0 rem 0 rather
+        // than unwinding out of an `extern "C"` frame (which would abort).
+        debug_assert!(false, "unsigned_div_limbs called with a zero divisor");
+        return (quotient, remainder);
+    };
+
+    // Dividend smaller than divisor: quotient 0, remainder = dividend.
+    if a_top_bit < b_top_bit {
+        return (quotient, *a);
+    }
+
+    // Tier 1: divisor is a power of two (exactly one set bit).
+    let b_top_limb = b_top_bit / 64;
+    if b[b_top_limb].is_power_of_two() && b[..b_top_limb].iter().all(|&l| l == 0) {
+        let k = b_top_bit;
+        let (limb_k, bit_k) = (k / 64, k % 64);
+        // remainder = low k bits of the dividend's magnitude.
+        remainder[..limb_k].copy_from_slice(&a[..limb_k]);
+        if bit_k > 0 {
+            remainder[limb_k] = a[limb_k] & ((1u64 << bit_k) - 1);
+        }
+        // quotient = a >> k.
+        for i in 0..BIGINT_LIMBS {
+            let src = i + limb_k;
+            let lo = if src < BIGINT_LIMBS { a[src] } else { 0 };
+            quotient[i] = if bit_k == 0 {
+                lo
+            } else {
+                let hi = if src + 1 < BIGINT_LIMBS {
+                    a[src + 1]
+                } else {
+                    0
+                };
+                (lo >> bit_k) | (hi << (64 - bit_k))
+            };
+        }
+        return (quotient, remainder);
+    }
+
+    // Tier 2: single-limb divisor — hardware division limb by limb.
+    if b_top_limb == 0 {
+        let d = b[0];
+        let mut rem = 0u64;
+        for i in (0..=a_top_bit / 64).rev() {
+            let cur = ((rem as u128) << 64) | a[i] as u128;
+            quotient[i] = (cur / d as u128) as u64;
+            rem = (cur % d as u128) as u64;
+        }
+        remainder[0] = rem;
+        return (quotient, remainder);
+    }
+
+    // Tier 3: general bit-at-a-time long division over the dividend's
+    // significant bits only.
+    for i in (0..=a_top_bit).rev() {
         // Shift remainder left by 1
         let mut carry = 0u64;
         for limb in remainder.iter_mut() {
