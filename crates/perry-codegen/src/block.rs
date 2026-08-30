@@ -297,7 +297,10 @@ impl LlBlock {
     /// check cannot be invalidated mid-loop). Intrinsic/libm-style calls
     /// never enter the perry runtime, so they cannot trigger a collection.
     pub fn contains_gc_unsafe_call(&self) -> bool {
-        if matches!(self.instructions.last(), Some(crate::inst::LlInst::Unreachable)) {
+        if matches!(
+            self.instructions.last(),
+            Some(crate::inst::LlInst::Unreachable)
+        ) {
             return false;
         }
         self.instructions.iter().any(|i| i.is_gc_unsafe_call())
