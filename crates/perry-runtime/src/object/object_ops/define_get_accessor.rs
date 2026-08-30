@@ -337,42 +337,40 @@ mod tests {
     #[test]
     fn combined_installer_matches_two_call_sequence() {
         let _global = crate::gc::global_side_table_test_lock();
-        unsafe {
-            let combined = js_object_alloc(0, 0);
-            super::super::super::install_fresh_accessor_property(
-                combined as usize,
-                "beta".to_string(),
-                AccessorDescriptor { get: 0, set: 0 },
-                PropertyAttrs::new(true, true, false),
+        let combined = js_object_alloc(0, 0);
+        super::super::super::install_fresh_accessor_property(
+            combined as usize,
+            "beta".to_string(),
+            AccessorDescriptor { get: 0, set: 0 },
+            PropertyAttrs::new(true, true, false),
+        );
+        let two_call = js_object_alloc(0, 0);
+        set_accessor_descriptor(
+            two_call as usize,
+            "beta".to_string(),
+            AccessorDescriptor { get: 0, set: 0 },
+        );
+        set_property_attrs(
+            two_call as usize,
+            "beta".to_string(),
+            PropertyAttrs::new(true, true, false),
+        );
+        for (label, obj) in [("combined", combined), ("two_call", two_call)] {
+            let acc = get_accessor_descriptor(obj as usize, "beta")
+                .unwrap_or_else(|| panic!("{label}: accessor entry"));
+            assert_eq!((acc.get, acc.set), (0, 0), "{label}");
+            let attrs = get_property_attrs(obj as usize, "beta")
+                .unwrap_or_else(|| panic!("{label}: attrs entry"));
+            assert!(
+                attrs.writable() && attrs.enumerable() && !attrs.configurable(),
+                "{label}"
             );
-            let two_call = js_object_alloc(0, 0);
-            set_accessor_descriptor(
-                two_call as usize,
-                "beta".to_string(),
-                AccessorDescriptor { get: 0, set: 0 },
+            let keys = super::super::super::accessor_descriptor_keys_for_obj(obj as usize);
+            assert_eq!(
+                keys.iter().filter(|k| k.as_str() == "beta").count(),
+                1,
+                "{label}: owner index holds the key exactly once"
             );
-            set_property_attrs(
-                two_call as usize,
-                "beta".to_string(),
-                PropertyAttrs::new(true, true, false),
-            );
-            for (label, obj) in [("combined", combined), ("two_call", two_call)] {
-                let acc = get_accessor_descriptor(obj as usize, "beta")
-                    .unwrap_or_else(|| panic!("{label}: accessor entry"));
-                assert_eq!((acc.get, acc.set), (0, 0), "{label}");
-                let attrs = get_property_attrs(obj as usize, "beta")
-                    .unwrap_or_else(|| panic!("{label}: attrs entry"));
-                assert!(
-                    attrs.writable() && attrs.enumerable() && !attrs.configurable(),
-                    "{label}"
-                );
-                let keys = super::super::super::accessor_descriptor_keys_for_obj(obj as usize);
-                assert_eq!(
-                    keys.iter().filter(|k| k.as_str() == "beta").count(),
-                    1,
-                    "{label}: owner index holds the key exactly once"
-                );
-            }
         }
     }
 
@@ -382,23 +380,21 @@ mod tests {
     #[test]
     fn combined_installer_repeat_does_not_duplicate_owner_index() {
         let _global = crate::gc::global_side_table_test_lock();
-        unsafe {
-            let obj = js_object_alloc(0, 0);
-            for _ in 0..2 {
-                super::super::super::install_fresh_accessor_property(
-                    obj as usize,
-                    "gamma".to_string(),
-                    AccessorDescriptor { get: 0, set: 0 },
-                    PropertyAttrs::new(true, true, false),
-                );
-            }
-            let keys = super::super::super::accessor_descriptor_keys_for_obj(obj as usize);
-            assert_eq!(
-                keys.iter().filter(|k| k.as_str() == "gamma").count(),
-                1,
-                "duplicate install must dedupe via the meta prior-bit path"
+        let obj = js_object_alloc(0, 0);
+        for _ in 0..2 {
+            super::super::super::install_fresh_accessor_property(
+                obj as usize,
+                "gamma".to_string(),
+                AccessorDescriptor { get: 0, set: 0 },
+                PropertyAttrs::new(true, true, false),
             );
         }
+        let keys = super::super::super::accessor_descriptor_keys_for_obj(obj as usize);
+        assert_eq!(
+            keys.iter().filter(|k| k.as_str() == "gamma").count(),
+            1,
+            "duplicate install must dedupe via the meta prior-bit path"
+        );
     }
 
     /// Numeric keys are inadmissible (canonical-index semantics) and must
