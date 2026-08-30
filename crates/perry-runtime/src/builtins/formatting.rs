@@ -257,11 +257,35 @@ impl Drop for InspectDepthLimitGuard {
 /// because the macOS linker's `-dead_strip` removes the symbol *names* of
 /// perry_fn_* globals (the bodies stay — they're referenced by pointer —
 /// but the symbol entries vanish, so `dli_sname` comes back null).
+/// `PERRY_EAGER_FN_METADATA_UTF8=1` restores validation at registration time,
+/// for A/B measurement of the startup cost this moves.
+fn eager_fn_metadata_validation() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_EAGER_FN_METADATA_UTF8").as_deref(),
+            Ok("1") | Ok("on") | Ok("true")
+        )
+    })
+}
+
+/// Decode a registered metadata slot, treating non-UTF-8 bytes as absent.
+///
+/// Registration stores raw bytes so module init does not validate every
+/// function's name and source text; the check moves here, where it runs only
+/// for metadata something actually reads. Invalid bytes yield `None`, which is
+/// what the caller saw before when registration rejected them up front.
+fn decode_registered(slot: Option<&std::sync::Arc<[u8]>>) -> Option<String> {
+    let bytes = slot?;
+    std::str::from_utf8(bytes).ok().map(str::to_owned)
+}
+
 fn function_name_registry(
-) -> &'static std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<str>>> {
+) -> &'static std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>> {
     use std::sync::OnceLock;
     static REGISTRY: OnceLock<
-        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<str>>>,
+        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>>,
     > = OnceLock::new();
     REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
@@ -305,7 +329,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
             function_name_registry()
                 .lock()
                 .ok()
-                .and_then(|map| map.get(&(func_ptr as usize)).map(|n| n.to_string()))
+                .and_then(|map| decode_registered(map.get(&(func_ptr as usize))))
                 .filter(|n| !n.is_empty())
         }
     };
@@ -361,12 +385,17 @@ pub unsafe extern "C" fn js_register_function_name(
     if func_ptr.is_null() || name_ptr.is_null() || name_len == 0 {
         return;
     }
+    // The bytes are stored UNVALIDATED and decoded on read. Module init calls
+    // this once per function in the bundle — 72,713 of them for claude-code —
+    // and `core::str::from_utf8` was 2.17% of `cc --help` doing exactly this.
+    // Nothing observable changes: a non-UTF-8 name was previously dropped at
+    // registration and is now dropped at lookup, so both report "no name".
     let bytes = std::slice::from_raw_parts(name_ptr, name_len as usize);
-    let Ok(name) = std::str::from_utf8(bytes) else {
+    if eager_fn_metadata_validation() && std::str::from_utf8(bytes).is_err() {
         return;
-    };
+    }
     if let Ok(mut map) = function_name_registry().lock() {
-        map.insert(func_ptr as usize, std::sync::Arc::from(name));
+        map.insert(func_ptr as usize, std::sync::Arc::from(bytes));
     }
 }
 
@@ -384,7 +413,7 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
     }
     if let Ok(mut map) = function_name_registry().lock() {
         map.entry(func_ptr)
-            .or_insert_with(|| std::sync::Arc::from(name));
+            .or_insert_with(|| std::sync::Arc::from(name.as_bytes()));
     }
 }
 
@@ -403,7 +432,7 @@ pub fn function_name_for_ptr(func_ptr: usize) -> Option<String> {
     function_name_registry()
         .lock()
         .ok()
-        .and_then(|map| map.get(&func_ptr).map(|n| n.to_string()))
+        .and_then(|map| decode_registered(map.get(&func_ptr)))
         .filter(|n| !n.is_empty())
 }
 
@@ -413,10 +442,10 @@ pub fn function_name_for_ptr(func_ptr: usize) -> Option<String> {
 /// time user code runs the map is fully populated. Mirrors the function-name
 /// registry's single-writer, last-write-wins semantics.
 fn function_source_registry(
-) -> &'static std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<str>>> {
+) -> &'static std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>> {
     use std::sync::OnceLock;
     static REGISTRY: OnceLock<
-        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<str>>>,
+        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>>,
     > = OnceLock::new();
     REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
@@ -438,12 +467,15 @@ pub unsafe extern "C" fn js_register_function_source(
     if func_ptr.is_null() || src_ptr.is_null() || src_len == 0 {
         return;
     }
+    // Stored unvalidated and decoded on read, as for names above. Source text
+    // is registered for every function a bundle CONTAINS, to serve
+    // `Function.prototype.toString()` — which most programs never call.
     let bytes = std::slice::from_raw_parts(src_ptr, src_len as usize);
-    let Ok(src) = std::str::from_utf8(bytes) else {
+    if eager_fn_metadata_validation() && std::str::from_utf8(bytes).is_err() {
         return;
-    };
+    }
     if let Ok(mut map) = function_source_registry().lock() {
-        map.insert(func_ptr as usize, std::sync::Arc::from(src));
+        map.insert(func_ptr as usize, std::sync::Arc::from(bytes));
     }
 }
 
@@ -455,7 +487,7 @@ pub fn function_source_for_ptr(func_ptr: usize) -> Option<String> {
     function_source_registry()
         .lock()
         .ok()
-        .and_then(|map| map.get(&func_ptr).map(|s| s.to_string()))
+        .and_then(|map| decode_registered(map.get(&func_ptr)))
         .filter(|s| !s.is_empty())
 }
 
