@@ -1595,7 +1595,7 @@ pub fn linearize_body(
                     Stmt::For { body, .. }
                     | Stmt::While { body, .. }
                     | Stmt::DoWhile { body, .. } => {
-                        rewrite_labeled_bc_in_stmts(body, label);
+                        rewrite_labeled_bc_in_stmts(body, label, next_local_id);
                     }
                     // A labeled yielding SWITCH: `break label` at case-body
                     // level is the switch's own break — rewrite it to plain
@@ -1603,7 +1603,7 @@ pub fn linearize_body(
                     // into the done-flag (#5868).
                     Stmt::Switch { cases, .. } => {
                         for case in cases.iter_mut() {
-                            rewrite_labeled_bc_in_stmts(&mut case.body, label);
+                            rewrite_labeled_bc_in_stmts(&mut case.body, label, next_local_id);
                         }
                     }
                     _ => {}
@@ -1670,14 +1670,45 @@ pub fn linearize_body(
 /// Within a labeled loop's body, rewrite `break label` / `continue label`
 /// that target THIS label into plain `break` / `continue`, so the loop's own
 /// For/While linearization (which only knows about plain break/continue) maps
-/// them to the loop's state targets. Descends only through `if` / `try`
-/// (which don't capture break/continue), mirroring the scoping of
-/// `rewrite_break_continue_in_stmt`. Stops at nested loops and `switch` —
-/// a `break label` from inside one of those still targets this loop, but the
-/// current single-sentinel scheme can't express that, so those are left
-/// as-is (pre-existing limitation).
-fn rewrite_labeled_bc_in_stmts(stmts: &mut [Stmt], label: &str) {
-    for s in stmts.iter_mut() {
+/// them to the loop's state targets. Descends through `if` / `try`, which do
+/// not capture either completion. Nested loops remain a boundary because a
+/// plain break/continue there would bind to the nested loop.
+///
+/// A switch is also a boundary for a plain `break`, but not for a labeled
+/// break targeting the enclosing loop. When such a break is present, desugar
+/// the switch first: its own plain breaks become the switch done-flag, while
+/// the still-named outer break lands in the resulting `if` chain and can then
+/// safely become the enclosing loop's plain break. This is especially
+/// important for source `label: switch (...)` statements: HIR represents the
+/// non-loop label as a labeled run-once do-while, and generator linearization
+/// otherwise drops that label target while splitting an awaited case (#9186).
+fn rewrite_labeled_bc_in_stmts(stmts: &mut Vec<Stmt>, label: &str, next_local_id: &mut u32) {
+    let mut i = 0;
+    while i < stmts.len() {
+        let desugared_switch = match &stmts[i] {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } if cases
+                .iter()
+                .any(|case| stmts_have_labeled_break_for(&case.body, label)) =>
+            {
+                Some(super::break_continue::desugar_switch_to_ifs(
+                    discriminant,
+                    cases,
+                    next_local_id,
+                ))
+            }
+            _ => None,
+        };
+        if let Some(desugared) = desugared_switch {
+            stmts.splice(i..=i, desugared);
+            // Reprocess at the same position. The replacement consists of
+            // lets/ifs, so recursion below rewrites the preserved named break.
+            continue;
+        }
+
+        let s = &mut stmts[i];
         match s {
             Stmt::LabeledBreak(l) if l == label => *s = Stmt::Break,
             Stmt::LabeledContinue(l) if l == label => *s = Stmt::Continue,
@@ -1686,9 +1717,9 @@ fn rewrite_labeled_bc_in_stmts(stmts: &mut [Stmt], label: &str) {
                 else_branch,
                 ..
             } => {
-                rewrite_labeled_bc_in_stmts(then_branch, label);
+                rewrite_labeled_bc_in_stmts(then_branch, label, next_local_id);
                 if let Some(eb) = else_branch.as_mut() {
-                    rewrite_labeled_bc_in_stmts(eb, label);
+                    rewrite_labeled_bc_in_stmts(eb, label, next_local_id);
                 }
             }
             Stmt::Try {
@@ -1696,12 +1727,12 @@ fn rewrite_labeled_bc_in_stmts(stmts: &mut [Stmt], label: &str) {
                 catch,
                 finally,
             } => {
-                rewrite_labeled_bc_in_stmts(body, label);
+                rewrite_labeled_bc_in_stmts(body, label, next_local_id);
                 if let Some(c) = catch.as_mut() {
-                    rewrite_labeled_bc_in_stmts(&mut c.body, label);
+                    rewrite_labeled_bc_in_stmts(&mut c.body, label, next_local_id);
                 }
                 if let Some(f) = finally.as_mut() {
-                    rewrite_labeled_bc_in_stmts(f, label);
+                    rewrite_labeled_bc_in_stmts(f, label, next_local_id);
                 }
             }
             // #5975: a `continue <label>` that targets THIS enclosing labeled
@@ -1709,14 +1740,6 @@ fn rewrite_labeled_bc_in_stmts(stmts: &mut [Stmt], label: &str) {
             // `continue`, so it continues the loop — rewrite it to a plain
             // `continue` here so the loop's linearization (and the #5868
             // yielding-switch desugar) map it to the loop's re-entry sentinel.
-            // Without this the `LabeledContinue` survives verbatim into the
-            // desugared switch's state machine, where nothing lowers it, and a
-            // `loop: while (…) { switch (…) { case …: yield …; continue loop } }`
-            // (e.g. the `yaml` package's block-scalar / indicator lexer, a
-            // generator) spins forever. `break <label>` is deliberately NOT
-            // rewritten in a nested switch: a switch DOES capture `break`, so a
-            // plain `break` would exit only the switch, not the loop — that is
-            // the pre-existing single-sentinel limitation documented above.
             Stmt::Switch { cases, .. } => {
                 for case in cases.iter_mut() {
                     rewrite_labeled_continue_in_stmts(&mut case.body, label);
@@ -1724,7 +1747,47 @@ fn rewrite_labeled_bc_in_stmts(stmts: &mut [Stmt], label: &str) {
             }
             _ => {}
         }
+        i += 1;
     }
+}
+
+/// Whether a statement list can reach `break label` without crossing a loop
+/// or another labeled statement. Switches do not capture named breaks, so they
+/// are traversed and individually desugared by the caller when necessary.
+fn stmts_have_labeled_break_for(stmts: &[Stmt], label: &str) -> bool {
+    stmts.iter().any(|stmt| match stmt {
+        Stmt::LabeledBreak(found) => found == label,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            stmts_have_labeled_break_for(then_branch, label)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|branch| stmts_have_labeled_break_for(branch, label))
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            stmts_have_labeled_break_for(body, label)
+                || catch
+                    .as_ref()
+                    .is_some_and(|clause| stmts_have_labeled_break_for(&clause.body, label))
+                || finally
+                    .as_ref()
+                    .is_some_and(|body| stmts_have_labeled_break_for(body, label))
+        }
+        Stmt::Switch { cases, .. } => cases
+            .iter()
+            .any(|case| stmts_have_labeled_break_for(&case.body, label)),
+        Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::Labeled { .. } => {
+            false
+        }
+        _ => false,
+    })
 }
 
 /// Rewrite `continue <label>` → plain `continue` for `label`, descending

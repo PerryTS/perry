@@ -20,7 +20,8 @@
 //! --experimental-strip-types` prints.
 
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
@@ -47,14 +48,33 @@ fn compile_and_run(dir: &std::path::Path, source: &str) -> String {
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    let run = Command::new(&output)
+    // Bound the generated program itself. A broken state transition can spin
+    // forever; without this guard one regression test consumed the entire
+    // two-hour cargo-test shard budget before CI exposed the culprit (#9186).
+    let mut child = Command::new(&output)
         .current_dir(dir)
-        .output()
-        .expect("run compiled binary");
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn compiled binary");
+    let timeout = Duration::from_secs(30);
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll compiled binary") {
+            break status;
+        }
+        if start.elapsed() > timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("compiled binary did not exit within {timeout:?}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let run = child.wait_with_output().expect("collect compiled output");
     assert!(
-        run.status.success(),
+        status.success(),
         "compiled binary failed (exit {:?})\nstdout:\n{}\nstderr:\n{}",
-        run.status.code(),
+        status.code(),
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
