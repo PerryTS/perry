@@ -1159,17 +1159,18 @@ pub(super) fn emit_guarded_direct_method_call(
                 };
                 // Leaves `current_block` at the freshly created guardcall
                 // block, where the per-field runtime chain below is emitted.
-                let _guardcall = crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
-                    ctx,
-                    &obj_bits,
-                    &obj_handle,
-                    &expected_class_id_str,
-                    &expected_shape_id,
-                    true,
-                    None,
-                    &proven_label,
-                    &[],
-                );
+                let _guardcall =
+                    crate::expr::class_field_inline_guard::emit_class_field_inline_precheck(
+                        ctx,
+                        &obj_bits,
+                        &obj_handle,
+                        &expected_class_id_str,
+                        &expected_shape_id,
+                        true,
+                        None,
+                        &proven_label,
+                        &[],
+                    );
                 // Created after the precheck's own blocks so the merge (and the
                 // typed/generic branch it feeds) follows the per-field guard
                 // calls in emission order.
