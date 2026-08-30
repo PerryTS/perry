@@ -244,6 +244,94 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
     })
 }
 
+/// The `+`-shaped guard for the arithmetic operators that cannot concatenate.
+///
+/// `-`, `*` and `/` apply ToNumeric to both operands, so unlike `+` there is
+/// no string case to preserve — the whole reason `lower_guarded_numeric_add`
+/// has to rebuild its tree. That makes the guard strictly simpler: test both
+/// operands, do the operation inline when they are numbers, and hand the
+/// original operands to the same dynamic helper otherwise.
+///
+/// BigInt is handled by the test rather than by a separate check: a BigInt is
+/// not a Number, so `5n - 3n` and `1n - 1` both take the cold arm and keep
+/// the helper's exact semantics (a BigInt result and a TypeError
+/// respectively).
+fn lower_guarded_numeric_arith(
+    ctx: &mut FnCtx<'_>,
+    op: BinaryOp,
+    left: &Expr,
+    right: &Expr,
+    fname: &str,
+) -> Result<String> {
+    let leaves = [left, right];
+    let needs_test: Vec<bool> = leaves
+        .iter()
+        .map(|leaf| !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
+        .collect();
+
+    with_operands_rooted(ctx, &leaves, |ctx, values| {
+        let mut cond: Option<String> = None;
+        for (value, is_tested) in values.iter().zip(needs_test.iter()) {
+            if !is_tested {
+                continue;
+            }
+            let is_num = crate::stmt::emit_js_value_is_number(ctx, value);
+            cond = Some(match cond {
+                Some(prev) => ctx.block().and(I1, &prev, &is_num),
+                None => is_num,
+            });
+        }
+        let native = |ctx: &mut FnCtx<'_>, l: &str, r: &str| match op {
+            BinaryOp::Sub => ctx.block().fsub(l, r),
+            BinaryOp::Mul => ctx.block().fmul(l, r),
+            _ => ctx.block().fdiv(l, r),
+        };
+        // Every leaf already vouched for: no diamond to emit.
+        let Some(all_num) = cond else {
+            let (l, r) = (values[0].clone(), values[1].clone());
+            return Ok(native(ctx, &l, &r));
+        };
+
+        let fast_idx = ctx.new_block("guarded_arith.numeric");
+        let slow_idx = ctx.new_block("guarded_arith.dynamic");
+        let merge_idx = ctx.new_block("guarded_arith.merge");
+        let fast_label = ctx.block_label(fast_idx);
+        let slow_label = ctx.block_label(slow_idx);
+        let merge_label = ctx.block_label(merge_idx);
+        ctx.block().cond_br(&all_num, &fast_label, &slow_label);
+
+        ctx.current_block = fast_idx;
+        let (l, r) = (values[0].clone(), values[1].clone());
+        let fast_val = native(ctx, &l, &r);
+        let fast_end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+
+        ctx.current_block = slow_idx;
+        crate::expr::emit_versioned_loop_callback_deopt(ctx);
+        let slow_val = ctx.block().call(
+            DOUBLE,
+            fname,
+            &[(DOUBLE, &values[0]), (DOUBLE, &values[1])],
+        );
+        let slow_end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+
+        ctx.current_block = merge_idx;
+        Ok(ctx
+            .block()
+            .phi(DOUBLE, &[(&fast_val, &fast_end), (&slow_val, &slow_end)]))
+    })
+}
+
+/// `PERRY_GUARDED_ARITH=0` restores the unconditional dynamic helper for
+/// `-`, `*` and `/`.
+fn guarded_arith_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_GUARDED_ARITH").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 /// Recognize `(value === null ? 0 : value) + 1` and its operand-reversed form.
 ///
 /// Generic user-class methods currently surface as `Any` at their call sites,
@@ -1083,6 +1171,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         // operands, so a pointer-bearing left operand must
                         // survive the right operand's evaluation.
                         let fname = bigint_dynamic_helper(*op);
+                        // `-`, `*` and `/` take the same guarded diamond `+`
+                        // got in #9159. The bail above is reached whenever an
+                        // operand MIGHT be a BigInt, which for an unproven
+                        // operand is always — so `s -= v` paid a call per
+                        // operation while `s += v` did not. The guard needs no
+                        // proof: a BigInt is not a Number, so it fails the test
+                        // and the cold arm runs this same helper.
+                        if guarded_arith_enabled()
+                            && matches!(op, BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div)
+                        {
+                            return lower_guarded_numeric_arith(
+                                ctx, *op, left, right, fname,
+                            );
+                        }
                         return lower_rooted_dynamic_binary(ctx, fname, left, right);
                     }
                 }
