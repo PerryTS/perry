@@ -5188,7 +5188,7 @@ fn expr_is_packed_f64_loop_safe(
     use perry_hir::{ArrayElement, Expr};
     match expr {
         Expr::IndexGet { object, index } => {
-            is_packed_f64_loop_index(object, index, arr_id, counter_id)
+            is_packed_f64_loop_foreign_read_index(ctx, object, index, arr_id, counter_id)
         }
         // A numeric-store fallback can downgrade/invalidate raw-f64 layout.
         // Without a loop restart, later packed-loop loads would keep using the
@@ -5272,6 +5272,45 @@ fn expr_is_packed_f64_loop_safe(
         | Expr::ArraySplice { .. } => false,
         _ => false,
     }
+}
+
+/// `arr[i]` inside a READ-ONLY matched body where `i` is an i32 counter of an
+/// ENCLOSING loop rather than this loop's own.
+///
+/// The clone's raw slot load is licensed by the counter being the loop's own
+/// induction variable, which its bound proves in range. A foreign index has no
+/// such proof, so the read site pays one inline `icmp ult idx, len` and takes
+/// the fact's existing side exit when it fails — the same mid-body exit the
+/// hole arm already uses.
+///
+/// Read-only bodies only, and that is what calling this from
+/// `expr_is_packed_f64_loop_safe` (never from the store matchers) buys: a side
+/// exit re-executes the iteration in the slow clone, which is harmless for
+/// reads and would double-apply a store. `sum = sum + arr[i] + arr[j]` in
+/// `benchmarks/suite/10_nested_loops.ts` is exactly this shape, and paid two
+/// typed-feedback guard calls plus two boxed fallbacks per iteration for it.
+fn is_packed_f64_loop_foreign_read_index(
+    ctx: &FnCtx<'_>,
+    object: &perry_hir::Expr,
+    index: &perry_hir::Expr,
+    arr_id: u32,
+    counter_id: u32,
+) -> bool {
+    if is_packed_f64_loop_index(object, index, arr_id, counter_id) {
+        return true;
+    }
+    let (perry_hir::Expr::LocalGet(object_id), perry_hir::Expr::LocalGet(index_id)) =
+        (object, index)
+    else {
+        return false;
+    };
+    *object_id == arr_id
+        && *index_id != counter_id
+        && *index_id != arr_id
+        && ctx.integer_locals.contains(index_id)
+        && ctx.i32_counter_slots.contains_key(index_id)
+        && !ctx.boxed_vars.contains(index_id)
+        && !ctx.closure_captures.contains_key(index_id)
 }
 
 fn is_packed_f64_loop_index(

@@ -15605,3 +15605,49 @@ mod integer_modulo;
 
 #[path = "native_proof_regressions/math_mul_fastpath.rs"]
 mod math_mul_fastpath;
+
+// `sum = sum + arr[i] + arr[j]` in a nested counted loop (suite
+// `10_nested_loops`): the inner clone reads `arr` at its own counter AND at the
+// outer loop's. The foreign read used to fall to the typed-feedback tier — a
+// registered guard CALL plus a boxed fallback per element — while the sibling
+// read beside it was a raw slot load. It now takes the same raw load behind one
+// inline bounds check, exiting to the clone's existing side exit when it fails.
+#[test]
+fn packed_clone_reads_a_foreign_counter_without_the_feedback_call() {
+    let add = |left: Expr, right: Expr| Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(left),
+        right: Box::new(right),
+    };
+    let body = vec![
+        number_array_let(1, "arr", vec![1, 2, 3, 4, 5, 6, 7, 8]),
+        Stmt::Let {
+            id: 2,
+            name: "sum".to_string(),
+            ty: Type::Number,
+            mutable: true,
+            init: Some(Expr::Number(0.0)),
+        },
+        for_loop(
+            3,
+            length(1),
+            vec![for_loop(
+                4,
+                length(1),
+                vec![Stmt::Expr(Expr::LocalSet(
+                    2,
+                    Box::new(add(
+                        add(local(2), index_get(1, local(3))),
+                        index_get(1, local(4)),
+                    )),
+                ))],
+            )],
+        ),
+        Stmt::Return(Some(local(2))),
+    ];
+    let ir = compile_ir("packed_clone_foreign_read.ts", body);
+    assert!(
+        ir.contains("packed_f64_loop.foreign.inbounds"),
+        "the foreign-counter read should take the bounds-checked clone load:\n{ir}"
+    );
+}

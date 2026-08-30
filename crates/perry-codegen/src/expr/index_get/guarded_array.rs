@@ -529,9 +529,30 @@ pub(super) fn lower_packed_f64_loop_index_get(
     arr_box: &str,
     idx_i32: &str,
     fact: &PackedF64LoopFact,
+    bounds_check: bool,
 ) -> String {
     let guard_id = fact.guard_id.as_str();
     let array_kind = fact.array_kind;
+    // A foreign index carries no in-range proof from the loop bound, so test it
+    // against the live length (`ArrayHeader.length`, i32 at offset 0 — the same
+    // word `expr/index.rs`'s store guard reads) and take the fact's side exit
+    // when it fails. One compare and a never-taken branch, against the
+    // typed-feedback guard CALL plus boxed fallback this replaces.
+    if bounds_check {
+        let in_bounds = {
+            let blk = ctx.block();
+            let arr_bits = blk.bitcast_double_to_i64(arr_box);
+            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+            let arr_ptr = blk.inttoptr(I64, &arr_handle);
+            let length = blk.load(I32, &arr_ptr);
+            blk.icmp_ult(I32, idx_i32, &length)
+        };
+        let cont_idx = ctx.new_block("packed_f64_loop.foreign.inbounds");
+        let cont_label = ctx.block_label(cont_idx);
+        ctx.block()
+            .cond_br(&in_bounds, &cont_label, &fact.store_side_exit_label);
+        ctx.current_block = cont_idx;
+    }
     let value = {
         let blk = ctx.block();
         let arr_bits = blk.bitcast_double_to_i64(arr_box);
