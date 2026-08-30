@@ -117,8 +117,8 @@ pub(crate) use prototype_methods::{
 pub(crate) use prototype_methods::{
     class_prototype_fast_guard_invalidated_for_method, class_prototype_method_guard_slot,
     class_prototype_method_root_remove, class_prototype_method_root_store,
-    invalidate_class_prototype_fast_guards_for_method, mirror_prototype_method_on_object,
-    synthetic_class_id_for_function,
+    invalidate_class_prototype_fast_guards, invalidate_class_prototype_fast_guards_for_method,
+    mirror_prototype_method_on_object, synthetic_class_id_for_function,
 };
 pub use prototype_methods::{
     js_class_register_static_field, js_get_function_prototype_method,

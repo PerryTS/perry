@@ -192,7 +192,6 @@ pub(crate) fn invalidate_class_prototype_fast_guards_for_method(name: &str) {
     retire_prototype_dependent_caches();
 }
 
-#[allow(dead_code)] // Fail-closed escape hatch for a future keyless mutation path.
 pub(crate) fn invalidate_class_prototype_fast_guards() {
     #[cfg(not(test))]
     PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(1, std::sync::atomic::Ordering::Release);

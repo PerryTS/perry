@@ -431,6 +431,13 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         && !crate::closure::is_closure_ptr(obj_ptr_for_record)
         && is_valid_obj_ptr(obj_ptr_for_record as *const u8)
     {
+        // This is keyless prototype surgery: unlike `C.prototype.m = value`,
+        // there is no method name with which to retire only one direct-method
+        // guard slot. The lower-level recorder is also used to wire runtime
+        // builtin prototype objects during startup, so invalidate here at the
+        // user-visible `Object.setPrototypeOf` entry rather than poisoning the
+        // fast path for every program during initialization.
+        crate::object::invalidate_class_prototype_fast_guards();
         super::super::prototype_chain::object_set_static_prototype(obj_ptr_for_record, proto_bits);
         // A grown array's local may still hold the FORWARDED (old) pointer;
         // the spec [[HasProperty]]/[[Get]] helpers look the prototype up by

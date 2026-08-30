@@ -1357,6 +1357,17 @@ pub(crate) fn get_field_by_name_object_tail(
         let keys = crate::object::object_keys_array(obj);
 
         if keys.is_null() {
+            // An explicit per-instance [[Prototype]] replaces the class's
+            // declaration prototype; it is not an extra link in front of the
+            // original vtable. Walk that authoritative chain before exposing
+            // class getters or methods, and do not resurrect the old class
+            // surface when the custom chain misses.
+            if !key.is_null()
+                && super::super::prototype_chain::object_has_prototype_override(obj as usize)
+            {
+                return super::super::prototype_chain::resolve_inherited_field(obj as usize, key)
+                    .unwrap_or_else(JSValue::undefined);
+            }
             // #809: an object with no own keys (e.g. an `Object.create(proto)`
             // result, or a `Function.prototype = obj` instance) still has to
             // resolve inherited props/methods. Pre-fix this returned undefined
@@ -1725,6 +1736,16 @@ pub(crate) fn get_field_by_name_object_tail(
                     };
                 }
             }
+        }
+
+        // A shaped receiver's own-key scan has missed. As in the keyless arm
+        // above, a user-installed per-instance prototype is now authoritative
+        // and must win over class-vtable getters and methods.
+        if !key.is_null()
+            && super::super::prototype_chain::object_has_prototype_override(obj as usize)
+        {
+            return super::super::prototype_chain::resolve_inherited_field(obj as usize, key)
+                .unwrap_or_else(JSValue::undefined);
         }
 
         // Key not found in the keys_array — fall back to the class

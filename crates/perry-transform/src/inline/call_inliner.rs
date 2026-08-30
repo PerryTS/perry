@@ -210,14 +210,116 @@ fn returns_only_anonymous_records(function: &Function) -> bool {
 /// loop bodies were seeded with empty facts, so such calls were never inlined.
 ///
 /// `collect_mutated_local_ids` recurses into closures and nested loops and
-/// catches every `LocalSet`/`Update`, so "not mutated in the loop" is a sound
-/// (conservative) proxy for "fact holds on every iteration".
+/// catches every `LocalSet`/`Update`. Prototype surgery is a second kind of
+/// loop-carried mutation: the receiver can still hold the same object while
+/// its method lookup changes on a later iteration. In that case no exact
+/// receiver fact is safe to seed into the body.
+fn loop_has_prototype_surgery(stmts: &[Stmt]) -> bool {
+    fn expr_has_prototype_surgery(expr: &Expr) -> bool {
+        if matches!(
+            expr,
+            Expr::RegisterClassParentDynamic { .. }
+                | Expr::SetFunctionPrototype { .. }
+                | Expr::RegisterPrototypeMethod { .. }
+                | Expr::RegisterFunctionPrototypeMethod { .. }
+                | Expr::ObjectDefineProperty(_, _, _)
+                | Expr::ObjectDefineProperties(_, _)
+                | Expr::ObjectSetPrototypeOf(_, _)
+                | Expr::ReflectDefineProperty { .. }
+        ) {
+            return true;
+        }
+        let mut found = false;
+        perry_hir::walker::walk_expr_children(expr, &mut |child| {
+            found |= expr_has_prototype_surgery(child);
+        });
+        found
+    }
+
+    fn stmt_has_prototype_surgery(stmt: &Stmt) -> bool {
+        match stmt {
+            Stmt::Let {
+                init: Some(expr), ..
+            }
+            | Stmt::Expr(expr)
+            | Stmt::Return(Some(expr))
+            | Stmt::Throw(expr) => expr_has_prototype_surgery(expr),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                expr_has_prototype_surgery(condition)
+                    || loop_has_prototype_surgery(then_branch)
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|branch| loop_has_prototype_surgery(branch))
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                expr_has_prototype_surgery(condition) || loop_has_prototype_surgery(body)
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                init.as_ref()
+                    .is_some_and(|stmt| stmt_has_prototype_surgery(stmt))
+                    || condition.as_ref().is_some_and(expr_has_prototype_surgery)
+                    || update.as_ref().is_some_and(expr_has_prototype_surgery)
+                    || loop_has_prototype_surgery(body)
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                loop_has_prototype_surgery(body)
+                    || catch
+                        .as_ref()
+                        .is_some_and(|catch| loop_has_prototype_surgery(&catch.body))
+                    || finally
+                        .as_ref()
+                        .is_some_and(|finally| loop_has_prototype_surgery(finally))
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                expr_has_prototype_surgery(discriminant)
+                    || cases.iter().any(|case| {
+                        case.test.as_ref().is_some_and(expr_has_prototype_surgery)
+                            || loop_has_prototype_surgery(&case.body)
+                    })
+            }
+            Stmt::Labeled { body, .. } => stmt_has_prototype_surgery(body),
+            Stmt::Let { init: None, .. }
+            | Stmt::Return(None)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => false,
+        }
+    }
+
+    stmts.iter().any(stmt_has_prototype_surgery)
+}
+
 fn loop_invariant_seed_facts(
     outer: &ExactReceiverFacts,
     body: &[Stmt],
     extra_exprs: &[&Expr],
 ) -> ExactReceiverFacts {
-    if outer.is_empty() {
+    if outer.is_empty()
+        || loop_has_prototype_surgery(body)
+        || extra_exprs
+            .iter()
+            .any(|expr| loop_has_prototype_surgery(&[Stmt::Expr((*expr).clone())]))
+    {
         return ExactReceiverFacts::new();
     }
     let mut mutated = std::collections::HashSet::new();

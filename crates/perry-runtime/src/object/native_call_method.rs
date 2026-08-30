@@ -1249,6 +1249,40 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     // dispatch tower below it is orders of magnitude more expensive.
     let object = || object_handle.get_nanbox_f64();
     let jsval = || JSValue::from_bits(object().to_bits());
+
+    // An explicit `Object.setPrototypeOf(instance, proto)` replaces the
+    // instance's class prototype. Resolve a method value through ordinary
+    // property lookup before any class/native dispatch: that lookup preserves
+    // own-property precedence and, for a miss, the per-instance chain is
+    // authoritative rather than falling back to the original class vtable.
+    if jsval().is_pointer() {
+        let candidate = jsval().as_pointer::<ObjectHeader>() as usize;
+        if crate::value::addr_class::is_above_handle_band(candidate)
+            && crate::object::is_valid_obj_ptr(candidate as *const u8)
+            && super::prototype_chain::object_has_prototype_override(candidate)
+        {
+            let method_key =
+                crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+            if !method_key.is_null() {
+                let receiver = object();
+                let receiver_ptr =
+                    JSValue::from_bits(receiver.to_bits()).as_pointer::<ObjectHeader>();
+                let method = super::js_object_get_field_by_name(receiver_ptr, method_key);
+                let method_handle = root_scope.root_nanbox_f64(f64::from_bits(method.bits()));
+                let receiver = object();
+                let bound = crate::closure::clone_closure_rebind_this(
+                    method_handle.get_nanbox_f64().to_bits(),
+                    receiver,
+                );
+                let args = refreshed_args();
+                return crate::closure::js_native_call_value(
+                    f64::from_bits(bound),
+                    args.as_ptr(),
+                    args.len(),
+                );
+            }
+        }
+    }
     // RAII recursion depth guard: prevent stack overflow from circular module deps.
     // The guard auto-decrements on drop, covering all ~20 return points in this function.
     // When max depth is hit, return a pointer to a static empty object instead of undefined.
