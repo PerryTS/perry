@@ -5042,9 +5042,9 @@ fn stmt_is_packed_f64_loop_safe(
         }
         // `throw` stays out: the thrown value is typically constructed
         // (`throw new Error(…)`), which is a call in the loop body.
+        Stmt::Throw(_) => packed_loop_abrupt_enabled(),
         Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
-        | Stmt::Throw(_)
         | Stmt::While { .. }
         | Stmt::DoWhile { .. }
         | Stmt::For { .. }

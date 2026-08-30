@@ -145,9 +145,39 @@ fn break_in_a_loop_whose_array_grows() {
 }
 
 #[test]
+fn a_throw_that_does_not_construct_takes_the_fast_path_correctly() {
+    // A `throw` whose value is already built is admitted: its block ends in
+    // `unreachable`, so control never returns to the loop and nothing reads
+    // what the clone cached. A throw that CONSTRUCTS its value is not, because
+    // the construction is emitted in blocks preceding the terminating one.
+    let out = compile_and_run(&format!(
+        "{PRELUDE}
+        const PRE = new Error(\"boom\");
+        function throwPre(k: number): string {{
+            try {{
+                let s = 0;
+                for (let i = 0; i < arr.length; i++) {{ s += arr[i]; if (arr[i] === k) throw PRE; }}
+                return \"none\" + s;
+            }} catch (e) {{ return (e as Error).message + \":\" + k; }}
+        }}
+        function throwValue(k: number): string {{
+            try {{
+                let s = 0;
+                for (let i = 0; i < arr.length; i++) {{ s += arr[i]; if (arr[i] === k) throw s; }}
+                return \"none\" + s;
+            }} catch (e) {{ return \"v\" + String(e); }}
+        }}
+        console.log(throwPre(4) + \" \" + throwPre(999) + \" \" + throwValue(0) + \" \" + throwValue(7));
+        "
+    ));
+    assert_eq!(out, "boom:4 none2016 v0 v28");
+}
+
+#[test]
 fn throw_inside_the_loop_is_still_correct() {
-    // `throw` is deliberately NOT admitted (the thrown value is constructed),
-    // but it must keep working on the generic path.
+    // A throw that CONSTRUCTS its value is not admitted (the construction is a
+    // call in a block that does not end in `unreachable`), but it must keep
+    // working on the generic path.
     let out = compile_and_run(&format!(
         "{PRELUDE}
         function throwAt(k: number): string {{
