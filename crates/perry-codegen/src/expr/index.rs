@@ -4,8 +4,9 @@
 use anyhow::{anyhow, Result};
 
 use super::{
-    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
-    emit_jsvalue_slot_store_scalar_aware_on_block, emit_write_barrier_slot_on_block,
+    emit_array_numeric_write_note_on_block,
+    emit_jsvalue_slot_store_scalar_aware_with_flags_on_block,
+    emit_jsvalue_slot_store_with_flags_on_block, emit_write_barrier_slot_on_block,
     emit_write_barrier_slot_value_and_generation_tested, nanbox_pointer_inline,
     raw_f64_layout_fact, FnCtx,
 };
@@ -84,6 +85,12 @@ pub(crate) fn lower_index_set_fast(
     val_double: &str,
     local_id: u32,
     layout_note_needed: bool,
+    // #9186: whether the stored value can be a heap string, decided by the
+    // caller with `store_needs_string_addref`. The plain slot-store emitters
+    // tie the addref demote to `layout_note_needed`, so a boolean or `null`
+    // written into an array that needs a layout note paid an
+    // `js_string_addref_if_heap_string` call it can never use.
+    string_addref_needed: bool,
     write_barrier_needed: bool,
     value_is_numeric: bool,
     require_numeric_layout: bool,
@@ -419,12 +426,13 @@ pub(crate) fn lower_index_set_fast(
             // array element: the slot holds a valid value, so the scalar-aware
             // note skips the GC layout hashmap on scalar-over-scalar stores
             // (#5094 — ~9× on bench_numeric_array_downgrade).
-            let value_bits = emit_jsvalue_slot_store_scalar_aware_on_block(
+            let value_bits = emit_jsvalue_slot_store_scalar_aware_with_flags_on_block(
                 blk,
                 &element_ptr,
                 val_double,
                 &arr_handle,
                 &idx_i32,
+                string_addref_needed,
                 layout_note_needed,
                 &arr_handle,
                 &element_addr,
@@ -634,12 +642,13 @@ pub(crate) fn lower_index_set_fast(
         let blk = ctx.block();
         let (element_addr, element_ptr) = element_slot(blk, &arr_handle, &idx_i32);
         {
-            let value_bits = emit_jsvalue_slot_store_on_block(
+            let value_bits = emit_jsvalue_slot_store_with_flags_on_block(
                 blk,
                 &element_ptr,
                 val_double,
                 &arr_handle,
                 &idx_i32,
+                string_addref_needed,
                 layout_note_needed,
                 &arr_handle,
                 &element_addr,

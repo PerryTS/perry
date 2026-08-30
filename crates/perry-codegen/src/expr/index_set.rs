@@ -1166,6 +1166,8 @@ pub(crate) fn lower(
                         if ctx.locals.contains_key(&id) {
                             let value_is_canonical_raw_f64 =
                                 crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value);
+                            let string_addref_needed =
+                                crate::expr::store_needs_string_addref(ctx, value);
                             lower_index_set_fast(
                                 ctx,
                                 &arr_box,
@@ -1173,6 +1175,7 @@ pub(crate) fn lower(
                                 &val_double,
                                 id,
                                 layout_note_needed,
+                                string_addref_needed,
                                 write_barrier_needed,
                                 value_is_numeric,
                                 require_numeric_layout,

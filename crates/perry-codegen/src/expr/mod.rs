@@ -134,6 +134,7 @@ pub(crate) use v8_interop::{
 pub(crate) use write_barrier::{
     emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
     emit_jsvalue_slot_store_pointer_tested, emit_jsvalue_slot_store_scalar_aware_on_block,
+    emit_jsvalue_slot_store_scalar_aware_with_flags_on_block,
     emit_jsvalue_slot_store_with_flags_on_block, emit_jsvalue_slot_store_with_value_bits_on_block,
     emit_layout_note_slot_on_block, emit_may_carry_heap_pointer_check,
     emit_root_heap_word_store_on_block, emit_root_nanbox_store_on_block, emit_write_barrier,

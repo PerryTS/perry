@@ -515,6 +515,44 @@ pub(crate) fn emit_jsvalue_slot_store_with_value_bits_on_block(
 /// This is the dominant per-write cost on downgraded `any[]` numeric loops
 /// (#5094) and gives ~9× on `bench_numeric_array_downgrade` without regressing
 /// `bench_object_property`.
+/// As [`emit_jsvalue_slot_store_scalar_aware_on_block`], but with the
+/// string-addref demote gated independently of the layout note — the
+/// scalar-aware twin of [`emit_jsvalue_slot_store_with_flags_on_block`].
+///
+/// The plain entry point below ties the two together, which costs an
+/// unconditional `js_string_addref_if_heap_string` call on every store that
+/// needs a layout note but writes a value that provably is not a heap string:
+/// `sieve[j] = false` in `benchmarks/suite/11_prime_sieve.ts` pays one per
+/// element for a boolean.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_jsvalue_slot_store_scalar_aware_with_flags_on_block(
+    blk: &mut LlBlock,
+    slot_ptr: &str,
+    value_double: &str,
+    layout_parent_bits: &str,
+    slot_index: &str,
+    string_addref_needed: bool,
+    layout_note_needed: bool,
+    barrier_parent_bits: &str,
+    slot_addr: &str,
+    write_barrier_needed: bool,
+) -> Option<String> {
+    emit_jsvalue_slot_store_on_block_inner(
+        blk,
+        slot_ptr,
+        value_double,
+        layout_parent_bits,
+        slot_index,
+        string_addref_needed,
+        layout_note_needed,
+        barrier_parent_bits,
+        slot_addr,
+        write_barrier_needed,
+        true,
+        None,
+    )
+}
+
 pub(crate) fn emit_jsvalue_slot_store_scalar_aware_on_block(
     blk: &mut LlBlock,
     slot_ptr: &str,
