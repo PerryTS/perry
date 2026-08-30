@@ -732,13 +732,22 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                             // head into the loop-scoped prelude in source order,
                             // registering each binding before the next
                             // initializer is lowered.
-                            let has_multiple_decls = var_decl.decls.len() > 1;
-                            for decl in
-                                var_decl
-                                    .decls
-                                    .iter()
-                                    .skip(if has_multiple_decls { 0 } else { 1 })
-                            {
+                            //
+                            // #9106 carve-out: when hoisting the tail around a
+                            // literal-initialized first declarator is provably
+                            // unobservable, keep that declarator in `For::init`
+                            // — the versioned counted-loop matchers key their
+                            // counter on it (`for (let i = 0, len = arr.length;
+                            // i < len; i++)`).
+                            let first_decl_keeps_init_slot = var_decl.decls.len() == 1
+                                || crate::lower_decl::for_head_first_decl_keeps_init_slot(
+                                    &var_decl.decls,
+                                );
+                            for decl in var_decl.decls.iter().skip(if first_decl_keeps_init_slot {
+                                1
+                            } else {
+                                0
+                            }) {
                                 if let Some(init_ast) = decl.init.as_ref() {
                                     result.extend(predeclare_implicit_assignment_targets(
                                         ctx, init_ast,
@@ -788,7 +797,7 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
                                     init: init_expr,
                                 });
                             }
-                            if has_multiple_decls {
+                            if !first_decl_keeps_init_slot {
                                 None
                             } else if let Some(decl) = var_decl.decls.first() {
                                 if let Some(init_ast) = decl.init.as_ref() {

@@ -762,3 +762,55 @@ pub(crate) fn lower_well_known_computed_method(
     // Other well-known on a class: not yet implemented — drop.
     Ok(Some(WellKnownComputedMethod::Unsupported))
 }
+
+/// #9106: whether a multi-declarator lexical `for` head may keep its FIRST
+/// declarator in the loop's own `For::init` slot while the remaining
+/// declarators are hoisted into the loop-scoped prelude.
+///
+/// The prelude runs before `For::init`, so that split evaluates the tail
+/// declarators before the first one — the reordering #9062 removed to
+/// preserve source-order semantics. The reorder is provably unobservable
+/// when:
+/// - the first declarator is a plain identifier binding,
+/// - its initializer is a pure literal (no reads, no writes, no effects, a
+///   value independent of the tail declarators), and
+/// - no tail declarator mentions the first binding's name anywhere in its
+///   pattern or initializer, so neither the value nor the TDZ state of the
+///   first binding can be observed early and no closure can capture it.
+///
+/// Keeping the counter's `let i = 0` in `For::init` is what the versioned
+/// counted-loop matchers key on (`for (let i = 0, len = arr.length; i < len;
+/// i++)` — the wolf-ecs scan idiom), so this carve-out restores their fast
+/// clones for the classic shape while every order-observable head stays on
+/// the #9062 prelude path.
+pub fn for_head_first_decl_keeps_init_slot(decls: &[ast::VarDeclarator]) -> bool {
+    use swc_ecma_visit::{Visit, VisitWith};
+    let Some((first, tail)) = decls.split_first() else {
+        return false;
+    };
+    let ast::Pat::Ident(first_ident) = &first.name else {
+        return false;
+    };
+    if !matches!(first.init.as_deref(), Some(ast::Expr::Lit(_))) {
+        return false;
+    }
+    struct Mentions<'a> {
+        sym: &'a str,
+        found: bool,
+    }
+    impl Visit for Mentions<'_> {
+        fn visit_ident(&mut self, ident: &ast::Ident) {
+            if ident.sym.as_ref() == self.sym {
+                self.found = true;
+            }
+        }
+    }
+    let mut mentions = Mentions {
+        sym: first_ident.id.sym.as_ref(),
+        found: false,
+    };
+    for decl in tail {
+        decl.visit_with(&mut mentions);
+    }
+    !mentions.found
+}
