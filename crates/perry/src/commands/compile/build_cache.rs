@@ -66,6 +66,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // counted for-loops — on and off emit different loop bodies, so a cached
     // object from one must not serve the other.
     "PERRY_LOOP_PROPERTY_HOIST",
+    // #9154: gates keeping the packed fast path across break/continue/return —
+    // on and off emit different loop exits, so a cached object from one must
+    // not serve the other.
+    "PERRY_PACKED_LOOP_ABRUPT",
     // #9122: gates the shape-cache path for object literals whose methods
     // capture `this` — on and off emit different literal-birth sequences,
     // so a cached object from one must not serve the other.

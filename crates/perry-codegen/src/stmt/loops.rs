@@ -5036,9 +5036,9 @@ fn stmt_is_packed_f64_loop_safe(
         // evaluated in the loop body like any other operand.
         Stmt::Return(value) => {
             packed_loop_abrupt_enabled()
-                && value.as_ref().is_none_or(|expr| {
-                    expr_is_packed_f64_loop_safe(ctx, expr, arr_id, counter_id)
-                })
+                && value
+                    .as_ref()
+                    .is_none_or(|expr| expr_is_packed_f64_loop_safe(ctx, expr, arr_id, counter_id))
         }
         // `throw` stays out: the thrown value is typically constructed
         // (`throw new Error(…)`), which is a call in the loop body.
