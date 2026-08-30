@@ -1420,6 +1420,84 @@ fn quantifier_after(chars: &[char], start: usize) -> Option<(usize, usize, bool)
     Some((start, end, lower_zero))
 }
 
+/// Emit the cheapest spelling of "matches any code point".
+///
+/// `[\s\S]` and `(?s:.)` denote exactly the same set — every Unicode scalar
+/// value — but they cost wildly different amounts to *compile*, and the
+/// difference only appears once the `i` flag is present.
+///
+/// `regex_syntax`'s HIR translator case-folds a character class by calling
+/// `ClassUnicodeRange::case_fold_simple` on each of its ranges, and that
+/// function loops over EVERY CODE POINT in the range:
+///
+/// ```text
+/// for cp in (start..=end).filter_map(char::from_u32) {
+///     for &cp_folded in folder.mapping(cp) { ranges.push(...) }
+/// }
+/// ```
+///
+/// `[\s\S]` canonicalizes to the single range `\x{0}-\x{10FFFF}`, so under
+/// `(?i)` that loop runs 1,114,112 times — to compute a fold that cannot
+/// change anything, since the class already contains every character. `.`
+/// under `(?s)` is not a class at all (`Hir::dot`), so the translator never
+/// folds it.
+///
+/// Measured (`fancy_regex::Regex::new`, best of 3, same machine):
+///
+/// | pattern | build |
+/// |---|---|
+/// | `(?i)[\s\S]*?` | 7.72 ms |
+/// | `(?i)(?s:.)*?` | 41.7 µs |
+///
+/// — 185x, and it compounds: three `[\s\S]` in one pattern cost 23.0 ms
+/// against 34.9 µs. This is not a microbenchmark curiosity. A symbolized
+/// `perf` profile of the claude-code bundle's `--help` put
+/// `ClassUnicodeRange::case_fold_simple` at 3.78% of ALL retired instructions
+/// — the second-largest symbol in the binary — and an exact uprobe stack
+/// capture (a stack recorded on every one of its 2,754 calls) attributed
+/// 99.6% of them to construction-time validation of six patterns, five of
+/// them successive `new RegExp` refinements of marked's
+/// `/^ {0,3}(?:<(script|pre|style|textarea)[\s>][\s\S]*?…/i` HTML-block rule
+/// — which carries the `i` flag and eight `[\s\S]`, and which that run never
+/// matches with even once.
+///
+/// The group is non-capturing, so capture numbering is untouched (and
+/// `collect_capture_spans` indexes the INPUT, not this output). `(?s:…)`
+/// scopes the `s` flag to the dot, so a pattern that lacks the JS `s` flag
+/// does not silently gain `dotAll` anywhere else.
+fn push_any_char(result: &mut String) {
+    result.push_str("(?s:.)");
+}
+
+/// If a character class starting at `chars[i]` spells "any code point", the
+/// number of input chars it occupies.
+///
+/// Recognizes exactly the closed complementary pairs — `[\s\S]`, `[\S\s]`,
+/// `[\d\D]`, `[\D\d]`, `[\w\W]`, `[\W\w]` — whose union is by definition the
+/// whole code point space, in either order. Deliberately narrow: it fires only
+/// on a six-character class whose two members are a shorthand and its own
+/// complement, so there is no set arithmetic to get wrong — the answer is
+/// always "everything".
+fn any_char_class_width(chars: &[char], i: usize) -> Option<usize> {
+    // `[` `\` a `\` b `]`
+    if chars.get(i) != Some(&'[')
+        || chars.get(i + 1) != Some(&'\\')
+        || chars.get(i + 3) != Some(&'\\')
+        || chars.get(i + 5) != Some(&']')
+    {
+        return None;
+    }
+    let (a, b) = (*chars.get(i + 2)?, *chars.get(i + 4)?);
+    if matches!(
+        (a, b),
+        ('s', 'S') | ('S', 's') | ('d', 'D') | ('D', 'd') | ('w', 'W') | ('W', 'w')
+    ) {
+        Some(6)
+    } else {
+        None
+    }
+}
+
 pub(super) fn js_regex_to_rust(pattern: &str) -> String {
     let folded = fold_surrogate_pairs(pattern);
     let folded = normalize_quantified_lookaround(&folded);
@@ -1636,15 +1714,30 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
             } else if chars.get(i + 1) == Some(&']') {
                 // JS: `[]` is an *empty* character class that never matches
                 // (the `]` immediately after `[` closes the class). The Rust
-                // `regex` crate rejects `[]`, so emit an unsatisfiable class.
-                result.push_str("[^\\s\\S]");
+                // `regex` crate rejects a literal `[]`, so emit an
+                // unsatisfiable one. `[a&&b]` (an empty intersection) rather
+                // than the obvious `[^\s\S]`, for the reason in
+                // `push_any_char`: `[^\s\S]` is the NEGATION of a class
+                // covering every code point, and `regex_syntax` case-folds the
+                // positive set BEFORE negating it — so under `(?i)` the
+                // never-matching class costs the same 1.1-million-iteration
+                // loop as the matches-everything one (7.46 ms vs 11 us here).
+                result.push_str("[a&&b]");
                 i += 2;
             } else if chars.get(i + 1) == Some(&'^') && chars.get(i + 2) == Some(&']') {
                 // JS: `[^]` is a negated empty class — it matches *any* code
                 // point, including line terminators. Rust rejects `[^]`, so
-                // emit the equivalent `[\s\S]`.
-                result.push_str("[\\s\\S]");
+                // emit the equivalent "any character": `(?s:.)`, NOT the
+                // `[\s\S]` spelling — see `push_any_char` for why the two
+                // differ by 185x under the `i` flag.
+                push_any_char(&mut result);
                 i += 3;
+            } else if let Some(width) = any_char_class_width(&chars, i) {
+                // A class the author wrote that already means "any character"
+                // (`[\s\S]`, `[\S\s]`, `[\d\D]`, `[\w\W]`, …). Same rewrite,
+                // same reason.
+                push_any_char(&mut result);
+                i += width;
             } else {
                 in_class = true;
                 result.push('[');
@@ -2071,5 +2164,62 @@ mod tests {
         let re = regex::Regex::new(&js_regex_to_rust(r"^[\w-\.]+$")).unwrap();
         assert!(re.is_match("a-b.c_d"));
         assert!(!re.is_match("a b"));
+    }
+}
+
+#[cfg(test)]
+mod any_char_rewrite_tests {
+    use super::js_regex_to_rust;
+
+    /// The rewrite fires on exactly the closed complementary pairs, and on
+    /// JS's `[^]`.
+    #[test]
+    fn any_char_classes_become_a_dot() {
+        for (js, rust) in [
+            (r"[\s\S]", "(?s:.)"),
+            (r"[\S\s]", "(?s:.)"),
+            (r"[\d\D]", "(?s:.)"),
+            (r"[\D\d]", "(?s:.)"),
+            (r"[\w\W]", "(?s:.)"),
+            (r"[\W\w]", "(?s:.)"),
+            ("[^]", "(?s:.)"),
+            // The mirror image: JS `[]` matches NOTHING, and the obvious
+            // `[^\\s\\S]` spelling is just as pathological under `i` (the fold
+            // runs on the positive set, before the negation).
+            ("[]", "[a&&b]"),
+            // In context, with quantifiers and neighbours.
+            (r"a[\s\S]*?b", "a(?s:.)*?b"),
+            (r"[\s\S]{2,3}", "(?s:.){2,3}"),
+            (r"<x>[\s\S]*</x>", "<x>(?s:.)*</x>"),
+        ] {
+            assert_eq!(js_regex_to_rust(js), rust, "translating /{js}/");
+        }
+    }
+
+    /// Everything that is NOT provably "every code point" must pass through
+    /// untouched. A false positive here silently widens a character class,
+    /// which no syntax check would catch — only a wrong match result.
+    #[test]
+    fn near_misses_are_left_alone() {
+        for js in [
+            r"[\s\s]",    // same shorthand twice, not a complement
+            r"[\S\S]",    //
+            r"[\s\D]",    // two shorthands, but not complements
+            r"[\w\S]",    //
+            r"[\s\Sx]",   // extra member
+            r"[x\s\S]",   // extra member
+            r"[^\s\S]",   // NEGATED — matches nothing, the exact opposite
+            r"[^\w\W]",   //
+            r"[\s]",      // single member
+            r"[\s\S",     // unterminated
+            r"\[\s\S\]",  // escaped brackets: a literal `[`, not a class
+            r"[a[\s\S]]", // an inner `[` inside a class is a literal in JS
+        ] {
+            let out = js_regex_to_rust(js);
+            assert!(
+                !out.contains("(?s:.)"),
+                "/{js}/ must not be rewritten to any-char, got {out}"
+            );
+        }
     }
 }

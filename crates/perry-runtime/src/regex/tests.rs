@@ -1070,3 +1070,64 @@ fn validated_pattern_set_is_capped() {
         "VALIDATED_PATTERNS must stay capped at {REGEX_CACHE_MAX_ENTRIES} entries, got {len}"
     );
 }
+
+/// The `[\s\S]` → `(?s:.)` rewrite must not move a single match result.
+///
+/// The rewrite exists purely to dodge a 1.1-million-iteration case fold in
+/// `regex_syntax` (see `grammar::push_any_char`), so the only thing that may
+/// change is how long construction takes. Everything a program can observe —
+/// what matches, what a capture group holds, which group number it is, and
+/// that the NEGATED forms still match nothing — is pinned here, because a
+/// silently widened character class produces no error anywhere: only a wrong
+/// answer, on inputs a syntax test never looks at.
+#[test]
+fn any_char_rewrite_preserves_match_behaviour() {
+    // Matches every code point, newlines included, with and without `i`.
+    for pattern in ["[\\s\\S]", "[^]", "[\\d\\D]", "[\\w\\W]", "[\\S\\s]"] {
+        for flags in ["", "i", "u", "iu", "m"] {
+            let re = js_regexp_new(make_string(pattern), make_string(flags));
+            for subject in ["a", "\n", " ", "\u{1F600}", "Ω", "\r"] {
+                assert!(
+                    js_regexp_test(re, make_string(subject)) != 0,
+                    "/{pattern}/{flags} must match {subject:?}"
+                );
+            }
+        }
+    }
+
+    // The negated forms are the exact opposite and must still match NOTHING.
+    for pattern in ["[^\\s\\S]", "[^\\w\\W]", "[]"] {
+        let re = js_regexp_new(make_string(pattern), make_string("i"));
+        for subject in ["a", "\n", "Ω"] {
+            assert!(
+                js_regexp_test(re, make_string(subject)) == 0,
+                "/{pattern}/i must not match {subject:?}"
+            );
+        }
+    }
+
+    // A class that is NOT a complementary pair keeps its narrow meaning.
+    let narrow = js_regexp_new(make_string("[\\d\\s]"), make_string("i"));
+    assert!(js_regexp_test(narrow, make_string("7")) != 0);
+    assert!(js_regexp_test(narrow, make_string("a")) == 0);
+
+    // The rewrite emits a NON-capturing group, so group numbering is
+    // unchanged: `$1` is still `b`, not the any-char.
+    let re = js_regexp_new(make_string("a[\\s\\S](b)"), make_string(""));
+    let m = js_regexp_exec(re, make_string("a\nb"));
+    assert!(!m.is_null(), "a[\\s\\S](b) must match \"a\\nb\"");
+
+    // Quantifiers still bind to the any-char, lazily and greedily.
+    let lazy = js_regexp_new(make_string("<x>([\\s\\S]*?)</x>"), make_string("i"));
+    assert!(js_regexp_test(lazy, make_string("<x>one\ntwo</x>")) != 0);
+    let greedy = js_regexp_new(make_string("^[\\s\\S]{3}$"), make_string(""));
+    assert!(js_regexp_test(greedy, make_string("a\nb")) != 0);
+    assert!(js_regexp_test(greedy, make_string("a\nbc")) == 0);
+
+    // `.source` still reports what the author wrote, not the translation.
+    let re = js_regexp_new(make_string("[\\s\\S]+"), make_string("gi"));
+    assert_eq!(
+        string_payload(js_regexp_get_source(re)),
+        b"[\\s\\S]+".to_vec()
+    );
+}
