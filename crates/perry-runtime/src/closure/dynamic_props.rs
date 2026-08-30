@@ -6,23 +6,92 @@ use crate::fast_hash::{new_ptr_hash_map, PtrHashMap};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
+/// Per-function dynamic properties with ordinary property-creation order.
+///
+/// Reads stay O(1) through the hash map, while `order` records the string-key
+/// insertion order required by `OrdinaryOwnPropertyKeys`. Updating an existing
+/// property leaves its position unchanged; deleting it removes the position so
+/// a later re-add appends it at the end.
+#[derive(Default)]
+struct ClosureProps {
+    values: HashMap<String, f64>,
+    order: Vec<String>,
+}
+
+impl ClosureProps {
+    fn contains_key(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+
+    fn get(&self, key: &str) -> Option<&f64> {
+        self.values.get(key)
+    }
+
+    fn insert(&mut self, key: String, value: f64) {
+        if !self.values.contains_key(&key) {
+            self.order.push(key.clone());
+        }
+        self.values.insert(key, value);
+    }
+
+    fn remove(&mut self, key: &str) -> Option<f64> {
+        let value = self.values.remove(key)?;
+        self.order.retain(|existing| existing != key);
+        Some(value)
+    }
+
+    fn merge_older(&mut self, mut older: ClosureProps) {
+        let newer = std::mem::take(self);
+        for key in newer.order {
+            if older.values.contains_key(&key) {
+                continue;
+            }
+            if let Some(value) = newer.values.get(&key).copied() {
+                older.insert(key, value);
+            }
+        }
+        *self = older;
+    }
+
+    fn snapshot(&self) -> Vec<(String, f64)> {
+        let mut indexed = Vec::new();
+        let mut strings = Vec::new();
+        for key in &self.order {
+            let Some(value) = self.values.get(key).copied() else {
+                continue;
+            };
+            if let Some(index) = crate::object::canonical_array_index(key) {
+                indexed.push((index, key.clone(), value));
+            } else {
+                strings.push((key.clone(), value));
+            }
+        }
+        indexed.sort_by_key(|(index, _, _)| *index);
+        indexed
+            .into_iter()
+            .map(|(_, key, value)| (key, value))
+            .chain(strings)
+            .collect()
+    }
+}
+
 per_test_global! {
     /// OUTER key is a closure heap address, probed on every dynamic property
     /// get/set/delete on a function object, so it takes `PtrHasher` for the
     /// same reason as the other pointer-keyed registries (#8125): a raw
     /// address is already well distributed and no external input reaches it.
     ///
-    /// The INNER `HashMap<String, f64>` deliberately keeps std's SipHash. Its
-    /// keys are JS property names, and unlike the descriptor side tables'
-    /// program-identifier keys these can be computed at runtime from program
-    /// input (`fn[userSuppliedName] = 1`), which is exactly the adversarial
-    /// case `RandomState` exists to defend. It is also not the half the
-    /// profile implicates -- `hash_one::<&usize>` is the outer probe.
-    static CLOSURE_PROPS: OnceLock<Mutex<PtrHashMap<usize, HashMap<String, f64>>>> =
+    /// `ClosureProps::values` deliberately keeps std's SipHash. Its keys are JS
+    /// property names, and unlike the descriptor side tables' program-identifier
+    /// keys these can be computed at runtime from program input
+    /// (`fn[userSuppliedName] = 1`), which is exactly the adversarial case
+    /// `RandomState` exists to defend. It is also not the half the profile
+    /// implicates -- `hash_one::<&usize>` is the outer probe.
+    static CLOSURE_PROPS: OnceLock<Mutex<PtrHashMap<usize, ClosureProps>>> =
         OnceLock::new();
 }
 
-fn get_closure_props() -> &'static Mutex<PtrHashMap<usize, HashMap<String, f64>>> {
+fn get_closure_props() -> &'static Mutex<PtrHashMap<usize, ClosureProps>> {
     CLOSURE_PROPS.get_or_init(|| Mutex::new(new_ptr_hash_map()))
 }
 
@@ -126,8 +195,8 @@ pub fn closure_static_prototype(closure_ptr: usize) -> Option<u64> {
         .and_then(|map| map.get(&closure_ptr).copied())
 }
 
-fn barrier_closure_dynamic_props(owner: usize, props: &mut HashMap<String, f64>) {
-    for value in props.values_mut() {
+fn barrier_closure_dynamic_props(owner: usize, props: &mut ClosureProps) {
+    for value in props.values.values_mut() {
         crate::gc::runtime_write_barrier_external_slot(
             owner,
             value as *mut f64 as usize,
@@ -137,13 +206,13 @@ fn barrier_closure_dynamic_props(owner: usize, props: &mut HashMap<String, f64>)
 }
 
 fn merge_closure_prop_map(
-    props: &mut PtrHashMap<usize, HashMap<String, f64>>,
+    props: &mut PtrHashMap<usize, ClosureProps>,
     owner: usize,
-    owner_props: HashMap<String, f64>,
+    owner_props: ClosureProps,
 ) {
     match props.entry(owner) {
         std::collections::hash_map::Entry::Occupied(mut entry) => {
-            entry.get_mut().extend(owner_props);
+            entry.get_mut().merge_older(owner_props);
         }
         std::collections::hash_map::Entry::Vacant(entry) => {
             entry.insert(owner_props);
@@ -265,7 +334,7 @@ pub(crate) fn visit_closure_dynamic_prop_values_mut(owner: usize, mut visit: imp
         return;
     };
 
-    for value in owner_props.values_mut() {
+    for value in owner_props.values.values_mut() {
         visit(value);
     }
 
@@ -351,7 +420,7 @@ pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRoot
         // `CopyingMark` this keeps `fn.errors = [...]` and its transitive
         // contents reachable; in rewrite phases it updates slot bits when a
         // value was forwarded.
-        for value in closure_props.values_mut() {
+        for value in closure_props.values.values_mut() {
             visitor.visit_nanbox_f64_slot(value);
         }
         if new_owner == owner {
@@ -760,7 +829,7 @@ pub(crate) fn closure_set_via_function_prototype_descriptor(
 /// Set a dynamic property on a closure.
 pub fn closure_set_dynamic_prop(ptr: usize, prop: &str, value: f64) {
     if let Ok(mut props) = get_closure_props().lock() {
-        let closure_props = props.entry(ptr).or_insert_with(HashMap::new);
+        let closure_props = props.entry(ptr).or_default();
         closure_props.insert(prop.to_string(), value);
         barrier_closure_dynamic_props(ptr, closure_props);
     }
@@ -808,20 +877,51 @@ pub(crate) fn test_clear_closure_side_tables() {
     }
 }
 
-/// Snapshot every dynamic property on a closure as `(name, value)` pairs.
-/// Sorted alphabetically for stable output (`HashMap` iteration order is
-/// non-deterministic). Used by `format_jsvalue` to emit `[Function: f]
-/// { ownProp: value }` for functions with user-attached properties. See
-/// #1203.
+/// Snapshot every dynamic property on a closure as `(name, value)` pairs in
+/// ECMA-262 own-key order: integer indices ascending, then other strings in
+/// property-creation order. Used by all function-object enumeration paths and
+/// by `format_jsvalue` to emit `[Function: f] { ownProp: value }`. See #1203
+/// and #9148.
 pub fn closure_dynamic_props_snapshot(ptr: usize) -> Vec<(String, f64)> {
     if let Ok(props) = get_closure_props().lock() {
         if let Some(map) = props.get(&ptr) {
-            let mut out: Vec<(String, f64)> = map.iter().map(|(k, v)| (k.clone(), *v)).collect();
-            out.sort_by(|a, b| a.0.cmp(&b.0));
-            return out;
+            return map.snapshot();
         }
     }
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests_9148 {
+    use super::ClosureProps;
+
+    fn names(props: &ClosureProps) -> Vec<String> {
+        props.snapshot().into_iter().map(|(name, _)| name).collect()
+    }
+
+    #[test]
+    fn closure_props_snapshot_uses_ecma_own_key_order() {
+        let mut props = ClosureProps::default();
+        props.insert("tag".to_string(), 1.0);
+        props.insert("other".to_string(), 2.0);
+        props.insert("10".to_string(), 10.0);
+        props.insert("2".to_string(), 2.0);
+
+        assert_eq!(names(&props), ["2", "10", "tag", "other"]);
+    }
+
+    #[test]
+    fn update_keeps_position_and_delete_readd_moves_to_tail() {
+        let mut props = ClosureProps::default();
+        props.insert("tag".to_string(), 1.0);
+        props.insert("other".to_string(), 2.0);
+        props.insert("tag".to_string(), 3.0);
+        assert_eq!(names(&props), ["tag", "other"]);
+
+        assert_eq!(props.remove("tag"), Some(3.0));
+        props.insert("tag".to_string(), 4.0);
+        assert_eq!(names(&props), ["other", "tag"]);
+    }
 }
 
 /// Unbind `this` from a detached method closure.

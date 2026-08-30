@@ -1568,6 +1568,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                 if has_prototype {
                     names.push("prototype".to_string());
                 }
+                sort_property_names_ecma(&mut names);
                 let result = crate::array::js_array_alloc(names.len() as u32);
                 for name in names {
                     let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
