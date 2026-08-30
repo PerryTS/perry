@@ -12868,9 +12868,7 @@ fn typed_f64_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "typed closure should expose a public wrapper and keep an internal generic body:\n{ir}"
     );
     assert!(
-        ir.contains(&format!(
-            "call i64 @js_closure_alloc_singleton(ptr @{public}"
-        )),
+        ir.contains(&format!("call i64 @js_closure_alloc(ptr @{public}")),
         "closure allocation must keep storing the public wrapper pointer:\n{ir}"
     );
     assert!(
@@ -12999,9 +12997,7 @@ fn typed_i32_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "typed-i32 closure should expose a public wrapper and keep an internal generic body:\n{ir}"
     );
     assert!(
-        ir.contains(&format!(
-            "call i64 @js_closure_alloc_singleton(ptr @{public}"
-        )),
+        ir.contains(&format!("call i64 @js_closure_alloc(ptr @{public}")),
         "closure allocation must keep storing the public wrapper pointer:\n{ir}"
     );
     assert!(
@@ -13198,9 +13194,7 @@ fn typed_i1_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "typed closure should expose a public wrapper and keep an internal generic body:\n{ir}"
     );
     assert!(
-        ir.contains(&format!(
-            "call i64 @js_closure_alloc_singleton(ptr @{public}"
-        )),
+        ir.contains(&format!("call i64 @js_closure_alloc(ptr @{public}")),
         "closure allocation must keep storing the public wrapper pointer:\n{ir}"
     );
     assert!(
@@ -13451,9 +13445,7 @@ fn typed_string_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "typed string closure should expose a public wrapper and keep an internal generic body:\n{ir}"
     );
     assert!(
-        ir.contains(&format!(
-            "call i64 @js_closure_alloc_singleton(ptr @{public}"
-        )),
+        ir.contains(&format!("call i64 @js_closure_alloc(ptr @{public}")),
         "closure allocation must keep storing the public wrapper pointer:\n{ir}"
     );
     assert!(
