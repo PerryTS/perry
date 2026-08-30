@@ -25,6 +25,41 @@ fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
+fn host_ui_archive_available() -> bool {
+    let archive_name = if cfg!(target_os = "linux") {
+        "libperry_ui_gtk4.a"
+    } else if cfg!(target_os = "macos") {
+        "libperry_ui_macos.a"
+    } else if cfg!(target_os = "windows") {
+        "perry_ui_windows.lib"
+    } else {
+        return false;
+    };
+
+    let mut search_dirs = Vec::new();
+    for env_var in ["PERRY_RUNTIME_DIR", "PERRY_LIB_DIR"] {
+        if let Some(dir) = std::env::var_os(env_var) {
+            search_dirs.push(PathBuf::from(dir));
+        }
+    }
+
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    search_dirs.push(workspace_root.join("target/release"));
+    search_dirs.push(workspace_root.join("target/debug"));
+
+    if let Some(bin_dir) = perry_bin().parent() {
+        search_dirs.push(bin_dir.to_path_buf());
+        if let Some(target_dir) = bin_dir.parent() {
+            search_dirs.push(target_dir.join("release"));
+            search_dirs.push(target_dir.join("debug"));
+        }
+    }
+
+    search_dirs
+        .into_iter()
+        .any(|dir| dir.join(archive_name).is_file())
+}
+
 fn compile_and_run(dir: &std::path::Path, source: &str) -> String {
     let entry = dir.join("main.ts");
     let output = dir.join("main_bin");
@@ -63,12 +98,20 @@ fn compile_and_run(dir: &std::path::Path, source: &str) -> String {
 /// `Record<string, number>` with it works (known key hits, unknown misses).
 #[test]
 fn get_device_model_is_a_string_usable_as_object_key() {
+    // The platform implementation lives in libperry_ui_*.a. Generic Perry
+    // integration shards intentionally build only runtime + stdlib, so keep
+    // the platform end-to-end coverage when that archive is provisioned and
+    // rely on perry-dispatch's unit test for the ABI shape everywhere else.
+    if !host_ui_archive_available() {
+        eprintln!("skipping platform-backed #5972 test: host UI archive is unavailable");
+        return;
+    }
+
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(
         dir.path(),
         r#"
 import { getDeviceModel } from "perry/system";
-import { Text } from "perry/ui"; // pull in the UI backend that defines perry_system_*
 
 const offsets: Record<string, number> = {
   "iPhone15,2": 1.0,
@@ -88,7 +131,6 @@ console.log("TYPE", typeof model);
 // WITHOUT crashing — that is the #5972 repro.
 console.log("KNOWN", offsetFor("iPhone15,2"));
 console.log("HOST", offsetFor(model));
-const _t = Text("keep the UI backend linked");
 console.log("DONE");
 "#,
     );

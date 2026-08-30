@@ -342,3 +342,23 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         ret: ReturnKind::Str,
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_identity_apis_return_boxed_strings() {
+        for method in ["getDeviceModel", "getOSVersion"] {
+            let row = PERRY_SYSTEM_TABLE
+                .iter()
+                .find(|row| row.method == method)
+                .unwrap_or_else(|| panic!("missing perry/system dispatch row for {method}"));
+            assert_eq!(
+                row.ret,
+                ReturnKind::Str,
+                "{method} returns a StringHeader pointer and must be string-boxed"
+            );
+        }
+    }
+}

@@ -2961,6 +2961,12 @@ fn gc_start_budgeted_full_cycle(
     rebaseline: BudgetedGcRebaseline,
     progress_kind: GcProgressKind,
 ) -> BudgetedGcCycle {
+    // #9231: budgeted cycles construct GcCycleState directly instead of
+    // entering through gc_collect_{minor,full}_with_trigger, so the lazy
+    // stack-map index must be built here while allocation is still legal.
+    // Otherwise the first root-scan step reaches #9182's fail-closed guard
+    // with an owed index and aborts.
+    super::roots::ensure_stack_maps_built();
     let mut state = GcCycleState::new_full(GcTriggerSnapshot::capture(trigger_kind));
     state.set_progress_kind(progress_kind);
     BudgetedGcCycle {
@@ -2988,6 +2994,8 @@ fn gc_start_budgeted_minor_fallback_cycle_with_snapshot(
     rebaseline: BudgetedGcRebaseline,
     progress_kind: GcProgressKind,
 ) -> BudgetedGcCycle {
+    // Same direct-constructor path as gc_start_budgeted_full_cycle above.
+    super::roots::ensure_stack_maps_built();
     let prev_in_alloc = GC_FLAGS.with(|f| {
         let prev = f.get();
         f.set(prev | GC_FLAG_IN_ALLOC);
