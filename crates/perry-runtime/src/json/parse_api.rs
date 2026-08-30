@@ -112,21 +112,6 @@ fn iterative_budget_message() -> String {
     )
 }
 
-fn is_json_null_literal(bytes: &[u8]) -> bool {
-    let Some(start) = bytes
-        .iter()
-        .position(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
-    else {
-        return false;
-    };
-    let end = bytes
-        .iter()
-        .rposition(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
-        .map(|idx| idx + 1)
-        .unwrap_or(start);
-    &bytes[start..end] == b"null"
-}
-
 /// Parse a deeply nested document through the flat tape representation. Tape
 /// construction validates syntax with an explicit heap stack; materialization
 /// likewise keeps pending containers on the heap. This path runs only beyond
@@ -200,30 +185,12 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
             .ok_or_else(|| syntax_error_value("JSON parse error: malformed deep document"));
     }
 
-    // Validate without constructing a second full JSON tree. The Perry parser
-    // below owns the runtime representation; asking serde_json for `Value`
-    // here doubled peak live memory (and allocation work) on large payloads.
-    if let Err(err) = serde_json::from_slice::<serde::de::IgnoredAny>(bytes) {
-        return Err(syntax_error_value(&format!("JSON parse error: {}", err)));
-    }
-
     // #7341: root the source string BEFORE the collection points, then
     // re-derive the input slice from the rooted value.
-    //
-    // The order used to be: derive `bytes`, run `serde_json::from_slice` (which
-    // allocates and arms the malloc trigger), call `gc_check_trigger()` (which
-    // can collect outright), suppress, and only THEN push the root. Two things
-    // went wrong at once. The slice predated a collection point, and — the part
-    // that makes re-deriving alone useless — so did the root: pushing
-    // `text_ptr` after the collection roots an address the collector has
-    // already moved away from, so reading it back yields the same stale
-    // pointer. The parser then reads retired from-space for the whole parse,
-    // which the quarantine reports as a fault at `parse_value + 36`, on the
-    // very first `peek()`.
-    //
-    // Rooting first means the collector rewrites the slot, so the re-read below
-    // yields the post-move payload address. The suppression that follows was
-    // already here and was never the bug.
+    // Pushing `text_ptr` after a collection would root an address the collector
+    // had already moved away from, so re-deriving from that slot would return
+    // the same stale pointer. Rooting first means the collector rewrites the
+    // slot and the parser receives the post-move payload.
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
 
     crate::gc::gc_collect_pending_suppressed_parse();
@@ -231,16 +198,8 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
     crate::gc::gc_suppress();
 
     //
-    // `bytes` above was taken from the StringHeader's payload before two
-    // collection points ran: `serde_json::from_slice` allocates (arming the
-    // malloc trigger), and `gc_check_trigger` can collect outright. An
-    // evacuating minor in either moves the source string, and the parser then
-    // reads the pre-collection address for the whole parse — the from-space
-    // quarantine reports it as a fault at `parse_value + 36`, on the very first
-    // `peek()`.
-    //
-    // The suppression was already here and is not the bug; the bug is that the
-    // borrow predates it. `text_root` keeps the string alive and the collector
+    // `bytes` above was taken before `gc_check_trigger`, which can move the
+    // source string. `text_root` keeps the string alive and the collector
     // rewrites that root, so re-reading the header now yields the post-move
     // payload address.
     let bytes = {
@@ -251,6 +210,7 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
     };
     let mut parser = DirectParser::new(bytes);
     let result = parser.parse_value();
+    let parse_ok = parser.finish();
     parse_root_push(result);
     crate::gc::gc_unsuppress();
     crate::gc::gc_bump_malloc_trigger();
@@ -266,11 +226,8 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
         }
     });
 
-    if result.is_null() && !is_json_null_literal(bytes) {
-        let preview_len = len.min(50);
-        let preview = std::str::from_utf8(&bytes[..preview_len]).unwrap_or("???");
-        let msg = format!("JSON parse error: Unexpected token: {}", preview);
-        return Err(syntax_error_value(&msg));
+    if !parse_ok {
+        return Err(syntax_error_value("JSON parse error: malformed input"));
     }
 
     Ok(result)
@@ -300,12 +257,6 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
             Some(value) => value,
             None => throw_syntax_error("JSON parse error: malformed deep document"),
         };
-    }
-    // Keep serde_json's strict syntax validation, but discard tokens as they
-    // are read instead of allocating an intermediate `serde_json::Value`
-    // immediately before Perry builds its own tree.
-    if let Err(err) = serde_json::from_slice::<serde::de::IgnoredAny>(bytes) {
-        throw_syntax_error(&format!("JSON parse error: {}", err));
     }
 
     crate::gc::gc_collect_pending_suppressed_parse();
@@ -433,6 +384,7 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
 
     let mut parser = DirectParser::new(bytes);
     let result = parser.parse_value();
+    let parse_ok = parser.finish();
     parse_root_push(result);
 
     // Re-enable GC and rebaseline triggers while the result is still
@@ -456,27 +408,8 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
         }
     });
 
-    // If parser didn't consume meaningful input (result is null and input wasn't "null"),
-    // the input was invalid JSON — throw SyntaxError
-    if result.is_null() {
-        let is_literal_null = len >= 4 && bytes.starts_with(b"null");
-        if !is_literal_null {
-            let preview_len = len.min(50);
-            let preview = std::str::from_utf8(&bytes[..preview_len]).unwrap_or("???");
-            let msg = format!("JSON parse error: Unexpected token: {}", preview);
-            throw_syntax_error(&msg);
-        } else if parser.has_trailing_content() {
-            // Literal `null` followed by trailing tokens (`JSON.parse("null x")`)
-            // — reject like any other trailing-token case.
-            throw_syntax_error("Unexpected non-whitespace character after JSON");
-        }
-    } else if parser.has_trailing_content() {
-        // A valid value was parsed but non-whitespace input remains
-        // (`JSON.parse("{}x")`, `JSON.parse("1 2")`). Node rejects trailing
-        // tokens with a SyntaxError; trailing whitespace is allowed.
-        crate::exception::js_throw(syntax_error_value(
-            "Unexpected non-whitespace character after JSON",
-        ));
+    if !parse_ok {
+        throw_syntax_error("JSON parse error: malformed input");
     }
 
     result
@@ -633,14 +566,22 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     };
 
     // Same pre-parse cleanup + GC suppression as `js_json_parse` —
-    // keeps the typed path on the same GC-safety contract.
+    // root before the collection point and re-derive the source bytes after it.
+    let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
     crate::gc::gc_collect_pending_suppressed_parse();
     crate::gc::gc_check_trigger();
     crate::gc::gc_suppress();
-    let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
+
+    let bytes = {
+        let moved = crate::json::parse_root_get(text_root);
+        let hdr = moved.as_string_ptr();
+        let data_ptr = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
+        std::slice::from_raw_parts(data_ptr, len)
+    };
 
     let mut parser = DirectParser::with_shape(bytes, shape);
     let result = parser.parse_array_typed();
+    let parse_ok = parser.finish();
     parse_root_push(result);
 
     crate::gc::gc_unsuppress();
@@ -656,16 +597,8 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
         }
     });
 
-    if result.is_null() {
-        let is_literal_null = len >= 4 && bytes.starts_with(b"null");
-        if !is_literal_null {
-            let preview_len = len.min(50);
-            let preview = std::str::from_utf8(&bytes[..preview_len]).unwrap_or("???");
-            let msg = format!("JSON parse error: Unexpected token: {}", preview);
-            // Throw a real `SyntaxError` (not a bare string) to match Node's
-            // error identity for invalid JSON.
-            crate::exception::js_throw(syntax_error_value(&msg));
-        }
+    if !parse_ok {
+        throw_syntax_error("JSON parse error: malformed input");
     }
 
     result

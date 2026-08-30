@@ -1,7 +1,7 @@
 //! SIMD-accelerated string-terminator scanning used by the direct JSON parser.
 
-/// Find the offset of the first `"` or `\` in `bytes`. Returns `None`
-/// if neither is found before end-of-input (which is a JSON error — the
+/// Find the first `"`, `\`, or raw control byte in `bytes`. Returns `None`
+/// if none is found before end-of-input (which is a JSON error — the
 /// caller handles that by failing the parse).
 ///
 /// Issue #179 tier 1 #3: SIMD-accelerated on aarch64 (NEON) and x86_64
@@ -35,7 +35,7 @@ pub(crate) fn find_string_terminator(bytes: &[u8]) -> Option<usize> {
 #[inline(always)]
 pub(crate) fn find_string_terminator_scalar(bytes: &[u8]) -> Option<usize> {
     for (i, &b) in bytes.iter().enumerate() {
-        if b == b'"' || b == b'\\' {
+        if b == b'"' || b == b'\\' || b < 0x20 {
             return Some(i);
         }
     }
@@ -49,12 +49,14 @@ pub(crate) fn find_string_terminator_neon(bytes: &[u8]) -> Option<usize> {
     unsafe {
         let quote = vdupq_n_u8(b'"');
         let bslash = vdupq_n_u8(b'\\');
+        let space = vdupq_n_u8(0x20);
         let mut i: usize = 0;
         while i + 16 <= bytes.len() {
             let chunk = vld1q_u8(bytes.as_ptr().add(i));
             let eq_q = vceqq_u8(chunk, quote);
             let eq_b = vceqq_u8(chunk, bslash);
-            let mask = vorrq_u8(eq_q, eq_b);
+            let control = vcltq_u8(chunk, space);
+            let mask = vorrq_u8(vorrq_u8(eq_q, eq_b), control);
             // Fast rejection: reduce the 16-byte mask to a single byte
             // (max across all lanes). Zero => no match in this chunk.
             if vmaxvq_u8(mask) == 0 {
@@ -88,12 +90,14 @@ pub(crate) fn find_string_terminator_sse2(bytes: &[u8]) -> Option<usize> {
     unsafe {
         let quote = _mm_set1_epi8(b'"' as i8);
         let bslash = _mm_set1_epi8(b'\\' as i8);
+        let control_max = _mm_set1_epi8(0x1F);
         let mut i: usize = 0;
         while i + 16 <= bytes.len() {
             let chunk = _mm_loadu_si128(bytes.as_ptr().add(i) as *const _);
             let eq_q = _mm_cmpeq_epi8(chunk, quote);
             let eq_b = _mm_cmpeq_epi8(chunk, bslash);
-            let mask = _mm_or_si128(eq_q, eq_b);
+            let control = _mm_cmpeq_epi8(_mm_min_epu8(chunk, control_max), chunk);
+            let mask = _mm_or_si128(_mm_or_si128(eq_q, eq_b), control);
             let bitmask = _mm_movemask_epi8(mask) as u32;
             if bitmask != 0 {
                 return Some(i + bitmask.trailing_zeros() as usize);

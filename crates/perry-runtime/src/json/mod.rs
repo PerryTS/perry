@@ -966,8 +966,118 @@ mod tests {
         }
     }
 
+    fn direct_parser_accepts(input: &[u8]) -> bool {
+        let saved_roots = parse_root_save_len();
+        let accepted = {
+            let _suppress = crate::gc::GcSuppressScope::new();
+            let mut parser = DirectParser::new(input);
+            unsafe {
+                parser.parse_value();
+            }
+            let accepted = parser.finish();
+            parse_root_restore(saved_roots);
+            accepted
+        };
+        accepted
+    }
+
     #[test]
-    fn parse_result_streaming_validation_rejects_malformed_and_trailing_input() {
+    fn direct_parser_validates_json_while_building_the_value() {
+        let invalid: &[&[u8]] = &[
+            b"{",
+            b"}",
+            b"[",
+            b"]",
+            b"",
+            b"   ",
+            br#"{,}"#,
+            br#"[,]"#,
+            br#"[1,]"#,
+            br#"{"a":1,}"#,
+            br#"{a:1}"#,
+            br#"{'a':1}"#,
+            br#"[01]"#,
+            br#"[-01]"#,
+            br#"[1.]"#,
+            br#"[.5]"#,
+            br#"[+1]"#,
+            br#"[1e]"#,
+            br#"[1e+]"#,
+            br#"[--1]"#,
+            br#"[NaN]"#,
+            br#"[Infinity]"#,
+            br#"[-Infinity]"#,
+            br#"[undefined]"#,
+            br#"[TRUE]"#,
+            br#""unterminated"#,
+            br#"["bad\x"]"#,
+            br#"["\u12"]"#,
+            br#"["\uZZZZ"]"#,
+            br#"{"a" 1}"#,
+            br#"{"a":}"#,
+            br#"{:1}"#,
+            br#"[1 2]"#,
+            br#"[1][2]"#,
+            br#"{}{}"#,
+            b"nul",
+            b"tru",
+            br#"[1,,2]"#,
+            br#"{"a":1 "b":2}"#,
+            br#""\t"x"#,
+            b"\"\t\"",
+            b"\"abcdefgh\nijklmnopqrst\"",
+            b"\"abcdefghijklmnop\nqrst\"",
+            b"\x0bnull",
+        ];
+        for input in invalid {
+            assert!(
+                !direct_parser_accepts(input),
+                "DirectParser accepted malformed JSON: {:?}",
+                String::from_utf8_lossy(input)
+            );
+        }
+
+        let valid: &[&[u8]] = &[
+            br#"{}"#,
+            br#"[]"#,
+            b"0",
+            b"-0",
+            b"1e5",
+            b"1E+5",
+            b"1e-5",
+            b"-1.5",
+            b"null",
+            b"true",
+            b"false",
+            br#""""#,
+            br#""\u0041""#,
+            br#""\n""#,
+            br#"[1,2,3]"#,
+            br#"{"a":{"b":[1,{"c":null}]}}"#,
+            br#"{"a":1,"a":2}"#,
+            br#"[[[[[1]]]]]"#,
+            br#""\ud83d\ude00""#,
+            br#""\ud800""#,
+            br#""\ud800\u0041""#,
+            br#""\udc00""#,
+            br#"{"":1}"#,
+            br#"  {"a" : 1 }  "#,
+            br#"[1e308]"#,
+            br#"[-1e308]"#,
+            br#"[1e-400]"#,
+            b"9007199254740993",
+        ];
+        for input in valid {
+            assert!(
+                direct_parser_accepts(input),
+                "DirectParser rejected valid JSON: {:?}",
+                String::from_utf8_lossy(input)
+            );
+        }
+    }
+
+    #[test]
+    fn parse_result_direct_validation_rejects_malformed_and_trailing_input() {
         for input in [
             br#"{"a":[1,]}"#.as_slice(),
             br#"{"a":1} trailing"#.as_slice(),
@@ -975,7 +1085,7 @@ mod tests {
             let text = js_string_from_bytes(input.as_ptr(), input.len() as u32);
             assert!(
                 unsafe { js_json_parse_result(text) }.is_err(),
-                "invalid JSON must be rejected before Perry tree construction"
+                "invalid JSON must be rejected by Perry's direct parser"
             );
         }
 
@@ -1541,8 +1651,8 @@ mod tests {
             let mut parser = DirectParser::new(bytes);
             let value = unsafe { parser.parse_number() };
             assert!(
-                !parser.has_trailing_content(),
-                "parse_number left trailing input on {s:?}"
+                parser.finish(),
+                "parse_number did not consume valid input {s:?}"
             );
             value.bits()
         };

@@ -28,6 +28,38 @@ impl<'a> ParsedStr<'a> {
     }
 }
 
+#[inline]
+fn decode_hex_u16(bytes: &[u8]) -> Option<u16> {
+    if bytes.len() != 4 {
+        return None;
+    }
+    let mut value = 0u16;
+    for &byte in bytes {
+        let digit = match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'a'..=b'f' => byte - b'a' + 10,
+            b'A'..=b'F' => byte - b'A' + 10,
+            _ => return None,
+        };
+        value = (value << 4) | digit as u16;
+    }
+    Some(value)
+}
+
+#[inline]
+fn push_code_unit_wtf8(output: &mut Vec<u8>, unit: u16) {
+    if (0xD800..=0xDFFF).contains(&unit) {
+        output.push(0xE0 | (unit >> 12) as u8);
+        output.push(0x80 | ((unit >> 6) & 0x3F) as u8);
+        output.push(0x80 | (unit & 0x3F) as u8);
+    } else {
+        let ch =
+            char::from_u32(unit as u32).expect("non-surrogate UTF-16 unit is a Unicode scalar");
+        let mut buf = [0u8; 4];
+        output.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+    }
+}
+
 /// Issue #179 typed-parse plan, Step 1b. Pre-computed shape for
 /// `JSON.parse<T[]>(blob)` where T is an object type with a known
 /// field list. Built once per typed-parse call from the codegen-
@@ -114,6 +146,7 @@ pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
 pub(crate) struct DirectParser<'a> {
     input: &'a [u8],
     pos: usize,
+    valid: bool,
     /// Issue #179 typed-parse: if Some, the top-level value is
     /// expected to be `Array<Object>` matching this shape. Each
     /// record uses the fast path; mismatches silently fall through
@@ -134,6 +167,7 @@ impl<'a> DirectParser<'a> {
         Self {
             input,
             pos: 0,
+            valid: true,
             shape: None,
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
@@ -145,6 +179,7 @@ impl<'a> DirectParser<'a> {
         Self {
             input,
             pos: 0,
+            valid: true,
             shape: Some(shape),
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
@@ -221,14 +256,12 @@ impl<'a> DirectParser<'a> {
         }
     }
 
-    /// After parsing the top-level value, returns `true` if any
-    /// non-whitespace input remains. JSON.parse must reject such trailing
-    /// tokens (`JSON.parse("{}x")`, `JSON.parse("1 2")`) with a `SyntaxError`;
-    /// trailing whitespace (`"{}\n"`) is allowed.
-    #[inline]
-    pub(crate) fn has_trailing_content(&mut self) -> bool {
+    /// The direct parser constructs values and validates syntax in the same
+    /// pass. Call this after the root value to reject both a grammar failure
+    /// and a second non-whitespace root token.
+    pub(crate) fn finish(&mut self) -> bool {
         self.skip_whitespace();
-        self.pos < self.input.len()
+        self.valid && self.pos == self.input.len()
     }
 
     #[inline]
@@ -238,8 +271,15 @@ impl<'a> DirectParser<'a> {
             self.advance();
             true
         } else {
+            self.valid = false;
             false
         }
+    }
+
+    #[inline]
+    fn invalid_value(&mut self) -> JSValue {
+        self.valid = false;
+        JSValue::null()
     }
 
     pub(crate) unsafe fn parse_value(&mut self) -> JSValue {
@@ -252,7 +292,7 @@ impl<'a> DirectParser<'a> {
             Some(b'f') => self.parse_false(),
             Some(b'n') => self.parse_null(),
             Some(c) if c == b'-' || c.is_ascii_digit() => self.parse_number(),
-            _ => JSValue::null(),
+            _ => self.invalid_value(),
         }
     }
 
@@ -275,7 +315,10 @@ impl<'a> DirectParser<'a> {
             // `PERRY_SSO_FORCE` env var retained as a no-op kept
             // alive for release-note compatibility — any value
             // still falls through to the unconditional SSO emit.
-            if let Some(sso) = JSValue::try_short_string(b) {
+            if b.len() <= crate::value::SHORT_STRING_MAX_LEN
+                && !crate::string::bytes_have_lone_surrogate(b)
+            {
+                let sso = JSValue::short_string_unchecked(b);
                 return sso;
             }
             // ASCII fast path: skip `compute_utf16_len`'s byte scan
@@ -286,14 +329,18 @@ impl<'a> DirectParser<'a> {
             // (16 B/it on aarch64 NEON) so it costs ~1 ns/byte and
             // saves the equivalent walk inside `compute_utf16_len`
             // plus the conditional widening for non-ASCII counters.
-            let ptr = if b.is_ascii() {
-                crate::string::js_string_from_ascii_bytes(b.as_ptr(), b.len() as u32)
-            } else {
-                js_string_from_bytes(b.as_ptr(), b.len() as u32)
+            let ptr = match s {
+                ParsedStr::Borrowed(b) if b.is_ascii() => {
+                    crate::string::js_string_from_ascii_bytes(b.as_ptr(), b.len() as u32)
+                }
+                ParsedStr::Borrowed(b) => js_string_from_bytes(b.as_ptr(), b.len() as u32),
+                // Escaped strings live in a Rust Vec, so the builder can derive
+                // the WTF-8 lone-surrogate flag while allocating the result.
+                ParsedStr::Owned(ref b) => crate::string::js_string_from_builder_bytes(b),
             };
             JSValue::string_ptr(ptr)
         } else {
-            JSValue::null()
+            self.invalid_value()
         }
     }
 
@@ -308,6 +355,7 @@ impl<'a> DirectParser<'a> {
     /// exactly once before the scalar tail handles the boundary.
     pub(crate) fn parse_string_bytes(&mut self) -> Option<ParsedStr<'a>> {
         if self.peek() != Some(b'"') {
+            self.valid = false;
             return None;
         }
         self.advance();
@@ -326,9 +374,14 @@ impl<'a> DirectParser<'a> {
                 self.pos += 1;
                 return Some(ParsedStr::Borrowed(slice));
             }
+            if ch < 0x20 {
+                self.valid = false;
+                return None;
+            }
             // ch == b'\\' — slow path from here.
             return self.parse_string_bytes_slow(start);
         }
+        self.valid = false;
         None
     }
 
@@ -336,6 +389,7 @@ impl<'a> DirectParser<'a> {
         let mut result = Vec::from(&self.input[start..self.pos]);
         loop {
             if self.pos >= self.input.len() {
+                self.valid = false;
                 return None;
             }
             let ch = self.input[self.pos];
@@ -344,6 +398,7 @@ impl<'a> DirectParser<'a> {
                 b'"' => return Some(ParsedStr::Owned(result)),
                 b'\\' => {
                     if self.pos >= self.input.len() {
+                        self.valid = false;
                         return None;
                     }
                     let esc = self.input[self.pos];
@@ -359,42 +414,48 @@ impl<'a> DirectParser<'a> {
                         b'f' => result.push(0x0C),
                         b'u' => {
                             if self.pos + 4 > self.input.len() {
+                                self.valid = false;
                                 return None;
                             }
-                            let hex =
-                                std::str::from_utf8(&self.input[self.pos..self.pos + 4]).ok()?;
-                            let code = u16::from_str_radix(hex, 16).ok()?;
+                            let Some(code) = decode_hex_u16(&self.input[self.pos..self.pos + 4])
+                            else {
+                                self.valid = false;
+                                return None;
+                            };
                             self.pos += 4;
-                            if (0xD800..=0xDBFF).contains(&code) {
-                                if self.pos + 6 <= self.input.len()
-                                    && self.input[self.pos] == b'\\'
-                                    && self.input[self.pos + 1] == b'u'
-                                {
-                                    let hex2 = std::str::from_utf8(
-                                        &self.input[self.pos + 2..self.pos + 6],
-                                    )
-                                    .ok()?;
-                                    let low = u16::from_str_radix(hex2, 16).ok()?;
-                                    self.pos += 6;
-                                    let codepoint = 0x10000
-                                        + ((code as u32 - 0xD800) << 10)
-                                        + (low as u32 - 0xDC00);
-                                    if let Some(c) = char::from_u32(codepoint) {
-                                        let mut buf = [0u8; 4];
-                                        let s = c.encode_utf8(&mut buf);
-                                        result.extend_from_slice(s.as_bytes());
-                                    }
-                                }
+                            let paired_low = if (0xD800..=0xDBFF).contains(&code)
+                                && self.pos + 6 <= self.input.len()
+                                && self.input[self.pos] == b'\\'
+                                && self.input[self.pos + 1] == b'u'
+                            {
+                                decode_hex_u16(&self.input[self.pos + 2..self.pos + 6])
+                                    .filter(|low| (0xDC00..=0xDFFF).contains(low))
                             } else {
-                                if let Some(c) = char::from_u32(code as u32) {
-                                    let mut buf = [0u8; 4];
-                                    let s = c.encode_utf8(&mut buf);
-                                    result.extend_from_slice(s.as_bytes());
-                                }
+                                None
+                            };
+                            if let Some(low) = paired_low {
+                                self.pos += 6;
+                                let codepoint = 0x10000
+                                    + ((code as u32 - 0xD800) << 10)
+                                    + (low as u32 - 0xDC00);
+                                let c = char::from_u32(codepoint)
+                                    .expect("surrogate pair is a Unicode scalar");
+                                let mut buf = [0u8; 4];
+                                let s = c.encode_utf8(&mut buf);
+                                result.extend_from_slice(s.as_bytes());
+                            } else {
+                                push_code_unit_wtf8(&mut result, code);
                             }
                         }
-                        _ => result.push(esc),
+                        _ => {
+                            self.valid = false;
+                            return None;
+                        }
                     }
+                }
+                c if c < 0x20 => {
+                    self.valid = false;
+                    return None;
                 }
                 _ => result.push(ch),
             }
@@ -465,6 +526,9 @@ impl<'a> DirectParser<'a> {
             // shaped record are NOT themselves expected to match the
             // shape (shape is one-level deep by design in Step 1b).
             let value = self.parse_value_generic();
+            if !self.valid {
+                break;
+            }
             // JSON.parse suppresses GC for the whole parse, so there is
             // no collection point between `parse_value_generic` and the
             // direct/slow-path field write below.
@@ -596,6 +660,9 @@ impl<'a> DirectParser<'a> {
             } else {
                 self.parse_value_generic()
             };
+            if !self.valid {
+                break;
+            }
             js_arr = parse_root_array_ptr(arr_slot);
             // GC is suppressed for the whole typed parse, so array growth
             // cannot collect before `value` is stored.
@@ -630,7 +697,7 @@ impl<'a> DirectParser<'a> {
             Some(b'f') => self.parse_false(),
             Some(b'n') => self.parse_null(),
             Some(c) if c == b'-' || c.is_ascii_digit() => self.parse_number(),
-            _ => JSValue::null(),
+            _ => self.invalid_value(),
         }
     }
 
@@ -685,6 +752,9 @@ impl<'a> DirectParser<'a> {
             }
 
             let value = self.parse_value();
+            if !self.valid {
+                break;
+            }
             // JSON.parse suppresses GC for the whole parse, so key
             // interning cannot collect before `value` is copied into
             // the temporary values vector below.
@@ -793,6 +863,9 @@ impl<'a> DirectParser<'a> {
 
         loop {
             let value = self.parse_value();
+            if !self.valid {
+                break;
+            }
             js_arr = parse_root_array_ptr(arr_slot);
             // GC is suppressed for the whole direct parse, so array growth
             // cannot collect before `value` is stored.
@@ -821,8 +894,22 @@ impl<'a> DirectParser<'a> {
             self.advance();
         }
         let int_start = self.pos;
-        while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
-            self.pos += 1;
+        match self.peek() {
+            Some(b'0') => {
+                self.advance();
+                if self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+                    while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+                        self.advance();
+                    }
+                    return self.invalid_value();
+                }
+            }
+            Some(b'1'..=b'9') => {
+                while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+                    self.advance();
+                }
+            }
+            _ => return self.invalid_value(),
         }
         let int_end = self.pos;
 
@@ -876,6 +963,9 @@ impl<'a> DirectParser<'a> {
             let frac_end = self.pos;
             let exp_after_frac = self.pos < self.input.len()
                 && (self.input[self.pos] == b'e' || self.input[self.pos] == b'E');
+            if frac_end == frac_start {
+                return self.invalid_value();
+            }
             let int_len = int_end - int_start;
             let frac_len = frac_end - frac_start;
             if !exp_after_frac
@@ -921,14 +1011,20 @@ impl<'a> DirectParser<'a> {
             {
                 self.pos += 1;
             }
+            let exponent_start = self.pos;
             while self.pos < self.input.len() && self.input[self.pos].is_ascii_digit() {
                 self.pos += 1;
+            }
+            if self.pos == exponent_start {
+                return self.invalid_value();
             }
         }
 
         let num_str = std::str::from_utf8_unchecked(&self.input[start..self.pos]);
-        let value: f64 = num_str.parse().unwrap_or(0.0);
-        JSValue::number(value)
+        match num_str.parse::<f64>() {
+            Ok(value) => JSValue::number(value),
+            Err(_) => self.invalid_value(),
+        }
     }
 
     pub(crate) unsafe fn parse_true(&mut self) -> JSValue {
@@ -936,7 +1032,7 @@ impl<'a> DirectParser<'a> {
             self.pos += 4;
             JSValue::bool(true)
         } else {
-            JSValue::null()
+            self.invalid_value()
         }
     }
 
@@ -945,14 +1041,16 @@ impl<'a> DirectParser<'a> {
             self.pos += 5;
             JSValue::bool(false)
         } else {
-            JSValue::null()
+            self.invalid_value()
         }
     }
 
     pub(crate) unsafe fn parse_null(&mut self) -> JSValue {
         if self.pos + 4 <= self.input.len() && &self.input[self.pos..self.pos + 4] == b"null" {
             self.pos += 4;
+            JSValue::null()
+        } else {
+            self.invalid_value()
         }
-        JSValue::null()
     }
 }
