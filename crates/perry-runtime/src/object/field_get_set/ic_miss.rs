@@ -1805,6 +1805,11 @@ mod c3c_pic_tests {
     /// sibling's, AND the slot it primes is the post-compaction slot.
     #[test]
     fn a_compacted_class_instance_primes_a_token_a_pristine_sibling_cannot_match() {
+        // Preserve the compacted fixture under default-on tombstones. The
+        // tombstone lane already produces a distinct class-instance token,
+        // but it keeps `c` in slot 2 and therefore cannot exercise the
+        // shifted-slot/token pairing this regression test owns.
+        let _tombstones = crate::object::delete_rest::test_scope_tombstone_deletes(false);
         let _lock = crate::gc::global_side_table_test_lock();
         {
             let packed = b"picdel_a\0picdel_b\0picdel_c";

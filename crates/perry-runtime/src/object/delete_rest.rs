@@ -1172,11 +1172,16 @@ mod shape_transition_tests_6759 {
     /// Ids are never reused, so "different" is the whole property.
     #[test]
     fn delete_mints_a_fresh_shape_id_for_a_plain_object() {
+        // This test is specifically about the identity transition caused by
+        // slot compaction. Default-on tombstones intentionally preserve slot
+        // placement, so pin the compacting lane instead of making the shape
+        // assertion vacuous against a different structural operation.
+        let _tombstones = test_scope_tombstone_deletes(false);
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
             let obj = crate::object::js_object_alloc(0, 8);
-            for name in ["del6759_a", "del6759_b", "del6759_c"] {
-                crate::object::js_object_set_field_by_name(obj, key(name), 1.0);
+            for (name, value) in [("del6759_a", 1.0), ("del6759_b", 2.0), ("del6759_c", 3.0)] {
+                crate::object::js_object_set_field_by_name(obj, key(name), value);
             }
             let _ = crate::object::js_object_get_field_by_name(obj, key("del6759_b"));
             let before = (*obj).parent_class_id;
@@ -1186,6 +1191,11 @@ mod shape_transition_tests_6759 {
             );
 
             assert_eq!(js_object_delete_field(obj, key("del6759_a")), 1);
+            assert_eq!(
+                f64::from_bits(js_object_get_field(obj, 1).bits()),
+                3.0,
+                "test premise: the delete did not compact the slots"
+            );
 
             // The compacted descriptor is installed before delete returns.
             let after = (*obj).parent_class_id;
@@ -1226,6 +1236,10 @@ mod shape_transition_tests_6759 {
     /// still what `class_field_inline_guard` compares until rung 3.
     #[test]
     fn delete_mints_a_fresh_shape_id_for_a_class_instance() {
+        // Keep the compacting precondition explicit: the default tombstone
+        // path also mints a successor id for class instances, but deliberately
+        // leaves surviving fields in their original slots.
+        let _tombstones = test_scope_tombstone_deletes(false);
         let _lock = crate::gc::global_side_table_test_lock();
         const CID: u32 = 0x0C3C_6760;
         const PARENT: u32 = 0x0C3C_6761;
@@ -1502,6 +1516,22 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn test_set_tombstone_deletes(forced: Option<bool>) {
     TOMBSTONE_TEST_OVERRIDE.with(|cell| cell.set(forced));
+}
+
+/// Force the tombstone-delete mode for one test scope and restore the prior
+/// thread-local override even when an assertion panics.
+#[cfg(test)]
+pub(crate) fn test_scope_tombstone_deletes(forced: bool) -> impl Drop {
+    struct Restore(Option<bool>);
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            test_set_tombstone_deletes(self.0);
+        }
+    }
+
+    let previous = TOMBSTONE_TEST_OVERRIDE.with(|cell| cell.replace(Some(forced)));
+    Restore(previous)
 }
 
 /// Threshold compaction for a tombstoned keys array: squeeze every hole AND

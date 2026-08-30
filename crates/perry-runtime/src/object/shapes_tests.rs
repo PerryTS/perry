@@ -438,6 +438,10 @@ mod descriptor_tests_8067 {
 
     #[test]
     fn delete_compaction_never_compares_equal_to_the_predelete_layout() {
+        // This is a compaction identity test, not a tombstone-layout test.
+        // Force the legacy structural operation so `after != before` still
+        // proves that shifted slots cannot inherit their predecessor token.
+        let _tombstones = crate::object::delete_rest::test_scope_tombstone_deletes(false);
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
             let obj = crate::object::js_object_alloc(0, 3);
