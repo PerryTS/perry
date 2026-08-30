@@ -507,7 +507,11 @@ pub extern "C" fn js_string_concat_value(
                     let scope = crate::gc::RuntimeHandleScope::new();
                     let prefix_handle = scope.root_string_ptr(prefix);
                     let (ptr, data_ptr) = string_storage_alloc(total_blen as u32);
-                    (ptr, data_ptr, prefix_handle.get_raw_const_ptr::<StringHeader>())
+                    (
+                        ptr,
+                        data_ptr,
+                        prefix_handle.get_raw_const_ptr::<StringHeader>(),
+                    )
                 }
             };
 
@@ -530,7 +534,11 @@ pub extern "C" fn js_string_concat_value(
             if is_valid_string_ptr(prefix) && prefix_blen > 0 {
                 copy_bytes_small(string_data(prefix), data_ptr, prefix_blen as usize);
             }
-            copy_bytes_small(num_buf.as_ptr(), data_ptr.add(prefix_blen as usize), num_len);
+            copy_bytes_small(
+                num_buf.as_ptr(),
+                data_ptr.add(prefix_blen as usize),
+                num_len,
+            );
         }
 
         return ptr;
