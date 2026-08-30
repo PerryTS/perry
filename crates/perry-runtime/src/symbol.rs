@@ -89,7 +89,7 @@ use crate::fast_hash::{
 use crate::string::StringHeader;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 // NaN-boxing tags (must match value.rs)
@@ -448,10 +448,31 @@ pub(crate) fn test_disable_symbol_magic_screen(disabled: bool) -> bool {
     TEST_DISABLE_SYMBOL_MAGIC_SCREEN.with(|c| c.replace(disabled))
 }
 
+/// Smallest and largest pointer ever registered as a Symbol, as a conservative
+/// filter in front of the process-global registry mutex.
+///
+/// `SYMBOL_EVER_REGISTERED` answers "has any symbol EVER been registered?",
+/// which stops discriminating the moment a program creates its first symbol —
+/// and every program that touches a well-known symbol creates one. After that
+/// `is_registered_symbol_slow` took the global mutex on EVERY probe, including
+/// the overwhelming majority asking about pointers that are not symbols at all.
+///
+/// The range only ever widens, and registration extends it before taking the
+/// lock — the same ordering, and for the same reason, as the latch arm above
+/// it: a pointer outside the range cannot be in the set, so rejecting is sound,
+/// while accepting merely falls through to the lookup that was already there.
+/// Death pruning removes entries without narrowing the range, which is
+/// harmless: those pointers reach the lookup, which correctly says no.
+static SYMBOL_ADDR_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
+static SYMBOL_ADDR_MAX: AtomicUsize = AtomicUsize::new(0);
+
 pub(crate) fn register_symbol_pointer(ptr: usize) {
     // Arm before taking the lock, so the entry is never reachable while the
     // latch still reads idle.
     SYMBOL_EVER_REGISTERED.arm();
+    // Widen before the insert, for the same reason.
+    SYMBOL_ADDR_MIN.fetch_min(ptr, Ordering::Release);
+    SYMBOL_ADDR_MAX.fetch_max(ptr, Ordering::Release);
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_POINTERS);
     if guard.is_none() {
         *guard = Some(new_ptr_hash_set());
@@ -527,9 +548,28 @@ pub fn is_registered_symbol(ptr: usize) -> bool {
     is_registered_symbol_slow(ptr)
 }
 
+/// `PERRY_SYMBOL_RANGE_FILTER=0` restores the unconditional mutex acquisition.
+fn symbol_range_filter_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_SYMBOL_RANGE_FILTER").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
 #[inline(never)]
 fn is_registered_symbol_slow(ptr: usize) -> bool {
     if ptr < 0x10000 {
+        return false;
+    }
+    // Outside the registered range ⟹ not a symbol, without the global mutex.
+    if symbol_range_filter_enabled()
+        && (ptr < SYMBOL_ADDR_MIN.load(Ordering::Acquire)
+            || ptr > SYMBOL_ADDR_MAX.load(Ordering::Acquire))
+    {
         return false;
     }
     let guard = SYMBOL_POINTERS.lock().unwrap();
