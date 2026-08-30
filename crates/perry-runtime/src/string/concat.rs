@@ -151,6 +151,10 @@ pub(crate) unsafe fn copy_bytes_small(src: *const u8, dst: *mut u8, len: usize) 
         dst.cast::<u16>().write_unaligned(head);
         dst.add(len - 2).cast::<u16>().write_unaligned(tail);
     } else if len == 1 {
+        // GC_STORE_AUDIT(POINTER_FREE): string payload BYTES, not JSValues —
+        // this helper copies UTF-8 into freshly allocated storage, so no slot
+        // here can hold a heap edge and no barrier applies. The wider arms
+        // above do the same copy through `write_unaligned`.
         *dst = *src;
     }
 }
