@@ -221,11 +221,38 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
 
     match bin.op {
         // Arithmetic
-        ast::BinaryOp::Add => Ok(Expr::Binary {
-            op: BinaryOp::Add,
-            left,
-            right,
-        }),
+        ast::BinaryOp::Add => {
+            // Two adjacent string literals are a compile-time constant, but
+            // nothing downstream could fold them: the pair lowers to a
+            // runtime concat call, which LLVM cannot see through (numeric
+            // literal folding happens there and is why `3 + 4` costs the
+            // empty loop while `"a" + "b"` cost 8.1 ns/iteration and
+            // `"a" + "b" + "c"` cost 19.7 — versus 0.5 in node).
+            //
+            // Left-associativity makes this fold the whole chain: `"a" + "b"
+            // + "c"` parses as `("a" + "b") + "c"`, and the inner pair has
+            // already been folded to `String("ab")` by the time this runs.
+            //
+            // ASCII-only, deliberately. A non-ASCII pair would need the
+            // runtime's WTF-8 rules — `canonicalize_surrogate_pairs` merges a
+            // high/low surrogate pair across the join into one astral code
+            // point (#6728), and `utf16_len` / `isWellFormed` depend on that.
+            // Rather than restate those rules here, non-ASCII literals keep
+            // the runtime path they have today.
+            if let (Expr::String(l), Expr::String(r)) = (left.as_ref(), right.as_ref()) {
+                if l.is_ascii() && r.is_ascii() {
+                    let mut folded = String::with_capacity(l.len() + r.len());
+                    folded.push_str(l);
+                    folded.push_str(r);
+                    return Ok(Expr::String(folded));
+                }
+            }
+            Ok(Expr::Binary {
+                op: BinaryOp::Add,
+                left,
+                right,
+            })
+        }
         ast::BinaryOp::Sub => Ok(Expr::Binary {
             op: BinaryOp::Sub,
             left,
