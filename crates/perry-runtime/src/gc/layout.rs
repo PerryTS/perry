@@ -1173,31 +1173,61 @@ pub(super) unsafe fn layout_rebuild_from_slots_with_policy(
 /// which re-resolved the header, re-checked forwarding and re-dispatched on the
 /// object kind). Callers must treat the object as fully initialized after
 /// this returns.
+///
+/// Returns `true` when at least one slot holds a pointer-bearing value, so
+/// the caller can skip the write barrier entirely for a pointer-free birth
+/// (the barrier's own child check would reject every slot anyway, after a
+/// call and a page classification per slot).
 pub(crate) unsafe fn layout_init_from_slots(
     user_ptr: *mut u8,
     slots: *const u64,
     slot_count: usize,
-) {
+) -> bool {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
-        return;
+        return true;
     };
-    layout_forget_object(user_ptr as usize);
+    if super::layout_tables::per_object_layouts_maybe_nonempty() {
+        layout_forget_object(user_ptr as usize);
+    }
     header_clear_typed_layout_intact(header);
     if slots.is_null() || slot_count == 0 {
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
-        return;
+        return false;
     }
-    let mut mask = if slot_count <= 64 {
-        LayoutSlotMask::Inline(0)
-    } else {
-        LayoutSlotMask::Heap(vec![0; slot_count.div_ceil(64)])
-    };
+    // Small births (the common case: a handful of captures) classify with a
+    // register-resident mask and no heap `Vec`; the min-slots threshold is
+    // read once here, not per slot.
+    let mut any_pointer = false;
+    if slot_count <= 64 {
+        let mut bits: u64 = 0;
+        for i in 0..slot_count {
+            if layout_pointer_bearing_bits(*slots.add(i)) {
+                bits |= 1u64 << i;
+            }
+        }
+        if bits == 0 {
+            set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+            return false;
+        }
+        any_pointer = true;
+        if super::layout_tables::immortal_layout_scope_active()
+            || slot_count < super::layout_tables::layout_mask_min_slots()
+        {
+            set_layout_state(header, GC_LAYOUT_UNKNOWN);
+        } else {
+            set_layout_state(header, GC_LAYOUT_SIDE_MASK);
+            slot_masks_insert(user_ptr as usize, LayoutSlotMask::Inline(bits));
+        }
+        return any_pointer;
+    }
+    let mut mask = LayoutSlotMask::Heap(vec![0; slot_count.div_ceil(64)]);
     for i in 0..slot_count {
         if layout_pointer_bearing_bits(*slots.add(i)) {
             mask.set_slot(i);
+            any_pointer = true;
         }
     }
-    if mask.is_empty() {
+    if !any_pointer {
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
     } else if super::layout_tables::immortal_layout_scope_active()
         || slot_count < super::layout_tables::layout_mask_min_slots()
@@ -1207,6 +1237,7 @@ pub(crate) unsafe fn layout_init_from_slots(
         set_layout_state(header, GC_LAYOUT_SIDE_MASK);
         slot_masks_insert(user_ptr as usize, mask);
     }
+    any_pointer
 }
 
 pub(crate) unsafe fn layout_rebuild_from_slots(

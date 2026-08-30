@@ -329,13 +329,28 @@ pub extern "C" fn js_closure_alloc_init(
         (*ptr).capture_count = capture_count;
         (*ptr).type_tag = CLOSURE_MAGIC;
         let slots = closure_capture_slots_mut(ptr);
-        std::ptr::copy_nonoverlapping(captures_ptr, slots, actual_count);
-        crate::gc::layout_init_from_slots(ptr as *mut u8, slots as *const u64, actual_count);
-        crate::gc::runtime_write_barrier_newborn_slots(
-            ptr as usize,
-            slots as *const u64,
-            actual_count,
-        );
+        // A handful of captures is the common case; a counted store loop
+        // beats the `memcpy` PLT call the runtime-length copy compiles to
+        // (perf: 2.6% of a one-capture birth was that call).
+        if actual_count <= 8 {
+            for i in 0..actual_count {
+                std::ptr::write(slots.add(i), *captures_ptr.add(i));
+            }
+        } else {
+            std::ptr::copy_nonoverlapping(captures_ptr, slots, actual_count);
+        }
+        let any_pointer =
+            crate::gc::layout_init_from_slots(ptr as *mut u8, slots as *const u64, actual_count);
+        // Pointer-free births (numbers, booleans, SSO strings) have nothing
+        // for a barrier to remember or shade; the classification above
+        // already proved it.
+        if any_pointer {
+            crate::gc::runtime_write_barrier_newborn_slots(
+                ptr as usize,
+                slots as *const u64,
+                actual_count,
+            );
+        }
     }
     ptr
 }
