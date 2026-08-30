@@ -1062,17 +1062,19 @@ pub(crate) struct FnCtx<'a> {
     /// root slot during the clone is harmless to a GC scan.
     pub numeric_accumulator_f64_slots: std::collections::HashMap<u32, String>,
     /// Poll-scoped receiver cache, active only while a packed fast clone is
-    /// being lowered: array local id -> plain (addrspace-0) F64 alloca
-    /// holding the receiver BOX. Every in-clone `LocalGet` of the receiver
-    /// reads this alloca instead of the GC-root slot, so mem2reg promotes it
-    /// and LLVM hoists the handle mask + element base math out of the loop —
-    /// the per-access root re-derive was 3-5 instructions on every packed
-    /// load and store. The cache refreshes from the real root on the ARMED
-    /// arm of every loop poll (`emit_armed_gc_loop_safepoint`), which is the
-    /// only place a call-free clone can collect, so a moving GC cannot
-    /// strand it; entries in `packed_receiver_refresh` drive that reload for
-    /// EVERY active scope, which keeps nested clones' outer caches fresh
-    /// when an inner loop's poll fires.
+    /// being lowered: array local id -> frame-rooted F64 alloca holding the
+    /// receiver BOX. Every in-clone `LocalGet` of the receiver reads this
+    /// alloca instead of the source binding's root, so native-root mem2reg
+    /// promotes it and LLVM hoists the handle mask + element base math out of
+    /// the loop — the per-access root re-derive was 3-5 instructions on every
+    /// packed load and store. The cache is itself rewritten by evacuation and
+    /// refreshes from the source root on the ARMED arm of every loop poll
+    /// (`emit_armed_gc_loop_safepoint`), which is the only place a call-free
+    /// clone can collect; entries in `packed_receiver_refresh` drive that
+    /// reload for EVERY active scope, which keeps nested clones' outer caches
+    /// fresh when an inner loop's poll fires. Rooting the cache is required
+    /// even with that reload: it makes liveness across the poll explicit and
+    /// keeps the shadow and native precise-root lowerings structurally sound.
     pub packed_receiver_box_slots: std::collections::HashMap<u32, String>,
     /// (alloca, source ref, source-is-module-global) reload recipes for the
     /// poll-arm refresh of `packed_receiver_box_slots`.

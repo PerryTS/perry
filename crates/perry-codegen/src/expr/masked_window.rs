@@ -12,7 +12,6 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{
     BoundsState, BufferAccessMode, LoweredValue, NativeFactUse, NativeRep, SemanticKind,
 };

@@ -670,11 +670,11 @@ fn admit_integer_update_accumulators(
 }
 
 impl PackedAccumulatorScope {
-    /// Cache each receiver's box in a promotable alloca for this fast
-    /// clone. Receivers here are matcher-validated plain locals or module
-    /// globals (never captures/boxes), and the clone body is call-free, so
-    /// the only collection point is the loop poll — whose armed arm reloads
-    /// every entry in `packed_receiver_refresh`.
+    /// Cache each receiver's box in a promotable precise-root alloca for this
+    /// fast clone. Receivers here are matcher-validated plain locals or module
+    /// globals (never captures/boxes), and the clone body is call-free, so the
+    /// only collection point is the loop poll — whose armed arm reloads every
+    /// entry in `packed_receiver_refresh` and re-derives its masked handle.
     fn hoist_receivers(&mut self, ctx: &mut FnCtx<'_>, array_ids: &[u32]) {
         for arr_id in array_ids {
             if ctx.packed_receiver_box_slots.contains_key(arr_id) {
@@ -690,9 +690,22 @@ impl PackedAccumulatorScope {
             let current = ctx.block().load(DOUBLE, &source_ref);
             let alloca = ctx.func.alloca_entry(DOUBLE);
             let handle_alloca = ctx.func.alloca_entry(I64);
+            // `root_entry_alloca` hoists the bind into entry setup, so seed
+            // the cache before that bind can make the collector dereference
+            // it. The later store publishes the live receiver and the bind
+            // makes evacuation rewrite this cache itself. Under native roots
+            // the bind becomes an addrspace(1) value that mem2reg can still
+            // promote, retaining the receiver-cache fast path while making
+            // its liveness across a strided poll explicit to the checker.
+            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            ctx.func.entry_allocas_push_store(DOUBLE, &undef, &alloca);
             {
                 let blk = ctx.block();
                 blk.store(DOUBLE, &current, &alloca);
+            }
+            crate::expr::root_entry_alloca(ctx, &alloca);
+            {
+                let blk = ctx.block();
                 let bits = blk.bitcast_double_to_i64(&current);
                 let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
                 blk.store(I64, &handle, &handle_alloca);
