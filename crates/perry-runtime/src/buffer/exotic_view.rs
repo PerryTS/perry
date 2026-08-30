@@ -65,6 +65,21 @@ pub fn is_non_indexed_buffer_view(addr: usize) -> bool {
     super::is_any_array_buffer(addr) || super::is_data_view(addr)
 }
 
+/// `true` only for a Node `Buffer`, not for another JS type that happens to
+/// share Perry's `BufferHeader` storage and registry entry.
+///
+/// Keep this stricter than [`is_byte_indexed_buffer`]: a plain `Uint8Array` is
+/// also byte-indexed, but `Buffer.isBuffer(new Uint8Array(...))` must be false.
+/// ArrayBuffer, SharedArrayBuffer, and DataView are excluded independently
+/// because none of them carries the Uint8Array-constructor marker.
+#[inline]
+pub fn is_node_buffer(addr: usize) -> bool {
+    super::is_registered_buffer(addr)
+        && !super::is_any_array_buffer(addr)
+        && !super::is_data_view(addr)
+        && !super::is_uint8array_buffer(addr)
+}
+
 /// The own-property key a NUMERIC computed key names on a non-indexed buffer
 /// view, or `None` when the key is not a number at all.
 ///

@@ -322,6 +322,17 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
             None
         }
     };
+    let node_buffer_prototype = |addr: usize| -> Option<f64> {
+        if !crate::buffer::is_node_buffer(addr) {
+            return None;
+        }
+        let proto = crate::object::builtin_prototype_value("Buffer");
+        if proto.to_bits() != crate::value::TAG_UNDEFINED {
+            Some(proto)
+        } else {
+            None
+        }
+    };
     let buffer_backed_uint8array_prototype = |addr: usize| -> Option<f64> {
         if !crate::buffer::is_uint8array_buffer(addr) {
             return None;
@@ -427,6 +438,9 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                 return proto;
             }
             if let Some(proto) = buffer_backed_prototype(raw_addr as usize) {
+                return proto;
+            }
+            if let Some(proto) = node_buffer_prototype(raw_addr as usize) {
                 return proto;
             }
             if let Some(proto) = buffer_backed_uint8array_prototype(raw_addr as usize) {
@@ -610,6 +624,9 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
             return proto;
         }
         if let Some(proto) = buffer_backed_prototype(bits as usize) {
+            return proto;
+        }
+        if let Some(proto) = node_buffer_prototype(bits as usize) {
             return proto;
         }
         if let Some(proto) = buffer_backed_uint8array_prototype(bits as usize) {

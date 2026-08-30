@@ -124,13 +124,6 @@ pub unsafe extern "C" fn napi_create_external_buffer(
     write_pointer_handle(env, buffer.cast(), result)
 }
 
-fn is_node_buffer(owner: usize) -> bool {
-    crate::buffer::is_registered_buffer(owner)
-        && !crate::buffer::is_any_array_buffer(owner)
-        && !crate::buffer::is_data_view(owner)
-        && !crate::buffer::is_uint8array_buffer(owner)
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn napi_is_buffer(
     env: NapiEnv,
@@ -140,7 +133,7 @@ pub unsafe extern "C" fn napi_is_buffer(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    *result = pointer_owner(env, value).is_ok_and(is_node_buffer);
+    *result = pointer_owner(env, value).is_ok_and(crate::buffer::is_node_buffer);
     ok(env)
 }
 

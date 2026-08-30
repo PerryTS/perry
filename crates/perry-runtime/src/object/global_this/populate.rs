@@ -148,6 +148,29 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             let name_key =
                 crate::string::js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
             let ctor_value = super::super::native_module::buffer_constructor_value();
+
+            // #9173: Buffer instances resolve to Buffer.prototype, whose own
+            // [[Prototype]] is Uint8Array.prototype. Both objects already
+            // exist here (Buffer is deliberately last in the constructor
+            // table), so link the real prototype objects without recursively
+            // initializing globalThis from buffer_constructor_value().
+            let ctor = JSValue::from_bits(ctor_value.to_bits());
+            if ctor.is_pointer() {
+                let buffer_proto = crate::closure::closure_get_dynamic_prop(
+                    ctor.as_pointer::<crate::closure::ClosureHeader>() as usize,
+                    "prototype",
+                );
+                let buffer_proto_value = JSValue::from_bits(buffer_proto.to_bits());
+                let uint8_proto = builtin_prototype_value("Uint8Array");
+                if buffer_proto_value.is_pointer()
+                    && JSValue::from_bits(uint8_proto.to_bits()).is_pointer()
+                {
+                    super::super::prototype_chain::object_set_static_prototype(
+                        buffer_proto_value.as_pointer::<ObjectHeader>() as usize,
+                        uint8_proto.to_bits(),
+                    );
+                }
+            }
             js_object_set_field_by_name(singleton(), name_key, ctor_value);
             super::super::set_builtin_property_attrs(
                 singleton() as usize,

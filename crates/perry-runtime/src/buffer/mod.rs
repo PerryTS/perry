@@ -83,7 +83,9 @@ pub use own_props::{
 // `ArrayBuffer` / `SharedArrayBuffer` / `DataView` share `BufferHeader` and the
 // buffer registry with `Buffer` / `Uint8Array` but have NO integer-indexed own
 // properties. See `exotic_view`.
-pub use exotic_view::{canonical_index_key, is_byte_indexed_buffer, is_non_indexed_buffer_view};
+pub use exotic_view::{
+    canonical_index_key, is_byte_indexed_buffer, is_node_buffer, is_non_indexed_buffer_view,
+};
 
 // ---- Re-exports: Buffer.from / alloc / concat (FFI) ----
 pub use from::{

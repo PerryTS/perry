@@ -114,6 +114,11 @@ fn only_array_buffer_and_data_view_are_non_indexed_views() {
     assert!(crate::buffer::is_byte_indexed_buffer(b));
     assert!(crate::buffer::is_byte_indexed_buffer(u8a));
 
+    assert!(crate::buffer::is_node_buffer(b));
+    assert!(!crate::buffer::is_node_buffer(u8a));
+    assert!(!crate::buffer::is_node_buffer(ab));
+    assert!(!crate::buffer::is_node_buffer(dv));
+
     // A plain array is not a buffer at all — the two `false` answers above are
     // NOT the same answer as this one, which is why `is_non_indexed_buffer_view`
     // exists separately from `!is_byte_indexed_buffer`.
