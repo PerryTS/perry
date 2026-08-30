@@ -872,3 +872,201 @@ fn search_returns_utf16_index() {
     let re = js_regexp_new(make_string("x"), make_string(""));
     assert_eq!(js_string_search_regex(make_string("𝌆x"), re), 2);
 }
+
+/// The eager syntax check must accept EXACTLY what the full build accepts.
+///
+/// `js_regexp_new` no longer answers "is this a `SyntaxError`?" by building the
+/// automaton — it asks the standard engine's parser alone
+/// (`lazy::std_engine_syntax_ok`) and only falls through to the both-engines
+/// path when the parser refuses. That is sound only while parser-acceptance and
+/// builder-acceptance agree; if a future `regex` release moves a diagnostic out
+/// of the parser and into the NFA build, a pattern would silently stop throwing
+/// at construction. This is the gate for that: it disagrees loudly rather than
+/// letting the divergence ship.
+///
+/// Both directions matter, so the corpus deliberately contains patterns the
+/// linear engine ACCEPTS, ones it rejects for lack of a feature (lookbehind,
+/// backreferences — the fancy-regex fallback's territory) and ones that are
+/// genuinely malformed.
+#[test]
+fn syntax_check_agrees_with_full_build() {
+    let corpus: &[(&str, &str)] = &[
+        // Ordinary shapes.
+        ("abc", ""),
+        ("^v?(\\d+)\\.(\\d+)\\.(\\d+)$", ""),
+        ("[A-Za-z0-9_.+-]+@[\\w-]+\\.[\\w.-]+", "i"),
+        ("(?:https?|ftp)://[^\\s]+", "gi"),
+        ("\\s+", "gm"),
+        ("a.b", "s"),
+        ("(foo|bar|baz){2,4}", "i"),
+        ("x{0,250}", ""),
+        ("\\d{1,256}", ""),
+        // Unicode classes / properties / astral — the case-folding shapes.
+        ("[A-Za-zÀ-ɏ]+", "i"),
+        ("[Ѐ-ӿͰ-Ͽ]*", "giu"),
+        ("\\p{L}+", "u"),
+        ("\\p{Script=Greek}", "u"),
+        ("[\\u{1F600}-\\u{1F64F}]", "u"),
+        ("[←-⇿☀-⛿]", "u"),
+        ("\\w+\\b", "iu"),
+        // Fancy-only (the linear engine refuses; fancy-regex accepts).
+        ("(?<=pre)\\d+", ""),
+        ("(?<!x)y", ""),
+        ("(?=abc)a", ""),
+        ("(a)\\1", ""),
+        // Malformed.
+        ("(", ""),
+        ("[z-a]", ""),
+        ("a{2,1}", ""),
+        ("[", ""),
+        (")", ""),
+        ("\\p{Bogus}", "u"),
+        ("\\p{Script=Nonsense}", "u"),
+        ("[\\p{Bogus}]", "u"),
+        ("(?<", ""),
+        ("*", ""),
+    ];
+    let mut disagreements = Vec::new();
+    for (pattern, flags) in corpus {
+        let cheap = lazy::std_engine_syntax_ok(pattern, flags);
+        let full = build_std_regex(&lazy::flag_prefixed_pattern(pattern, flags)).is_ok();
+        if cheap != full {
+            disagreements.push(format!(
+                "/{pattern}/{flags}: parser says {cheap}, full build says {full}"
+            ));
+        }
+    }
+    assert!(
+        disagreements.is_empty(),
+        "the cheap construction-time syntax check diverged from the full build \
+         — construction would throw (or stop throwing) SyntaxError for:\n  {}",
+        disagreements.join("\n  ")
+    );
+
+    // The corpus above is the committed, readable one. It was developed
+    // against a much larger throwaway corpus: every distinct regex literal in
+    // the claude-code (2,378), pi and kimi bundles — 3,402 in total — plus
+    // 6,297 mutations of the claude-code set (truncations, single-character
+    // deletions, an injected `{2,1}`) to load the REJECT direction, since the
+    // real-world patterns are all valid by construction. 9,899 patterns, zero
+    // disagreements. Point this at such a file to re-run that sweep.
+    if let Ok(path) = std::env::var("PERRY_REGEX_CORPUS") {
+        let text = std::fs::read_to_string(&path).expect("PERRY_REGEX_CORPUS is unreadable");
+        let mut wide = Vec::new();
+        let mut n = 0usize;
+        for line in text.lines().filter(|l| !l.is_empty()) {
+            let mut fields = line.splitn(2, '\t');
+            let pattern = fields.next().unwrap();
+            let flags = fields.next().unwrap_or("");
+            n += 1;
+            if lazy::std_engine_syntax_ok(pattern, flags)
+                != build_std_regex(&lazy::flag_prefixed_pattern(pattern, flags)).is_ok()
+            {
+                wide.push(format!("/{pattern}/{flags}"));
+            }
+        }
+        assert!(
+            wide.is_empty(),
+            "{} of {n} patterns in {path} disagree:\n  {}",
+            wide.len(),
+            wide.join("\n  ")
+        );
+    }
+}
+
+/// Construction must NOT build the automaton; the first operation that needs a
+/// matcher must.
+///
+/// This is the structural half of the perf fix — the wall-clock half is a
+/// fixture whose 200 literals cost 73 ms to construct before and ~0 after. A
+/// regression here (something re-introducing an eager build) would not fail any
+/// behavioural test, only make every program slower, so assert the state
+/// directly: `regex_ptr` is the built/not-built flag.
+#[test]
+fn construction_defers_the_program_build_until_first_use() {
+    let re = js_regexp_new(
+        make_string("[A-Za-z]+(?:foo|bar)[0-9]{1,4}"),
+        make_string("i"),
+    );
+    assert!(
+        unsafe { (*re).regex_ptr.is_null() },
+        "constructing a RegExp must not build its program"
+    );
+    // Everything observable without matching stays available.
+    assert_eq!(
+        string_payload(js_regexp_get_source(re)),
+        b"[A-Za-z]+(?:foo|bar)[0-9]{1,4}".to_vec()
+    );
+    assert_eq!(string_payload(js_regexp_get_flags(re)), b"i".to_vec());
+    assert!(unsafe { (*re).case_insensitive });
+    assert!(
+        unsafe { (*re).regex_ptr.is_null() },
+        "reading .source/.flags must not build the program either"
+    );
+
+    assert!(js_regexp_test(re, make_string("XFOO12")) != 0);
+    assert!(
+        !unsafe { (*re).regex_ptr.is_null() },
+        "the first match must build and install the program"
+    );
+}
+
+/// The deferred build installs the fancy-regex and RepeatMatcher programs too,
+/// not just the linear one — they live on the same publish point, so a header
+/// whose pattern needs one must still get it on first use.
+#[test]
+fn deferred_build_installs_the_fancy_and_repeat_matcher_fallbacks() {
+    let fancy = js_regexp_new(make_string(r"(?<=pre)\d+"), make_string(""));
+    assert!(unsafe { (*fancy).fancy_ptr.is_null() });
+    assert!(js_regexp_test(fancy, make_string("pre77")) != 0);
+    assert!(
+        !unsafe { (*fancy).fancy_ptr.is_null() },
+        "first use must install the fancy-regex fallback"
+    );
+    assert!(js_regexp_test(fancy, make_string("nope77")) == 0);
+
+    let repeat = js_regexp_new(make_string(r"(a?b??)*"), make_string(""));
+    assert!(unsafe { (*repeat).repeat_matcher_ptr.is_null() });
+    assert!(js_regexp_test(repeat, make_string("ab")) != 0);
+    assert!(
+        !unsafe { (*repeat).repeat_matcher_ptr.is_null() },
+        "first use must install the ECMAScript RepeatMatcher"
+    );
+}
+
+/// Two evaluations of the same pattern are still distinct objects with
+/// independent `lastIndex`, and deferring the build does not let them share a
+/// header (ECMA-262 requires a fresh object per evaluation — the same
+/// invariant the closure-literal singleton fix restored for functions).
+#[test]
+fn deferred_build_keeps_per_object_identity_and_last_index() {
+    let a = js_regexp_new(make_string("x"), make_string("g"));
+    let b = js_regexp_new(make_string("x"), make_string("g"));
+    assert_ne!(
+        a as usize, b as usize,
+        "each evaluation is a distinct object"
+    );
+    assert!(!js_regexp_exec(a, make_string("xx")).is_null());
+    assert_eq!(regex_last_index_offset(a), 1);
+    assert_eq!(
+        regex_last_index_offset(b),
+        0,
+        "a sibling regex must not inherit lastIndex through the shared program"
+    );
+}
+
+/// The validated-pattern set is capped like the program caches: it holds owned
+/// pattern text (`emoji-regex` is ~12,807 chars) and is fed by `new
+/// RegExp(userInput)`, so an uncapped one would be the same attacker-driven
+/// growth the compiled-program caches were capped for.
+#[test]
+fn validated_pattern_set_is_capped() {
+    for i in 0..(REGEX_CACHE_MAX_ENTRIES * 2 + 10) {
+        lazy::mark_pattern_validated(&format!("validfill{i}[a-z]+"), "");
+    }
+    let len = VALIDATED_PATTERNS.with(|c| c.borrow().len());
+    assert!(
+        len <= REGEX_CACHE_MAX_ENTRIES,
+        "VALIDATED_PATTERNS must stay capped at {REGEX_CACHE_MAX_ENTRIES} entries, got {len}"
+    );
+}

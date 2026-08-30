@@ -38,6 +38,8 @@ mod exec_array;
 #[cfg(feature = "regex-engine")]
 mod grammar;
 #[cfg(feature = "regex-engine")]
+mod lazy;
+#[cfg(feature = "regex-engine")]
 mod match_all;
 #[cfg(feature = "regex-engine")]
 mod repeat_matcher;
@@ -314,6 +316,16 @@ crate::perry_thread_local! {
     /// are the patterns where `regex`/`fancy-regex` cannot reproduce
     /// `RepeatMatcher` capture reset and nullable-iteration semantics (#5897).
     static REPEAT_MATCHER_CACHE: RefCell<HashMap<(String, String), Arc<repeat_matcher::RepeatMatcherRegex>>> = RefCell::new(HashMap::new());
+
+    /// `(pattern, flags)` pairs that have already cleared construction-time
+    /// validation. Validity is a pure function of the pair, so the answer is
+    /// worth remembering; `js_regexp_new` used to get this from a
+    /// `REGEX_CACHE` hit, which stopped being a proxy once the compiled
+    /// program became lazy (see `regex::lazy`). Same cap and
+    /// clear-on-overflow policy as the program caches — the cost of a clear
+    /// is a repeated parse, never a wrong verdict. The unit value keeps
+    /// `evict_regex_cache_if_full` shared with the three program caches.
+    static VALIDATED_PATTERNS: RefCell<HashMap<(String, String), ()>> = RefCell::new(HashMap::new());
 }
 
 /// Compiled-program size budget handed to both regex engines.
@@ -367,8 +379,9 @@ pub(crate) fn build_fancy_regex(pattern: &str) -> Result<fancy_regex::Regex, fan
 #[cfg(feature = "regex-engine")]
 const REGEX_CACHE_MAX_ENTRIES: usize = 512;
 
-/// Clear-on-overflow guard shared by both compiled-regex caches: make room
-/// for one more entry, wiping the map when it is at capacity.
+/// Clear-on-overflow guard shared by the compiled-program caches and the
+/// validated-pattern set: make room for one more entry, wiping the map when it
+/// is at capacity.
 #[cfg(feature = "regex-engine")]
 fn evict_regex_cache_if_full<V>(cache: &mut HashMap<(String, String), V>) {
     if cache.len() >= REGEX_CACHE_MAX_ENTRIES {
@@ -377,12 +390,15 @@ fn evict_regex_cache_if_full<V>(cache: &mut HashMap<(String, String), V>) {
 }
 
 /// Compile `(pattern, flags)` into the caches if absent, reporting whether
-/// SOME engine accepted the flag-prefixed pattern. One NFA build total —
-/// `js_regexp_new` used to build every unique pattern TWICE (once discarded
-/// for validation at construction, once here for the cache), which doubled
-/// regex cost during bundle startup where every module-level literal
-/// constructs eagerly (the emoji-regex class of pattern costs milliseconds
-/// per build).
+/// SOME engine accepted the flag-prefixed pattern. One NFA build total.
+///
+/// This is the expensive path — the emoji-regex class of pattern costs
+/// milliseconds per build. It no longer runs at construction: `js_regexp_new`
+/// validates with the parser alone and `regex::lazy` calls this (through
+/// `get_or_compile_regex`) on the first operation that needs a matcher. It is
+/// still reached from construction for the patterns the linear engine's parser
+/// rejects, where only a build can tell a fancy-regex pattern from a
+/// `SyntaxError`.
 ///
 /// Returns `true` when the pattern is usable: compiled by the `regex` crate
 /// (cached in `REGEX_CACHE`), or by `fancy-regex` (cached in `FANCY_CACHE`,
@@ -411,29 +427,10 @@ fn compile_and_cache_regex_checked(pattern: &str, flags: &str) -> bool {
             );
         });
     }
-    // Translate JS regex to Rust-compatible pattern
-    let translated = js_regex_to_rust(pattern);
-    let case_insensitive = flags.contains('i');
-    let multiline = flags.contains('m');
-    // #2828: the `s` (dotAll) flag maps directly onto the Rust `regex`
-    // crate's `(?s)` inline mode, so `.` matches newlines.
-    let dot_all = flags.contains('s');
-    let regex_pattern = if case_insensitive || multiline || dot_all {
-        let mut prefix = String::from("(?");
-        if case_insensitive {
-            prefix.push('i');
-        }
-        if multiline {
-            prefix.push('m');
-        }
-        if dot_all {
-            prefix.push('s');
-        }
-        prefix.push(')');
-        format!("{}{}", prefix, translated)
-    } else {
-        translated
-    };
+    // Translate JS regex to Rust-compatible pattern, with the inline mode
+    // prefix the flags imply. Shared with `lazy::std_engine_syntax_ok` so the
+    // eager syntax check and this build can never inspect different strings.
+    let regex_pattern = lazy::flag_prefixed_pattern(pattern, flags);
     let regex = match build_std_regex(&regex_pattern) {
         Ok(re) => re,
         Err(_) => {
@@ -746,9 +743,12 @@ fn validate_and_canonicalize_flags(flags: &str) -> String {
 /// Create a new RegExp from pattern and flags strings
 /// Returns a pointer to RegExpHeader
 ///
-/// Uses the thread-local REGEX_CACHE so repeated regex literals (e.g. in a
-/// loop) reuse the same compiled Regex instead of leaking a fresh one each
-/// time. The raw pointer stored in RegExpHeader is kept alive by the cache.
+/// Validates the pattern and allocates the header; it does NOT build the
+/// compiled program. That happens on the first operation that needs a matcher
+/// — see `regex::lazy`, and the `regex_ptr`/`fancy_ptr`/`repeat_matcher_ptr`
+/// fields, which are null until then. A fresh header per call is required:
+/// ECMA-262 evaluates a regex literal to a NEW object every time, and the
+/// distinction is observable through `===`, expandos and `lastIndex`.
 #[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_regexp_new(
@@ -801,28 +801,20 @@ pub extern "C" fn js_regexp_new(
     // the fancy fallback. `get_or_compile_regex` populates FANCY_CACHE when
     // the regex crate fails but fancy-regex succeeds; check both here.
     //
-    // PERF (#5777 follow-up): the ENTIRE validation block is gated on a
-    // REGEX_CACHE miss. Regex validity is a pure function of (pattern, flags):
-    // an invalid pattern throws here BEFORE `get_or_compile_regex` can ever
-    // cache it, and both writers of REGEX_CACHE — this function and
-    // `regex/compile.rs` (`RegExp.prototype.compile`) — run these exact checks
-    // first, so any entry already in the cache is provably valid and
-    // re-validating it can only burn CPU. #5777 already skipped the expensive
-    // both-engines recompile on a hit; this extends the skip to the "cheap"
-    // JS-syntax checks too, which are not actually cheap:
-    // `has_invalid_repeated_quantifier` does a
-    // `pattern.chars().collect::<Vec<char>>()` (a ~51 KB allocation for a
-    // 12,807-char pattern) plus an O(n) scan on EVERY `new RegExp(...)`. The
-    // common `string-width`/`emoji-regex` npm packages construct a fresh
-    // ~12,807-char `/…/g` literal on every measurement and a layout pass can
-    // call them thousands of times, so this re-validation — not the
-    // already-cached compile — became the top hot frame in profiles.
+    // PERF (#5777 follow-up): the ENTIRE validation block runs at most once
+    // per (pattern, flags). Regex validity is a pure function of the pair, so
+    // a pattern that has already cleared it can never fail it later; the
+    // cheap JS-syntax checks are not actually cheap
+    // (`has_invalid_repeated_quantifier` does a
+    // `pattern.chars().collect::<Vec<char>>()` — a ~51 KB allocation for a
+    // 12,807-char pattern — plus an O(n) scan on EVERY `new RegExp(...)`),
+    // and the common `string-width`/`emoji-regex` npm packages construct a
+    // fresh ~12,807-char `/…/g` literal on every measurement, which a layout
+    // pass calls thousands of times. #5777 keyed that skip off a REGEX_CACHE
+    // hit, which worked only because construction also COMPILED; with the
+    // build deferred, the fact is recorded directly in `VALIDATED_PATTERNS`.
     {
-        let in_cache = REGEX_CACHE.with(|c| {
-            c.borrow()
-                .contains_key(&(pattern_str.to_string(), flags_str.to_string()))
-        });
-        if !in_cache {
+        if !lazy::pattern_already_validated(pattern_str, flags_str) {
             if has_invalid_repeated_quantifier(pattern_str) {
                 throw_regexp_syntax_error(&format!(
                     "Invalid regular expression: /{}/: invalid pattern",
@@ -860,12 +852,23 @@ pub extern "C" fn js_regexp_new(
                     pattern_str
                 ));
             }
-            // The expensive part of validation: compile the pattern. This
-            // BUILDS AND CACHES in one step (`compile_and_cache_regex_checked`)
-            // so the `get_or_compile_regex` below is a guaranteed cache hit —
-            // previously every unique pattern was NFA-compiled twice (once
-            // discarded here, once for the cache), doubling startup regex cost.
-            if !compile_and_cache_regex_checked(pattern_str, flags_str) {
+            // The remaining question — "is this a SyntaxError?" — used to be
+            // answered by BUILDING the pattern, which is why constructing a
+            // regex cost an NFA. Ask the standard engine's PARSER instead
+            // (`lazy::std_engine_syntax_ok`, the same `regex_syntax` parse
+            // `build_std_regex` performs, on the same string): 17.8x cheaper,
+            // and it agrees with the full build on every one of the 2,378
+            // regex literals in the claude-code bundle (asserted over a
+            // corpus by `tests::syntax_check_agrees_with_full_build`).
+            //
+            // A parser rejection is NOT a verdict: every lookbehind /
+            // backreference pattern is rejected by the linear engine too. Fall
+            // through to the unchanged both-engines path, which owns the
+            // SyntaxError decision and populates the caches for the fancy
+            // fallback.
+            if !lazy::std_engine_syntax_ok(pattern_str, flags_str)
+                && !compile_and_cache_regex_checked(pattern_str, flags_str)
+            {
                 // Preserve the historical edge: validation used to test the
                 // BARE translated pattern (no `(?ims)` prefix). A pattern that
                 // compiles bare but blows the size limit with the flag prefix
@@ -880,17 +883,17 @@ pub extern "C" fn js_regexp_new(
                     ));
                 }
             }
+            lazy::mark_pattern_validated(pattern_str, flags_str);
         }
     }
 
-    // Get or compile the regex from the cache. The header OWNS a leaked `Arc`
-    // reference (`Arc::into_raw`) to the compiled program — mirroring
-    // `fancy_ptr` below — so the pointer stays valid even after the capped
-    // `REGEX_CACHE` (see `REGEX_CACHE_MAX_ENTRIES`) evicts its own reference.
-    // Previously this borrowed `Arc::as_ptr` and relied on the cache never
-    // dropping an entry.
-    let arc = get_or_compile_regex(pattern_str, flags_str);
-    let regex_ptr = Arc::into_raw(arc) as *mut Regex;
+    // The compiled program is NOT built here. Validation above has already
+    // established that the pattern is legal, and a bundle evaluates hundreds
+    // of module-level literals it never matches with — building each one's
+    // NFA at construction is what put ~14% of a claude-code `--help` run
+    // inside `regex_syntax`/`regex_automata`. `regex_ptr` stays null (the
+    // "not built yet" state) and `lazy::ensure_regex_compiled` installs the
+    // owned `Arc`s on the first operation that needs a matcher.
 
     // ★ Last use of the borrowed pattern text before this function allocates.
     // `pattern_str` borrows the GC string; the two allocations below can move
@@ -946,7 +949,8 @@ pub extern "C" fn js_regexp_new(
         // Neither `gc_malloc` nor the arena zeroes reused memory, so this
         // must be set explicitly or the GC follows a garbage pointer.
         (*ptr).meta = std::ptr::null_mut();
-        (*ptr).regex_ptr = regex_ptr;
+        // Null = not compiled yet; see `lazy::ensure_regex_compiled`.
+        (*ptr).regex_ptr = std::ptr::null_mut();
         (*ptr).pattern_ptr = pattern;
         (*ptr).flags_ptr = canonical_flags_ptr;
         // `pattern_ptr` / `flags_ptr` are GC-managed StringHeaders — the GC scans
@@ -989,31 +993,14 @@ pub extern "C" fn js_regexp_new(
         // Wall 18: self-identifying marker so identity checks survive a
         // duplicate-runtime thread-local split.
         (*ptr).magic = REGEXP_MAGIC;
-        // Header-resident fancy-regex fallback (lookahead/lookbehind/backrefs)
-        // so `.replace(re, fn)` etc. don't depend on the (possibly other-copy)
-        // FANCY_CACHE thread-local. `get_or_compile_regex` above already
-        // populated FANCY_CACHE on THIS thread when the std `regex` crate
-        // rejected the pattern; clone that Arc onto the header (leaked so the
-        // raw pointer stays valid for the header's lifetime — RegExp headers
-        // and their compiled programs live for the process today).
-        (*ptr).fancy_ptr = FANCY_CACHE.with(|fc| {
-            match fc
-                .borrow()
-                .get(&(owned_pattern.clone(), flags_str.to_string()))
-            {
-                Some(arc) => Arc::into_raw(arc.clone()) as *const (),
-                None => std::ptr::null(),
-            }
-        });
-        (*ptr).repeat_matcher_ptr = REPEAT_MATCHER_CACHE.with(|cache| {
-            match cache
-                .borrow()
-                .get(&(owned_pattern.clone(), flags_str.to_string()))
-            {
-                Some(arc) => Arc::into_raw(arc.clone()) as *const (),
-                None => std::ptr::null(),
-            }
-        });
+        // The header-resident fancy-regex fallback (lookahead/lookbehind/
+        // backrefs) and the ECMAScript backtracking matcher are installed
+        // alongside `regex_ptr` by `lazy::ensure_regex_compiled`, from the
+        // same caches, on the first operation that needs a matcher. Keeping
+        // all three on one publish point is what makes `regex_ptr.is_null()`
+        // a sound built/not-built flag.
+        (*ptr).fancy_ptr = std::ptr::null();
+        (*ptr).repeat_matcher_ptr = std::ptr::null();
 
         // Record the pointer so that js_string_split can detect
         // `s.split(regex)` without a dedicated runtime decl.
@@ -1199,7 +1186,7 @@ pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader
             };
         }
 
-        let regex = &*(*re).regex_ptr;
+        let regex = lazy::header_std_regex(re);
         if regex.is_match(str_data) {
             1
         } else {
@@ -1213,6 +1200,10 @@ pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader
 /// pattern (backreferences, lookbehind, etc.).
 #[cfg(feature = "regex-engine")]
 pub(crate) fn lookup_fancy_regex(re: *const RegExpHeader) -> Option<Arc<fancy_regex::Regex>> {
+    // The header's programs are built on first use; `fancy_ptr` is null until
+    // then, and a null there is indistinguishable from "this pattern has no
+    // fancy fallback" — so build before reading it.
+    lazy::ensure_regex_compiled(re);
     unsafe {
         // Wall 18: header-resident fancy Arc first (duplicate-runtime
         // thread-local resilient). `fancy_ptr` is a leaked `Arc` raw pointer; to
@@ -1242,6 +1233,10 @@ pub(crate) fn lookup_fancy_regex(re: *const RegExpHeader) -> Option<Arc<fancy_re
 fn lookup_repeat_matcher(
     re: *const RegExpHeader,
 ) -> Option<Arc<repeat_matcher::RepeatMatcherRegex>> {
+    // Same first-use build as `lookup_fancy_regex`: a null
+    // `repeat_matcher_ptr` means "not built yet" before it can mean "this
+    // pattern needs no backtracking matcher".
+    lazy::ensure_regex_compiled(re);
     unsafe {
         if regex_header_has_magic(re) && !(*re).repeat_matcher_ptr.is_null() {
             let raw = (*re).repeat_matcher_ptr as *const repeat_matcher::RepeatMatcherRegex;
@@ -1464,7 +1459,7 @@ pub extern "C" fn js_string_replace_regex(
             return replace_regex_str_fancy(str_data, &fre, (*re).global, repl_str);
         }
 
-        let regex = &*(*re).regex_ptr;
+        let regex = lazy::header_std_regex(re);
         let global = (*re).global;
         let has_named_groups = regex.capture_names().any(|n| n.is_some());
 
@@ -1585,7 +1580,7 @@ pub extern "C" fn js_string_split_regex_n(
             // zero-width matches (it emits leading/trailing/consecutive empty
             // strings the spec's `e == p` skip suppresses) and never splices
             // captured groups, so walk the string the spec's way instead.
-            crate::string::spec_regex_split(&*(*re).regex_ptr, &str_data, limit)
+            crate::string::spec_regex_split(lazy::header_std_regex(re), &str_data, limit)
         };
 
         let arr = crate::array::js_array_alloc(parts.len() as u32);
@@ -1637,7 +1632,7 @@ pub extern "C" fn js_string_search_regex(s: *const StringHeader, re: *const RegE
             };
         }
 
-        let regex = &*(*re).regex_ptr;
+        let regex = lazy::header_std_regex(re);
         match regex.find(str_data) {
             Some(m) => {
                 // `String.prototype.search` returns a JS string index — UTF-16

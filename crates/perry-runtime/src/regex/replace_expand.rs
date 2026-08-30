@@ -345,7 +345,7 @@ pub extern "C" fn js_string_replace_regex_fn(
     }
 
     unsafe {
-        let regex = &*(*re).regex_ptr;
+        let regex = super::lazy::header_std_regex(re);
         let global = (*re).global;
 
         // Extract closure pointer from NaN-boxed value
@@ -482,7 +482,7 @@ pub extern "C" fn js_string_replace_regex_named(
             return replace_regex_str_fancy(str_data, &fre, (*re).global, repl_str);
         }
 
-        let regex = &*(*re).regex_ptr;
+        let regex = super::lazy::header_std_regex(re);
         let global = (*re).global;
         let has_named_groups = regex.capture_names().any(|n| n.is_some());
 

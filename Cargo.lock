@@ -6338,6 +6338,7 @@ dependencies = [
  "perry-parser",
  "rand 0.10.1",
  "regex",
+ "regex-syntax",
  "regress",
  "resolv-conf",
  "ryu",

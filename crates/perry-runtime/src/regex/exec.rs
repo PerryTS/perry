@@ -38,7 +38,7 @@ pub extern "C" fn js_regexp_exec(
     // of them may reach Phase 2 (#8449).
     let (owned, has_indices) = unsafe {
         let str_data = string_as_str(s);
-        let regex = &*(*re).regex_ptr;
+        let regex = super::lazy::header_std_regex(re);
         let global = (*re).global;
         let sticky = (*re).sticky;
         let has_indices = (*re).has_indices;

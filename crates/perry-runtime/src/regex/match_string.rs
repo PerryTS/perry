@@ -78,7 +78,7 @@ pub extern "C" fn js_string_match(
     // UTF-16/WTF-8 metadata while the engine's `Captures` may borrow `s`.
     let owned = unsafe {
         let str_data = string_as_str(s);
-        let regex = &*(*re).regex_ptr;
+        let regex = super::lazy::header_std_regex(re);
         let global = (*re).global;
         let has_indices = (*re).has_indices;
 

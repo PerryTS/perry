@@ -120,7 +120,7 @@ diagnostics = []
 # RegExp object's identity/display layer (header, `is_regex_pointer`, `toString`)
 # stays always compiled, so console-formatting / value-to-string paths keep
 # working with no engine present.
-regex-engine = ["dep:regex", "dep:fancy-regex", "dep:regress"]
+regex-engine = ["dep:regex", "dep:regex-syntax", "dep:fancy-regex", "dep:regress"]
 # The TC39 `Temporal.*` API (`temporal_rs` + its transitive tz/calendar deps:
 # jiff-tzdb, icu_calendar, timezone_provider, calendrical_calculations —
 # ~580 KB). Independent of JS `Date` (which has its own `date.rs` impl), so a
@@ -286,6 +286,10 @@ libc.workspace = true
 gimli = { version = "0.34", default-features = false, features = ["read"] }
 rand = "0.10"
 regex = { workspace = true, optional = true }
+# The parser half of `regex`, used on its own to answer "is this pattern a
+# SyntaxError?" without building the automaton — see `regex/lazy.rs`. Not a
+# new archive: `regex` already links it, this only names it directly.
+regex-syntax = { version = "0.8", optional = true }
 regress = { workspace = true, features = ["utf16"], optional = true }
 # Taffy — flexbox / grid layout engine for the perry/tui module
 # (#358 Phase 3). Same crate Bevy and Dioxus use; pure Rust, no FFI.

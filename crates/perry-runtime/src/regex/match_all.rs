@@ -143,7 +143,7 @@ unsafe fn materialize_match_all_results(
             });
         }
     } else {
-        let regex = &*(*re).regex_ptr;
+        let regex = super::lazy::header_std_regex(re);
         let named_names: Vec<(usize, String)> = regex
             .capture_names()
             .enumerate()

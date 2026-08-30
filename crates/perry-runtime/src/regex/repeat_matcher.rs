@@ -301,17 +301,10 @@ pub(super) fn compile(pattern: &str, flags: &str) -> Option<RepeatMatcherRegex> 
 }
 
 fn source_and_flags(re: *const super::RegExpHeader) -> (String, String) {
-    if let Some(source) =
-        super::REGEX_SOURCE_TABLE.with(|table| table.borrow().get(&(re as usize)).cloned())
-    {
-        return source;
-    }
-    unsafe {
-        (
-            super::string_as_str((*re).pattern_ptr).to_string(),
-            super::string_as_str((*re).flags_ptr).to_string(),
-        )
-    }
+    // One definition, shared with the lazy first-use builder: both need the
+    // `(source, flags)` a header was constructed from, and a second copy of
+    // the side-table-then-header fallback would be a place for them to drift.
+    super::lazy::source_and_flags(re)
 }
 
 fn decode_wtf8_units(bytes: &[u8]) -> Vec<u16> {
