@@ -206,6 +206,11 @@ const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
     // Human-facing telemetry only; never changes IR or object bytes.
     "PERRY_CODEGEN_PROGRESS",
     "PERRY_CODEGEN_UNIT_TIMINGS",
+    // `packed_loop_reject` prints the admission chain's declining condition and
+    // returns `None` either way — the rejection is what the caller already got
+    // without the flag, so the emitted code is identical. An input, rather than
+    // an exclusion, would make every trace run miss the cache for nothing.
+    "PERRY_PACKED_LOOP_TRACE",
     // Entry outlining report output is observational only.
     "PERRY_OUTLINE_ENTRY_REPORT",
     // Only read on an already-fatal dialect-construction failure (a unit that
