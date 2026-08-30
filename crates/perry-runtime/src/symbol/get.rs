@@ -279,6 +279,34 @@ unsafe fn req_handle_symbol_fallback(obj_f64: f64, sym_f64: f64) -> Option<f64> 
 }
 
 unsafe fn object_header_ptr_from_value_bits(bits: u64) -> Option<usize> {
+    let (raw, obj_type) = heap_ptr_and_type_from_value_bits(bits)?;
+    if obj_type == crate::gc::GC_TYPE_OBJECT {
+        Some(raw)
+    } else {
+        None
+    }
+}
+
+/// #9192: [`object_header_ptr_from_value_bits`] for the RECEIVER position,
+/// which may be a real array (`Object.setPrototypeOf(arr, {[S]: v})`). Only the
+/// ADDRESS is used here — as the key of the recorded-`[[Prototype]]` lookup —
+/// so an `ArrayHeader` is safe, while the chain HOPS still require a genuine
+/// `GC_TYPE_OBJECT` before anything is dereferenced as one.
+unsafe fn receiver_ptr_from_value_bits(bits: u64) -> Option<usize> {
+    let (raw, obj_type) = heap_ptr_and_type_from_value_bits(bits)?;
+    if obj_type == crate::gc::GC_TYPE_OBJECT
+        || obj_type == crate::gc::GC_TYPE_ARRAY
+        || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+    {
+        Some(raw)
+    } else {
+        None
+    }
+}
+
+/// Validate a value's bits as a live tracked heap allocation and report its
+/// address together with its GC type byte.
+unsafe fn heap_ptr_and_type_from_value_bits(bits: u64) -> Option<(usize, u8)> {
     let top16 = bits >> 48;
     let raw = if top16 == 0x7FFD {
         (bits & POINTER_MASK) as usize
@@ -304,11 +332,7 @@ unsafe fn object_header_ptr_from_value_bits(bits: u64) -> Option<usize> {
     if !tracked_malloc && !(arena_payload && arena_header) {
         return None;
     }
-    if (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT {
-        Some(raw)
-    } else {
-        None
-    }
+    Some((raw, (*gc_header).obj_type))
 }
 
 /// Walk the explicit static prototype chain to find an inherited symbol property.
@@ -320,7 +344,11 @@ pub(crate) unsafe fn inherited_symbol_property(obj_f64: f64, sym_f64: f64) -> Op
 
 unsafe fn resolve_explicit_object_prototype_symbol(obj_f64: f64, sym_f64: f64) -> Option<f64> {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
-    let mut owner = object_header_ptr_from_value_bits(obj_f64.to_bits())?;
+    // #9192: the receiver may be a real ARRAY with a retargeted `[[Prototype]]`
+    // (`Object.setPrototypeOf(arr, {[S]: v})`). Its address is only a lookup
+    // key here, so accept it; every chain HOP below still demands a real
+    // `GC_TYPE_OBJECT` before dereferencing.
+    let mut owner = receiver_ptr_from_value_bits(obj_f64.to_bits())?;
     let mut visited_buf = [0usize; 16];
     let mut visited_len = 0usize;
     let mut visited_overflow: Option<std::collections::HashSet<usize>> = None;

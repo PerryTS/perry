@@ -277,8 +277,8 @@ pub(crate) use get_field_by_name_async::async_resource_property;
 pub(crate) use get_field_by_name_tail::get_field_by_name_object_tail;
 pub(super) use has_property::native_module_own_field_by_key;
 pub(crate) use has_property::{
-    closure_dynamic_prop_by_key, reified_function_method_name, wide_key_index_lookup,
-    wide_key_index_note_hit, WIDE_KEY_INDEX_MIN_KEYS,
+    closure_dynamic_prop_by_key, prototype_value_has_property, reified_function_method_name,
+    wide_key_index_lookup, wide_key_index_note_hit, WIDE_KEY_INDEX_MIN_KEYS,
 };
 pub use has_property::{js_in_operator, js_object_has_property};
 #[cfg(test)]

@@ -227,6 +227,25 @@ pub(super) unsafe fn dispatch_handle(
                         return Some(result);
                     }
                 }
+                // #9192: `Object.setPrototypeOf(arr, p)` REPLACES the implicit
+                // `Array.prototype` chain, so a method that lives on `p` — the
+                // ES5 subclass idiom `MyList.prototype = Object.create(
+                // Array.prototype); MyList.prototype.first = …` — is the one
+                // `arr.first()` must call. Without this the built-in arms below
+                // never matched the name and the call fell through to the
+                // tower's non-object tail, which answers the null-object stub.
+                // Same walker Wall 10 uses for `Object.setPrototypeOf(handle,
+                // proto)`; it costs one side-table probe that answers `None`
+                // for every array with the default prototype.
+                if let Some(result) = dispatch_handle_proto_method(
+                    crate::array::clean_arr_ptr(arr) as usize,
+                    f64::from_bits(jsval.bits()),
+                    method_name,
+                    args_ptr,
+                    args_len,
+                ) {
+                    return Some(result);
+                }
                 // #6658: an explicit `thisArg` (2nd argument) must bind the
                 // callback's `this`. The dense helpers the arms below dispatch
                 // to deliberately bind `undefined` (spec: absent thisArg) and

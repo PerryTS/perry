@@ -889,6 +889,27 @@ pub(crate) fn get_field_by_name_object_tail(
                 if key_bytes == b"length" {
                     return JSValue::number(crate::array::js_array_length(arr) as f64);
                 }
+                // #9192: `arr.__proto__` IS the array's `[[Prototype]]` (the
+                // spec models it as an `Object.prototype` accessor returning
+                // `[[GetPrototypeOf]](this)`) — the same shape the closure arm
+                // above resolves off the static-prototype side table. Without
+                // it a retargeted array reported the WRONG object here while
+                // `Object.getPrototypeOf(arr)` reported the right one.
+                if key_bytes == b"__proto__" {
+                    // `__proto__` itself lives on `Object.prototype`, so an
+                    // array whose chain no longer reaches it (an explicit null
+                    // prototype) has no such property at all.
+                    if crate::object::prototype_chain::object_static_prototype(obj as usize)
+                        == Some(crate::value::TAG_NULL)
+                    {
+                        return JSValue::undefined();
+                    }
+                    let receiver = crate::value::js_nanbox_pointer(obj as i64);
+                    let proto = crate::object::object_ops::js_object_get_prototype_of(
+                        f64::from_bits(receiver.to_bits()),
+                    );
+                    return JSValue::from_bits(proto.to_bits());
+                }
                 // date-fns / drizzle / lodash duck-typing path:
                 // `arr.constructor === Array`, `new arr.constructor(...)`,
                 // etc. expect a non-undefined function-typed value that
@@ -905,6 +926,16 @@ pub(crate) fn get_field_by_name_object_tail(
                     }
                     if let Some(v) = crate::array::array_named_property_get(arr, key) {
                         return JSValue::from_bits(v.to_bits());
+                    }
+                    // A recorded custom `[[Prototype]]` replaces the whole
+                    // implicit chain, so `constructor` must be resolved through
+                    // it (a plain `{}` prototype answers `Object`, not `Array`)
+                    // rather than short-circuiting to the global `Array`. #9192.
+                    if crate::object::prototype_chain::object_static_prototype(obj as usize)
+                        .is_some()
+                    {
+                        return array_prototype_property_value("constructor", obj as usize)
+                            .unwrap_or_else(JSValue::undefined);
                     }
                     let v = js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
                     return JSValue::from_bits(v.to_bits());

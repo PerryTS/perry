@@ -687,6 +687,42 @@ pub(crate) unsafe fn array_prototype_property_value(
     let name_copy = super::HeapKeyBytes::copy_of(name.as_bytes());
     let name: &str = std::str::from_utf8_unchecked(name_copy.as_bytes());
 
+    // #9192: an explicit `Object.setPrototypeOf(arr, p)` REPLACES the implicit
+    // `Array.prototype` chain this function otherwise hardcodes. Before the fix
+    // a retargeted array both failed to inherit `p`'s named properties AND kept
+    // inheriting `Array.prototype`'s — `Object.setPrototypeOf(a, {foo:1})` left
+    // `a.foo` undefined while `typeof a.map` stayed `"function"` (node: `1` and
+    // `"undefined"`). `null` inherits nothing at all.
+    //
+    // The two callers that pass a NON-array receiver here
+    // (`array_subclass_prototype_field` and the `fill` fallback in
+    // `native_call_method`) already require the absence of a recorded
+    // prototype, so this branch is reachable only for a retargeted array.
+    if let Some(proto_bits) = super::super::prototype_chain::object_static_prototype(receiver_addr)
+    {
+        if proto_bits == crate::value::TAG_NULL {
+            return None;
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver_h =
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver_addr as i64));
+        let proto_h = scope.root_heap_word_u64(proto_bits);
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        if key.is_null() {
+            return None;
+        }
+        let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
+        let receiver_addr =
+            crate::value::js_nanbox_get_pointer(receiver_h.get_nanbox_f64()) as usize;
+        let key = crate::value::js_nanbox_get_pointer(key_h.get_nanbox_f64())
+            as *const crate::StringHeader;
+        return super::super::prototype_chain::resolve_inherited_field_from_prototype(
+            receiver_addr,
+            proto_h.get_heap_word_u64(),
+            key,
+        );
+    }
+
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver_addr as i64));
     let ctor = super::super::js_get_global_this_builtin_value(b"Array".as_ptr(), 5);

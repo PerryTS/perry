@@ -1251,6 +1251,41 @@ unsafe fn ordinary_has_property(
     ordinary_object_prototype_property_value(last_valid, key).is_some()
 }
 
+/// #9192: ECMA-262 `[[HasProperty]]` on a value that is serving as some other
+/// object's recorded `[[Prototype]]`.
+///
+/// The array index / named-key `in` arms need this: their receiver is an
+/// `ArrayHeader`, so they cannot enter [`ordinary_has_property`]'s object walk
+/// on the receiver itself, but the recorded prototype they must consult is an
+/// ordinary object (or another array — the walk handles both). `TAG_NULL`
+/// answers `false`: `Object.setPrototypeOf(arr, null)` inherits nothing.
+pub(crate) unsafe fn prototype_value_has_property(
+    proto_bits: u64,
+    key: *const crate::StringHeader,
+) -> bool {
+    const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+    if proto_bits == TAG_NULL || key.is_null() {
+        return false;
+    }
+    let proto_val = f64::from_bits(proto_bits);
+    if crate::proxy::js_proxy_is_proxy(proto_val) != 0 {
+        let key_val = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+        return crate::value::js_is_truthy(crate::proxy::js_proxy_has(proto_val, key_val)) != 0;
+    }
+    let top16 = proto_bits >> 48;
+    let proto_ptr = if top16 == 0x7FFD {
+        (proto_bits & crate::value::POINTER_MASK) as usize
+    } else if top16 == 0 && proto_bits > 0x10000 {
+        proto_bits as usize
+    } else {
+        return false;
+    };
+    if proto_ptr == 0 || !super::super::is_valid_obj_ptr(proto_ptr as *const u8) {
+        return false;
+    }
+    ordinary_has_property(proto_ptr as *const ObjectHeader, key)
+}
+
 /// Get a field by its string key name
 /// Returns the field value or undefined if the key is not found
 pub(crate) unsafe fn closure_dynamic_prop_by_key(
