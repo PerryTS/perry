@@ -178,6 +178,119 @@ pub(crate) fn object_set_field_by_name_transition_only_fast(
     object_set_field_by_name_transition_fast_impl(obj, key, value, false)
 }
 
+/// Re-add a deleted property on a receiver whose ShapeId deliberately stayed
+/// stable across the tombstone delete (#9064).
+///
+/// The write stub has already identified the key's former slot and observed
+/// `TAG_HOLE`; this helper completes the absent-property transition without
+/// repeating the full `OrdinarySet` ladder. It remains conservative: the key
+/// must still be absent, the keys array must still be private, and the normal
+/// prototype-interception proof must clear. The key is appended rather than
+/// resurrected in its old slot, preserving ECMAScript enumeration order.
+/// Returns the new IC slot word (including the overflow tag), the post-GC
+/// receiver, and the post-GC value on success.
+pub(crate) fn try_readd_stable_tombstone(
+    obj: *mut ObjectHeader,
+    key: f64,
+    value: f64,
+) -> Option<(u32, *mut ObjectHeader, f64)> {
+    let key_value = JSValue::from_bits(key.to_bits());
+    if obj.is_null() || (!key_value.is_short_string() && !key_value.is_string()) {
+        return None;
+    }
+    let initial_gc = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize)? };
+    if initial_gc.obj_type != crate::gc::GC_TYPE_OBJECT
+        || initial_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || initial_gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
+    {
+        return None;
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let key_handle = scope.root_nanbox_f64(key);
+    let value_handle = scope.root_nanbox_f64(value);
+
+    unsafe {
+        let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let mut key = key_handle.get_nanbox_f64();
+        let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
+        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
+            | crate::gc::OBJ_FLAG_SEALED
+            | crate::gc::OBJ_FLAG_NO_EXTEND
+            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+        if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+            || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+            || gc._reserved & BLOCKING_FLAGS != 0
+            || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
+            || !crate::object::object_is_regular(obj)
+            || crate::array::object_prototype_addr_matches(obj as usize)
+            || ((*obj).class_id == 0 && crate::url::is_url_object_shape(obj))
+        {
+            return None;
+        }
+
+        if super::plain_data_write_may_intercept(obj as usize, 0, key) {
+            return None;
+        }
+
+        obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        key = key_handle.get_nanbox_f64();
+        let shape = crate::object::shapes::object_shape_descriptor(obj)?;
+        let keys = shape.keys as usize as *mut ArrayHeader;
+        if keys.is_null() || shape.logical_key_count > 4096 {
+            return None;
+        }
+        let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let key_bytes =
+            crate::string::js_string_key_bytes(JSValue::from_bits(key.to_bits()), &mut key_buf)?;
+        let key_hash = key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());
+        let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
+        if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+            || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
+                != 0
+            || crate::object::keys_find_slot_by_bytes(keys, shape.logical_key_count, key_bytes)
+                .is_some()
+        {
+            return None;
+        }
+
+        let new_index = shape.logical_key_count;
+        let live_slots = shape.live_inline_slot_count;
+        let alloc_limit = live_slots.max(crate::object::INLINE_SLOT_FLOOR as u32);
+        let old_keys_handle = scope.root_raw_mut_ptr(keys);
+        let new_keys = crate::array::js_array_push(keys, JSValue::from_bits(key.to_bits()));
+
+        obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let value = value_handle.get_nanbox_f64();
+        let old_keys = old_keys_handle.get_raw_mut_ptr::<ArrayHeader>();
+        set_object_keys_array(obj, new_keys);
+        super::mark_object_dynamic_shape_unknown(obj);
+        if old_keys != new_keys {
+            super::shapes::shape_keys_grown(old_keys as usize, new_keys);
+        }
+
+        let mut value_bits = value.to_bits();
+        if (value_bits >> 48) == 0x7FFD && (value_bits & 0x0000_FFFF_FFFF_FFFF) == 0 {
+            value_bits = crate::value::TAG_UNDEFINED;
+        }
+        let slot_word = if new_index < alloc_limit {
+            if new_index >= live_slots {
+                set_object_live_slot_count(obj, new_index + 1);
+            }
+            store_object_field_slot(obj, new_index as usize, value_bits);
+            new_index
+        } else {
+            overflow_set(obj as usize, new_index as usize, value_bits);
+            new_index | crate::proxy::IC_SLOT_OVERFLOW_BIT
+        };
+        keys_index_insert(new_keys, new_index + 1, key_hash, new_index);
+        Some((slot_word, obj, value))
+    }
+}
+
 fn object_set_field_by_name_transition_fast_impl(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,

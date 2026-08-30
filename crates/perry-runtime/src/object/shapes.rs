@@ -12,11 +12,14 @@
 //!
 //! The pointer-keyed key→slot index remains an accelerator: every hit still
 //! re-validates the key bytes. Separately, every published `ShapeId` resolves
-//! in this agent's `RuntimeState` to an immutable descriptor containing the
+//! in this agent's `RuntimeState` to a descriptor containing the
 //! ordered-keys edge plus the exact logical-key and live-inline-slot bounds.
 //! The descriptor table is agent-local while ids are process-global. A live
 //! object's ShapeId is authoritative for its ordered keys, logical-key count,
-//! live inline-slot bound, and semantic generation.
+//! live inline-slot bound, and semantic generation. The one deliberately
+//! mutable state is an owned ordinary object's #9064 stable-tombstone epoch:
+//! per-slot `TAG_HOLE` validation lets its private keys array grow between
+//! amortized squeezes without retiring unrelated cached slots.
 //!
 //! #8113 removed `ObjectHeader::field_count`, so the descriptor's
 //! `live_inline_slot_count` is no longer a mirror of a header word — it is the
@@ -38,7 +41,8 @@ pub(crate) use shapes_slot_list::shape_descriptor_keys_slot;
 pub(crate) use shapes_slot_list::shape_id_owns_keys_slot;
 pub(crate) use shapes_slot_list::{
     object_shape_hole_count, publish_object_shape_holes, record_shape_scan_outcome,
-    shape_index_migrate_after_delete, shape_index_shift_in_place, SlotList,
+    retire_owned_shape_history, shape_index_migrate_after_delete, shape_index_shift_in_place,
+    try_update_stable_tombstone_shape, SlotList,
 };
 
 #[derive(Clone)]
@@ -79,13 +83,18 @@ pub(crate) struct ShapeDescriptor {
     /// Raw ArrayHeader address in Perry's fixed-width heap-word ABI. Keeping
     /// this u64 preserves identical representation on ILP32/LP64.
     pub(crate) keys: u64,
-    /// The keys address currently represented in `ids_by_facts` and
-    /// `ids_by_keys`. The collector may rewrite `keys` directly through a raw
+    /// The keys address currently represented in the reverse indices. The
+    /// collector may rewrite `keys` directly through a raw
     /// slot before the metadata scanner runs; retaining the indexed address
     /// lets that scanner repair exactly this descriptor instead of rebuilding
     /// and sorting both reverse maps for every shape in the agent.
     /// Never part of shape identity.
     indexed_keys: u64,
+    /// Whether this descriptor participates in exact-facts interning. A
+    /// private stable-tombstone epoch mutates its counts in place and detaches
+    /// from `ids_by_facts`; it remains in `ids_by_keys` for GC relocation and
+    /// deterministic retirement at squeeze.
+    facts_indexed: bool,
     /// Address of the BOXED record this value was lifted from, or 0 for a
     /// descriptor built outside the table (equality comparisons, tests).
     /// Never part of shape IDENTITY — see the hand-written `PartialEq` below.
@@ -120,8 +129,10 @@ pub(crate) struct ShapeDescriptor {
     /// bits belong to the GC layout/age protocol and object feature flags.
     pub(crate) object_kind: ShapeObjectKind,
     /// Tombstoned key slots (`TAG_HOLE`) left by O(1) deletes; the live key
-    /// count is `logical_key_count - hole_count`. Immutable per id like every
-    /// other identity fact — a hole-delete publishes a successor id.
+    /// count is `logical_key_count - hole_count`. Ordinarily immutable per id;
+    /// an owned ordinary receiver carrying `OBJ_FLAG_STABLE_TOMBSTONES`
+    /// updates this count in place while per-slot IC validation protects the
+    /// stable id (#9064).
     pub(crate) hole_count: u32,
 }
 
@@ -216,9 +227,10 @@ struct ShapeFacts {
     semantic_generation: u64,
     object_kind: ShapeObjectKind,
     /// Tombstoned key slots in the keys array (`TAG_HOLE` markers left by
-    /// O(1) deletes). Part of identity: two shapes over the same array with
-    /// different hole sets must be distinct ids, or a stale IC entry for a
-    /// deleted key would keep hitting.
+    /// O(1) deletes). Ordinarily part of identity. A private ordinary receiver
+    /// in the stable-tombstone epoch updates this fact in place; its ICs
+    /// validate the cached value slot against `TAG_HOLE` instead of relying on
+    /// token churn.
     hole_count: u32,
 }
 
@@ -400,9 +412,13 @@ fn sync_descriptor_reverse_indices(inner: &mut ShapeTableInner, id: u32) {
 
     let old_facts = descriptor_facts_with_keys(descriptor, descriptor.indexed_keys);
     let new_facts = descriptor_facts(descriptor);
-    remove_descriptor_id_from_facts_index(inner, old_facts, id);
+    if descriptor.facts_indexed {
+        remove_descriptor_id_from_facts_index(inner, old_facts, id);
+    }
     remove_descriptor_id_from_keys_index(inner, descriptor.indexed_keys, id);
-    insert_descriptor_id_sorted(inner.ids_by_facts.entry(new_facts).or_default(), id);
+    if descriptor.facts_indexed {
+        insert_descriptor_id_sorted(inner.ids_by_facts.entry(new_facts).or_default(), id);
+    }
     insert_descriptor_id_sorted(inner.ids_by_keys.entry(descriptor.keys).or_default(), id);
     if let Some(record) = inner.descriptors.get_mut(&id) {
         record.indexed_keys = descriptor.keys;
@@ -418,7 +434,9 @@ fn remove_descriptor_and_reverse_indices(inner: &mut ShapeTableInner, id: u32) {
     };
     retire_cached_shape_object_kind(id);
     let facts = descriptor_facts_with_keys(*descriptor, descriptor.indexed_keys);
-    remove_descriptor_id_from_facts_index(inner, facts, id);
+    if descriptor.facts_indexed {
+        remove_descriptor_id_from_facts_index(inner, facts, id);
+    }
     remove_descriptor_id_from_keys_index(inner, descriptor.indexed_keys, id);
 }
 
@@ -553,6 +571,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     let descriptor = ShapeDescriptor {
         keys: keys_id as u64,
         indexed_keys: keys_id as u64,
+        facts_indexed: true,
         record: 0,
         old_carrier: false,
         old_carrier_seen: false,
@@ -1296,6 +1315,21 @@ pub(crate) unsafe fn publish_object_shape_from(
     // observe mutated bytes and no descriptor can make that state sound.
     let old_id = object_shape_stamp(obj);
     if let Some(old) = shape_descriptor_by_id(old_id) {
+        // #9064: an owned ordinary receiver that already entered stable-
+        // tombstone mode keeps its id across same-allocation tail appends and
+        // live-bound growth. Cached slots validate `TAG_HOLE`, so the deleted
+        // slot stays a miss while every surviving slot remains valid. A keys
+        // reallocation declines inside the helper and takes the ordinary
+        // mint-then-stamp path below.
+        if let Some(id) = try_update_stable_tombstone_shape(
+            obj,
+            keys,
+            key_count,
+            live_inline_slot_count,
+            old.hole_count,
+        ) {
+            return id;
+        }
         if old.keys == keys as u64 && old.logical_key_count != key_count {
             // #8113: these three arms are unreachable-by-construction defenses
             // (`debug_assert!` below). They deliberately leave the receiver

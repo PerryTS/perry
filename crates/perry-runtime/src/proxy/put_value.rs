@@ -730,10 +730,10 @@ fn write_stub_insert(token: u64, key_bits: u64, slot: u32) {
 ///
 /// Set at prime time, where the full receiver validation runs and the
 /// inline-vs-overflow verdict is known. `object_kind`,
-/// `live_inline_slot_count` and `logical_key_count` are IMMUTABLE per shape
-/// id (the shape table only ever inserts descriptors; the sole in-place
-/// mutations are GC bookkeeping — the relocated `keys` address and the
-/// carrier liveness bits), so a hit whose token matches the receiver's
+/// `live_inline_slot_count` and `logical_key_count` are immutable per ordinary
+/// shape id. #9064's private stable-tombstone state is the exception: cached
+/// slots remain placed, but a deleted one contains `TAG_HOLE` and must miss.
+/// Otherwise a hit whose token matches the receiver's
 /// CURRENT stamp has already proved everything the prime proved about kind
 /// and bounds. What remains mutable per object is the GC header — type,
 /// forwarded, and the blocking flags `Object.freeze`-family operations set —
@@ -775,6 +775,18 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
     let stamp = crate::object::shapes::object_shape_stamp(obj);
     if (crate::object::shapes::PIC_ID_TOKEN_BIT | stamp as u64) != token {
         return None;
+    }
+    if gc_header._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0 {
+        let old_bits = if slot & IC_SLOT_OVERFLOW_BIT != 0 {
+            crate::object::overflow_get(obj_addr, (slot & !IC_SLOT_OVERFLOW_BIT) as usize)?
+        } else {
+            let fields_ptr = (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>())
+                as *const crate::JSValue;
+            (*fields_ptr.add(slot as usize)).bits()
+        };
+        if old_bits == crate::value::TAG_HOLE {
+            return None;
+        }
     }
     if slot & IC_SLOT_OVERFLOW_BIT != 0 {
         crate::object::overflow_set(
@@ -829,6 +841,25 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         }
     }
 
+    // Stable-tombstone re-adds own their complete rooted transition. Probe
+    // before constructing this miss handler's general-purpose handle scope so
+    // the hot successful lane does not root target/key/value twice.
+    let target_bits = target.to_bits();
+    if (target_bits & !POINTER_MASK) == POINTER_TAG {
+        let obj = (target_bits & POINTER_MASK) as *mut crate::ObjectHeader;
+        let stub_bits = stub_key_bits(key);
+        if let Some((slot, obj, value)) = crate::object::try_readd_stable_tombstone(obj, key, value)
+        {
+            let token = crate::object::shapes::PIC_ID_TOKEN_BIT
+                | unsafe { crate::object::shapes::object_shape_stamp(obj) } as u64;
+            if let Some(kb) = stub_bits {
+                write_stub_insert(token, kb, slot);
+                crate::object::read_stub::read_stub_insert(token, kb, slot);
+            }
+            return value;
+        }
+    }
+
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_nanbox_f64(key);
@@ -845,18 +876,18 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
     // that nested allocation/collection point.
     let target_now = target_handle.get_nanbox_f64();
     let key_now = key_handle.get_nanbox_f64();
-    if (target_now.to_bits() & !POINTER_MASK) == POINTER_TAG
-        && (key_now.to_bits() & !POINTER_MASK) == crate::value::STRING_TAG
-    {
+    if (target_now.to_bits() & !POINTER_MASK) == POINTER_TAG {
         let obj = (target_now.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
-        let key_ptr = (key_now.to_bits() & POINTER_MASK) as *const crate::StringHeader;
-        if crate::object::object_set_field_by_name_transition_only_fast(
-            obj,
-            key_ptr,
-            value_handle.get_nanbox_f64(),
-        ) != 0
-        {
-            return value_handle.get_nanbox_f64();
+        if (key_now.to_bits() & !POINTER_MASK) == crate::value::STRING_TAG {
+            let key_ptr = (key_now.to_bits() & POINTER_MASK) as *const crate::StringHeader;
+            if crate::object::object_set_field_by_name_transition_only_fast(
+                obj,
+                key_ptr,
+                value_handle.get_nanbox_f64(),
+            ) != 0
+            {
+                return value_handle.get_nanbox_f64();
+            }
         }
     }
 
@@ -952,10 +983,13 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         if let Some(kb) = stub_key_bits(key) {
             if idx < alloc_limit {
                 write_stub_insert(shape_token, kb, idx);
+                crate::object::read_stub::read_stub_insert(shape_token, kb, idx);
             } else if idx < shape.logical_key_count {
                 // Overflow: bound-checked against the key count at prime,
                 // which the hit-time token match preserves.
-                write_stub_insert(shape_token, kb, idx | IC_SLOT_OVERFLOW_BIT);
+                let slot = idx | IC_SLOT_OVERFLOW_BIT;
+                write_stub_insert(shape_token, kb, slot);
+                crate::object::read_stub::read_stub_insert(shape_token, kb, slot);
             }
         }
         if idx >= alloc_limit {

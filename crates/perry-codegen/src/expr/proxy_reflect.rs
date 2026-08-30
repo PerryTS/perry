@@ -63,6 +63,10 @@ const WRITE_PIC_BLOCKING_FLAGS: u16 = 0x1987;
 /// It is deliberately NOT in `WRITE_PIC_BLOCKING_FLAGS` — this bit ADMITS a
 /// receiver, the blocking mask REJECTS one.
 const PLAIN_ORDINARY_OBJ_FLAG: u16 = 0x200;
+/// Runtime `OBJ_FLAG_STABLE_TOMBSTONES`. The bit is already present in the
+/// generated write guard's `_reserved` load; on a hit it gates the one deleted
+/// slot check required while the receiver keeps a stable ShapeId (#9064).
+const STABLE_TOMBSTONES_OBJ_FLAG: u16 = 0x400;
 
 /// The NaN-boxed `undefined` literal, for an absent optional operand.
 fn undefined_literal() -> String {
@@ -530,6 +534,9 @@ fn lower_put_value_static_write_ic(
     let dispatch4_idx = ctx.new_block("put.pic.dispatch4");
     let dispatch5_idx = ctx.new_block("put.pic.dispatch5");
     let hit_idx = ctx.new_block("put.pic.hit");
+    let hit_validate_idx = ctx.new_block("put.pic.hit.validate");
+    let hit_store_idx = ctx.new_block("put.pic.hit.store");
+    let deleted_idx = ctx.new_block("put.pic.deleted");
     let miss_idx = ctx.new_block("put.pic.miss");
     let miss2_idx = ctx.new_block("put.pic.miss2");
     let miss3_idx = ctx.new_block("put.pic.miss3");
@@ -545,6 +552,9 @@ fn lower_put_value_static_write_ic(
     let dispatch4_label = ctx.block_label(dispatch4_idx);
     let dispatch5_label = ctx.block_label(dispatch5_idx);
     let hit_label = ctx.block_label(hit_idx);
+    let hit_validate_label = ctx.block_label(hit_validate_idx);
+    let hit_store_label = ctx.block_label(hit_store_idx);
+    let deleted_label = ctx.block_label(deleted_idx);
     let miss_label = ctx.block_label(miss_idx);
     let miss2_label = ctx.block_label(miss2_idx);
     let miss3_label = ctx.block_label(miss3_idx);
@@ -728,6 +738,30 @@ fn lower_put_value_static_write_ic(
         let field_ptr = blk.inttoptr(I64, &field_addr);
         (field_ptr, field_addr)
     };
+    // A stable tombstone keeps the receiver token unchanged, so the selected
+    // slot needs one liveness check. Keep the extra load entirely off ordinary
+    // objects: their already-loaded `_reserved` word takes the direct store
+    // edge, preserving the hot write path.
+    let stable_tombstones =
+        ctx.block()
+            .and(I16, &reserved, &STABLE_TOMBSTONES_OBJ_FLAG.to_string());
+    let needs_slot_validation = ctx.block().icmp_ne(I16, &stable_tombstones, "0");
+    ctx.block().cond_br(
+        &needs_slot_validation,
+        &hit_validate_label,
+        &hit_store_label,
+    );
+
+    ctx.current_block = hit_validate_idx;
+    let old_value = ctx.block().load(DOUBLE, &field_ptr);
+    let old_bits = ctx.block().bitcast_double_to_i64(&old_value);
+    let deleted = ctx
+        .block()
+        .icmp_eq(I64, &old_bits, crate::nanbox::TAG_HOLE_I64);
+    ctx.block()
+        .cond_br(&deleted, &deleted_label, &hit_store_label);
+
+    ctx.current_block = hit_store_idx;
     if pointer_possible {
         let slot_i32 = ctx.block().trunc(I64, &selected_slot, I32);
         // The one behavioural difference from the `_aware` emitter this
@@ -796,8 +830,23 @@ fn lower_put_value_static_write_ic(
     ctx.block().br(&merge_label);
     let hit_end_label = ctx.block().label.clone();
 
-    ctx.current_block = miss_idx;
+    ctx.current_block = deleted_idx;
     let strict_i32 = if strict { "1" } else { "0" };
+    let deleted_value = ctx.block().call(
+        DOUBLE,
+        "js_put_value_set_ic_miss",
+        &[
+            (DOUBLE, &target_value),
+            (I64, &key_handle),
+            (DOUBLE, &stored_value),
+            (I32, strict_i32),
+            (PTR, &cache_ref),
+        ],
+    );
+    let deleted_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = miss_idx;
     let miss_value = ctx.block().call(
         DOUBLE,
         "js_put_value_set_ic_miss",
@@ -877,6 +926,7 @@ fn lower_put_value_static_write_ic(
         DOUBLE,
         &[
             (&stored_value, &hit_end_label),
+            (&deleted_value, &deleted_end_label),
             (&miss_value, &miss_end_label),
             (&miss2_value, &miss2_end_label),
             (&miss3_value, &miss3_end_label),
@@ -942,6 +992,8 @@ fn lower_put_value_dyn_ic_inline(
     let way1_idx = ctx.new_block("put.dynic.way1");
     let way2_idx = ctx.new_block("put.dynic.way2");
     let store_idx = ctx.new_block("put.dynic.store");
+    let store_validate_idx = ctx.new_block("put.dynic.store.validate");
+    let store_dispatch_idx = ctx.new_block("put.dynic.store.dispatch");
     let store_scalar_idx = ctx.new_block("put.dynic.store.scalar");
     let store_ref_idx = ctx.new_block("put.dynic.store.ref");
     let slow_idx = ctx.new_block("put.dynic.slow");
@@ -951,6 +1003,8 @@ fn lower_put_value_dyn_ic_inline(
     let way1_label = ctx.block_label(way1_idx);
     let way2_label = ctx.block_label(way2_idx);
     let store_label = ctx.block_label(store_idx);
+    let store_validate_label = ctx.block_label(store_validate_idx);
+    let store_dispatch_label = ctx.block_label(store_dispatch_idx);
     let store_scalar_label = ctx.block_label(store_scalar_idx);
     let store_ref_label = ctx.block_label(store_ref_idx);
     let slow_label = ctx.block_label(slow_idx);
@@ -1046,6 +1100,26 @@ fn lower_put_value_dyn_ic_inline(
     let slot_off = ctx.block().add(I64, &slot_bytes, &header_bytes);
     let obj_ptr = ctx.block().inttoptr(I64, &t_handle);
     let slot_ptr = ctx.block().gep_inbounds(I8, &obj_ptr, &[(I64, &slot_off)]);
+    let stable_tombstones =
+        ctx.block()
+            .and(I16, &reserved, &STABLE_TOMBSTONES_OBJ_FLAG.to_string());
+    let needs_slot_validation = ctx.block().icmp_ne(I16, &stable_tombstones, "0");
+    ctx.block().cond_br(
+        &needs_slot_validation,
+        &store_validate_label,
+        &store_dispatch_label,
+    );
+
+    ctx.current_block = store_validate_idx;
+    let old_value = ctx.block().load(DOUBLE, &slot_ptr);
+    let old_bits = ctx.block().bitcast_double_to_i64(&old_value);
+    let deleted = ctx
+        .block()
+        .icmp_eq(I64, &old_bits, crate::nanbox::TAG_HOLE_I64);
+    ctx.block()
+        .cond_br(&deleted, &slow_label, &store_dispatch_label);
+
+    ctx.current_block = store_dispatch_idx;
     ctx.block()
         .cond_br(&v_scalar, &store_scalar_label, &store_ref_label);
 

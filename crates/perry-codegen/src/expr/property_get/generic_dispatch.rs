@@ -367,6 +367,7 @@ pub(crate) fn lower_generic_property_get(
     // through phis (`false`/`0` on the early-exit edges, which is exactly
     // what the flat predicate computed there).
     let hit_idx = ctx.new_block("pic.hit");
+    let hit_live_idx = ctx.new_block("pic.hit.live");
     let prefix_guard_idx = ctx.new_block("pic.prefix.guard");
     let prefix_meta_idx = ctx.new_block("pic.prefix.meta");
     let prefix_token_idx = ctx.new_block("pic.prefix.token");
@@ -384,6 +385,7 @@ pub(crate) fn lower_generic_property_get(
     let call_idx = ctx.new_block("pic.miss.call");
     let merge_idx = ctx.new_block("pic.merge");
     let hit_label = ctx.block_label(hit_idx);
+    let hit_live_label = ctx.block_label(hit_live_idx);
     let prefix_guard_label = ctx.block_label(prefix_guard_idx);
     let prefix_meta_label = ctx.block_label(prefix_meta_idx);
     let prefix_token_label = ctx.block_label(prefix_token_idx);
@@ -548,11 +550,6 @@ pub(crate) fn lower_generic_property_get(
     ctx.current_block = hit_idx;
     let cache_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
     let slot = ctx.block().load(I64, &cache_slot_ptr);
-    crate::expr::emit_typed_feedback_record_call(
-        ctx.block(),
-        "js_typed_feedback_record_guard_pass",
-        &[(I64, &feedback_site_id)],
-    );
     let offset = ctx.block().shl(I64, &slot, "3");
     // arm64_32 watchOS: the object fields region begins at
     // `size_of::<ObjectHeader>()` past the user pointer — 16 on LP64 and
@@ -563,6 +560,19 @@ pub(crate) fn lower_generic_property_get(
     let field_addr = ctx.block().add(I64, &base, &offset);
     let field_ptr = ctx.block().inttoptr(I64, &field_addr);
     let val_hit = ctx.block().load(DOUBLE, &field_ptr);
+    let val_hit_bits = ctx.block().bitcast_double_to_i64(&val_hit);
+    let hit_deleted = ctx
+        .block()
+        .icmp_eq(I64, &val_hit_bits, crate::nanbox::TAG_HOLE_I64);
+    ctx.block()
+        .cond_br(&hit_deleted, &call_label, &hit_live_label);
+
+    ctx.current_block = hit_live_idx;
+    crate::expr::emit_typed_feedback_record_call(
+        ctx.block(),
+        "js_typed_feedback_record_guard_pass",
+        &[(I64, &feedback_site_id)],
+    );
     let hit_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
@@ -834,7 +844,9 @@ pub(crate) fn lower_generic_property_get(
         .expect("PIC_WAYS is non-zero, so the reduction leaves exactly one lane");
     way_hit = ctx.block().and(I1, &way_hit, &way_any);
     let way_load_idx = ctx.new_block("pic.way.load");
+    let way_live_idx = ctx.new_block("pic.way.live");
     let way_load_label = ctx.block_label(way_load_idx);
+    let way_live_label = ctx.block_label(way_live_idx);
     ctx.block().cond_br(&way_hit, &way_load_label, &call_label);
 
     ctx.current_block = way_load_idx;
@@ -843,6 +855,14 @@ pub(crate) fn lower_generic_property_get(
     let way_field_addr = ctx.block().add(I64, &way_base, &way_offset);
     let way_field_ptr = ctx.block().inttoptr(I64, &way_field_addr);
     let val_way = ctx.block().load(DOUBLE, &way_field_ptr);
+    let val_way_bits = ctx.block().bitcast_double_to_i64(&val_way);
+    let way_deleted = ctx
+        .block()
+        .icmp_eq(I64, &val_way_bits, crate::nanbox::TAG_HOLE_I64);
+    ctx.block()
+        .cond_br(&way_deleted, &call_label, &way_live_label);
+
+    ctx.current_block = way_live_idx;
     let way_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 

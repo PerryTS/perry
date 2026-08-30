@@ -224,30 +224,47 @@ pub extern "C" fn js_object_delete_field(
             }
             return 1;
         }
+        // Once #9064's stable marker is installed, this receiver has already
+        // been proved to be an ordinary non-prototype object with no
+        // descriptors. Avoid decoding the same dynamic key and scanning the
+        // class-prototype registries on every subsequent delete. Installing a
+        // descriptor sets OBJ_FLAG_HAS_DESCRIPTORS, which re-opens the full
+        // semantic checks below before the property can be deleted.
+        let stable_plain_data = crate::value::addr_class::try_read_gc_header(obj as usize)
+            .is_some_and(|header| {
+                header.obj_type == crate::gc::GC_TYPE_OBJECT
+                    && header._reserved
+                        & (crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
+                            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS)
+                        == crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
+            });
+
         // An accessor-ONLY property (defineProperty get/set with no data
         // slot) has no keys_array entry — the scan below would "succeed
         // vacuously" while leaving the descriptor in the side table, so
         // `delete obj[1]` left a ghost accessor behind (test262
         // map/15.4.4.19-8-b-8: a getter deletes a sibling accessor
         // mid-iteration and HasProperty must turn false).
-        if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
-            if get_accessor_descriptor(obj as usize, name).is_some() {
-                if let Some(attrs) = get_property_attrs(obj as usize, name) {
-                    if !attrs.configurable() {
-                        return 0;
+        if !stable_plain_data {
+            if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                if get_accessor_descriptor(obj as usize, name).is_some() {
+                    if let Some(attrs) = get_property_attrs(obj as usize, name) {
+                        if !attrs.configurable() {
+                            return 0;
+                        }
                     }
+                    // Deleting an accessor from a class/Object prototype changes
+                    // method resolution for this key just like installing it.
+                    super::descriptor_state::disable_inline_guards_for_descriptor_target(
+                        obj as usize,
+                        name,
+                    );
+                    super::clear_accessor_descriptor(obj as usize, name);
+                    super::clear_property_attrs(obj as usize, name);
+                    // defineProperty may ALSO have planted a keys_array
+                    // placeholder entry for the key — fall through to the scan
+                    // below so hasOwnProperty / Object.keys stop seeing it.
                 }
-                // Deleting an accessor from a class/Object prototype changes
-                // method resolution for this key just like installing it.
-                super::descriptor_state::disable_inline_guards_for_descriptor_target(
-                    obj as usize,
-                    name,
-                );
-                super::clear_accessor_descriptor(obj as usize, name);
-                super::clear_property_attrs(obj as usize, name);
-                // defineProperty may ALSO have planted a keys_array
-                // placeholder entry for the key — fall through to the scan
-                // below so hasOwnProperty / Object.keys stop seeing it.
             }
         }
         // A class-declaration prototype object: instance accessors (`get x()`)
@@ -266,19 +283,26 @@ pub extern "C" fn js_object_delete_field(
         // hasOwnProperty keeps finding the method via `own_key_present` and
         // verifyProperty fails "m descriptor should be configurable" (#5441,
         // ~760 generated language/{statements,expressions}/class tests).
-        if let Some(cid) = super::class_registry::class_id_for_decl_prototype_object(obj as usize) {
-            if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
-                if name != "constructor"
-                    && (super::class_registry::class_own_accessor_ptrs(cid, name).is_some()
-                        || super::native_module::class_has_own_method(cid, name)
-                        || super::class_registry::lookup_own_prototype_method(cid, name).is_some())
-                {
-                    super::class_registry::class_mark_key_deleted(cid, name);
-                    super::class_registry::invalidate_class_prototype_fast_guards_for_method(name);
-                    crate::typed_feedback::invalidate_method_change(cid);
-                    // Accessors have no keys_array entry, so the scan below is a
-                    // vacuous success for them; methods DO, so fall through to
-                    // remove it. Either way, don't early-return.
+        if !stable_plain_data {
+            if let Some(cid) =
+                super::class_registry::class_id_for_decl_prototype_object(obj as usize)
+            {
+                if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
+                    if name != "constructor"
+                        && (super::class_registry::class_own_accessor_ptrs(cid, name).is_some()
+                            || super::native_module::class_has_own_method(cid, name)
+                            || super::class_registry::lookup_own_prototype_method(cid, name)
+                                .is_some())
+                    {
+                        super::class_registry::class_mark_key_deleted(cid, name);
+                        super::class_registry::invalidate_class_prototype_fast_guards_for_method(
+                            name,
+                        );
+                        crate::typed_feedback::invalidate_method_change(cid);
+                        // Accessors have no keys_array entry, so the scan below is a
+                        // vacuous success for them; methods DO, so fall through to
+                        // remove it. Either way, don't early-return.
+                    }
                 }
             }
         }
@@ -303,23 +327,25 @@ pub extern "C" fn js_object_delete_field(
             Some(i) => i,
             None => return 1, // Not found — delete succeeds vacuously
         };
-        let key_name = {
-            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-            let key_len = (*key).byte_len as usize;
-            std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).ok()
-        };
-        if let Some(name) = key_name {
-            if let Some(attrs) = get_property_attrs(obj as usize, name) {
-                if !attrs.configurable() {
-                    return 0;
+        if !stable_plain_data {
+            let key_name = {
+                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+                let key_len = (*key).byte_len as usize;
+                std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).ok()
+            };
+            if let Some(name) = key_name {
+                if let Some(attrs) = get_property_attrs(obj as usize, name) {
+                    if !attrs.configurable() {
+                        return 0;
+                    }
                 }
+                // A configurable data method on a class/Object prototype is about
+                // to disappear. Retire only this name's direct-method guards.
+                super::descriptor_state::disable_inline_guards_for_descriptor_target(
+                    obj as usize,
+                    name,
+                );
             }
-            // A configurable data method on a class/Object prototype is about
-            // to disappear. Retire only this name's direct-method guards.
-            super::descriptor_state::disable_inline_guards_for_descriptor_target(
-                obj as usize,
-                name,
-            );
         }
 
         // Proper delete: shift remaining keys + values down by one, then
@@ -366,8 +392,50 @@ pub extern "C" fn js_object_delete_field(
             let holes = super::shapes::object_shape_hole_count(obj);
             let threshold_hit = key_count >= 16 && (holes + 1) * 2 > key_count as u32;
             if !threshold_hit {
+                // #9064: a private ordinary object's tombstone state can keep
+                // one ShapeId until the amortized squeeze. Every direct IC
+                // validates the cached value slot against TAG_HOLE, so the
+                // deleted key misses while the other slots remain valid. Keep
+                // class/prototype machinery on the existing token-retirement
+                // path; its method caches have different guards.
+                let obj_gc =
+                    (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+                let already_stable =
+                    (*obj_gc)._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0;
+                let stable_identity = already_stable
+                    || (*obj).class_id == 0
+                    || super::is_anon_shape_class_id((*obj).class_id);
+                // The stable marker also certifies that the receiver is not a
+                // direct-method guard target. Those registries are immutable
+                // for an existing ordinary object, so the expensive reverse
+                // scans are only needed before installing the marker.
+                let stable_not_prototype = already_stable
+                    || (!crate::array::object_prototype_addr_matches(obj as usize)
+                        && !super::class_registry::is_registered_class_prototype_object(
+                            obj as usize,
+                        )
+                        && super::class_registry::class_id_for_decl_prototype_object(obj as usize)
+                            .is_none());
+                let stable_candidate = stable_identity
+                    && stable_not_prototype
+                    && super::shapes::object_shape_descriptor(obj).is_some_and(|shape| {
+                        shape.object_kind == super::shapes::ShapeObjectKind::Ordinary
+                    })
+                    && (*obj_gc)._reserved
+                        & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+                            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+                            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT)
+                        == 0;
+                let predecessor = super::shapes::object_shape_stamp(obj);
+                if stable_candidate {
+                    (*obj_gc)._reserved |= crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
+                }
                 let successor = super::shapes::publish_object_shape_holes(obj, holes + 1);
                 if successor != 0 {
+                    let stable = stable_candidate && successor == predecessor;
+                    if !stable {
+                        (*obj_gc)._reserved &= !crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
+                    }
                     let elements = (keys as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>())
                         as *mut f64;
                     // Barriered stores, exactly the Map delete's idiom: the
@@ -385,19 +453,35 @@ pub extern "C" fn js_object_delete_field(
                             obj as usize,
                             fields_ptr.add(i) as usize,
                             i,
-                            crate::value::TAG_UNDEFINED,
+                            if stable {
+                                crate::value::TAG_HOLE
+                            } else {
+                                crate::value::TAG_UNDEFINED
+                            },
                         );
                     } else {
-                        overflow_set(obj as usize, i, crate::value::TAG_UNDEFINED);
+                        overflow_set(
+                            obj as usize,
+                            i,
+                            if stable {
+                                crate::value::TAG_HOLE
+                            } else {
+                                crate::value::TAG_UNDEFINED
+                            },
+                        );
                     }
                     return 1;
                 }
+                (*obj_gc)._reserved &= !crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
                 // Unstamped/unshaped receiver: fall through to the
                 // compacting delete below, which needs no shape stamp.
             } else {
                 // Threshold: squeeze every hole plus this key in one pass,
                 // then continue through the ordinary compaction bookkeeping
                 // is unnecessary — the squeeze does its own.
+                let obj_gc =
+                    (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+                (*obj_gc)._reserved &= !crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
                 squeeze_holes_and_delete(
                     obj,
                     keys,
@@ -411,6 +495,11 @@ pub extern "C" fn js_object_delete_field(
             }
         }
         let index_migrated = if keys_owned {
+            // Appends leave historical prefix ShapeIds valid, but this shift
+            // changes the CONTENT of every prefix crossing `i`. Retire those
+            // private growth-era ids before mutating the array so publication
+            // cannot reuse an old count-matching token for a new slot order.
+            super::shapes::retire_owned_shape_history(obj, keys);
             let elements =
                 (keys as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
             // Overlapping ranges inside ONE allocation: `copy` (memmove).

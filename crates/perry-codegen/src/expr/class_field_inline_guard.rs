@@ -47,11 +47,13 @@ const GC_TYPE_OBJECT: &str = "2";
 const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
 const TYPED_LAYOUT_INTACT_BIT: &str = "4096"; // GC_OBJ_TYPED_LAYOUT_INTACT (0x1000)
 const OBJ_FLAG_FROZEN_BIT: &str = "1"; // OBJ_FLAG_FROZEN (0x01)
-const OBJ_FLAG_HAS_DESCRIPTORS_BIT: &str = "2048"; // OBJ_FLAG_HAS_DESCRIPTORS (0x800)
 const OBJ_FLAG_PACKED_NUMERIC_PROOF_BIT: &str = "128"; // OBJ_FLAG_PACKED_NUMERIC_PROOF (0x080)
-/// `OBJ_FLAG_FROZEN | OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_PACKED_NUMERIC_PROOF`
-/// — all live in the same `GcHeader::_reserved` i16, so one mask tests them.
-const OBJ_FLAG_WRITE_FAST_PATH_BLOCKED: &str = "2177";
+/// `OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_STABLE_TOMBSTONES`.
+const OBJ_FLAG_READ_FAST_PATH_BLOCKED: &str = "3072";
+/// `OBJ_FLAG_FROZEN | OBJ_FLAG_STABLE_TOMBSTONES |
+/// OBJ_FLAG_HAS_DESCRIPTORS | OBJ_FLAG_PACKED_NUMERIC_PROOF` — all live in the
+/// same `GcHeader::_reserved` i16, so one mask tests them.
+const OBJ_FLAG_WRITE_FAST_PATH_BLOCKED: &str = "3201";
 const F64_EXP_MASK: &str = "9218868437227405312"; // 0x7FF0_0000_0000_0000
 
 /// A widening arm for the class-field shape check: one concrete subclass whose
@@ -298,9 +300,9 @@ pub(crate) fn emit_class_field_loop_preheader_check(
         // gate, so the hoisted check must vet the per-object flag — once, for
         // the whole loop: installing a descriptor mid-loop would require a
         // runtime call, which the call-free fast clone cannot make.
-        let has_desc = blk.and(I16, &reserved, OBJ_FLAG_HAS_DESCRIPTORS_BIT);
-        let no_desc = blk.icmp_eq(I16, &has_desc, "0");
-        acc = blk.and(I1, &acc, &no_desc);
+        let blocked = blk.and(I16, &reserved, OBJ_FLAG_READ_FAST_PATH_BLOCKED);
+        let unblocked = blk.icmp_eq(I16, &blocked, "0");
+        acc = blk.and(I1, &acc, &unblocked);
 
         if require_raw_f64 {
             let intact = blk.and(I16, &reserved, TYPED_LAYOUT_INTACT_BIT);
@@ -536,9 +538,9 @@ pub(crate) fn emit_class_field_inline_precheck(
         // process-global gate above stay open for such installs (only
         // prototype-level descriptors flip it), so unrelated instances keep the
         // fast path.
-        let has_desc = blk.and(I16, &reserved, OBJ_FLAG_HAS_DESCRIPTORS_BIT);
-        let no_desc = blk.icmp_eq(I16, &has_desc, "0");
-        acc = blk.and(I1, &acc, &no_desc);
+        let blocked = blk.and(I16, &reserved, OBJ_FLAG_READ_FAST_PATH_BLOCKED);
+        let unblocked = blk.icmp_eq(I16, &blocked, "0");
+        acc = blk.and(I1, &acc, &unblocked);
 
         if require_raw_f64 {
             // The slot is read/written as a raw double, so the per-object typed

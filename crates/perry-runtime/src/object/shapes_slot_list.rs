@@ -212,6 +212,106 @@ pub(crate) unsafe fn object_shape_hole_count(obj: *const crate::object::ObjectHe
         .unwrap_or(0)
 }
 
+/// Retire growth-era descriptors before an owned keys array changes CONTENT
+/// in place.
+///
+/// Same-address appends preserve every historical prefix, so their ShapeIds
+/// remain valid while the array grows. Compaction is different: shifting a
+/// middle key rewrites those prefixes. If the later publication merely drops
+/// the logical count, exact-facts interning can otherwise rediscover the old
+/// count-N id and let a stale IC read the pre-shift slot. The current id stays
+/// live until the successor is minted; every private historical id is removed
+/// from both reverse indices and the by-id table.
+pub(crate) unsafe fn retire_owned_shape_history(
+    obj: *const crate::object::ObjectHeader,
+    keys: *const super::ArrayHeader,
+) {
+    if obj.is_null() || keys.is_null() {
+        return;
+    }
+    let current = super::object_shape_stamp(obj);
+    let keys_addr = keys as u64;
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    let stale: Vec<u32> = inner
+        .ids_by_keys
+        .get(&keys_addr)
+        .map(|ids| ids.iter().copied().filter(|&id| id != current).collect())
+        .unwrap_or_default();
+    for id in stale {
+        super::remove_descriptor_and_reverse_indices(&mut inner, id);
+    }
+}
+
+/// Update the private structural facts of a stable-tombstone receiver without
+/// changing its ShapeId.
+///
+/// This is intentionally narrower than general shape publication: the keys
+/// allocation must stay at the same address, so the descriptor's GC edge and
+/// every surviving `(token, slot)` remain unchanged. Deletes change only the
+/// hole count; a re-add appends at the private array's tail and may also widen
+/// the inline live bound. A grow-reallocation declines and uses the ordinary
+/// mint-then-stamp path.
+///
+/// A mutable private epoch must not participate in exact-facts interning.
+/// Detach it from `ids_by_facts` on entry and leave it in `ids_by_keys`, which
+/// keeps GC relocation and squeeze-time retirement exact without hashing six
+/// changing facts on every delete and re-add. The boxed descriptor address is
+/// stable, so the direct lookup cache observes updated counts immediately.
+pub(crate) unsafe fn try_update_stable_tombstone_shape(
+    obj: *mut crate::object::ObjectHeader,
+    keys: *mut super::ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    hole_count: u32,
+) -> Option<u32> {
+    if obj.is_null() || keys.is_null() || !super::shape_word_is_writable(obj) {
+        return None;
+    }
+    let gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT
+        || (*gc)._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
+    {
+        return None;
+    }
+    let id = super::object_shape_stamp(obj);
+    if !super::is_shape_id(id) {
+        return None;
+    }
+
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    super::sync_descriptor_reverse_indices(&mut inner, id);
+    let current = **inner.descriptors.get(&id)?;
+    // A stable id may never silently retarget its collector-owned keys edge.
+    // Array growth that reallocates falls back to a fresh descriptor.
+    if current.keys != keys as u64 || current.object_kind != super::ShapeObjectKind::Ordinary {
+        return None;
+    }
+    if current.logical_key_count == logical_key_count
+        && current.live_inline_slot_count == live_inline_slot_count
+        && current.hole_count == hole_count
+    {
+        return Some(id);
+    }
+
+    if current.facts_indexed {
+        let old_facts = super::descriptor_facts(current);
+        super::remove_descriptor_id_from_facts_index(&mut inner, old_facts, id);
+    }
+    {
+        let record = inner
+            .descriptors
+            .get_mut(&id)
+            .expect("stable tombstone descriptor disappeared while borrowed");
+        record.logical_key_count = logical_key_count;
+        record.live_inline_slot_count = live_inline_slot_count;
+        record.hole_count = hole_count;
+        record.facts_indexed = false;
+    }
+    drop(inner);
+    super::debug_assert_object_shape_parity(obj);
+    Some(id)
+}
+
 pub(crate) unsafe fn publish_object_shape_holes(
     obj: *mut crate::object::ObjectHeader,
     hole_count: u32,
@@ -222,6 +322,15 @@ pub(crate) unsafe fn publish_object_shape_holes(
     let Some(current) = super::object_shape_descriptor(obj) else {
         return 0;
     };
+    if let Some(id) = try_update_stable_tombstone_shape(
+        obj,
+        current.keys as usize as *mut super::ArrayHeader,
+        current.logical_key_count,
+        current.live_inline_slot_count,
+        hole_count,
+    ) {
+        return id;
+    }
     let generation = super::SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if generation == 0 {
         super::shape_id_exhausted_abort();
@@ -293,6 +402,7 @@ pub(super) fn install_external_shape_id(
     let descriptor = super::ShapeDescriptor {
         keys: keys as usize as u64,
         indexed_keys: keys as usize as u64,
+        facts_indexed: true,
         record: 0,
         old_carrier: false,
         old_carrier_seen: false,

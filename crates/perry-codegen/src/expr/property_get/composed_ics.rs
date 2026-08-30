@@ -54,10 +54,12 @@ pub(super) fn lower_symbol_then_named_property_ic(
 
         let identity_idx = ctx.new_block("symfield.identity");
         let hit_idx = ctx.new_block("symfield.hit");
+        let live_idx = ctx.new_block("symfield.live");
         let miss_idx = ctx.new_block("symfield.miss");
         let merge_idx = ctx.new_block("symfield.merge");
         let identity_label = ctx.block_label(identity_idx);
         let hit_label = ctx.block_label(hit_idx);
+        let live_label = ctx.block_label(live_idx);
         let miss_label = ctx.block_label(miss_idx);
         let merge_label = ctx.block_label(merge_idx);
 
@@ -105,11 +107,6 @@ pub(super) fn lower_symbol_then_named_property_ic(
         ctx.block().cond_br(&hit, &hit_label, &miss_label);
 
         ctx.current_block = hit_idx;
-        crate::expr::emit_typed_feedback_record_call(
-            ctx.block(),
-            "js_typed_feedback_record_guard_pass",
-            &[(I64, &feedback_site_id)],
-        );
         let cached_slot_ptr = ctx.block().gep(I64, &field_cache, &[(I64, "1")]);
         let cached_slot = ctx.block().load(I64, &cached_slot_ptr);
         let slot_bytes = ctx.block().shl(I64, &cached_slot, "3");
@@ -117,6 +114,18 @@ pub(super) fn lower_symbol_then_named_property_ic(
         let field_addr = ctx.block().add(I64, &fields_base, &slot_bytes);
         let field_ptr = ctx.block().inttoptr(I64, &field_addr);
         let hit_value = ctx.block().load(DOUBLE, &field_ptr);
+        let hit_bits = ctx.block().bitcast_double_to_i64(&hit_value);
+        let deleted = ctx
+            .block()
+            .icmp_eq(I64, &hit_bits, crate::nanbox::TAG_HOLE_I64);
+        ctx.block().cond_br(&deleted, &miss_label, &live_label);
+
+        ctx.current_block = live_idx;
+        crate::expr::emit_typed_feedback_record_call(
+            ctx.block(),
+            "js_typed_feedback_record_guard_pass",
+            &[(I64, &feedback_site_id)],
+        );
         let hit_end = ctx.block().label.clone();
         ctx.block().br(&merge_label);
 

@@ -1100,6 +1100,16 @@ pub(crate) const OBJ_FLAG_PACKED_NUMERIC_PROOF: u16 = 0x80;
 // and `GC_ARRAY_ARGUMENTS_OBJECT` (0x200). Only meaningful for
 // `GC_TYPE_ARRAY`.
 pub const OBJ_FLAG_ARRAY_DESCRIPTORS: u16 = 0x400;
+/// #9064: this `GC_TYPE_OBJECT` has O(1)-delete tombstones whose ShapeId is
+/// deliberately stable. A cached slot is authoritative only after its value
+/// is checked against `TAG_HOLE`; the marker means the cached key was deleted
+/// and the access must take the ordinary lookup path.
+///
+/// Bit 10 is shared with `OBJ_FLAG_ARRAY_DESCRIPTORS`, which is meaningful
+/// only for `GC_TYPE_ARRAY`. Object and Array payloads are disjoint by the
+/// already-required `obj_type` guard, matching the existing bit sharing at
+/// 7/9/11/12.
+pub const OBJ_FLAG_STABLE_TOMBSTONES: u16 = 0x400;
 // #5054: a property/accessor descriptor (or builtin attrs) has been installed
 // on this specific object — the dynamic-write fast path must take the full
 // descriptor-aware OrdinarySet walk. Bit 11; only meaningful for

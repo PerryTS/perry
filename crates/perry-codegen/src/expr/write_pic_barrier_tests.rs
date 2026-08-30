@@ -44,8 +44,10 @@ use crate::{compile_module, CompileOptions};
 use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, ModuleInitKind, Param, Stmt};
 
-/// The hit block of the static write PIC — where the store itself lives.
+/// The hit block of the static write PIC — where stable-tombstone receivers
+/// branch through slot validation before the common store block.
 const HIT: &str = "put.pic.hit";
+const HIT_STORE: &str = "put.pic.hit.store";
 /// #8184's guarded arm. `emit_jsvalue_slot_store_pointer_tested` names its
 /// blocks from the `stem` its caller passes; the static write PIC passes
 /// `"put.pic"` precisely so an assertion about THIS site cannot be satisfied
@@ -212,14 +214,17 @@ fn static_write_pic_guards_its_bookkeeping_behind_a_live_pointer_test() {
 
     let hit = block(&ir, HIT)
         .unwrap_or_else(|| panic!("the static write PIC's hit block must exist:\n{ir}"));
+    let hit_store = block(&ir, HIT_STORE)
+        .unwrap_or_else(|| panic!("the static write PIC's store block must exist:\n{ir}"));
 
-    // (a) The STORE stays unconditional and in the hit block. Only the
-    // bookkeeping moved; a guard that also skipped the store would be a
-    // dropped write, not an optimization.
+    // (a) Every live-slot hit reaches the common STORE block. Stable tombstone
+    // receivers validate the selected slot first; ordinary receivers branch
+    // straight there. A path that skipped the store would be a dropped write.
     assert!(
-        hit.lines().any(|l| l.trim().starts_with("store double")),
-        "the hit block must still perform the slot store — only the bookkeeping \
-         moved behind the guard, never the write itself:\n{hit}"
+        hit_store
+            .lines()
+            .any(|l| l.trim().starts_with("store double")),
+        "the common hit-store block must still perform the slot store:\n{hit_store}"
     );
 
     // (b) None of the three calls is unconditional any more. This is the
@@ -227,8 +232,9 @@ fn static_write_pic_guards_its_bookkeeping_behind_a_live_pointer_test() {
     // `emit_jsvalue_slot_store_scalar_aware_on_block` puts all three back here.
     for helper in [ADDREF, NOTE, BARRIER_CALL] {
         assert!(
-            !hit.contains(helper),
-            "#8184: `{helper}` must no longer be UNCONDITIONAL in the PIC hit block:\n{hit}"
+            !hit.contains(helper) && !hit_store.contains(helper),
+            "#8184: `{helper}` must no longer be UNCONDITIONAL before/at the PIC store:\n\
+             hit:\n{hit}\nstore:\n{hit_store}"
         );
     }
     assert!(
@@ -262,8 +268,8 @@ fn static_write_pic_guards_its_bookkeeping_behind_a_live_pointer_test() {
     // in the block. `or(or(or(ptr_tag, str_tag), bigint_tag), and(top16==0,
     // bits>=floor))` — a dropped disjunct narrows the predicate, which is the
     // direction that STRANDS a child.
-    let def = def_of(&hit, &cond).unwrap_or_else(|| {
-        panic!("the guard condition %{cond} is not defined in the hit block:\n{hit}")
+    let def = def_of(&hit_store, &cond).unwrap_or_else(|| {
+        panic!("the guard condition %{cond} is not defined in the hit-store block:\n{hit_store}")
     });
     assert!(
         def.starts_with("or i1"),
@@ -272,12 +278,12 @@ fn static_write_pic_guards_its_bookkeeping_behind_a_live_pointer_test() {
     let tagged = operand(def, 0).expect("the disjunction has a tagged operand");
     let raw_addr = operand(def, 1).expect("the disjunction has a bare-address operand");
     assert!(
-        def_of(&hit, &tagged).is_some_and(|d| d.starts_with("or i1")),
-        "the tagged half must itself be an OR of the pointer / string / bigint tags:\n{hit}"
+        def_of(&hit_store, &tagged).is_some_and(|d| d.starts_with("or i1")),
+        "the tagged half must itself be an OR of the pointer / string / bigint tags:\n{hit_store}"
     );
     assert!(
-        def_of(&hit, &raw_addr).is_some_and(|d| d.starts_with("and i1")),
-        "the bare-address half must be `top16 == 0 AND bits >= floor`:\n{hit}"
+        def_of(&hit_store, &raw_addr).is_some_and(|d| d.starts_with("and i1")),
+        "the bare-address half must be `top16 == 0 AND bits >= floor`:\n{hit_store}"
     );
 
     // (e) The bits tested are a JSValue's bits, taken in this block, and there
@@ -290,7 +296,7 @@ fn static_write_pic_guards_its_bookkeeping_behind_a_live_pointer_test() {
     // so the store, the guard and each helper argument legitimately name
     // different registers for the same value. An identity assertion here would
     // fail on correct IR, which is worse than not asserting it.
-    let lshr: Vec<&str> = hit
+    let lshr: Vec<&str> = hit_store
         .lines()
         .map(str::trim)
         .filter(|l| l.contains("lshr i64") && l.trim_end().ends_with(", 48"))
@@ -299,13 +305,13 @@ fn static_write_pic_guards_its_bookkeeping_behind_a_live_pointer_test() {
         lshr.len(),
         1,
         "expected exactly one `lshr i64 …, 48` (the tag extract) in the hit block, \
-         got {lshr:?}:\n{hit}"
+         got {lshr:?}:\n{hit_store}"
     );
     let tag_src = operand(lshr[0], 1).expect("`%t = lshr i64 %bits, 48` names its input");
     assert!(
-        def_of(&hit, &tag_src).is_some_and(|d| d.starts_with("bitcast double")),
+        def_of(&hit_store, &tag_src).is_some_and(|d| d.starts_with("bitcast double")),
         "the tag must be extracted from a JSValue's bits, i.e. a double bitcast in \
-         this block, not from an unrelated integer:\n{hit}"
+         this block, not from an unrelated integer:\n{hit_store}"
     );
 
     // (f) The arm still does all three jobs.
@@ -357,15 +363,19 @@ fn static_write_pic_keeps_a_bare_store_for_a_provably_non_pointer_value() {
 
     let hit = block(&ir, HIT)
         .unwrap_or_else(|| panic!("the static write PIC's hit block must exist:\n{ir}"));
+    let hit_store = block(&ir, HIT_STORE)
+        .unwrap_or_else(|| panic!("the static write PIC's store block must exist:\n{ir}"));
     assert!(
-        hit.lines().any(|l| l.trim().starts_with("store double")),
-        "the numeric arm must still store:\n{hit}"
+        hit_store
+            .lines()
+            .any(|l| l.trim().starts_with("store double")),
+        "the numeric arm must still store:\n{hit_store}"
     );
     for helper in [ADDREF, NOTE, BARRIER_CALL] {
         assert!(
-            !hit.contains(helper),
+            !hit.contains(helper) && !hit_store.contains(helper),
             "GC_STORE_AUDIT(POINTER_FREE): a value proven unable to carry GC pointer \
-             bits must not reach {helper}:\n{hit}"
+             bits must not reach {helper}:\n{hit_store}"
         );
     }
     for stem in [BOOKKEEPING, BARRIER] {
