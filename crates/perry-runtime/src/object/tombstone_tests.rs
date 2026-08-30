@@ -55,9 +55,10 @@ fn tombstone_hole_never_reaches_template_prefixes() {
             pre_tombstone_shape,
             "owned ordinary tombstone delete must keep the receiver ShapeId stable"
         );
-        let obj_gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let obj_gc = crate::value::addr_class::try_read_gc_header(obj as usize)
+            .expect("a freshly allocated object must carry a readable GcHeader");
         assert_ne!(
-            (*obj_gc)._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES,
+            obj_gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES,
             0,
             "stable tombstone receiver must advertise per-slot IC validation"
         );
@@ -180,11 +181,9 @@ fn anonymous_shape_object_literal_uses_stable_tombstone_identity() {
                 );
             }
         }
-        let obj_gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        assert_ne!(
-            (*obj_gc)._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES,
-            0
-        );
+        let obj_gc = crate::value::addr_class::try_read_gc_header(obj as usize)
+            .expect("a freshly allocated object must carry a readable GcHeader");
+        assert_ne!(obj_gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES, 0);
     }
 }
 
@@ -208,19 +207,19 @@ fn stable_tombstone_marker_reopens_later_descriptor_checks() {
             let key = crate::string::js_string_from_bytes(victim.as_ptr(), victim.len() as u32);
             assert_eq!(super::delete_rest::js_object_delete_field(obj, key), 1);
         }
-        let obj_gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        assert_ne!(
-            (*obj_gc)._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES,
-            0
-        );
+        let obj_gc = crate::value::addr_class::try_read_gc_header(obj as usize)
+            .expect("a freshly allocated object must carry a readable GcHeader");
+        assert_ne!(obj_gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES, 0);
 
         super::descriptor_state::set_property_attrs(
             obj as usize,
             "descriptor_key_05".to_string(),
             super::descriptor_state::PropertyAttrs::new(true, true, false),
         );
+        let obj_gc = crate::value::addr_class::try_read_gc_header(obj as usize)
+            .expect("the descriptor target must retain a readable GcHeader");
         assert_ne!(
-            (*obj_gc)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS,
+            obj_gc._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS,
             0,
             "installing an attribute must invalidate the stable plain-data proof"
         );

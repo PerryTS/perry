@@ -267,9 +267,9 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
     if obj.is_null() || keys.is_null() || !super::shape_word_is_writable(obj) {
         return None;
     }
-    let gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    if (*gc).obj_type != crate::gc::GC_TYPE_OBJECT
-        || (*gc)._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
+    let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
+    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+        || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
     {
         return None;
     }

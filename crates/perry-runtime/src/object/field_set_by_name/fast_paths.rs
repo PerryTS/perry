@@ -212,34 +212,40 @@ pub(crate) fn try_readd_stable_tombstone(
     let value_handle = scope.root_nanbox_f64(value);
 
     unsafe {
-        let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         let mut key = key_handle.get_nanbox_f64();
-        let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
         const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
             | crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
             | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
-        if gc.obj_type != crate::gc::GC_TYPE_OBJECT
-            || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-            || gc._reserved & BLOCKING_FLAGS != 0
-            || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
-            || !crate::object::object_is_regular(obj)
-            || crate::array::object_prototype_addr_matches(obj as usize)
-            || ((*obj).class_id == 0 && crate::url::is_url_object_shape(obj))
-        {
+        let eligible = obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
+            let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
+            Some(
+                gc.obj_type == crate::gc::GC_TYPE_OBJECT
+                    && gc.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                    && gc._reserved & BLOCKING_FLAGS == 0
+                    && gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0
+                    && crate::object::object_is_regular(obj)
+                    && !crate::array::object_prototype_addr_matches(obj as usize)
+                    && ((*obj).class_id != 0 || !crate::url::is_url_object_shape(obj)),
+            )
+        })?;
+        if !eligible {
             return None;
         }
 
-        if super::plain_data_write_may_intercept(obj as usize, 0, key) {
+        if obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
+            super::plain_data_write_may_intercept(obj as usize, 0, key)
+        }) {
             return None;
         }
 
-        obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
         key = key_handle.get_nanbox_f64();
-        let shape = crate::object::shapes::object_shape_descriptor(obj)?;
-        let keys = shape.keys as usize as *mut ArrayHeader;
+        let (shape, keys) = obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
+            let shape = crate::object::shapes::object_shape_descriptor(obj)?;
+            Some((shape, shape.keys as usize as *mut ArrayHeader))
+        })?;
         if keys.is_null() || shape.logical_key_count > 4096 {
             return None;
         }
@@ -261,11 +267,12 @@ pub(crate) fn try_readd_stable_tombstone(
         let live_slots = shape.live_inline_slot_count;
         let alloc_limit = live_slots.max(crate::object::INLINE_SLOT_FLOOR as u32);
         let old_keys_handle = scope.root_raw_mut_ptr(keys);
-        let new_keys = crate::array::js_array_push(keys, JSValue::from_bits(key.to_bits()));
-
-        obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        let ((new_keys, old_keys), obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
+            old_keys_handle.across_mut::<ArrayHeader, _>(|| {
+                crate::array::js_array_push(keys, JSValue::from_bits(key.to_bits()))
+            })
+        });
         let value = value_handle.get_nanbox_f64();
-        let old_keys = old_keys_handle.get_raw_mut_ptr::<ArrayHeader>();
         set_object_keys_array(obj, new_keys);
         super::mark_object_dynamic_shape_unknown(obj);
         if old_keys != new_keys {
