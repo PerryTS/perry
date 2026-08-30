@@ -392,6 +392,17 @@ pub(crate) fn lower_object_literal(
     // need the by-name path because `this_patches` populates them post-build
     // via `js_closure_set_capture_bits`, which assumes the key is already in
     // keys_array — fine here since the shape allocator pre-populates it.
+    // A `captures_this` method used to force the WHOLE literal onto the
+    // by-name path (all-or-nothing gate): `this_patches` needs the closure
+    // value after every later initializer has run, and the by-name arm keeps
+    // it alive through nested rooted accumulators. But the shape allocator
+    // pre-populates keys_array, so by-INDEX stores are just as valid for
+    // method props — and the patch loop can simply RE-READ each method
+    // closure from its own field slot at patch time (`js_object_get_field`):
+    // the rooted object keeps the closure alive, and the re-read observes
+    // any evacuation that moved it, with no per-closure rooting at all. So
+    // the gate is now only a kill switch (PERRY_OBJECT_LITERAL_SHAPE_METHODS=0
+    // restores the old routing for A/B).
     let any_method_closure = !generator_iterator_object
         && props.iter().any(|(_, v)| {
             matches!(
@@ -402,8 +413,17 @@ pub(crate) fn lower_object_literal(
                 }
             )
         });
+    // Read per literal, deliberately uncached: this is a compile-time
+    // decision (nanoseconds against a whole literal's codegen), and the
+    // by-name tests below pin the fallback arm by flipping the env under a
+    // module-local mutex — an OnceLock would freeze whichever state ran
+    // first and silently un-pin the arm the tests exist to exercise.
+    let shape_path_methods_enabled = !matches!(
+        std::env::var("PERRY_OBJECT_LITERAL_SHAPE_METHODS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    );
 
-    if !any_method_closure && field_count > 0 {
+    if (!any_method_closure || shape_path_methods_enabled) && field_count > 0 {
         // Build packed keys "k1\0k2\0…" interned in the StringPool (shared
         // across all literals with the same key set + order).
         let mut packed_keys = String::new();
@@ -442,6 +462,11 @@ pub(crate) fn lower_object_literal(
             ],
         );
 
+        // `(field_idx, reserved_this_slot_idx)` for each `captures_this`
+        // method: consumed in `finish`, where each closure is re-read from
+        // its own field slot (see the gate comment above).
+        let shape_this_patches: std::cell::RefCell<Vec<(u32, u32)>> =
+            std::cell::RefCell::new(Vec::new());
         return rooting::with_rooted_accumulator(
             ctx,
             Repr::Ptr,
@@ -449,6 +474,19 @@ pub(crate) fn lower_object_literal(
             protect_handle,
             |ctx, obj| {
                 for (i, (_, value_expr)) in props.iter().enumerate() {
+                    if let Expr::Closure {
+                        params: cparams,
+                        body: cbody,
+                        captures: ccaps,
+                        captures_this: true,
+                        ..
+                    } = value_expr
+                    {
+                        let auto_caps = compute_auto_captures(ctx, cparams, cbody, ccaps);
+                        shape_this_patches
+                            .borrow_mut()
+                            .push((i as u32, auto_caps.len() as u32));
+                    }
                     let v = lower_expr(ctx, value_expr)?;
                     let idx_str = i.to_string();
                     // Issue #448: the runtime `js_object_set_field` takes its
@@ -474,6 +512,33 @@ pub(crate) fn lower_object_literal(
                 Ok(())
             },
             |ctx, obj_handle| {
+                // Patch each method closure's reserved `this` slot AFTER all
+                // fields are set, reading the closure back from the object so
+                // the pointer is post-evacuation fresh (the by-name arm's
+                // nested-rooting dance is unnecessary here).
+                let patches = shape_this_patches.borrow();
+                if !patches.is_empty() {
+                    let blk = ctx.block();
+                    let obj_tagged_bits = blk.or(I64, obj_handle, crate::nanbox::POINTER_TAG_I64);
+                    for (field_idx, this_idx) in patches.iter() {
+                        let fld = field_idx.to_string();
+                        let bits = blk.call(
+                            I64,
+                            "js_object_get_field",
+                            &[(I64, obj_handle), (I32, &fld)],
+                        );
+                        let closure_handle = blk.and(I64, &bits, POINTER_MASK_I64);
+                        let idx_str = this_idx.to_string();
+                        blk.call_void(
+                            "js_closure_set_capture_bits",
+                            &[
+                                (I64, &closure_handle),
+                                (I32, &idx_str),
+                                (I64, &obj_tagged_bits),
+                            ],
+                        );
+                    }
+                }
                 if let Some(layout) = typed_layout.as_ref() {
                     emit_object_typed_shape_init(ctx, obj_handle, layout);
                 }
@@ -576,7 +641,34 @@ mod by_name_method_closure_tests {
     /// index is 1 — which is what lets
     /// [`the_patches_are_applied_in_source_order`] tell the two patch calls
     /// apart.
-    fn method_literal_ir() -> String {
+    /// Serializes the routing-env pin across this module's tests. The env
+    /// var only affects literals that carry a `captures_this` method, and
+    /// this module owns every such literal in the test corpus, so pinning
+    /// under this mutex cannot perturb any concurrently running test.
+    static ROUTING_PIN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    pub(super) struct RoutingPin {
+        prev: Option<std::ffi::OsString>,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+    impl Drop for RoutingPin {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(v) => std::env::set_var("PERRY_OBJECT_LITERAL_SHAPE_METHODS", v),
+                None => std::env::remove_var("PERRY_OBJECT_LITERAL_SHAPE_METHODS"),
+            }
+        }
+    }
+    pub(super) fn pin_routing(value: &str) -> RoutingPin {
+        let guard = ROUTING_PIN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let prev = std::env::var_os("PERRY_OBJECT_LITERAL_SHAPE_METHODS");
+        std::env::set_var("PERRY_OBJECT_LITERAL_SHAPE_METHODS", value);
+        RoutingPin { prev, _guard: guard }
+    }
+
+    pub(super) fn method_literal_ir() -> String {
         let closure = |func_id: u32, captures: Vec<u32>| {
             let param_id = 10 + func_id;
             let mut body = vec![Stmt::Return(Some(Expr::LocalGet(param_id)))];
@@ -651,7 +743,7 @@ mod by_name_method_closure_tests {
 
     /// The `build` function's body, and only it — the closure bodies are
     /// separate `define`s and contain none of what is asserted below.
-    fn build_fn(ir: &str) -> String {
+    pub(super) fn build_fn(ir: &str) -> String {
         let mut body = Vec::new();
         let mut inside = false;
         for line in ir.lines() {
@@ -673,6 +765,89 @@ mod by_name_method_closure_tests {
         body.join("\n")
     }
 
+#[cfg(test)]
+mod shape_method_literal_tests {
+    //! Shape-path twins of `by_name_method_closure_tests`: the DEFAULT
+    //! routing for a `captures_this` method literal since the all-or-nothing
+    //! gate became a kill switch. Same HIR fixture, same hazards pinned —
+    //! deferred patches must run below every store, in source order — plus
+    //! the shape path's own discipline: each patched closure is RE-READ from
+    //! its field slot (`js_object_get_field`) instead of being kept alive in
+    //! a rooted slot, so a patch that reads anything else regresses to the
+    //! moved-from-address bug the by-name arm needed #8809 to fix.
+    use super::{build_fn, method_literal_ir, pin_routing};
+
+    #[test]
+    fn a_this_capturing_method_selects_the_shape_path() {
+        let _pin = pin_routing("1");
+        let ir = build_fn(&method_literal_ir());
+        assert!(
+            ir.contains("@js_object_alloc_with_shape("),
+            "the method literal must allocate through the shape cache:\n{ir}"
+        );
+        assert_eq!(
+            ir.matches("@js_object_set_field(").count(),
+            4,
+            "every property is stored by INDEX on this path:\n{ir}"
+        );
+        assert_eq!(
+            ir.matches("@js_object_set_field_by_name(").count(),
+            0,
+            "no by-name stores may remain:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn the_patches_run_below_every_store_and_reread_their_closure() {
+        let _pin = pin_routing("1");
+        let ir = build_fn(&method_literal_ir());
+        let last_store = ir
+            .rfind("@js_object_set_field(")
+            .expect("an indexed store");
+        let tail = &ir[last_store..];
+        assert_eq!(
+            tail.matches("@js_closure_set_capture_bits(").count(),
+            2,
+            "one patch per `this`-capturing method, all below the last store:\n{tail}"
+        );
+        assert_eq!(
+            tail.matches("@js_object_get_field(").count(),
+            2,
+            "each patch must RE-READ its closure from the object's field slot \
+             (a kept register is stale after an evacuating initializer):\n{tail}"
+        );
+    }
+
+    #[test]
+    fn the_patches_are_applied_in_source_order() {
+        let _pin = pin_routing("1");
+        let ir = build_fn(&method_literal_ir());
+        let last_store = ir
+            .rfind("@js_object_set_field(")
+            .expect("an indexed store");
+        let tail = &ir[last_store..];
+        // `add` sits at field index 0, `scale` at field index 2; the re-reads
+        // name the field, so source order is readable off the `i32 <idx>`
+        // argument of each `js_object_get_field`.
+        let idxs: Vec<&str> = tail
+            .lines()
+            .filter(|l| l.contains("@js_object_get_field("))
+            .map(|l| {
+                l.split("i32 ")
+                    .nth(1)
+                    .and_then(|v| v.split(')').next())
+                    .expect("the field index")
+            })
+            .collect();
+        assert_eq!(
+            idxs,
+            vec!["0", "2"],
+            "`add` (field 0) must be patched before `scale` (field 2):\n{tail}"
+        );
+    }
+}
+
+
     /// Everything the lowering emits after the last property store: the
     /// deferred closure re-reads, the patch loop, and the releases.
     fn tail_after_last_property_store(ir: &str) -> String {
@@ -682,10 +857,13 @@ mod by_name_method_closure_tests {
         ir[last_store..].to_string()
     }
 
-    /// The literal must take the BY-NAME path, or every assertion below is
-    /// about a branch that did not run.
+    /// With the shape routing pinned OFF, the literal must take the BY-NAME
+    /// path, or every assertion below is about a branch that did not run.
+    /// (Default routing sends `captures_this` literals through the shape
+    /// path — see `shape_method_literal_tests` for that arm's pins.)
     #[test]
     fn a_this_capturing_method_selects_the_by_name_path() {
+        let _pin = pin_routing("0");
         let ir = build_fn(&method_literal_ir());
         assert!(
             ir.contains("@js_object_alloc(i32 0, i32 4)"),
@@ -709,6 +887,7 @@ mod by_name_method_closure_tests {
     /// count only means something in the tail.
     #[test]
     fn the_this_patches_run_below_every_property_store() {
+        let _pin = pin_routing("0");
         let ir = build_fn(&method_literal_ir());
         let tail = tail_after_last_property_store(&ir);
         assert_eq!(
@@ -726,6 +905,7 @@ mod by_name_method_closure_tests {
     /// `i32 <idx>` argument.
     #[test]
     fn the_patches_are_applied_in_source_order() {
+        let _pin = pin_routing("0");
         let ir = build_fn(&method_literal_ir());
         let tail = tail_after_last_property_store(&ir);
         let idxs: Vec<&str> = tail
@@ -762,6 +942,7 @@ mod by_name_method_closure_tests {
     /// #7192's sweep did not catch this one.
     #[test]
     fn a_method_closure_is_rooted_before_it_is_installed() {
+        let _pin = pin_routing("0");
         let ir = build_fn(&method_literal_ir());
         let lines: Vec<&str> = ir.lines().collect();
         let closure_allocs: Vec<usize> = lines
@@ -806,6 +987,7 @@ mod by_name_method_closure_tests {
     /// patch loop).
     #[test]
     fn three_slots_are_rooted_and_released_innermost_first() {
+        let _pin = pin_routing("0");
         let full = method_literal_ir();
         let ir = build_fn(&full);
         let tail = tail_after_last_property_store(&ir);
