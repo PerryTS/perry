@@ -22,7 +22,6 @@
 //! time (`expando_clear_on_alloc`).
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExoticKind {
@@ -106,7 +105,7 @@ pub(crate) fn exotic_expando_kind_of_value(value: f64) -> Option<(usize, ExoticK
 pub(crate) struct ExoticExpandoTables {
     /// addr -> insertion-ordered (key, nanboxed value bits) pairs for the
     /// non-Error exotic cells handled by this module.
-    entries: RefCell<HashMap<usize, Vec<(String, u64)>>>,
+    entries: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<(String, u64)>>>,
     /// Fast-path gate so hot get/set paths skip the map lookup until the
     /// first expando is installed on this thread.
     in_use: Cell<bool>,
@@ -115,7 +114,7 @@ pub(crate) struct ExoticExpandoTables {
 impl ExoticExpandoTables {
     pub(crate) fn new() -> Self {
         Self {
-            entries: RefCell::new(HashMap::new()),
+            entries: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
             in_use: Cell::new(false),
         }
     }

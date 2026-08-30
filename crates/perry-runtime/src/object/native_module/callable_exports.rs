@@ -1494,15 +1494,15 @@ thread_local! {
     /// but isolated from it so a user `fn.length = x` write can't perturb it)
     /// lets the `.length` value-read and `getOwnPropertyDescriptor` agree with
     /// the spec count. #3143.
-    static BUILTIN_CLOSURE_LENGTH: std::cell::RefCell<std::collections::HashMap<usize, u32>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static BUILTIN_CLOSURE_LENGTH: std::cell::RefCell<crate::fast_hash::PtrHashMap<usize, u32>> =
+        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
     /// Built-in method closures are callable but lack ECMAScript
     /// `[[Construct]]`. Track the installed closure values so the dynamic
     /// `new` / `Reflect.construct` paths can reject them without changing
     /// ordinary user closures or global constructor closures.
-    static BUILTIN_CLOSURE_NON_CONSTRUCTABLE: std::cell::RefCell<std::collections::HashSet<usize>> =
-        std::cell::RefCell::new(std::collections::HashSet::new());
+    static BUILTIN_CLOSURE_NON_CONSTRUCTABLE: std::cell::RefCell<crate::fast_hash::PtrHashSet<usize>> =
+        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_set());
 }
 
 /// Record the spec `.length` for a built-in prototype-method closure. See

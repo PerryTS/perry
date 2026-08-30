@@ -142,16 +142,48 @@ impl BuildHasher for FastKeyHasher {
 
 pub struct FastKeyHasherImpl(u64);
 
+/// One FNV-1a fold step over a whole machine word.
+///
+/// FNV-1a is defined over bytes, and [`FastKeyHasherImpl::write`] keeps that
+/// definition for genuine byte strings. For an integer field, though, folding
+/// byte-by-byte buys nothing: the fold is a strictly serial
+/// `xor` -> `wrapping_mul` dependency chain, so an eight-byte field costs eight
+/// dependent multiplies (~3 cycles of latency each) to mix a value that one
+/// multiply already mixes. This folds the whole word in one step.
+///
+/// It FOLDS (`h ^ word`, then multiply) rather than OVERWRITING the
+/// accumulator, which is the property [`PtrHasher`] deliberately lacks and the
+/// reason `PtrHasher` cannot serve a multi-field key: with an overwriting
+/// `write_*`, a struct hash collapses to its last field alone. Every field of
+/// a composite key reaches the accumulator here.
+#[inline(always)]
+fn fnv_fold_word(acc: u64, word: u64) -> u64 {
+    (acc ^ word).wrapping_mul(FNV_PRIME)
+}
+
 impl Hasher for FastKeyHasherImpl {
+    /// Final avalanche. FNV-1a accumulates most of its entropy in the HIGH
+    /// bits (the prime is only ~2^40, so a low input bit cannot reach the top
+    /// of the word in one round), but `hashbrown` takes its bucket index from
+    /// the LOW bits. With the word-at-a-time folds below a short key may run as
+    /// few as one round, so the low bits get very little mixing on their own.
+    ///
+    /// Multiplying by the Fibonacci constant and folding the top half down
+    /// pushes the accumulated high-bit entropy into the bucket-index bits for
+    /// one extra multiply per lookup — against the ~30 multiplies the word
+    /// folds save on a `ShapeFacts` key. This is the same hazard, and the same
+    /// remedy, as [`mix`] on [`PtrHasher`]: without it, keys that differ only
+    /// in their high bits (or aligned pointers, whose low bits are constant)
+    /// pile into one bucket and the map degrades to a linked list.
     #[inline]
     fn finish(&self) -> u64 {
-        self.0
+        let h = self.0.wrapping_mul(PTR_MIX);
+        h ^ (h >> 32)
     }
-    /// FNV-1a byte fold. A `(usize, String)` key hashes its `usize` half via the
-    /// default `write_usize` (which forwards to `write(&n.to_ne_bytes())`) and
-    /// its `String` half via `str`'s `Hash` (`write(bytes)` + a `write_u8(0xff)`
-    /// terminator, both routed here), so this one method covers every byte of
-    /// the composite key deterministically.
+    /// FNV-1a byte fold, for the genuine byte-string half of a key: a
+    /// `(usize, String)` key hashes its `String` half via `str`'s `Hash`
+    /// (`write(bytes)` plus a `write_u8(0xff)` terminator), and both route
+    /// here.
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
         let mut h = self.0;
@@ -160,6 +192,74 @@ impl Hasher for FastKeyHasherImpl {
             h = h.wrapping_mul(FNV_PRIME);
         }
         self.0 = h;
+    }
+
+    // Integer writes fold one word per call instead of falling into `Hasher`'s
+    // default `write_uN` -> `write(&n.to_ne_bytes())` byte loop.
+    //
+    // This is what the shape table's `ids_by_facts` key pays for: `ShapeFacts`
+    // is six integer fields (two `u64`, three `u32`, one enum discriminant, an
+    // `isize`), so the derived `Hash` fed ~36 bytes -- ~36 serial multiplies --
+    // through the byte loop for a key that six folds mix just as well. That
+    // lookup runs on every shape publish (`shape_descriptor_ensure_with_holes`
+    // probes `ids_by_facts` before minting an id), i.e. on every object
+    // property add/delete that transitions a shape.
+    //
+    // `write_u8` is deliberately included even though it is exactly equivalent
+    // to the byte path for a single byte: routing it here keeps every integer
+    // width in one place rather than leaving one width to a different rule.
+
+    #[inline]
+    fn write_u8(&mut self, n: u8) {
+        self.0 = fnv_fold_word(self.0, n as u64);
+    }
+    #[inline]
+    fn write_u16(&mut self, n: u16) {
+        self.0 = fnv_fold_word(self.0, n as u64);
+    }
+    #[inline]
+    fn write_u32(&mut self, n: u32) {
+        self.0 = fnv_fold_word(self.0, n as u64);
+    }
+    #[inline]
+    fn write_u64(&mut self, n: u64) {
+        self.0 = fnv_fold_word(self.0, n);
+    }
+    #[inline]
+    fn write_u128(&mut self, n: u128) {
+        self.0 = fnv_fold_word(self.0, n as u64);
+        self.0 = fnv_fold_word(self.0, (n >> 64) as u64);
+    }
+    #[inline]
+    fn write_usize(&mut self, n: usize) {
+        self.0 = fnv_fold_word(self.0, n as u64);
+    }
+    #[inline]
+    fn write_i8(&mut self, n: i8) {
+        self.0 = fnv_fold_word(self.0, n as u64);
+    }
+    #[inline]
+    fn write_i16(&mut self, n: i16) {
+        self.0 = fnv_fold_word(self.0, n as u64);
+    }
+    #[inline]
+    fn write_i32(&mut self, n: i32) {
+        self.0 = fnv_fold_word(self.0, n as u64);
+    }
+    #[inline]
+    fn write_i64(&mut self, n: i64) {
+        self.0 = fnv_fold_word(self.0, n as u64);
+    }
+    #[inline]
+    fn write_i128(&mut self, n: i128) {
+        self.write_u128(n as u128);
+    }
+    /// `derive(Hash)` on a fieldless enum hashes `discriminant_value(self)`,
+    /// whose type is `isize` for a default-repr enum -- so `ShapeFacts`'
+    /// `object_kind` field lands here, not on `write_u8`.
+    #[inline]
+    fn write_isize(&mut self, n: isize) {
+        self.0 = fnv_fold_word(self.0, n as u64);
     }
 }
 
@@ -255,6 +355,114 @@ mod tests {
             assert!(s.contains(&(base + i * 8)));
         }
         assert!(!s.contains(&(base + 1000 * 8)));
+    }
+
+    /// The word-at-a-time integer folds must actually be TAKEN — this is the
+    /// `FastKeyHasher` analogue of
+    /// `u32_keys_take_the_multiplicative_fast_path`. Deleting
+    /// `FastKeyHasherImpl::write_u64` drops `u64` back onto `Hasher`'s default
+    /// `write_u64` -> `write(&n.to_ne_bytes())` byte loop (eight dependent
+    /// multiplies instead of one) and turns this red.
+    #[test]
+    fn integer_writes_take_the_word_fold_fast_path() {
+        let n = 0x0123_4567_89ab_cdefu64;
+        let mut h = FastKeyHasher.build_hasher();
+        h.write_u64(n);
+        let acc = (FNV_OFFSET_BASIS ^ n).wrapping_mul(FNV_PRIME);
+        let expected = {
+            let x = acc.wrapping_mul(PTR_MIX);
+            x ^ (x >> 32)
+        };
+        assert_eq!(
+            h.finish(),
+            expected,
+            "write_u64 fell into the per-byte fold"
+        );
+    }
+
+    /// The defining difference from [`PtrHasher`]: the integer writes FOLD the
+    /// accumulator instead of overwriting it, so every field of a composite key
+    /// reaches the hash. With an overwriting `write_*` (what `PtrHasher` does,
+    /// correctly, for its single-word key) a `ShapeFacts` would hash to its last
+    /// field alone and the shape table's reverse index would collapse.
+    #[test]
+    fn word_folds_keep_every_field_of_a_composite_key() {
+        fn hash(fields: &[u64]) -> u64 {
+            let mut h = FastKeyHasher.build_hasher();
+            for &f in fields {
+                h.write_u64(f);
+            }
+            h.finish()
+        }
+        // Same trailing field, different leading fields.
+        assert_ne!(hash(&[1, 2, 3]), hash(&[9, 9, 3]));
+        // A prefix must not alias the whole key.
+        assert_ne!(hash(&[1, 2, 3]), hash(&[3]));
+        // Field ORDER is part of the identity.
+        assert_ne!(hash(&[1, 2]), hash(&[2, 1]));
+        // Mixed widths must not alias either.
+        let mut a = FastKeyHasher.build_hasher();
+        a.write_u32(1);
+        a.write_u32(2);
+        let mut b = FastKeyHasher.build_hasher();
+        b.write_u64((1u64 << 32) | 2);
+        assert_ne!(a.finish(), b.finish());
+    }
+
+    /// A `ShapeFacts`-shaped key is mostly SMALL integers (key counts, hole
+    /// counts, a two-variant enum discriminant) plus one heap address. Those
+    /// live in the low bits, which is exactly where `hashbrown` reads its
+    /// bucket index — so the `finish()` avalanche has to carry the entropy
+    /// down. Deleting the `wrapping_mul(PTR_MIX)` from `finish` collapses this.
+    #[test]
+    fn shape_facts_shaped_keys_spread_across_low_bit_buckets() {
+        use std::collections::HashSet;
+        let mut buckets = HashSet::new();
+        let mut n = 0usize;
+        // 8-byte-aligned keys array addresses, small counts, 2 object kinds.
+        for keys in 0..64u64 {
+            for logical in 0..8u32 {
+                for holes in 0..2u32 {
+                    for kind in 0..2isize {
+                        let mut h = FastKeyHasher.build_hasher();
+                        h.write_u64(0x1_0000_0000 + keys * 8);
+                        h.write_u32(logical);
+                        h.write_u32(logical);
+                        h.write_u64(0);
+                        h.write_isize(kind);
+                        h.write_u32(holes);
+                        buckets.insert(h.finish() & 0x3ff);
+                        n += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(n, 2048);
+        assert!(
+            buckets.len() > 600,
+            "ShapeFacts-shaped keys hashed into only {} of 1024 buckets",
+            buckets.len()
+        );
+    }
+
+    /// Bare-`usize`-keyed `FastKeyHashMap`s exist too (`attr_keys_by_owner`,
+    /// `SYMBOL_PROPERTY_ATTRS`' first half), and a bare key runs only ONE fold
+    /// round. Aligned heap addresses must still spread.
+    #[test]
+    fn single_round_pointer_keys_spread_across_low_bit_buckets() {
+        use std::collections::HashSet;
+        let mut buckets = HashSet::new();
+        let base = 0x1_0000_0000usize;
+        for i in 0..1024 {
+            let mut h = FastKeyHasher.build_hasher();
+            h.write_usize(base + i * 16);
+            buckets.insert(h.finish() & 0x3ff);
+        }
+        assert!(
+            buckets.len() > 512,
+            "aligned pointers hashed into only {} of 1024 buckets",
+            buckets.len()
+        );
     }
 
     /// The descriptor side tables key on `(usize, String)`. Verify the FNV-1a

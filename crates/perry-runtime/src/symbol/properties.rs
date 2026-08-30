@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::string::{js_string_from_bytes, StringHeader};
-use std::collections::HashMap;
 
 /// Look up the cached pointer for the registered `util.inspect.custom` symbol
 /// (description `"nodejs.util.inspect.custom"`). Returns 0 if the symbol has
@@ -93,7 +92,7 @@ pub(crate) fn set_symbol_property_attrs(
     super::note_symbol_key_installed(sym_key);
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
     if guard.is_none() {
-        *guard = Some(HashMap::new());
+        *guard = Some(crate::fast_hash::new_fast_key_hash_map());
     }
     guard.as_mut().unwrap().insert((owner, sym_key), attrs);
 }

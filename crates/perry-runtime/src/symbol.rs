@@ -83,6 +83,9 @@ pub(crate) use gc_roots::{
     test_symbol_property_root_bits, test_symbol_property_roots,
 };
 
+use crate::fast_hash::{
+    new_ptr_hash_map, new_ptr_hash_set, FastKeyHashMap, PtrHashMap, PtrHashSet,
+};
 use crate::string::StringHeader;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -142,7 +145,7 @@ static SYMBOL_REGISTRY: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None)
 // detect symbol pointers safely without reading the (possibly nonexistent)
 // GcHeader byte.
 per_test_global! {
-    static SYMBOL_POINTERS: Mutex<Option<HashSet<usize>>> = Mutex::new(None);
+    static SYMBOL_POINTERS: Mutex<Option<PtrHashSet<usize>>> = Mutex::new(None);
 }
 
 /// Process-lifetime descriptions for registered (`Symbol.for`) and well-known
@@ -154,7 +157,7 @@ per_test_global! {
 /// materialize a fresh StringHeader in the *caller's* arena on demand, which
 /// is the only thread-safe contract: the symbol identity is global, but
 /// every StringHeader belongs to exactly one thread's arena.
-static REGISTERED_SYMBOL_DESCRIPTIONS: Mutex<Option<HashMap<usize, std::sync::Arc<str>>>> =
+static REGISTERED_SYMBOL_DESCRIPTIONS: Mutex<Option<PtrHashMap<usize, std::sync::Arc<str>>>> =
     Mutex::new(None);
 
 pub(crate) fn registered_symbol_description(sym_ptr: usize) -> Option<std::sync::Arc<str>> {
@@ -209,8 +212,8 @@ crate::perry_thread_local! {
     /// not recoverable from the payload. That is the pre-existing WTF-8 gap
     /// CLAUDE.md already lists, not a new one, and it is strictly better than
     /// dropping the description.
-    static FRESH_SYMBOL_DESCRIPTIONS: RefCell<HashMap<u64, std::sync::Arc<[u8]>>> =
-        RefCell::new(HashMap::new());
+    static FRESH_SYMBOL_DESCRIPTIONS: RefCell<PtrHashMap<u64, std::sync::Arc<[u8]>>> =
+        RefCell::new(new_ptr_hash_map());
 }
 
 #[cfg(test)]
@@ -282,7 +285,7 @@ pub(crate) fn test_fresh_symbol_description_count() -> usize {
 pub(crate) fn record_registered_symbol_description(sym_ptr: usize, description: &str) {
     let mut guard = REGISTERED_SYMBOL_DESCRIPTIONS.lock().unwrap();
     if guard.is_none() {
-        *guard = Some(HashMap::new());
+        *guard = Some(new_ptr_hash_map());
     }
     guard
         .as_mut()
@@ -451,7 +454,7 @@ pub(crate) fn register_symbol_pointer(ptr: usize) {
     SYMBOL_EVER_REGISTERED.arm();
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_POINTERS);
     if guard.is_none() {
-        *guard = Some(HashSet::new());
+        *guard = Some(new_ptr_hash_set());
     }
     guard.as_mut().unwrap().insert(ptr);
 }
@@ -550,15 +553,17 @@ pub(crate) fn is_global_registered_symbol(ptr: usize) -> bool {
 // rewritten when owners move; symbol keys and NaN-boxed values are GC roots.
 // Storage stays intentionally linear because per-object symbol keys are rare.
 per_test_global! {
-    static SYMBOL_PROPERTIES: Mutex<Option<HashMap<usize, Vec<(usize, u64)>>>> = Mutex::new(None);
+    static SYMBOL_PROPERTIES: Mutex<Option<PtrHashMap<usize, Vec<(usize, u64)>>>> =
+        Mutex::new(None);
 }
 
 // Descriptor attributes for symbol-keyed properties installed through
 // Object.defineProperty. Direct symbol assignment uses the normal data-property
 // defaults, so absence here means writable/enumerable/configurable are all true.
 per_test_global! {
-    static SYMBOL_PROPERTY_ATTRS: Mutex<Option<HashMap<(usize, usize), crate::object::PropertyAttrs>>> =
-        Mutex::new(None);
+    static SYMBOL_PROPERTY_ATTRS: Mutex<
+        Option<FastKeyHashMap<(usize, usize), crate::object::PropertyAttrs>>,
+    > = Mutex::new(None);
 }
 
 /// Death pruning for the symbol-keyed property side tables (2026-07-09 GC
@@ -835,7 +840,7 @@ pub(crate) fn store_object_symbol_property_root(
     {
         let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
         if guard.is_none() {
-            *guard = Some(HashMap::new());
+            *guard = Some(new_ptr_hash_map());
         }
         let map = guard.as_mut().unwrap();
         let entries = map.entry(obj_key).or_default();

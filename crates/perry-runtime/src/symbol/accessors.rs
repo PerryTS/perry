@@ -105,7 +105,7 @@ pub(crate) unsafe fn set_symbol_accessor_property(
         // entries out for the raw-entry consumers (formatting, freeze/seal).
         let mut props = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
         if props.is_none() {
-            *props = Some(HashMap::new());
+            *props = Some(crate::fast_hash::new_ptr_hash_map());
         }
         let entries = props.as_mut().unwrap().entry(obj_key).or_default();
         if let Some(entry) = entries.iter_mut().find(|entry| entry.0 == sym_key) {

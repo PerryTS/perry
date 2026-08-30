@@ -2,15 +2,28 @@
 //! and the closure-magic-tag pointer predicate.
 
 use super::*;
+use crate::fast_hash::{new_ptr_hash_map, PtrHashMap};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 per_test_global! {
-    static CLOSURE_PROPS: OnceLock<Mutex<HashMap<usize, HashMap<String, f64>>>> = OnceLock::new();
+    /// OUTER key is a closure heap address, probed on every dynamic property
+    /// get/set/delete on a function object, so it takes `PtrHasher` for the
+    /// same reason as the other pointer-keyed registries (#8125): a raw
+    /// address is already well distributed and no external input reaches it.
+    ///
+    /// The INNER `HashMap<String, f64>` deliberately keeps std's SipHash. Its
+    /// keys are JS property names, and unlike the descriptor side tables'
+    /// program-identifier keys these can be computed at runtime from program
+    /// input (`fn[userSuppliedName] = 1`), which is exactly the adversarial
+    /// case `RandomState` exists to defend. It is also not the half the
+    /// profile implicates -- `hash_one::<&usize>` is the outer probe.
+    static CLOSURE_PROPS: OnceLock<Mutex<PtrHashMap<usize, HashMap<String, f64>>>> =
+        OnceLock::new();
 }
 
-fn get_closure_props() -> &'static Mutex<HashMap<usize, HashMap<String, f64>>> {
-    CLOSURE_PROPS.get_or_init(|| Mutex::new(HashMap::new()))
+fn get_closure_props() -> &'static Mutex<PtrHashMap<usize, HashMap<String, f64>>> {
+    CLOSURE_PROPS.get_or_init(|| Mutex::new(new_ptr_hash_map()))
 }
 
 per_test_global! {
@@ -25,11 +38,15 @@ per_test_global! {
     /// deletion here and have every property-protocol site consult it. test262's
     /// `verifyProperty` exercises exactly this (delete-then-`hasOwnProperty`)
     /// when checking `configurable`.
-    static CLOSURE_DELETED_KEYS: OnceLock<Mutex<HashMap<usize, HashSet<String>>>> = OnceLock::new();
+    ///
+    /// Outer key is a closure address (`PtrHasher`); the inner `HashSet<String>`
+    /// keeps SipHash for the same reason as `CLOSURE_PROPS`' inner map.
+    static CLOSURE_DELETED_KEYS: OnceLock<Mutex<PtrHashMap<usize, HashSet<String>>>> =
+        OnceLock::new();
 }
 
-fn get_closure_deleted_keys() -> &'static Mutex<HashMap<usize, HashSet<String>>> {
-    CLOSURE_DELETED_KEYS.get_or_init(|| Mutex::new(HashMap::new()))
+fn get_closure_deleted_keys() -> &'static Mutex<PtrHashMap<usize, HashSet<String>>> {
+    CLOSURE_DELETED_KEYS.get_or_init(|| Mutex::new(new_ptr_hash_map()))
 }
 
 /// Record that `key` was `delete`d off the closure at `ptr`.
@@ -77,11 +94,11 @@ per_test_global! {
     /// real prototype chain, but recording the (closure → proto) link here lets
     /// string- and symbol-keyed property reads on the closure walk to the proto's
     /// own properties — so `TagClass._op === "Tag"` and `isTag(TagClass)` hold.
-    static CLOSURE_STATIC_PROTOTYPES: OnceLock<Mutex<HashMap<usize, u64>>> = OnceLock::new();
+    static CLOSURE_STATIC_PROTOTYPES: OnceLock<Mutex<PtrHashMap<usize, u64>>> = OnceLock::new();
 }
 
-fn get_closure_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
-    CLOSURE_STATIC_PROTOTYPES.get_or_init(|| Mutex::new(HashMap::new()))
+fn get_closure_prototypes() -> &'static Mutex<PtrHashMap<usize, u64>> {
+    CLOSURE_STATIC_PROTOTYPES.get_or_init(|| Mutex::new(new_ptr_hash_map()))
 }
 
 /// Record `Object.setPrototypeOf(closure_ptr, proto)`. `proto_bits` is the
@@ -120,7 +137,7 @@ fn barrier_closure_dynamic_props(owner: usize, props: &mut HashMap<String, f64>)
 }
 
 fn merge_closure_prop_map(
-    props: &mut HashMap<usize, HashMap<String, f64>>,
+    props: &mut PtrHashMap<usize, HashMap<String, f64>>,
     owner: usize,
     owner_props: HashMap<String, f64>,
 ) {
