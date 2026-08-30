@@ -62,6 +62,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // settings emit different call sequences, so a cached object from one
     // must not serve the other.
     "PERRY_METHOD_INLINE_PROBE",
+    // #9122: gates the shape-cache path for object literals whose methods
+    // capture `this` — on and off emit different literal-birth sequences,
+    // so a cached object from one must not serve the other.
+    "PERRY_OBJECT_LITERAL_SHAPE_METHODS",
     // #9060: gates whether a reduce accumulator earns the stable-packed fast
     // clone's numeric proof — with it on, `s += arr[i]` lowers to an inline
     // fadd instead of `js_dynamic_string_or_number_add`, so the two settings
