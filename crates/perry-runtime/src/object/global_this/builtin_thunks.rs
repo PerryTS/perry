@@ -484,7 +484,18 @@ fn js_function_ctor_from_strings_impl(args_ptr: *const f64, args_len: usize) -> 
     #[cfg(feature = "dyn-eval")]
     {
         let args_vec: Vec<String> = (0..args_len).map(arg_str).collect();
-        return crate::dyn_eval::dyn_function_from_strings(&args_vec);
+        // Source preparation descends through the parser and SWC visitor
+        // stack. Keep a Rust-owned setjmp handler innermost while those frames
+        // exist: a subset diagnostic is a Perry exception, and allowing its
+        // raw system unwind to cross an opaque dependency frame can trip that
+        // frame's abort-on-unwind guard (#9207). Once the stack is back at this
+        // generated-code boundary, rethrow to the caller's invoke/landingpad.
+        return match crate::exception::js_call_catching(|| {
+            crate::dyn_eval::dyn_function_from_strings(&args_vec)
+        }) {
+            Ok(function) => function,
+            Err(error) => crate::exception::js_throw(error),
+        };
     }
     // Without the `dyn-eval` feature (size-optimized builds that carry no
     // dynamic-eval site), keep the historical clean throw: it lets
