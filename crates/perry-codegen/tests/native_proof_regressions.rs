@@ -1568,9 +1568,13 @@ fn pod_field_read_after_dynamic_materialization_uses_dynamic_numeric_sub() {
         ir.contains("call double @js_dynamic_sub"),
         "materialized POD field reads must use coercing dynamic arithmetic:\n{ir}"
     );
+    // The `fsub` may appear, but only downstream of a runtime tag test: since
+    // the guarded-arithmetic change, `-` emits a diamond whose cold arm is the
+    // `js_dynamic_sub` asserted above. What must never happen — boxed bits
+    // reaching raw arithmetic on a static claim alone — is what is asserted.
     assert!(
-        !ir.contains("fsub double"),
-        "materialized POD field reads must not feed boxed JSValue bits into raw arithmetic:\n{ir}"
+        !ir.contains("fsub double") || ir.contains("guarded_arith.numeric"),
+        "materialized POD field reads must not feed boxed JSValue bits into UNGUARDED raw arithmetic:\n{ir}"
     );
 }
 
@@ -12758,9 +12762,13 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
              keep the possibly boxed `+` result on semantically dynamic multiplication:\n\
              {pshape_ir}"
         );
+        // Annotation-only operands still must not reach raw multiplication on
+        // the strength of the annotation. They may reach it after a runtime
+        // tag test, which is the same standard `+` has held since #9159 and
+        // which `*` now shares: the diamond's cold arm keeps `js_dynamic_mul`.
         assert!(
-            !pshape_ir.contains(" fmul "),
-            "annotation-only operands must not reach raw f64 multiplication in `$pshape`:\n{pshape_ir}"
+            !pshape_ir.contains(" fmul ") || pshape_ir.contains("guarded_arith.numeric"),
+            "annotation-only operands must not reach UNGUARDED raw f64 multiplication in `$pshape`:\n{pshape_ir}"
         );
     }
     assert!(
