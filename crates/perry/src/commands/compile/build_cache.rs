@@ -57,6 +57,11 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // off, the map is empty and every binding takes the entry-resolved
     // indirect path, so the two settings emit different call sequences.
     "PERRY_CALL_DEVIRT",
+    // #9124: gates deciding the monomorphic method case with the inline
+    // shape probe instead of the typed-feedback runtime guard — the two
+    // settings emit different call sequences, so a cached object from one
+    // must not serve the other.
+    "PERRY_METHOD_INLINE_PROBE",
     // #9060: gates whether a reduce accumulator earns the stable-packed fast
     // clone's numeric proof — with it on, `s += arr[i]` lowers to an inline
     // fadd instead of `js_dynamic_string_or_number_add`, so the two settings
