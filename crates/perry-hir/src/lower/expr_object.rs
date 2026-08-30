@@ -668,10 +668,57 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     }
                 }
                 ast::Prop::Shorthand(_) => {}
+                // Method shorthand `m() { … }` with a static key lowers exactly
+                // like `m: function () { … }` (dynamic `this`, a plain
+                // pointer-bearing field slot), so it joins the closed-shape
+                // record route instead of falling to the by-name/shape-cache
+                // `Expr::Object` path whose field READS degrade to by-name
+                // dispatch (114–461 ns per literal on a 3-prop object vs 44 ns
+                // for the function-expression spelling). What is NOT admitted:
+                // `super` (needs the object home slot the IIFE route
+                // provides), async/generator methods (their own lowering
+                // shapes), computed keys, and `__proto__`.
+                ast::Prop::Method(method) => {
+                    if is_noncomputed_proto_key(&method.key) {
+                        return false;
+                    }
+                    match &method.key {
+                        ast::PropName::Ident(_) | ast::PropName::Str(_) | ast::PropName::Num(_) => {}
+                        _ => return false,
+                    }
+                    if method.function.is_async
+                        || method.function.is_generator
+                        || function_body_uses_super(&method.function)
+                    {
+                        return false;
+                    }
+                }
                 _ => return false,
             }
         }
         true
+    }
+
+    /// Conservative: any `super.x` / `super[x]` / `super(...)` anywhere in the
+    /// body — nested functions and classes included — keeps the method on the
+    /// home-object-carrying route.
+    fn function_body_uses_super(function: &ast::Function) -> bool {
+        use swc_ecma_visit::{Visit, VisitWith};
+        struct Finder(bool);
+        impl Visit for Finder {
+            fn visit_super_prop_expr(&mut self, _: &ast::SuperPropExpr) {
+                self.0 = true;
+            }
+            fn visit_callee(&mut self, callee: &ast::Callee) {
+                if matches!(callee, ast::Callee::Super(_)) {
+                    self.0 = true;
+                }
+                callee.visit_children_with(self);
+            }
+        }
+        let mut finder = Finder(false);
+        function.visit_with(&mut finder);
+        finder.0
     }
     // #6812 (w16): `{}` — the builder-pattern seed — lowers to `new
     // __AnonShape_<site-hash>()`, a unique 0-field shape-only class per
@@ -695,7 +742,15 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             cap_args_appended: 0,
         });
     }
-    if is_closed_shape(obj) {
+    // Directly exported method literals stay on the seeded IIFE route below:
+    // a consumer module's guarded direct call on an imported object keys on
+    // the producer's shape-only seed class and slot order, and this routing
+    // is what that capability was built against.
+    let exported_method_literal = prefer_exported_method_shape_seed
+        && obj.props.iter().any(|prop| {
+            matches!(prop, ast::PropOrSpread::Prop(p) if matches!(p.as_ref(), ast::Prop::Method(_)))
+        });
+    if is_closed_shape(obj) && !exported_method_literal {
         let mut fields: Vec<(String, Type, Expr)> = Vec::new();
         let mut bail = false;
         let mut seen = std::collections::HashSet::new();
@@ -782,6 +837,61 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         break;
                     };
                     fields.push((name, ty, value));
+                }
+                ast::Prop::Method(method) => {
+                    // `is_closed_shape` admitted only static-key, non-async,
+                    // non-generator, super-free methods. Lower the body with
+                    // the shared method lowering, then take the closure as a
+                    // dynamic-`this` value — identical to the function-
+                    // expression spelling — so no post-construction `this`
+                    // patch is needed and `t.m()` / `f.call(other)` both bind
+                    // the call receiver, as the spec says.
+                    let Some((mkey, value_expr, _uses_this)) = lower_method_prop(ctx, method)?
+                    else {
+                        bail = true;
+                        break;
+                    };
+                    let MethodKeyKind::Static(key) = mkey else {
+                        bail = true;
+                        break;
+                    };
+                    if !seen.insert(key.clone()) {
+                        bail = true;
+                        break;
+                    }
+                    let value = match value_expr {
+                        Expr::Closure {
+                            func_id,
+                            params,
+                            return_type,
+                            body,
+                            captures,
+                            mutable_captures,
+                            captures_this: _,
+                            captures_new_target,
+                            enclosing_class: _,
+                            is_arrow,
+                            is_async,
+                            is_generator,
+                            is_strict,
+                        } => Expr::Closure {
+                            func_id,
+                            params,
+                            return_type,
+                            body,
+                            captures,
+                            mutable_captures,
+                            captures_this: false,
+                            captures_new_target,
+                            enclosing_class: None,
+                            is_arrow,
+                            is_async,
+                            is_generator,
+                            is_strict,
+                        },
+                        other => other,
+                    };
+                    fields.push((key, Type::Any, value));
                 }
                 _ => unreachable!(),
             }

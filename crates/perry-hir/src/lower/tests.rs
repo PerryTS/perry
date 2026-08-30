@@ -163,23 +163,44 @@ const computed = { [key]() { return 1; } };
             .unwrap_or_else(|| panic!("missing init for {name}"))
     };
 
-    let Expr::Object(props) = local_init("fast") else {
+    // A static-key, super-free method literal is a closed-shape RECORD: it
+    // lowers to the anonymous-shape class allocation (fixed-slot reads, no
+    // builder IIFE), with each method carried as a dynamic-`this` closure
+    // argument — the function-expression spelling's semantics — so no
+    // post-construction `this` patch exists to get wrong.
+    let Expr::New {
+        class_name, args, ..
+    } = local_init("fast")
+    else {
         panic!(
-            "static method literal should be a direct object: {:#?}",
+            "static method literal should be a closed-shape record allocation: {:#?}",
             hir.init
         );
     };
-    assert_eq!(
-        props
-            .iter()
-            .map(|(key, _)| key.as_str())
-            .collect::<Vec<_>>(),
-        ["plain", "captured", "dynamicThis"]
+    assert!(
+        class_name.starts_with("__AnonShape_"),
+        "record class expected, got {class_name}"
     );
+    let record = hir
+        .classes
+        .iter()
+        .find(|class| &class.name == class_name)
+        .unwrap_or_else(|| panic!("record class {class_name} must be synthesized"));
+    assert_eq!(
+        record
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        ["plain", "captured", "dynamicThis"],
+        "field order must follow source order"
+    );
+    assert_eq!(args.len(), 3);
     assert!(matches!(
-        &props[2].1,
+        &args[2],
         Expr::Closure {
-            captures_this: true,
+            captures_this: false,
+            enclosing_class: None,
             ..
         }
     ));
