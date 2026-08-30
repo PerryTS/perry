@@ -70,6 +70,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // on and off emit different loop exits, so a cached object from one must
     // not serve the other.
     "PERRY_PACKED_LOOP_ABRUPT",
+    // #9159: gates admitting the guarded fadd for two-leaf dynamic `+` — on
+    // and off emit different add sequences, so a cached object from one must
+    // not serve the other.
+    "PERRY_DYNAMIC_ADD_PAIR_GUARD",
     // #9122: gates the shape-cache path for object literals whose methods
     // capture `this` — on and off emit different literal-birth sequences,
     // so a cached object from one must not serve the other.
