@@ -43,6 +43,9 @@ pub(crate) fn hoist_loop_invariant_property_array(
     update: Option<&Expr>,
     body: &[Stmt],
 ) -> Option<(Stmt, Expr, Vec<Stmt>)> {
+    if !hoist_enabled() {
+        return None;
+    }
     let (recv_id, property) = counted_loop_property_array(condition)?;
     if !property_is_anon_shape_data_field(ctx, recv_id, &property) {
         return None;
@@ -89,6 +92,16 @@ pub(crate) fn hoist_loop_invariant_property_array(
         .map(|stmt| rewrite_stmt(stmt, recv_id, &property, hoist_id))
         .collect();
     Some((hoist, new_condition, new_body))
+}
+
+/// `PERRY_LOOP_PROPERTY_HOIST=0` restores the pre-hoist lowering, so the pass
+/// can be A/B'd on a single build and switched off in the field if a program
+/// ever slips past the three equivalence checks.
+fn hoist_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_LOOP_PROPERTY_HOIST").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
 }
 
 /// `i < RECV.PROP.length` — returns `(RECV, PROP)`.
