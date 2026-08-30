@@ -86,10 +86,6 @@ pub extern "C" fn js_string_append(
         }
     }
 
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let dest_handle = scope.root_string_ptr(dest as *const StringHeader);
-    let src_handle = scope.root_string_ptr(src);
-
     unsafe {
         let dest_blen = (*dest).byte_len;
         let src_blen = (*src).byte_len;
@@ -117,10 +113,14 @@ pub extern "C" fn js_string_append(
         // In-place append optimization: if dest is uniquely owned (refcount==1)
         // and has enough capacity, append directly without allocation.
         // This turns O(n^2) string building loops into amortized O(n).
+        // No allocation happens in this arm, so it runs with no handle scope
+        // and no roots: the unconditional two-root setup used to cost ~37% of
+        // an `s += "ab"` accumulator loop (`sample`), all of it for the arm
+        // that cannot collect. The growth arm below opens its own scope.
         if (*dest).refcount == 1 && new_blen <= (*dest).capacity {
             let dest_data = (dest as *mut u8).add(std::mem::size_of::<StringHeader>());
             let src_data_ptr = string_data(src);
-            ptr::copy_nonoverlapping(
+            super::concat::copy_bytes_small(
                 src_data_ptr,
                 dest_data.add(dest_blen as usize),
                 src_blen as usize,
@@ -145,6 +145,9 @@ pub extern "C" fn js_string_append(
         // register that setjmp/stack-walk didn't capture). Fresh allocation
         // is safe: old string becomes garbage for the next GC cycle.
         let new_cap = (new_blen * 2).max(32);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let dest_handle = scope.root_string_ptr(dest as *const StringHeader);
+        let src_handle = scope.root_string_ptr(src);
         let new_ptr = js_string_from_bytes_with_capacity(ptr::null(), 0, new_cap);
         let dest = dest_handle.get_raw_mut_ptr::<StringHeader>();
         let src = src_handle.get_raw_const_ptr::<StringHeader>();

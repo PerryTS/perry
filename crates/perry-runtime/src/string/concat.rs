@@ -126,7 +126,7 @@ fn bytes_all_ascii(data: *const u8, len: u32) -> bool {
 /// Same contract as `ptr::copy_nonoverlapping`: both regions valid for
 /// `len` bytes, non-overlapping.
 #[inline(always)]
-unsafe fn copy_bytes_small(src: *const u8, dst: *mut u8, len: usize) {
+pub(crate) unsafe fn copy_bytes_small(src: *const u8, dst: *mut u8, len: usize) {
     // Overlapping-window chunk copies, NOT a byte loop: LLVM's loop-idiom
     // pass recognises a plain byte loop and emits the very `memcpy` call
     // this helper exists to avoid (verified in `sample`: the loop version
