@@ -13,7 +13,6 @@ use super::*;
 ///
 /// NOTE: This function is named js_native_call_value to avoid symbol collision
 /// with js_call_value in perry-jsruntime which handles V8 JavaScript values.
-#[no_mangle]
 // A dynamically-dispatched closure can throw into a generated caller's catch
 // landing pad. Keep this value-call bridge unwind-capable just like
 // `js_native_call_method`; otherwise debug/static runtime builds install an
@@ -27,11 +26,31 @@ use super::*;
 // throw trips ("panic in a function that cannot unwind"). #8416 introduced
 // the first two such guards here; #8464 added ~40 more and measurably
 // regressed main (+20 gap crashes, gc-stress) before being reverted.
+#[cfg(panic = "abort")]
+#[no_mangle]
 pub unsafe extern "C" fn js_native_call_value(
     func_value: f64,
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    unsafe { js_native_call_value_impl(func_value, args_ptr, args_len) }
+}
+
+// Debug/test static archives transport Perry exceptions with Rust unwinding,
+// so this outer value-call boundary must permit them to reach an interpreted
+// caller's catch handler. Production keeps the plain-C wrapper above (#8479).
+#[cfg(not(panic = "abort"))]
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_native_call_value(
+    func_value: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    unsafe { js_native_call_value_impl(func_value, args_ptr, args_len) }
+}
+
+#[inline(always)]
+unsafe fn js_native_call_value_impl(func_value: f64, args_ptr: *const f64, args_len: usize) -> f64 {
     use crate::value::JSValue;
 
     let jsval = JSValue::from_bits(func_value.to_bits());
