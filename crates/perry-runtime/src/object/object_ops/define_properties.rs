@@ -382,8 +382,18 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         }
         if (proto_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG {
             let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
+            // `proto` is user-supplied, so it can carry a fetch/zlib/proxy
+            // handle rather than a heap object. A bare `is_valid_obj_ptr`
+            // accepts those bands on Linux, and this pointer is stored into a
+            // GC root table that the collector later dereferences — a segfault
+            // there, silently hidden on macOS (#1843/#4004/#4665/#4800/#6271).
+            // Require a real, readable GC header instead.
             if !proto_ptr.is_null()
                 && !crate::closure::is_closure_ptr(proto_ptr as usize)
+                && crate::value::addr_class::is_above_handle_band(proto_ptr as usize)
+                && unsafe {
+                    crate::value::addr_class::try_read_gc_header(proto_ptr as usize).is_some()
+                }
                 && is_valid_obj_ptr(proto_ptr as *const u8)
             {
                 super::super::class_registry::class_prototype_object_root_store(

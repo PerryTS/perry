@@ -252,6 +252,12 @@
     },
     {
       "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
+      "name": "TEST_COLLECT_BEFORE_GLOBAL_THIS_ALLOC",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] Cell<bool> one-shot flag that asks js_get_global_this to collect once before it allocates the realm, so the unresolved-global rooting regression can observe the relocation; stores only true/false and is absent from shipped binaries."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
       "name": "THREAD_GLOBAL_THIS",
       "verdict": "covered_elsewhere",
       "scanner": "gc::roots GLOBAL_ROOTS \u2014 the cell's address is registered with js_gc_register_global_root (fetch_globals.rs, js_get_global_this) and marked+rewritten as a mutable global root",

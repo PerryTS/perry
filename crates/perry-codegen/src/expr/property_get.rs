@@ -55,6 +55,7 @@ mod tests;
 
 pub(crate) use generic_dispatch::lower_generic_property_get;
 pub(crate) use globalget::lower_globalget_property;
+use helpers::guarded_declared_class_get_candidate;
 pub(crate) use helpers::{
     builtin_prototype_method_read, class_has_computed_runtime_members,
     is_global_builtin_value_expr, lower_class_method_bind, lower_global_builtin_static_value,
@@ -68,20 +69,6 @@ use super::{
     nanbox_string_inline, raw_f64_layout_fact, try_lower_pod_field_get, unbox_to_i64, FnCtx,
     TypedFeedbackContract, TypedFeedbackKind,
 };
-
-/// A declared class may nominate the guarded field/method route, but never a
-/// raw load by itself. Every field consumer below checks the live receiver's
-/// class id and keys token before dereferencing; method-value/runtime-member
-/// helpers retain their dynamic fallback semantics.
-fn guarded_declared_class_get_candidate(ctx: &FnCtx<'_>, object: &Expr) -> Option<String> {
-    let Expr::LocalGet(id) = object else {
-        return None;
-    };
-    let HirType::Named(name) = ctx.local_type_hint(id)? else {
-        return None;
-    };
-    ctx.classes.contains_key(name).then(|| name.clone())
-}
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // #7219: reading `.buffer` on a tracked typed-array view HANDS OUT ITS

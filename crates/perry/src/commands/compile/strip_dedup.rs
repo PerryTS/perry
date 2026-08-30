@@ -151,19 +151,6 @@ fn force_localize_symbol(symbol: &str) -> bool {
         || is_panic_unwind_symbol(symbol)
 }
 
-/// True if `path` is an ELF object file (first four bytes `0x7F 'E' 'L' 'F'`).
-/// Used to skip panic/unwind-symbol localization on ELF, where localizing
-/// `rust_eh_personality` / `DW.ref.rust_eh_personality` breaks PIE relocations
-/// (see [`RUST_PANIC_UNWIND_SYMBOL_PARTS`]).
-fn object_is_elf(path: &Path) -> bool {
-    use std::io::Read;
-    let mut magic = [0u8; 4];
-    std::fs::File::open(path)
-        .and_then(|mut f| f.read_exact(&mut magic))
-        .map(|_| magic == [0x7f, b'E', b'L', b'F'])
-        .unwrap_or(false)
-}
-
 pub(super) fn find_path_tool(name: &str) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH")?;
     std::env::split_paths(&paths)
@@ -1072,10 +1059,6 @@ fn rebuild_archive(
 
 pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) -> Result<PathBuf> {
     let lib_name = lib_path.file_name().and_then(|f| f.to_str()).unwrap_or("?");
-    let is_coff = lib_path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("lib"));
     eprintln!(
         "[strip-dedup] Processing well-known wrapper: {}",
         lib_path.display()
@@ -1165,6 +1148,18 @@ pub(super) fn strip_duplicate_objects_from_well_known_lib(lib_path: &PathBuf) ->
         let stderr = String::from_utf8_lossy(&extract_out.stderr);
         return Err(anyhow::anyhow!("failed to extract {lib_name}: {stderr}"));
     }
+
+    // Decide the container format from the extracted members, never from the
+    // archive's file name. This function is handed the intermediate wrapper
+    // produced by `strip_duplicate_objects_from_no_shared_deps`, which is named
+    // `_<lib>_nosharedeps.lib` on EVERY platform — so an extension check claims
+    // COFF on macOS and Linux as well. `llvm-ar --format=coff` then writes a
+    // GNU-style symbol table whose `/` member is not a Mach-O file, and Apple's
+    // linker rejects the whole archive ("archive member '/' not a mach-o file").
+    let is_coff = members
+        .iter()
+        .filter_map(|member| extracted_archive_member(&extract_dir, member))
+        .any(|member_path| object_is_coff(&member_path));
 
     let archive_tag: String = lib_name
         .chars()
@@ -1821,6 +1816,9 @@ fn shared_dep_members_to_remove(
 fn requires_bundled_native_companion(symbol: &str) -> bool {
     symbol.trim_start_matches('_').starts_with("ring_core_")
 }
+
+mod object_format;
+use object_format::{object_is_coff, object_is_elf};
 
 mod stub_symbols;
 pub(super) use stub_symbols::localize_stdlib_stub_symbols;

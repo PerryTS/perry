@@ -932,3 +932,20 @@ pub(crate) fn lower_raw_f64_class_field_get_for_number_context(
         ],
     )))
 }
+
+/// A declared class may nominate the guarded field/method route, but never a
+/// raw load by itself. Every field consumer checks the live receiver's class id
+/// and keys token before dereferencing; method-value/runtime-member helpers
+/// retain their dynamic fallback semantics.
+pub(crate) fn guarded_declared_class_get_candidate(
+    ctx: &FnCtx<'_>,
+    object: &Expr,
+) -> Option<String> {
+    let Expr::LocalGet(id) = object else {
+        return None;
+    };
+    let HirType::Named(name) = ctx.local_type_hint(id)? else {
+        return None;
+    };
+    ctx.classes.contains_key(name).then(|| name.clone())
+}
