@@ -36,7 +36,8 @@ fn set_foreach_leave(set: *const SetHeader) -> bool {
     let addr = set as usize;
     SET_FOREACH_STACK.with(|stack| {
         let mut stack = stack.borrow_mut();
-        debug_assert_eq!(stack.pop(), Some(addr));
+        let popped = stack.pop();
+        debug_assert_eq!(popped, Some(addr));
         !stack.contains(&addr)
     })
 }

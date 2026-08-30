@@ -37,7 +37,8 @@ fn map_foreach_leave(map: *const MapHeader) -> bool {
     let addr = map as usize;
     MAP_FOREACH_STACK.with(|stack| {
         let mut stack = stack.borrow_mut();
-        debug_assert_eq!(stack.pop(), Some(addr));
+        let popped = stack.pop();
+        debug_assert_eq!(popped, Some(addr));
         !stack.contains(&addr)
     })
 }
