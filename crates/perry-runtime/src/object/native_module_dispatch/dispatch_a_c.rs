@@ -378,9 +378,9 @@ pub(crate) unsafe fn nm_dispatch_buffer(ctx: &NmCtx, module_name: &str, method_n
             let arr = pack_args();
             ptr_to_f64(crate::buffer::js_buffer_from_array(arr) as *const u8)
         }
-        ("buffer.Buffer", "isBuffer") => {
-            bool_to_f64(crate::buffer::js_buffer_is_buffer(arg(0).to_bits() as i64))
-        }
+        ("buffer.Buffer", "isBuffer") => bool_to_f64(crate::buffer::js_buffer_is_node_buffer(
+            arg(0).to_bits() as i64,
+        )),
         ("buffer.Buffer", "isEncoding") => {
             bool_to_f64(crate::buffer::js_buffer_is_encoding(arg(0)))
         }

@@ -67,7 +67,7 @@ pub unsafe extern "C" fn js_value_buffer_or_typedarray_data(
 static KEEP_JS_VALUE_BUFFER_OR_TYPEDARRAY_DATA: unsafe extern "C" fn(f64, *mut u32) -> *const u8 =
     js_value_buffer_or_typedarray_data;
 
-/// Check if an object is a Buffer (using the buffer registry)
+/// Check if an object uses the shared Buffer/Uint8Array representation.
 #[no_mangle]
 pub extern "C" fn js_buffer_is_buffer(ptr: i64) -> i32 {
     if ptr == 0 || (ptr as u64) < 0x1000 {
@@ -83,6 +83,42 @@ pub extern "C" fn js_buffer_is_buffer(ptr: i64) -> i32 {
         1
     } else {
         0
+    }
+}
+
+/// Check if an object has the Node `Buffer` brand.
+///
+/// Perry intentionally backs both `Buffer` and constructor-created
+/// `Uint8Array` values with `BufferHeader` and registers both addresses in
+/// `BUFFER_REGISTRY`. Keep [`js_buffer_is_buffer`] as the broader storage
+/// predicate used by native APIs that accept either representation, and use
+/// this discriminator for the public `Buffer.isBuffer()` identity check.
+#[no_mangle]
+pub extern "C" fn js_buffer_is_node_buffer(ptr: i64) -> i32 {
+    if js_buffer_is_buffer(ptr) == 0 {
+        return 0;
+    }
+    let addr = if ((ptr as u64) >> 48) != 0 {
+        (ptr as u64) & 0x0000_FFFF_FFFF_FFFF
+    } else {
+        ptr as u64
+    } as usize;
+    (!is_uint8array_buffer(addr)) as i32
+}
+
+#[cfg(test)]
+mod buffer_brand_tests {
+    use super::*;
+
+    #[test]
+    fn node_buffer_brand_excludes_constructor_uint8arrays() {
+        let buffer = buffer_alloc(4);
+        let uint8array = js_uint8array_alloc(4);
+
+        assert_eq!(js_buffer_is_buffer(buffer as i64), 1);
+        assert_eq!(js_buffer_is_node_buffer(buffer as i64), 1);
+        assert_eq!(js_buffer_is_buffer(uint8array as i64), 1);
+        assert_eq!(js_buffer_is_node_buffer(uint8array as i64), 0);
     }
 }
 

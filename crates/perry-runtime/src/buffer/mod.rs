@@ -99,8 +99,8 @@ pub use from::{
 // ---- Re-exports: predicates / byteLength (FFI) ----
 pub use query::{
     js_buffer_byte_length, js_buffer_byte_length_value, js_buffer_is_ascii, js_buffer_is_buffer,
-    js_buffer_is_encoding, js_buffer_is_utf8, js_native_buffer_byte_len, js_native_buffer_data_ptr,
-    js_value_buffer_or_typedarray_data,
+    js_buffer_is_encoding, js_buffer_is_node_buffer, js_buffer_is_utf8, js_native_buffer_byte_len,
+    js_native_buffer_data_ptr, js_value_buffer_or_typedarray_data,
 };
 
 // ---- Re-exports: toString / print / length / to-array ----

@@ -254,6 +254,7 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_buffer_from_value", I64, &[I64, I32]);
     module.declare_function("js_buffer_is_ascii", DOUBLE, &[DOUBLE]);
     module.declare_function("js_buffer_is_buffer", I32, &[I64]);
+    module.declare_function("js_buffer_is_node_buffer", I32, &[I64]);
     module.declare_function("js_buffer_is_encoding", I32, &[DOUBLE]);
     module.declare_function("js_buffer_is_utf8", DOUBLE, &[DOUBLE]);
     module.declare_function("js_buffer_print", VOID, &[I64]);
