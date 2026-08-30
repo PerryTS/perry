@@ -95,6 +95,21 @@ fn hoists_a_loop_invariant_property_array() {
 }
 
 #[test]
+fn generated_hoist_name_does_not_shadow_a_source_binding() {
+    assert_same_with_and_without_hoist(
+        "generated name collision",
+        r#"
+        const __perry_hoist_arr = 99;
+        const holder = { arr: [1, 2, 3] };
+        let sum = 0;
+        for (let i = 0; i < holder.arr.length; i++) sum += holder.arr[i];
+        console.log(__perry_hoist_arr + " " + sum);
+        "#,
+        "99 6",
+    );
+}
+
+#[test]
 fn refuses_when_the_receiver_is_rebound_in_the_loop() {
     // Both objects share a shape, so no runtime shape check could catch this:
     // the rewrite has to refuse it syntactically. A stale array would keep

@@ -32,6 +32,47 @@ use detect::{
 
 use for_await::lower_runtime_for_await_iterator_body;
 
+// Keep the property-hoist pass and its large `Stmt`/`Expr` return place out of
+// recursive `lower_body_stmt` frames. At the unoptimized test profile, adding
+// those temporaries to the monolithic lowering function exhausted Rust's
+// default 2 MiB test-thread stack while compiling an unrelated dependency
+// graph (#9194). The call boundary is intentional, including in optimized
+// compiler builds.
+#[inline(never)]
+fn finish_for_with_property_array_hoist(
+    ctx: &mut LoweringContext,
+    init: Option<Box<Stmt>>,
+    condition: Option<Expr>,
+    update: Option<Expr>,
+    body: Vec<Stmt>,
+) -> Vec<Stmt> {
+    if let Some((hoist, new_condition, new_body)) = condition.as_ref().and_then(|cond| {
+        crate::lower::property_array_hoist::hoist_loop_invariant_property_array(
+            ctx,
+            cond,
+            update.as_ref(),
+            &body,
+        )
+    }) {
+        return vec![
+            hoist,
+            Stmt::For {
+                init,
+                condition: Some(new_condition),
+                update,
+                body: new_body,
+            },
+        ];
+    }
+
+    vec![Stmt::For {
+        init,
+        condition,
+        update,
+        body,
+    }]
+}
+
 pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Vec<Stmt>> {
     let mut result = Vec::new();
 
@@ -880,32 +921,10 @@ pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Ve
             // 20.58 ns/iteration versus 0.50 hand-hoisted (node: 0.54). The
             // pass refuses unless the read is provably side-effect free and
             // the loop cannot rebind or write it — see the module docs.
-            let hoisted = condition.as_ref().and_then(|cond| {
-                crate::lower::property_array_hoist::hoist_loop_invariant_property_array(
-                    ctx,
-                    cond,
-                    update.as_ref(),
-                    &body,
-                )
-            });
+            let lowered_for =
+                finish_for_with_property_array_hoist(ctx, init, condition, update, body);
             ctx.pop_block_scope(for_scope_mark);
-            match hoisted {
-                Some((hoist, new_condition, new_body)) => {
-                    result.push(hoist);
-                    result.push(Stmt::For {
-                        init,
-                        condition: Some(new_condition),
-                        update,
-                        body: new_body,
-                    });
-                }
-                None => result.push(Stmt::For {
-                    init,
-                    condition,
-                    update,
-                    body,
-                }),
-            }
+            result.extend(lowered_for);
         }
         ast::Stmt::Try(try_stmt) => {
             // try body is its own lexical scope
