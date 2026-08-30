@@ -248,6 +248,10 @@ const serializer: any = {
   asBoolean(b: any): string { return b ? "true" : "false"; },
   asInteger(n: any): string { return String(Math.trunc(Number(n))); },
 };
+// Real serializer generators bind receiver-dependent helpers before their
+// generated body destructures and calls them as free functions. Keep that
+// receiver contract explicit: method shorthand has dynamic `this` (#9134).
+serializer.asString = serializer.asString.bind(serializer);
 
 const lines: string[] = [
   'const {',
