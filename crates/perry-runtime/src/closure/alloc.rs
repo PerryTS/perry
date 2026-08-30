@@ -334,6 +334,9 @@ pub extern "C" fn js_closure_alloc_init(
         // (perf: 2.6% of a one-capture birth was that call).
         if actual_count <= 8 {
             for i in 0..actual_count {
+                // GC_STORE_AUDIT(BARRIERED): copied captures are followed by
+                // the closure layout/barrier rebuild below (`any_pointer`),
+                // exactly as the `copy_nonoverlapping` arm beneath this one.
                 std::ptr::write(slots.add(i), *captures_ptr.add(i));
             }
         } else {

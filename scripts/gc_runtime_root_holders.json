@@ -1784,6 +1784,24 @@
       "name": "WINDOW_ROOTS",
       "verdict": "not_a_gc_pointer",
       "why": "Window-root registry maps numeric window handles to numeric root-widget handles; neither value is a JavaScript heap pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/set.rs",
+      "name": "SET_FOREACH_STACK",
+      "count": 1,
+      "classification": "not_a_gc_pointer",
+      "verdict": "not_a_gc_pointer",
+      "why": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves \u2014 see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there.",
+      "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves \u2014 see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
+    },
+    {
+      "file": "crates/perry-runtime/src/map.rs",
+      "name": "MAP_FOREACH_STACK",
+      "count": 1,
+      "classification": "not_a_gc_pointer",
+      "verdict": "not_a_gc_pointer",
+      "why": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves \u2014 see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there.",
+      "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves \u2014 see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core perry_thread_local! declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
