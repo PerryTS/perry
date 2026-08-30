@@ -62,6 +62,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // settings emit different call sequences, so a cached object from one
     // must not serve the other.
     "PERRY_METHOD_INLINE_PROBE",
+    // #9149: gates hoisting a loop-invariant property-array receiver out of
+    // counted for-loops — on and off emit different loop bodies, so a cached
+    // object from one must not serve the other.
+    "PERRY_LOOP_PROPERTY_HOIST",
     // #9122: gates the shape-cache path for object literals whose methods
     // capture `this` — on and off emit different literal-birth sequences,
     // so a cached object from one must not serve the other.

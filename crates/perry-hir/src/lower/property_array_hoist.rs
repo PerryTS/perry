@@ -55,7 +55,10 @@ pub(crate) fn hoist_loop_invariant_property_array(
     }
     // Reads of `RECV.PROP` must actually occur in the body, or the rewrite
     // moves work without removing any.
-    if !body.iter().any(|stmt| stmt_reads_property(stmt, recv_id, &property)) {
+    if !body
+        .iter()
+        .any(|stmt| stmt_reads_property(stmt, recv_id, &property))
+    {
         return None;
     }
 
@@ -137,11 +140,7 @@ fn counted_loop_property_array(condition: &Expr) -> Option<(u32, String)> {
 
 /// Condition 1: the receiver's static type is a synthesized closed-shape
 /// literal class, whose members are data fields by construction.
-fn property_is_anon_shape_data_field(
-    ctx: &LoweringContext,
-    recv_id: u32,
-    property: &str,
-) -> bool {
+fn property_is_anon_shape_data_field(ctx: &LoweringContext, recv_id: u32, property: &str) -> bool {
     // Keyed on the INITIALIZER, not the binding's type. A getter-bearing
     // literal infers as `Any` so a type check would happen to reject it, but
     // an annotated structural object type can still be backed by an accessor —
@@ -155,11 +154,7 @@ fn property_is_anon_shape_data_field(
         .is_some_and(|fields| fields.iter().any(|field| field == property))
 }
 
-fn anon_shape_field_type(
-    ctx: &LoweringContext,
-    class_name: &str,
-    property: &str,
-) -> Option<Type> {
+fn anon_shape_field_type(ctx: &LoweringContext, class_name: &str, property: &str) -> Option<Type> {
     let idx = *ctx.classes_index.get(class_name)?;
     ctx.pending_classes
         .get(idx)
@@ -215,8 +210,13 @@ fn expr_is_hoist_safe(expr: &Expr, recv_id: u32) -> bool {
         // Condition 2: never let the receiver be rebound.
         Expr::LocalSet(id, value) => *id != recv_id && expr_is_hoist_safe(value, recv_id),
         Expr::Update { id, .. } => *id != recv_id,
-        Expr::LocalGet(_) | Expr::Number(_) | Expr::Integer(_) | Expr::String(_)
-        | Expr::Bool(_) | Expr::Null | Expr::Undefined => true,
+        Expr::LocalGet(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::String(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined => true,
         Expr::PropertyGet { object, .. } => expr_is_hoist_safe(object, recv_id),
         Expr::IndexGet { object, index } => {
             expr_is_hoist_safe(object, recv_id) && expr_is_hoist_safe(index, recv_id)
@@ -261,9 +261,9 @@ fn stmt_reads_property(stmt: &Stmt, recv_id: u32, property: &str) -> bool {
                 || then_branch
                     .iter()
                     .any(|s| stmt_reads_property(s, recv_id, property))
-                || else_branch.as_ref().is_some_and(|b| {
-                    b.iter().any(|s| stmt_reads_property(s, recv_id, property))
-                })
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|b| b.iter().any(|s| stmt_reads_property(s, recv_id, property)))
         }
         _ => false,
     }
