@@ -13,6 +13,8 @@ mod header;
 mod header_gc_slots;
 mod immutable;
 mod indexing;
+#[cfg(test)]
+pub(crate) use indexing::test_element_accessor_calls;
 mod indexing_support;
 mod is_array;
 mod iter_methods;

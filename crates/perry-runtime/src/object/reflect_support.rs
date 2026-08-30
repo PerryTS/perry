@@ -190,7 +190,7 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         // pre-call addresses are never bound past the call.
         let keys_handle = scope.root_raw_mut_ptr(crate::object::object_keys_array(obj));
         let key_handle = scope.root_string_ptr(key_str);
-        let ((), mut keys) = keys_handle.across_mut::<crate::array::ArrayHeader, _>(|| ());
+        let ((), keys) = keys_handle.across_mut::<crate::array::ArrayHeader, _>(|| ());
         // Defence in depth for the class the buffer arm above closes by
         // routing: `keys_array` is only an `ArrayHeader` when `obj` really is
         // an `ObjectHeader`, and a receiver kind with no arm here reaches this
@@ -201,19 +201,30 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         if keys.is_null() || !crate::value::addr_class::is_plausible_heap_addr(keys as usize) {
             return false;
         }
-        let key_count = crate::array::js_array_length(keys) as usize;
-        for i in 0..key_count {
-            let (stored, refreshed_keys) =
-                keys_handle.across_mut::<crate::array::ArrayHeader, _>(|| {
-                    crate::array::js_array_get(keys, i as u32)
-                });
-            let ((), key_str) = key_handle.across_const::<crate::StringHeader, _>(|| ());
-            keys = refreshed_keys;
-            if crate::string::js_string_key_matches(stored, key_str) {
-                return true;
-            }
-        }
-        false
+        let key_count = crate::array::js_array_length(keys);
+        // #6759's shared key index answers this exact question — "is this
+        // string key one of the receiver's own keys" — in O(1) at or above
+        // `KEYS_INDEX_THRESHOLD` and with a raw dense-slot compare below it.
+        // Every other [[Get]]/[[Set]]/delete keys walk was routed through it;
+        // this one was missed and kept the per-element `js_array_get` +
+        // `js_string_key_matches` loop, i.e. the full JS-facing element
+        // accessor (`clean_arr_ptr`, typed-array/buffer registry probes,
+        // descriptor gate, hole translation) plus a handle round-trip PER KEY.
+        //
+        // That made it the dominant cost of the receiver-based [[Set]] walk:
+        // `js_put_value_set_dyn_ic_miss` -> `ordinary_set_with_receiver` ->
+        // `create_or_update_receiver_property` -> `own_set_descriptor` lands
+        // here on every store that the #5054 direct-store lane declines, so
+        // building an object property-by-property re-scanned every key already
+        // installed — quadratic, and 4.2% of `claude --help` sat in
+        // `js_array_get_f64` under this one loop alone.
+        //
+        // `keys_find_slot_by_key_ptr` allocates nothing (a consult-only shape
+        // probe, then a raw slot compare), so unlike the loop it replaced it
+        // needs no per-iteration re-rooting — the handles above still cover
+        // the `js_string_coerce` that produced `key_str`.
+        let ((), key_str) = key_handle.across_const::<crate::StringHeader, _>(|| ());
+        crate::object::keys_find_slot_by_key_ptr(keys, key_count, key_str).is_some()
     }
 }
 

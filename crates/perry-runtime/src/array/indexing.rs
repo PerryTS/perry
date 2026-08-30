@@ -40,6 +40,22 @@ pub(crate) fn test_strict_dense_pointer_overwrite_hits() -> u64 {
     STRICT_DENSE_POINTER_OVERWRITE_HITS.with(std::cell::Cell::get)
 }
 
+// Test-only entry counter for `js_array_get_f64`, the JS-facing element
+// accessor. A runtime walk that reaches for it PER ELEMENT is paying the whole
+// gauntlet (forward-resolution, Map/Set/typed-array/buffer registry probes,
+// descriptor gate, hole translation) for what is a raw slot read, so tests that
+// assert "this walk no longer uses the element accessor" count it rather than
+// timing it. Same shape as the hit counter above.
+#[cfg(test)]
+thread_local! {
+    static ELEMENT_ACCESSOR_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_element_accessor_calls() -> u64 {
+    ELEMENT_ACCESSOR_CALLS.with(std::cell::Cell::get)
+}
+
 pub(crate) fn object_prototype_has_index_flag() -> bool {
     OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
 }
@@ -703,6 +719,8 @@ pub extern "C" fn js_array_numeric_get_f64_unboxed(arr: *mut ArrayHeader, index:
 #[no_mangle]
 pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
+    #[cfg(test)]
+    ELEMENT_ACCESSOR_CALLS.with(|c| c.set(c.get().wrapping_add(1)));
 
     // Issue #179 Phase 5: lazy fast path — must run BEFORE
     // `clean_arr_ptr` because that helper force-materializes a lazy
