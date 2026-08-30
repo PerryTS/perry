@@ -461,6 +461,10 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
             expr_may_return_boxed_value_from_raw_f64_fallback(ctx, left)
                 || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, right)
         }
+        // A `Uint8Array`/`Buffer` byte read is a Number in bounds and the
+        // `undefined` box out of bounds: a raw-f64 consumer must coerce it
+        // (the number-context arm in `expr/binary.rs` does so inline).
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
         _ => false,
     }
 }

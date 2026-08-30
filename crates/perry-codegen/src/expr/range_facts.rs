@@ -732,6 +732,41 @@ pub(crate) fn bounds_for_buffer_access_width(
             return bounds;
         }
     }
+    // A COMPOUND index (`(y + ky) * SIZE + (x + kx)`) is neither a single
+    // index local with a bounded-pair fact nor a constant, so both routes above
+    // decline and the read falls back to a per-element runtime call
+    // (`js_uint8array_index_get_value`: 54 calls per pixel in
+    // benchmarks/suite/bench_int_arithmetic.ts). The interval analysis can
+    // still bound it: every leaf is a counter with an `int_range_facts` range
+    // or a compile-time constant, and `int_range_expr` composes those with
+    // checked arithmetic, returning `None` the moment a leaf is unknown or a
+    // step overflows. When the whole interval sits inside a CONSTANT buffer
+    // length, the access is in bounds for every iteration.
+    //
+    // Deliberately narrow: a non-constant length (a parameter, a grown array)
+    // still declines, because then there is nothing to compare the interval
+    // against.
+    if let Some(view) = ctx.buffer_view_slots.get(&buffer_local_id) {
+        if let Some(length) = view
+            .length_source
+            .as_ref()
+            .and_then(|source| length_source_constant(ctx, source))
+        {
+            if let Some(range) = int_range_expr(ctx, index) {
+                let width = i64::from(bounds_width_units);
+                if range.min >= 0
+                    && range
+                        .max
+                        .checked_add(width)
+                        .is_some_and(|end| end <= length)
+                {
+                    return BoundsState::Proven {
+                        proof: BoundsProof::ExplicitGuard,
+                    };
+                }
+            }
+        }
+    }
     if let Some(index_value) = constant_i64_expr(ctx, index) {
         let Some(view) = ctx.buffer_view_slots.get(&buffer_local_id) else {
             return BoundsState::Unknown;

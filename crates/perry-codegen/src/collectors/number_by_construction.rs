@@ -633,4 +633,68 @@ mod tests {
         assert!(!without.contains(&x_id));
         assert!(!without.contains(&s_id));
     }
+
+    // The HIR lowers `px[i]` on a binding it knows is a `Uint8Array` to the
+    // dedicated `Uint8ArrayGet` node, not `IndexGet`. The Add rule's
+    // number-or-`undefined` view read must recognise both spellings, or the
+    // canonical `const px = new Uint8Array(n); ... acc += px[i]` accumulator
+    // (bench_int_arithmetic) never leaves the dynamic-add tier.
+    fn uint8array_get_stmts(px: u32, i: u32, acc: u32) -> Vec<Stmt> {
+        vec![
+            Stmt::Let {
+                id: px,
+                name: "px".to_string(),
+                ty: HirType::Named("Uint8Array".to_string()),
+                mutable: false,
+                init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(16))))),
+            },
+            Stmt::Let {
+                id: i,
+                name: "i".to_string(),
+                ty: HirType::Number,
+                mutable: true,
+                init: Some(Expr::Integer(0)),
+            },
+            Stmt::Let {
+                id: acc,
+                name: "acc".to_string(),
+                ty: HirType::Number,
+                mutable: true,
+                init: Some(Expr::Number(0.0)),
+            },
+            Stmt::Expr(Expr::LocalSet(
+                acc,
+                Box::new(add(
+                    Expr::LocalGet(acc),
+                    Expr::Uint8ArrayGet {
+                        array: Box::new(Expr::LocalGet(px)),
+                        index: Box::new(Expr::LocalGet(i)),
+                    },
+                )),
+            )),
+        ]
+    }
+    #[test]
+    fn uint8array_get_node_admits_the_accumulator_like_index_get() {
+        let (px, i, acc) = (10u32, 11u32, 12u32);
+        let stmts = uint8array_get_stmts(px, i, acc);
+        let numeric = run_fixpoint(&stmts, &HashSet::new());
+        assert!(
+            numeric.contains(&acc),
+            "`acc += px[i]` on a const Uint8Array binding must be Number by construction"
+        );
+    }
+    #[test]
+    fn uint8array_get_node_with_string_write_stays_dynamic() {
+        // One non-numeric write to the accumulator must still reject it.
+        let (px, i, acc) = (10u32, 11u32, 12u32);
+        let mut stmts = uint8array_get_stmts(px, i, acc);
+        stmts.push(Stmt::Expr(Expr::LocalSet(
+            acc,
+            Box::new(add(Expr::LocalGet(acc), Expr::String("x".to_string()))),
+        )));
+        let numeric = run_fixpoint(&stmts, &HashSet::new());
+        assert!(!numeric.contains(&acc));
+    }
+
 }

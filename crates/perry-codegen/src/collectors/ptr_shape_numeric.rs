@@ -553,8 +553,19 @@ pub(super) fn expr_numeric_by_construction(
     // an out-of-bounds read is not itself a Number and must not become a
     // general raw-f64 proof.
     let numeric_view_value_or_undefined = |x: &Expr| {
-        let Expr::IndexGet { object, index } = x else {
-            return false;
+        // The HIR lowers `u8[i]` on a binding it already knows is a
+        // `Uint8Array`/`Buffer` to the dedicated `Uint8ArrayGet` node
+        // (`lower/expr_member/member_tail.rs`), so a `const px = new
+        // Uint8Array(n)` receiver — the very binding this rule is written
+        // for — never arrived here as `IndexGet`, and `acc += px[i]` fell
+        // out of the fixpoint: every `+=` lowered through
+        // `js_dynamic_string_or_number_add` with `acc` as a rooted slot
+        // (bench_int_arithmetic: 7.7x node; `acc += (px[i] | 0)` was 2000x
+        // faster than `acc += px[i]`). Both nodes read the same storage.
+        let (object, index) = match x {
+            Expr::IndexGet { object, index } => (object, index),
+            Expr::Uint8ArrayGet { array, index } => (array, index),
+            _ => return false,
         };
         let Expr::LocalGet(view_id) = object.as_ref() else {
             return false;
@@ -761,6 +772,12 @@ pub(super) fn expr_provably_not_bigint(e: &Expr, not_bigint_locals: &HashSet<u32
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. } => true,
         Expr::LocalGet(id) => not_bigint_locals.contains(id),
+        // A `Uint8Array`/`Buffer` element read is a byte (a Number) in
+        // bounds and `undefined` out of bounds — never a BigInt. This is what
+        // lets `acc += px[i] * k` reach the Number path: `*` needs only ONE
+        // provably-non-BigInt operand (a BigInt mixed with anything else
+        // throws), so the byte read carries the whole product.
+        Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => true,
         Expr::Unary { op, operand } => match op {
             perry_hir::UnaryOp::Pos => true, // `+x` throws for BigInt
             perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::BitNot => {

@@ -401,6 +401,44 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
     // not an unconditional raw f64. In arithmetic context the OOB `undefined`
     // must become canonical NaN. Sink that conversion into the OOB/cold arms
     // so the in-bounds hot path remains a guard plus native load.
+    // The HIR spells the same read `Uint8ArrayGet` when it already knows the
+    // receiver is a `Uint8Array`/`Buffer`. Its value is a byte or (OOB)
+    // `undefined`; in number context that `undefined` must become canonical
+    // NaN BEFORE any `fadd`/`fmul` — IEEE arithmetic propagates the NaN-box
+    // payload, so a raw `fadd acc, <undefined box>` would leave `acc` reading
+    // as `undefined` (caught by the OOB differential: `a += px[17]` printed
+    // `undefined`). Prefer the guarded inline load (NaN sunk into the OOB
+    // arm, in-bounds path untouched); when it declines, canonicalize the
+    // generic read inline with one compare + select — never a call — which
+    // is exact because the only non-double this node can yield is the
+    // `undefined` box.
+    if let Expr::Uint8ArrayGet { index, .. } = expr {
+        if is_numeric_expr(ctx, index) {
+            // Deliberately NOT routed through
+            // `ta_param_f64_read::try_lower_ta_f64_read_for_number_context`:
+            // its checked load reads the length at `handle + 0` and the
+            // elements at `handle + 16`, which is the typed-array object
+            // layout. Perry's `new Uint8Array(n)` is buffer-backed (length at
+            // `data - 8`), so that load treats every index as out of bounds and
+            // silently yields `undefined` — measured as `checksum:0` on
+            // benchmarks/suite/bench_int_arithmetic.ts. `f64_kind_from_class`
+            // still maps "Uint8Array"/"Uint8ClampedArray" to a kind, so the
+            // same hazard waits for any future caller that hands it one of
+            // those receivers.
+            //
+            // `lower_expr` picks the correct tier for this node (the inline
+            // buffer-view load when the receiver is a tracked view, else
+            // `js_uint8array_index_get_value`); the only value it can return
+            // that is not a double is the `undefined` box, so one compare +
+            // select canonicalizes it exactly, with no call.
+            let raw = lower_expr(ctx, expr)?;
+            let blk = ctx.block();
+            let bits = blk.bitcast_double_to_i64(&raw);
+            let is_undef = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
+            let canonical = blk.select(I1, &is_undef, DOUBLE, "0x7FF8000000000000", &raw);
+            return Ok((canonical, true));
+        }
+    }
     if let Expr::IndexGet { object, index } = expr {
         if let Some(value) =
             super::ta_param_f64_read::try_lower_ta_f64_read_for_number_context(ctx, object, index)?
