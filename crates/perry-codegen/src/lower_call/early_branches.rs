@@ -389,7 +389,17 @@ pub fn try_lower_closure_typed_local_call(
         }
         // The checked closure-unbox path below validates the current callee;
         // the erased type only decides whether to try that guarded dispatch.
-        if matches!(ctx.local_type_hint(id), Some(HirType::Function(_))) {
+        // #9105 follow-up: an entry-resolved binding takes this guarded arm
+        // even when its type hint erased to `Any` — the esbuild
+        // `__commonJS`/`__esm` factory-callback shape. The arm's runtime
+        // behavior is hint-independent (checked unbox, resolved-target
+        // diamond, full-dispatcher fallback); the hint only ever selected who
+        // enters it.
+        if matches!(ctx.local_type_hint(id), Some(HirType::Function(_)))
+            || ctx
+                .resolved_arrow_callback_targets
+                .contains_key(&(*id, args.len()))
+        {
             // #7803: the callee outlives the arguments here too, and this is
             // the arm on the failing stack — `core/schemas.ts` closure 138,
             // whose callee is a mutable-capture box read (`js_box_get_bits`)

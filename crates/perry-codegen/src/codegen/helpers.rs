@@ -1767,11 +1767,22 @@ pub(super) fn emit_callee_binding_resolutions(
         if ctx.local_closure_func_ids.contains_key(&id) {
             continue;
         }
-        if !matches!(
-            ctx.local_type_hint(&id),
+        // A `Function`-hinted binding is consumed by the guarded
+        // direct-dispatch arm. An UNTYPED (or `Any`) PARAMETER is consumed by
+        // the closure-call fallthrough's map check instead — that is the
+        // esbuild `__commonJS`/`__esm` shape, where every module factory's
+        // callback parameter erases to `Any` and paid the full dispatcher per
+        // call. A binding hinted as something else stays out: the resolution
+        // could only ever return null for it.
+        let hint = ctx.local_type_hint(&id);
+        let function_hinted = matches!(
+            hint,
             Some(perry_hir::types::Type::Function(function))
                 if !function.is_async && !function.is_generator
-        ) {
+        );
+        let any_param =
+            param_ids.contains(&id) && matches!(hint, None | Some(perry_hir::types::Type::Any));
+        if !function_hinted && !any_param {
             continue;
         }
         let value_box = if let Some(&capture_idx) = ctx.closure_captures.get(&id) {
