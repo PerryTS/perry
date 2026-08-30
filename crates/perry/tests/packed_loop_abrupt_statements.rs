@@ -196,13 +196,15 @@ fn throw_inside_the_loop_is_still_correct() {
     assert_eq!(out, "hit15 none2016");
 }
 
-/// #9185 admitted `throw` to the packed fast path; this is the case that
-/// showed it was a silent wrong answer.
+/// #9185 admitted `throw` to the packed fast path and this is the case that
+/// showed it was a silent wrong answer; #9210 fixed it properly, so the loops
+/// below are on the fast path again AND correct.
 ///
 /// `break` and `continue` leave the clone through normal CFG edges, which
 /// flush the loop-carried locals back to their frame slots. An unwind edge
-/// does not, so the `catch` below read `s` from a slot the loop never
-/// updated and got its pre-loop `0` instead of `780`.
+/// reaches no such block, so the `catch` below read `s` from a slot the loop
+/// never updated and got its pre-loop `0` instead of `780`. The fix emits the
+/// writeback at the throw site; this test is that writeback's only guard.
 ///
 /// Every assertion here reads a loop-carried local AFTER the abrupt exit,
 /// which is precisely what #9185's own tests did not do. The `break` and
@@ -255,4 +257,40 @@ fn a_loop_carried_local_survives_a_taken_throw() {
         out,
         "break 780 | continue 1024 | throwBefore 780 | throwAfter 820 | closure 780"
     );
+}
+
+/// Both accumulator representations must survive the throw, not just the
+/// float one.
+///
+/// A `+=` accumulator lives in a `DOUBLE` alloca, but a `c++` counter is
+/// promoted to a separate i32 slot and only converted back with `sitofp`.
+/// Those are two distinct writeback paths in the clone, and the flush at the
+/// throw site has to cover both — a fix that walked only the float table
+/// would leave `c` reading `0` here while `s` looked correct.
+#[test]
+fn both_accumulator_kinds_survive_a_taken_throw() {
+    let out = compile_and_run(&format!(
+        "{PRELUDE}
+        const PRE = new Error(\"boom\");
+        function bothAccumulators(): string {{
+            let c = 0; let s = 0;
+            try {{
+                for (let i = 0; i < arr.length; i++) {{
+                    if (arr[i] === 40) throw PRE;
+                    c++; s += arr[i];
+                }}
+            }} catch (e) {{ return \"c=\" + c + \" s=\" + s; }}
+            return \"none c=\" + c + \" s=\" + s;
+        }}
+        function counterOnly(): string {{
+            let c = 0;
+            try {{
+                for (let i = 0; i < arr.length; i++) {{ if (arr[i] === 17) throw PRE; c++; }}
+            }} catch (e) {{ return \"c=\" + c; }}
+            return \"none c=\" + c;
+        }}
+        console.log(bothAccumulators() + \" | \" + counterOnly());
+        "
+    ));
+    assert_eq!(out, "c=40 s=780 | c=17");
 }

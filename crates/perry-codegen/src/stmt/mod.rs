@@ -581,6 +581,13 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // of producing a rejected promise the caller can `.catch()`.
         Stmt::Throw(expr) => {
             let val = lower_expr(ctx, expr)?;
+            // Inside a packed fast clone the loop-carried accumulators live in
+            // allocas, and an unwind edge does not pass through the exit block
+            // that writes them back. Flush AFTER lowering the operand (which
+            // may itself read or write an accumulator through the redirect) and
+            // BEFORE the throw, since invoke-EH creates the unwind edge inside
+            // the call. A no-op outside a clone: the side tables are empty.
+            crate::stmt::loops::flush_packed_accumulator_locals(ctx);
             if ctx.is_async_fn && ctx.try_depth == 0 {
                 let blk = ctx.block();
                 let handle = blk.call(crate::types::I64, "js_promise_rejected", &[(DOUBLE, &val)]);

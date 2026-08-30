@@ -796,6 +796,68 @@ impl PackedAccumulatorScope {
     }
 }
 
+/// Write the fast clone's promoted accumulators back to their real slots
+/// WITHOUT ending the redirect scope.
+///
+/// `PackedAccumulatorScope::finish` covers the fall-through exit and the
+/// side-exit trampolines cover a mid-iteration deopt, but both are blocks the
+/// clone BRANCHES to, and `break`/`continue` reach them the same way. An
+/// unwind edge reaches neither: under invoke-EH `js_throw` leaves for the
+/// landing pad from inside the call itself, so a `catch` observes whatever is
+/// in the real slot at that moment. Emitting the stores at the throw site is
+/// the only point that works, which is what #9185 was missing.
+///
+/// Unlike `finish` this does NOT unregister the redirects: lowering continues
+/// inside the clone afterwards, and later statements must keep reading the
+/// promoted values.
+pub(crate) fn flush_packed_accumulator_locals(ctx: &mut FnCtx<'_>) {
+    if ctx.numeric_accumulator_f64_slots.is_empty()
+        && ctx.deferred_integer_update_accumulators.is_empty()
+    {
+        return;
+    }
+    if ctx.block().is_terminated() {
+        return;
+    }
+
+    // The side tables are hash-keyed, so collect and sort before emitting —
+    // IR order must not depend on hash iteration order.
+    let mut unboxed: Vec<(u32, String, String)> = ctx
+        .numeric_accumulator_f64_slots
+        .iter()
+        .filter_map(|(id, alloca)| {
+            ctx.locals
+                .get(id)
+                .map(|real_slot| (*id, alloca.clone(), real_slot.clone()))
+        })
+        .collect();
+    unboxed.sort_by_key(|(id, _, _)| *id);
+    for (_, alloca, real_slot) in &unboxed {
+        // Same argument as `finish`: a genuine double's bits are its nanbox,
+        // numbers carry no heap edge so no barrier, and leaving the shadow
+        // state conservative only ever costs an extra root scan.
+        let value = ctx.block().load(DOUBLE, alloca);
+        ctx.block().store(DOUBLE, &value, real_slot);
+    }
+
+    let mut deferred: Vec<(u32, String, String)> = ctx
+        .deferred_integer_update_accumulators
+        .iter()
+        .filter_map(|id| {
+            let i32_slot = ctx.i32_counter_slots.get(id)?;
+            let dbl_slot = ctx.locals.get(id)?;
+            Some((*id, i32_slot.clone(), dbl_slot.clone()))
+        })
+        .collect();
+    deferred.sort_by_key(|(id, _, _)| *id);
+    for (_, i32_slot, dbl_slot) in &deferred {
+        let blk = ctx.block();
+        let value = blk.load(I32, i32_slot);
+        let as_double = blk.sitofp(I32, &value, DOUBLE);
+        blk.store(DOUBLE, &as_double, dbl_slot);
+    }
+}
+
 fn emit_packed_numeric_accumulator_admission(
     ctx: &mut FnCtx<'_>,
     body: &[Stmt],
@@ -5080,9 +5142,15 @@ fn stmt_is_packed_f64_loop_safe(
         // closure-captured accumulator was also correct, being boxed rather
         // than register-promoted, which is what kept the bug this narrow.
         //
-        // Re-admitting this needs the writeback emitted at the throw site, not
-        // just the admission; see #9210.
-        Stmt::Throw(_) => false,
+        // Admitted again now that `flush_packed_accumulator_locals` emits the
+        // writeback AT the throw site (#9210). The operand is checked the same
+        // way `Stmt::Return` checks its value; #9185 admitted any throw at all
+        // and leaned on `stmt_array_length_effect` to reject the constructing
+        // ones, which is a weaker guarantee than stating the requirement here.
+        Stmt::Throw(value) => {
+            packed_loop_abrupt_enabled()
+                && expr_is_packed_f64_loop_safe(ctx, value, arr_id, counter_id)
+        }
         Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
         | Stmt::While { .. }
