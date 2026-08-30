@@ -74,6 +74,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // and off emit different add sequences, so a cached object from one must
     // not serve the other.
     "PERRY_DYNAMIC_ADD_PAIR_GUARD",
+    // #9166: gates the guarded inline path for `-`, `*` and `/` — on and off
+    // emit different arithmetic sequences, so a cached object from one must
+    // not serve the other.
+    "PERRY_GUARDED_ARITH",
     // #9122: gates the shape-cache path for object literals whose methods
     // capture `this` — on and off emit different literal-birth sequences,
     // so a cached object from one must not serve the other.
