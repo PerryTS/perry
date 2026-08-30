@@ -412,8 +412,18 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
         return;
     }
     if let Ok(mut map) = function_name_registry().lock() {
-        map.entry(func_ptr)
-            .or_insert_with(|| std::sync::Arc::from(name.as_bytes()));
+        // "Absent" now means "absent OR stored bytes that do not decode" —
+        // registration no longer rejects invalid UTF-8, so an undecodable
+        // entry occupies the slot where nothing used to, and a plain
+        // `or_insert_with` would let it shadow this valid name forever.
+        // `decode_registered` already treats such an entry as absent on read;
+        // this keeps the write side agreeing with it.
+        let usable = map
+            .get(&func_ptr)
+            .is_some_and(|bytes| std::str::from_utf8(bytes).is_ok());
+        if !usable {
+            map.insert(func_ptr, std::sync::Arc::from(name.as_bytes()));
+        }
     }
 }
 
