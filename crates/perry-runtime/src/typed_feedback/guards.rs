@@ -283,7 +283,9 @@ fn class_field_get_contract(
         if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
             return (0, 0, gc_type, false);
         }
-        if (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        if (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+            || (*gc_header)._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES != 0
+        {
             return (0, 0, gc_type, false);
         }
 
@@ -553,7 +555,9 @@ fn class_field_set_contract(
             return (0, 0, gc_type, false);
         }
         if (*gc_header)._reserved
-            & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF)
+            & (crate::gc::OBJ_FLAG_FROZEN
+                | crate::gc::OBJ_FLAG_PACKED_NUMERIC_PROOF
+                | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
             != 0
         {
             let obj = object_addr as *mut ObjectHeader;

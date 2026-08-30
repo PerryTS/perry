@@ -70,6 +70,24 @@ pub unsafe fn ptr_is_tracked_heap_object(ptr: *const u8) -> bool {
     }
 }
 
+/// Decode an object keys-array slot without assuming heap-string storage.
+/// Dynamic SSO writes keep short property names inline; module-slot shapes may
+/// still carry the legacy validated raw `StringHeader` pointer form.
+#[inline]
+unsafe fn object_key_str<'a>(
+    key_bits: u64,
+    sso: &'a mut [u8; crate::value::SHORT_STRING_MAX_LEN],
+) -> Option<&'a str> {
+    let key = JSValue::from_bits(key_bits);
+    if let Some(bytes) = crate::string::js_string_key_bytes(key, sso) {
+        return std::str::from_utf8(bytes).ok();
+    }
+    if ptr_is_tracked_heap_object(key_bits as *const u8) {
+        return str_from_header(key_bits as *const StringHeader);
+    }
+    None
+}
+
 pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     // A small-handle-band id (revocable-Proxy id, fetch/zlib/stream handle) is
     // never a real ObjectHeader; reading its `keys_array` field would deref
@@ -1292,22 +1310,6 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         // key (#5909) and to write the property name below.
         let key_f64 = key_at(f);
         let key_bits = key_f64.to_bits();
-        let key_tag = key_bits & 0xFFFF_0000_0000_0000;
-        let key_ptr = if key_tag == STRING_TAG || key_tag == POINTER_TAG {
-            (key_bits & POINTER_MASK) as *const StringHeader
-        } else if ptr_is_tracked_heap_object(key_bits as *const u8) {
-            // Untagged raw key pointer (#3576 module-slot shape). It must be
-            // VALIDATED, not assumed: this arm previously accepted anything
-            // that was not STRING_TAG/POINTER_TAG and dereferenced it, so a
-            // key slot holding a NaN-boxed immediate — observed as
-            // `0x7FFC_0000_0000_0010` — was read as a `StringHeader`
-            // (byte_len at +4, data at +0x14) and SIGSEGV'd. Same bug class as
-            // #7447, same predicate: decide by GC allocation membership, which
-            // is dereference-free, rather than by bit pattern.
-            key_bits as *const StringHeader
-        } else {
-            std::ptr::null()
-        };
 
         // SerializeJSONProperty step 2 (#5909): apply a heap-valued member's
         // `toJSON` HERE, before the comma/key are written, so a member whose
@@ -1318,7 +1320,8 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         // unreadable, so pass "" as it did before.
         let mut member_probed = false;
         if (field_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG || is_raw_pointer(field_bits) {
-            set_to_json_key_str(str_from_header(key_ptr).unwrap_or(""));
+            let mut key_sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            set_to_json_key_str(object_key_str(key_bits, &mut key_sso).unwrap_or(""));
             if let Some(resolved) = member_to_json(field_val) {
                 let rb = resolved.to_bits();
                 if rb == TAG_UNDEFINED || is_closure_value(rb) || is_symbol_value(rb) {
@@ -1335,31 +1338,21 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             }
         }
 
-        // `member_to_json` above may have run a user `toJSON` — a GC /
-        // evacuation point that moves the key string. The raw `key_ptr`
-        // captured before it is then dangling, so re-derive it from the rooted
-        // object header before the property name is written. Without this, a
-        // member whose `toJSON` forces a copying-minor GC (#5909's pre-key
-        // member probe) emitted a corrupted key
-        // (gc::tests …test_json_stringify_object_rederives_fields_after_tojson_minor_gc).
-        let key_ptr = if member_probed {
-            let kb = key_at(f).to_bits();
-            let kt = kb & 0xFFFF_0000_0000_0000;
-            if kt == STRING_TAG || kt == POINTER_TAG {
-                (kb & POINTER_MASK) as *const StringHeader
-            } else {
-                kb as *const StringHeader
-            }
-        } else {
-            key_ptr
-        };
-
         if !first {
             buf.push(',');
         }
         first = false;
 
-        if let Some(key_str) = str_from_header(key_ptr) {
+        // `member_to_json` may have collected and moved a heap key. Re-read
+        // the slot through the rooted object after that call; SSO keys remain
+        // self-contained and use the same decoder.
+        let current_key_bits = if member_probed {
+            key_at(f).to_bits()
+        } else {
+            key_bits
+        };
+        let mut key_sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        if let Some(key_str) = object_key_str(current_key_bits, &mut key_sso) {
             // A key can itself contain `"`/`\`/control characters (e.g. a
             // `Symbol`-adjacent computed key or `Object.defineProperty`
             // literal name) — must go through the same escaper as string
@@ -1413,7 +1406,7 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
             // `bigint_apply_to_json`, which reads the pending `toJSON` key, so
             // record this member's key first (#5909).
             if val_tag == BIGINT_TAG {
-                set_to_json_key_str(str_from_header(key_ptr).unwrap_or(""));
+                set_to_json_key_str(object_key_str(current_key_bits, &mut key_sso).unwrap_or(""));
             }
             write_number(buf, field_val);
         }

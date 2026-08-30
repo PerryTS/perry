@@ -28,7 +28,7 @@ pub extern "C" fn js_delete_result(deleted: i32, strict: i32) -> f64 {
 /// Returns 1 if the field was deleted (or didn't exist), 0 otherwise
 #[no_mangle]
 pub extern "C" fn js_object_delete_field(
-    obj: *mut ObjectHeader,
+    mut obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> i32 {
     if obj.is_null() || key.is_null() {
@@ -306,7 +306,7 @@ pub extern "C" fn js_object_delete_field(
                 }
             }
         }
-        let keys = crate::object::object_keys_array(obj);
+        let mut keys = crate::object::object_keys_array(obj);
         if keys.is_null() {
             // No keys array means no fields to delete, but delete "succeeds" vacuously
             return 1;
@@ -373,7 +373,46 @@ pub extern "C" fn js_object_delete_field(
         // array's ADDRESS, so the key index only needs its slots shifted.
         let keys_gc_header =
             (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        let keys_owned = (*keys_gc_header).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED == 0;
+        let mut keys_owned = (*keys_gc_header).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED == 0;
+        // A one/few-key churn object starts from a transition-cache target, so
+        // its FIRST keys array is eagerly marked SHAPE_SHARED even when no
+        // second object ever adopts it. Compacting that shared array to empty
+        // and then appending marks the replacement shared again: the receiver
+        // can never enter the owned tombstone lane and allocates on every
+        // delete. For a small array, fork the complete layout once and seed an
+        // owned tombstone below. Stable-token re-adds deliberately stay out
+        // of the transition cache, so this private edge remains mutable while
+        // siblings retain their immutable shared edge.
+        //
+        // Keep this below 16 slots, matching the small-object threshold. Wide
+        // populated receivers retain the existing clone+compact ownership
+        // transfer and its index migration (#9064 is their separate lane).
+        if !keys_owned && key_count < 16 && object_tombstone_deletes_enabled() {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let obj_handle = scope.root_raw_mut_ptr(obj);
+            let (keys_cloned, reloaded_obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
+                crate::array::js_array_alloc(key_count.max(1) as u32 + 4)
+            });
+            // The allocation can collect. Reload the receiver, then recover
+            // its authoritative old keys edge instead of copying through the
+            // pre-collection raw addresses.
+            obj = reloaded_obj;
+            keys = crate::object::object_keys_array(obj);
+            let src_elements =
+                (keys as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+            let dst_elements =
+                (keys_cloned as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
+            if key_count != 0 {
+                // GC_STORE_AUDIT(INIT): the clone is unpublished; its layout
+                // is rebuilt before set_object_keys_array publishes the edge.
+                std::ptr::copy_nonoverlapping(src_elements, dst_elements, key_count);
+            }
+            (*keys_cloned).length = key_count as u32;
+            super::rebuild_array_layout_from_slots(keys_cloned);
+            set_object_keys_array(obj, keys_cloned);
+            keys = keys_cloned;
+            keys_owned = true;
+        }
         // O(1) tombstone delete (flag-gated, #9020's Map pattern applied to
         // objects). An OWNED keys array can take a hole marker in place of
         // the deleted key: survivors keep their slots, so nothing shifts, no
@@ -748,6 +787,191 @@ pub extern "C" fn js_object_delete_dynamic_value(obj_value: f64, key: f64) -> i3
     js_object_delete_dynamic(obj, key)
 }
 
+/// Delete an SSO-named own data property from an already-private stable
+/// tombstone receiver without materialising the key or repeating the exotic
+/// object ladder in `js_object_delete_field`.
+///
+/// This is deliberately an admission-only helper. Any receiver that can carry
+/// descriptors, prototype-method side effects, typed layout, URL semantics,
+/// or a shared keys edge declines to the ordinary path. The amortized squeeze
+/// also declines so its load-bearing publication/compaction ordering remains
+/// centralized in `js_object_delete_field`.
+unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<i32> {
+    if obj.is_null() || !key.is_short_string() {
+        return None;
+    }
+    let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
+    const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
+        | crate::gc::OBJ_FLAG_SEALED
+        | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+        | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+    // The flag is admitted by the complete delete path only for class-less or
+    // registered anonymous-shape ordinary objects, so class declaration
+    // prototypes cannot enter this lane.
+    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+        || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
+        || gc._reserved & BLOCKING_FLAGS != 0
+        || !super::object_is_regular(obj)
+        || crate::array::object_prototype_addr_matches(obj as usize)
+        || ((*obj).class_id == 0 && crate::url::is_url_object_shape(obj))
+    {
+        return None;
+    }
+
+    let shape = super::shapes::object_shape_descriptor(obj)?;
+    if shape.object_kind != super::shapes::ShapeObjectKind::Ordinary {
+        return None;
+    }
+    let keys = shape.keys as usize as *mut crate::ArrayHeader;
+    if keys.is_null() || shape.logical_key_count == 0 || shape.logical_key_count > 16 {
+        return None;
+    }
+    let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
+    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+        || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED) != 0
+    {
+        return None;
+    }
+
+    let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let key_bytes = crate::string::js_string_key_bytes(key, &mut key_buf)?;
+    let elements = (keys as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
+    // The one-live-key cycle appends its sole live key at the tail. Validate
+    // that constructive position directly; broader small receivers retain
+    // the byte-lookup fallback.
+    let tail = shape.logical_key_count - 1;
+    let slot = if shape.hole_count + 1 == shape.logical_key_count
+        && (*elements.add(tail as usize)).to_bits() == key.bits()
+    {
+        tail
+    } else if let Some(slot) =
+        super::keys_find_slot_by_bytes(keys, shape.logical_key_count, key_bytes)
+    {
+        slot
+    } else {
+        return Some(1);
+    };
+    let next_holes = shape.hole_count + 1;
+    if shape.logical_key_count >= 16 && next_holes * 2 > shape.logical_key_count {
+        // The one-live-key lane reaches the threshold with every earlier slot
+        // already tombstoned and the sole live SSO key at the tail. Squeeze
+        // that state to logical length zero, but rekey the detached boxed
+        // descriptor instead of allocating/indexing a replacement record.
+        // The new token still retires every generated cache entry, which is
+        // mandatory because slot zero will name a different key next epoch.
+        if next_holes == shape.logical_key_count && slot == tail {
+            let alloc_limit = shape
+                .live_inline_slot_count
+                .max(crate::object::INLINE_SLOT_FLOOR as u32);
+            let fields =
+                (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut crate::JSValue;
+            let old_value = if slot < alloc_limit {
+                (*fields.add(slot as usize)).bits()
+            } else {
+                overflow_get(obj as usize, slot as usize)?
+            };
+
+            super::prop_plan::prop_plan_epoch_bump();
+            crate::gc::runtime_store_external_jsvalue_slot(
+                keys as usize,
+                elements.add(slot as usize) as usize,
+                crate::value::TAG_HOLE,
+            );
+            if slot < alloc_limit {
+                crate::gc::runtime_store_jsvalue_slot(
+                    obj as usize,
+                    fields.add(slot as usize) as usize,
+                    slot as usize,
+                    crate::value::TAG_HOLE,
+                );
+            } else {
+                overflow_set(obj as usize, slot as usize, crate::value::TAG_HOLE);
+            }
+            (*keys).length = 0;
+            super::rebuild_array_layout_from_slots(keys);
+            if super::shapes::rekey_stable_tombstone_shape_after_squeeze(
+                obj,
+                shape,
+                0,
+                shape.live_inline_slot_count,
+                0,
+            )
+            .is_some()
+            {
+                return Some(1);
+            }
+
+            // A failed admission has not changed the descriptor. Restore the
+            // receiver byte-for-byte and let the complete squeeze own it.
+            (*keys).length = shape.logical_key_count;
+            crate::gc::runtime_store_external_jsvalue_slot(
+                keys as usize,
+                elements.add(slot as usize) as usize,
+                key.bits(),
+            );
+            super::rebuild_array_layout_from_slots(keys);
+            if slot < alloc_limit {
+                crate::gc::runtime_store_jsvalue_slot(
+                    obj as usize,
+                    fields.add(slot as usize) as usize,
+                    slot as usize,
+                    old_value,
+                );
+            } else {
+                overflow_set(obj as usize, slot as usize, old_value);
+            }
+        }
+        return None;
+    }
+
+    super::prop_plan::prop_plan_epoch_bump();
+    // This narrower helper cannot mint a descriptor or allocate, so `obj`
+    // and `keys` remain valid across the structural update below.
+    if super::shapes::try_update_stable_tombstone_shape_cached(
+        obj,
+        shape,
+        shape.logical_key_count,
+        shape.live_inline_slot_count,
+        next_holes,
+    )
+    .or_else(|| {
+        super::shapes::try_update_stable_tombstone_shape(
+            obj,
+            keys,
+            shape.logical_key_count,
+            shape.live_inline_slot_count,
+            next_holes,
+        )
+    })
+    .is_none()
+    {
+        return None;
+    }
+    crate::gc::runtime_store_external_jsvalue_slot(
+        keys as usize,
+        elements.add(slot as usize) as usize,
+        crate::value::TAG_HOLE,
+    );
+    let live_slots = shape
+        .live_inline_slot_count
+        .max(crate::object::INLINE_SLOT_FLOOR as u32);
+    if slot < live_slots {
+        let fields =
+            (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut crate::JSValue;
+        crate::gc::runtime_store_jsvalue_slot(
+            obj as usize,
+            fields.add(slot as usize) as usize,
+            slot as usize,
+            crate::value::TAG_HOLE,
+        );
+    } else {
+        overflow_set(obj as usize, slot as usize, crate::value::TAG_HOLE);
+    }
+    Some(1)
+}
+
 /// Delete a field from an object using a dynamic key (could be string or number index)
 /// Returns 1 if successful, 0 otherwise
 #[no_mangle]
@@ -777,6 +1001,11 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
         }
     }
     let key_val = JSValue::from_bits(key.to_bits());
+    if key_val.is_short_string() {
+        if let Some(result) = unsafe { try_delete_stable_sso(obj, key_val) } {
+            return result;
+        }
+    }
 
     // If the key is a string, use js_object_delete_field. #1781: accept
     // inline SSO short keys — `delete obj["abc"]` for a <=5-char key arrives

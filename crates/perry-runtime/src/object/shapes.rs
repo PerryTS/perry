@@ -47,8 +47,9 @@ pub(crate) use shapes_slot_list::shape_descriptor_keys_slot;
 pub(crate) use shapes_slot_list::shape_id_owns_keys_slot;
 pub(crate) use shapes_slot_list::{
     object_shape_hole_count, publish_object_shape_holes, record_shape_scan_outcome,
-    retire_owned_shape_history, shape_index_migrate_after_delete, shape_index_shift_in_place,
-    try_update_stable_tombstone_shape, SlotList,
+    rekey_stable_tombstone_shape_after_squeeze, retire_owned_shape_history,
+    shape_index_migrate_after_delete, shape_index_shift_in_place,
+    try_update_stable_tombstone_shape, try_update_stable_tombstone_shape_cached, SlotList,
 };
 
 #[derive(Clone)]

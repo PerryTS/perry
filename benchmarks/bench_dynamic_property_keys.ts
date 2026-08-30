@@ -14,19 +14,21 @@
 //   node           36 ms           21 ms           1.7x
 //   perry        1487 ms         1321 ms           1.1x
 //
-// The delete penalty is the number the "objects that defeat shapes need a
-// dictionary mode" argument rests on — and perry's is LOWER than node's. Adding
-// a dictionary representation would therefore be a large investment aimed at a
-// tail perry does not have.
+// That ledger was accurate at the time. After the dynamic-write campaigns and
+// tombstone deletes became default-on, however, the two columns inverted
+// (Mac mini, current main at #9065 filing, min-of-7):
 //
-// The second column is the real gap: ~60x on plain overwrite. Profiling this
-// binary puts the time in `js_array_get_f64`, `try_read_tracked_gc_header`,
-// `shape_descriptor_by_id` + `shape_descriptor_ensure_with_generation` (two
-// hash lookups per access on the hot path), and `js_put_value_set_dyn_ic_miss`
-// — i.e. inline-cache misses and shape-table probes, not deletion.
+//   engine   delete_heavy   overwrite_only   delete penalty
+//   node           30 ms           19 ms           1.6x
+//   perry         981 ms           13 ms          75.5x
 //
-// Keep both columns when changing this file: the ratio is what refutes the
-// dictionary-mode premise, and the absolute is what tracks the real gap.
+// Perry's overwrite loop now beats node; delete-driven shape identity is the
+// remaining gap. The ratio that originally argued against dictionary-style
+// handling is now the strongest evidence for stable-token, per-key-validated
+// churn shapes (#9064/#9065).
+//
+// Keep BOTH dated ledgers when changing this file. They record a real inversion
+// in where the cost lives, not an error in the original measurement.
 
 function deleteHeavy(n: number): number {
   const o: Record<string, number> = {};

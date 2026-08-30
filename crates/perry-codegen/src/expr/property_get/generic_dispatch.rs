@@ -565,7 +565,7 @@ pub(crate) fn lower_generic_property_get(
         .block()
         .icmp_eq(I64, &val_hit_bits, crate::nanbox::TAG_HOLE_I64);
     ctx.block()
-        .cond_br(&hit_deleted, &call_label, &hit_live_label);
+        .cond_br(&hit_deleted, &miss_label, &hit_live_label);
 
     ctx.current_block = hit_live_idx;
     crate::expr::emit_typed_feedback_record_call(

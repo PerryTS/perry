@@ -198,6 +198,21 @@ pub(crate) fn try_readd_stable_tombstone(
     if obj.is_null() || (!key_value.is_short_string() && !key_value.is_string()) {
         return None;
     }
+
+    // The small-object churn case overwhelmingly has spare capacity: the
+    // private keys array grows geometrically, then accepts several SSO names
+    // before the next squeeze. Appending there cannot collect, so avoid three
+    // runtime handles and the general Array.push classifier on that lane.
+    // Every semantic gate from the rooted path is repeated inside the helper;
+    // allocation/growth still falls through unchanged.
+    if key_value.is_short_string() {
+        if let Some(result) =
+            unsafe { try_readd_stable_tombstone_sso_no_grow(obj, key_value, value) }
+        {
+            return Some(result);
+        }
+    }
+
     let initial_gc = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize)? };
     if initial_gc.obj_type != crate::gc::GC_TYPE_OBJECT
         || initial_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
@@ -296,6 +311,128 @@ pub(crate) fn try_readd_stable_tombstone(
         keys_index_insert(new_keys, new_index + 1, key_hash, new_index);
         Some((slot_word, obj, value))
     }
+}
+
+/// Non-allocating SSO append for a private stable-tombstone keys array that
+/// already has capacity for one more entry.
+unsafe fn try_readd_stable_tombstone_sso_no_grow(
+    obj: *mut ObjectHeader,
+    key: JSValue,
+    value: f64,
+) -> Option<(u32, *mut ObjectHeader, f64)> {
+    let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
+    const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
+        | crate::gc::OBJ_FLAG_SEALED
+        | crate::gc::OBJ_FLAG_NO_EXTEND
+        | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+        | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+        | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT;
+    // Stable-tombstone admission already excludes real class/prototype
+    // receivers; only class-less and registered anonymous-shape ordinary
+    // objects can carry the flag into this append lane.
+    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+        || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || gc._reserved & BLOCKING_FLAGS != 0
+        || gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES == 0
+        || !crate::object::object_is_regular(obj)
+        || crate::array::object_prototype_addr_matches(obj as usize)
+        || ((*obj).class_id == 0 && crate::url::is_url_object_shape(obj))
+    {
+        return None;
+    }
+
+    let key_f64 = f64::from_bits(key.bits());
+    if super::plain_data_write_may_intercept(obj as usize, 0, key_f64) {
+        return None;
+    }
+    let shape = crate::object::shapes::object_shape_descriptor(obj)?;
+    if shape.object_kind != crate::object::shapes::ShapeObjectKind::Ordinary
+        || shape.logical_key_count >= 16
+    {
+        return None;
+    }
+    let keys = shape.keys as usize as *mut ArrayHeader;
+    if keys.is_null() {
+        return None;
+    }
+    let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
+    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+        || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED) != 0
+        || (*keys).length != shape.logical_key_count
+        || (*keys).length >= (*keys).capacity
+    {
+        return None;
+    }
+
+    let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let key_bytes = crate::string::js_string_key_bytes(key, &mut key_buf)?;
+    // All-holes is a constructive absence proof and is the steady state of a
+    // one-live-key receiver immediately after delete.
+    if shape.hole_count != shape.logical_key_count
+        && crate::object::keys_find_slot_by_bytes(keys, shape.logical_key_count, key_bytes)
+            .is_some()
+    {
+        return None;
+    }
+    let new_index = shape.logical_key_count;
+    let alloc_limit = shape
+        .live_inline_slot_count
+        .max(crate::object::INLINE_SLOT_FLOOR as u32);
+    let next_live = if new_index < alloc_limit {
+        shape.live_inline_slot_count.max(new_index + 1)
+    } else {
+        shape.live_inline_slot_count
+    };
+
+    let elements = (keys as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    crate::gc::runtime_store_external_jsvalue_slot(
+        keys as usize,
+        elements.add(new_index as usize) as usize,
+        key.bits(),
+    );
+    (*keys).length = new_index + 1;
+    if crate::object::shapes::try_update_stable_tombstone_shape_cached(
+        obj,
+        shape,
+        new_index + 1,
+        next_live,
+        shape.hole_count,
+    )
+    .or_else(|| {
+        crate::object::shapes::try_update_stable_tombstone_shape(
+            obj,
+            keys,
+            new_index + 1,
+            next_live,
+            shape.hole_count,
+        )
+    })
+    .is_none()
+    {
+        (*keys).length = new_index;
+        crate::gc::runtime_store_external_jsvalue_slot(
+            keys as usize,
+            elements.add(new_index as usize) as usize,
+            crate::value::TAG_HOLE,
+        );
+        return None;
+    }
+
+    super::mark_object_dynamic_shape_unknown(obj);
+    let mut value_bits = value.to_bits();
+    if (value_bits >> 48) == 0x7FFD && (value_bits & 0x0000_FFFF_FFFF_FFFF) == 0 {
+        value_bits = crate::value::TAG_UNDEFINED;
+    }
+    let slot_word = if new_index < alloc_limit {
+        store_object_field_slot(obj, new_index as usize, value_bits);
+        new_index
+    } else {
+        overflow_set(obj as usize, new_index as usize, value_bits);
+        new_index | crate::proxy::IC_SLOT_OVERFLOW_BIT
+    };
+    let key_hash = key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());
+    keys_index_insert(keys, new_index + 1, key_hash, new_index);
+    Some((slot_word, obj, value))
 }
 
 fn object_set_field_by_name_transition_fast_impl(

@@ -192,6 +192,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     let keys_elements =
         (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
     let mut prefixes: Vec<String> = Vec::with_capacity(shape_fields as usize);
+    let mut key_sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     for f in 0..shape_fields {
         let key_bits = (*keys_elements.add(f as usize)).to_bits();
         // A tombstoned key slot (#9029, flag-gated deletes): the hole's bits
@@ -202,13 +203,9 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
         if key_bits == crate::value::TAG_HOLE {
             return None;
         }
-        let key_tag = key_bits & 0xFFFF_0000_0000_0000;
-        let key_ptr = if key_tag == STRING_TAG || key_tag == POINTER_TAG {
-            (key_bits & POINTER_MASK) as *const StringHeader
-        } else {
-            key_bits as *const StringHeader
-        };
-        let key_str = str_from_header(key_ptr)?;
+        let key_bytes =
+            crate::string::js_string_key_bytes(JSValue::from_bits(key_bits), &mut key_sso)?;
+        let key_str = std::str::from_utf8(key_bytes).ok()?;
         let needs_escape = key_str.bytes().any(|b| b == b'"' || b == b'\\' || b < 0x20);
         let mut prefix = String::with_capacity(key_str.len() + 4);
         prefix.push(if f == 0 { '{' } else { ',' });
@@ -293,13 +290,11 @@ unsafe fn set_to_json_key_for_template_field(keys_arr: *mut crate::ArrayHeader, 
     let keys_elements =
         (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
     let key_bits = (*keys_elements.add(f)).to_bits();
-    let key_tag = key_bits & 0xFFFF_0000_0000_0000;
-    let key_ptr = if key_tag == STRING_TAG || key_tag == POINTER_TAG {
-        (key_bits & POINTER_MASK) as *const StringHeader
-    } else {
-        key_bits as *const StringHeader
-    };
-    set_to_json_key_str(str_from_header(key_ptr).unwrap_or(""));
+    let mut key_sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let key_str = crate::string::js_string_key_bytes(JSValue::from_bits(key_bits), &mut key_sso)
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .unwrap_or("");
+    set_to_json_key_str(key_str);
 }
 
 /// Fast emission path for an object element that matches the cached shape

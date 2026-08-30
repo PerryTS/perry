@@ -983,13 +983,11 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         if let Some(kb) = stub_key_bits(key) {
             if idx < alloc_limit {
                 write_stub_insert(shape_token, kb, idx);
-                crate::object::read_stub::read_stub_insert(shape_token, kb, idx);
             } else if idx < shape.logical_key_count {
                 // Overflow: bound-checked against the key count at prime,
                 // which the hit-time token match preserves.
                 let slot = idx | IC_SLOT_OVERFLOW_BIT;
                 write_stub_insert(shape_token, kb, slot);
-                crate::object::read_stub::read_stub_insert(shape_token, kb, slot);
             }
         }
         if idx >= alloc_limit {

@@ -216,6 +216,9 @@ fn stable_tombstone_marker_reopens_later_descriptor_checks() {
             "descriptor_key_05".to_string(),
             super::descriptor_state::PropertyAttrs::new(true, true, false),
         );
+        // Reacquire after the mutation: `try_read_gc_header` returns an
+        // immutable view, so retaining it across the flag write would let an
+        // optimized test reuse the pre-install value.
         let obj_gc = crate::value::addr_class::try_read_gc_header(obj as usize)
             .expect("the descriptor target must retain a readable GcHeader");
         assert_ne!(
@@ -267,6 +270,79 @@ fn tombstone_off_compaction_does_not_reuse_growth_prefix_shape() {
         assert_eq!(
             js_object_get_field_by_name(obj, shifted).bits(),
             98.0f64.to_bits()
+        );
+    }
+}
+
+/// A one-live-key receiver used to miss tombstones entirely: transition-cache
+/// insertion eagerly marked every freshly appended keys array shared, so each
+/// delete cloned+compacted it and the next append repeated the cycle. The first
+/// delete now forks one owned tombstone so the stable-token re-add path can
+/// keep that private layout out of the transition cache.
+#[test]
+fn small_churn_first_delete_forks_owned_tombstone() {
+    super::delete_rest::test_set_tombstone_deletes(Some(true));
+    let _restore = scopeguard_tombstone_flag();
+    let _global = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let mut obj = js_object_alloc(0, 0);
+        let first = crate::string::js_string_from_bytes(b"small_0".as_ptr(), 7);
+        js_object_set_field_by_name(obj, first, 0.0);
+
+        let first_delete = crate::string::js_string_from_bytes(b"small_0".as_ptr(), 7);
+        assert_eq!(
+            super::delete_rest::js_object_delete_field(obj, first_delete),
+            1
+        );
+        let owned_keys = crate::object::object_keys_array(obj);
+        assert_eq!(
+            crate::array::keys_array_len_capped_to_capacity(owned_keys),
+            1
+        );
+        assert_eq!(super::shapes::object_shape_hole_count(obj), 1);
+        let keys_gc = crate::value::addr_class::try_read_gc_header(owned_keys as usize).unwrap();
+        assert_eq!(
+            keys_gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED,
+            0,
+            "first small-object delete must leave a private tombstone layout"
+        );
+
+        let sso = crate::value::JSValue::try_short_string(b"k0").unwrap();
+        assert!(
+            crate::object::try_readd_stable_tombstone(obj, f64::from_bits(sso.bits()), 1.0,)
+                .is_some()
+        );
+        let stable_shape = super::shapes::object_shape_stamp(obj);
+        assert_eq!(
+            super::delete_rest::js_object_delete_dynamic(obj, f64::from_bits(sso.bits())),
+            1
+        );
+        assert_eq!(super::shapes::object_shape_stamp(obj), stable_shape);
+        assert_eq!(super::shapes::object_shape_hole_count(obj), 2);
+
+        for n in 1..=14 {
+            let name = format!("k{n}");
+            let next = crate::value::JSValue::try_short_string(name.as_bytes()).unwrap();
+            let (_, next_obj, _) =
+                crate::object::try_readd_stable_tombstone(obj, f64::from_bits(next.bits()), 1.0)
+                    .expect("small stable receiver must re-add its next SSO key");
+            obj = next_obj;
+            assert_eq!(
+                super::delete_rest::js_object_delete_dynamic(obj, f64::from_bits(next.bits())),
+                1
+            );
+        }
+        let squeezed_keys = crate::object::object_keys_array(obj);
+        assert_eq!(
+            crate::array::keys_array_len_capped_to_capacity(squeezed_keys),
+            0,
+            "the all-holes small epoch must squeeze back to logical length zero"
+        );
+        assert_eq!(super::shapes::object_shape_hole_count(obj), 0);
+        assert_ne!(
+            super::shapes::object_shape_stamp(obj),
+            stable_shape,
+            "slot reuse after squeeze must retire the previous IC token"
         );
     }
 }

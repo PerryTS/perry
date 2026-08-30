@@ -142,6 +142,14 @@ crates/perry-stdlib/src/streams.rs
 # phase/debt/budget groups should be split together in the tracked #1435 file
 # decomposition rather than mixed into an unrelated runtime fast-path PR.
 crates/perry-runtime/src/gc/policy.rs
+# Stable-tombstone IC validation (#9064/#9065) pushed the coupled generated
+# read/write dispatch trunk 19 lines over; splitting its proxy/Reflect and PIC
+# emitters is structural follow-up work, not part of this runtime fast path.
+crates/perry-codegen/src/expr/proxy_reflect.rs
+# The shape-registry core is 16 lines over after documenting mutable private
+# tombstone epochs. Its table/index/publish invariants need a coordinated split
+# rather than moving one half of the invariant for this optimization.
+crates/perry-runtime/src/object/shapes.rs
 # --- Vendored third-party sources (third_party/windows-winui/, see its
 # VENDORED.md): a verbatim snapshot of Microsoft windows-rs / Windows Reactor
 # at commit 65066a7109c214f317ed66261cfb7518160b8aaf. These are NOT Perry

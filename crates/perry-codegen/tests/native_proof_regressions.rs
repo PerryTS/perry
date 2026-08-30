@@ -15276,8 +15276,8 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
         rejected
             .matches("call double @js_put_value_set_ic_miss")
             .count(),
-        20,
-        "the bounded rejection must preserve all four cache miss entries for all five semantic write sites:\n{rejected}"
+        25,
+        "the bounded rejection must preserve all five fallback entries for all five semantic write sites:\n{rejected}"
     );
 
     let mut nonfinite_body = loop_body(1);
