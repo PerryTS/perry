@@ -13,7 +13,7 @@ pub(crate) fn register_class(class_id: u32, parent_class_id: u32) {
     crate::object::class_meta_registry::parent_dense_store(class_id, parent_class_id);
     let mut registry = CLASS_REGISTRY.write().unwrap();
     if registry.is_none() {
-        *registry = Some(HashMap::new());
+        *registry = Some(crate::fast_hash::new_ptr_hash_map());
     }
     registry.as_mut().unwrap().insert(class_id, parent_class_id);
 }
@@ -518,7 +518,7 @@ pub unsafe extern "C" fn js_register_class_static_method(
     };
     let mut guard = CLASS_STATIC_METHODS.write().unwrap();
     if guard.is_none() {
-        *guard = Some(HashMap::new());
+        *guard = Some(crate::fast_hash::new_ptr_hash_map());
     }
     guard
         .as_mut()
@@ -610,7 +610,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
             if let Some(method_name) = alias {
                 let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
                 if registry.is_none() {
-                    *registry = Some(HashMap::new());
+                    *registry = Some(crate::fast_hash::new_ptr_hash_map());
                 }
                 let vtable = registry
                     .as_mut()
@@ -645,7 +645,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
     if is_static != 0 {
         let mut guard = CLASS_STATIC_METHODS.write().unwrap();
         if guard.is_none() {
-            *guard = Some(HashMap::new());
+            *guard = Some(crate::fast_hash::new_ptr_hash_map());
         }
         guard
             .as_mut()
@@ -656,7 +656,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
     } else {
         let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
         if registry.is_none() {
-            *registry = Some(HashMap::new());
+            *registry = Some(crate::fast_hash::new_ptr_hash_map());
         }
         let vtable = registry
             .as_mut()
@@ -733,7 +733,7 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
         if is_static == 0 {
             let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
             if registry.is_none() {
-                *registry = Some(HashMap::new());
+                *registry = Some(crate::fast_hash::new_ptr_hash_map());
             }
             let vtable = registry
                 .as_mut()
@@ -753,7 +753,7 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
         } else {
             let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
             if guard.is_none() {
-                *guard = Some(HashMap::new());
+                *guard = Some(crate::fast_hash::new_ptr_hash_map());
             }
             let entry = guard
                 .as_mut()

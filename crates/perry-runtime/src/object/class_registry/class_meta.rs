@@ -1,6 +1,6 @@
 use super::*;
+use crate::fast_hash::{new_ptr_hash_map, new_ptr_hash_set, PtrHashMap, PtrHashSet};
 use crate::object::class_image::ImageTable;
-use std::collections::HashMap;
 use std::sync::RwLock;
 
 /// Register a class id so `js_value_typeof` can distinguish class refs
@@ -12,7 +12,7 @@ pub unsafe extern "C" fn js_register_class_id(class_id: u32) {
     }
     let mut guard = REGISTERED_CLASS_IDS.write().unwrap();
     if guard.is_none() {
-        *guard = Some(std::collections::HashSet::new());
+        *guard = Some(new_ptr_hash_set());
     }
     guard.as_mut().unwrap().insert(class_id);
 }
@@ -23,13 +23,13 @@ pub unsafe extern "C" fn js_register_class_id(class_id: u32) {
 /// `metatype.name` to build the module token, so the empty default name
 /// from `v8::Function::builder(...)` would collide every module under the
 /// same token. (#1021.)
-pub static CLASS_NAMES: ImageTable<RwLock<Option<HashMap<u32, String>>>> =
+pub static CLASS_NAMES: ImageTable<RwLock<Option<PtrHashMap<u32, String>>>> =
     ImageTable::new(|image| &image.names);
 /// Maps `class_id → ECMAScript constructor length` (formal parameters before
 /// the first default/rest parameter). Class refs are integer immediates rather
 /// than heap Function objects, so their own `length` property is reified from
 /// this table alongside `CLASS_NAMES`.
-pub static CLASS_LENGTHS: ImageTable<RwLock<Option<HashMap<u32, u32>>>> =
+pub static CLASS_LENGTHS: ImageTable<RwLock<Option<PtrHashMap<u32, u32>>>> =
     ImageTable::new(|image| &image.lengths);
 
 /// Register the user-visible name of a class so the V8 bridge can label
@@ -53,7 +53,7 @@ pub unsafe extern "C" fn js_register_class_name(class_id: u32, name_ptr: *const 
     };
     let mut guard = CLASS_NAMES.write().unwrap();
     if guard.is_none() {
-        *guard = Some(HashMap::new());
+        *guard = Some(new_ptr_hash_map());
     }
     guard.as_mut().unwrap().insert(class_id, name);
 }
@@ -72,7 +72,7 @@ pub extern "C" fn js_register_class_length(class_id: u32, length: u32) {
     }
     let mut guard = CLASS_LENGTHS.write().unwrap();
     if guard.is_none() {
-        *guard = Some(HashMap::new());
+        *guard = Some(new_ptr_hash_map());
     }
     guard.as_mut().unwrap().insert(class_id, length);
 }
@@ -500,7 +500,7 @@ pub unsafe extern "C" fn js_text_encoding_stream_new() -> f64 {
 /// drizzle's `value.constructor === Object` duck checks, and the standard
 /// `({}).constructor === Object` semantics all match Node. The HIR
 /// lowering registers each anon shape's id here at module init.
-pub static ANON_SHAPE_CLASS_IDS: ImageTable<RwLock<Option<std::collections::HashSet<u32>>>> =
+pub static ANON_SHAPE_CLASS_IDS: ImageTable<RwLock<Option<PtrHashSet<u32>>>> =
     ImageTable::new(|image| &image.anon_shape_class_ids);
 
 /// Mark `class_id` as a synthetic anon-shape class so `.constructor`
@@ -513,7 +513,7 @@ pub unsafe extern "C" fn js_register_anon_shape_class_id(class_id: u32) {
     }
     let mut guard = ANON_SHAPE_CLASS_IDS.write().unwrap();
     if guard.is_none() {
-        *guard = Some(std::collections::HashSet::new());
+        *guard = Some(new_ptr_hash_set());
     }
     guard.as_mut().unwrap().insert(class_id);
 }

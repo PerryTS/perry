@@ -61,7 +61,7 @@ unsafe fn define_class_prototype_method(target_cid: u32, name: &str, value_bits:
                 {
                     let mut guard = CLASS_VTABLE_REGISTRY.write().unwrap();
                     if guard.is_none() {
-                        *guard = Some(std::collections::HashMap::new());
+                        *guard = Some(crate::fast_hash::new_ptr_hash_map());
                     }
                     let reg = guard.as_mut().unwrap();
                     let vtable = reg.entry(target_cid).or_insert_with(|| ClassVTable {

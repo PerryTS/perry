@@ -455,7 +455,25 @@ pub(crate) struct ObjectHotTables {
     pub(crate) shape_kind_cache: std::cell::UnsafeCell<Box<[u64]>>,
     /// Overflow map for shape_ids that collide in the inline cache. Values
     /// are `(keys_array, runtime_shape_id)` — see [`ShapeCacheEntry`].
-    pub(crate) shape_cache_overflow: RefCell<HashMap<u32, (*mut ArrayHeader, u32)>>,
+    ///
+    /// `PtrHasher`, not SipHash. The inline cache above is 256 entries,
+    /// direct-mapped on `shape_id & 255`, and `shape_id` steps by
+    /// `10007 mod 256 == 23` per class id — so any image with more than 256
+    /// live shapes collides constantly and `shape_cache_get_with_id` falls
+    /// through to this map. Every `shape_cache_insert` writes it too. The key
+    /// is a runtime-minted shape id (`class_id * 10007 + field_count * 100003
+    /// + 1_000_000`), never external input.
+    ///
+    /// A `u32` key's SipHash is small enough that LLVM inlines it into the
+    /// caller, so this cost does NOT appear under a `RandomState` frame in a
+    /// sampled profile — it is charged to `js_build_class_keys_array` and
+    /// friends. Every sibling field of this struct is already either a fast
+    /// hash table or an `UnsafeCell` array; this one was the exception.
+    ///
+    /// Iteration-order safe: the only iteration is `scan_shape_cache_roots_mut`
+    /// (`.values_mut()`, GC root marking — commutative). Nothing else iterates.
+    pub(crate) shape_cache_overflow:
+        RefCell<crate::fast_hash::PtrHashMap<u32, (*mut ArrayHeader, u32)>>,
     /// Per-thread shape-transition cache for the dynamic-key write path;
     /// see the doc block above `with_transition_cache`. HEAP-allocated
     /// (`Box`) — oversized inline storage overflowed the arm64_32 ILP32
@@ -491,7 +509,7 @@ impl ObjectHotTables {
             shape_kind_cache: std::cell::UnsafeCell::new(
                 vec![0; shapes::SHAPE_KIND_CACHE_SIZE].into_boxed_slice(),
             ),
-            shape_cache_overflow: RefCell::new(HashMap::new()),
+            shape_cache_overflow: RefCell::new(crate::fast_hash::new_ptr_hash_map()),
             transition_cache: std::cell::UnsafeCell::new(
                 vec![
                     TransitionEntry {

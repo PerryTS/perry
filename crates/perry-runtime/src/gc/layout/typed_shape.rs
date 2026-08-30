@@ -75,8 +75,19 @@ struct RegisteredTypedShapeKey {
 
 #[derive(Default)]
 struct RegisteredTypedShapes {
-    ids_by_layout: std::collections::HashMap<RegisteredTypedShapeKey, u32>,
-    layouts_by_id: std::collections::HashMap<u32, TypedLayoutDescriptor>,
+    /// `FastKeyHasher`, NOT `PtrHasher`: [`RegisteredTypedShapeKey`] is a
+    /// COMPOSITE key (two `u32`s plus two `Vec<u64>` mask word lists), and
+    /// `PtrHasher`'s `write_*` OVERWRITE the accumulator, which would collapse
+    /// the key to its last field. `FastKeyHasher` folds every field.
+    ///
+    /// Neither half is external input — `class_id` is codegen-minted and the
+    /// mask words are derived from the compiled class layout — so SipHash's
+    /// DoS resistance buys nothing. The derived `Hash` feeds each mask word
+    /// through `write_u64`, which SipHash charges per byte; the word-at-a-time
+    /// folds added in #9147 make that one multiply per word.
+    ids_by_layout: crate::fast_hash::FastKeyHashMap<RegisteredTypedShapeKey, u32>,
+    /// Bare `u32` ShapeId key -> `PtrHasher` (single multiply + avalanche).
+    layouts_by_id: crate::fast_hash::PtrHashMap<u32, TypedLayoutDescriptor>,
 }
 
 static REGISTERED_TYPED_SHAPES: std::sync::LazyLock<std::sync::Mutex<RegisteredTypedShapes>> =

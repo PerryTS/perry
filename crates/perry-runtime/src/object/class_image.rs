@@ -70,8 +70,9 @@
 //! purpose: a latch armed by ANY image only ever costs another image the slow
 //! path, never a wrong answer.
 
+use crate::fast_hash::{PtrHashMap, PtrHashSet};
 use std::cell::OnceCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LockResult, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread::ThreadId;
@@ -84,40 +85,63 @@ use super::class_registry::ClassVTable;
 pub(crate) const PARENT_DENSE_CAP: usize = 1 << 16;
 
 /// class_id -> { name -> (func_ptr, param_count, has_rest) } for static methods.
-pub type StaticMethodTable = HashMap<u32, HashMap<String, (usize, u32, bool)>>;
+///
+/// OUTER map only takes the fast hasher (see `ClassImageTables`); the INNER
+/// `HashMap<String, _>` stays on SipHash because its keys are JS-supplied
+/// member names.
+pub type StaticMethodTable = PtrHashMap<u32, HashMap<String, (usize, u32, bool)>>;
 /// class_id -> { name -> (getter func_ptr, setter func_ptr) } for static accessors.
-pub type StaticAccessorTable = HashMap<u32, HashMap<String, (usize, usize)>>;
+/// Outer map fast-hashed, inner `String`-keyed map deliberately not — see above.
+pub type StaticAccessorTable = PtrHashMap<u32, HashMap<String, (usize, usize)>>;
 /// class_id -> (ctor func_ptr, total param count, signature capture count).
-pub type ConstructorTable = HashMap<u32, (usize, u32, u32)>;
+pub type ConstructorTable = PtrHashMap<u32, (usize, u32, u32)>;
 /// class_id -> (has_synthetic_arguments, has_rest) for a registered constructor.
-pub type ConstructorFlagTable = HashMap<u32, (bool, bool)>;
+pub type ConstructorFlagTable = PtrHashMap<u32, (bool, bool)>;
 
 /// One compiled image's class metadata: every class-id-keyed table module init
 /// writes. Field docs live on the `static` handles that select them.
+///
+/// # Hasher choice
+///
+/// The class-id-keyed tables use [`PtrHashMap`] / [`PtrHashSet`]
+/// (`PtrHasher`: one multiply plus an avalanche step) rather than std's
+/// SipHash. A class id is minted by codegen from a small sequential counter
+/// (`perry-hir::lower::context`), so it is a dense process-internal integer
+/// and never external input — hash-flooding resistance buys nothing, exactly
+/// as for the pointer-keyed registries in [`crate::fast_hash`]. `PtrHasher`'s
+/// `write_u32` override (#8125) keeps a bare `u32` key on the single-multiply
+/// path, and its avalanche spreads a dense sequential run across buckets.
+///
+/// Iteration order is not observable for any of these: nothing in the tree
+/// iterates them (only `get` / `insert` / `contains`). The `String`-keyed
+/// INNER maps of [`StaticMethodTable`] / [`StaticAccessorTable`], and the
+/// `(u32, String)`-keyed `method_bind_lengths` pair below, deliberately stay
+/// on SipHash — their keys are JS-supplied member names, and the inner maps
+/// are enumerated on paths that reach user-visible output.
 pub struct ClassImageTables {
-    pub(crate) vtables: RwLock<Option<HashMap<u32, ClassVTable>>>,
+    pub(crate) vtables: RwLock<Option<PtrHashMap<u32, ClassVTable>>>,
     pub(crate) static_methods: RwLock<Option<StaticMethodTable>>,
     pub(crate) static_accessors: RwLock<Option<StaticAccessorTable>>,
     pub(crate) method_bind_lengths: RwLock<Option<HashMap<(u32, String), u32>>>,
     pub(crate) static_method_bind_lengths: RwLock<Option<HashMap<(u32, String), u32>>>,
-    pub(crate) registered_class_ids: RwLock<Option<HashSet<u32>>>,
-    pub(crate) parents: RwLock<Option<HashMap<u32, u32>>>,
+    pub(crate) registered_class_ids: RwLock<Option<PtrHashSet<u32>>>,
+    pub(crate) parents: RwLock<Option<PtrHashMap<u32, u32>>>,
     /// `parent + 1` for every registered edge whose child id is
     /// `< PARENT_DENSE_CAP`; `0` means "no edge". Heap-allocated per image
     /// (256 KiB) rather than `.bss`, because there is one per image now.
     pub(crate) parent_dense: Box<[AtomicU32]>,
-    pub(crate) fetch_parent_kind: RwLock<Option<HashMap<u32, u8>>>,
-    pub(crate) generic_origin: RwLock<Option<HashMap<u32, u32>>>,
-    pub(crate) extends_error: RwLock<Option<HashSet<u32>>>,
-    pub(crate) has_instance: RwLock<Option<HashMap<u32, usize>>>,
-    pub(crate) to_string_tag: RwLock<Option<HashMap<u32, usize>>>,
+    pub(crate) fetch_parent_kind: RwLock<Option<PtrHashMap<u32, u8>>>,
+    pub(crate) generic_origin: RwLock<Option<PtrHashMap<u32, u32>>>,
+    pub(crate) extends_error: RwLock<Option<PtrHashSet<u32>>>,
+    pub(crate) has_instance: RwLock<Option<PtrHashMap<u32, usize>>>,
+    pub(crate) to_string_tag: RwLock<Option<PtrHashMap<u32, usize>>>,
     pub(crate) constructors: RwLock<Option<ConstructorTable>>,
     pub(crate) constructor_flags: RwLock<Option<ConstructorFlagTable>>,
-    pub(crate) extends_data_view: RwLock<Option<HashSet<u32>>>,
-    pub(crate) extends_typed_array: RwLock<Option<HashSet<u32>>>,
-    pub(crate) names: RwLock<Option<HashMap<u32, String>>>,
-    pub(crate) lengths: RwLock<Option<HashMap<u32, u32>>>,
-    pub(crate) anon_shape_class_ids: RwLock<Option<HashSet<u32>>>,
+    pub(crate) extends_data_view: RwLock<Option<PtrHashSet<u32>>>,
+    pub(crate) extends_typed_array: RwLock<Option<PtrHashSet<u32>>>,
+    pub(crate) names: RwLock<Option<PtrHashMap<u32, String>>>,
+    pub(crate) lengths: RwLock<Option<PtrHashMap<u32, u32>>>,
+    pub(crate) anon_shape_class_ids: RwLock<Option<PtrHashSet<u32>>>,
 }
 
 impl ClassImageTables {

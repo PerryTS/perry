@@ -291,7 +291,7 @@ mod tests {
     fn register_test_class(cid: u32) {
         let mut guard = crate::object::REGISTERED_CLASS_IDS.write().unwrap();
         guard
-            .get_or_insert_with(std::collections::HashSet::new)
+            .get_or_insert_with(crate::fast_hash::new_ptr_hash_set)
             .insert(cid);
     }
 

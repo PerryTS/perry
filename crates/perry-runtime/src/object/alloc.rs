@@ -7,8 +7,22 @@
 
 use super::*;
 
-static CLASS_KEYS_BY_ID: std::sync::RwLock<Option<std::collections::HashMap<u32, (usize, u32)>>> =
-    std::sync::RwLock::new(None);
+/// class_id -> (keys array address, field count).
+///
+/// `PtrHasher`, not SipHash: the key is a codegen-minted class id (a small
+/// sequential counter, see `perry-hir::lower::context`), never external input,
+/// so hash-flooding resistance buys nothing — the same rationale as the
+/// pointer-keyed registries in `fast_hash`. `js_build_class_keys_array` calls
+/// `remember_class_keys_array` on EVERY invocation, including the shape-cache
+/// hit path, so this probe is per-object-construction rather than
+/// per-registration; a `claude-code --help` profile put SipHash under
+/// `remember_class_keys_array` at 0.175% of samples.
+///
+/// Iteration-order safe: the map is only ever `insert`ed and `get`ed (the two
+/// sites below). Nothing iterates it, so the hasher cannot reorder anything.
+static CLASS_KEYS_BY_ID: std::sync::RwLock<
+    Option<crate::fast_hash::PtrHashMap<u32, (usize, u32)>>,
+> = std::sync::RwLock::new(None);
 
 fn remember_class_keys_array(class_id: u32, field_count: u32, keys_array: *mut ArrayHeader) {
     if class_id == 0 || keys_array.is_null() {
@@ -17,7 +31,7 @@ fn remember_class_keys_array(class_id: u32, field_count: u32, keys_array: *mut A
     {
         let mut guard = CLASS_KEYS_BY_ID.write().unwrap();
         if guard.is_none() {
-            *guard = Some(std::collections::HashMap::new());
+            *guard = Some(crate::fast_hash::new_ptr_hash_map());
         }
         guard
             .as_mut()

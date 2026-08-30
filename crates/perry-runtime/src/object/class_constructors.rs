@@ -121,7 +121,7 @@ pub unsafe extern "C" fn js_register_class_constructor(
     }
     let mut guard = CLASS_CONSTRUCTORS.write().unwrap();
     if guard.is_none() {
-        *guard = Some(HashMap::new());
+        *guard = Some(crate::fast_hash::new_ptr_hash_map());
     }
     guard.as_mut().unwrap().insert(
         class_id as u32,
@@ -166,7 +166,7 @@ pub extern "C" fn js_register_class_constructor_flags(
     }
     let mut guard = CLASS_CONSTRUCTOR_FLAGS.write().unwrap();
     if guard.is_none() {
-        *guard = Some(HashMap::new());
+        *guard = Some(crate::fast_hash::new_ptr_hash_map());
     }
     guard.as_mut().unwrap().insert(
         class_id as u32,

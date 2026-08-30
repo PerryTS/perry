@@ -56,7 +56,7 @@ pub unsafe extern "C" fn js_register_class_method(
     };
     let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
     if registry.is_none() {
-        *registry = Some(HashMap::new());
+        *registry = Some(crate::fast_hash::new_ptr_hash_map());
     }
     let reg = registry.as_mut().unwrap();
     let vtable = reg.entry(class_id as u32).or_insert_with(|| ClassVTable {
@@ -206,7 +206,7 @@ pub unsafe extern "C" fn js_register_class_getter(
     };
     let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
     if registry.is_none() {
-        *registry = Some(HashMap::new());
+        *registry = Some(crate::fast_hash::new_ptr_hash_map());
     }
     let reg = registry.as_mut().unwrap();
     let vtable = reg.entry(class_id as u32).or_insert_with(|| ClassVTable {
@@ -248,7 +248,7 @@ pub unsafe extern "C" fn js_register_class_setter(
     };
     let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
     if registry.is_none() {
-        *registry = Some(HashMap::new());
+        *registry = Some(crate::fast_hash::new_ptr_hash_map());
     }
     let reg = registry.as_mut().unwrap();
     let vtable = reg.entry(class_id as u32).or_insert_with(|| ClassVTable {
@@ -386,7 +386,7 @@ unsafe fn register_class_static_accessor_half(
     };
     let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();
     if guard.is_none() {
-        *guard = Some(HashMap::new());
+        *guard = Some(crate::fast_hash::new_ptr_hash_map());
     }
     let entry = guard
         .as_mut()

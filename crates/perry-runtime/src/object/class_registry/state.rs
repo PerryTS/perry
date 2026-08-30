@@ -237,8 +237,9 @@ pub struct ClassVTable {
 
 /// Vtable registry of the calling thread's image (#8546 — see
 /// `object/class_image.rs`): class_id -> vtable.
-pub static CLASS_VTABLE_REGISTRY: ImageTable<RwLock<Option<HashMap<u32, ClassVTable>>>> =
-    ImageTable::new(|image| &image.vtables);
+pub static CLASS_VTABLE_REGISTRY: ImageTable<
+    RwLock<Option<crate::fast_hash::PtrHashMap<u32, ClassVTable>>>,
+> = ImageTable::new(|image| &image.vtables);
 
 /// #1788: per-class STATIC-method registry: class_id -> { name -> (func_ptr,
 /// param_count, has_rest) }. Static methods are emitted as `perry_static_*`
@@ -287,7 +288,7 @@ crate::perry_thread_local! {
 /// Set of all registered class ids. Populated at module init by codegen
 /// emitting `js_register_class_id(cid)` for every user class — even
 /// classes without any methods. Refs #618 / #420 followup.
-pub static REGISTERED_CLASS_IDS: ImageTable<RwLock<Option<std::collections::HashSet<u32>>>> =
+pub static REGISTERED_CLASS_IDS: ImageTable<RwLock<Option<crate::fast_hash::PtrHashSet<u32>>>> =
     ImageTable::new(|image| &image.registered_class_ids);
 
 crate::perry_thread_local! {

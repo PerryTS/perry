@@ -2,14 +2,14 @@
 //! `extends Error`, `Symbol.hasInstance` / `Symbol.toStringTag` hooks
 //! (split out of `object/mod.rs`, behavior-preserving).
 
+use crate::fast_hash::{new_ptr_hash_map, new_ptr_hash_set, PtrHashMap, PtrHashSet};
 use crate::object::class_image::{self, ImageTable, PARENT_DENSE_CAP};
 use crate::registry_latch::RegistryLatch;
-use std::collections::HashMap;
 use std::sync::RwLock;
 
 /// The calling image's class registry mapping class_id -> parent_class_id for
 /// inheritance chain lookups (#8546 — see `object/class_image.rs`).
-pub(crate) static CLASS_REGISTRY: ImageTable<RwLock<Option<HashMap<u32, u32>>>> =
+pub(crate) static CLASS_REGISTRY: ImageTable<RwLock<Option<PtrHashMap<u32, u32>>>> =
     ImageTable::new(|image| &image.parents);
 
 // ============================================================================
@@ -97,7 +97,7 @@ pub(crate) fn get_parent_class_id(class_id: u32) -> Option<u32> {
 /// `GlobalRequest = global.Request`. Lets the runtime dynamic-construction
 /// path (`new (classExprValue)(...)` / ClassRef `new`) attach the underlying
 /// native fetch handle, matching what the static codegen `super()` path does.
-static FETCH_PARENT_KIND: ImageTable<RwLock<Option<HashMap<u32, u8>>>> =
+static FETCH_PARENT_KIND: ImageTable<RwLock<Option<PtrHashMap<u32, u8>>>> =
     ImageTable::new(|image| &image.fetch_parent_kind);
 
 /// Idle until some class extends the global `Request`/`Response`.
@@ -109,7 +109,7 @@ pub(crate) fn register_fetch_parent_kind(class_id: u32, kind: u8) {
     FETCH_PARENT_LATCH.arm();
     let mut g = FETCH_PARENT_KIND.write().unwrap();
     if g.is_none() {
-        *g = Some(HashMap::new());
+        *g = Some(new_ptr_hash_map());
     }
     g.as_mut().unwrap().insert(class_id, kind);
 }
@@ -149,7 +149,7 @@ fn fetch_parent_kind_slow(class_id: u32) -> Option<u8> {
 /// (`object/class_constructors.rs`), static-method lookup and vtable dispatch,
 /// so splicing the generic in between a specialization and its real base would
 /// re-run the wrong constructor. Only `instanceof` consults this one.
-static CLASS_GENERIC_ORIGIN: ImageTable<RwLock<Option<HashMap<u32, u32>>>> =
+static CLASS_GENERIC_ORIGIN: ImageTable<RwLock<Option<PtrHashMap<u32, u32>>>> =
     ImageTable::new(|image| &image.generic_origin);
 
 /// Idle until a generic class is monomorphized. `class_chain_reaches` probes
@@ -169,7 +169,7 @@ pub extern "C" fn js_register_class_generic_origin(class_id: u32, generic_id: u3
     GENERIC_ORIGIN_LATCH.arm();
     let mut g = CLASS_GENERIC_ORIGIN.write().unwrap();
     if g.is_none() {
-        *g = Some(HashMap::new());
+        *g = Some(new_ptr_hash_map());
     }
     g.as_mut().unwrap().insert(class_id, generic_id);
 }
@@ -197,7 +197,7 @@ fn class_generic_origin_slow(class_id: u32) -> Option<u32> {
 }
 
 /// The calling image's set of class IDs that extend the built-in Error class.
-static EXTENDS_ERROR_REGISTRY: ImageTable<RwLock<Option<std::collections::HashSet<u32>>>> =
+static EXTENDS_ERROR_REGISTRY: ImageTable<RwLock<Option<PtrHashSet<u32>>>> =
     ImageTable::new(|image| &image.extends_error);
 
 /// Per-class `Symbol.hasInstance` static hook. Maps class_id → raw function
@@ -205,7 +205,7 @@ static EXTENDS_ERROR_REGISTRY: ImageTable<RwLock<Option<std::collections::HashSe
 /// TAG_TRUE / TAG_FALSE result). Populated at module init from
 /// `__perry_wk_hasinstance_<class>` top-level functions lifted by the HIR
 /// class lowering.
-static CLASS_HAS_INSTANCE_REGISTRY: ImageTable<RwLock<Option<HashMap<u32, usize>>>> =
+static CLASS_HAS_INSTANCE_REGISTRY: ImageTable<RwLock<Option<PtrHashMap<u32, usize>>>> =
     ImageTable::new(|image| &image.has_instance);
 
 /// Per-class `Symbol.toStringTag` getter hook. Maps class_id → raw function
@@ -214,7 +214,7 @@ static CLASS_HAS_INSTANCE_REGISTRY: ImageTable<RwLock<Option<HashMap<u32, usize>
 /// init from `__perry_wk_tostringtag_<class>` top-level functions lifted by
 /// the HIR class lowering. Consulted by `js_object_to_string` so
 /// `Object.prototype.toString.call(x)` returns `[object <tag>]`.
-static CLASS_TO_STRING_TAG_REGISTRY: ImageTable<RwLock<Option<HashMap<u32, usize>>>> =
+static CLASS_TO_STRING_TAG_REGISTRY: ImageTable<RwLock<Option<PtrHashMap<u32, usize>>>> =
     ImageTable::new(|image| &image.to_string_tag);
 
 /// Idle until a class declares `static [Symbol.hasInstance]`. `js_instanceof`
@@ -233,7 +233,7 @@ pub unsafe extern "C" fn js_register_class_has_instance(class_id: u32, func_ptr:
     HAS_INSTANCE_LATCH.arm();
     let mut registry = CLASS_HAS_INSTANCE_REGISTRY.write().unwrap();
     if registry.is_none() {
-        *registry = Some(HashMap::new());
+        *registry = Some(new_ptr_hash_map());
     }
     registry
         .as_mut()
@@ -247,7 +247,7 @@ pub unsafe extern "C" fn js_register_class_to_string_tag(class_id: u32, func_ptr
     TO_STRING_TAG_LATCH.arm();
     let mut registry = CLASS_TO_STRING_TAG_REGISTRY.write().unwrap();
     if registry.is_none() {
-        *registry = Some(HashMap::new());
+        *registry = Some(new_ptr_hash_map());
     }
     registry
         .as_mut()
@@ -289,7 +289,7 @@ pub extern "C" fn js_register_class_extends_error(class_id: u32) {
     EXTENDS_ERROR_LATCH.arm();
     let mut registry = EXTENDS_ERROR_REGISTRY.write().unwrap();
     if registry.is_none() {
-        *registry = Some(std::collections::HashSet::new());
+        *registry = Some(new_ptr_hash_set());
     }
     registry.as_mut().unwrap().insert(class_id);
 }
