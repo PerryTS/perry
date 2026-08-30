@@ -153,6 +153,39 @@ pub(crate) fn native_namespace_prop_override_get(module: &str, prop: &str) -> Op
     })
 }
 
+/// pi boot blocker: a user write to a builtin namespace member must win every
+/// subsequent NAME-KEYED read, no matter which lowering performed the store.
+/// Today the stores are split: computed writes (`process[k] = fn`) land in
+/// `NATIVE_NAMESPACE_PROP_OVERRIDES` via `nm_field_set_override`, while static
+/// writes (`process.chdir = fn`) reach the generic store path and land as an
+/// OWN dynamic field on the canonical namespace object. The name-keyed read
+/// entries (`js_native_module_property_by_name`,
+/// `js_native_module_esm_export_value`) carry no object pointer, so they only
+/// consulted the override table — a static write was invisible to them and
+/// the read handed back the canonical BOUND_METHOD closure again. graceful-fs
+/// then did `Object.setPrototypeOf(process.chdir, chdir)` with the SAME
+/// closure on both sides and pi's boot died on the resulting (correct)
+/// "Cyclic __proto__ value" self-set rejection. Consult BOTH stores. This
+/// never CREATES a namespace: if none was ever built, no user store can have
+/// landed on one.
+pub(crate) fn native_namespace_user_value(module: &str, prop: &str) -> Option<f64> {
+    if let Some(value) = native_namespace_prop_override_get(module, prop) {
+        return Some(value);
+    }
+    // Build the probe key BEFORE reading the cached namespace bits: the
+    // string allocation can run a moving collection, and the cache slot is
+    // rewritten by `scan_native_callable_export_roots_mut`, so bits read afterwards
+    // are current.
+    let key = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
+    let ns_bits = NATIVE_MODULE_NAMESPACES.with(|cache| cache.borrow().get(module).copied())?;
+    let obj = (ns_bits & crate::value::POINTER_MASK) as *const ObjectHeader;
+    if obj.is_null() {
+        return None;
+    }
+    unsafe { super::field_get_set::native_module_own_field_by_key(obj, key) }
+        .map(|v| f64::from_bits(v.bits()))
+}
+
 fn bound_native_method_length(name: &str) -> Option<u32> {
     match name {
         "keepSocketAlive" => Some(1),
@@ -922,7 +955,7 @@ unsafe fn native_module_property_by_name_impl(
     // codegen `NativeModuleRef` fast-path landed here without consulting the
     // side-table, so writes via `PutValueSet` didn't round-trip on reads.
     if consult_overrides {
-        if let Some(value) = native_namespace_prop_override_get(module_name, property_name) {
+        if let Some(value) = native_namespace_user_value(module_name, property_name) {
             return value;
         }
     }
@@ -1078,6 +1111,14 @@ pub extern "C" fn js_native_module_esm_export_value(module: f64, property: f64) 
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
     let module = normalize_native_module_alias(&module).to_string();
+    // A user write to the member wins over the built-in snapshot below —
+    // this entry also serves property reads off the DEFAULT export object
+    // (`import fs from "node:fs"; fs.rename` after graceful-fs patched it),
+    // which is Node's live mutable CJS exports object. See
+    // `native_namespace_user_value`.
+    if let Some(value) = native_namespace_user_value(&module, &property) {
+        return value;
+    }
     let key = format!("{module}\0{property}");
     if let Some(bits) = NATIVE_ESM_EXPORT_VALUES.with(|values| values.borrow().get(&key).copied()) {
         return f64::from_bits(bits);
