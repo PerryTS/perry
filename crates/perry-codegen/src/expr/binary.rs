@@ -308,11 +308,9 @@ fn lower_guarded_numeric_arith(
 
         ctx.current_block = slow_idx;
         crate::expr::emit_versioned_loop_callback_deopt(ctx);
-        let slow_val = ctx.block().call(
-            DOUBLE,
-            fname,
-            &[(DOUBLE, &values[0]), (DOUBLE, &values[1])],
-        );
+        let slow_val =
+            ctx.block()
+                .call(DOUBLE, fname, &[(DOUBLE, &values[0]), (DOUBLE, &values[1])]);
         let slow_end = ctx.block().label.clone();
         ctx.block().br(&merge_label);
 
@@ -1181,9 +1179,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         if guarded_arith_enabled()
                             && matches!(op, BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div)
                         {
-                            return lower_guarded_numeric_arith(
-                                ctx, *op, left, right, fname,
-                            );
+                            return lower_guarded_numeric_arith(ctx, *op, left, right, fname);
                         }
                         return lower_rooted_dynamic_binary(ctx, fname, left, right);
                     }
