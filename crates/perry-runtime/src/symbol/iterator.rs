@@ -518,6 +518,12 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_handle = scope.root_nanbox_f64(value);
     let value = value_handle.get_nanbox_f64();
+    // #9101: a declared class is a Function object despite Perry storing it
+    // as an INT32-tagged class id. Route it through the class-aware helper
+    // before the pointer-only object guard below.
+    if crate::object::class_ref_id(value).is_some() {
+        return crate::value::to_string::class_ref_to_primitive(value, hint);
+    }
     let bits = value.to_bits();
     let tag = bits & 0xFFFF_0000_0000_0000;
     if tag != POINTER_TAG {

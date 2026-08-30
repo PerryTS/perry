@@ -98,6 +98,17 @@ unsafe fn to_numeric(value: f64) -> f64 {
     if jsval.is_bigint() {
         return value;
     }
+    // ClassRefs are INT32-tagged but are Function objects in JavaScript. Run
+    // ToPrimitive(number) before the non-pointer primitive fast path below;
+    // preserve a BigInt result for ToNumeric rather than collapsing it through
+    // ToNumber.
+    if crate::object::class_ref_id(value).is_some() {
+        let primitive = crate::value::to_string::class_ref_to_primitive(value, 1);
+        if JSValue::from_bits(primitive.to_bits()).is_bigint() {
+            return primitive;
+        }
+        return crate::builtins::js_number_coerce(primitive);
+    }
     // Non-object primitives (number/int32/string/bool/null/undefined) never
     // become a BigInt; defer to the existing ToNumber coercion.
     if !jsval.is_pointer() {
@@ -181,7 +192,7 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
     // makes the addition concatenate. This also preserves an own static
     // valueOf/toString override.
     if is_class_ref {
-        return crate::value::ordinary_to_primitive_for_toprimitive(value, false);
+        return crate::value::to_string::class_ref_to_primitive(value, 0);
     }
 
     let ptr = jsval.as_pointer::<u8>() as usize;

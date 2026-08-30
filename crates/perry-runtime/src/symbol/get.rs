@@ -468,6 +468,21 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
         if let Some(vb) = class_static_symbol_lookup(class_id, sym_f64) {
             return f64::from_bits(vb);
         }
+        // #9101: statically-known well-known-symbol METHODS are registered
+        // under synthetic names (`@@toPrimitive`, etc.), rather than in the
+        // class-static-symbol data-property table above. Reify a static method
+        // value with the constructor ClassRef as its receiver. This also makes
+        // an explicit `C[Symbol.toPrimitive]` read agree with the ToPrimitive
+        // consumer instead of returning undefined.
+        if let Some(method_name) = well_known_symbol_method_key(sym_f64) {
+            if crate::object::lookup_static_method_in_chain(class_id, method_name).is_some() {
+                return crate::object::js_class_method_bind(
+                    obj_f64,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                );
+            }
+        }
         // #6173: a `static [S]() {}` (and, through a prototype ref, an
         // instance `[S]() {}`) registers in CLASS_SYMBOL_METHODS, which this
         // resolver never consulted — so reading `D[S]` as a VALUE returned

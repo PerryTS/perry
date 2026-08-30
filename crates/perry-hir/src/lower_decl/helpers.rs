@@ -636,8 +636,7 @@ pub(crate) enum WellKnownComputedMethod {
     /// `__perry_wk_tostringtag_<class>`); the caller skips the member.
     Lifted,
     /// A recognized well-known symbol in a form perry doesn't implement
-    /// yet (e.g. a static `[Symbol.toPrimitive]`) — the caller drops the
-    /// member, preserving the historical behavior.
+    /// yet — the caller drops the member, preserving the historical behavior.
     Unsupported,
 }
 
@@ -747,14 +746,13 @@ pub(crate) fn lower_well_known_computed_method(
             "@@asyncIterator".to_string(),
         )));
     }
-    // #2374: `[Symbol.toPrimitive](hint) {}` on a class — register under
-    // `@@toPrimitive` so the symbol resolver in `runtime/src/symbol.rs`
-    // (`well_known_symbol_method_key`) binds it as
-    // `instance[Symbol.toPrimitive]`. The runtime's ToPrimitive
-    // (`js_to_primitive`, consulted by unary `+` numeric coercion and
-    // template/`String()` string coercion) then invokes it with the
-    // appropriate hint before falling back to `valueOf`/`toString`.
-    if wk == "toPrimitive" && !method.is_static && matches!(method.kind, ast::MethodKind::Method) {
+    // #2374 / #9101: `[Symbol.toPrimitive](hint) {}` on a class — register
+    // under `@@toPrimitive` so the symbol resolver in `runtime/src/symbol.rs`
+    // (`well_known_symbol_method_key`) binds it as either the instance or
+    // constructor's `[Symbol.toPrimitive]`. The runtime's ToPrimitive then
+    // invokes it with the appropriate hint before falling back to
+    // `valueOf`/`toString`.
+    if wk == "toPrimitive" && matches!(method.kind, ast::MethodKind::Method) {
         return Ok(Some(WellKnownComputedMethod::Rename(
             "@@toPrimitive".to_string(),
         )));

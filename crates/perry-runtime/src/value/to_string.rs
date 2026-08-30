@@ -499,7 +499,7 @@ pub(crate) unsafe fn to_primitive_number(value: f64) -> OrdinaryToPrimitiveOutco
         return OrdinaryToPrimitiveOutcome::Primitive(value);
     }
 
-    match custom_to_primitive_number(value) {
+    match custom_to_primitive(value, b"number") {
         CustomToPrimitiveOutcome::Absent => {}
         CustomToPrimitiveOutcome::Primitive(p) => return OrdinaryToPrimitiveOutcome::Primitive(p),
         CustomToPrimitiveOutcome::TypeError => return OrdinaryToPrimitiveOutcome::TypeError,
@@ -508,7 +508,7 @@ pub(crate) unsafe fn to_primitive_number(value: f64) -> OrdinaryToPrimitiveOutco
     ordinary_to_primitive_number_for_add(value)
 }
 
-unsafe fn custom_to_primitive_number(value: f64) -> CustomToPrimitiveOutcome {
+unsafe fn custom_to_primitive(value: f64, hint: &[u8]) -> CustomToPrimitiveOutcome {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_handle = scope.root_nanbox_f64(value);
     let to_primitive = crate::symbol::well_known_symbol("toPrimitive");
@@ -525,7 +525,7 @@ unsafe fn custom_to_primitive_number(value: f64) -> CustomToPrimitiveOutcome {
         return CustomToPrimitiveOutcome::TypeError;
     }
     let method_handle = scope.root_nanbox_f64(method);
-    let hint_ptr = crate::string::js_string_from_bytes(b"number".as_ptr(), 6);
+    let hint_ptr = crate::string::js_string_from_bytes(hint.as_ptr(), hint.len() as u32);
     let hint_handle = scope.root_string_ptr(hint_ptr);
     let hint = f64::from_bits(
         STRING_TAG
@@ -554,6 +554,28 @@ unsafe fn custom_to_primitive_number(value: f64) -> CustomToPrimitiveOutcome {
         CustomToPrimitiveOutcome::Primitive(result)
     } else {
         CustomToPrimitiveOutcome::TypeError
+    }
+}
+
+/// Run full `ToPrimitive` for an INT32-tagged constructor ClassRef.
+///
+/// ClassRefs are objects at the language level but are not pointer-tagged in
+/// Perry, so the generic pointer-only coercion ladders cannot safely discover
+/// them. Keep the representation exception in one place: consult the static
+/// `Symbol.toPrimitive` hook first, then perform the ordinary Function-object
+/// `valueOf`/`toString` sequence with the hint-mandated ordering.
+pub(crate) unsafe fn class_ref_to_primitive(value: f64, hint: i32) -> f64 {
+    let (hint_name, string_first): (&[u8], bool) = match hint {
+        1 => (b"number", false),
+        2 => (b"string", true),
+        _ => (b"default", false),
+    };
+    match custom_to_primitive(value, hint_name) {
+        CustomToPrimitiveOutcome::Absent => {
+            ordinary_to_primitive_for_toprimitive(value, string_first)
+        }
+        CustomToPrimitiveOutcome::Primitive(p) => p,
+        CustomToPrimitiveOutcome::TypeError => throw_cannot_convert_to_primitive(),
     }
 }
 
@@ -1100,6 +1122,10 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
         let n = jsval.as_int32();
         let cid = (value.to_bits() & 0xFFFF_FFFF) as u32;
         if crate::object::is_class_id_registered(cid) {
+            if !skip_to_primitive {
+                let primitive = unsafe { class_ref_to_primitive(value, 2) };
+                return js_jsvalue_to_string(primitive);
+            }
             let name = crate::object::class_name_for_id(cid).unwrap_or_default();
             let s = format!("function {name}() {{ [native code] }}");
             return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
