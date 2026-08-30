@@ -143,6 +143,7 @@ _CODEGEN_SUITES = [
     "scalar_replaced_slot_roots",
     "spec_abi_typed_array_local_length",
     "static_symbol_hygiene",
+    "string_array_length_9160",
     "temp_root_operand_temporaries",
     "typed_array_rmw_8692",
     "typed_shape_declared_at_allocation",
