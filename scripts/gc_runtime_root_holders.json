@@ -374,6 +374,14 @@
       "why": "Address-KEYED owner table (owned String copies of pattern/flags); rekeyed on move, cleared on death, same hooks as REGEX_POINTERS."
     },
     {
+      "file": "crates/perry-runtime/src/regex.rs",
+      "name": "VALIDATED_PATTERNS",
+      "count": 1,
+      "classification": "not_a_gc_pointer",
+      "verdict": "not_a_gc_pointer",
+      "why": "Memoises which (pattern, flags) pairs have already passed the eager syntax check, so a repeated literal validates once (#9178). Keys are owned Rust `String`s copied out of the JS strings, and the value is `()` — nothing in the map is or points to a JS heap object, so there is no slot for the collector to mark or rewrite. The JS string a pattern came from is rooted by its own RegExp header, independently of this table."
+    },
+    {
       "file": "crates/perry-runtime/src/set.rs",
       "name": "SET_FOREACH_STACK",
       "count": 1,
