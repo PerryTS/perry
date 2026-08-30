@@ -38,11 +38,10 @@ grep -rn "new Function(" <pkg>/
 grep -rn "require(" <pkg>/ | grep -v "^.*://"   # dynamic require
 grep -rn "await import(" <pkg>/
 
-# Unsupported primitives
-grep -rn "\bSymbol(" <pkg>/
-grep -rn "new Proxy(" <pkg>/
-grep -rn "new WeakMap(" <pkg>/
-grep -rn "new WeakRef(" <pkg>/
+# Supported, but with caveats — surface for review, not blockers
+grep -rn "new Proxy(" <pkg>/    # limited trapping: docs/src/language/limitations.md#limited-proxy-trapping
+grep -rn "new WeakMap(" <pkg>/  # targets retained, never collected: docs/src/language/limitations.md#weak-references-retain-their-targets
+grep -rn "new WeakRef(" <pkg>/  # same retention caveat
 
 # Reflection / metadata
 grep -rn "Reflect\." <pkg>/
@@ -65,8 +64,8 @@ Make a punch list. For each hit, decide: can it be patched, or does it rule the 
 
 ### 3. Triage
 
-- **Rules the package out**: native addons, heavy `eval`/`Function`, packages whose core API depends on `Proxy` (e.g., ORMs, validation DSLs).
-- **Patchable**: decorators (often removable with a light rewrite), occasional `Symbol` uses (swap for unique string sentinels), lookbehind regex (rewrite as a two-pass match), simple computed keys (hoist to explicit assignment), `Object.setPrototypeOf` in isomorphic fallback paths (often dead code for native targets).
+- **Rules the package out**: native addons, heavy `eval`/`Function`, packages whose core API needs exotic `Proxy` trap behavior beyond Perry's supported surface (full engine-level trapping of every dynamic access — see [Limited Proxy Trapping](../../../docs/src/language/limitations.md#limited-proxy-trapping)). Plain `Proxy` use is fine.
+- **Patchable**: decorators (often removable with a light rewrite), lookbehind regex (rewrite as a two-pass match), simple computed keys (hoist to explicit assignment), `Object.setPrototypeOf` in isomorphic fallback paths (often dead code for native targets).
 - **Defer to `jsEval` fallback** if patching is unreasonable but only a small surface is affected.
 
 Report the triage to the user before patching anything substantial, so they can decide whether to keep going.
@@ -109,7 +108,7 @@ Tell the user:
 
 ## Important
 
-- **Don't patch blindly.** A grep hit isn't always real — `Symbol` inside a string, `eval` in a comment, `Proxy` as an identifier name, etc. Read the actual usage.
+- **Don't patch blindly.** A grep hit isn't always real — `eval` in a comment, `Proxy` as an identifier name, etc. Read the actual usage.
 - **Don't commit patches to the user's repo without asking.** Show the diff, let them decide.
 - **Respect the experimental label.** If something doesn't work, say so — don't paper over it. Report back so issue #115 gets real feedback.
 
