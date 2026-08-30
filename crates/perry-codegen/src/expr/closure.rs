@@ -304,8 +304,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // per resume with the same per-activation box captures. User
             // arrows and function expressions always mint fresh objects.
             let is_plain_async_step = is_plain_async_step_body(body);
-            let singleton_identity_safe =
-                is_plain_async_step && (*is_arrow || captures_all_boxed);
+            let singleton_identity_safe = is_plain_async_step && (*is_arrow || captures_all_boxed);
             let no_capture_singleton = is_plain_async_step && *is_arrow && total_caps == 0;
             let captured_singleton =
                 singleton_identity_safe && !no_capture_singleton && !writes_unboxed_capture;
