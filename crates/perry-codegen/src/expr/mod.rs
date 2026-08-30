@@ -2726,6 +2726,8 @@ pub(crate) mod string_window;
 mod ptr_numarray_access;
 mod ta_param_f64_read;
 #[cfg(test)]
+mod unary_bigint_tests;
+#[cfg(test)]
 mod unary_bitnot_tests;
 pub(crate) use index_get::{
     numeric_index_has_integer_array_index_proof, packed_f64_loop_index_parts,
