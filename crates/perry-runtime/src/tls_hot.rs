@@ -31,7 +31,7 @@
 //!
 //! # Do not add a field — declare with [`crate::perry_thread_local`]
 //!
-//! The sixteen named fields below are a **closed set**. They are the
+//! The seventeen named fields below are a **closed set**. They are the
 //! allocation path, they have fixed offsets, and they are kept because a fixed
 //! offset is one load cheaper than a claimed slot on the hottest path in the
 //! runtime. Nothing else belongs there.
@@ -59,7 +59,7 @@
 //! fields do not have at all. `scripts/check_thread_locals.py` makes a new raw
 //! `thread_local!` a build error unless it is recorded as deliberately cold,
 //! and `scripts/tls_budget_gate.sh` measures the outcome on two programs whose
-//! paths are deliberately *not* among these sixteen.
+//! paths are deliberately *not* among these seventeen.
 //!
 //! # Lifetime
 //!
@@ -190,9 +190,12 @@ pub(crate) struct HotTls {
     pub(crate) i32_box_ptr_cache: [Cell<usize>; INLINE_BOX_PTR_CACHE_SLOTS],
     pub(crate) bool_box_ptr_cache: [Cell<usize>; INLINE_BOX_PTR_CACHE_SLOTS],
     /// Generic slots, one per [`crate::perry_thread_local`] declaration that
-    /// this thread has resolved at least once. Last, so the named fields above
-    /// keep their small fixed offsets.
+    /// this thread has resolved at least once. Kept at its established offset
+    /// so the named fields and inline values above do not move.
     slots: [Cell<*mut u8>; HOT_SLOT_CAPACITY],
+    /// `gc::roots::RUNTIME_HANDLE_STACK`. Appended after the generic slots so
+    /// none of the offsets consumed by generated code move (#9183).
+    pub(crate) runtime_handle_stack: Cell<*mut u8>,
 }
 
 /// Byte offsets generated code hard-codes into its inline hot-cache access
@@ -256,6 +259,7 @@ impl HotTls {
         i32_box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],
         bool_box_ptr_cache: [const { Cell::new(0) }; INLINE_BOX_PTR_CACHE_SLOTS],
         slots: [const { Cell::new(std::ptr::null_mut()) }; HOT_SLOT_CAPACITY],
+        runtime_handle_stack: Cell::new(std::ptr::null_mut()),
     };
 }
 
@@ -294,6 +298,9 @@ fn fill(slots: *mut HotTls) {
         (*slots).per_object_layouts_nonempty = crate::gc::per_object_layouts_nonempty_hot_addr();
         (*slots).shape_install_memo = crate::gc::shape_install_memo_hot_addr();
         (*slots).learned_inline_fields = crate::object::learned_inline_fields_hot_addr();
+        (*slots)
+            .runtime_handle_stack
+            .set(crate::gc::runtime_handle_stack_hot_addr());
         // Last, and the field `hot()` tests: every other slot is already
         // written by the time this one is non-null, so a re-entrant call from
         // inside one of the providers above cannot observe a half-filled cache
@@ -471,6 +478,54 @@ fn hot_uncached() -> &'static HotTls {
     slots
 }
 
+/// Return this thread's cache only after the Darwin direct-TSD path has
+/// published it. Unlike [`hot`], this never resolves `HOT` and never calls
+/// [`fill`], so initialization-sensitive users can safely fall back to their
+/// own thread-local while the cache is being built (#9183).
+#[cfg(all(
+    target_vendor = "apple",
+    target_arch = "aarch64",
+    target_pointer_width = "64"
+))]
+#[inline(always)]
+pub(crate) fn hot_if_published() -> Option<&'static HotTls> {
+    let key = darwin_tsd::KEY.load(std::sync::atomic::Ordering::Relaxed);
+    if key == darwin_tsd::NO_KEY {
+        return None;
+    }
+    // SAFETY: `key` is a live pthread key. A non-null value was published
+    // from this thread's const-initialized `HOT` after `fill` completed.
+    let slots = unsafe { darwin_tsd::get(key) } as *mut HotTls;
+    if slots.is_null() {
+        None
+    } else {
+        Some(unsafe { &*slots })
+    }
+}
+
+/// The published-cache shortcut is Darwin-specific. Other targets keep the
+/// ordinary TLS path, where resolving a thread-local is already a fixed
+/// offset and the extra cache indirection has no demonstrated benefit.
+#[cfg(not(all(
+    target_vendor = "apple",
+    target_arch = "aarch64",
+    target_pointer_width = "64"
+)))]
+#[inline(always)]
+pub(crate) fn hot_if_published() -> Option<&'static HotTls> {
+    None
+}
+
+/// Stop serving the named handle-stack pointer before its raw thread-local is
+/// destroyed. The generic-slot form had this teardown protection through
+/// `SlotGuard`; the named fast path must preserve it (#9183).
+#[inline(always)]
+pub(crate) fn unpublish_runtime_handle_stack() {
+    if let Some(hot) = hot_if_published() {
+        hot.runtime_handle_stack.set(std::ptr::null_mut());
+    }
+}
+
 /// The per-thread address cache. On Apple aarch64 this is an `mrs` plus two
 /// loads with no call at all; elsewhere it is the single TLS access the field
 /// cache already collapsed the whole allocation path down to.
@@ -481,17 +536,8 @@ fn hot_uncached() -> &'static HotTls {
 ))]
 #[inline(always)]
 pub(crate) fn hot() -> &'static HotTls {
-    let key = darwin_tsd::KEY.load(std::sync::atomic::Ordering::Relaxed);
-    if key != darwin_tsd::NO_KEY {
-        // SAFETY: `key` is a live pthread key, so the slot exists; it holds
-        // either null (this thread has not published yet) or the address this
-        // thread published from `HOT`.
-        let slots = unsafe { darwin_tsd::get(key) } as *mut HotTls;
-        if !slots.is_null() {
-            // SAFETY: published from `HOT`, which is const-init with no `Drop`
-            // — see the module docs on lifetime.
-            return unsafe { &*slots };
-        }
+    if let Some(slots) = hot_if_published() {
+        return slots;
     }
     hot_uncached()
 }
@@ -604,7 +650,7 @@ pub fn published_slots() -> usize {
 /// three times. The line reports:
 ///
 /// * `claimed` — declarations that took a slot process-wide. A program that
-///   exercises paths outside the sixteen named fields drives this well past
+///   exercises paths outside the seventeen named fields drives this well past
 ///   zero; a program that does not, does not.
 /// * `published` — slots this thread actually filled.
 /// * `direct_tsd` — whether `hot()` is the `mrs`-plus-two-loads path. `0`
@@ -867,7 +913,7 @@ impl<T: 'static> HotKey<T> {
 ///
 /// # Why this is the default rather than an allowlist
 ///
-/// The named fields at the top of this file are an opt-in list of sixteen,
+/// The named fields at the top of this file are an opt-in list of seventeen,
 /// curated against whichever workload was profiled last. Every hot path the
 /// list did not anticipate silently paid full price: `churn` read 0% of
 /// `_tlv_get_addr` for months while `asyncpipe` — Map/Set registries, buffer
@@ -1036,6 +1082,11 @@ mod tests {
             crate::gc::temp_roots_hot_addr(),
             "temp_roots"
         );
+        assert_eq!(
+            hot.runtime_handle_stack.get(),
+            crate::gc::runtime_handle_stack_hot_addr(),
+            "runtime_handle_stack"
+        );
     }
 
     /// No slot may be null after `hot()` — a null would mean `fill` skipped a
@@ -1069,9 +1120,36 @@ mod tests {
             ("shape_install_memo", hot.shape_install_memo),
             ("learned_inline_fields", hot.learned_inline_fields),
             ("temp_roots", hot.temp_roots),
+            ("runtime_handle_stack", hot.runtime_handle_stack.get()),
         ] {
             assert!(!ptr.is_null(), "{name} slot was left null by fill()");
         }
+    }
+
+    /// Handle scopes are used while a thread is still starting. Their cold
+    /// fallback must therefore remain usable without recursively filling the
+    /// cache that is trying to discover the handle-stack address (#9183).
+    #[test]
+    fn runtime_handles_do_not_fill_an_unpublished_cache() {
+        std::thread::spawn(|| {
+            let slots = super::HOT.with(|cell| cell.get());
+            // SAFETY: this is the current thread's const-initialized `HOT`.
+            assert!(unsafe { (*slots).temp_roots.is_null() });
+            assert!(super::hot_if_published().is_none());
+
+            {
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let handle = scope.root_heap_word_u64(0);
+                assert_eq!(handle.get_heap_word_u64(), 0);
+            }
+
+            // Scope creation, push, read and drop all stayed on the fallback;
+            // none was allowed to re-enter `fill`.
+            assert!(unsafe { (*slots).temp_roots.is_null() });
+            assert!(super::hot_if_published().is_none());
+        })
+        .join()
+        .expect("unpublished-cache probe thread panicked");
     }
 
     /// The direct thread-specific-data path must be live on this platform.

@@ -1,5 +1,54 @@
 use super::*;
 
+struct RuntimeHandleStackHotGuard;
+
+impl Drop for RuntimeHandleStackHotGuard {
+    fn drop(&mut self) {
+        crate::tls_hot::unpublish_runtime_handle_stack();
+    }
+}
+
+thread_local! {
+    /// This stays a raw `thread_local!` as the initialization fallback for its
+    /// named `HotTls` slot. Going through `perry_thread_local!` here would call
+    /// `hot()` while `HotTls::fill` is still resolving this address (#9183).
+    static RUNTIME_HANDLE_STACK: RefCell<Vec<RuntimeHandleSlot>> = const { RefCell::new(Vec::new()) };
+    /// Registered after the stack itself, so reverse-order TLS destruction
+    /// clears the named cache pointer before the stack storage is destroyed.
+    static RUNTIME_HANDLE_STACK_HOT_GUARD: RuntimeHandleStackHotGuard = const { RuntimeHandleStackHotGuard };
+}
+
+/// Resolve this thread's runtime-handle stack without entering `HotTls`.
+/// Called once by `tls_hot::fill`, and by handle operations only until the
+/// Darwin direct-TSD cache has been published.
+#[inline(always)]
+pub(crate) fn runtime_handle_stack_hot_addr() -> *mut u8 {
+    let addr = RUNTIME_HANDLE_STACK.with(|stack| stack as *const _ as *mut u8);
+    RUNTIME_HANDLE_STACK_HOT_GUARD.with(|_| {});
+    addr
+}
+
+/// Borrow this thread's transient-handle stack.
+///
+/// On Apple aarch64 the steady-state path reads the address from an already
+/// published `HotTls`. During `HotTls::fill` (and on every other target) it
+/// uses the ordinary thread-local directly, so opening a handle scope cannot
+/// recursively initialize the cache (#9183).
+#[inline(always)]
+fn with_runtime_handle_stack<R>(f: impl FnOnce(&RefCell<Vec<RuntimeHandleSlot>>) -> R) -> R {
+    if let Some(hot) = crate::tls_hot::hot_if_published() {
+        let stack = hot.runtime_handle_stack.get();
+        if stack.is_null() {
+            return RUNTIME_HANDLE_STACK.with(f);
+        }
+        // SAFETY: `fill` stores this thread's `RUNTIME_HANDLE_STACK` address
+        // before publishing the cache, and the address is stable for the
+        // lifetime of the thread.
+        return f(unsafe { &*(stack as *const RefCell<Vec<RuntimeHandleSlot>>) });
+    }
+    RUNTIME_HANDLE_STACK.with(f)
+}
+
 /// Scoped owner for transient runtime handles.
 ///
 /// Handles are mutable GC roots for values that live only in a runtime
@@ -12,14 +61,14 @@ pub struct RuntimeHandleScope {
 impl RuntimeHandleScope {
     #[inline]
     pub fn new() -> Self {
-        let base = RUNTIME_HANDLE_STACK.with(|stack| stack.borrow().len());
+        let base = with_runtime_handle_stack(|stack| stack.borrow().len());
         Self { base }
     }
 
     #[inline]
     pub(super) fn push<'scope>(&'scope self, slot: RuntimeHandleSlot) -> RuntimeHandle<'scope> {
         runtime_handle_slot_write_barrier(slot);
-        let index = RUNTIME_HANDLE_STACK.with(|stack| {
+        let index = with_runtime_handle_stack(|stack| {
             let mut stack = stack.borrow_mut();
             let index = stack.len();
             stack.push(slot);
@@ -111,7 +160,7 @@ impl RuntimeHandleScope {
 
     #[cfg(test)]
     pub(crate) fn active_len_for_tests() -> usize {
-        RUNTIME_HANDLE_STACK.with(|stack| stack.borrow().len())
+        with_runtime_handle_stack(|stack| stack.borrow().len())
     }
 }
 
@@ -119,12 +168,12 @@ impl RuntimeHandleScope {
 /// Rust frames. `longjmp` skips `RuntimeHandleScope::drop`, so exception
 /// unwinding restores this depth explicitly.
 pub(crate) fn runtime_handle_stack_savepoint() -> usize {
-    RUNTIME_HANDLE_STACK.with(|stack| stack.borrow().len())
+    with_runtime_handle_stack(|stack| stack.borrow().len())
 }
 
 /// Discard transient roots owned by Rust frames skipped by a JS exception.
 pub(crate) fn runtime_handle_stack_restore(savepoint: usize) {
-    RUNTIME_HANDLE_STACK.with(|stack| stack.borrow_mut().truncate(savepoint));
+    with_runtime_handle_stack(|stack| stack.borrow_mut().truncate(savepoint));
 }
 
 #[inline]
@@ -149,7 +198,7 @@ impl Default for RuntimeHandleScope {
 impl Drop for RuntimeHandleScope {
     #[inline]
     fn drop(&mut self) {
-        RUNTIME_HANDLE_STACK.with(|stack| {
+        with_runtime_handle_stack(|stack| {
             stack.borrow_mut().truncate(self.base);
         });
     }
@@ -182,7 +231,7 @@ fn handle_kind_mismatch(expected: &str) -> ! {
 impl<'scope> RuntimeHandle<'scope> {
     #[inline]
     pub(super) fn with_slot<R>(&self, f: impl FnOnce(RuntimeHandleSlot) -> R) -> R {
-        RUNTIME_HANDLE_STACK.with(|stack| {
+        with_runtime_handle_stack(|stack| {
             let stack = stack.borrow();
             let slot = match stack.get(self.index) {
                 Some(slot) => *slot,
@@ -194,7 +243,7 @@ impl<'scope> RuntimeHandle<'scope> {
 
     #[inline]
     pub(super) fn with_slot_mut<R>(&self, f: impl FnOnce(&mut RuntimeHandleSlot) -> R) -> R {
-        RUNTIME_HANDLE_STACK.with(|stack| {
+        with_runtime_handle_stack(|stack| {
             let mut stack = stack.borrow_mut();
             let slot = match stack.get_mut(self.index) {
                 Some(slot) => slot,
@@ -404,7 +453,7 @@ impl<'scope> RuntimeHandle<'scope> {
 }
 
 pub(crate) fn scan_runtime_handle_roots_mut(visitor: &mut RuntimeRootVisitor<'_>) {
-    RUNTIME_HANDLE_STACK.with(|stack| {
+    with_runtime_handle_stack(|stack| {
         let mut stack = stack.borrow_mut();
         for slot in stack.iter_mut() {
             match slot {
@@ -439,7 +488,7 @@ pub(crate) fn scan_runtime_handle_roots_mut_step(
     let state = state
         .downcast_mut::<RuntimeHandleRootScanState>()
         .expect("runtime handle root scanner state type");
-    RUNTIME_HANDLE_STACK.with(|stack| {
+    with_runtime_handle_stack(|stack| {
         let mut stack = stack.borrow_mut();
         while *remaining > 0 && state.cursor < stack.len() {
             match &mut stack[state.cursor] {
@@ -477,7 +526,7 @@ pub(crate) fn scan_runtime_handle_roots_mut_step(
 
 #[no_mangle]
 pub extern "C" fn js_ffi_root_scope_enter() -> usize {
-    RUNTIME_HANDLE_STACK.with(|stack| stack.borrow().len())
+    with_runtime_handle_stack(|stack| stack.borrow().len())
 }
 
 /// Root a raw heap ADDRESS (e.g. an `i64` closure pointer from an ext
@@ -486,7 +535,7 @@ pub extern "C" fn js_ffi_root_scope_enter() -> usize {
 pub extern "C" fn js_ffi_root_push_heap_addr(addr: u64) -> usize {
     let slot = RuntimeHandleSlot::HeapWord(addr);
     runtime_handle_slot_write_barrier(slot);
-    RUNTIME_HANDLE_STACK.with(|stack| {
+    with_runtime_handle_stack(|stack| {
         let mut stack = stack.borrow_mut();
         let index = stack.len();
         stack.push(slot);
@@ -496,7 +545,7 @@ pub extern "C" fn js_ffi_root_push_heap_addr(addr: u64) -> usize {
 
 #[no_mangle]
 pub extern "C" fn js_ffi_root_get_heap_addr(index: usize) -> u64 {
-    RUNTIME_HANDLE_STACK.with(|stack| match stack.borrow().get(index) {
+    with_runtime_handle_stack(|stack| match stack.borrow().get(index) {
         Some(RuntimeHandleSlot::HeapWord(bits)) => *bits,
         _ => 0,
     })
@@ -507,7 +556,7 @@ pub extern "C" fn js_ffi_root_get_heap_addr(index: usize) -> u64 {
 pub extern "C" fn js_ffi_root_push_nanbox(bits: u64) -> usize {
     let slot = RuntimeHandleSlot::Nanbox(bits);
     runtime_handle_slot_write_barrier(slot);
-    RUNTIME_HANDLE_STACK.with(|stack| {
+    with_runtime_handle_stack(|stack| {
         let mut stack = stack.borrow_mut();
         let index = stack.len();
         stack.push(slot);
@@ -517,7 +566,7 @@ pub extern "C" fn js_ffi_root_push_nanbox(bits: u64) -> usize {
 
 #[no_mangle]
 pub extern "C" fn js_ffi_root_get_nanbox(index: usize) -> u64 {
-    RUNTIME_HANDLE_STACK.with(|stack| match stack.borrow().get(index) {
+    with_runtime_handle_stack(|stack| match stack.borrow().get(index) {
         Some(RuntimeHandleSlot::Nanbox(bits)) => *bits,
         _ => 0,
     })
@@ -525,5 +574,5 @@ pub extern "C" fn js_ffi_root_get_nanbox(index: usize) -> u64 {
 
 #[no_mangle]
 pub extern "C" fn js_ffi_root_scope_exit(base: usize) {
-    RUNTIME_HANDLE_STACK.with(|stack| stack.borrow_mut().truncate(base));
+    with_runtime_handle_stack(|stack| stack.borrow_mut().truncate(base));
 }

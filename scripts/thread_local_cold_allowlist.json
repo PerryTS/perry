@@ -1,6 +1,6 @@
 {
   "_comment": "Files still declaring raw `thread_local!`. Every entry is a declaration that pays `_tlv_get_addr` on Darwin; the count is a ratchet, so adding one to an already-listed file fails too. New code should use `crate::perry_thread_local!` \u2014 see crates/perry-runtime/src/tls_hot.rs. Regenerate with scripts/check_thread_locals.py --update.",
-  "_hot_declarations": 271,
+  "_hot_declarations": 275,
   "files": {
     "crates/perry-runtime/src/agent.rs": 1,
     "crates/perry-runtime/src/arena/block.rs": 2,
@@ -38,6 +38,7 @@
     "crates/perry-runtime/src/gc/old_free.rs": 1,
     "crates/perry-runtime/src/gc/policy.rs": 6,
     "crates/perry-runtime/src/gc/promote_in_place.rs": 1,
+    "crates/perry-runtime/src/gc/roots/runtime_handles.rs": 1,
     "crates/perry-runtime/src/gc/roots/scan_mode.rs": 1,
     "crates/perry-runtime/src/gc/roots/shadow_stack.rs": 2,
     "crates/perry-runtime/src/gc/roots/temp_roots.rs": 1,

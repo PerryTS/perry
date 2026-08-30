@@ -20,7 +20,9 @@ pub(super) use runtime_handles::{
     new_runtime_handle_root_scan_state, scan_runtime_handle_roots_mut,
     scan_runtime_handle_roots_mut_step,
 };
-pub(crate) use runtime_handles::{runtime_handle_stack_restore, runtime_handle_stack_savepoint};
+pub(crate) use runtime_handles::{
+    runtime_handle_stack_hot_addr, runtime_handle_stack_restore, runtime_handle_stack_savepoint,
+};
 pub use runtime_handles::{RuntimeHandle, RuntimeHandleScope};
 pub use scanner_shims::{
     async_context_mutable_root_scanner, async_context_root_scanner,
@@ -108,7 +110,6 @@ crate::perry_thread_local! {
     pub(super) static FFI_MUTABLE_ROOT_SCANNERS: RefCell<Vec<PerryFfiMutableRootScanner>> = RefCell::new(Vec::new());
     pub(super) static FFI_NAMED_MUTABLE_ROOT_SCANNERS: RefCell<Vec<(PerryFfiNamedMutableRootScanner, usize)>> = RefCell::new(Vec::new());
     pub(super) static GLOBAL_ROOTS: RefCell<Vec<*mut u64>> = const { RefCell::new(Vec::new()) };
-    pub(super) static RUNTIME_HANDLE_STACK: RefCell<Vec<RuntimeHandleSlot>> = const { RefCell::new(Vec::new()) };
     pub(super) static GC_ROOT_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
