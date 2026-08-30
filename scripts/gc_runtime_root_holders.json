@@ -2015,10 +2015,6 @@
       "name": "ROOT_SCANNERS"
     },
     {
-      "file": "crates/perry-runtime/src/gc/roots.rs",
-      "name": "RUNTIME_HANDLE_STACK"
-    },
-    {
       "file": "crates/perry-runtime/src/gc/roots/stack_maps.rs",
       "name": "LAST_REWRITE_WALK"
     },
