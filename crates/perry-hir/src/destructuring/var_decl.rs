@@ -333,12 +333,29 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // every property of `x` is a data field rather than an accessor —
             // `is_closed_shape` rejects getters and setters — and the
             // loop-invariant property hoist refuses to fire without it.
+            //
+            // A `const` alias of such a binding inherits the proof: neither
+            // name can ever be rebound, so both always denote the object the
+            // literal created. This is what lets the hoist reach receivers
+            // read through an alias, including one captured by a closure —
+            // the capture keeps the same `LocalId`, so no extra plumbing is
+            // needed once the alias is recorded.
             if !mutable {
-                if let Some(Expr::New { class_name, .. }) = init.as_ref() {
-                    if class_name.starts_with("__AnonShape_") {
+                match init.as_ref() {
+                    Some(Expr::New { class_name, .. })
+                        if class_name.starts_with("__AnonShape_") =>
+                    {
                         ctx.closed_shape_literal_locals
                             .insert(id, class_name.clone());
                     }
+                    Some(Expr::LocalGet(source)) => {
+                        if let Some(class_name) =
+                            ctx.closed_shape_literal_locals.get(source).cloned()
+                        {
+                            ctx.closed_shape_literal_locals.insert(id, class_name);
+                        }
+                    }
+                    _ => {}
                 }
             }
             result.push(Stmt::Let {

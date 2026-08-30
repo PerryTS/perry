@@ -200,7 +200,40 @@ fn stmt_is_hoist_safe(stmt: &Stmt, recv_id: u32) -> bool {
                     .as_ref()
                     .is_none_or(|b| b.iter().all(|s| stmt_is_hoist_safe(s, recv_id)))
         }
+        // Nested loops are the common case this pass exists for — `m.rows[i]`
+        // in an outer loop with an inner loop over the row — so recurse rather
+        // than refuse. A nested loop is safe on exactly the same terms: it may
+        // not rebind the receiver and may not call anything.
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            expr_is_hoist_safe(condition, recv_id)
+                && body.iter().all(|s| stmt_is_hoist_safe(s, recv_id))
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref()
+                .is_none_or(|s| stmt_is_hoist_safe(s, recv_id))
+                && condition
+                    .as_ref()
+                    .is_none_or(|e| expr_is_hoist_safe(e, recv_id))
+                && update
+                    .as_ref()
+                    .is_none_or(|e| expr_is_hoist_safe(e, recv_id))
+                && body.iter().all(|s| stmt_is_hoist_safe(s, recv_id))
+        }
+        Stmt::Labeled { body, .. } => stmt_is_hoist_safe(body, recv_id),
+        // Leaving the loop early is fine: the hoisted `Let` is evaluated
+        // before the loop either way, and the property read it replaces was
+        // never reached on this path.
+        Stmt::Return(value) => value
+            .as_ref()
+            .is_none_or(|e| expr_is_hoist_safe(e, recv_id)),
+        Stmt::Throw(value) => expr_is_hoist_safe(value, recv_id),
         Stmt::Break | Stmt::Continue => true,
+        Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
         _ => false,
     }
 }
@@ -265,6 +298,31 @@ fn stmt_reads_property(stmt: &Stmt, recv_id: u32, property: &str) -> bool {
                     .as_ref()
                     .is_some_and(|b| b.iter().any(|s| stmt_reads_property(s, recv_id, property)))
         }
+        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+            expr_reads_property(condition, recv_id, property)
+                || body.iter().any(|s| stmt_reads_property(s, recv_id, property))
+        }
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => {
+            init.as_ref()
+                .is_some_and(|s| stmt_reads_property(s, recv_id, property))
+                || condition
+                    .as_ref()
+                    .is_some_and(|e| expr_reads_property(e, recv_id, property))
+                || update
+                    .as_ref()
+                    .is_some_and(|e| expr_reads_property(e, recv_id, property))
+                || body.iter().any(|s| stmt_reads_property(s, recv_id, property))
+        }
+        Stmt::Labeled { body, .. } => stmt_reads_property(body, recv_id, property),
+        Stmt::Return(value) => value
+            .as_ref()
+            .is_some_and(|e| expr_reads_property(e, recv_id, property)),
+        Stmt::Throw(value) => expr_reads_property(value, recv_id, property),
         _ => false,
     }
 }
@@ -345,8 +403,54 @@ fn rewrite_stmt(stmt: &Stmt, recv_id: u32, property: &str, hoist_id: u32) -> Stm
                     .collect()
             }),
         },
+        // These mirror the arms `stmt_is_hoist_safe` admits. Anything it
+        // admits must be rewritten here too, or the read it vouched for keeps
+        // the per-iteration lookup.
+        Stmt::While { condition, body } => Stmt::While {
+            condition: rewrite_expr(condition, recv_id, property, hoist_id),
+            body: rewrite_block(body, recv_id, property, hoist_id),
+        },
+        Stmt::DoWhile { body, condition } => Stmt::DoWhile {
+            body: rewrite_block(body, recv_id, property, hoist_id),
+            condition: rewrite_expr(condition, recv_id, property, hoist_id),
+        },
+        Stmt::For {
+            init,
+            condition,
+            update,
+            body,
+        } => Stmt::For {
+            init: init
+                .as_ref()
+                .map(|s| Box::new(rewrite_stmt(s, recv_id, property, hoist_id))),
+            condition: condition
+                .as_ref()
+                .map(|e| rewrite_expr(e, recv_id, property, hoist_id)),
+            update: update
+                .as_ref()
+                .map(|e| rewrite_expr(e, recv_id, property, hoist_id)),
+            body: rewrite_block(body, recv_id, property, hoist_id),
+        },
+        Stmt::Labeled { label, body } => Stmt::Labeled {
+            label: label.clone(),
+            body: Box::new(rewrite_stmt(body, recv_id, property, hoist_id)),
+        },
+        Stmt::Return(value) => Stmt::Return(
+            value
+                .as_ref()
+                .map(|e| rewrite_expr(e, recv_id, property, hoist_id)),
+        ),
+        Stmt::Throw(value) => {
+            Stmt::Throw(rewrite_expr(value, recv_id, property, hoist_id))
+        }
         other => other.clone(),
     }
+}
+
+fn rewrite_block(body: &[Stmt], recv_id: u32, property: &str, hoist_id: u32) -> Vec<Stmt> {
+    body.iter()
+        .map(|s| rewrite_stmt(s, recv_id, property, hoist_id))
+        .collect()
 }
 
 fn rewrite_expr(expr: &Expr, recv_id: u32, property: &str, hoist_id: u32) -> Expr {
