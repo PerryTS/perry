@@ -279,7 +279,25 @@ fn ensure_thunk_registered() {
 
 /// The single native entry every interpreted closure shares. Reads its
 /// identity + environment from capture slots and runs the tree-walker.
+// Like the generic closure dispatchers, this frame can pass a Perry exception
+// from interpreted code to a generated caller. Debug/test runtimes need the
+// unwind-capable spelling so Rust does not install an RFC-2945 guard. Shipped
+// panic-abort runtimes deliberately use plain C so the raw exception crosses
+// without the inverse panic-abort C-unwind guard (#8479, #9207).
+#[cfg(not(panic = "abort"))]
+extern "C-unwind" fn interp_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    raw_args: f64,
+) -> f64 {
+    interp_thunk_impl(closure, raw_args)
+}
+
+#[cfg(panic = "abort")]
 extern "C" fn interp_thunk(closure: *const crate::closure::ClosureHeader, raw_args: f64) -> f64 {
+    interp_thunk_impl(closure, raw_args)
+}
+
+fn interp_thunk_impl(closure: *const crate::closure::ClosureHeader, raw_args: f64) -> f64 {
     let fn_id = crate::closure::js_closure_get_capture_f64(closure, 0) as u32;
     let def_env = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 1));
     let this_bits = crate::closure::js_closure_get_capture_bits(closure, 2);

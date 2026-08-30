@@ -842,11 +842,19 @@ pub unsafe fn dispatch_rest_bundled(
         };
         ($($i:tt),* $(,)?) => {{
             if let Some(arguments_double) = all_arguments_double {
+                #[cfg(panic = "abort")]
                 let f: extern "C" fn(*const ClosureHeader $(, rest_arm!(@ty $i))*, f64, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                #[cfg(not(panic = "abort"))]
+                let f: extern "C-unwind" fn(*const ClosureHeader $(, rest_arm!(@ty $i))*, f64, f64) -> f64 =
                     std::mem::transmute(func_ptr);
                 f(closure $(, a!($i))*, rest_double, arguments_double)
             } else {
+                #[cfg(panic = "abort")]
                 let f: extern "C" fn(*const ClosureHeader $(, rest_arm!(@ty $i))*, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                #[cfg(not(panic = "abort"))]
+                let f: extern "C-unwind" fn(*const ClosureHeader $(, rest_arm!(@ty $i))*, f64) -> f64 =
                     std::mem::transmute(func_ptr);
                 f(closure $(, a!($i))*, rest_double)
             }
@@ -856,11 +864,19 @@ pub unsafe fn dispatch_rest_bundled(
     match k {
         0 => {
             if let Some(arguments_double) = all_arguments_double {
+                #[cfg(panic = "abort")]
                 let f: extern "C" fn(*const ClosureHeader, f64, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                #[cfg(not(panic = "abort"))]
+                let f: extern "C-unwind" fn(*const ClosureHeader, f64, f64) -> f64 =
                     std::mem::transmute(func_ptr);
                 f(closure, rest_double, arguments_double)
             } else {
+                #[cfg(panic = "abort")]
                 let f: extern "C" fn(*const ClosureHeader, f64) -> f64 =
+                    std::mem::transmute(func_ptr);
+                #[cfg(not(panic = "abort"))]
+                let f: extern "C-unwind" fn(*const ClosureHeader, f64) -> f64 =
                     std::mem::transmute(func_ptr);
                 f(closure, rest_double)
             }
