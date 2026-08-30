@@ -336,10 +336,24 @@ fn cross_module_arrow_callback_dispatch_is_resolved_once_and_fails_closed() {
             && all_ir.contains("i32 1, i64 1)"),
         "module init must register the exact one-box capture layout"
     );
+    let trusted_callback =
+        llvm_function_body_containing(&all_ir, "$trusted_boxes", "trusted_box.tdz");
     assert!(
-        all_ir.contains("call i64 @js_box_get_bits_trusted(")
-            && all_ir.contains("call void @js_box_set_bits_trusted_no_barrier("),
-        "the private body must use the trusted box accessors"
+        trusted_callback.contains("getelementptr i8, ptr")
+            && trusted_callback.contains(", i64 16")
+            && trusted_callback.contains("inttoptr i64")
+            && trusted_callback.contains("load i64, ptr")
+            && trusted_callback.contains("store i64")
+            && trusted_callback.contains("call i64 @js_box_get_bits_trusted(")
+            && trusted_callback.contains("call void @js_write_barrier("),
+        "the private body must inline normal trusted-box access and retain its cold fallback:\n{trusted_callback}"
+    );
+    assert!(
+        !trusted_callback.contains("@js_closure_get_capture_bits(")
+            && !trusted_callback.contains("@js_box_get_bits(")
+            && !trusted_callback.contains("@js_box_set_bits(")
+            && !trusted_callback.contains("@js_box_set_bits_trusted_no_barrier("),
+        "the private body must not reintroduce generic or superseded trusted-box access:\n{trusted_callback}"
     );
 
     let mut forced_command = Command::new(dir.path().join("main_bin"));
@@ -430,9 +444,11 @@ fn imported_class_return_types_pull_in_transitive_dispatch_metadata() {
         "perry_method_returned_ts__Returned__valuePing",
         "perry_method_factory_ts__Hidden__pong",
     ] {
+        let public_call = format!("call double @{symbol}(");
+        let guarded_shape_call = format!("call double @{symbol}$pshape(");
         assert!(
-            entry_ir.contains(&format!("call double @{symbol}(")),
-            "the consumer did not route the returned instance directly through {symbol}:\n{entry_ir}"
+            entry_ir.contains(&public_call) || entry_ir.contains(&guarded_shape_call),
+            "the consumer did not route the returned instance directly through {symbol} or its guarded shape capability:\n{entry_ir}"
         );
     }
 }
