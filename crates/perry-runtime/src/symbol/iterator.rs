@@ -35,14 +35,6 @@ pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64
                     keys.push(sym_key);
                 }
             }
-            keys.sort_by_key(|sym_key| {
-                let ptr = *sym_key as *const SymbolHeader;
-                if ptr.is_null() {
-                    u64::MAX
-                } else {
-                    (*ptr).id
-                }
-            });
             keys
         };
         let mut arr = crate::array::js_array_alloc(entries.len() as u32);

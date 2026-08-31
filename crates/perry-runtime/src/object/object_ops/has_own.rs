@@ -148,13 +148,30 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
 
         // Symbol-keyed lookup: route through SYMBOL_PROPERTIES side table.
         if crate::symbol::js_is_symbol(key_value) != 0 {
-            // ClassRef receivers carry class_id in the low 32 bits.
-            let bits = obj_value.to_bits();
-            if (bits >> 48) == 0x7FFE {
-                let class_id = (bits & 0xFFFF_FFFF) as u32;
-                let present =
-                    crate::symbol::class_static_symbol_lookup(class_id, key_value).is_some();
+            let sym_key = crate::symbol::sym_key_from_f64(key_value);
+            if let Some(class_id) = super::super::class_ref_id(obj_value) {
+                let is_prototype = super::super::class_prototype_ref_id(obj_value).is_some();
+                let present = if is_prototype {
+                    super::super::class_registry::class_has_own_symbol_member(
+                        class_id, sym_key, false,
+                    )
+                } else {
+                    crate::symbol::class_static_symbol_lookup(class_id, key_value).is_some()
+                        || super::super::class_registry::class_has_own_symbol_member(
+                            class_id, sym_key, true,
+                        )
+                };
                 return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+            }
+            let obj_key = crate::symbol::obj_key_from_f64(obj_value);
+            if let Some(class_id) =
+                super::super::class_registry::class_id_for_decl_prototype_object(obj_key)
+            {
+                if super::super::class_registry::class_has_own_symbol_member(
+                    class_id, sym_key, false,
+                ) {
+                    return f64::from_bits(TAG_TRUE);
+                }
             }
             let present = crate::symbol::js_object_has_own_symbol(obj_value, key_value);
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });

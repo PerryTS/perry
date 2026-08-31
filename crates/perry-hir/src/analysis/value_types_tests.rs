@@ -1339,6 +1339,7 @@ fn infers_class_prototype_and_super_meta_value_shapes() {
             is_static: false,
             param_count: 0,
             has_rest: false,
+            definition_order: 1,
         },
         Expr::RegisterClassComputedAccessor {
             class_name: "Widget".to_string(),
@@ -1346,6 +1347,7 @@ fn infers_class_prototype_and_super_meta_value_shapes() {
             getter_name: Some("getValue".to_string()),
             setter_name: None,
             is_static: false,
+            definition_order: 2,
         },
     ] {
         assert_eq!(infer_expr_type(&expr, &env), Type::Void);

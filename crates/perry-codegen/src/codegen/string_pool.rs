@@ -657,14 +657,15 @@ pub(super) fn emit_string_pool(
     // symbols for those live in the defining module's object file.
     // Each module's init registers its own classes; the linker
     // ensures all init functions run before main.
-    // (class_id, name, llvm_symbol, total_param_count, has_synth_args, has_rest, spec_length)
-    let mut method_triples: Vec<(u32, String, String, u32, bool, bool, u32)> = Vec::new();
+    // (class_id, name, llvm_symbol, total_param_count, has_synth_args,
+    // has_rest, spec_length, definition_order)
+    let mut method_triples: Vec<(u32, String, String, u32, bool, bool, u32, u32)> = Vec::new();
     // #1788: (cid, static-method name, perry_static_* symbol, param_count,
     // has_rest). Registered into the runtime CLASS_STATIC_METHODS table so a
     // subclass whose parent is a class-expression value inherits the parent's
     // static methods (`class Sub extends make(...) {}; Sub.greet()`); has_rest
     // tells the dispatcher to bundle trailing args for a `...rest` param.
-    let mut static_method_triples: Vec<(u32, String, String, u32, bool, u32)> = Vec::new();
+    let mut static_method_triples: Vec<(u32, String, String, u32, bool, u32, u32)> = Vec::new();
     // #1787: (cid, standalone-constructor symbol, total_param_count).
     // Registered into CLASS_CONSTRUCTORS so `new <classObjectValue>()` (a
     // class-expression value constructed dynamically) can replay the class's
@@ -759,6 +760,7 @@ pub(super) fn emit_string_pool(
                 has_synth_args,
                 has_rest,
                 spec_length,
+                method.id,
             ));
         }
         // #1788: static methods are emitted as `perry_static_*` (no `this`
@@ -785,6 +787,7 @@ pub(super) fn emit_string_pool(
                 sm.params.len() as u32,
                 has_rest,
                 spec_length,
+                sm.id,
             ));
         }
         // #1787: the standalone constructor `<prefix>__<class>_constructor`
@@ -857,8 +860,16 @@ pub(super) fn emit_string_pool(
         ctor_triples.push((cid, ctor_symbol, ctor_params, ctor_sig_caps));
     }
     method_triples.sort_unstable();
-    for (cid, method_name, llvm_name, param_count, has_synth_args, has_rest, spec_length) in
-        method_triples
+    for (
+        cid,
+        method_name,
+        llvm_name,
+        param_count,
+        has_synth_args,
+        has_rest,
+        spec_length,
+        definition_order,
+    ) in method_triples
     {
         chunker.roll_if_full();
         let blk = chunker.current_block();
@@ -892,6 +903,16 @@ pub(super) fn emit_string_pool(
                 (I64, has_rest_str),
             ],
         );
+        blk.call_void(
+            "js_register_class_string_member_order",
+            &[
+                (I64, &cid.to_string()),
+                (I64, &bytes_i64),
+                (I64, &len_str),
+                (I64, "0"),
+                (I64, &definition_order.to_string()),
+            ],
+        );
         // Record the default-aware spec `.length` so `C.prototype.m.length`
         // reflects params-before-first-default, not the raw param count.
         blk.call_void(
@@ -908,7 +929,9 @@ pub(super) fn emit_string_pool(
     // static methods (subclass extends a class-expression value) resolve at
     // runtime via the class_id parent-chain walk.
     static_method_triples.sort_unstable();
-    for (cid, method_name, llvm_name, param_count, has_rest, spec_length) in static_method_triples {
+    for (cid, method_name, llvm_name, param_count, has_rest, spec_length, definition_order) in
+        static_method_triples
+    {
         chunker.roll_if_full();
         let blk = chunker.current_block();
         let entry = match strings.iter().find(|e| e.value == method_name) {
@@ -930,6 +953,16 @@ pub(super) fn emit_string_pool(
                 (I64, &func_i64),
                 (I64, &param_count.to_string()),
                 (I64, has_rest_str),
+            ],
+        );
+        blk.call_void(
+            "js_register_class_string_member_order",
+            &[
+                (I64, &cid.to_string()),
+                (I64, &bytes_i64),
+                (I64, &len_str),
+                (I64, "1"),
+                (I64, &definition_order.to_string()),
             ],
         );
         // Record the default-aware spec `.length` for the static method so
@@ -1121,7 +1154,7 @@ pub(super) fn emit_string_pool(
     // `undefined`.
     // (class_id, prop_name, llvm_symbol, is_static) — static accessors register
     // onto the class constructor (CLASS_STATIC_ACCESSORS), not the instance vtable.
-    let mut getter_pairs: Vec<(u32, String, String, bool)> = Vec::new();
+    let mut getter_pairs: Vec<(u32, String, String, bool, u32)> = Vec::new();
     for (class_name, class) in classes.iter() {
         // Refs #486: skip alias keys (see method-emission loop above).
         if *class_name != class.name {
@@ -1166,11 +1199,11 @@ pub(super) fn emit_string_pool(
                     sanitize_member(&inner),
                 )
             };
-            getter_pairs.push((cid, prop.clone(), llvm_name, is_static));
+            getter_pairs.push((cid, prop.clone(), llvm_name, is_static, getter_fn.id));
         }
     }
     getter_pairs.sort_unstable();
-    for (cid, prop_name, llvm_name, is_static) in getter_pairs {
+    for (cid, prop_name, llvm_name, is_static, definition_order) in getter_pairs {
         chunker.roll_if_full();
         let blk = chunker.current_block();
         let entry = match strings.iter().find(|e| e.value == prop_name) {
@@ -1196,6 +1229,16 @@ pub(super) fn emit_string_pool(
                 (I64, &func_i64),
             ],
         );
+        blk.call_void(
+            "js_register_class_string_member_order",
+            &[
+                (I64, &cid.to_string()),
+                (I64, &bytes_i64),
+                (I64, &len_str),
+                (I64, if is_static { "1" } else { "0" }),
+                (I64, &definition_order.to_string()),
+            ],
+        );
     }
 
     // Refs #486 (hono): parallel registration for class setters. Without
@@ -1215,7 +1258,7 @@ pub(super) fn emit_string_pool(
     // class/setter-length-dflt): without a per-func-ptr length registration
     // the runtime fell back to the setter's ABI arity (1), over-counting the
     // defaulted param.
-    let mut setter_pairs: Vec<(u32, String, String, bool, u32)> = Vec::new();
+    let mut setter_pairs: Vec<(u32, String, String, bool, u32, u32)> = Vec::new();
     for (class_name, class) in classes.iter() {
         if *class_name != class.name {
             continue;
@@ -1252,11 +1295,18 @@ pub(super) fn emit_string_pool(
                 )
             };
             let spec_length = spec_function_length(&setter_fn.params) as u32;
-            setter_pairs.push((cid, prop.clone(), llvm_name, is_static, spec_length));
+            setter_pairs.push((
+                cid,
+                prop.clone(),
+                llvm_name,
+                is_static,
+                spec_length,
+                setter_fn.id,
+            ));
         }
     }
     setter_pairs.sort_unstable();
-    for (cid, prop_name, llvm_name, is_static, spec_length) in setter_pairs {
+    for (cid, prop_name, llvm_name, is_static, spec_length, definition_order) in setter_pairs {
         chunker.roll_if_full();
         let blk = chunker.current_block();
         let entry = match strings.iter().find(|e| e.value == prop_name) {
@@ -1289,6 +1339,16 @@ pub(super) fn emit_string_pool(
                 (I64, &bytes_i64),
                 (I64, &len_str),
                 (I64, &func_i64),
+            ],
+        );
+        blk.call_void(
+            "js_register_class_string_member_order",
+            &[
+                (I64, &cid.to_string()),
+                (I64, &bytes_i64),
+                (I64, &len_str),
+                (I64, if is_static { "1" } else { "0" }),
+                (I64, &definition_order.to_string()),
             ],
         );
     }

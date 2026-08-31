@@ -333,6 +333,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             is_static,
             param_count,
             has_rest,
+            definition_order,
         } => {
             let key_v = lower_expr(ctx, key_expr)?;
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
@@ -349,6 +350,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let param_count_str = param_count.to_string();
                         let is_static_str = (*is_static as i64).to_string();
                         let has_rest_str = (*has_rest as i64).to_string();
+                        let definition_order_str = definition_order.to_string();
                         ctx.block().call_void(
                             "js_register_class_computed_method",
                             &[
@@ -358,6 +360,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (I64, &param_count_str),
                                 (I64, &is_static_str),
                                 (I64, &has_rest_str),
+                                (I64, &definition_order_str),
                             ],
                         );
                     }
@@ -371,6 +374,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             getter_name,
             setter_name,
             is_static,
+            definition_order,
         } => {
             let key_v = lower_expr(ctx, key_expr)?;
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
@@ -407,6 +411,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         .unwrap_or_else(|| "0".to_string());
                     let cid_str = class_id.to_string();
                     let is_static_str = (*is_static as i64).to_string();
+                    let definition_order_str = definition_order.to_string();
                     ctx.block().call_void(
                         "js_register_class_computed_accessor",
                         &[
@@ -415,6 +420,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             (I64, &getter_i64),
                             (I64, &setter_i64),
                             (I64, &is_static_str),
+                            (I64, &definition_order_str),
                         ],
                     );
                 }

@@ -598,6 +598,11 @@ crate::perry_thread_local! {
     /// this side-table keyed by class_id.
     pub(crate) static CLASS_DYNAMIC_PROPS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashMap<String, f64>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Property-creation order for `CLASS_DYNAMIC_PROPS`. The value table is a
+    /// HashMap for hot lookup, while [[OwnPropertyKeys]] needs first-insertion
+    /// order (with delete + re-add moving a key to the end).
+    pub(crate) static CLASS_DYNAMIC_PROP_ORDER: std::cell::RefCell<std::collections::HashMap<u32, Vec<String>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
     /// #7190: `(writable, enumerable)` for static own keys installed by
     /// `Object.defineProperty(C, k, desc)`. They live in `CLASS_DYNAMIC_PROPS`
     /// next to `static x = …` fields, which are writable AND enumerable by

@@ -319,6 +319,11 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_register_class_getter", VOID, &[I64, I64, I64, I64]);
     // Refs #486: per-class setter dispatch — see object.rs::js_register_class_setter.
     module.declare_function("js_register_class_setter", VOID, &[I64, I64, I64, I64]);
+    module.declare_function(
+        "js_register_class_string_member_order",
+        VOID,
+        &[I64, I64, I64, I64, I64],
+    );
     // Default-aware spec `.length` per class method (CLASS_METHOD_BIND_LENGTHS).
     module.declare_function(
         "js_register_class_method_bind_length",

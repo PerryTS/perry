@@ -677,6 +677,7 @@ mod property_key_tests {
                 0,
                 0,
                 0,
+                1,
             );
             let method = crate::object::class_registry::lookup_class_symbol_method_in_chain(
                 class_id, sym_key, false,
@@ -691,6 +692,7 @@ mod property_key_tests {
                 computed_class_getter as *const () as usize as i64,
                 0,
                 0,
+                2,
             );
             let value = crate::object::class_registry::class_symbol_getter_value(
                 class_id,

@@ -32,6 +32,110 @@ pub fn is_class_id_registered(class_id: u32) -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn record_class_string_member_order(
+    class_id: u32,
+    name: String,
+    is_static: bool,
+    definition_order: u32,
+) {
+    if class_id == 0 {
+        return;
+    }
+    let mut guard = match CLASS_STRING_MEMBER_ORDERS.write() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard
+        .as_mut()
+        .unwrap()
+        .entry((class_id, is_static, name))
+        // A later getter/setter or duplicate method redefines the existing
+        // property without moving it in [[OwnPropertyKeys]].
+        .and_modify(|order| *order = (*order).min(definition_order))
+        .or_insert(definition_order);
+}
+
+/// A configurable class element that is deleted and later recreated is a new
+/// property and must move to the end of its string-key partition. Keep the
+/// dispatch registry entry for fast calls, but retire its declaration-order
+/// position until a future class evaluation explicitly registers it again.
+pub(crate) fn invalidate_class_string_member_order(class_id: u32, name: &str, is_static: bool) {
+    if class_id == 0 {
+        return;
+    }
+    let mut guard = match CLASS_STRING_MEMBER_ORDERS.write() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
+    if guard.is_none() {
+        *guard = Some(HashMap::new());
+    }
+    guard
+        .as_mut()
+        .unwrap()
+        .insert((class_id, is_static, name.to_string()), u32::MAX);
+}
+
+pub(crate) unsafe fn record_class_symbol_member_order(
+    class_id: u32,
+    sym_key: usize,
+    is_static: bool,
+    definition_order: u32,
+) {
+    let symbol_id = (*(sym_key as *const crate::symbol::SymbolHeader)).id;
+    CLASS_SYMBOL_MEMBER_ORDERS.with(|orders| {
+        let mut guard = orders.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(HashMap::new());
+        }
+        guard
+            .as_mut()
+            .unwrap()
+            .entry((class_id, symbol_id, is_static))
+            .and_modify(|order| *order = (*order).min(definition_order))
+            .or_insert(definition_order);
+    });
+}
+
+/// Record the ClassBody position of a non-computed string-keyed method or
+/// accessor. Codegen emits this beside the existing dispatch registration;
+/// computed keys record the same metadata after runtime ToPropertyKey.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_class_string_member_order(
+    class_id: i64,
+    name_ptr: *const u8,
+    name_len: i64,
+    is_static: i64,
+    definition_order: i64,
+) {
+    if class_id <= 0 || name_ptr.is_null() || name_len < 0 {
+        return;
+    }
+    let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize))
+    else {
+        return;
+    };
+    record_class_string_member_order(
+        class_id as u32,
+        name.to_string(),
+        is_static != 0,
+        definition_order as u32,
+    );
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_REGISTER_CLASS_STRING_MEMBER_ORDER: unsafe extern "C" fn(
+    i64,
+    *const u8,
+    i64,
+    i64,
+    i64,
+) = js_register_class_string_member_order;
+
 /// Register a class method in the vtable registry.
 /// Called at startup from the init function for every class method/getter.
 #[no_mangle]

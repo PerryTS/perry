@@ -72,6 +72,9 @@ pub extern "C" fn js_object_delete_field(
                 if super::class_registry::class_name_for_id(class_id).is_some() {
                     super::class_registry::class_delete_own_dynamic_prop(class_id, name);
                     super::class_registry::class_mark_key_deleted(class_id, name);
+                    super::class_registry::invalidate_class_string_member_order(
+                        class_id, name, true,
+                    );
                 }
                 // #6363: a native HANDLE's own properties are its user expandos.
                 // `delete` used to unconditionally report success while LEAVING
@@ -295,6 +298,9 @@ pub extern "C" fn js_object_delete_field(
                                 .is_some())
                     {
                         super::class_registry::class_mark_key_deleted(cid, name);
+                        super::class_registry::invalidate_class_string_member_order(
+                            cid, name, false,
+                        );
                         super::class_registry::invalidate_class_prototype_fast_guards_for_method(
                             name,
                         );
@@ -721,6 +727,7 @@ fn delete_class_prototype_key(class_id: u32, name: &str) -> i32 {
         return 1;
     }
     super::class_registry::class_mark_key_deleted(class_id, name);
+    super::class_registry::invalidate_class_string_member_order(class_id, name, false);
     super::class_registry::invalidate_class_prototype_fast_guards_for_method(name);
     crate::typed_feedback::invalidate_method_change(class_id);
     1

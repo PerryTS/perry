@@ -1382,72 +1382,17 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                     "prototype".to_string(),
                 ]
             };
-            if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-                if let Some(reg) = registry.as_ref() {
-                    if let Some(vtable) = reg.get(&class_id) {
-                        if is_prototype_ref {
-                            let mut method_names: Vec<String> =
-                                vtable.methods.keys().cloned().collect();
-                            method_names.sort();
-                            for name in method_names {
-                                if !name.starts_with('#') {
-                                    push_unique_name(&mut names, name);
-                                }
-                            }
-                            let mut getter_names: Vec<String> =
-                                vtable.getters.keys().cloned().collect();
-                            getter_names.sort();
-                            for name in getter_names {
-                                if !name.starts_with('#') {
-                                    push_unique_name(&mut names, name);
-                                }
-                            }
-                            let mut setter_names: Vec<String> =
-                                vtable.setters.keys().cloned().collect();
-                            setter_names.sort();
-                            for name in setter_names {
-                                if !name.starts_with('#') {
-                                    push_unique_name(&mut names, name);
-                                }
-                            }
-                        }
-                    }
+            for name in
+                super::class_registry::class_own_string_member_names(class_id, !is_prototype_ref)
+            {
+                if !super::class_registry::class_is_key_deleted(class_id, &name) {
+                    push_unique_name(&mut names, name);
                 }
             }
             if !is_prototype_ref {
-                if let Ok(static_methods) = CLASS_STATIC_METHODS.read() {
-                    if let Some(map) = static_methods.as_ref().and_then(|m| m.get(&class_id)) {
-                        let mut method_names: Vec<String> = map.keys().cloned().collect();
-                        method_names.sort();
-                        for name in method_names {
-                            if !name.starts_with('#') {
-                                push_unique_name(&mut names, name);
-                            }
-                        }
-                    }
+                for name in super::class_registry::class_own_dynamic_prop_names(class_id) {
+                    push_unique_name(&mut names, name);
                 }
-                if let Ok(static_accessors) = CLASS_STATIC_ACCESSORS.read() {
-                    if let Some(map) = static_accessors.as_ref().and_then(|m| m.get(&class_id)) {
-                        let mut accessor_names: Vec<String> = map.keys().cloned().collect();
-                        accessor_names.sort();
-                        for name in accessor_names {
-                            if !name.starts_with('#') {
-                                push_unique_name(&mut names, name);
-                            }
-                        }
-                    }
-                }
-                CLASS_DYNAMIC_PROPS.with(|m| {
-                    if let Some(props) = m.borrow().get(&class_id) {
-                        let mut prop_names: Vec<String> = props.keys().cloned().collect();
-                        prop_names.sort();
-                        for name in prop_names {
-                            if !super::field_get_set::is_internal_runtime_key(&name) {
-                                push_unique_name(&mut names, name);
-                            }
-                        }
-                    }
-                });
             }
             names.retain(|n| !super::field_get_set::is_internal_runtime_key(n));
             sort_property_names_ecma(&mut names);
@@ -1622,6 +1567,62 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
             || crate::wasi::is_wasi_instance(f64::from_bits(
                 crate::value::js_nanbox_pointer(obj as i64).to_bits(),
             ));
+
+        // Declared class prototypes split their own properties between the
+        // ordinary keys array (constructor, methods, later expandos) and the
+        // class vtable (accessors). Rebuild their string half from both stores
+        // in ClassBody order. The physical-key membership check preserves
+        // deletion of mirrored methods/constructor; accessors have no physical
+        // slot, so their class deletion marker is authoritative.
+        if let Some(class_id) =
+            super::class_registry::class_id_for_decl_prototype_object(obj as usize)
+        {
+            let mut physical = Vec::new();
+            let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+            for i in 0..len {
+                let key_val = crate::array::js_array_get(keys, pos(i));
+                if key_val.bits() == crate::value::TAG_HOLE
+                    || key_val.bits() == crate::value::TAG_UNDEFINED
+                {
+                    continue;
+                }
+                let Some(bytes) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) else {
+                    continue;
+                };
+                if super::field_get_set::is_internal_runtime_key_bytes(bytes) {
+                    continue;
+                }
+                if let Ok(name) = std::str::from_utf8(bytes) {
+                    push_unique_name(&mut physical, name.to_string());
+                }
+            }
+
+            let mut names = Vec::new();
+            if physical.iter().any(|name| name == "constructor") {
+                names.push("constructor".to_string());
+            }
+            for name in super::class_registry::class_own_string_member_names(class_id, false) {
+                if super::class_registry::class_is_key_deleted(class_id, &name) {
+                    continue;
+                }
+                let is_accessor =
+                    super::class_registry::class_own_accessor_ptrs(class_id, &name).is_some();
+                if is_accessor || physical.contains(&name) {
+                    push_unique_name(&mut names, name);
+                }
+            }
+            for name in physical {
+                push_unique_name(&mut names, name);
+            }
+            sort_property_names_ecma(&mut names);
+            let result = crate::array::js_array_alloc(names.len() as u32);
+            for name in names {
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                crate::array::js_array_push(result, JSValue::string_ptr(key));
+            }
+            return f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000);
+        }
+
         let result = crate::array::js_array_alloc(len as u32);
         let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for i in 0..len {

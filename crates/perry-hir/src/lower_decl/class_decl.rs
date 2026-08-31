@@ -46,16 +46,22 @@ use class_heritage::*;
 use super::*;
 
 fn generic_computed_member_key<'a>(
-    ctx: &LoweringContext,
+    _ctx: &LoweringContext,
     method: &'a ast::ClassMethod,
 ) -> Option<&'a ast::ComputedPropName> {
     let ast::PropName::Computed(computed) = &method.key else {
         return None;
     };
-    if is_symbol_iterator_key(&computed.expr)
-        || is_inspect_custom_key(ctx, &computed.expr)
-        || symbol_well_known_key(&computed.expr).is_some()
-    {
+    let well_known = symbol_well_known_key(&computed.expr);
+    let needs_special_lowering =
+        (well_known == Some("iterator") && method.function.is_generator && !method.is_static)
+            || (well_known == Some("hasInstance")
+                && method.is_static
+                && matches!(method.kind, ast::MethodKind::Method))
+            || (well_known == Some("toStringTag")
+                && !method.is_static
+                && matches!(method.kind, ast::MethodKind::Getter));
+    if needs_special_lowering {
         return None;
     }
     Some(computed)
@@ -887,7 +893,16 @@ pub fn lower_class_decl(
                         // consumers work (#5128). See the helper for details.
                         if prop_name == "@@iterator" && func.is_generator && !method.is_static {
                             let wrapper = synthesize_symbol_iterator_wrapper(ctx, &name, &mut func);
-                            methods.push(wrapper);
+                            let ast::PropName::Computed(computed) = &method.key else {
+                                unreachable!("@@iterator generator key must be computed");
+                            };
+                            computed_members.push(ClassComputedMember {
+                                key_expr: lower_expr(ctx, &computed.expr)?,
+                                function: wrapper,
+                                is_static: false,
+                                kind: ClassComputedMemberKind::Method,
+                                source_order: member_index,
+                            });
                             continue;
                         }
                         if seen_generic_computed_member && can_source_order_register {
@@ -1743,7 +1758,16 @@ pub fn lower_class_from_ast(
                         // exactly as the class-declaration path does above.
                         if prop_name == "@@iterator" && func.is_generator && !method.is_static {
                             let wrapper = synthesize_symbol_iterator_wrapper(ctx, name, &mut func);
-                            methods.push(wrapper);
+                            let ast::PropName::Computed(computed) = &method.key else {
+                                unreachable!("@@iterator generator key must be computed");
+                            };
+                            computed_members.push(ClassComputedMember {
+                                key_expr: lower_expr(ctx, &computed.expr)?,
+                                function: wrapper,
+                                is_static: false,
+                                kind: ClassComputedMemberKind::Method,
+                                source_order: member_index,
+                            });
                             continue;
                         }
                         if seen_generic_computed_member && can_source_order_register {

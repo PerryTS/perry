@@ -65,8 +65,9 @@ pub(crate) use state::{
     class_decl_prototype_value_for_instance_class, class_delete_own_dynamic_prop,
     class_dynamic_prop_root_store, class_has_own_dynamic_prop, class_id_for_decl_prototype_object,
     class_is_key_deleted, class_mark_key_deleted, class_object_value_for_cid,
-    class_object_value_root_store, class_own_enumerable_field_names, class_own_static_field_value,
-    class_parent_closure, class_parent_closure_root_store, class_prototype_method_is_enumerable,
+    class_object_value_root_store, class_own_dynamic_prop_names, class_own_enumerable_field_names,
+    class_own_static_field_value, class_own_string_member_names, class_parent_closure,
+    class_parent_closure_root_store, class_prototype_method_is_enumerable,
     class_prototype_method_set_enumerable, class_prototype_method_value_cache_root_store,
     class_prototype_object_root_store, class_static_defined_attrs, class_static_prototype,
     class_static_prototype_is_nulled, class_static_prototype_root_clear,
@@ -80,8 +81,8 @@ pub use state::{
     CLASS_METHOD_BIND_LENGTHS, CLASS_OBJECT_VALUES, CLASS_PARENT_CLOSURES,
     CLASS_PROTOTYPE_METHOD_NONENUM, CLASS_PROTOTYPE_OBJECTS, CLASS_STATIC_ACCESSORS,
     CLASS_STATIC_METHODS, CLASS_STATIC_METHOD_BIND_LENGTHS, CLASS_STATIC_PROTOTYPES,
-    CLASS_SYMBOL_ACCESSORS, CLASS_SYMBOL_METHODS, CLASS_VTABLE_REGISTRY, FUNCTION_CLASS_IDS,
-    REGISTERED_CLASS_IDS,
+    CLASS_STRING_MEMBER_ORDERS, CLASS_SYMBOL_ACCESSORS, CLASS_SYMBOL_MEMBER_ORDERS,
+    CLASS_SYMBOL_METHODS, CLASS_VTABLE_REGISTRY, FUNCTION_CLASS_IDS, REGISTERED_CLASS_IDS,
 };
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────
@@ -166,12 +167,13 @@ pub(crate) use gc_roots::{
 // ── registration.rs ─────────────────────────────────────────────────────────
 pub(crate) use registration::{
     class_accessor_function_value, class_own_accessor_ptrs, class_own_static_accessor_ptrs,
+    invalidate_class_string_member_order,
 };
 pub use registration::{
     is_class_id_registered, js_register_class_getter, js_register_class_method,
     js_register_class_method_bind_length, js_register_class_setter,
     js_register_class_static_getter, js_register_class_static_method_bind_length,
-    js_register_class_static_setter,
+    js_register_class_static_setter, js_register_class_string_member_order,
 };
 
 // ── dispatch.rs ─────────────────────────────────────────────────────────────
@@ -190,14 +192,14 @@ pub(crate) use parent_static::{
     call_private_static_method_for_owner, call_registered_static_method, call_static_method,
     class_chain_has_instance_accessor, class_dynamic_static_accessor_descriptor,
     class_dynamic_static_accessor_getter_value, class_has_instance_getter,
-    class_has_own_static_method, class_has_symbol_member_in_chain, class_instance_setter_apply,
-    class_method_bind_length, class_object_own_field_bytes, class_object_pinned_parent,
-    class_own_symbol_accessor_ptrs, class_own_symbol_member_keys, class_own_symbol_method,
-    class_private_instance_getter_value, class_private_instance_setter_apply,
-    class_static_accessor_getter_value, class_static_accessor_setter_apply,
-    class_symbol_getter_value, class_symbol_setter_apply, get_parent_class_id,
-    lookup_class_symbol_method_in_chain, lookup_static_method_in_chain, register_class,
-    register_class_dynamic_static_accessor,
+    class_has_own_static_method, class_has_own_symbol_member, class_has_symbol_member_in_chain,
+    class_instance_setter_apply, class_method_bind_length, class_object_own_field_bytes,
+    class_object_pinned_parent, class_own_symbol_accessor_ptrs, class_own_symbol_member_keys,
+    class_own_symbol_method, class_private_instance_getter_value,
+    class_private_instance_setter_apply, class_static_accessor_getter_value,
+    class_static_accessor_setter_apply, class_symbol_getter_value, class_symbol_setter_apply,
+    get_parent_class_id, lookup_class_symbol_method_in_chain, lookup_static_method_in_chain,
+    register_class, register_class_dynamic_static_accessor,
 };
 pub use parent_static::{
     is_class_object_ptr, is_class_object_value, is_registered_class_prototype_object,

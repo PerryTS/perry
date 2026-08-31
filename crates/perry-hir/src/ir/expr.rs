@@ -537,6 +537,7 @@ pub enum Expr {
         is_static: bool,
         param_count: u32,
         has_rest: bool,
+        definition_order: u32,
     },
 
     /// Register one side of a computed class accessor.
@@ -546,6 +547,7 @@ pub enum Expr {
         getter_name: Option<String>,
         setter_name: Option<String>,
         is_static: bool,
+        definition_order: u32,
     },
 
     /// Issue #1772: per-evaluation identity for a class EXPRESSION

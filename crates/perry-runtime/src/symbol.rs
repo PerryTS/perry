@@ -1055,15 +1055,30 @@ pub(crate) static CLASS_STATIC_SYMBOLS_LATCH: crate::registry_latch::RegistryLat
 pub(crate) fn store_class_static_symbol_root(class_id: u32, sym_key: usize, value_bits: u64) {
     note_symbol_key_installed(sym_key);
     CLASS_STATIC_SYMBOLS_LATCH.arm();
+    let symbol_id = unsafe { (*(sym_key as *const SymbolHeader)).id };
+    let created;
     {
         let mut guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
         if guard.is_none() {
             *guard = Some(HashMap::new());
         }
-        guard
+        created = guard
             .as_mut()
             .unwrap()
-            .insert((class_id, sym_key), value_bits);
+            .insert((class_id, sym_key), value_bits)
+            .is_none();
+    }
+    if created {
+        let mut order = CLASS_STATIC_SYMBOL_ORDER.lock().unwrap();
+        if order.is_none() {
+            *order = Some(HashMap::new());
+        }
+        order
+            .as_mut()
+            .unwrap()
+            .entry(class_id)
+            .or_default()
+            .push(symbol_id);
     }
     publish_symbol_side_table_root_edges(sym_key, value_bits);
 }
@@ -1076,6 +1091,10 @@ per_test_global! {
     /// when the receiver is a class identifier (NaN-boxed INT32_TAG).
     /// Refs #420.
     static CLASS_STATIC_SYMBOLS: Mutex<Option<HashMap<(u32, usize), u64>>> = Mutex::new(None);
+
+    /// Symbol-id creation order for static symbol data properties. IDs are
+    /// stable across moving GC, unlike the pointer keys in the value table.
+    static CLASS_STATIC_SYMBOL_ORDER: Mutex<Option<HashMap<u32, Vec<u64>>>> = Mutex::new(None);
 }
 
 #[cfg(test)]

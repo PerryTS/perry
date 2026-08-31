@@ -1,6 +1,8 @@
 use super::decl_prototype_table::DeclPrototypeTable;
 use super::*;
-use crate::object::class_image::{ImageTable, StaticAccessorTable, StaticMethodTable};
+use crate::object::class_image::{
+    ImageTable, StaticAccessorTable, StaticMethodTable, StringMemberOrderTable,
+};
 use std::collections::HashMap;
 use std::sync::RwLock;
 
@@ -100,10 +102,21 @@ pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: &str, value: f6
         });
     }
     CLASS_DYNAMIC_PROPS.with(|m| {
-        m.borrow_mut()
+        let created = m
+            .borrow_mut()
             .entry(class_id)
             .or_default()
-            .insert(name.to_string(), value);
+            .insert(name.to_string(), value)
+            .is_none();
+        if created {
+            crate::object::CLASS_DYNAMIC_PROP_ORDER.with(|order| {
+                order
+                    .borrow_mut()
+                    .entry(class_id)
+                    .or_default()
+                    .push(name.to_string());
+            });
+        }
     });
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
 }
@@ -129,22 +142,37 @@ pub(crate) fn class_own_static_field_value(class_id: u32, name: &str) -> Option<
 /// here too (never reflectable). Returned unsorted; the caller applies ECMA
 /// ordering. (test262 class/elements static-field-declaration & friends.)
 pub(crate) fn class_own_enumerable_field_names(class_id: u32) -> Vec<String> {
-    CLASS_DYNAMIC_PROPS.with(|m| {
-        m.borrow()
-            .get(&class_id)
-            .map(|props| {
-                props
-                    .keys()
-                    .filter(|k| !crate::object::is_internal_runtime_key(k))
-                    // #7190: a key installed by `Object.defineProperty` without
-                    // `enumerable: true` shares this table with static fields
-                    // but is NOT enumerable.
-                    .filter(|k| !class_static_key_is_non_enumerable(class_id, k))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default()
-    })
+    class_own_dynamic_prop_names(class_id)
+        .into_iter()
+        // #7190: a key installed by `Object.defineProperty` without
+        // `enumerable: true` shares this table with static fields but is NOT
+        // enumerable.
+        .filter(|key| !class_static_key_is_non_enumerable(class_id, key))
+        .collect()
+}
+
+pub(crate) fn class_own_dynamic_prop_names(class_id: u32) -> Vec<String> {
+    let mut names = crate::object::CLASS_DYNAMIC_PROP_ORDER
+        .with(|order| order.borrow().get(&class_id).cloned().unwrap_or_default());
+    CLASS_DYNAMIC_PROPS.with(|props| {
+        let props = props.borrow();
+        let Some(props) = props.get(&class_id) else {
+            names.clear();
+            return;
+        };
+        names.retain(|name| props.contains_key(name));
+        // Registries populated by older/native paths may predate the order
+        // side table. Keep those visible with a deterministic fallback.
+        let mut missing: Vec<String> = props
+            .keys()
+            .filter(|name| !names.contains(name))
+            .cloned()
+            .collect();
+        missing.sort();
+        names.extend(missing);
+    });
+    names.retain(|key| !crate::object::is_internal_runtime_key(key));
+    names
 }
 
 /// #7190: record a `defineProperty`-installed static key's attributes. Called
@@ -194,6 +222,11 @@ pub(crate) fn class_delete_own_dynamic_prop(class_id: u32, name: &str) {
     CLASS_DYNAMIC_PROPS.with(|m| {
         if let Some(props) = m.borrow_mut().get_mut(&class_id) {
             props.remove(name);
+        }
+    });
+    crate::object::CLASS_DYNAMIC_PROP_ORDER.with(|order| {
+        if let Some(names) = order.borrow_mut().get_mut(&class_id) {
+            names.retain(|existing| existing != name);
         }
     });
 }
@@ -260,6 +293,12 @@ pub static CLASS_STATIC_METHODS: ImageTable<RwLock<Option<StaticMethodTable>>> =
 pub static CLASS_STATIC_ACCESSORS: ImageTable<RwLock<Option<StaticAccessorTable>>> =
     ImageTable::new(|image| &image.static_accessors);
 
+/// Source order for public class methods/accessors. Dispatch data lives in
+/// separate hash maps by member kind; keeping this metadata alongside the
+/// image lets [[OwnPropertyKeys]] reconstruct the single ClassBody order.
+pub static CLASS_STRING_MEMBER_ORDERS: ImageTable<RwLock<Option<StringMemberOrderTable>>> =
+    ImageTable::new(|image| &image.string_member_orders);
+
 /// Spec `Function.prototype.length` per (class_id, method/accessor name) — the
 /// count of formal parameters before the first one with a default or a rest.
 /// The vtable only records the *total* param count (needed for call dispatch),
@@ -283,6 +322,12 @@ crate::perry_thread_local! {
         RwLock::new(None);
 
     pub static CLASS_SYMBOL_ACCESSORS: RwLock<Option<HashMap<(u32, usize, bool), (usize, usize)>>> =
+        RwLock::new(None);
+
+    /// Source order for Symbol-keyed class methods/accessors. Symbol member
+    /// registries are thread-local because their keys are heap addresses, so
+    /// their ordering metadata follows the same ownership model.
+    pub static CLASS_SYMBOL_MEMBER_ORDERS: RwLock<Option<HashMap<(u32, u64, bool), u32>>> =
         RwLock::new(None);
 }
 
@@ -751,8 +796,72 @@ pub(crate) fn class_decl_prototype_method_names(class_id: u32) -> Vec<String> {
             names.extend(vtable.methods.keys().cloned());
         }
     }
+    order_class_string_member_names(class_id, false, &mut names);
+    names
+}
+
+fn internal_symbol_dispatch_alias(name: &str) -> bool {
+    matches!(
+        name,
+        "@@iterator"
+            | "@@asyncIterator"
+            | "@@toPrimitive"
+            | "__perry_dispose__"
+            | "__perry_async_dispose__"
+            | "__perry_inspect_custom__"
+    )
+}
+
+fn order_class_string_member_names(class_id: u32, is_static: bool, names: &mut Vec<String>) {
     names.sort();
     names.dedup();
+    let orders = CLASS_STRING_MEMBER_ORDERS.read().ok();
+    let order_for = |name: &str| {
+        orders
+            .as_ref()
+            .and_then(|guard| guard.as_ref())
+            .and_then(|map| map.get(&(class_id, is_static, name.to_string())).copied())
+    };
+    // Synthetic names exist solely to keep Perry's string-based dispatch fast.
+    // A source method literally named "@@iterator" has an order registration
+    // and remains visible; an alias created for a Symbol method does not.
+    names.retain(|name| {
+        let order = order_for(name);
+        order != Some(u32::MAX) && (order.is_some() || !internal_symbol_dispatch_alias(name))
+    });
+    names.sort_by(|left, right| match (order_for(left), order_for(right)) {
+        (Some(a), Some(b)) => a.cmp(&b).then_with(|| left.cmp(right)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => left.cmp(right),
+    });
+}
+
+/// Own string-keyed methods and accessors in ClassBody definition order.
+/// The dispatch registries intentionally remain hash maps; reflection is the
+/// only consumer that needs their cross-kind ordering.
+pub(crate) fn class_own_string_member_names(class_id: u32, is_static: bool) -> Vec<String> {
+    let mut names = Vec::new();
+    if is_static {
+        if let Ok(methods) = CLASS_STATIC_METHODS.read() {
+            if let Some(map) = methods.as_ref().and_then(|all| all.get(&class_id)) {
+                names.extend(map.keys().cloned());
+            }
+        }
+        if let Ok(accessors) = CLASS_STATIC_ACCESSORS.read() {
+            if let Some(map) = accessors.as_ref().and_then(|all| all.get(&class_id)) {
+                names.extend(map.keys().cloned());
+            }
+        }
+    } else if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
+        if let Some(vtable) = registry.as_ref().and_then(|all| all.get(&class_id)) {
+            names.extend(vtable.methods.keys().cloned());
+            names.extend(vtable.getters.keys().cloned());
+            names.extend(vtable.setters.keys().cloned());
+        }
+    }
+    names.retain(|name| !name.starts_with('#'));
+    order_class_string_member_names(class_id, is_static, &mut names);
     names
 }
 

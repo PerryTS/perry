@@ -553,6 +553,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
     param_count: i64,
     is_static: i64,
     has_rest: i64,
+    definition_order: i64,
 ) {
     if class_id == 0 || func_ptr == 0 {
         return;
@@ -565,6 +566,12 @@ pub unsafe extern "C" fn js_register_class_computed_method(
             return;
         }
         crate::symbol::note_symbol_key_installed(sym_key);
+        super::registration::record_class_symbol_member_order(
+            class_id,
+            sym_key,
+            is_static != 0,
+            definition_order as u32,
+        );
         CLASS_SYMBOL_METHODS.with(|table| {
             let mut guard = table.write().unwrap();
             if guard.is_none() {
@@ -606,6 +613,10 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 } else {
                     None
                 }
+            })
+            .or_else(|| {
+                (sym_key == crate::symbol::inspect_custom_symbol_ptr())
+                    .then_some("__perry_inspect_custom__")
             });
             if let Some(method_name) = alias {
                 let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
@@ -639,6 +650,12 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         Some(name) => name,
         None => return,
     };
+    super::registration::record_class_string_member_order(
+        class_id,
+        name.clone(),
+        is_static != 0,
+        definition_order as u32,
+    );
     if is_static != 0 && name == "prototype" {
         throw_object_type_error(b"Classes may not have a static property named 'prototype'");
     }
@@ -694,6 +711,7 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
     getter_ptr: i64,
     setter_ptr: i64,
     is_static: i64,
+    definition_order: i64,
 ) {
     if class_id == 0 || (getter_ptr == 0 && setter_ptr == 0) {
         return;
@@ -706,6 +724,12 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
             return;
         }
         crate::symbol::note_symbol_key_installed(sym_key);
+        super::registration::record_class_symbol_member_order(
+            class_id,
+            sym_key,
+            is_static != 0,
+            definition_order as u32,
+        );
         CLASS_SYMBOL_ACCESSORS.with(|table| {
             let mut guard = table.write().unwrap();
             if guard.is_none() {
@@ -727,6 +751,12 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
         return;
     }
     if let Some(name) = property_key_string(property_key) {
+        super::registration::record_class_string_member_order(
+            class_id,
+            name.clone(),
+            is_static != 0,
+            definition_order as u32,
+        );
         if is_static != 0 && name == "prototype" {
             throw_object_type_error(b"Classes may not have a static property named 'prototype'");
         }
@@ -917,10 +947,18 @@ pub(crate) fn class_own_symbol_member_keys(class_id: u32, is_static: bool) -> Ve
     });
     keys.sort_by_key(|sym_key| unsafe {
         let ptr = *sym_key as *const crate::symbol::SymbolHeader;
-        if ptr.is_null() {
-            u64::MAX
+        let symbol_id = if ptr.is_null() { u64::MAX } else { (*ptr).id };
+        let definition_order = CLASS_SYMBOL_MEMBER_ORDERS.with(|orders| {
+            orders.read().ok().and_then(|guard| {
+                guard
+                    .as_ref()
+                    .and_then(|map| map.get(&(class_id, symbol_id, is_static)).copied())
+            })
+        });
+        if let Some(order) = definition_order {
+            (0u8, order, symbol_id)
         } else {
-            (*ptr).id
+            (1u8, u32::MAX, symbol_id)
         }
     });
     keys

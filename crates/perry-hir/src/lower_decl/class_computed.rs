@@ -30,6 +30,7 @@ pub(crate) fn class_computed_member_registration_expr(
                 .last()
                 .map(|p| p.is_rest)
                 .unwrap_or(false),
+            definition_order: member.function.id,
         },
         ClassComputedMemberKind::Getter => Expr::RegisterClassComputedAccessor {
             class_name: class_name.to_string(),
@@ -37,6 +38,7 @@ pub(crate) fn class_computed_member_registration_expr(
             getter_name: Some(member.function.name.clone()),
             setter_name: None,
             is_static: member.is_static,
+            definition_order: member.function.id,
         },
         ClassComputedMemberKind::Setter => Expr::RegisterClassComputedAccessor {
             class_name: class_name.to_string(),
@@ -44,6 +46,7 @@ pub(crate) fn class_computed_member_registration_expr(
             getter_name: None,
             setter_name: Some(member.function.name.clone()),
             is_static: member.is_static,
+            definition_order: member.function.id,
         },
     }
 }

@@ -356,6 +356,7 @@ pub(crate) fn test_clear_symbol_side_table_roots() {
     *crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES) = None;
     *crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS) = None;
     *crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS) = None;
+    *CLASS_STATIC_SYMBOL_ORDER.lock().unwrap() = None;
     accessors::test_clear_symbol_accessor_roots();
 
     let mut persistent = Vec::new();
@@ -420,7 +421,21 @@ pub(crate) fn test_symbol_property_owner_exists(owner: usize) -> bool {
 #[cfg(test)]
 pub(crate) fn test_seed_class_static_symbol_root(class_id: u32, sym_key: usize, value_bits: u64) {
     if class_id != 0 && sym_key != 0 {
-        store_class_static_symbol_root(class_id, sym_key, value_bits);
+        // Root-scanner tests deliberately use synthetic addresses, including
+        // an unaligned sentinel. Seed only the root table they exercise;
+        // production registration additionally reads SymbolHeader::id for
+        // [[OwnPropertyKeys]] ordering and therefore requires a real Symbol.
+        CLASS_STATIC_SYMBOLS_LATCH.arm();
+        let mut guard = crate::gc::lock_gc_root_registry(&CLASS_STATIC_SYMBOLS);
+        if guard.is_none() {
+            *guard = Some(HashMap::new());
+        }
+        guard
+            .as_mut()
+            .unwrap()
+            .insert((class_id, sym_key), value_bits);
+        drop(guard);
+        publish_symbol_side_table_root_edges(sym_key, value_bits);
     }
 }
 

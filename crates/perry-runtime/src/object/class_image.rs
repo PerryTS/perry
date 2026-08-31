@@ -93,6 +93,11 @@ pub type StaticMethodTable = PtrHashMap<u32, HashMap<String, (usize, u32, bool)>
 /// class_id -> { name -> (getter func_ptr, setter func_ptr) } for static accessors.
 /// Outer map fast-hashed, inner `String`-keyed map deliberately not — see above.
 pub type StaticAccessorTable = PtrHashMap<u32, HashMap<String, (usize, usize)>>;
+/// `(class_id, is_static, property_name) -> source-order token` for declared
+/// string-keyed methods and accessors. The token is the member function's HIR
+/// id, which is allocated while walking the class body and therefore orders
+/// entries across the otherwise separate method/getter/setter registries.
+pub type StringMemberOrderTable = HashMap<(u32, bool, String), u32>;
 /// class_id -> (ctor func_ptr, total param count, signature capture count).
 pub type ConstructorTable = PtrHashMap<u32, (usize, u32, u32)>;
 /// class_id -> (has_synthetic_arguments, has_rest) for a registered constructor.
@@ -122,6 +127,7 @@ pub struct ClassImageTables {
     pub(crate) vtables: RwLock<Option<PtrHashMap<u32, ClassVTable>>>,
     pub(crate) static_methods: RwLock<Option<StaticMethodTable>>,
     pub(crate) static_accessors: RwLock<Option<StaticAccessorTable>>,
+    pub(crate) string_member_orders: RwLock<Option<StringMemberOrderTable>>,
     pub(crate) method_bind_lengths: RwLock<Option<HashMap<(u32, String), u32>>>,
     pub(crate) static_method_bind_lengths: RwLock<Option<HashMap<(u32, String), u32>>>,
     pub(crate) registered_class_ids: RwLock<Option<PtrHashSet<u32>>>,
@@ -150,6 +156,7 @@ impl ClassImageTables {
             vtables: RwLock::new(None),
             static_methods: RwLock::new(None),
             static_accessors: RwLock::new(None),
+            string_member_orders: RwLock::new(None),
             method_bind_lengths: RwLock::new(None),
             static_method_bind_lengths: RwLock::new(None),
             registered_class_ids: RwLock::new(None),
