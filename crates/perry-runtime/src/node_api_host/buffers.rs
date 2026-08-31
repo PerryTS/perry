@@ -145,7 +145,7 @@ pub unsafe extern "C" fn napi_get_buffer_info(
     length: *mut usize,
 ) -> NapiStatus {
     let owner = match pointer_owner(env, value) {
-        Ok(owner) if is_node_buffer(owner) => owner,
+        Ok(owner) if crate::buffer::is_node_buffer(owner) => owner,
         _ => return set_status(env, NapiStatus::InvalidArg, "value must be a Buffer"),
     };
     let buffer = owner as *const BufferHeader;
