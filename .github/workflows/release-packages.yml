@@ -358,12 +358,53 @@ jobs:
           echo "All gate workflows passed — proceeding to build/publish."
 
   # ---------------------------------------------------------------------------
+  # Warm the x86_64-apple-darwin dependency cache before `build` runs.
+  #
+  # The macOS x86_64 leg must run on an Intel runner: the bare `macos-15` label
+  # is the Arm64 image, whose arm64-only LLVM cannot link an x86_64 binary.
+  # Intel runners are materially slower -- the arm64 leg takes ~3h40m WITH a
+  # warm cache -- and a cold `dist` build there ran to GitHub's hard 6h job
+  # ceiling and was cancelled. A cancelled job SKIPS its post-steps, so
+  # `rust-cache` saved nothing, leaving that leg unable to warm its own cache:
+  # it cannot finish without a cache and cannot cache without finishing.
+  #
+  # This job breaks the loop. `rust-cache` caches THIRD-PARTY dependencies only
+  # (it deliberately evicts workspace-crate fingerprints -- see #4856 in the
+  # build job), and those are the bulk of a cold build. Compiling them here
+  # under a timeout safely inside the ceiling, with `cache-on-failure`, saves
+  # the cache even if this job does not finish, so `build` starts from
+  # compiled dependencies.
+  #
+  # `continue-on-error` is deliberate: this is an optimization, never a gate.
+  # If it fails or times out, `build` runs exactly as it would have.
+  prime-macos-x86_64-cache:
+    needs: [preflight]
+    runs-on: macos-15-intel
+    timeout-minutes: 330
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-08-20 --profile minimal --target x86_64-apple-darwin
+      - uses: ./.github/actions/setup-llvm22
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # MUST match the build job's key for this target, or this warms a
+          # cache nothing reads.
+          shared-key: "release-x86_64-apple-darwin"
+          cache-on-failure: true
+          workspaces: |
+            . -> target
+      - name: Compile dependencies for x86_64-apple-darwin
+        run: cargo build --profile dist --target x86_64-apple-darwin -p perry
+
+  # ---------------------------------------------------------------------------
   # Build release binaries for all platforms
   # ---------------------------------------------------------------------------
   build:
     # preflight is only in `needs` for its outputs (the update-manifest signing
     # steps bake the release tag into the signed URL); await-tests is the gate.
-    needs: [preflight, await-tests]
+    needs: [preflight, await-tests, prime-macos-x86_64-cache]
     strategy:
       # Don't let one platform's build failure cancel the others (mirrors
       # build-cross). A broken cross-host target should not strand the
