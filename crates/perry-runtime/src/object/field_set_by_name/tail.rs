@@ -279,7 +279,7 @@ pub(crate) fn set_field_by_name_object_tail(
             && obj_class_id != NATIVE_MODULE_CLASS_ID
             && crate::object::object_is_regular(obj)
             && (*gc_header)._reserved & PLAN_BLOCKING_FLAGS == 0
-            && !super::prototype_chain::object_has_prototype_override(obj as usize);
+            && !super::prototype_chain::object_has_prototype_divergence(obj as usize);
         let plan_fast = plan_eligible
             && super::prop_plan::store_plan_check(obj_class_id, interned_key as usize);
 
@@ -512,7 +512,7 @@ pub(crate) fn set_field_by_name_object_tail(
                 && obj_class_id != NATIVE_MODULE_CLASS_ID
                 && crate::object::object_is_regular(obj)
                 && obj_flags & PLAN_BLOCKING_FLAGS == 0
-                && !super::prototype_chain::object_has_prototype_override(obj as usize);
+                && !super::prototype_chain::object_has_prototype_divergence(obj as usize);
             if !plan_fast && record_plan_eligible {
                 super::prop_plan::store_plan_record(obj_class_id, interned_key as usize);
             }

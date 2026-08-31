@@ -287,7 +287,7 @@ fn recorded_prototype_constructor_overrides_plain_object_constructor() {
         let instance = js_object_alloc(class_id, 0);
         let constructor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
         js_object_set_field_by_name(prototype, constructor_key, 42.0);
-        crate::object::prototype_chain::object_set_static_prototype(
+        crate::object::prototype_chain::object_set_user_prototype(
             instance as usize,
             crate::value::js_nanbox_pointer(prototype as i64).to_bits(),
         );

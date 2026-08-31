@@ -1549,8 +1549,8 @@ pub(crate) unsafe fn object_keys_array(obj: *const ObjectHeader) -> *mut ArrayHe
 /// `ObjectMeta` migration.
 #[repr(C)]
 pub struct ObjectMeta {
-    /// Custom `[[Prototype]]` recorded by `Object.setPrototypeOf` / object
-    /// literal `__proto__`: the NaN-boxed proto bits,
+    /// Custom `[[Prototype]]` recorded by a user-facing operation or runtime
+    /// prototype wiring: the NaN-boxed proto bits,
     /// `crate::value::TAG_NULL` for an explicit null prototype, or 0 when
     /// unset (fall back to default prototype resolution).
     pub prototype: u64,
@@ -1567,8 +1567,11 @@ pub struct ObjectMeta {
     /// Same summary for accessor descriptors (`get`/`set` installs) — the
     /// `accessor_descriptors` table twin of `attr_key_bits`.
     pub accessor_key_bits: u64,
-    /// Object-only state and compact scalar proof payloads. Bit 0 is the
-    /// custom-prototype flag. #8690 reserves bits 1..2 and 8..63 for the
+    /// Object-only state and compact scalar proof payloads. Bit 0 records
+    /// prototype-semantic divergence (including runtime wiring); bit 3 records
+    /// that a user-facing operation chose the prototype. Keeping those signals
+    /// separate prevents internal wiring from masquerading as
+    /// `Object.setPrototypeOf`. #8690 reserves bits 1..2 and 8..63 for the
     /// packed Array-subclass numeric-prefix proof (kind, verified bound, and
     /// ShapeId);
     /// its address-reuse-safe authority is a type-specific GcHeader bit.
@@ -1650,7 +1653,8 @@ pub struct ObjectMeta {
     pub elements: u64,
 }
 
-pub(crate) const OBJECT_META_FLAG_PROTO_OVERRIDE: u64 = 1;
+pub(crate) const OBJECT_META_FLAG_PROTO_DIVERGED: u64 = 1;
+pub(crate) const OBJECT_META_FLAG_USER_PROTO_OVERRIDE: u64 = 1 << 3;
 
 /// Authoritative ordinary-object discriminator. RegExp has its own GC kind,
 /// and heap class-expression values carry their kind in the immutable ShapeId

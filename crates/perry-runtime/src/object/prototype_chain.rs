@@ -154,11 +154,26 @@ pub(crate) unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::O
     Some(obj_ptr as *mut crate::ObjectHeader)
 }
 
-/// Record `Object.setPrototypeOf(obj_ptr, proto)`. `proto_bits` is the NaN-box
-/// bits of the prototype object (POINTER-tagged) or `TAG_NULL`. Idempotent
-/// overwrite.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PrototypeLinkKind {
+    ClassDefault,
+    RuntimeWiring,
+    UserOverride,
+}
+
+/// Record runtime prototype wiring while preserving the loud setter's cache
+/// invalidations and shape-semantic transition. This deliberately does not
+/// claim that the user replaced the receiver's prototype.
 pub fn object_set_static_prototype(obj_ptr: usize, proto_bits: u64) {
-    object_set_static_prototype_impl(obj_ptr, proto_bits, true)
+    object_set_static_prototype_impl(obj_ptr, proto_bits, PrototypeLinkKind::RuntimeWiring)
+}
+
+/// Record a prototype selected by a user-facing operation such as
+/// `Object.setPrototypeOf` or an object-literal `__proto__`. This has the same
+/// invalidation behavior as the loud runtime setter and additionally publishes
+/// the dedicated user-origin signal consumed by class dispatch.
+pub(crate) fn object_set_user_prototype(obj_ptr: usize, proto_bits: u64) {
+    object_set_static_prototype_impl(obj_ptr, proto_bits, PrototypeLinkKind::UserOverride)
 }
 
 /// Construct-path variant: link a fresh instance to its class-DEFAULT
@@ -171,10 +186,12 @@ pub fn object_set_static_prototype(obj_ptr: usize, proto_bits: u64) {
 /// flushed the plan cache on EVERY function-ctor construction, which kept it
 /// permanently cold in fiber-heavy workloads.
 pub(crate) fn object_link_class_default_prototype(obj_ptr: usize, proto_bits: u64) {
-    object_set_static_prototype_impl(obj_ptr, proto_bits, false)
+    object_set_static_prototype_impl(obj_ptr, proto_bits, PrototypeLinkKind::ClassDefault)
 }
 
-fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_override: bool) {
+fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: PrototypeLinkKind) {
+    let prototype_diverged = link_kind != PrototypeLinkKind::ClassDefault;
+    let user_override = link_kind == PrototypeLinkKind::UserOverride;
     if obj_ptr == 0 {
         return;
     }
@@ -196,12 +213,12 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
     // A per-instance prototype override invalidates class-keyed interception
     // verdicts (the overridden chain can differ from the class chain), and the
     // object itself must never satisfy a class-keyed plan again.
-    if instance_override {
+    if prototype_diverged {
         crate::object::prop_plan::prop_plan_epoch_bump();
         // #7480: a `[[Prototype]]` swap on a live instance is prototype
         // surgery — the same class of event as writing onto `C.prototype`, so
         // it retires every outstanding element-shape proof. Deliberately
-        // inside the `instance_override` gate: the quiet sibling
+        // inside the `prototype_diverged` gate: the quiet sibling
         // (`object_link_class_default_prototype`) fires on every `new F()`.
         crate::array::invalidate_all_element_shapes();
     }
@@ -221,8 +238,11 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
             });
             let proto_bits = proto_handle.get_heap_word_u64();
             (*meta).prototype = proto_bits;
-            if instance_override {
-                (*meta).flags |= crate::object::OBJECT_META_FLAG_PROTO_OVERRIDE;
+            if prototype_diverged {
+                (*meta).flags |= crate::object::OBJECT_META_FLAG_PROTO_DIVERGED;
+            }
+            if user_override {
+                (*meta).flags |= crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE;
             }
             // GC_STORE_AUDIT(BARRIERED): meta-record prototype slot store —
             // the record is an arena allocation, so the ordinary object-slot
@@ -232,7 +252,7 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, instance_ov
                 &(*meta).prototype as *const u64 as usize,
                 proto_bits,
             );
-            if instance_override {
+            if prototype_diverged {
                 crate::object::shapes::transition_object_shape_semantics(obj);
             }
             return;
@@ -293,19 +313,31 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
         .and_then(|map| map.get(&obj_ptr).copied())
 }
 
-/// True only for a per-instance `Object.setPrototypeOf` / literal
-/// `__proto__` override. Class-default prototype links use the same metadata
-/// record but deliberately leave this bit clear so class-keyed store plans
-/// remain valid.
 #[inline]
-pub(crate) fn object_has_prototype_override(obj_ptr: usize) -> bool {
+fn object_has_prototype_flag(obj_ptr: usize, flag: u64) -> bool {
     unsafe {
         let Some(obj) = meta_capable_object(obj_ptr) else {
             return false;
         };
         let meta = (*obj).meta;
-        !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_PROTO_OVERRIDE != 0
+        !meta.is_null() && (*meta).flags & flag != 0
     }
+}
+
+/// True when this receiver's recorded prototype diverges from its class
+/// default, regardless of whether runtime wiring or a user-facing operation
+/// selected it. Cache guards use this conservative signal.
+#[inline]
+pub(crate) fn object_has_prototype_divergence(obj_ptr: usize) -> bool {
+    object_has_prototype_flag(obj_ptr, crate::object::OBJECT_META_FLAG_PROTO_DIVERGED)
+}
+
+/// True only when a user-facing operation selected this receiver's prototype.
+/// Runtime wiring can use the same metadata record and loud invalidations, but
+/// it deliberately leaves this distinct bit clear.
+#[inline]
+pub(crate) fn object_has_user_prototype_override(obj_ptr: usize) -> bool {
+    object_has_prototype_flag(obj_ptr, crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE)
 }
 
 pub(crate) fn default_object_prototype_bits() -> Option<u64> {
@@ -581,6 +613,50 @@ pub(crate) fn test_prototype_registry_latch_armed() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_wiring_and_user_override_publish_distinct_signals() {
+        let _no_move = crate::gc::GcSuppressScope::new();
+
+        let runtime_wired = crate::object::js_object_alloc(0, 0);
+        object_set_static_prototype(runtime_wired as usize, crate::value::TAG_NULL);
+        let runtime_meta = unsafe { (*runtime_wired).meta };
+        assert!(!runtime_meta.is_null());
+        assert_ne!(
+            unsafe { (*runtime_meta).flags } & crate::object::OBJECT_META_FLAG_PROTO_DIVERGED,
+            0,
+            "the loud runtime setter must retain its conservative divergence signal"
+        );
+        assert!(object_has_prototype_divergence(runtime_wired as usize));
+        assert!(
+            !object_has_user_prototype_override(runtime_wired as usize),
+            "runtime prototype wiring must not masquerade as a user override"
+        );
+
+        let class_default = crate::object::js_object_alloc(0, 0);
+        object_link_class_default_prototype(class_default as usize, crate::value::TAG_NULL);
+        let class_default_meta = unsafe { (*class_default).meta };
+        assert!(!class_default_meta.is_null());
+        assert_eq!(
+            unsafe { (*class_default_meta).flags }
+                & (crate::object::OBJECT_META_FLAG_PROTO_DIVERGED
+                    | crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE),
+            0,
+            "class-default links must publish neither divergence signal"
+        );
+        assert!(!object_has_prototype_divergence(class_default as usize));
+
+        let user_overridden = crate::object::js_object_alloc(0, 0);
+        object_set_user_prototype(user_overridden as usize, crate::value::TAG_NULL);
+        let user_meta = unsafe { (*user_overridden).meta };
+        assert!(!user_meta.is_null());
+        assert_ne!(
+            unsafe { (*user_meta).flags } & crate::object::OBJECT_META_FLAG_PROTO_DIVERGED,
+            0
+        );
+        assert!(object_has_prototype_divergence(user_overridden as usize));
+        assert!(object_has_user_prototype_override(user_overridden as usize));
+    }
 
     #[test]
     fn inherited_lookup_stops_on_recorded_prototype_cycle() {

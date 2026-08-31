@@ -1282,7 +1282,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         let candidate = jsval().as_pointer::<ObjectHeader>() as usize;
         if crate::value::addr_class::is_above_handle_band(candidate)
             && crate::object::is_valid_obj_ptr(candidate as *const u8)
-            && super::prototype_chain::object_has_prototype_override(candidate)
+            && super::prototype_chain::object_has_user_prototype_override(candidate)
         {
             let method_key =
                 crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);

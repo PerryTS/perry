@@ -474,7 +474,7 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
     let object = raw.cast::<ObjectHeader>();
     let current_receiver_word = unsafe { ptr::read_unaligned(raw.cast::<u64>()) };
     if current_receiver_word != receiver_word
-        || crate::object::prototype_chain::object_has_prototype_override(raw as usize)
+        || crate::object::prototype_chain::object_has_prototype_divergence(raw as usize)
     {
         return 0;
     }
@@ -619,7 +619,7 @@ fn revalidate_admitted_subclass_live(
     }
     let meta = unsafe { (*object).meta };
     if !meta.is_null()
-        && unsafe { (*meta).flags } & crate::object::OBJECT_META_FLAG_PROTO_OVERRIDE != 0
+        && unsafe { (*meta).flags } & crate::object::OBJECT_META_FLAG_PROTO_DIVERGED != 0
     {
         return 0;
     }

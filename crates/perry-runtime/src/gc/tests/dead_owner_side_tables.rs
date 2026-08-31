@@ -738,14 +738,14 @@ fn test_object_meta_prototype_survives_copied_minor_move() {
     let (proto, _) = unsafe { alloc_nursery_test_object(0) };
     let old_owner = owner as usize;
     let old_proto = proto as usize;
-    crate::object::prototype_chain::object_set_static_prototype(old_owner, ptr_bits(old_proto));
+    crate::object::prototype_chain::object_set_user_prototype(old_owner, ptr_bits(old_proto));
     assert_eq!(
         crate::object::prototype_chain::object_static_prototype(old_owner),
         Some(ptr_bits(old_proto)),
         "test premise: the meta-resident prototype reads back before the GC"
     );
     assert!(
-        crate::object::prototype_chain::object_has_prototype_override(old_owner),
+        crate::object::prototype_chain::object_has_user_prototype_override(old_owner),
         "test premise: the per-instance override bit lives in the meta record"
     );
     js_shadow_slot_set(0, ptr_bits(old_owner));
@@ -765,7 +765,7 @@ fn test_object_meta_prototype_survives_copied_minor_move() {
         "the meta record's prototype slot must be rewritten to the moved proto"
     );
     assert!(
-        crate::object::prototype_chain::object_has_prototype_override(new_owner),
+        crate::object::prototype_chain::object_has_user_prototype_override(new_owner),
         "the non-pointer meta flags must travel with the copied record"
     );
 

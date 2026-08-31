@@ -104,13 +104,15 @@ console.log("swap-after:", readA(a));
 
 /// #9244: the per-instance prototype-override fast path in
 /// `js_native_call_method` resolves the method by ordinary property lookup.
-/// A generator carries the override flag but has no own or inherited `map` —
-/// Perry synthesizes the iterator helpers (#2874) further down the dispatch
-/// tower. Returning on the lookup MISS called `undefined`, so
-/// `[...gen().map(f)]` threw `TypeError: undefined is not iterable`. Only a
-/// resolved callable may take the fast path; a miss must fall through.
+/// Before #9251, a runtime-wired generator carried the shared override flag but
+/// had no own or inherited `map` — Perry synthesizes iterator helpers (#2874)
+/// further down the dispatch tower. Returning on the lookup MISS called
+/// `undefined`, so `[...gen().map(f)]` threw `TypeError: undefined is not
+/// iterable`. The dedicated user-origin signal now keeps runtime wiring out of
+/// that path; the genuine resolved override below still proves that user
+/// replacement wins over the class vtable.
 #[test]
-fn overridden_receiver_miss_falls_through_to_synthesized_helpers() {
+fn runtime_wiring_preserves_synthesized_helpers_and_user_override_still_wins() {
     let stdout = compile_and_run(
         r#"
 function* gen() {

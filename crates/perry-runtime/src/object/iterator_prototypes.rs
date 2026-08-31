@@ -206,15 +206,15 @@ fn set_to_string_tag(obj: *mut ObjectHeader, tag: &str) {
 /// Uses the class-DEFAULT variant, not `object_set_static_prototype`. Attaching
 /// `%ArrayIteratorPrototype%` to a fresh array iterator is exactly what that
 /// function documents — a chain identical for every instance of the class — and
-/// not a user `Object.setPrototypeOf`. The loud variant additionally sets
-/// `OBJECT_META_FLAG_PROTO_OVERRIDE`, which made `object_has_prototype_override`
-/// answer true for EVERY built-in iterator. Any caller that treats an override
-/// as "the per-instance chain is authoritative, resolve methods by ordinary
-/// inheriting lookup" then reached the `%…IteratorPrototype%` `next` THUNK,
+/// not a user `Object.setPrototypeOf`. Before #9251, the loud variant's
+/// divergence bit was also the user-override signal, so every built-in iterator
+/// appeared user-reparented. A caller treating that as "the per-instance chain
+/// is authoritative, resolve methods by ordinary inheriting lookup" then
+/// reached the `%…IteratorPrototype%` `next` THUNK,
 /// which resolves its receiver from `js_implicit_this_get()` rather than the
 /// bound `this` (#7576) — producing `Method %IteratorPrototype%.next called on
 /// incompatible receiver`. The prototype itself is still recorded either way;
-/// only the override flag and the plan-cache flush differ.
+/// the class-default variant also avoids the divergence bit and cache flushes.
 fn chain_to(child: *mut ObjectHeader, parent: *mut ObjectHeader) {
     let parent_bits = crate::value::js_nanbox_pointer(parent as i64).to_bits();
     super::prototype_chain::object_link_class_default_prototype(child as usize, parent_bits);

@@ -1997,7 +1997,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             // neither record nor honor store plans.
                             let plan_eligible = header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO
                                 == 0
-                                && !crate::object::prototype_chain::object_has_prototype_override(
+                                && !crate::object::prototype_chain::object_has_prototype_divergence(
                                     addr,
                                 )
                                 && class_id != crate::object::NATIVE_MODULE_CLASS_ID

@@ -448,7 +448,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
             0
         };
         if crate::value::addr_class::is_small_handle(handle_id) {
-            super::super::prototype_chain::object_set_static_prototype(handle_id, proto_bits);
+            super::super::prototype_chain::object_set_user_prototype(handle_id, proto_bits);
             return obj_value;
         }
     }
@@ -487,7 +487,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         // user-visible `Object.setPrototypeOf` entry rather than poisoning the
         // fast path for every program during initialization.
         crate::object::invalidate_class_prototype_fast_guards();
-        super::super::prototype_chain::object_set_static_prototype(obj_ptr_for_record, proto_bits);
+        super::super::prototype_chain::object_set_user_prototype(obj_ptr_for_record, proto_bits);
         // A grown array's local may still hold the FORWARDED (old) pointer;
         // the spec [[HasProperty]]/[[Get]] helpers look the prototype up by
         // the CLEANED address. Record under both keys so either resolves
@@ -502,7 +502,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
                     obj_ptr_for_record as *const crate::array::ArrayHeader,
                 ) as usize;
                 if cleaned != 0 && cleaned != obj_ptr_for_record {
-                    super::super::prototype_chain::object_set_static_prototype(cleaned, proto_bits);
+                    super::super::prototype_chain::object_set_user_prototype(cleaned, proto_bits);
                 }
             }
         }

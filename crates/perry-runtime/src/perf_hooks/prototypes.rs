@@ -219,9 +219,10 @@ fn perf_constructor_prototype(class_name: &str) -> f64 {
 /// Link runtime-created perf objects through their built-in class hierarchy.
 ///
 /// This is class-default wiring, not a user `Object.setPrototypeOf` override.
-/// The loud setter marks the receiver with `OBJECT_META_FLAG_PROTO_OVERRIDE`;
-/// method dispatch then treats the chain as user-replaced and re-dispatches an
-/// already bound prototype method back through `js_native_call_method`,
+/// Before #9251, the loud setter's divergence bit was also interpreted as a
+/// user-origin signal; method dispatch then treated the chain as user-replaced
+/// and re-dispatched an already bound prototype method through
+/// `js_native_call_method`,
 /// recursing until the process exhausts its stack (#9281).
 fn link_perf_class_default_prototype(obj: usize, proto_bits: u64) {
     crate::object::prototype_chain::object_link_class_default_prototype(obj, proto_bits);

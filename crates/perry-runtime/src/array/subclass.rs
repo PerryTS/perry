@@ -26,9 +26,10 @@ pub(super) use loop_guard::{js_packed_arraylike_loop_guard, js_packed_ecs_u32_lo
 // surviving address reuse: fresh allocations have it clear, and both words
 // ride an evacuation without a side-table re-key walk.
 //
-//     bit 0       existing custom-[[Prototype]] flag
+//     bit 0       prototype-semantic divergence
 //     bit 1       payload valid
 //     bit 2       compact nonnegative-int entity proof (mode 2)
+//     bit 3       user-origin prototype signal
 //     bits 8..31  verified prefix bound (24 bits, max 16,000,000)
 //     bits 32..63 exact semantic ShapeId
 const PACKED_NUMERIC_META_VALID: u64 = 1 << 1;
@@ -109,9 +110,9 @@ pub(super) struct ValidatedObjectReceiver {
 /// Dense Array-subclass paths have just completed that proof, so repeating it
 /// ahead of every receiver-local layout-cache hit is both redundant and hot.
 #[inline(always)]
-unsafe fn validated_object_has_prototype_override(obj: *const ObjectHeader) -> bool {
+unsafe fn validated_object_has_prototype_divergence(obj: *const ObjectHeader) -> bool {
     let meta = (*obj).meta;
-    !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_PROTO_OVERRIDE != 0
+    !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_PROTO_DIVERGED != 0
 }
 
 #[inline(always)]
@@ -244,7 +245,7 @@ unsafe fn build_dense_layout(obj: *const ObjectHeader) -> Option<DenseSubclassLa
     let class_id = (*obj).class_id;
     if class_id == 0
         || !is_array_subclass_class_id(class_id)
-        || validated_object_has_prototype_override(obj)
+        || validated_object_has_prototype_divergence(obj)
     {
         return None;
     }
@@ -359,7 +360,7 @@ fn validated_object_receiver_for_value(value: f64) -> Option<ValidatedObjectRece
 fn dense_layout_for_validated_object(obj: *const ObjectHeader) -> Option<DenseSubclassLayout> {
     // This is per receiver, not per ShapeId. A cached layout built before
     // Object.setPrototypeOf must not let this object borrow the old proof.
-    if unsafe { validated_object_has_prototype_override(obj) } {
+    if unsafe { validated_object_has_prototype_divergence(obj) } {
         return None;
     }
     if let Some(layout) = unsafe { owner_cached_dense_layout(obj) } {

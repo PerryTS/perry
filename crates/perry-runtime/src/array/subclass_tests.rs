@@ -265,10 +265,7 @@ fn dense_array_subclass_cache_declines_a_per_instance_prototype_override() {
     crate::object::js_object_set_index_polymorphic(obj as i64, 0.0, 11.0);
 
     assert_eq!(array_subclass_fast_index_get(receiver, 0), Some(11.0));
-    crate::object::prototype_chain::object_set_static_prototype(
-        obj as usize,
-        crate::value::TAG_NULL,
-    );
+    crate::object::prototype_chain::object_set_user_prototype(obj as usize, crate::value::TAG_NULL);
     assert_eq!(
         array_subclass_fast_index_get(receiver, 0),
         None,

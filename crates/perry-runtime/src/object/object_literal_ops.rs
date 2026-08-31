@@ -121,14 +121,14 @@ pub unsafe extern "C" fn js_object_literal_set_prototype(obj_value: f64, proto_v
     let proto_bits = proto_value.to_bits();
     let proto_jsv = crate::value::JSValue::from_bits(proto_bits);
     if proto_jsv.is_null() {
-        super::prototype_chain::object_set_static_prototype(obj as usize, TAG_NULL);
+        super::prototype_chain::object_set_user_prototype(obj as usize, TAG_NULL);
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     if crate::symbol::js_is_symbol(proto_value) != 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     if value_is_object_like(proto_value) {
-        super::prototype_chain::object_set_static_prototype(obj as usize, proto_bits);
+        super::prototype_chain::object_set_user_prototype(obj as usize, proto_bits);
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
