@@ -79,7 +79,7 @@ pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
     // the idle fast path. (This is the ordering `js_buffer_register_external`
     // already documents; see also `crate::registry_latch`.)
     SHARED_SAB_NONEMPTY.store(true, Ordering::Release);
-    crate::buffer::note_buffer_like_registered();
+    crate::buffer::note_buffer_like_registered(buf as usize);
     registry()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -135,7 +135,7 @@ pub(crate) fn test_seed_shared_sab(addr: usize) {
     // fixture exercises the real fast/slow-path split rather than a state the
     // production path never produces.
     SHARED_SAB_NONEMPTY.store(true, Ordering::Release);
-    crate::buffer::note_buffer_like_registered();
+    crate::buffer::note_buffer_like_registered(addr);
     registry()
         .lock()
         .unwrap_or_else(|e| e.into_inner())

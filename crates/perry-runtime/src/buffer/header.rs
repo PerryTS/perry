@@ -173,7 +173,7 @@ crate::perry_thread_local! {
         RefCell::new(new_ptr_hash_map());
 }
 
-use crate::registry_latch::RegistryLatch;
+use crate::registry_latch::{RegistryAddrWindow, RegistryLatch};
 
 /// Monotone "at least one `Buffer`-shaped allocation exists" latch.
 ///
@@ -191,6 +191,54 @@ use crate::registry_latch::RegistryLatch;
 /// load rather than one per registry — hence [`note_buffer_like_registered`],
 /// which `shared_sab::alloc_shared_sab` calls before publishing a backing.
 static BUFFER_LIKE_EVER_REGISTERED: RegistryLatch = RegistryLatch::new();
+
+/// Smallest and largest address ever registered as buffer-like, process-wide.
+///
+/// The latch above answers "has ANY buffer ever been registered?", which
+/// `claude-code --help` arms with its **10th** buffer allocation and then
+/// consults 4,650,000 more times — every one of them going out of line to a
+/// thread-local resolution, a `RefCell` borrow and a hash, to answer "no"
+/// 4,651,082 times out of 4,651,086. This window answers the same question
+/// about the *address*, from two adjacent static loads that inline into all
+/// ~239 call sites, and rejected 88% of those calls when it lived (as
+/// `BUFFER_ADDR_RANGE`) behind the call instead of in front of it.
+///
+/// It covers every table `is_registered_buffer_slow` consults:
+///   * `BUFFER_REGISTRY` — only `register_buffer` inserts, and it admits first;
+///   * `EXTERNAL_BUFFER_REGISTRY` — both writers (`js_buffer_register_external`
+///     and `js_buffer_mark_as_crypto_key_external`) route through
+///     `register_buffer` with the same address first;
+///   * `shared_sab`'s process-global SAB registry — `alloc_shared_sab` calls
+///     [`note_buffer_like_registered`] with the backing address before it
+///     publishes.
+///
+/// Rejecting an address outside the window is therefore sound; see
+/// [`RegistryAddrWindow`] for the ordering rule that makes it so.
+static BUFFER_LIKE_ADDR_WINDOW: RegistryAddrWindow = RegistryAddrWindow::new();
+
+#[cfg(test)]
+thread_local! {
+/// Test-only count of `is_registered_buffer` calls that got past the address
+/// window and reached the registries. The window is a fast path, and a fast
+/// path nobody can prove ran is not a fast path (same contract as
+/// `typedarray::TEST_TA_REGISTRY_PROBES`, #7765).
+///
+/// Per THREAD, not per process, exactly like `TEST_TA_REGISTRY_PROBES`: the
+/// registry it guards is thread-local and `cargo test` gives each case its own
+/// thread inside one process.
+    static TEST_BUFFER_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_buffer_registry_probe_count() -> u64 {
+    TEST_BUFFER_REGISTRY_PROBES.with(|c| c.get())
+}
+
+#[cfg(test)]
+pub(crate) fn test_buffer_addr_window_bounds() -> Option<(usize, usize)> {
+    BUFFER_LIKE_ADDR_WINDOW.bounds_for_tests()
+}
+
 /// Avoid a thread-local map probe in `buffer_data{,_mut}` until the first
 /// foreign-backed buffer is created. The latch is deliberately monotone;
 /// these accessors are among the hottest paths in the runtime.
@@ -202,7 +250,11 @@ static FOREIGN_BACKING_EVER_REGISTERED: RegistryLatch = RegistryLatch::new();
 /// reports as buffers without them ever entering `BUFFER_REGISTRY`, so it must
 /// arm the same latch — and, per the [`crate::registry_latch`] rule, must do so
 /// *before* the backing becomes reachable.
-pub(crate) fn note_buffer_like_registered() {
+pub(crate) fn note_buffer_like_registered(addr: usize) {
+    // Widen before arming, and arm before the caller publishes: the probe
+    // checks the latch and then the window, so both must already cover this
+    // address by the time it becomes findable.
+    BUFFER_LIKE_ADDR_WINDOW.admit(addr);
     BUFFER_LIKE_EVER_REGISTERED.arm();
 }
 
@@ -304,8 +356,9 @@ pub fn register_buffer(ptr: *const BufferHeader) {
     // Arm BEFORE the insert: an arm placed afterwards leaves a window in which
     // this buffer is in the registry while `is_registered_buffer` still takes
     // the idle fast path and denies it. See `crate::registry_latch`.
-    BUFFER_LIKE_EVER_REGISTERED.arm();
     let addr = ptr as usize;
+    BUFFER_LIKE_ADDR_WINDOW.admit(addr);
+    BUFFER_LIKE_EVER_REGISTERED.arm();
     BUFFER_ADDR_RANGE.with(|r| {
         let (lo, hi) = r.get();
         r.set((lo.min(addr), hi.max(addr)));
@@ -337,6 +390,16 @@ pub fn is_registered_buffer(addr: usize) -> bool {
     if BUFFER_LIKE_EVER_REGISTERED.is_idle() {
         return false;
     }
+    // An address outside the registered window cannot be in any of the three
+    // tables the slow path consults, so reject it here — inline, without the
+    // call, the thread-local resolution, the `RefCell` borrow or the hash.
+    // Every writer widens the window before it publishes, which is what makes
+    // rejecting sound; see `BUFFER_LIKE_ADDR_WINDOW`.
+    if !BUFFER_LIKE_ADDR_WINDOW.may_contain(addr) {
+        return false;
+    }
+    #[cfg(test)]
+    TEST_BUFFER_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
     is_registered_buffer_slow(addr)
 }
 

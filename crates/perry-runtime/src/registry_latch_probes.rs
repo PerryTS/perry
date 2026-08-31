@@ -216,6 +216,102 @@ fn detached_buffer_mark_is_found_after_the_idle_fast_path_ran() {
     assert!(!crate::buffer::is_detached_buffer(scratch));
 }
 
+/// An address no allocator on any supported platform can return: above
+/// `addr_class::is_valid_obj_ptr`'s heap ceiling, so no concurrently running
+/// test can widen a registry window to cover it.
+const FAR_OUTSIDE_ANY_WINDOW: usize = 0x7000_0000_0000_0000;
+
+/// The window is a fast path, so it must be shown to *run*, not merely to give
+/// the right answer — a probe that reached the registries and missed returns
+/// `false` too. The probe counter distinguishes the two, and the second half of
+/// this test is what makes the first half able to fail: an always-`false`
+/// `may_contain` would pass the rejection assertion and fail here.
+#[test]
+fn buffer_probe_rejects_an_out_of_window_address_without_touching_the_registries() {
+    // Two real registrations, so the window has an interior rather than a
+    // single point.
+    let first = crate::buffer::buffer_alloc(32) as usize;
+    let second = crate::buffer::buffer_alloc(32) as usize;
+    let (lo, hi) = crate::buffer::test_buffer_addr_window_bounds()
+        .expect("registering a buffer must open the address window");
+    assert!(
+        lo <= first.min(second) && hi >= first.max(second),
+        "the window must cover every registered buffer: \
+             [{lo:#x}, {hi:#x}] vs {first:#x} / {second:#x}"
+    );
+
+    let before = crate::buffer::test_buffer_registry_probe_count();
+    assert!(
+        !crate::buffer::is_registered_buffer(FAR_OUTSIDE_ANY_WINDOW),
+        "an address outside the window is not a registered buffer"
+    );
+    assert_eq!(
+        crate::buffer::test_buffer_registry_probe_count(),
+        before,
+        "the address window must answer without reaching the registries"
+    );
+
+    // A registered address must still be admitted AND still resolve — this is
+    // the direction in which a wrong window is a type confusion, not a slowdown.
+    assert!(
+        crate::buffer::is_registered_buffer(first),
+        "the window must not hide a registered buffer"
+    );
+    assert!(
+        crate::buffer::test_buffer_registry_probe_count() > before,
+        "an in-window address must reach the registries"
+    );
+}
+
+#[test]
+fn typed_array_probe_rejects_an_out_of_window_address_without_touching_the_registry() {
+    let first = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_UINT8, 4) as usize;
+    let second = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_FLOAT64, 4) as usize;
+    let (lo, hi) = crate::typedarray::test_typed_array_addr_window_bounds()
+        .expect("registering a typed array must open the address window");
+    assert!(lo <= first.min(second) && hi >= first.max(second));
+
+    let before = crate::typedarray::test_typed_array_window_admitted_probe_count();
+    assert_eq!(
+        crate::typedarray::lookup_typed_array_kind(FAR_OUTSIDE_ANY_WINDOW),
+        None
+    );
+    assert_eq!(
+        crate::typedarray::test_typed_array_window_admitted_probe_count(),
+        before,
+        "the address window must answer without reaching the registry \
+         or writing a negative cache entry"
+    );
+
+    assert_eq!(
+        crate::typedarray::lookup_typed_array_kind(first),
+        Some(crate::typedarray::KIND_UINT8),
+        "the window must not hide a registered typed array"
+    );
+    assert!(crate::typedarray::test_typed_array_window_admitted_probe_count() > before);
+}
+
+/// `alloc_shared_sab` publishes a backing that `is_registered_buffer` reports
+/// as a buffer without it ever entering `BUFFER_REGISTRY`, so the window has to
+/// be widened on that route too. Calling the allocator directly (rather than
+/// `js_shared_array_buffer_new`, which also calls `register_buffer`) is what
+/// makes this test able to fail: it exercises the `note_buffer_like_registered`
+/// path alone.
+#[test]
+fn shared_sab_backing_is_inside_the_buffer_address_window() {
+    let sab = crate::shared_sab::alloc_shared_sab(64) as usize;
+    assert!(
+        crate::buffer::is_registered_buffer(sab),
+        "a SharedArrayBuffer backing must stay visible to `is_registered_buffer`"
+    );
+    let (lo, hi) = crate::buffer::test_buffer_addr_window_bounds()
+        .expect("a SAB allocation must open the address window");
+    assert!(
+        lo <= sab && sab <= hi,
+        "the SAB route must widen the window: {sab:#x} outside [{lo:#x}, {hi:#x}]"
+    );
+}
+
 /// The ordering rule itself, modelled on a private latch + table pair so both
 /// orderings can be run. This is the "prove the gate can fail" half: if
 /// arm-after-insert were harmless the wrong-order case would be indistinguishable
