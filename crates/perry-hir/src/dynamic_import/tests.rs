@@ -753,6 +753,56 @@ fn worker_new_visitor_descends_into_closure_bodies() {
 }
 
 #[test]
+fn dynamic_import_visitors_keep_closure_and_toplevel_order_in_lockstep() {
+    fn dynamic_import(path: &str) -> Expr {
+        Expr::DynamicImport {
+            paths: vec![],
+            arg: Box::new(Expr::String(path.to_string())),
+            byte_offset: 0,
+            deferred_error: None,
+            synchronous: false,
+        }
+    }
+
+    fn path(expr: &Expr) -> String {
+        match expr {
+            Expr::DynamicImport { arg, .. } => match arg.as_ref() {
+                Expr::String(path) => path.clone(),
+                other => panic!("expected string dynamic import, got {other:?}"),
+            },
+            other => panic!("expected dynamic import, got {other:?}"),
+        }
+    }
+
+    let mut module = Module::new("dynamic-import-order");
+    module.init.push(Stmt::Expr(Expr::Closure {
+        func_id: 1,
+        params: vec![],
+        return_type: Type::Void,
+        body: vec![Stmt::Expr(dynamic_import("closure"))],
+        captures: vec![],
+        mutable_captures: vec![],
+        captures_this: false,
+        captures_new_target: false,
+        enclosing_class: None,
+        is_arrow: false,
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+    }));
+    module.init.push(Stmt::Expr(dynamic_import("toplevel")));
+
+    let mut immutable = Vec::new();
+    for_each_dynamic_import(&module, &mut |expr| immutable.push(path(expr)));
+
+    let mut mutable = Vec::new();
+    for_each_dynamic_import_mut(&mut module, &mut |expr| mutable.push(path(expr)));
+
+    assert_eq!(immutable, ["closure", "toplevel"]);
+    assert_eq!(mutable, immutable);
+}
+
+#[test]
 fn resolve_web_worker_url_relative_to_import_meta() {
     let expr = Expr::UrlNew {
         url: Box::new(Expr::String("./rpc-worker.ts".to_string())),
