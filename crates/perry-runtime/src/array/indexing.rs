@@ -1531,9 +1531,17 @@ pub(crate) unsafe fn try_strict_dense_number_store(
     // proves there are no holes and keeps its bit-for-bit old hot path; every
     // other admitted layout proves ownership with the slot Perry is about to
     // overwrite.
+    // The process latch leads: an array can only have an inherited index when
+    // SOME array has been retargeted, so a program that never calls
+    // `Object.setPrototypeOf` on an array keeps this lane bit-for-bit as it was
+    // (one relaxed load of a static bool, and the slot is never read here).
+    // `new Array(n)` fills are holey and would otherwise all fall off the lane.
     let may_have_holes = flags & crate::gc::GC_ARRAY_RAW_F64_LAYOUT == 0
         || flags & crate::gc::GC_ARRAY_RAW_F64_HOLES != 0;
-    if may_have_holes && ptr::read(slot) == crate::value::TAG_HOLE {
+    if crate::object::prototype_chain::array_static_proto_recorded()
+        && may_have_holes
+        && ptr::read(slot) == crate::value::TAG_HOLE
+    {
         return None;
     }
     // GC_STORE_AUDIT(POINTER_FREE): a number never holds a heap pointer, and
