@@ -289,6 +289,18 @@ impl RegistryAddrWindow {
 /// here is the one the measurements above were taken at, and is deliberately
 /// not raised on speculation.
 ///
+/// **Bits accrue per ADMISSION, not per live entry.** Both tables this guards
+/// are re-keyed by the collector — a symbol or a prototype that is evacuated is
+/// admitted again at its new address, and the bits its old address set are
+/// never cleared — so a long-running program with a moving nursery walks
+/// towards saturation over time rather than sitting at a fixed occupancy. That
+/// is measurable rather than theoretical, and it was measured: re-running the
+/// answer census on the shipped `claude --help` binary, the symbol filter ended
+/// the run admitting 1,492 of 378,163 probes, of which 622 were genuine — 870
+/// false positives, a 0.23% rate against a population that had been evacuated
+/// and re-admitted throughout. The bound to watch is the false-positive rate at
+/// END of run, not the registration count.
+///
 /// # The ordering rule (binding, and identical to [`RegistryAddrWindow`]'s)
 ///
 /// **[`admit`](Self::admit) must run BEFORE the registry mutation it

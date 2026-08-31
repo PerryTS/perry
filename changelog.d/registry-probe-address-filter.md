@@ -68,6 +68,33 @@
   one-line change; it is deliberately not raised on speculation, because 1,024
   bits is the size every number above was measured at.
 
+  Bits accrue per *admission*, not per live entry: both tables are re-keyed by
+  the collector, so an evacuated symbol or prototype is admitted again at its
+  new address and the old address's bits stay set. The number that matters is
+  therefore the false-positive rate at END of run, and it was measured on the
+  shipped binary rather than assumed — see the census below.
+
+#### The census on the shipped binary
+
+Re-running the uretprobe answer census on the built `claude --help` binary,
+after the change:
+
+| probe | calls | "yes" |
+|---|---|---|
+| `is_registered_symbol` | 378,163 → **1,492** | 622 → **622** |
+| `is_uint8array_buffer` | 537,921 → **0** | 0 → 0 |
+| `is_registered_class_prototype_object` | 26,290 → 26,290 | 122 → **122** |
+
+Every genuine "yes" survives. The symbol filter's 1,492 admissions are 622 real
+answers plus 870 false positives — 0.23% of the 377,541 negatives, at the end
+of a run in which the population was evacuated and re-admitted throughout. The
+class-prototype probe is still *entered* the same number of times (the filter
+is inside the function, which has three call sites and is not `#[inline]`);
+what it no longer does is the scan, which is where its 0.46% lived.
+
+`--help` output stayed byte-identical to node — 9,175 bytes, rc=0 — in every
+arm, before and after.
+
 #### Why it cannot misclassify
 
 These probes classify pointers, so a wrong answer is type confusion rather than
