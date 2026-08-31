@@ -295,6 +295,12 @@
       "why": "Source order for Symbol-keyed class members: HashMap<(class_id, SymbolHeader::id, is_static), u32>. The u64 is the symbol's stable id (read once at registration in record_class_symbol_member_order), NOT its address, so the table needs no re-key when a Symbol is evacuated; the value is an order index. The member values themselves live in CLASS_SYMBOL_METHODS/CLASS_SYMBOL_ACCESSORS, which scan_class_symbol_member_keys_mut visits and rewrite_class_symbol_method_key_if_forwarded re-keys."
     },
     {
+      "file": "crates/perry-runtime/src/object/field_set_by_name/fast_paths.rs",
+      "name": "TEST_TRANSITION_FAST_HITS",
+      "verdict": "not_a_gc_pointer",
+      "why": "#[cfg(test)] hit counter for the learned shape-transition fast path: a thread_local Cell<u64> incremented on each hit and reset by test_reset_transition_fast_hits. Holds a count, never a JSValue or heap pointer, and does not exist in a release build."
+    },
+    {
       "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
       "name": "TEST_COLLECT_BEFORE_GLOBAL_THIS_ALLOC",
       "verdict": "test_only",

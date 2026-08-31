@@ -591,14 +591,17 @@ fn object_set_field_by_name_transition_fast_impl_value(
         // still follow. A pre-scope caller's raw f64 operands may be stale
         // after it, so hand back re-rooted copies for the caller's fallback
         // ladder — set unconditionally, so the caller's use is uniform.
-        {
-            let key_now = key_handle.get_raw_const_ptr::<crate::StringHeader>();
-            *refresh = Some((
-                crate::value::js_nanbox_pointer(obj as i64),
-                crate::value::js_nanbox_string(key_now as i64),
-                value_handle.get_nanbox_f64(),
-            ));
-        }
+        // The key pointer is only valid for the duration of this
+        // non-allocating tuple build, so scope it rather than binding it.
+        *refresh = Some(
+            key_handle.with_const_ptr::<crate::StringHeader, _>(|key_now| {
+                (
+                    crate::value::js_nanbox_pointer(obj as i64),
+                    crate::value::js_nanbox_string(key_now as i64),
+                    value_handle.get_nanbox_f64(),
+                )
+            }),
+        );
         let value = value_handle.get_nanbox_f64();
 
         let prev_shape_id = super::shapes::object_shape_stamp(obj);
