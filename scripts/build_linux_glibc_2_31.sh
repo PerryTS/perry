@@ -43,6 +43,19 @@ export LLVM_SYS_221_PREFIX
   exit 1
 }
 
+# The image deliberately ships no Rust toolchain: release-packages.yml mounts
+# the runner's ~/.cargo and ~/.rustup and points CARGO_HOME/RUSTUP_HOME at
+# them. Those give cargo its data, not its binaries — nothing puts
+# $CARGO_HOME/bin on PATH inside the container, so `rustup` and `cargo`
+# resolved to nothing and the leg died with exit 127. This leg was added in
+# #8350 (2026-08-18), after the last successful release, so it had never once
+# run to completion.
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+command -v rustup >/dev/null || {
+  echo "rustup not found on PATH ($PATH) — is \$CARGO_HOME/bin mounted?" >&2
+  exit 1
+}
+
 rustup target add "$target"
 
 cargo build --profile dist --target "$target" -p perry

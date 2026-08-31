@@ -864,7 +864,14 @@ extern "C" fn fromspace_fault_handler(
     }
 }
 
-#[cfg(all(unix, any(target_os = "macos", target_os = "linux")))]
+// `libc::backtrace`/`backtrace_symbols_fd` are a glibc extension: they do not
+// exist in musl, so `target_os = "linux"` alone selected a body that cannot
+// compile for `x86_64-unknown-linux-musl` (#9245-era release leg, E0425). The
+// musl build takes the empty arm below.
+#[cfg(all(
+    unix,
+    any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))
+))]
 fn emit_native_backtrace() {
     const MAX_FRAMES: usize = 64;
     let mut frames = [std::ptr::null_mut::<libc::c_void>(); MAX_FRAMES];
@@ -878,7 +885,10 @@ fn emit_native_backtrace() {
     }
 }
 
-#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))
+))]
 fn emit_native_backtrace() {}
 
 /// Name the objects that still HOLD the stale address, not just the frame that

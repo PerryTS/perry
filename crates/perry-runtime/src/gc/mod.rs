@@ -172,8 +172,16 @@ mod cycle_malloc_trim;
 use cycle::*;
 #[cfg(test)]
 pub(crate) use cycle_malloc_trim::{
-    reset_test_malloc_trim_call_count, reset_test_malloc_trim_executed_count,
-    test_malloc_trim_call_count, test_malloc_trim_executed_count,
+    reset_test_malloc_trim_call_count, test_malloc_trim_call_count,
+};
+// The *executed* counters only exist where `malloc_trim` itself does, so the
+// import has to carry the same gate as the declaration. Importing them under a
+// bare `#[cfg(test)]` made `perry-runtime`'s test build fail to compile on
+// Windows MSVC (E0432) — a target the PR tier never builds, so only the full
+// tier's `windows-build`/`windows-arm64-build` saw it.
+#[cfg(all(test, any(target_env = "gnu", target_os = "macos")))]
+pub(crate) use cycle_malloc_trim::{
+    reset_test_malloc_trim_executed_count, test_malloc_trim_executed_count,
 };
 mod verify;
 

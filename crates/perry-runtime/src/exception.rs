@@ -528,7 +528,12 @@ fn emit_uncaught_backtrace() {
     if !on {
         return;
     }
-    #[cfg(all(unix, any(target_os = "macos", target_os = "linux")))]
+    // glibc-only pair; musl has no `backtrace`, so this block must not be
+    // selected there (E0425 at release time on the musl leg).
+    #[cfg(all(
+        unix,
+        any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))
+    ))]
     {
         const MAX_FRAMES: usize = 96;
         let mut frames = [std::ptr::null_mut::<libc::c_void>(); MAX_FRAMES];
