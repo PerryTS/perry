@@ -444,7 +444,27 @@ unsafe fn array_object_proto_index_owner(proto_bits: u64, key: &str) -> usize {
         }
         match crate::object::prototype_chain::object_static_prototype(addr) {
             Some(next) => bits = next,
-            None => return 0,
+            // #9220: `Object.create(p)` does NOT record `p` in the observable
+            // prototype side table — `js_object_create` models the link with a
+            // SYNTHETIC CLASS ID whose `class_prototype_object` entry is `p`
+            // (#809). The recorded-prototype hop alone therefore stops one link
+            // short, and an inherited accessor / non-writable index that the
+            // READ side already resolves (`js_object_get_field_by_name`'s
+            // `class_id != 0` branch, reached through
+            // `resolve_inherited_field_from_prototype`) was silently replaced by
+            // a new own element on the array. Take the same hop the read walk
+            // takes so `[[Set]]` and `[[Get]]` agree on the chain.
+            None => {
+                let class_id = (*(addr as *const crate::ObjectHeader)).class_id;
+                if class_id == 0 {
+                    return 0;
+                }
+                let synth = crate::object::class_prototype_object(class_id);
+                if synth.is_null() || synth as usize == addr {
+                    return 0;
+                }
+                bits = crate::value::js_nanbox_pointer(synth as i64).to_bits();
+            }
         }
     }
     0
