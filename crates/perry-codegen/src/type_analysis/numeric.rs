@@ -309,8 +309,18 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // operand must not be treated as numeric. (`!x` is a boolean, not
         // a number — handled by `is_bool_expr`.)
         Expr::Unary { op, operand } => {
+            // The result is a clean f64 only when the unary lowering did NOT
+            // route through the dynamic helper — and that lowering keys off
+            // `is_provably_not_bigint`, a POSITIVE proof, not off
+            // `!is_bigint_expr`, which merely says "we failed to prove it is
+            // one". An indexed read from a `bigint[]` is exactly the gap
+            // between those two: unproven either way, so it takes the dynamic
+            // path and yields a NaN-boxed BigInt. Claiming that numeric made
+            // the ENCLOSING operator emit a native `fneg`/`fmul` over the
+            // BigInt payload, so `-(-a[0])` came back `NaN` and
+            // `(-a[0]) * (-a[1])` came back `-2n` (#9142 follow-up).
             matches!(op, UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot)
-                && !is_bigint_expr(ctx, operand)
+                && (is_numeric_expr(ctx, operand) || is_provably_not_bigint(ctx, operand))
         }
         // Explicit numeric-coercion node — lowers to `js_number_coerce`,
         // which always yields a clean f64.
