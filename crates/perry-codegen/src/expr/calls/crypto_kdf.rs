@@ -127,11 +127,13 @@ pub(crate) fn arm_crypto_scrypt(
     let pwd_box = lower_expr(ctx, &args[0])?;
     let salt_box = lower_expr(ctx, &args[1])?;
     let len_box = lower_expr(ctx, &args[2])?;
-    let cb_expr = if args.len() >= 5 {
-        let _ = lower_expr(ctx, &args[3])?;
-        &args[4]
+    let (opts_box, cb_expr) = if args.len() >= 5 {
+        (lower_expr(ctx, &args[3])?, &args[4])
     } else {
-        &args[3]
+        (
+            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            &args[3],
+        )
     };
     let cb_box = lower_expr(ctx, cb_expr)?;
     let blk = ctx.block();
@@ -144,6 +146,7 @@ pub(crate) fn arm_crypto_scrypt(
             (I64, &pwd_handle),
             (I64, &salt_handle),
             (DOUBLE, &len_box),
+            (DOUBLE, &opts_box),
             (DOUBLE, &cb_box),
         ],
     ))
@@ -243,19 +246,15 @@ pub(crate) fn arm_crypto_scrypt_sync(
     let salt_box = lower_expr(ctx, &args[1])?;
     let keylen_box = lower_expr(ctx, &args[2])?;
     let opts_box = if args.len() >= 4 {
-        Some(lower_expr(ctx, &args[3])?)
+        lower_expr(ctx, &args[3])?
     } else {
-        None
+        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
     };
     // #2013/#3146: node validates keylen as an integer in [0, 2^31-1].
     emit_validate_integer_arg(ctx, &keylen_box, "keylen", 0.0, i32::MAX as f64);
     let blk = ctx.block();
     let pwd_handle = unbox_to_i64(blk, &pwd_box);
     let salt_handle = unbox_to_i64(blk, &salt_box);
-    let opts_handle = match &opts_box {
-        Some(b) => unbox_to_i64(blk, b),
-        None => "0".to_string(),
-    };
     let buf_handle = blk.call(
         I64,
         "js_crypto_scrypt_bytes",
@@ -263,7 +262,7 @@ pub(crate) fn arm_crypto_scrypt_sync(
             (I64, &pwd_handle),
             (I64, &salt_handle),
             (DOUBLE, &keylen_box),
-            (I64, &opts_handle),
+            (DOUBLE, &opts_box),
         ],
     );
     Ok(nanbox_pointer_inline(blk, &buf_handle))
