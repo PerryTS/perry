@@ -218,6 +218,9 @@ mod ic_miss;
 mod ic_miss_array_length_tests;
 mod map_set_receiver;
 mod probe_dispatch;
+/// #9131: per-instance `[[Prototype]]` override lookup, split out of
+/// `get_field_by_name_tail.rs` for the 2000-line cap.
+mod prototype_override;
 
 /// Size of the direct-mapped `(keys_ptr, key_hash, field_index)` inline
 /// cache backing `js_object_get_field_by_name`'s slow tail.
