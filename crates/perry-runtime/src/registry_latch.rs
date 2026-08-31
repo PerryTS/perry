@@ -232,6 +232,47 @@ impl RegistryAddrWindow {
         let hi = self.hi.load(Ordering::Acquire);
         (lo <= hi).then_some((lo, hi))
     }
+
+    /// Test hook: the raw `(lo, hi)` pair, empty window included, for a test
+    /// that needs to compare the bounds themselves rather than ask whether the
+    /// window is open.
+    #[cfg(test)]
+    pub(crate) fn raw_bounds_for_tests(&self) -> (usize, usize) {
+        (
+            self.lo.load(Ordering::Acquire),
+            self.hi.load(Ordering::Acquire),
+        )
+    }
+
+    /// Test hook: empty the window, returning the bounds that were there.
+    ///
+    /// Only a test wants this, and only a test may have it: the whole soundness
+    /// argument is that the window never narrows, so a production narrowing
+    /// would make a live registered address read as unregistered. A test that
+    /// calls this MUST put back at least what it took (see
+    /// `symbol::SymbolAddrRangeGuard`), or a later test in the same binary
+    /// inherits a window too narrow for addresses registered before it ran.
+    #[cfg(test)]
+    pub(crate) fn take_bounds_for_tests(&self) -> (usize, usize) {
+        let previous = self.raw_bounds_for_tests();
+        self.lo.store(usize::MAX, Ordering::Release);
+        self.hi.store(0, Ordering::Release);
+        previous
+    }
+
+    /// Test hook: widen back to at least the pair
+    /// [`take_bounds_for_tests`](Self::take_bounds_for_tests) returned.
+    ///
+    /// Deliberately not `admit(lo); admit(hi)`: `admit` moves BOTH bounds, so
+    /// restoring the empty window `(usize::MAX, 0)` that way would push `hi` to
+    /// `usize::MAX` and leave the window covering the entire address space —
+    /// sound, but it would silently disable the fast path for the rest of the
+    /// test binary and every "the window rejected it" assertion after it.
+    #[cfg(test)]
+    pub(crate) fn restore_bounds_for_tests(&self, lo: usize, hi: usize) {
+        self.lo.fetch_min(lo, Ordering::AcqRel);
+        self.hi.fetch_max(hi, Ordering::AcqRel);
+    }
 }
 
 #[cfg(test)]

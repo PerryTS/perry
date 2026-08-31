@@ -65,7 +65,8 @@ pub(crate) use header::{
 #[cfg(test)]
 pub(crate) use header::{
     test_buffer_addr_window_bounds, test_buffer_registry_probe_count, test_data_view_registry_len,
-    test_shared_array_buffer_registry_len,
+    test_shared_array_buffer_registry_len, test_uint8array_addr_window_bounds,
+    test_uint8array_registry_probe_count,
 };
 
 // ---- Re-exports: ArrayBuffer detach / transfer (ES2024) ----

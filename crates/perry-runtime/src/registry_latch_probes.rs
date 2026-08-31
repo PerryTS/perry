@@ -291,6 +291,77 @@ fn typed_array_probe_rejects_an_out_of_window_address_without_touching_the_regis
     assert!(crate::typedarray::test_typed_array_window_admitted_probe_count() > before);
 }
 
+/// The Uint8Array-mark window, on the same terms as the buffer one above: it
+/// must be shown to RUN, not merely to answer correctly, and it must not hide a
+/// marked backing. `typed_array_owner_kind` asks this question on every untyped
+/// element access, so the rejection is the common case by a wide margin.
+#[test]
+fn uint8array_probe_rejects_an_out_of_window_address_without_touching_the_registries() {
+    let first = crate::buffer::buffer_alloc(32) as usize;
+    crate::buffer::mark_as_uint8array(first);
+    let second = crate::buffer::buffer_alloc(32) as usize;
+    crate::buffer::mark_as_uint8array(second);
+    let (lo, hi) = crate::buffer::test_uint8array_addr_window_bounds()
+        .expect("marking a Uint8Array must open the address window");
+    assert!(
+        lo <= first.min(second) && hi >= first.max(second),
+        "the window must cover every marked backing: \
+             [{lo:#x}, {hi:#x}] vs {first:#x} / {second:#x}"
+    );
+
+    let before = crate::buffer::test_uint8array_registry_probe_count();
+    assert!(
+        !crate::buffer::is_uint8array_buffer(FAR_OUTSIDE_ANY_WINDOW),
+        "an address outside the window is not a marked Uint8Array backing"
+    );
+    assert_eq!(
+        crate::buffer::test_uint8array_registry_probe_count(),
+        before,
+        "the address window must answer without reaching the registries"
+    );
+
+    assert!(
+        crate::buffer::is_uint8array_buffer(first),
+        "the window must not hide a marked Uint8Array backing"
+    );
+    assert!(
+        crate::buffer::test_uint8array_registry_probe_count() > before,
+        "an in-window address must reach the registries"
+    );
+}
+
+/// The symbol window. `is_registered_symbol` is asked about arbitrary
+/// pointer-shaped values on the generic property, coercion and iteration paths,
+/// and the answer is essentially always "no" — but a symbol the collector has
+/// EVACUATED must keep answering "yes" from its new address, which is what the
+/// forwarding rewrite's widening is for (see
+/// `gc::tests::copying_side_tables::test_copying_minor_keeps_moved_symbol_visible_to_the_range_filter`).
+#[test]
+fn symbol_probe_rejects_an_out_of_window_address_without_touching_the_registry() {
+    let sym = unsafe { crate::symbol::alloc_symbol(std::ptr::null_mut(), false) } as usize;
+    assert!(sym != 0, "test premise: the symbol allocated");
+    let (lo, hi) = crate::symbol::test_symbol_addr_range();
+    assert!(
+        lo <= sym && sym <= hi,
+        "registering a symbol must widen the window to cover it: \
+             {sym:#x} outside [{lo:#x}, {hi:#x}]"
+    );
+
+    let before = crate::symbol::test_symbol_registry_probe_count();
+    assert!(!crate::symbol::is_registered_symbol(FAR_OUTSIDE_ANY_WINDOW));
+    assert_eq!(
+        crate::symbol::test_symbol_registry_probe_count(),
+        before,
+        "the address window must answer without reaching SYMBOL_POINTERS"
+    );
+
+    assert!(
+        crate::symbol::is_registered_symbol(sym),
+        "the window must not hide a registered symbol"
+    );
+    assert!(crate::symbol::test_symbol_registry_probe_count() > before);
+}
+
 /// `alloc_shared_sab` publishes a backing that `is_registered_buffer` reports
 /// as a buffer without it ever entering `BUFFER_REGISTRY`, so the window has to
 /// be widened on that route too. Calling the allocator directly (rather than

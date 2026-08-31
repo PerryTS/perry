@@ -89,7 +89,7 @@ use crate::fast_hash::{
 use crate::string::StringHeader;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 // NaN-boxing tags (must match value.rs)
@@ -463,8 +463,23 @@ pub(crate) fn test_disable_symbol_magic_screen(disabled: bool) -> bool {
 /// while accepting merely falls through to the lookup that was already there.
 /// Death pruning removes entries without narrowing the range, which is
 /// harmless: those pointers reach the lookup, which correctly says no.
-static SYMBOL_ADDR_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
-static SYMBOL_ADDR_MAX: AtomicUsize = AtomicUsize::new(0);
+///
+/// # Why this is a [`RegistryAddrWindow`] and why the probe checks it INLINE
+///
+/// #9177 put this filter *inside* `is_registered_symbol_slow`, so a probe that
+/// the range rejects still paid the out-of-line call, a `OnceLock` load for the
+/// env kill switch, and only then the two bound loads. Measured on
+/// `claude-code --help` that residue is 0.60% of the whole run. The window is
+/// two adjacent static loads and two compares, so hoisting it into
+/// `is_registered_symbol` — where it inlines into every call site — makes the
+/// common negative answer cost no call at all.
+///
+/// The env kill switch went with the move. It guarded an enumeration ("every
+/// inserter widens"), and this file no longer relies on one: `debug_assertions`
+/// builds re-derive every rejection from `SYMBOL_POINTERS` itself, so an
+/// inserter added without widening panics in the first test that touches it.
+static SYMBOL_ADDR_WINDOW: crate::registry_latch::RegistryAddrWindow =
+    crate::registry_latch::RegistryAddrWindow::new();
 
 /// Widen the address range to admit `ptr`.
 ///
@@ -480,8 +495,7 @@ static SYMBOL_ADDR_MAX: AtomicUsize = AtomicUsize::new(0);
 /// otherwise stop answering to `typeof`, symbol-keyed property lookup and
 /// `Symbol.iterator` dispatch — while still being perfectly alive.
 pub(crate) fn widen_symbol_addr_range(ptr: usize) {
-    SYMBOL_ADDR_MIN.fetch_min(ptr, Ordering::Release);
-    SYMBOL_ADDR_MAX.fetch_max(ptr, Ordering::Release);
+    SYMBOL_ADDR_WINDOW.admit(ptr);
 }
 
 /// The ONLY way to put a pointer into `SYMBOL_POINTERS`. Widening and
@@ -506,13 +520,8 @@ pub(crate) struct SymbolAddrRangeGuard(usize, usize);
 impl SymbolAddrRangeGuard {
     /// Reset to the empty range, so only what the test registers is admitted.
     pub(crate) fn reset() -> Self {
-        let g = SymbolAddrRangeGuard(
-            SYMBOL_ADDR_MIN.load(Ordering::Acquire),
-            SYMBOL_ADDR_MAX.load(Ordering::Acquire),
-        );
-        SYMBOL_ADDR_MIN.store(usize::MAX, Ordering::Release);
-        SYMBOL_ADDR_MAX.store(0, Ordering::Release);
-        g
+        let (lo, hi) = SYMBOL_ADDR_WINDOW.take_bounds_for_tests();
+        SymbolAddrRangeGuard(lo, hi)
     }
 }
 
@@ -521,17 +530,13 @@ impl Drop for SymbolAddrRangeGuard {
     fn drop(&mut self) {
         // Union of what we saved and what the test widened to, so neither the
         // pre-existing members nor the test's own survive outside the range.
-        SYMBOL_ADDR_MIN.fetch_min(self.0, Ordering::Release);
-        SYMBOL_ADDR_MAX.fetch_max(self.1, Ordering::Release);
+        SYMBOL_ADDR_WINDOW.restore_bounds_for_tests(self.0, self.1);
     }
 }
 
 #[cfg(test)]
 pub(crate) fn test_symbol_addr_range() -> (usize, usize) {
-    (
-        SYMBOL_ADDR_MIN.load(Ordering::Acquire),
-        SYMBOL_ADDR_MAX.load(Ordering::Acquire),
-    )
+    SYMBOL_ADDR_WINDOW.raw_bounds_for_tests()
 }
 
 pub(crate) fn register_symbol_pointer(ptr: usize) {
@@ -610,33 +615,45 @@ pub fn is_registered_symbol(ptr: usize) -> bool {
     if SYMBOL_EVER_REGISTERED.is_idle() {
         return false;
     }
+    // Armed says only that SOME symbol exists — which is true of every program
+    // that touches a well-known symbol, i.e. essentially all of them. An
+    // address outside the registered window is not one of them, and rejecting
+    // it here keeps the negative answer inline: no call, no bound loads behind
+    // a call, no mutex. See `SYMBOL_ADDR_WINDOW`.
+    if !SYMBOL_ADDR_WINDOW.may_contain(ptr) {
+        // Machine-check the writer set rather than enumerate it. Every route
+        // into `SYMBOL_POINTERS` goes through `insert_symbol_pointer_in_set`,
+        // which widens first — but that is a property of today's code, and a
+        // route added without it would not crash: it would silently report a
+        // live symbol as "not a symbol", so `typeof`, symbol-keyed lookup and
+        // `Symbol.iterator` dispatch would quietly stop working for it. In a
+        // debug build every rejection is therefore re-derived from the
+        // authoritative set, which turns that into a panic in the first test
+        // that exercises the route. Compiled out entirely in release.
+        #[cfg(debug_assertions)]
+        {
+            let present = SYMBOL_POINTERS
+                .lock()
+                .ok()
+                .is_some_and(|g| g.as_ref().is_some_and(|s| s.contains(&ptr)));
+            assert!(
+                !present,
+                "SYMBOL_ADDR_WINDOW rejected {ptr:#x}, but it IS in \
+                 SYMBOL_POINTERS. Some route reached the set without going \
+                 through `insert_symbol_pointer_in_set` (which widens the \
+                 window) first."
+            );
+        }
+        return false;
+    }
     #[cfg(test)]
     TEST_SYMBOL_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
     is_registered_symbol_slow(ptr)
 }
 
-/// `PERRY_SYMBOL_RANGE_FILTER=0` restores the unconditional mutex acquisition.
-fn symbol_range_filter_enabled() -> bool {
-    use std::sync::OnceLock;
-    static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
-        !matches!(
-            std::env::var("PERRY_SYMBOL_RANGE_FILTER").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        )
-    })
-}
-
 #[inline(never)]
 fn is_registered_symbol_slow(ptr: usize) -> bool {
     if ptr < 0x10000 {
-        return false;
-    }
-    // Outside the registered range ⟹ not a symbol, without the global mutex.
-    if symbol_range_filter_enabled()
-        && (ptr < SYMBOL_ADDR_MIN.load(Ordering::Acquire)
-            || ptr > SYMBOL_ADDR_MAX.load(Ordering::Acquire))
-    {
         return false;
     }
     let guard = SYMBOL_POINTERS.lock().unwrap();

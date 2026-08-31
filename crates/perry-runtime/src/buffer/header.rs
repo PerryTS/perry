@@ -268,6 +268,48 @@ static ARRAY_BUFFER_EVER_MARKED: RegistryLatch = RegistryLatch::new();
 static SHARED_ARRAY_BUFFER_EVER_MARKED: RegistryLatch = RegistryLatch::new();
 static DATA_VIEW_EVER_MARKED: RegistryLatch = RegistryLatch::new();
 static UINT8ARRAY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
+
+/// Smallest and largest address ever marked as a `new Uint8Array(...)`
+/// backing, process-wide.
+///
+/// `UINT8ARRAY_EVER_MARKED` stops discriminating at the first Uint8Array, and
+/// `typedarray_props::typed_array_owner_kind` asks this question about the
+/// receiver of **every untyped element access** — so on `claude-code --help`
+/// the latch is armed for essentially the whole run and the probe is a
+/// permanent out-of-line call, a `OnceLock` load, a thread-local resolution and
+/// a `RefCell` borrow to say "no".
+///
+/// It covers both tables `is_uint8array_buffer_slow` consults, each of which
+/// has exactly one insert funnel:
+///   * `UINT8ARRAY_FROM_CTOR` — only [`mark_as_uint8array`] inserts;
+///   * the process-global external registry — only
+///     [`register_external_uint8array`] inserts, and both of ITS callers reach
+///     [`mark_as_uint8array`] with the same address anyway.
+///
+/// Both widen before they publish, so an address outside the window is in
+/// neither table and rejecting it is sound. Removal (the GC's dead-buffer
+/// sweep) never narrows the window, which only makes it a weaker filter, never
+/// a wrong one. See [`RegistryAddrWindow`] for the ordering rule.
+static UINT8ARRAY_ADDR_WINDOW: RegistryAddrWindow = RegistryAddrWindow::new();
+
+#[cfg(test)]
+thread_local! {
+/// Test-only count of `is_uint8array_buffer` calls that got past the address
+/// window and reached the registries — the twin of
+/// `TEST_BUFFER_REGISTRY_PROBES`, for the same reason: a fast path nobody can
+/// prove ran is not a fast path.
+    static TEST_UINT8ARRAY_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_uint8array_registry_probe_count() -> u64 {
+    TEST_UINT8ARRAY_REGISTRY_PROBES.with(|c| c.get())
+}
+
+#[cfg(test)]
+pub(crate) fn test_uint8array_addr_window_bounds() -> Option<(usize, usize)> {
+    UINT8ARRAY_ADDR_WINDOW.bounds_for_tests()
+}
 static SECRET_KEY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
 static CRYPTO_KEY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
 static ASYMMETRIC_KEY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
@@ -468,6 +510,10 @@ fn is_registered_buffer_slow(addr: usize) -> bool {
 /// Mark this buffer as one that came from `new Uint8Array(...)` so it
 /// formats as `Uint8Array(N) [ ... ]` rather than `<Buffer ...>`.
 pub fn mark_as_uint8array(addr: usize) {
+    // Widen before arming, and arm before the insert: the probe consults the
+    // latch and then the window, so both must already cover this address by the
+    // time it becomes findable. See `crate::registry_latch`.
+    UINT8ARRAY_ADDR_WINDOW.admit(addr);
     UINT8ARRAY_EVER_MARKED.arm();
     UINT8ARRAY_ADDR_RANGE.with(|r| {
         let (lo, hi) = r.get();
@@ -510,6 +556,13 @@ pub extern "C" fn js_buffer_mark_as_uint8array_external(addr: usize) {
 /// precisely so an address registered on one thread is visible from another,
 /// and the thread-local set that would otherwise cover it is not.
 fn register_external_uint8array(addr: usize) {
+    // Both of this function's callers also call `mark_as_uint8array(addr)`,
+    // which admits the same address — but that is an enumeration of callers,
+    // and this is the funnel the doc comment above promises is authoritative.
+    // Admitting here too costs two RMWs on a path that runs a handful of times
+    // per process and makes the funnel self-sufficient.
+    UINT8ARRAY_ADDR_WINDOW.admit(addr);
+    UINT8ARRAY_EVER_MARKED.arm();
     EXTERNAL_UINT8ARRAYS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
     if let Ok(mut r) = external_uint8arrays().lock() {
         r.insert(addr);
@@ -659,6 +712,30 @@ pub fn is_uint8array_buffer(addr: usize) -> bool {
     if UINT8ARRAY_EVER_MARKED.is_idle() {
         return false;
     }
+    // An address outside the marked window is in neither table the slow path
+    // consults, so reject it inline — no call, no `OnceLock`, no thread-local
+    // resolution, no `RefCell` borrow. See `UINT8ARRAY_ADDR_WINDOW`.
+    if !UINT8ARRAY_ADDR_WINDOW.may_contain(addr) {
+        // Completeness audit, machine-checked rather than enumerated — see the
+        // twin in `is_registered_buffer` for why. `is_uint8array_buffer_slow`
+        // is the authoritative reader of both tables and mutates nothing, so
+        // calling it here changes no state the next probe would observe.
+        // Compiled out entirely in release.
+        #[cfg(debug_assertions)]
+        {
+            assert!(
+                !is_uint8array_buffer_slow(addr),
+                "UINT8ARRAY_ADDR_WINDOW rejected {addr:#x}, but it IS a marked \
+                 Uint8Array backing. Some route reached UINT8ARRAY_FROM_CTOR or \
+                 the external-Uint8Array registry without calling \
+                 `UINT8ARRAY_ADDR_WINDOW.admit()` (via `mark_as_uint8array` or \
+                 `register_external_uint8array`) first."
+            );
+        }
+        return false;
+    }
+    #[cfg(test)]
+    TEST_UINT8ARRAY_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
     is_uint8array_buffer_slow(addr)
 }
 
