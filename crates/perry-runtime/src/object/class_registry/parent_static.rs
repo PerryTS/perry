@@ -1792,8 +1792,11 @@ pub fn is_registered_class_prototype_object(ptr: usize) -> bool {
         // entirely in release.
         #[cfg(debug_assertions)]
         {
+            // `try_read`, not `read`, for the reason the symbol twin gives:
+            // the rejection path never took this lock before, so a blocking
+            // audit could hang on a caller the audited code would not have.
             let present = CLASS_PROTOTYPE_OBJECTS.with(|table| {
-                table.read().is_ok_and(|guard| {
+                table.try_read().is_ok_and(|guard| {
                     guard
                         .as_ref()
                         .is_some_and(|map| map.values().any(|&p| p == ptr))

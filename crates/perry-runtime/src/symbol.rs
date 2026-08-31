@@ -685,8 +685,14 @@ pub fn is_registered_symbol(ptr: usize) -> bool {
         // that exercises the route. Compiled out entirely in release.
         #[cfg(debug_assertions)]
         {
+            // `try_lock`, not `lock`. The rejection path never took this mutex
+            // before, so a blocking audit would introduce a deadlock that the
+            // code it audits cannot have: a caller that probes an unregistered
+            // address while holding `SYMBOL_POINTERS` is fine today and would
+            // hang here. A `try_lock` that loses the race simply does not audit
+            // that one rejection, and the suite performs millions of them.
             let present = SYMBOL_POINTERS
-                .lock()
+                .try_lock()
                 .ok()
                 .is_some_and(|g| g.as_ref().is_some_and(|s| s.contains(&ptr)));
             assert!(
