@@ -127,9 +127,10 @@ pub unsafe extern "C" fn js_mysql2_connection_end(conn_handle: Handle) -> *mut P
 pub unsafe extern "C" fn js_mysql2_connection_query(
     conn_handle: Handle,
     sql_ptr: *const u8,
-    params: JSValue,
+    params_f: f64,
 ) -> *mut Promise {
     let promise = js_promise_new_cross_thread();
+    let params = JSValue::from_bits(params_f.to_bits());
 
     // Extract the SQL string
     let sql = if sql_ptr.is_null() {
@@ -151,6 +152,8 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
         async move {
             use tokio::time::timeout;
 
+            let param_values = param_values?;
+
             // First try as a regular connection
             if let Some(wrapper) = get_handle_mut::<MysqlConnectionHandle>(conn_handle) {
                 if let Some(conn) = wrapper.connection.as_mut() {
@@ -159,6 +162,8 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
                         query = match param {
                             ParamValue::Null => query.bind(Option::<String>::None),
                             ParamValue::String(s) => query.bind(s.clone()),
+                            ParamValue::Bytes(bytes) => query.bind(bytes.clone()),
+                            ParamValue::DateTime(date) => query.bind(*date),
                             ParamValue::Number(n) => query.bind(*n),
                             ParamValue::Int(i) => query.bind(*i),
                             ParamValue::Bool(b) => query.bind(*b),
@@ -206,6 +211,8 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
                         query = match param {
                             ParamValue::Null => query.bind(Option::<String>::None),
                             ParamValue::String(s) => query.bind(s.clone()),
+                            ParamValue::Bytes(bytes) => query.bind(bytes.clone()),
+                            ParamValue::DateTime(date) => query.bind(*date),
                             ParamValue::Number(n) => query.bind(*n),
                             ParamValue::Int(i) => query.bind(*i),
                             ParamValue::Bool(b) => query.bind(*b),
@@ -260,9 +267,10 @@ pub unsafe extern "C" fn js_mysql2_connection_query(
 pub unsafe extern "C" fn js_mysql2_connection_execute(
     conn_handle: Handle,
     sql_ptr: *const u8,
-    params: JSValue,
+    params_f: f64,
 ) -> *mut Promise {
     let promise = js_promise_new_cross_thread();
+    let params = JSValue::from_bits(params_f.to_bits());
 
     let sql = if sql_ptr.is_null() {
         String::new()
@@ -282,6 +290,8 @@ pub unsafe extern "C" fn js_mysql2_connection_execute(
         async move {
             use tokio::time::timeout;
 
+            let param_values = param_values?;
+
             // Try as a regular connection first
             if let Some(wrapper) = get_handle_mut::<MysqlConnectionHandle>(conn_handle) {
                 if let Some(conn) = wrapper.connection.as_mut() {
@@ -290,6 +300,8 @@ pub unsafe extern "C" fn js_mysql2_connection_execute(
                         query = match param {
                             ParamValue::Null => query.bind(Option::<String>::None),
                             ParamValue::String(s) => query.bind(s.clone()),
+                            ParamValue::Bytes(bytes) => query.bind(bytes.clone()),
+                            ParamValue::DateTime(date) => query.bind(*date),
                             ParamValue::Number(n) => query.bind(*n),
                             ParamValue::Int(i) => query.bind(*i),
                             ParamValue::Bool(b) => query.bind(*b),
@@ -350,6 +362,8 @@ pub unsafe extern "C" fn js_mysql2_connection_execute(
                         query = match param {
                             ParamValue::Null => query.bind(Option::<String>::None),
                             ParamValue::String(s) => query.bind(s.clone()),
+                            ParamValue::Bytes(bytes) => query.bind(bytes.clone()),
+                            ParamValue::DateTime(date) => query.bind(*date),
                             ParamValue::Number(n) => query.bind(*n),
                             ParamValue::Int(i) => query.bind(*i),
                             ParamValue::Bool(b) => query.bind(*b),

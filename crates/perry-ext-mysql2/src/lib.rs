@@ -15,10 +15,10 @@
 //! adapter; followup once a wrapper actually demands it).
 
 use perry_ffi::{
-    alloc_string, build_object_shape, js_array_alloc, js_array_get, js_array_push,
+    alloc_string, build_object_shape, js_array_alloc, js_array_get, js_array_length, js_array_push,
     js_object_alloc_with_shape, js_object_get_field, js_object_set_field, register_handle,
-    spawn_blocking, take_handle, with_handle, ArrayHeader, Handle, JsPromise, JsValue,
-    ObjectHeader, Promise, StringHeader,
+    spawn_blocking, take_handle, value_byte_slice, with_handle, ArrayHeader, Handle, JsPromise,
+    JsValue, ObjectHeader, Promise, StringHeader, SHORT_STRING_MAX_LEN,
 };
 use sqlx::mysql::{MySqlConnection, MySqlDatabaseError, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::pool::PoolConnection;
@@ -33,6 +33,12 @@ mod test_async_shims;
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
 const DEFAULT_QUERY_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_ACQUIRE_TIMEOUT_SECS: u64 = 10;
+
+extern "C" {
+    fn js_array_is_array(value: f64) -> f64;
+    fn js_date_get_time(value: f64) -> f64;
+    fn js_util_types_is_date(value: f64) -> f64;
+}
 
 /// Connection config — matches perry-stdlib's `MySqlConfig` shape.
 #[derive(Debug, Clone)]
@@ -80,16 +86,22 @@ impl MySqlConfig {
 }
 
 unsafe fn jsvalue_to_string(value: JsValue) -> Option<String> {
-    if value.is_string() {
-        let ptr = value.as_string_ptr();
-        if !ptr.is_null() {
-            let len = (*ptr).byte_len as usize;
-            let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            let bytes = std::slice::from_raw_parts(data, len);
-            return std::str::from_utf8(bytes).ok().map(String::from);
-        }
+    if value.is_short_string() {
+        let mut bytes = [0; SHORT_STRING_MAX_LEN];
+        let len = value.short_string_to_buf(&mut bytes)?;
+        return std::str::from_utf8(&bytes[..len]).ok().map(String::from);
     }
-    None
+    if !value.is_string() {
+        return None;
+    }
+    let ptr = value.as_string_ptr();
+    if ptr.is_null() {
+        return None;
+    }
+    let len = (*ptr).byte_len as usize;
+    let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data, len);
+    std::str::from_utf8(bytes).ok().map(String::from)
 }
 
 /// Percent-decode a URI component (`%25` → `%`, `%40` → `@`, …). A lone `%`
@@ -245,13 +257,36 @@ enum QueryOutcome {
 
 fn extract_raw_value(row: &MySqlRow, index: usize, type_name: &str) -> RawValue {
     match type_name {
-        "INT" | "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT UNSIGNED" | "TINYINT UNSIGNED"
-        | "SMALLINT UNSIGNED" | "MEDIUMINT UNSIGNED" => row
+        "TINYINT" => row
+            .try_get::<i8, _>(index)
+            .map(|n| RawValue::Float64(n as f64))
+            .unwrap_or(RawValue::Null),
+        "TINYINT UNSIGNED" => row
+            .try_get::<u8, _>(index)
+            .map(|n| RawValue::Float64(n as f64))
+            .unwrap_or(RawValue::Null),
+        "SMALLINT" => row
+            .try_get::<i16, _>(index)
+            .map(|n| RawValue::Float64(n as f64))
+            .unwrap_or(RawValue::Null),
+        "SMALLINT UNSIGNED" => row
+            .try_get::<u16, _>(index)
+            .map(|n| RawValue::Float64(n as f64))
+            .unwrap_or(RawValue::Null),
+        "MEDIUMINT" | "INT" => row
             .try_get::<i32, _>(index)
             .map(|n| RawValue::Float64(n as f64))
             .unwrap_or(RawValue::Null),
-        "BIGINT" | "BIGINT UNSIGNED" => row
+        "MEDIUMINT UNSIGNED" | "INT UNSIGNED" => row
+            .try_get::<u32, _>(index)
+            .map(|n| RawValue::Float64(n as f64))
+            .unwrap_or(RawValue::Null),
+        "BIGINT" => row
             .try_get::<i64, _>(index)
+            .map(|n| RawValue::Float64(n as f64))
+            .unwrap_or(RawValue::Null),
+        "BIGINT UNSIGNED" => row
+            .try_get::<u64, _>(index)
             .map(|n| RawValue::Float64(n as f64))
             .unwrap_or(RawValue::Null),
         "FLOAT" | "DOUBLE" | "DECIMAL" => row
@@ -479,6 +514,8 @@ fn is_row_returning_query(sql: &str) -> bool {
 enum ParamValue {
     Null,
     String(String),
+    Bytes(Vec<u8>),
+    DateTime(chrono::NaiveDateTime),
     Number(f64),
     Int(i64),
     Bool(bool),
@@ -522,21 +559,33 @@ impl QueryRequest {
     }
 }
 
-unsafe fn extract_params_from_jsvalue(params: JsValue) -> Vec<ParamValue> {
+unsafe fn extract_params_from_jsvalue(params: JsValue) -> Result<Vec<ParamValue>, String> {
+    if params.is_undefined() || params.is_null() {
+        return Ok(Vec::new());
+    }
+
+    let params_f = f64::from_bits(params.bits());
+    let is_array = JsValue::from_bits(js_array_is_array(params_f).to_bits()).to_bool();
+    if !is_array {
+        return Err("Bind parameters must be an array".to_string());
+    }
+
     let arr_ptr = params.as_pointer::<ArrayHeader>();
     if arr_ptr.is_null() {
-        return Vec::new();
+        return Err("Bind parameters array has no valid runtime pointer".to_string());
     }
-    let length = (*arr_ptr).length;
+    let length = js_array_length(arr_ptr);
     let mut result = Vec::with_capacity(length as usize);
     for i in 0..length {
         let element = js_array_get(arr_ptr, i);
-        let p = if element.is_null() || element.is_undefined() {
+        let p = if element.is_null() {
             ParamValue::Null
-        } else if element.is_string() {
+        } else if element.is_undefined() {
+            return Err(format!("Bind parameter at index {i} is undefined"));
+        } else if element.is_any_string() {
             jsvalue_to_string(element)
                 .map(ParamValue::String)
-                .unwrap_or(ParamValue::Null)
+                .ok_or_else(|| format!("Could not read string bind parameter at index {i}"))?
         } else if element.is_int32() {
             ParamValue::Int(element.to_int32() as i64)
         } else if element.is_bool() {
@@ -548,12 +597,40 @@ unsafe fn extract_params_from_jsvalue(params: JsValue) -> Vec<ParamValue> {
             } else {
                 ParamValue::Number(n)
             }
+        } else if let Some(bytes) = value_byte_slice(element) {
+            // Copy off the Perry heap before the async query is scheduled.
+            // This covers Buffer and Uint8Array without retaining a raw pointer
+            // into movable/runtime-owned storage on the worker thread.
+            ParamValue::Bytes(bytes.to_vec())
         } else {
-            ParamValue::Null
+            let value_f = f64::from_bits(element.bits());
+            let is_date = JsValue::from_bits(js_util_types_is_date(value_f).to_bits()).to_bool();
+            if is_date {
+                let millis = js_date_get_time(value_f);
+                if !millis.is_finite() {
+                    return Err(format!("Bind parameter at index {i} is an invalid Date"));
+                }
+                let millis = millis as i64;
+                let date = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(millis)
+                    .ok_or_else(|| {
+                        format!("Bind parameter at index {i} is outside MySQL's Date range")
+                    })?
+                    .naive_utc();
+                ParamValue::DateTime(date)
+            } else {
+                return Err(format!("Unsupported bind parameter at index {i}"));
+            }
         };
         result.push(p);
     }
-    result
+    Ok(result)
+}
+
+fn rejected_params_promise(message: String) -> *mut Promise {
+    let promise = JsPromise::new();
+    let raw = promise.as_raw();
+    promise.reject_string(&message);
+    raw
 }
 
 unsafe fn read_sql(sql_ptr: *const u8) -> String {
@@ -731,6 +808,8 @@ async fn execute_query_on_connection(
         query = match param {
             ParamValue::Null => query.bind(Option::<String>::None),
             ParamValue::String(s) => query.bind(s.clone()),
+            ParamValue::Bytes(bytes) => query.bind(bytes.clone()),
+            ParamValue::DateTime(date) => query.bind(*date),
             ParamValue::Number(n) => query.bind(*n),
             ParamValue::Int(i) => query.bind(*i),
             ParamValue::Bool(b) => query.bind(*b),
@@ -789,6 +868,7 @@ async fn execute_query_on_target(
 /// `config_f` is a NaN-boxed JsValue.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_create_connection(config_f: f64) -> *mut Promise {
+    ensure_dispatch_registered();
     let config = JsValue::from_bits(config_f.to_bits());
     let mysql_config = parse_mysql_config(config);
     let promise = JsPromise::new();
@@ -807,7 +887,10 @@ pub unsafe extern "C" fn js_mysql2_create_connection(config_f: f64) -> *mut Prom
         match result {
             Ok(conn) => {
                 let handle = register_handle(MysqlConnectionHandle::new(conn));
-                promise.resolve(JsValue::from_number(handle as f64));
+                // Registry handles are pointer-tagged small integers. Returning a
+                // normal JS number loses that identity, so the first method call
+                // cannot find the connection and rejects "Invalid connection handle".
+                promise.resolve(JsValue::from_object_ptr(handle as *mut ()));
             }
             Err(error) => error.reject(promise),
         }
@@ -851,7 +934,10 @@ unsafe fn run_connection_query(
 ) -> *mut Promise {
     let sql = read_sql(sql_ptr);
     let params = JsValue::from_bits(params_f.to_bits());
-    let param_values = extract_params_from_jsvalue(params);
+    let param_values = match extract_params_from_jsvalue(params) {
+        Ok(values) => values,
+        Err(message) => return rejected_params_promise(message),
+    };
     let request = QueryRequest::new(sql, param_values, rows_as_array, force_prepared);
     let target = connection_target(conn_handle);
 
@@ -1218,7 +1304,10 @@ unsafe fn run_pool_query(
 ) -> *mut Promise {
     let sql = read_sql(sql_ptr);
     let params = JsValue::from_bits(params_f.to_bits());
-    let param_values = extract_params_from_jsvalue(params);
+    let param_values = match extract_params_from_jsvalue(params) {
+        Ok(values) => values,
+        Err(message) => return rejected_params_promise(message),
+    };
     let request = QueryRequest::new(sql, param_values, rows_as_array, force_prepared);
     let pool = with_handle::<MysqlPoolHandle, _, _>(pool_handle, |wrapper| wrapper.pool.clone());
     let promise = JsPromise::new();
@@ -1294,7 +1383,7 @@ pub extern "C" fn js_mysql2_pool_get_connection(pool_handle: Handle) -> *mut Pro
         match result {
             Ok(conn) => {
                 let h = register_handle(MysqlPoolConnectionHandle::new(conn));
-                promise.resolve(JsValue::from_number(h as f64));
+                promise.resolve(JsValue::from_object_ptr(h as *mut ()));
             }
             Err(error) => error.reject(promise),
         }
@@ -1326,7 +1415,10 @@ unsafe fn run_pool_conn_query(
 ) -> *mut Promise {
     let sql = read_sql(sql_ptr);
     let params = JsValue::from_bits(params_f.to_bits());
-    let param_values = extract_params_from_jsvalue(params);
+    let param_values = match extract_params_from_jsvalue(params) {
+        Ok(values) => values,
+        Err(message) => return rejected_params_promise(message),
+    };
     let request = QueryRequest::new(sql, param_values, rows_as_array, force_prepared);
     let connection = with_handle::<MysqlPoolConnectionHandle, _, _>(conn_handle, |wrapper| {
         Arc::clone(&wrapper.connection)
@@ -1537,6 +1629,73 @@ mod tests {
         assert_eq!(transaction_sql_for_method("commit"), Some("COMMIT"));
         assert_eq!(transaction_sql_for_method("rollback"), Some("ROLLBACK"));
         assert_eq!(transaction_sql_for_method("release"), None);
+    }
+
+    #[test]
+    fn parameter_extraction_preserves_every_supported_value() {
+        unsafe {
+            let short = perry_runtime::JSValue::try_short_string(b"hi")
+                .expect("two-byte string uses the SSO representation");
+            let long = alloc_string("long-string");
+            let date = perry_runtime::date::js_date_new_from_timestamp(1_706_933_106_789.0);
+            let buffer = perry_ffi::alloc_buffer(&[0, 1, 127, 128, 255]);
+
+            let mut array = js_array_alloc(8);
+            for value in [
+                JsValue::from_bits(short.bits()),
+                JsValue::from_string_ptr(long.as_raw()),
+                JsValue::from_int32(42),
+                JsValue::from_number(3.25),
+                JsValue::TRUE,
+                JsValue::NULL,
+                JsValue::from_bits(date.to_bits()),
+                JsValue::from_object_ptr(buffer),
+            ] {
+                array = js_array_push(array, value);
+            }
+
+            let expected_date = chrono::NaiveDate::from_ymd_opt(2024, 2, 3)
+                .unwrap()
+                .and_hms_milli_opt(4, 5, 6, 789)
+                .unwrap();
+            let actual = extract_params_from_jsvalue(JsValue::from_object_ptr(array))
+                .expect("all supported parameter values must marshal");
+            assert_eq!(
+                actual,
+                vec![
+                    ParamValue::String("hi".to_string()),
+                    ParamValue::String("long-string".to_string()),
+                    ParamValue::Int(42),
+                    ParamValue::Number(3.25),
+                    ParamValue::Bool(true),
+                    ParamValue::Null,
+                    ParamValue::DateTime(expected_date),
+                    ParamValue::Bytes(vec![0, 1, 127, 128, 255]),
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn parameter_extraction_rejects_values_instead_of_substituting_null() {
+        unsafe {
+            let mut undefined_array = js_array_alloc(1);
+            undefined_array = js_array_push(undefined_array, JsValue::UNDEFINED);
+            let error = extract_params_from_jsvalue(JsValue::from_object_ptr(undefined_array))
+                .expect_err("undefined must never become SQL NULL");
+            assert_eq!(error, "Bind parameter at index 0 is undefined");
+
+            let object = perry_ffi::alloc_object();
+            let error = extract_params_from_jsvalue(object)
+                .expect_err("a non-array params container must be rejected");
+            assert_eq!(error, "Bind parameters must be an array");
+
+            let mut object_array = js_array_alloc(1);
+            object_array = js_array_push(object_array, object);
+            let error = extract_params_from_jsvalue(JsValue::from_object_ptr(object_array))
+                .expect_err("an unsupported parameter must never become SQL NULL");
+            assert_eq!(error, "Unsupported bind parameter at index 0");
+        }
     }
 
     #[test]

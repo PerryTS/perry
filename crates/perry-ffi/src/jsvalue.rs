@@ -40,10 +40,16 @@ const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
+const SHORT_STRING_LEN_SHIFT: u64 = 40;
+const SHORT_STRING_LEN_MASK: u64 = 0x0000_FF00_0000_0000;
+const SHORT_STRING_DATA_MASK: u64 = 0x0000_00FF_FFFF_FFFF;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+
+/// Maximum UTF-8 byte length stored directly inside an SSO [`JsValue`].
+pub const SHORT_STRING_MAX_LEN: usize = 5;
 
 /// A NaN-boxed JavaScript value, as it crosses the FFI boundary.
 ///
@@ -172,6 +178,24 @@ impl JsValue {
     #[inline]
     pub const fn is_short_string(self) -> bool {
         (self.0 & TAG_MASK) == SHORT_STRING_TAG
+    }
+
+    /// Copy an inline SSO string into `buffer` without allocating in the Perry
+    /// heap, returning its UTF-8 byte length. Returns `None` when this value is
+    /// not an inline string.
+    ///
+    /// This is preferable to materializing a `StringHeader` while a native
+    /// wrapper is walking raw runtime pointers: materialization may collect and
+    /// move the surrounding object or array before the wrapper finishes.
+    #[inline]
+    pub fn short_string_to_buf(self, buffer: &mut [u8; SHORT_STRING_MAX_LEN]) -> Option<usize> {
+        if !self.is_short_string() {
+            return None;
+        }
+        let len = ((self.0 & SHORT_STRING_LEN_MASK) >> SHORT_STRING_LEN_SHIFT) as usize;
+        let bytes = (self.0 & SHORT_STRING_DATA_MASK).to_le_bytes();
+        buffer[..len].copy_from_slice(&bytes[..len]);
+        Some(len)
     }
 
     /// True if the value is a heap object pointer (`POINTER_TAG` —
@@ -517,6 +541,9 @@ mod tests {
         let sso = JsValue::from_bits(sso_bits);
         assert!(sso.is_any_string(), "SSO short string is a string");
         assert!(sso.is_short_string(), "SSO short string is the short repr");
+        let mut decoded = [0; SHORT_STRING_MAX_LEN];
+        assert_eq!(sso.short_string_to_buf(&mut decoded), Some(2));
+        assert_eq!(&decoded[..2], b"hi");
         assert!(
             !sso.is_string(),
             "strict is_string() must NOT match SSO — this is the footgun"
@@ -532,6 +559,7 @@ mod tests {
             !heap.is_short_string(),
             "a heap STRING_TAG value is not the SSO repr"
         );
+        assert_eq!(heap.short_string_to_buf(&mut decoded), None);
 
         // Non-strings: neither predicate fires.
         for (val, kind) in [
