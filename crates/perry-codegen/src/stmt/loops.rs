@@ -553,6 +553,10 @@ fn emit_range_loop_accumulator_admission(
         matched.counter_id,
         slow_pre_label,
         block_prefix,
+        // The range tier publishes `window_validated: true` and its loads are
+        // hole-checked, so an `a[i +/- c]` read is lowered inline and yields a
+        // Number. See `accumulator_rhs_is_numeric`.
+        true,
     )
 }
 
@@ -865,9 +869,10 @@ fn emit_packed_numeric_accumulator_admission(
     counter_id: u32,
     slow_pre_label: &str,
     block_prefix: &str,
+    offset_reads_inlined: bool,
 ) -> PackedAccumulatorScope {
     let accumulators = super::stable_packed_accumulator::collect_numeric_accumulators(
-        ctx, body, array_id, counter_id,
+        ctx, body, array_id, counter_id, offset_reads_inlined,
     );
     // Integer (`c++`) accumulators admit independently of the float set —
     // a pure count loop has no float accumulator at all.
@@ -1048,6 +1053,11 @@ fn lower_packed_f64_versioned_for(
         matched.counter_id,
         &slow_pre_label,
         loop_label,
+        // This tier publishes `window_validated: false`, so
+        // `packed_f64_loop_fact_for_index` declines a non-zero offset and the
+        // read takes the generic path — which can produce `undefined`. #9259
+        // is the work that would make an offset read inline here.
+        false,
     );
     acc_scope.hoist_receivers(ctx, &[matched.array_id]);
     ctx.packed_f64_loop_facts.push(PackedF64LoopFact {

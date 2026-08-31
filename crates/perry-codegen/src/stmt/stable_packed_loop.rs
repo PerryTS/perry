@@ -1665,7 +1665,9 @@ pub(super) fn lower(
     // requires `numeric_elements` — without the element proof the accumulator
     // walk's `array[counter]` leaf has nothing to stand on.
     let numeric_accumulators = if candidate.numeric_elements {
-        collect_numeric_accumulators(ctx, body, candidate.array_id, candidate.counter_id)
+        // The stable-packed tier is left as it was; widening it needs its own
+        // proof that an offset read lowers inline here.
+        collect_numeric_accumulators(ctx, body, candidate.array_id, candidate.counter_id, false)
     } else {
         Vec::new()
     };

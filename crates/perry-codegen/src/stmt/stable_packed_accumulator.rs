@@ -38,29 +38,57 @@ fn accumulator_rhs_is_numeric(
     expr: &Expr,
     array_id: u32,
     counter_id: u32,
+    offset_reads_inlined: bool,
     candidates: &std::collections::BTreeSet<u32>,
 ) -> bool {
     match expr {
         Expr::Number(_) | Expr::Integer(_) => true,
-        Expr::IndexGet { object, index } => matches!(
-            (object.as_ref(), index.as_ref()),
-            (Expr::LocalGet(a), Expr::LocalGet(i)) if *a == array_id && *i == counter_id
-        ),
+        Expr::IndexGet { object, index } => {
+            let Expr::LocalGet(a) = object.as_ref() else {
+                return false;
+            };
+            if *a != array_id {
+                return false;
+            }
+            match index.as_ref() {
+                Expr::LocalGet(i) => *i == counter_id,
+                // `a[counter +/- c]`. Admissible only when the caller's tier
+                // emits an INLINE packed load for an offset index, because
+                // that load is what makes the value a Number: the range tier
+                // publishes `window_validated`, so its guard proved the whole
+                // window, and its hole-tolerant loads side-exit before
+                // producing a value. A tier that falls back to a generic read
+                // for the offset can yield `undefined`, and admitting that as
+                // numeric would be a wrong answer rather than a missed
+                // optimisation — so the caller states which it is.
+                //
+                // Without this the read is not numeric, the accumulator never
+                // earns its number proof, and every `+` in the enclosing
+                // expression lowers to a tag-test diamond over
+                // `js_dynamic_string_or_number_add` — the same cost #9060 and
+                // #9091 removed for the bare-counter form.
+                _ if offset_reads_inlined => {
+                    crate::expr::packed_f64_loop_index_parts(index)
+                        .is_some_and(|(i, _)| i == counter_id)
+                }
+                _ => false,
+            }
+        }
         Expr::LocalGet(id) => {
             candidates.contains(id) || crate::type_analysis::is_numeric_expr(ctx, expr)
         }
         Expr::Binary { left, right, .. } => {
-            accumulator_rhs_is_numeric(ctx, left, array_id, counter_id, candidates)
-                && accumulator_rhs_is_numeric(ctx, right, array_id, counter_id, candidates)
+            accumulator_rhs_is_numeric(ctx, left, array_id, counter_id, offset_reads_inlined, candidates)
+                && accumulator_rhs_is_numeric(ctx, right, array_id, counter_id, offset_reads_inlined, candidates)
         }
         Expr::NumberCoerce(operand) => {
-            accumulator_rhs_is_numeric(ctx, operand, array_id, counter_id, candidates)
+            accumulator_rhs_is_numeric(ctx, operand, array_id, counter_id, offset_reads_inlined, candidates)
         }
         Expr::Unary { op, operand } => {
             matches!(
                 op,
                 perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::Pos | perry_hir::UnaryOp::BitNot
-            ) && accumulator_rhs_is_numeric(ctx, operand, array_id, counter_id, candidates)
+            ) && accumulator_rhs_is_numeric(ctx, operand, array_id, counter_id, offset_reads_inlined, candidates)
         }
         Expr::MathAbs(v)
         | Expr::MathSqrt(v)
@@ -70,15 +98,15 @@ fn accumulator_rhs_is_numeric(
         | Expr::MathTrunc(v)
         | Expr::MathSign(v)
         | Expr::MathFround(v) => {
-            accumulator_rhs_is_numeric(ctx, v, array_id, counter_id, candidates)
+            accumulator_rhs_is_numeric(ctx, v, array_id, counter_id, offset_reads_inlined, candidates)
         }
         Expr::MathImul(l, r) | Expr::MathPow(l, r) => {
-            accumulator_rhs_is_numeric(ctx, l, array_id, counter_id, candidates)
-                && accumulator_rhs_is_numeric(ctx, r, array_id, counter_id, candidates)
+            accumulator_rhs_is_numeric(ctx, l, array_id, counter_id, offset_reads_inlined, candidates)
+                && accumulator_rhs_is_numeric(ctx, r, array_id, counter_id, offset_reads_inlined, candidates)
         }
         Expr::MathMin(values) | Expr::MathMax(values) => values
             .iter()
-            .all(|v| accumulator_rhs_is_numeric(ctx, v, array_id, counter_id, candidates)),
+            .all(|v| accumulator_rhs_is_numeric(ctx, v, array_id, counter_id, offset_reads_inlined, candidates)),
         _ => false,
     }
 }
@@ -228,6 +256,7 @@ pub(super) fn collect_numeric_accumulators(
     body: &[Stmt],
     array_id: u32,
     counter_id: u32,
+    offset_reads_inlined: bool,
 ) -> Vec<u32> {
     if !packed_loop_numeric_accumulators_enabled() {
         return Vec::new();
@@ -255,7 +284,14 @@ pub(super) fn collect_numeric_accumulators(
             .filter(|id| {
                 !writes[id].iter().all(|write| match write {
                     Some(rhs) => {
-                        accumulator_rhs_is_numeric(ctx, rhs, array_id, counter_id, &candidates)
+                        accumulator_rhs_is_numeric(
+                            ctx,
+                            rhs,
+                            array_id,
+                            counter_id,
+                            offset_reads_inlined,
+                            &candidates,
+                        )
                     }
                     // `Update` (++/--): ToNumeric(Number) ± 1 is a Number.
                     None => true,
