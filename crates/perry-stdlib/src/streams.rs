@@ -27,7 +27,6 @@
 
 use perry_runtime::{ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader};
 use std::collections::{HashMap, VecDeque};
-use std::os::raw::c_int;
 use std::sync::Mutex;
 
 // Calls that allocate or mutate runtime-owned values must cross the stable C
@@ -293,18 +292,10 @@ pub(crate) fn internal_promise() -> *mut Promise {
 }
 
 unsafe fn try_call_stream_action(callback: i64, reason: f64) -> Result<f64, u64> {
-    let trap_buf = perry_runtime::exception::js_try_push();
-    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
-    if jumped == 0 {
-        let result = js_closure_call1(callback as *const ClosureHeader, reason);
-        perry_runtime::exception::js_try_end();
-        Ok(result)
-    } else {
-        let error = perry_runtime::exception::js_get_exception();
-        perry_runtime::exception::js_clear_exception();
-        perry_runtime::exception::js_try_end();
-        Err(error.to_bits())
-    }
+    perry_runtime::exception::catch_js_throw(|| {
+        js_closure_call1(callback as *const ClosureHeader, reason)
+    })
+    .map_err(f64::to_bits)
 }
 
 unsafe fn stream_action_promise(result: f64) -> Option<*mut Promise> {
@@ -1563,18 +1554,8 @@ unsafe fn call_iterator_next(iterator: f64) -> Option<f64> {
 }
 
 unsafe fn try_call_iterator_next(iterator: f64) -> Result<Option<f64>, u64> {
-    let trap_buf = perry_runtime::exception::js_try_push();
-    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
-    if jumped == 0 {
-        let step = call_iterator_next(iterator);
-        perry_runtime::exception::js_try_end();
-        Ok(step)
-    } else {
-        let err = perry_runtime::exception::js_get_exception();
-        perry_runtime::exception::js_clear_exception();
-        perry_runtime::exception::js_try_end();
-        Err(err.to_bits())
-    }
+    perry_runtime::exception::catch_js_throw(|| unsafe { call_iterator_next(iterator) })
+        .map_err(f64::to_bits)
 }
 
 unsafe fn chunks_from_async_iterable(value: f64) -> Option<ReadableFromSource> {

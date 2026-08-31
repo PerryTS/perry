@@ -10,7 +10,6 @@ use perry_runtime::{
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::os::raw::c_int;
 use std::sync::Once;
 
 // `events` is feature-gated behind `bundled-events`; when the well-known
@@ -292,21 +291,18 @@ pub unsafe extern "C" fn js_domain_emit_error(
 
 unsafe fn call_with_domain(handle: Handle, callback: f64, args: &[f64]) -> f64 {
     enter_domain(handle);
-    let trap_buf = perry_runtime::exception::js_try_push();
-    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
-    if jumped == 0 {
-        let result =
-            perry_runtime::closure::js_native_call_value(callback, args.as_ptr(), args.len());
-        perry_runtime::exception::js_try_end();
-        exit_domain(handle);
-        result
-    } else {
-        let err = perry_runtime::exception::js_get_exception();
-        perry_runtime::exception::js_clear_exception();
-        perry_runtime::exception::js_try_end();
-        exit_domain(handle);
-        let _ = js_domain_emit_error(handle, err, undefined(), true);
-        undefined()
+    // Armed in a C trampoline frame (#9305); the error emit below runs
+    // after the trap is popped, exactly as before.
+    let outcome = perry_runtime::exception::catch_js_throw(|| unsafe {
+        perry_runtime::closure::js_native_call_value(callback, args.as_ptr(), args.len())
+    });
+    exit_domain(handle);
+    match outcome {
+        Ok(result) => result,
+        Err(err) => {
+            let _ = js_domain_emit_error(handle, err, undefined(), true);
+            undefined()
+        }
     }
 }
 

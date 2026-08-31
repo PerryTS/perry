@@ -27,7 +27,6 @@
 
 use crate::common::handle::Handle;
 use std::borrow::Cow;
-use std::os::raw::c_int;
 
 use perry_runtime::array::{js_array_alloc, js_array_length, js_array_push_f64};
 use perry_runtime::buffer::{buffer_alloc, buffer_data_mut, BufferHeader};
@@ -385,16 +384,7 @@ unsafe fn decode_parse_component(raw: &str, decode: Option<*const ClosureHeader>
 }
 
 unsafe fn apply_decode_codec(callback: *const ClosureHeader, raw: &str) -> Option<f64> {
-    let trap_buf = perry_runtime::exception::js_try_push();
-    let jumped = unsafe { perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
-    let result = if jumped == 0 {
-        Some(call_codec(callback, raw))
-    } else {
-        perry_runtime::exception::js_clear_exception();
-        None
-    };
-    perry_runtime::exception::js_try_end();
-    result
+    perry_runtime::exception::catch_js_throw(|| unsafe { call_codec(callback, raw) }).ok()
 }
 
 /// Call a user-supplied codec closure with `raw` and return its JS value.

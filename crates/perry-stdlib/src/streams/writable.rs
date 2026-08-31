@@ -351,33 +351,13 @@ unsafe fn attach_writable_write_handlers(
 }
 
 unsafe fn try_call_writable_write(cb: i64, chunk: f64) -> Result<f64, u64> {
-    let trap_buf = perry_runtime::exception::js_try_push();
-    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
-    if jumped == 0 {
-        let result = js_closure_call1(cb as *const ClosureHeader, chunk);
-        perry_runtime::exception::js_try_end();
-        Ok(result)
-    } else {
-        let err = perry_runtime::exception::js_get_exception();
-        perry_runtime::exception::js_clear_exception();
-        perry_runtime::exception::js_try_end();
-        Err(err.to_bits())
-    }
+    perry_runtime::exception::catch_js_throw(|| js_closure_call1(cb as *const ClosureHeader, chunk))
+        .map_err(f64::to_bits)
 }
 
 unsafe fn try_call_writable_close(cb: i64) -> Result<f64, u64> {
-    let trap_buf = perry_runtime::exception::js_try_push();
-    let jumped = perry_runtime::ffi::setjmp::setjmp(trap_buf as *mut c_int);
-    if jumped == 0 {
-        let result = js_closure_call0(cb as *const ClosureHeader);
-        perry_runtime::exception::js_try_end();
-        Ok(result)
-    } else {
-        let err = perry_runtime::exception::js_get_exception();
-        perry_runtime::exception::js_clear_exception();
-        perry_runtime::exception::js_try_end();
-        Err(err.to_bits())
-    }
+    perry_runtime::exception::catch_js_throw(|| js_closure_call0(cb as *const ClosureHeader))
+        .map_err(f64::to_bits)
 }
 
 extern "C" fn writable_close_fulfilled(closure: *const ClosureHeader, _value: f64) -> f64 {

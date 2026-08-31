@@ -734,17 +734,7 @@ mod tests {
     }
 
     fn catch_runtime_throw(f: impl FnOnce()) -> bool {
-        let env = perry_runtime::exception::js_try_push();
-        let jumped = unsafe { perry_runtime::ffi::setjmp::setjmp(env as *mut c_int) };
-        if jumped == 0 {
-            f();
-            perry_runtime::exception::js_try_end();
-            false
-        } else {
-            perry_runtime::exception::js_try_end();
-            perry_runtime::exception::js_clear_exception();
-            true
-        }
+        perry_runtime::exception::catch_js_throw(f).is_err()
     }
 
     #[test]

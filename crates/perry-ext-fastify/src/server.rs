@@ -124,15 +124,54 @@ extern "C" {
     fn js_error_get_message(error: *mut ErrorHeader) -> *mut StringHeader;
 }
 
-#[cfg(target_vendor = "apple")]
 extern "C" {
-    #[link_name = "_setjmp"]
-    fn setjmp(env: *mut c_int) -> c_int;
+    /// The runtime's C setjmp trampoline (#9305, `perry_sjlj.c`, bundled in
+    /// `libperry_runtime.a`). rustc cannot express `returns_twice`, so a raw
+    /// `setjmp` call in a Rust frame is miscompiled under LLVM's one-return
+    /// assumption (stack-slot coloring across the call); every jmp_buf arm
+    /// goes through this C frame instead. Mirrors
+    /// `perry_runtime::exception::arm_trap_and_run`.
+    fn perry_sjlj_try(
+        env: *mut core::ffi::c_void,
+        body: unsafe extern "C" fn(*mut core::ffi::c_void),
+        ctx: *mut core::ffi::c_void,
+    ) -> c_int;
 }
 
-#[cfg(not(target_vendor = "apple"))]
-extern "C" {
-    fn setjmp(env: *mut c_int) -> c_int;
+/// Arm `env` (from `js_try_push`) inside the C trampoline and run `f` under
+/// it. `None` = a JS throw longjmp-landed (exception state set, trap still
+/// pushed). Local mirror of `perry_runtime::exception::arm_trap_and_run` —
+/// this crate deliberately has no Cargo dep on perry-runtime.
+fn arm_trap_and_run<R, F: FnOnce() -> R>(env: *mut c_int, f: F) -> Option<R> {
+    struct Ctx<F, R> {
+        f: Option<F>,
+        ret: Option<R>,
+    }
+    unsafe extern "C" fn invoke<F: FnOnce() -> R, R>(raw: *mut core::ffi::c_void) {
+        let ctx = unsafe { &mut *(raw as *mut Ctx<F, R>) };
+        let f = ctx.f.take().expect("sjlj trampoline invoked body twice");
+        ctx.ret = Some(f());
+    }
+    let mut ctx: Ctx<_, R> = Ctx {
+        f: Some(f),
+        ret: None,
+    };
+    let rc = unsafe {
+        perry_sjlj_try(
+            env as *mut core::ffi::c_void,
+            invoke::<F, R>,
+            &mut ctx as *mut Ctx<_, R> as *mut core::ffi::c_void,
+        )
+    };
+    if rc == 0 {
+        Some(
+            ctx.ret
+                .take()
+                .expect("sjlj trampoline returned 0 without a body result"),
+        )
+    } else {
+        None
+    }
 }
 
 /// Opaque marker for the runtime's Promise struct. We never read its
@@ -1133,22 +1172,24 @@ fn call_hook_awaiting(hook: ClosurePtr, ctx_f64: f64, ctx_handle: Handle) -> Hoo
 
 unsafe fn call_closure2_catching(closure: JsClosure, arg0: f64, arg1: f64) -> ClosureCallResult {
     let trap_buf = js_try_push();
-    let jumped = setjmp(trap_buf);
-    if jumped != 0 {
-        let exc = js_get_exception();
-        js_clear_exception();
-        js_try_end();
-        return ClosureCallResult {
-            value: f64::from_bits(TAG_UNDEFINED),
-            thrown: Some(exc),
-        };
-    }
-
-    let value = closure.call2(arg0, arg1);
-    js_try_end();
-    ClosureCallResult {
-        value,
-        thrown: None,
+    let outcome = arm_trap_and_run(trap_buf, || unsafe { closure.call2(arg0, arg1) });
+    match outcome {
+        Some(value) => {
+            js_try_end();
+            ClosureCallResult {
+                value,
+                thrown: None,
+            }
+        }
+        None => {
+            let exc = js_get_exception();
+            js_clear_exception();
+            js_try_end();
+            ClosureCallResult {
+                value: f64::from_bits(TAG_UNDEFINED),
+                thrown: Some(exc),
+            }
+        }
     }
 }
 
@@ -1159,22 +1200,24 @@ unsafe fn call_closure3_catching(
     arg2: f64,
 ) -> ClosureCallResult {
     let trap_buf = js_try_push();
-    let jumped = setjmp(trap_buf);
-    if jumped != 0 {
-        let exc = js_get_exception();
-        js_clear_exception();
-        js_try_end();
-        return ClosureCallResult {
-            value: f64::from_bits(TAG_UNDEFINED),
-            thrown: Some(exc),
-        };
-    }
-
-    let value = closure.call3(arg0, arg1, arg2);
-    js_try_end();
-    ClosureCallResult {
-        value,
-        thrown: None,
+    let outcome = arm_trap_and_run(trap_buf, || unsafe { closure.call3(arg0, arg1, arg2) });
+    match outcome {
+        Some(value) => {
+            js_try_end();
+            ClosureCallResult {
+                value,
+                thrown: None,
+            }
+        }
+        None => {
+            let exc = js_get_exception();
+            js_clear_exception();
+            js_try_end();
+            ClosureCallResult {
+                value: f64::from_bits(TAG_UNDEFINED),
+                thrown: Some(exc),
+            }
+        }
     }
 }
 
