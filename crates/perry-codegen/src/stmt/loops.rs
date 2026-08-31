@@ -1170,6 +1170,22 @@ struct PackedF64RangeLoop {
 /// potential side exit (hole-checked loads / the store's numeric-RHS check),
 /// so a side exit into the slow loop re-executes the current iteration
 /// without duplicating effects.
+/// Diagnostic twin of [`packed_loop_reject`] for the #6011 range matcher.
+///
+/// Same reasoning: the admission decision is a chain of independent
+/// conditions, and when a loop unexpectedly stays on the generic path there is
+/// no way to tell WHICH one declined it by reading the code. #9204 gave the
+/// versioned matcher this treatment after three attempts on #9151 each guessed
+/// a different gate; the range matcher had no equivalent, so #9248 guessed too
+/// — and widened a predicate that was never the thing rejecting the loop.
+fn range_loop_reject(reason: &'static str) -> Option<PackedF64RangeLoop> {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    if *ON.get_or_init(|| std::env::var("PERRY_PACKED_LOOP_TRACE").as_deref() == Ok("1")) {
+        eprintln!("[range-loop] rejected: {reason}");
+    }
+    None
+}
 fn match_packed_f64_range_loop(
     ctx: &FnCtx<'_>,
     init: Option<&Stmt>,
@@ -1179,7 +1195,7 @@ fn match_packed_f64_range_loop(
 ) -> Option<PackedF64RangeLoop> {
     use perry_hir::{CompareOp, Expr, UpdateOp};
     if !ctx.pending_labels.is_empty() {
-        return None;
+        return range_loop_reject("pending_labels");
     }
     let (counter_id, start) = match init? {
         Stmt::Let {
@@ -1190,21 +1206,21 @@ fn match_packed_f64_range_loop(
             let start = match init_expr {
                 Expr::Integer(n) => *n,
                 Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => *n as i64,
-                _ => return None,
+                _ => return range_loop_reject("init_not_integer_literal"),
             };
             (*id, start)
         }
-        _ => return None,
+        _ => return range_loop_reject("init_not_a_let"),
     };
     if !(0..=i64::from(i32::MAX)).contains(&start) {
-        return None;
+        return range_loop_reject("start_out_of_i32_range");
     }
     let (op, left, right) = match condition? {
         Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
-        _ => return None,
+        _ => return range_loop_reject("condition_not_compare"),
     };
     if !matches!(op, CompareOp::Lt) || !matches!(left, Expr::LocalGet(id) if *id == counter_id) {
-        return None;
+        return range_loop_reject("compare_not_lt_on_counter");
     }
     let bound = match right {
         // Cap constants at i32::MAX - 64 so `bound + max_offset` cannot
@@ -1221,7 +1237,7 @@ fn match_packed_f64_range_loop(
             // mutate the global mid-loop, and direct writes to `bound_id` in
             // cond/update/body are rejected by the invariance walker.
             if ctx.boxed_vars.contains(bound_id) {
-                return None;
+                return range_loop_reject("bound_local_boxed");
             }
             // Repsel Phase 1: canonical-i32 bounds read through `LocalGet`
             // (materialized from the i32 slot) — accessible storage.
@@ -1229,14 +1245,14 @@ fn match_packed_f64_range_loop(
                 && !ctx.local_slot_reps.contains_key(bound_id)
                 && !ctx.module_globals.contains_key(bound_id)
             {
-                return None;
+                return range_loop_reject("bound_local_not_addressable");
             }
             if !local_bound_is_loop_invariant(condition?, update, body, *bound_id) {
-                return None;
+                return range_loop_reject("bound_not_loop_invariant");
             }
             PackedF64RangeLoopBound::Local(*bound_id)
         }
-        _ => return None,
+        _ => return range_loop_reject("bound_shape_unsupported"),
     };
     if !matches!(
         update?,
@@ -1246,7 +1262,7 @@ fn match_packed_f64_range_loop(
             ..
         } if *id == counter_id
     ) {
-        return None;
+        return range_loop_reject("update_not_counter_increment");
     }
     // Repsel Phase 1: canonical-i32 counters qualify — they already own the
     // shared i32 slot the versioned copies read, and the `Update`/`LocalGet`
@@ -1257,7 +1273,7 @@ fn match_packed_f64_range_loop(
         || !loop_counter_bounds_are_safe(ctx, counter_id, update, body)
         || !loop_counter_entry_i32_range_is_safe(init, counter_id)
     {
-        return None;
+        return range_loop_reject("counter_not_integer");
     }
 
     let bound_local = match bound {
@@ -1282,13 +1298,13 @@ fn match_packed_f64_range_loop(
             bound_local,
             &mut accesses,
         ) {
-            return None;
+            return range_loop_reject("body_not_admissible");
         }
         true
     };
     if accesses.is_empty() {
         // No tracked array access — nothing for the versioned loop to win.
-        return None;
+        return range_loop_reject("no_tracked_array_access");
     }
     for access in accesses.values() {
         let arr_id = access.array_id;
@@ -1327,15 +1343,15 @@ fn match_packed_f64_range_loop(
                 if !packed_loop_array_binding_storage_is_addressable(ctx, arr_id)
                     || ctx.scalar_replaced_arrays.contains_key(&arr_id)
                 {
-                    return None;
+                    return range_loop_reject("dense_written_not_addressable");
                 }
             } else if !packed_loop_array_binding_is_eligible(ctx, arr_id) {
-                return None;
+                return range_loop_reject("written_binding_not_eligible");
             }
         } else if !packed_loop_array_binding_storage_is_addressable(ctx, arr_id)
             || ctx.scalar_replaced_arrays.contains_key(&arr_id)
         {
-            return None;
+            return range_loop_reject("read_binding_not_addressable");
         }
         // The guard takes i32 window endpoints; make sure `start + offset`
         // still fits (bound-side overflow is prevented by the constant cap /
@@ -1346,17 +1362,17 @@ fn match_packed_f64_range_loop(
             if !(i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&min_idx)
                 || !(i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&max_base)
             {
-                return None;
+                return range_loop_reject("counter_window_out_of_i32");
             }
         }
         if let Some((lo, hi)) = access.stat {
             // `hi + 1` must fit the guard's i32 `max_idx_exclusive` argument.
             if lo < 0 || hi >= i64::from(i32::MAX) {
-                return None;
+                return range_loop_reject("static_window_out_of_i32");
             }
         }
         if access.counter.is_none() && access.stat.is_none() {
-            return None;
+            return range_loop_reject("access_has_no_window");
         }
         if access.written {
             // Dense written arrays need only the declared number[]-ness: the
@@ -1370,14 +1386,14 @@ fn match_packed_f64_range_loop(
             // here; a wrong hint is one failed guard -> slow loop. Classic
             // (side-exiting, hole-tolerant) written arrays keep the full set.
             if !local_allows_packed_f64_loop_store(ctx, arr_id) {
-                return None;
+                return range_loop_reject("store_local_not_allowed");
             }
             if !dense
                 && !ctx
                     .native_facts
                     .packed_f64_eligible_for_guarded_store(arr_id)
             {
-                return None;
+                return range_loop_reject("store_not_fact_eligible");
             }
         } else if !local_is_number_array(ctx, arr_id)
             && !(dense && local_is_untyped_candidate(ctx, arr_id))
@@ -1389,7 +1405,7 @@ fn match_packed_f64_range_loop(
             // slow loop, never correctness. Known non-array static types stay
             // excluded so ordinary object/string index loops don't grow dead
             // guard chains.
-            return None;
+            return range_loop_reject("array_static_type_excluded");
         }
     }
     Some(PackedF64RangeLoop {
