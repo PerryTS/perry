@@ -171,6 +171,40 @@ mod c3c_tests {
         unsafe { debug_assert_object_shape_parity(obj) };
     }
 
+    /// A preinstalled id is valid only while the canonical keys edge still
+    /// carries the logical count it was minted for. If those facts diverge,
+    /// the allocator must decline the direct stamp and publish an exact local
+    /// descriptor through its existing fallback.
+    #[test]
+    fn preinstalled_shape_key_count_mismatch_uses_exact_fallback() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const CID: u32 = 0x0C3C_7926;
+        let packed = b"count_mismatch";
+        let keys =
+            crate::object::js_build_class_keys_array(CID, 1, packed.as_ptr(), packed.len() as u32);
+        let stale_id = js_object_shape_id_for_keys(keys as usize as u64, 1);
+
+        unsafe {
+            // Model a module keys global whose current array facts no longer
+            // match the ShapeId installed beside it. This is the state that
+            // fast-json-stringify reached through AJV's resolve module.
+            (*keys).length = 0;
+        }
+        let obj =
+            crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, 1, keys, stale_id);
+        let actual_id = unsafe { (*obj).parent_class_id };
+        assert_ne!(
+            actual_id, stale_id,
+            "a stale logical key count must not be published on the newborn"
+        );
+        let descriptor = shape_descriptor_by_id(actual_id)
+            .expect("the count-mismatch fallback must publish an exact descriptor");
+        assert_eq!(descriptor.keys, keys as u64);
+        assert_eq!(descriptor.logical_key_count, 0);
+        assert_eq!(descriptor.live_inline_slot_count, 1);
+        unsafe { debug_assert_object_shape_parity(obj) };
+    }
+
     /// #6759 C3c stamp invariant on a REAL object through the real
     /// write/read paths: a read resolution stamps a shape id into the
     /// plain object's `parent_class_id`; after further appends any surviving

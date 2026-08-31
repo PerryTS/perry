@@ -312,9 +312,9 @@ fn object_alloc_class_inline_keys_impl(
         (*ptr).meta = ptr::null_mut();
         // The compiled entry point passes the ShapeId installed beside this
         // canonical keys global at module initialization. Reuse that immutable
-        // descriptor directly when its live-slot bound still matches; learned
-        // instance widening and worker-local first installs retain the exact
-        // mint-and-validate fallback.
+        // descriptor directly when its keys facts and live-slot bound still
+        // match; learned instance widening, key-count drift, and worker-local
+        // first installs retain the exact mint-and-validate fallback.
         let used_preinstalled_shape = preinstalled_shape_id != 0
             && crate::object::shapes::try_birth_stamp_preinstalled_shape(
                 ptr,

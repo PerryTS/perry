@@ -1064,12 +1064,12 @@ pub(crate) unsafe fn birth_stamp_object_shape(
 /// Stamp a newborn compiled-class allocation from the ShapeId installed at
 /// module initialization, without re-canonicalizing the same shape facts.
 ///
-/// A hit proves the immutable ordered-keys edge and live inline-slot bound
-/// directly from the agent-local descriptor. Canonical class keys never mutate
-/// in place: structural growth forks a new keys array and mints a new ShapeId,
-/// so exact `(ShapeId, keys pointer)` identity also carries the descriptor's
-/// logical key count. Missing worker-local ids and learned-width mismatches
-/// return `false` for the existing mint-and-validate path to handle.
+/// A hit proves the immutable ordered-keys edge, logical key count, and live
+/// inline-slot bound directly from the agent-local descriptor. The id and keys
+/// pointer arrive through separate module globals, so every structural fact is
+/// checked before the single stamp store. Missing worker-local ids, key-count
+/// drift, and learned-width mismatches return `false` for the existing
+/// mint-and-validate path to handle.
 ///
 /// # Safety
 ///
@@ -1090,7 +1090,13 @@ pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
     let Some(descriptor) = shape_descriptor_by_id(runtime_shape_id) else {
         return false;
     };
+    let logical_key_count = if keys.is_null() {
+        0
+    } else {
+        crate::array::keys_array_len_capped_to_capacity(keys) as u32
+    };
     if descriptor.keys != keys as u64
+        || descriptor.logical_key_count != logical_key_count
         || descriptor.live_inline_slot_count != live_inline_slot_count
         || descriptor.semantic_generation != 0
         || descriptor.object_kind != ShapeObjectKind::Ordinary
