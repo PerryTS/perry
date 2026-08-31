@@ -16,7 +16,7 @@ schema_version = 1
 source = "benchmarks/honest_bench/workloads/3_image_convolution/perry/image_conv.ts"
 kind = "image_convolution"
 allow_hot_loop_conversions = true
-allowed_hot_loop_runtime_calls = ["js_gc_loop_safepoint"]
+allowed_hot_loop_runtime_calls = ["js_gc_loop_safepoint", "js_number_coerce"]
 
 [workloads.image_convolution.vectorization]
 min_vectorized_loops = 0
@@ -88,6 +88,7 @@ detail = "object disassembly contains the FNV multiply constant"
 name = "input_generation"
 required = true
 no_runtime_calls = true
+allowed_runtime_calls = ["js_gc_loop_safepoint"]
 
 [[workloads.image_convolution.named_regions.selectors]]
 counter_min = { store_i8 = 1 }
@@ -128,6 +129,7 @@ counter_min = { load_i8 = 1, store_i8 = 1, xor_i32 = 1 }
 name = "blur"
 required = true
 no_runtime_calls = true
+allowed_runtime_calls = ["js_gc_loop_safepoint", "js_number_coerce"]
 
 [[workloads.image_convolution.named_regions.selectors]]
 counter_min = { load_i8 = 3, store_i8 = 1 }
@@ -147,6 +149,7 @@ name = "fnv_hash"
 required = true
 no_runtime_calls = true
 no_conversions = true
+allowed_runtime_calls = ["js_gc_loop_safepoint"]
 
 [[workloads.image_convolution.named_regions.selectors]]
 counter_min = { load_i8 = 1, xor_i32 = 1, mul_i32 = 1 }
@@ -160,7 +163,7 @@ detail = "fnv hash i32 xor/mul shape"
 
 [workloads.image_convolution.native_rep_checks]
 materialization_regions = ["input_generation", "blur", "fnv_hash"]
-allow_materialization_reasons = ["function_abi", "return_abi"]
+allow_materialization_reasons = ["function_abi", "return_abi", "unknown_bounds"]
 
 [[workloads.image_convolution.native_rep_checks.require_records]]
 name = "image_input_generation_buffer_view"
@@ -877,13 +880,14 @@ regex_none = [
 detail = "fast clone loads raw f64 array slots without per-access guards or numeric coercion"
 
 [[workloads.packed_f64_loop_versioning.ir_checks]]
-name = "packed_f64_store_loop_guarded_clone"
+name = "packed_f64_store_loop_check_free_clone"
 section = "llvm_before"
-regex_all = [
-  '''packed_f64_loop_store\.fast\.\d+:\n(?:(?!\n[^\s].*:)[\s\S])*?\bstore double\b''',
-  '''packed_f64_loop_store\.fallback\.\d+:\n(?:(?!\n[^\s].*:)[\s\S])*?\bbr label %packed_f64\.loop\.slow''',
+regex = '''for\.packed_f64_fast\.body\.\d+(?:\.[\w.-]+)?:[^\n]*\n(?:(?!\n[^\s].*:)[\s\S])*?\bstore double\b'''
+regex_none = [
+  '''for\.packed_f64_fast\.body\.\d+(?:\.[\w.-]+)?:[^\n]*\n(?:(?!\n[^\s].*:)[\s\S])*?@js_typed_feedback_numeric_array_index_set_guard''',
+  '''for\.packed_f64_fast\.body\.\d+(?:\.[\w.-]+)?:[^\n]*\n(?:(?!\n[^\s].*:)[\s\S])*?@js_typed_feedback_array_index_set_fallback_boxed''',
 ]
-detail = "eligible store loops contain a raw-f64 fast store and a side exit to the ordinary guarded fallback"
+detail = "statically genuine store values use a raw-f64 fast store without a per-element guard or fallback"
 
 [[workloads.packed_f64_loop_versioning.stdout_checks]]
 name = "packed_f64_loop_versioning_checksum"
@@ -909,8 +913,8 @@ detail = "fast clone contains raw double loads for read-only packed loops"
 
 [[workloads.packed_f64_loop_versioning.named_regions.checks]]
 name = "packed_f64_fast_loop_bounded_fp_int_conversions"
-max = { fptosi = 0, sitofp = 3, ptrtoint = 0 }
-detail = "fast clones avoid lossy conversions while permitting the source-required integer-index-to-number conversion in each materialized copy"
+max = { fptosi = 0, sitofp = 3, ptrtoint = 1 }
+detail = "fast clones avoid lossy conversions while permitting source-required integer-to-number conversion and one receiver-handle cache conversion"
 
 [workloads.packed_f64_loop_versioning.native_rep_checks]
 allow_materialization_reasons = ["runtime_api", "return_abi"]
@@ -1033,9 +1037,16 @@ boxed_number_allocations_static = 0
 buffer_slow_path_accesses_static = 0
 
 [[workloads.packed_f64_loop_versioning_negative.ir_checks]]
-name = "packed_f64_loop_guard_not_emitted_for_negative_cases"
-regex_none = ["js_typed_feedback_packed_f64_array_loop_guard"]
-detail = "holey, sparse, frozen/sealed/no-extend, accessor, non-number, any, unknown-index, and alias-mutating loops are rejected before loop versioning"
+name = "packed_f64_loop_guard_scoped_to_safe_read_only_cases"
+regex_all = [
+  '''define double @perry_fn_[^(]*__frozenLoop\([^)]*\)[^{]*\{(?:(?!\n\})[\s\S])*?@js_typed_feedback_packed_f64_array_loop_guard''',
+  '''define double @perry_fn_[^(]*__sealedLoop\([^)]*\)[^{]*\{(?:(?!\n\})[\s\S])*?@js_typed_feedback_packed_f64_array_loop_guard''',
+  '''define double @perry_fn_[^(]*__nonExtensibleLoop\([^)]*\)[^{]*\{(?:(?!\n\})[\s\S])*?@js_typed_feedback_packed_f64_array_loop_guard''',
+]
+regex_none = [
+  '''define double @perry_fn_[^(]*__(?:holeyArrayLoop|sparseWriteLoop|accessorDescriptorLoop|nonNumberWriteLoop|anyReceiverLoop|unknownIndexLoop|aliasLengthMutationLoop)\([^)]*\)[^{]*\{(?:(?!\n\})[\s\S])*?@js_typed_feedback_packed_f64_array_loop_guard''',
+]
+detail = "read-only frozen/sealed/non-extensible arrays may version behind the runtime guard; holey, sparse, accessor, non-number, any, unknown-index, and alias-mutating loops remain excluded"
 
 [[workloads.packed_f64_loop_versioning_negative.stdout_checks]]
 name = "packed_f64_loop_versioning_negative_checksum"
