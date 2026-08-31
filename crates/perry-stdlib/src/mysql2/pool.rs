@@ -126,9 +126,9 @@ pub unsafe extern "C" fn js_mysql2_pool_end(pool_handle: Handle) -> *mut Promise
 ///
 /// `params` is the optional second arg user code passes to `db.query(sql, [..])`.
 /// The codegen dispatch table for `("mysql2", "Pool", "query")` declares
-/// `args: &[NA_STR, NA_PTR]` so the call site always emits 3 arguments
+/// `args: &[NA_STR, NA_F64]` so the call site always emits 3 arguments
 /// (handle + sql + params). When the user omits `params`, codegen pads the
-/// slot with `0` (i64 nullptr); `extract_params_from_jsvalue` returns an
+/// slot with JS `undefined`; `extract_params_from_jsvalue` returns an
 /// empty Vec for that case. When the user passes an array, sqlx builds a
 /// prepared statement and binds each value — same code path as
 /// `js_mysql2_pool_execute`. Without binding, sqlx sends the binary execute
@@ -139,9 +139,10 @@ pub unsafe extern "C" fn js_mysql2_pool_end(pool_handle: Handle) -> *mut Promise
 pub unsafe extern "C" fn js_mysql2_pool_query(
     pool_handle: Handle,
     sql_ptr: *const u8,
-    params: JSValue,
+    params_f: f64,
 ) -> *mut Promise {
     let promise = js_promise_new_cross_thread();
+    let params = JSValue::from_bits(params_f.to_bits());
 
     // Extract the SQL string
     let sql = if sql_ptr.is_null() {
@@ -168,6 +169,8 @@ pub unsafe extern "C" fn js_mysql2_pool_query(
             use crate::common::get_handle;
             use tokio::time::timeout;
 
+            let param_values = param_values?;
+
             if let Some(wrapper) = get_handle::<MysqlPoolHandle>(pool_handle) {
                 // Build the query with parameter bindings (no-op when
                 // param_values is empty, preserving the no-param call shape).
@@ -176,6 +179,8 @@ pub unsafe extern "C" fn js_mysql2_pool_query(
                     query = match param {
                         ParamValue::Null => query.bind(Option::<String>::None),
                         ParamValue::String(s) => query.bind(s.clone()),
+                        ParamValue::Bytes(bytes) => query.bind(bytes.clone()),
+                        ParamValue::DateTime(date) => query.bind(*date),
                         ParamValue::Number(n) => query.bind(*n),
                         ParamValue::Int(i) => query.bind(*i),
                         ParamValue::Bool(b) => query.bind(*b),
@@ -239,9 +244,10 @@ pub unsafe extern "C" fn js_mysql2_pool_query(
 pub unsafe extern "C" fn js_mysql2_pool_execute(
     pool_handle: Handle,
     sql_ptr: *const u8,
-    params: JSValue,
+    params_f: f64,
 ) -> *mut Promise {
     let promise = js_promise_new_cross_thread();
+    let params = JSValue::from_bits(params_f.to_bits());
 
     // Extract the SQL string
     let sql = if sql_ptr.is_null() {
@@ -265,6 +271,8 @@ pub unsafe extern "C" fn js_mysql2_pool_execute(
             use crate::common::get_handle;
             use tokio::time::timeout;
 
+            let param_values = param_values?;
+
             if let Some(wrapper) = get_handle::<MysqlPoolHandle>(pool_handle) {
                 // Build the query with parameter bindings
                 let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
@@ -273,6 +281,8 @@ pub unsafe extern "C" fn js_mysql2_pool_execute(
                     query = match param {
                         ParamValue::Null => query.bind(Option::<String>::None),
                         ParamValue::String(s) => query.bind(s.clone()),
+                        ParamValue::Bytes(bytes) => query.bind(bytes.clone()),
+                        ParamValue::DateTime(date) => query.bind(*date),
                         ParamValue::Number(n) => query.bind(*n),
                         ParamValue::Int(i) => query.bind(*i),
                         ParamValue::Bool(b) => query.bind(*b),
@@ -327,20 +337,35 @@ pub unsafe extern "C" fn js_mysql2_pool_execute(
 }
 
 /// Enum to hold different parameter value types
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ParamValue {
     Null,
     String(String),
+    Bytes(Vec<u8>),
+    DateTime(chrono::NaiveDateTime),
     Number(f64),
     Int(i64),
     Bool(bool),
 }
 
 /// Extract parameter values from a JSValue array
-pub(crate) unsafe fn extract_params_from_jsvalue(params: JSValue) -> Vec<ParamValue> {
+pub(crate) unsafe fn extract_params_from_jsvalue(
+    params: JSValue,
+) -> Result<Vec<ParamValue>, String> {
     let mut result = Vec::new();
 
     let bits = params.bits();
+
+    if bits == 0 || params.is_undefined() || params.is_null() {
+        return Ok(result);
+    }
+
+    let is_array =
+        JSValue::from_bits(perry_runtime::js_array_is_array(f64::from_bits(bits)).to_bits())
+            .as_bool();
+    if !is_array {
+        return Err("Bind parameters must be an array".to_string());
+    }
 
     // Handle both NaN-boxed pointers and raw pointers
     let arr_ptr: *const perry_runtime::ArrayHeader = if params.is_pointer() {
@@ -353,14 +378,14 @@ pub(crate) unsafe fn extract_params_from_jsvalue(params: JSValue) -> Vec<ParamVa
         if upper == 0 || (upper > 0 && upper < 0x7FF0) {
             bits as *const perry_runtime::ArrayHeader
         } else {
-            return result;
+            return Err("Bind parameters array has no valid runtime pointer".to_string());
         }
     } else {
-        return result;
+        return Err("Bind parameters array has no valid runtime pointer".to_string());
     };
 
     if arr_ptr.is_null() {
-        return result;
+        return Err("Bind parameters array has no valid runtime pointer".to_string());
     }
 
     let length = js_array_length(arr_ptr);
@@ -369,19 +394,26 @@ pub(crate) unsafe fn extract_params_from_jsvalue(params: JSValue) -> Vec<ParamVa
         let element_bits = js_array_get_jsvalue(arr_ptr, i);
         let element = JSValue::from_bits(element_bits);
 
-        let param = if element.is_null() || element.is_undefined() {
+        let param = if element.is_null() {
             ParamValue::Null
-        } else if element.is_string() {
+        } else if element.is_undefined() {
+            return Err(format!("Bind parameter at index {i} is undefined"));
+        } else if element.is_any_string() {
             // Extract string value
-            let str_ptr = element.as_string_ptr();
-            if !str_ptr.is_null() {
+            if element.is_short_string() {
+                let mut bytes = [0; perry_runtime::value::SHORT_STRING_MAX_LEN];
+                let len = element.short_string_to_buf(&mut bytes);
+                ParamValue::String(String::from_utf8_lossy(&bytes[..len]).to_string())
+            } else {
+                let str_ptr = element.as_string_ptr();
+                if str_ptr.is_null() {
+                    return Err(format!("Could not read string bind parameter at index {i}"));
+                }
                 let len = (*str_ptr).byte_len as usize;
                 let data_ptr =
                     (str_ptr as *const u8).add(std::mem::size_of::<perry_runtime::StringHeader>());
                 let bytes = std::slice::from_raw_parts(data_ptr, len);
                 ParamValue::String(String::from_utf8_lossy(bytes).to_string())
-            } else {
-                ParamValue::Null
             }
         } else if element.is_bigint() {
             // Convert BigInt to string (MySQL handles numeric strings correctly)
@@ -414,19 +446,34 @@ pub(crate) unsafe fn extract_params_from_jsvalue(params: JSValue) -> Vec<ParamVa
                 ParamValue::Number(n)
             }
         } else {
-            // Unknown type - try to treat as number
-            let n = element.to_number();
-            if n.fract() == 0.0 && n >= i64::MIN as f64 && n <= i64::MAX as f64 {
-                ParamValue::Int(n as i64)
+            let mut byte_len = 0;
+            let byte_ptr = perry_runtime::buffer::js_value_buffer_or_typedarray_data(
+                f64::from_bits(element_bits),
+                &mut byte_len,
+            );
+            if !byte_ptr.is_null() {
+                let bytes = std::slice::from_raw_parts(byte_ptr, byte_len as usize);
+                ParamValue::Bytes(bytes.to_vec())
+            } else if perry_runtime::date::is_date_value(f64::from_bits(element_bits)) {
+                let millis = perry_runtime::date::js_date_get_time(f64::from_bits(element_bits));
+                if !millis.is_finite() {
+                    return Err(format!("Bind parameter at index {i} is an invalid Date"));
+                }
+                let date = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(millis as i64)
+                    .ok_or_else(|| {
+                        format!("Bind parameter at index {i} is outside MySQL's Date range")
+                    })?
+                    .naive_utc();
+                ParamValue::DateTime(date)
             } else {
-                ParamValue::Number(n)
+                return Err(format!("Unsupported bind parameter at index {i}"));
             }
         };
 
         result.push(param);
     }
 
-    result
+    Ok(result)
 }
 
 /// pool.getConnection() -> Promise<PoolConnection>
@@ -495,9 +542,10 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_release(conn_handle: Handle) 
 pub unsafe extern "C" fn js_mysql2_pool_connection_query(
     conn_handle: Handle,
     sql_ptr: *const u8,
-    params: JSValue,
+    params_f: f64,
 ) -> *mut Promise {
     let promise = js_promise_new_cross_thread();
+    let params = JSValue::from_bits(params_f.to_bits());
 
     // Extract the SQL string
     let sql = if sql_ptr.is_null() {
@@ -519,6 +567,8 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_query(
             use crate::common::get_handle_mut;
             use tokio::time::timeout;
 
+            let param_values = param_values?;
+
             if let Some(wrapper) = get_handle_mut::<MysqlPoolConnectionHandle>(conn_handle) {
                 if let Some(ref mut conn) = wrapper.connection {
                     let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
@@ -526,6 +576,8 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_query(
                         query = match param {
                             ParamValue::Null => query.bind(Option::<String>::None),
                             ParamValue::String(s) => query.bind(s.clone()),
+                            ParamValue::Bytes(bytes) => query.bind(bytes.clone()),
+                            ParamValue::DateTime(date) => query.bind(*date),
                             ParamValue::Number(n) => query.bind(*n),
                             ParamValue::Int(i) => query.bind(*i),
                             ParamValue::Bool(b) => query.bind(*b),
@@ -589,9 +641,10 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_query(
 pub unsafe extern "C" fn js_mysql2_pool_connection_execute(
     conn_handle: Handle,
     sql_ptr: *const u8,
-    params: JSValue,
+    params_f: f64,
 ) -> *mut Promise {
     let promise = js_promise_new_cross_thread();
+    let params = JSValue::from_bits(params_f.to_bits());
 
     // Extract the SQL string
     let sql = if sql_ptr.is_null() {
@@ -614,6 +667,8 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_execute(
             use crate::common::get_handle_mut;
             use tokio::time::timeout;
 
+            let param_values = param_values?;
+
             if let Some(wrapper) = get_handle_mut::<MysqlPoolConnectionHandle>(conn_handle) {
                 if let Some(ref mut conn) = wrapper.connection {
                     // Build the query with parameter bindings
@@ -623,6 +678,8 @@ pub unsafe extern "C" fn js_mysql2_pool_connection_execute(
                         query = match param {
                             ParamValue::Null => query.bind(Option::<String>::None),
                             ParamValue::String(s) => query.bind(s.clone()),
+                            ParamValue::Bytes(bytes) => query.bind(bytes.clone()),
+                            ParamValue::DateTime(date) => query.bind(*date),
                             ParamValue::Number(n) => query.bind(*n),
                             ParamValue::Int(i) => query.bind(*i),
                             ParamValue::Bool(b) => query.bind(*b),
@@ -686,13 +743,12 @@ mod tests {
     /// Issue #414: every shape the codegen dispatch table can pass to a
     /// mysql2 query/execute params slot must be safely consumable.
     ///
-    /// The dispatcher emits `args: &[NA_STR, NA_PTR]` for both `db.query`
+    /// The dispatcher emits `args: &[NA_STR, NA_F64]` for both `db.query`
     /// and `db.execute`, which in user code can be:
-    ///   - missing (`db.query(sql)`) — codegen pads NA_PTR with `0`
+    ///   - missing (`db.query(sql)`) — codegen passes JS `undefined`
     ///   - undefined (`db.query(sql, undefined)`) — codegen passes TAG_UNDEFINED
-    ///   - an array (`db.query(sql, [42])`) — codegen passes the unboxed
-    ///     `*const ArrayHeader` (raw, lower 48 bits, no tag)
-    ///   - a NaN-boxed pointer (defensive: in case some caller skips unbox)
+    ///   - an array (`db.query(sql, [42])`) — codegen passes its NaN-boxed value
+    ///   - a raw pointer (defensive compatibility with the old NA_PTR ABI)
     ///
     /// Pre-fix, only the no-params + execute-only paths were exercised; the
     /// query path silently dropped a non-zero params arg because the FFI
@@ -700,19 +756,20 @@ mod tests {
     /// extract-and-bind path; these tests pin the four shapes.
     #[test]
     fn extract_params_returns_empty_for_codegen_no_args_pad() {
-        // codegen pads NA_PTR with the literal i64 `0` when the user
-        // omitted the params arg — the fast path for `db.query(sql)`.
-        let v = unsafe { extract_params_from_jsvalue(JSValue::from_bits(0)) };
+        // Keep accepting the literal `0` used by the old NA_PTR ABI.
+        let v = unsafe { extract_params_from_jsvalue(JSValue::from_bits(0)) }.unwrap();
         assert!(v.is_empty(), "raw 0 must yield no params");
     }
 
     #[test]
     fn extract_params_returns_empty_for_undefined_and_null() {
         let undef =
-            unsafe { extract_params_from_jsvalue(JSValue::from_bits(0x7FFC_0000_0000_0001)) };
+            unsafe { extract_params_from_jsvalue(JSValue::from_bits(0x7FFC_0000_0000_0001)) }
+                .unwrap();
         assert!(undef.is_empty(), "TAG_UNDEFINED must yield no params");
         let null =
-            unsafe { extract_params_from_jsvalue(JSValue::from_bits(0x7FFC_0000_0000_0002)) };
+            unsafe { extract_params_from_jsvalue(JSValue::from_bits(0x7FFC_0000_0000_0002)) }
+                .unwrap();
         assert!(null.is_empty(), "TAG_NULL must yield no params");
     }
 
@@ -732,7 +789,7 @@ mod tests {
             // Codegen unboxes the NaN-boxed pointer to a raw i64. Mimic that
             // by passing the raw lower-48-bits pointer (no tag).
             let raw_ptr = arr as u64;
-            let v = extract_params_from_jsvalue(JSValue::from_bits(raw_ptr));
+            let v = extract_params_from_jsvalue(JSValue::from_bits(raw_ptr)).unwrap();
             assert_eq!(v.len(), 2, "should extract two int params");
             match &v[0] {
                 ParamValue::Int(n) => assert_eq!(*n, 42),
@@ -756,7 +813,7 @@ mod tests {
 
             // Defensive path: caller forgets to unbox before passing.
             let nan_boxed = (arr as u64) | 0x7FFD_0000_0000_0000;
-            let v = extract_params_from_jsvalue(JSValue::from_bits(nan_boxed));
+            let v = extract_params_from_jsvalue(JSValue::from_bits(nan_boxed)).unwrap();
             assert_eq!(v.len(), 1);
             match &v[0] {
                 ParamValue::Int(n) => assert_eq!(*n, 123),

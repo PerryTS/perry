@@ -133,17 +133,58 @@ impl RawQueryResult {
 /// Extract a raw value from a MySQL row (safe to call on any thread)
 fn extract_raw_value(row: &MySqlRow, index: usize, type_name: &str) -> RawValue {
     match type_name {
-        "INT" | "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT UNSIGNED" | "TINYINT UNSIGNED"
-        | "SMALLINT UNSIGNED" | "MEDIUMINT UNSIGNED" => {
+        "TINYINT" => {
+            if let Ok(val) = row.try_get::<i8, _>(index) {
+                RawValue::Int32(val as i32)
+            } else {
+                RawValue::Null
+            }
+        }
+        "TINYINT UNSIGNED" => {
+            if let Ok(val) = row.try_get::<u8, _>(index) {
+                RawValue::Int32(val as i32)
+            } else {
+                RawValue::Null
+            }
+        }
+        "SMALLINT" => {
+            if let Ok(val) = row.try_get::<i16, _>(index) {
+                RawValue::Int32(val as i32)
+            } else {
+                RawValue::Null
+            }
+        }
+        "SMALLINT UNSIGNED" => {
+            if let Ok(val) = row.try_get::<u16, _>(index) {
+                RawValue::Int32(val as i32)
+            } else {
+                RawValue::Null
+            }
+        }
+        "MEDIUMINT" | "INT" => {
             if let Ok(val) = row.try_get::<i32, _>(index) {
                 RawValue::Int32(val)
             } else {
                 RawValue::Null
             }
         }
-        "BIGINT" | "BIGINT UNSIGNED" => {
+        "MEDIUMINT UNSIGNED" | "INT UNSIGNED" => {
+            if let Ok(val) = row.try_get::<u32, _>(index) {
+                RawValue::Float64(val as f64)
+            } else {
+                RawValue::Null
+            }
+        }
+        "BIGINT" => {
             if let Ok(val) = row.try_get::<i64, _>(index) {
                 RawValue::Int64(val)
+            } else {
+                RawValue::Null
+            }
+        }
+        "BIGINT UNSIGNED" => {
+            if let Ok(val) = row.try_get::<u64, _>(index) {
+                RawValue::Float64(val as f64)
             } else {
                 RawValue::Null
             }
