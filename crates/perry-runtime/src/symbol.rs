@@ -448,7 +448,7 @@ pub(crate) fn test_disable_symbol_magic_screen(disabled: bool) -> bool {
     TEST_DISABLE_SYMBOL_MAGIC_SCREEN.with(|c| c.replace(disabled))
 }
 
-/// Smallest and largest pointer ever registered as a Symbol, as a conservative
+/// Which pointers have ever been registered as a Symbol — a conservative
 /// filter in front of the process-global registry mutex.
 ///
 /// `SYMBOL_EVER_REGISTERED` answers "has any symbol EVER been registered?",
@@ -457,11 +457,11 @@ pub(crate) fn test_disable_symbol_magic_screen(disabled: bool) -> bool {
 /// `is_registered_symbol_slow` took the global mutex on EVERY probe, including
 /// the overwhelming majority asking about pointers that are not symbols at all.
 ///
-/// The range only ever widens, and registration extends it before taking the
+/// The filter only ever gains bits, and registration admits before taking the
 /// lock — the same ordering, and for the same reason, as the latch arm above
-/// it: a pointer outside the range cannot be in the set, so rejecting is sound,
-/// while accepting merely falls through to the lookup that was already there.
-/// Death pruning removes entries without narrowing the range, which is
+/// it: a pointer the filter rejects cannot be in the set, so rejecting is
+/// sound, while accepting merely falls through to the lookup that was already
+/// there. Death pruning removes entries without clearing bits, which is
 /// harmless: those pointers reach the lookup, which correctly says no.
 ///
 /// # Why this is a filter and not the `[lo, hi]` range #9177 shipped
@@ -488,12 +488,12 @@ pub(crate) fn test_disable_symbol_magic_screen(disabled: bool) -> bool {
 static SYMBOL_ADDR_FILTER: crate::registry_latch::RegistryAddrFilter =
     crate::registry_latch::RegistryAddrFilter::new();
 
-/// Widen the address range to admit `ptr`.
+/// Admit `ptr` into [`SYMBOL_ADDR_FILTER`].
 ///
 /// EVERY path that puts a pointer into `SYMBOL_POINTERS` must call this
-/// first, not just the registration one. `is_registered_symbol_slow` rejects
-/// an out-of-range pointer WITHOUT consulting the set, so a member outside
-/// the range is a live symbol the probe reports as "not a symbol".
+/// first, not just the registration one. `is_registered_symbol` rejects a
+/// filtered-out pointer WITHOUT consulting the set, so a member the filter
+/// does not hold is a live symbol the probe reports as "not a symbol".
 ///
 /// That is not a theoretical second inserter: `SYMBOL_POINTERS` is a GC root
 /// registry, and `rewrite_symbol_pointer_metadata_if_forwarded` re-keys an
@@ -501,17 +501,17 @@ static SYMBOL_ADDR_FILTER: crate::registry_latch::RegistryAddrFilter =
 /// symbol evacuated out of the range established by its own allocation would
 /// otherwise stop answering to `typeof`, symbol-keyed property lookup and
 /// `Symbol.iterator` dispatch — while still being perfectly alive.
-pub(crate) fn widen_symbol_addr_range(ptr: usize) {
+pub(crate) fn admit_symbol_pointer(ptr: usize) {
     SYMBOL_ADDR_FILTER.admit(ptr);
 }
 
-/// The ONLY way to put a pointer into `SYMBOL_POINTERS`. Widening and
+/// The ONLY way to put a pointer into `SYMBOL_POINTERS`. Admitting and
 /// inserting are one operation on purpose: there are three insert sites (the
 /// registration, and two forwarding rewrites — a per-slot one and the bulk
-/// one the copying minor actually drives), and a range filter is only sound
-/// while every one of them widens.
+/// one the copying minor actually drives), and the filter is only sound while
+/// every one of them admits.
 pub(crate) fn insert_symbol_pointer_in_set(set: &mut PtrHashSet<usize>, ptr: usize) {
-    widen_symbol_addr_range(ptr);
+    admit_symbol_pointer(ptr);
     set.insert(ptr);
 }
 
@@ -519,17 +519,17 @@ pub(crate) fn insert_symbol_pointer_in_set(set: &mut PtrHashSet<usize>, ptr: usi
 #[cfg(test)]
 pub(crate) const SYMBOL_FILTER_WORDS: usize = crate::registry_latch::RegistryAddrFilter::words();
 
-/// Save/restore the address filter around a test that needs to observe
-/// a NARROW range. The bounds are process-global and only ever widen in
-/// production, so a test that resets them must put back at least what it
-/// found — otherwise a later test in the same binary gets a range too narrow
-/// for symbols registered before it ran, and fails for no reason of its own.
+/// Save/restore the address filter around a test that needs to observe a
+/// NEARLY-EMPTY filter. It is process-global and only ever gains bits in
+/// production, so a test that clears it must put back at least what it found —
+/// otherwise a later test in the same binary gets a filter that no longer holds
+/// symbols registered before it ran, and fails for no reason of its own.
 #[cfg(test)]
 pub(crate) struct SymbolAddrRangeGuard([u64; SYMBOL_FILTER_WORDS]);
 
 #[cfg(test)]
 impl SymbolAddrRangeGuard {
-    /// Reset to the empty range, so only what the test registers is admitted.
+    /// Empty the filter, so only what the test registers is admitted.
     pub(crate) fn reset() -> Self {
         SymbolAddrRangeGuard(SYMBOL_ADDR_FILTER.take_for_tests())
     }
@@ -538,8 +538,8 @@ impl SymbolAddrRangeGuard {
 #[cfg(test)]
 impl Drop for SymbolAddrRangeGuard {
     fn drop(&mut self) {
-        // Union of what we saved and what the test widened to, so neither the
-        // pre-existing members nor the test's own survive outside the range.
+        // Union of what we saved and what the test admitted, so neither the
+        // pre-existing members nor the test's own fall out of the filter.
         SYMBOL_ADDR_FILTER.restore_for_tests(self.0);
     }
 }
@@ -571,8 +571,8 @@ pub(crate) fn register_symbol_pointer(ptr: usize) {
     // Arm before taking the lock, so the entry is never reachable while the
     // latch still reads idle.
     SYMBOL_EVER_REGISTERED.arm();
-    // Widen before the insert, for the same reason.
-    widen_symbol_addr_range(ptr);
+    // Admit before the insert, for the same reason.
+    admit_symbol_pointer(ptr);
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_POINTERS);
     if guard.is_none() {
         *guard = Some(new_ptr_hash_set());
