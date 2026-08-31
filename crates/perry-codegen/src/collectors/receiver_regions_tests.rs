@@ -637,7 +637,8 @@ fn inventory() -> Vec<TableRow> {
             claim: ReceiverClaim::ScalarRelation,
             boundary: FactBoundary::ScopeId,
             excludes_try: false,
-            unwind_safe_by: "arithmetic relation",
+            unwind_safe_by: "arithmetic relation over local ids carrying an explicit \
+                             BoundsProof; admission walkers descend into Try",
         },
         TableRow {
             table: "guarded_buffer_index_pairs",
