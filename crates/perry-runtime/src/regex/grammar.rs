@@ -379,6 +379,13 @@ pub(super) fn has_unicode_forbidden_pattern(pattern: &str) -> bool {
 // JS \s excludes U+0085 NEL; Rust's \s includes it. Use explicit class for parity outside char-class.
 const JS_WHITESPACE_CLASS: &str = r"[\t\n\x0B\x0C\r\x20\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]";
 const JS_NON_WHITESPACE_CLASS: &str = r"[^\t\n\x0B\x0C\r\x20\x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}]";
+// ECMA-262 CharacterClassEscape: unlike Rust's Unicode-aware `\w`, the JS
+// word set starts as exactly these ASCII characters. Under BOTH `i` and
+// Unicode mode, Canonicalize adds the two non-ASCII code points whose simple
+// case fold lands in that set (LONG S -> s, KELVIN SIGN -> k).
+const JS_ASCII_WORD_MEMBERS: &str = r"A-Za-z0-9_";
+const JS_UNICODE_IGNORE_CASE_WORD_MEMBERS: &str = r"A-Za-z0-9_\x{017F}\x{212A}";
+const JS_NON_DOTALL_DOT: &str = r"[^\n\r\x{2028}\x{2029}]";
 // ECMAScript allows quantifiers up to 2^53-1; regex-syntax uses u32 and rejects larger values.
 const MAX_QUANTIFIER: u64 = 65_535;
 
@@ -1272,6 +1279,24 @@ fn next_is_class_shorthand(chars: &[char], i: usize) -> bool {
     )
 }
 
+/// Did the source member immediately before `chars[i]` spell `\w` or `\W`?
+/// Those escapes are expanded to explicit members before a following hyphen is
+/// processed, so `out_ends_with_class_shorthand` can no longer recognize them.
+fn previous_is_word_shorthand(chars: &[char], i: usize) -> bool {
+    if i < 2 || chars.get(i - 2) != Some(&'\\') || !matches!(chars.get(i - 1), Some('w' | 'W')) {
+        return false;
+    }
+    // `\\w-` is a literal backslash, `w`, hyphen — the candidate slash is
+    // itself escaped and therefore was not a shorthand.
+    let mut preceding_backslashes = 0usize;
+    let mut k = i - 2;
+    while k > 0 && chars[k - 1] == '\\' {
+        preceding_backslashes += 1;
+        k -= 1;
+    }
+    preceding_backslashes % 2 == 0
+}
+
 /// Rewrites quantified lookaround groups (`(?=…)?`, `(?!…)*`, `(?:(?=…))?`, etc.)
 /// into a form `fancy-regex` accepts. Lower-bound-0 → drop the assertion; ≥1 →
 /// keep the assertion, drop the quantifier. JS/V8 allow these; `fancy-regex`
@@ -1517,13 +1542,176 @@ fn any_char_class_width(chars: &[char], i: usize) -> Option<usize> {
     }
 }
 
+fn js_word_members(unicode_ignore_case: bool) -> &'static str {
+    if unicode_ignore_case {
+        JS_UNICODE_IGNORE_CASE_WORD_MEMBERS
+    } else {
+        JS_ASCII_WORD_MEMBERS
+    }
+}
+
+/// A one-code-point atom for ECMAScript's `\w` (or `\W` when `negated`).
+///
+/// The local `-i` is essential even when the outer pattern is `(?i)`: Rust's
+/// case-folding of `[A-Za-z0-9_]` adds LONG S and KELVIN SIGN in non-Unicode
+/// JS mode too. ECMAScript adds those only for the `i`+`u` combination, so the
+/// exact post-Canonicalize set is written explicitly and then protected from
+/// another fold.
+fn js_word_atom(negated: bool, unicode_ignore_case: bool) -> String {
+    format!(
+        "(?-i:[{}{}])",
+        if negated { "^" } else { "" },
+        js_word_members(unicode_ignore_case)
+    )
+}
+
+/// Emit the `i`+`u` word-boundary assertion. Rust has an ASCII boundary mode
+/// for the ordinary case (`(?-iu:\b)`), but no boundary predicate for the
+/// exact ASCII-plus-LONG-S-plus-KELVIN set required by ECMAScript. Four
+/// one-code-point lookarounds spell the transition (or non-transition)
+/// directly; fancy-regex handles this rare form.
+fn push_unicode_ignore_case_word_boundary(result: &mut String, non_boundary: bool) {
+    let word = js_word_atom(false, true);
+    if non_boundary {
+        result.push_str(&format!("(?:(?<={word})(?={word})|(?<!{word})(?!{word}))"));
+    } else {
+        result.push_str(&format!("(?:(?<!{word})(?={word})|(?<={word})(?!{word}))"));
+    }
+}
+
+/// Rewrite a case-insensitive, non-Unicode JS class containing `\w`/`\W`.
+///
+/// A scoped flag group cannot appear *inside* a Rust character class. Merely
+/// replacing `\w` with `A-Za-z0-9_` is therefore wrong under the outer `(?i)`:
+/// regex-syntax folds that ASCII class back to LONG S and KELVIN SIGN. Split
+/// the class union into ordinary members (which keep normal `i` semantics) and
+/// exact locally-case-sensitive word/non-word atoms. For a negated mixed class,
+/// assert that the union does not match and then consume one arbitrary scalar.
+/// The common single-shorthand forms stay simple character-class atoms.
+fn rewrite_case_insensitive_ascii_word_class(
+    chars: &[char],
+    open: usize,
+    flags: &str,
+) -> Option<(String, usize)> {
+    if chars.get(open) != Some(&'[') {
+        return None;
+    }
+    let negated = chars.get(open + 1) == Some(&'^');
+    let members_start = open + if negated { 2 } else { 1 };
+
+    let mut close = members_start;
+    while close < chars.len() {
+        if chars[close] == '\\' {
+            close += 2;
+            continue;
+        }
+        if chars[close] == ']' {
+            break;
+        }
+        close += 1;
+    }
+    if chars.get(close) != Some(&']') {
+        return None;
+    }
+
+    let mut rest_members = String::new();
+    let mut rest_member_count = 0usize;
+    let mut has_word = false;
+    let mut has_non_word = false;
+    let mut previous_was_word_escape = false;
+    let mut i = members_start;
+    while i < close {
+        if chars[i] == '\\' && i + 1 < close && matches!(chars[i + 1], 'w' | 'W') {
+            has_word |= chars[i + 1] == 'w';
+            has_non_word |= chars[i + 1] == 'W';
+            previous_was_word_escape = true;
+            i += 2;
+            continue;
+        }
+        if chars[i] == '\\' && i + 1 < close {
+            rest_members.push(chars[i]);
+            rest_members.push(chars[i + 1]);
+            rest_member_count += 1;
+            previous_was_word_escape = false;
+            i += 2;
+            continue;
+        }
+        if chars[i] == '-' {
+            let next_is_word_escape =
+                i + 2 < close && chars[i + 1] == '\\' && matches!(chars[i + 2], 'w' | 'W');
+            if previous_was_word_escape || next_is_word_escape {
+                rest_members.push_str("\\-");
+            } else {
+                rest_members.push('-');
+            }
+        } else {
+            rest_members.push(chars[i]);
+        }
+        rest_member_count += 1;
+        previous_was_word_escape = false;
+        i += 1;
+    }
+
+    if !(has_word || has_non_word) {
+        return None;
+    }
+    let width = close + 1 - open;
+
+    // A shorthand and its complement cover every scalar; preserve #9216's
+    // cheap dotAll / empty-intersection spellings and never build a full-range
+    // class under `i`.
+    if has_word && has_non_word {
+        return Some((
+            if negated {
+                "[a&&b]".to_string()
+            } else {
+                "(?s:.)".to_string()
+            },
+            width,
+        ));
+    }
+
+    if rest_member_count == 0 {
+        let atom = if has_word {
+            js_word_atom(negated, false)
+        } else {
+            js_word_atom(!negated, false)
+        };
+        return Some((atom, width));
+    }
+
+    let rest_source = format!("[{rest_members}]");
+    let mut arms = vec![js_regex_to_rust_with_flags(&rest_source, flags)];
+    if has_word {
+        arms.push(js_word_atom(false, false));
+    }
+    if has_non_word {
+        arms.push(js_word_atom(true, false));
+    }
+    let union = arms.join("|");
+    let rewritten = if negated {
+        format!("(?!(?:{union}))(?s:.)")
+    } else {
+        format!("(?:{union})")
+    };
+    Some((rewritten, width))
+}
+
 pub(super) fn js_regex_to_rust(pattern: &str) -> String {
+    js_regex_to_rust_with_flags(pattern, "")
+}
+
+pub(super) fn js_regex_to_rust_with_flags(pattern: &str, flags: &str) -> String {
     let folded = fold_surrogate_pairs(pattern);
     let folded = normalize_quantified_lookaround(&folded);
     let folded = clamp_large_quantifiers(&folded);
     let mut result = String::with_capacity(folded.len());
     let chars: Vec<char> = folded.chars().collect();
     let capture_spans = collect_capture_spans(&chars);
+    let case_insensitive = flags.contains('i');
+    let unicode = flags.contains('u') || flags.contains('v');
+    let unicode_ignore_case = case_insensitive && unicode;
+    let dot_all = flags.contains('s');
     let mut i = 0;
     let mut in_class = false; // track `[...]` position; JS and Rust disagree on bare `[` inside
     while i < chars.len() {
@@ -1653,6 +1841,48 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                         }
                     }
                 }
+                // ECMAScript word escapes are ASCII, unlike Rust's Unicode
+                // `\w`/`\W`. Inside a class the `i`+non-Unicode case is
+                // rewritten as a whole at the opening `[` below, because a
+                // scoped `(?-i:...)` group cannot occur inside a class. Every
+                // other flag combination can safely use explicit members.
+                'w' if in_class => {
+                    result.push_str(js_word_members(unicode_ignore_case));
+                    i += 2;
+                }
+                'W' if in_class => {
+                    result.push_str("[^");
+                    result.push_str(js_word_members(unicode_ignore_case));
+                    result.push(']');
+                    i += 2;
+                }
+                'w' => {
+                    result.push_str(&js_word_atom(false, unicode_ignore_case));
+                    i += 2;
+                }
+                'W' => {
+                    result.push_str(&js_word_atom(true, unicode_ignore_case));
+                    i += 2;
+                }
+                // Word boundaries use the same IsWordChar predicate as `\w`.
+                // Rust's `(?-iu:\b)` is the exact ASCII form. Only `i`+`u`
+                // needs the explicit augmented-set lookarounds.
+                'b' if !in_class => {
+                    if unicode_ignore_case {
+                        push_unicode_ignore_case_word_boundary(&mut result, false);
+                    } else {
+                        result.push_str("(?-iu:\\b)");
+                    }
+                    i += 2;
+                }
+                'B' if !in_class => {
+                    if unicode_ignore_case {
+                        push_unicode_ignore_case_word_boundary(&mut result, true);
+                    } else {
+                        result.push_str("(?-iu:\\B)");
+                    }
+                    i += 2;
+                }
                 // `\s`/`\S` outside class: JS excludes NEL (U+0085), Rust includes it.
                 's' if !in_class => {
                     result.push_str(JS_WHITESPACE_CLASS);
@@ -1757,6 +1987,17 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
                 // same reason.
                 push_any_char(&mut result);
                 i += width;
+            } else if case_insensitive && !unicode {
+                if let Some((rewritten, width)) =
+                    rewrite_case_insensitive_ascii_word_class(&chars, i, flags)
+                {
+                    result.push_str(&rewritten);
+                    i += width;
+                } else {
+                    in_class = true;
+                    result.push('[');
+                    i += 1;
+                }
             } else {
                 in_class = true;
                 result.push('[');
@@ -1767,6 +2008,13 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
             // consumed by the backslash branch above and never reaches here).
             in_class = false;
             result.push(']');
+            i += 1;
+        } else if !in_class && chars[i] == '.' {
+            if dot_all {
+                result.push('.');
+            } else {
+                result.push_str(JS_NON_DOTALL_DOT);
+            }
             i += 1;
         } else if !in_class && chars[i] == '(' && i + 2 < chars.len() && chars[i + 1] == '?' {
             // Check for JS named group (?<name>...) — convert to (?P<name>...)
@@ -1785,7 +2033,9 @@ pub(super) fn js_regex_to_rust(pattern: &str) -> String {
             }
         } else if in_class
             && chars[i] == '-'
-            && (out_ends_with_class_shorthand(&result) || next_is_class_shorthand(&chars, i + 1))
+            && (out_ends_with_class_shorthand(&result)
+                || previous_is_word_shorthand(&chars, i)
+                || next_is_class_shorthand(&chars, i + 1))
         {
             // Inside a class, a `-` adjacent to a shorthand class (`\d`, `\w`,
             // `\s`, …, or a `\p{…}` property) is a *literal* hyphen in JS — a
@@ -2178,9 +2428,9 @@ mod tests {
         // would otherwise reject `\w-` as `ClassRangeLiteral`. The hyphen must
         // be escaped to `\-`.
         for (src, expect) in [
-            (r"[\w-\.]", r"[\w\-\.]"),
+            (r"[\w-\.]", r"[A-Za-z0-9_\-\.]"),
             (r"[\d-z]", r"[\d\-z]"),
-            (r"[a\w-]", r"[a\w\-]"),
+            (r"[a\w-]", r"[aA-Za-z0-9_\-]"),
             (r"[a-\d]", r"[a\-\d]"),
             (r"[\p{Greek}-x]", r"[\p{Greek}\-x]"),
         ] {
@@ -2193,7 +2443,7 @@ mod tests {
         // An ordinary `a-z` range between two single literals is untouched.
         assert_eq!(js_regex_to_rust("[a-z]"), "[a-z]");
         // Outside a class, `-` is never escaped.
-        assert_eq!(js_regex_to_rust(r"\d-\w"), r"\d-\w");
+        assert_eq!(js_regex_to_rust(r"\d-\w"), r"\d-(?-i:[A-Za-z0-9_])");
         // A `\w-\.` member must match `\w`, a literal `-`, and `.`.
         let re = regex::Regex::new(&js_regex_to_rust(r"^[\w-\.]+$")).unwrap();
         assert!(re.is_match("a-b.c_d"));
@@ -2203,7 +2453,7 @@ mod tests {
 
 #[cfg(test)]
 mod any_char_rewrite_tests {
-    use super::js_regex_to_rust;
+    use super::{js_regex_to_rust, js_regex_to_rust_with_flags};
 
     /// The rewrite fires on exactly the closed complementary pairs, and on
     /// JS's `[^]`.
@@ -2254,6 +2504,15 @@ mod any_char_rewrite_tests {
                 !out.contains("(?s:.)"),
                 "/{js}/ must not be rewritten to any-char, got {out}"
             );
+        }
+    }
+
+    #[test]
+    fn empty_and_any_classes_keep_the_non_folding_rewrite_with_flags() {
+        for flags in ["", "i", "u", "iu", "s", "gimsu"] {
+            assert_eq!(js_regex_to_rust_with_flags("[^]", flags), "(?s:.)");
+            assert_eq!(js_regex_to_rust_with_flags("[]", flags), "[a&&b]");
+            assert_eq!(js_regex_to_rust_with_flags(r"[\w\W]", flags), "(?s:.)");
         }
     }
 }

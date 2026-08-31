@@ -463,12 +463,96 @@ fn escaped_hyphen_in_class_stays_literal() {
 }
 
 #[test]
+fn ecmascript_word_escapes_and_boundaries_use_the_spec_word_set() {
+    fn matches(pattern: &str, flags: &str, subject: &str) -> bool {
+        let re = js_regexp_new(make_string(pattern), make_string(flags));
+        js_regexp_test(re, make_string(subject)) != 0
+    }
+
+    // Neither `u` nor `i` alone widens the ASCII set. Rust's native `\w`
+    // admits all of these, which was the silent wrong-answer bug.
+    for flags in ["", "i", "u"] {
+        for subject in ["é", "Ω", "漢", "K", "ſ"] {
+            assert!(
+                !matches(r"^\w$", flags, subject),
+                "/^\\w$/{flags} {subject}"
+            );
+            assert!(matches(r"^\W$", flags, subject), "/^\\W$/{flags} {subject}");
+            assert!(
+                !matches(r"^[\w]$", flags, subject),
+                "/^[\\w]$/{flags} {subject}"
+            );
+            assert!(
+                matches(r"^[\W]$", flags, subject),
+                "/^[\\W]$/{flags} {subject}"
+            );
+        }
+    }
+
+    // `i`+`u` adds exactly the two non-ASCII simple folds into ASCII.
+    for subject in ["K", "ſ"] {
+        assert!(matches(r"^\w$", "iu", subject));
+        assert!(!matches(r"^\W$", "iu", subject));
+        assert!(matches(r"^[\w]$", "iu", subject));
+        assert!(!matches(r"^[\W]$", "iu", subject));
+        assert!(matches(r"^\b.\b$", "iu", subject));
+        assert!(!matches(r"^\B.\B$", "iu", subject));
+    }
+    for subject in ["é", "Ω", "漢"] {
+        assert!(!matches(r"^\w$", "iu", subject));
+        assert!(matches(r"^\W$", "iu", subject));
+        assert!(!matches(r"^\b.\b$", "iu", subject));
+        assert!(matches(r"^\B.\B$", "iu", subject));
+    }
+
+    // Mixed classes under non-Unicode `i` need separate exact-word and
+    // normally-folded arms; the outer Rust `(?i)` must not fold the word arm.
+    assert!(!matches(r"^[a\w]+$", "i", "Ω"));
+    assert!(matches(r"^[^a\w]+$", "i", "Ω"));
+    assert!(matches(r"^[a\W]+$", "i", "Ω"));
+    assert!(!matches(r"^[^a\W]+$", "i", "Ω"));
+
+    // Boundary word-ness is the same predicate as `\w`.
+    assert!(!matches(r"^\bΩ\b$", "", "Ω"));
+    assert!(matches(r"^\BΩ\B$", "", "Ω"));
+    assert!(matches(r"x\bΩ", "", "xΩ"));
+    assert!(!matches(r"x\BΩ", "", "xΩ"));
+}
+
+#[test]
+fn ecmascript_dot_excludes_all_line_terminators_without_dotall() {
+    fn matches(pattern: &str, flags: &str, subject: &str) -> bool {
+        let re = js_regexp_new(make_string(pattern), make_string(flags));
+        js_regexp_test(re, make_string(subject)) != 0
+    }
+
+    for flags in ["", "i", "u", "m", "g"] {
+        for terminator in ["\n", "\r", "\u{2028}", "\u{2029}"] {
+            assert!(
+                !matches(r"^.$", flags, terminator),
+                "/^.$/{flags} matched {terminator:?}"
+            );
+        }
+    }
+    for terminator in ["\n", "\r", "\u{2028}", "\u{2029}"] {
+        assert!(matches(r"^.$", "s", terminator));
+        assert!(matches(r"^.$", "isu", terminator));
+    }
+    assert!(matches(r"^.$", "", "\t"));
+    assert!(!matches(r".{2}", "g", "\t\r\n"));
+    assert!(matches(r".{2}", "gs", "\t\r\n"));
+}
+
+#[test]
 fn annexb_legacy_decimal_escapes() {
     // #5594: a `\<n>` with no matching capture group is an Annex B.1.4
     // legacy octal escape, not a backreference — `\1` → `\x01`, never the
     // bare `\1` the `regex`/`fancy-regex` crates reject.
     assert_eq!(js_regex_to_rust(r"\1"), r"\x{01}");
-    assert_eq!(js_regex_to_rust(r"\b(\w+) \2\b"), r"\b(\w+) \x{02}\b");
+    assert_eq!(
+        js_regex_to_rust(r"\b(\w+) \2\b"),
+        r"(?-iu:\b)((?-i:[A-Za-z0-9_])+) \x{02}(?-iu:\b)"
+    );
     // Multi-digit octal: `\12` = 0o12 = 0x0A, `\14` = 0o14 = 0x0C.
     assert_eq!(js_regex_to_rust(r"[\12-\14]"), r"[\x{0A}-\x{0C}]");
     // Inside a class a decimal escape is always octal, never a backref —

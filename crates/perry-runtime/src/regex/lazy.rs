@@ -50,7 +50,7 @@ use std::sync::Arc;
 
 use regex::Regex;
 
-use super::grammar::{collapse_redos_guard_quantifiers, js_regex_to_rust};
+use super::grammar::{collapse_redos_guard_quantifiers, js_regex_to_rust_with_flags};
 use super::{
     evict_regex_cache_if_full, get_or_compile_regex, is_valid_ptr, is_valid_regex_ptr,
     string_as_str, RegExpHeader, FANCY_CACHE, REGEX_SOURCE_TABLE, REPEAT_MATCHER_CACHE,
@@ -64,7 +64,7 @@ use super::{
 /// validator that inspects a DIFFERENT string than the builder would either
 /// throw on a pattern that compiles or accept one that does not.
 pub(super) fn flag_prefixed_pattern(pattern: &str, flags: &str) -> String {
-    let translated = js_regex_to_rust(pattern);
+    let translated = js_regex_to_rust_with_flags(pattern, flags);
     let case_insensitive = flags.contains('i');
     let multiline = flags.contains('m');
     // #2828: the `s` (dotAll) flag maps directly onto the Rust `regex`
