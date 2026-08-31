@@ -40,6 +40,7 @@ mod tui;
 mod typescript;
 mod undici;
 mod utils_crypto;
+mod ws_events;
 mod yoga;
 
 // ============================================================================
@@ -168,6 +169,7 @@ pub(super) static NATIVE_MODULE_TABLE: LazyLock<Vec<NativeModSig>> = LazyLock::n
     v.extend_from_slice(node_domain::NODE_DOMAIN_ROWS);
     v.extend_from_slice(fastify::FASTIFY_ROWS);
     v.extend_from_slice(databases::DATABASES_ROWS);
+    v.extend_from_slice(ws_events::WS_EVENTS_ROWS);
     v.extend_from_slice(net_events::NET_EVENTS_ROWS);
     v.extend_from_slice(net_classes_state::NET_CLASSES_STATE_ROWS);
     v.extend_from_slice(tls_events::TLS_EVENTS_ROWS);
