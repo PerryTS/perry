@@ -1,6 +1,7 @@
+use std::hint::black_box;
 use std::time::Instant;
 
-fn fib(n: i32) -> i32 {
+fn fib(n: i64) -> i64 {
     if n < 2 {
         return n;
     }
@@ -9,7 +10,7 @@ fn fib(n: i32) -> i32 {
 
 fn bench_fibonacci() {
     let start = Instant::now();
-    let result = fib(40);
+    let result = fib(black_box(40));
     let elapsed = start.elapsed().as_millis();
     println!("fibonacci:{}", elapsed);
     println!("  checksum: {}", result);
@@ -28,6 +29,15 @@ fn bench_loop_overhead() {
 
 fn bench_array_write() {
     let mut arr = vec![0.0_f64; 10_000_000];
+    // suite/03_array_write.ts fills every slot BEFORE it calls Date.now(), so
+    // its timed loop overwrites resident pages. `vec![0.0; N]` is calloc, whose
+    // pages are mapped lazily -- without this pre-touch the Rust timed loop
+    // additionally pays ~10M first-touch faults the TS timed loop does not,
+    // and the column measures page-fault cost rather than store throughput.
+    for slot in arr.iter_mut() {
+        *slot = 0.0;
+    }
+    black_box(&arr);
     let start = Instant::now();
     for i in 0..10_000_000 {
         arr[i] = i as f64;
@@ -72,10 +82,12 @@ fn bench_object_create() {
     let start = Instant::now();
     let mut sum: f64 = 0.0;
     for i in 0..1_000_000 {
-        let p = Point {
+        // Without the barrier LLVM proves the struct never escapes and removes
+        // the allocation entirely, reporting 0 ms for a loop that never ran.
+        let p = black_box(Point {
             x: i as f64,
             y: i as f64 * 2.0,
-        };
+        });
         sum += p.x + p.y;
     }
     let elapsed = start.elapsed().as_millis();
