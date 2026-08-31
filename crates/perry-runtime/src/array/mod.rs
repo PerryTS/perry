@@ -153,9 +153,9 @@ pub use self::indexing::{
 pub(crate) use self::indexing_support::test_keys_array_slot_fallbacks;
 pub(crate) use self::indexing_support::{
     array_proto_iterator_modified, invalidate_array_index_fast_path,
-    keys_array_len_capped_to_capacity, keys_array_slot, note_array_proto_iterator_write,
-    note_object_prototype_index_write, object_prototype_has_index_flag,
-    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
+    keys_array_len_capped_to_capacity, keys_array_slot, note_array_index_write,
+    note_array_proto_iterator_write, note_object_prototype_index_write,
+    object_prototype_has_index_flag, PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED,
 };
 pub use self::is_array::js_array_is_array;
 pub(crate) use self::iter_methods::throw_reduce_of_empty;
