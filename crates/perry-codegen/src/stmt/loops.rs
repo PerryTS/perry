@@ -480,6 +480,13 @@ fn lower_numeric_range_add_loop(
             &[(DOUBLE, &arr_box), (DOUBLE, &start_box), (DOUBLE, &delta)],
         ),
     };
+    // Result contract (see `array_numeric_range_add_impl`):
+    //   ret >= 0          -- whole window done; ret is the counter on exit.
+    //   ret == -1         -- receiver-level decline; nothing mutated.
+    //   ret <= -2         -- slots [start, k) mutated, k = -ret - 2; the
+    //                        ordinary loop RESUMES at k (the element at k is
+    //                        not a plain number, so its `+` may concatenate or
+    //                        dispatch valueOf -- generic code handles it).
     let succeeded = ctx.block().icmp_sge(I64, &result, "0");
     let success_idx = ctx.new_block("numeric.range_add.success");
     let fallback_idx = ctx.new_block("numeric.range_add.fallback");
@@ -502,6 +509,36 @@ fn lower_numeric_range_add_loop(
     ctx.block().br(&merge_label);
 
     ctx.current_block = fallback_idx;
+    {
+        // ret <= -2: seed the counter with the resume index before entering
+        // the ordinary loop. ret == -1 keeps the counter untouched (it still
+        // holds the loop's start value).
+        let is_partial = ctx.block().icmp_slt(I64, &result, "-1");
+        let neg = ctx.block().sub(I64, "-2", &result);
+        let cur_i32 = if let Some(slot) = ctx.i32_counter_slots.get(&matched.counter_id).cloned() {
+            let cur = ctx.block().load(I32, &slot);
+            let resume = ctx.block().trunc(I64, &neg, I32);
+            let seeded = ctx
+                .block()
+                .select(crate::types::I1, &is_partial, I32, &resume, &cur);
+            ctx.block().store(I32, &seeded, &slot);
+            Some(seeded)
+        } else {
+            None
+        };
+        if let Some(slot) = ctx.locals.get(&matched.counter_id).cloned() {
+            let cur = ctx.block().load(DOUBLE, &slot);
+            let resume_d = if let Some(seeded) = &cur_i32 {
+                ctx.block().sitofp(I32, seeded, DOUBLE)
+            } else {
+                let d = ctx.block().sitofp(I64, &neg, DOUBLE);
+                let cur2 = cur.clone();
+                ctx.block()
+                    .select(crate::types::I1, &is_partial, DOUBLE, &d, &cur2)
+            };
+            ctx.block().store(DOUBLE, &resume_d, &slot);
+        }
+    }
     lower_for_after_init(
         ctx,
         init,
@@ -872,7 +909,11 @@ fn emit_packed_numeric_accumulator_admission(
     offset_reads_inlined: bool,
 ) -> PackedAccumulatorScope {
     let accumulators = super::stable_packed_accumulator::collect_numeric_accumulators(
-        ctx, body, array_id, counter_id, offset_reads_inlined,
+        ctx,
+        body,
+        array_id,
+        counter_id,
+        offset_reads_inlined,
     );
     // Integer (`c++`) accumulators admit independently of the float set —
     // a pure count loop has no float accumulator at all.
@@ -4962,9 +5003,18 @@ fn match_packed_f64_versioned_loop(
     }
     let ordinary_hoist =
         condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body));
-    let hoist = ordinary_hoist.or_else(|| {
-        condition.and_then(|cond| classify_for_length_hoist_impl(ctx, cond, update, body, true))
-    })?;
+    let hoist = ordinary_hoist
+        .or_else(|| {
+            condition.and_then(|cond| classify_for_length_hoist_impl(ctx, cond, update, body, true))
+        })
+        .or_else(|| {
+            // #9253 flagged this as the one SILENT gate in the matcher: a loop
+            // whose bound is not `arr.length` exits here before any of the named
+            // rejects below can fire, which made every literal- or param-bounded
+            // loop invisible to the trace.
+            let _ = packed_loop_reject("no_length_hoist");
+            None
+        })?;
     if !matches!(hoist.op, perry_hir::CompareOp::Lt) || hoist.lhs_addend != 0 {
         return packed_loop_reject("compare_op_not_lt");
     }

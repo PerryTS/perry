@@ -876,7 +876,13 @@ fn numeric_range_add_updates_only_the_validated_window_of_a_mixed_array() {
 }
 
 #[test]
-fn numeric_range_add_failure_is_transactional() {
+fn numeric_range_add_element_failure_mutates_the_prefix_and_reports_the_resume_index() {
+    // The kernel is a single fused pass. A non-number mid-window no longer
+    // rolls the whole call back: slots before it keep their update (they
+    // received exactly the one `+ delta` the source loop owed them), the
+    // return encodes the resume index (`-index - 2`), and the caller's
+    // ordinary loop takes over from there. The slot itself and everything
+    // after it are untouched.
     let mut arr = js_array_alloc(3);
     arr = js_array_push_f64(arr, 10.0);
     arr = js_array_push_f64(arr, 20.0);
@@ -885,10 +891,27 @@ fn numeric_range_add_failure_is_transactional() {
     js_array_set_f64(arr, 1, marker);
 
     let receiver = boxed_pointer(arr as *mut u8);
-    assert_eq!(js_array_numeric_range_add(receiver, 0.0, 3.0, 7.0), -1);
-    assert_eq!(js_array_get_f64(arr, 0), 10.0);
+    // Stops at index 1: -(1) - 2 == -3.
+    assert_eq!(js_array_numeric_range_add(receiver, 0.0, 3.0, 7.0), -3);
+    assert_eq!(js_array_get_f64(arr, 0), 17.0);
     assert_eq!(js_array_get_f64(arr, 1).to_bits(), marker.to_bits());
     assert_eq!(js_array_get_f64(arr, 2), 30.0);
+
+    // RECEIVER-level failures stay fully transactional: nothing was written.
+    // (The frozen-array test below pins the same for OBJ_FLAG_FROZEN.)
+    let not_an_array = 4.0_f64;
+    assert_eq!(js_array_numeric_range_add(not_an_array, 0.0, 3.0, 7.0), -1);
+
+    // A failure at index 0 mutates nothing and resumes at 0: -(0) - 2 == -2.
+    assert_eq!(js_array_numeric_range_add(receiver, 1.0, 3.0, 7.0), -3);
+    let mut arr2 = js_array_alloc(2);
+    arr2 = js_array_push_f64(arr2, 1.0);
+    js_array_set_f64(arr2, 0, marker);
+    arr2 = js_array_push_f64(arr2, 2.0);
+    let receiver2 = boxed_pointer(arr2 as *mut u8);
+    assert_eq!(js_array_numeric_range_add(receiver2, 0.0, 2.0, 7.0), -2);
+    assert_eq!(js_array_get_f64(arr2, 0).to_bits(), marker.to_bits());
+    assert_eq!(js_array_get_f64(arr2, 1), 2.0);
 }
 
 #[test]

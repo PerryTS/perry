@@ -1115,7 +1115,7 @@ pub extern "C" fn js_array_numeric_value_to_raw_f64(value: f64) -> f64 {
 }
 
 #[inline]
-fn canonical_raw_f64(value: f64) -> f64 {
+pub(crate) fn canonical_raw_f64(value: f64) -> f64 {
     if value.is_nan() {
         f64::NAN
     } else {
