@@ -405,6 +405,17 @@ jobs:
     # preflight is only in `needs` for its outputs (the update-manifest signing
     # steps bake the release tag into the signed URL); await-tests is the gate.
     needs: [preflight, await-tests, prime-macos-x86_64-cache]
+    # `prime-macos-x86_64-cache` is a cache warmer, never a gate, so its result
+    # must not decide whether the release builds. `continue-on-error` keeps a
+    # failure there from failing the RUN, but this is the repository's first
+    # JOB-level use of it and GitHub's `needs` semantics for that case are not
+    # worth a silently skipped release to find out. State the gate explicitly:
+    # await-tests decides, preflight must have produced its outputs, and the
+    # warmer's outcome is deliberately unexamined.
+    if: >-
+      ${{ !cancelled()
+      && needs.preflight.result == 'success'
+      && needs.await-tests.result == 'success' }}
     strategy:
       # Don't let one platform's build failure cancel the others (mirrors
       # build-cross). A broken cross-host target should not strand the
