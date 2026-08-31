@@ -430,6 +430,13 @@ pub(super) fn al_get(recv: f64, k: i64) -> f64 {
         if k < 0 {
             return undef();
         }
+        // #9221: explicit Array.prototype.<method>.call(array, ...) must use
+        // the same recorded-prototype Get as a direct `array[k]`. Default-chain
+        // arrays retain the old `js_array_get_f64` lane, and Proxy prototypes
+        // remain on their dedicated path (the classification returns None).
+        if real_array_uses_recorded_spec_path(arr) {
+            return crate::array::array_spec_get(arr, k as u32);
+        }
         return js_array_get_f64(arr, k as u32);
     }
     let b = recv.to_bits();
@@ -535,6 +542,17 @@ fn object_get_property_chain(obj_ptr: usize, k: i64) -> f64 {
     undef()
 }
 
+/// Whether a genuine Array receiver must use the #9219 recorded-prototype
+/// classification for indexed Get/HasProperty. The process latch keeps the
+/// per-array side-table probe out of programs that never retarget an array;
+/// the classification itself excludes Proxy prototypes so their existing
+/// dedicated trap path is not invoked twice.
+#[inline]
+fn real_array_uses_recorded_spec_path(arr: *const ArrayHeader) -> bool {
+    crate::object::prototype_chain::array_static_proto_recorded()
+        && unsafe { crate::array::array_custom_prototype(arr).is_some() }
+}
+
 /// `HasProperty(ToObject(recv), k)`.
 pub(super) fn al_has(recv: f64, k: i64) -> bool {
     if k < 0 {
@@ -548,8 +566,17 @@ pub(super) fn al_has(recv: f64, k: i64) -> bool {
             }
             let el = *((arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64)
                 .add(k as usize);
-            return el.to_bits() != TAG_HOLE;
+            if el.to_bits() != TAG_HOLE {
+                return true;
+            }
         }
+        // #9221: a hole is absent only from the receiver. On a retargeted
+        // array, HasProperty must walk the recorded chain; this is exactly the
+        // `ArrayCustomProto::{Null, Array, Other}` policy used by direct reads.
+        if real_array_uses_recorded_spec_path(arr) {
+            return crate::array::array_spec_has_index(arr, k as u32);
+        }
+        return false;
     }
     let b = recv.to_bits();
     if is_string_value(b) {
