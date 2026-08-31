@@ -473,6 +473,26 @@ pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
     // costs the most on a cold address — no negative-entry write-back into the
     // shared `PERRY_TA_KIND_CACHE`. See `TYPED_ARRAY_ADDR_WINDOW`.
     if !TYPED_ARRAY_ADDR_WINDOW.may_contain(addr) {
+        // Completeness audit — see the twin in `buffer::header::
+        // is_registered_buffer` for why the writer set is machine-checked
+        // rather than enumerated. Read the registry DIRECTLY rather than
+        // through `lookup_registered_typed_array_kind`: that function writes a
+        // negative entry into `PERRY_TA_KIND_CACHE` on a miss, and an audit
+        // that mutates the state it audits changes what the next probe does.
+        // `TYPED_ARRAY_REGISTRY` is authoritative anyway — every positive cache
+        // entry is derived from it. Compiled out entirely in release.
+        #[cfg(debug_assertions)]
+        {
+            assert!(
+                TYPED_ARRAY_REGISTRY
+                    .with(|r| r.borrow().get(&addr).copied())
+                    .is_none(),
+                "TYPED_ARRAY_ADDR_WINDOW rejected {addr:#x}, but it IS in \
+                 TYPED_ARRAY_REGISTRY. Some route reached the registry without \
+                 calling `TYPED_ARRAY_ADDR_WINDOW.admit()` (via \
+                 `register_typed_array`) first."
+            );
+        }
         return None;
     }
     #[cfg(test)]

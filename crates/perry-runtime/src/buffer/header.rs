@@ -396,6 +396,27 @@ pub fn is_registered_buffer(addr: usize) -> bool {
     // Every writer widens the window before it publishes, which is what makes
     // rejecting sound; see `BUFFER_LIKE_ADDR_WINDOW`.
     if !BUFFER_LIKE_ADDR_WINDOW.may_contain(addr) {
+        // Machine-check the completeness of the writer set instead of trusting
+        // an enumeration of it. The window is only sound if EVERY route into
+        // the three tables below calls `admit` first; an enumeration of those
+        // routes is a snapshot that a later commit can invalidate silently, and
+        // the failure it would cause is a misclassified pointer, not a slow
+        // path. In debug builds every rejection is therefore re-derived from
+        // the authoritative tables, which turns "someone added a registration
+        // route without admitting" into a panic in the first test that
+        // exercises that route. Compiled out entirely in release.
+        #[cfg(debug_assertions)]
+        {
+            assert!(
+                !is_registered_buffer_slow(addr),
+                "BUFFER_LIKE_ADDR_WINDOW rejected {addr:#x}, but it IS a \
+                 registered buffer. Some registration route reached \
+                 BUFFER_REGISTRY, the external-buffer registry or the \
+                 shared-SAB registry without calling \
+                 `BUFFER_LIKE_ADDR_WINDOW.admit()` (via `register_buffer` or \
+                 `note_buffer_like_registered`) first."
+            );
+        }
         return false;
     }
     #[cfg(test)]

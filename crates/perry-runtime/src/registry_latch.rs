@@ -184,25 +184,36 @@ impl RegistryAddrWindow {
     ///
     /// MUST run **before** the guarded table is mutated — see the type docs.
     ///
-    /// `fetch_min`/`fetch_max`, not load-then-store: a plain store is a
-    /// read-modify-write with a hole in it, and two threads registering at
-    /// once can both read the old bound and let the *narrower* of the two
-    /// stores land last — dropping the other thread's address out of the
-    /// window while its entry is live in that thread's registry. That is a
-    /// false negative for a genuinely registered address, i.e. exactly the one
-    /// failure mode this type must not have. The relaxed pre-check keeps the
-    /// atomic RMW off the path a registration loop takes once the window
-    /// already covers the address; skipping is sound because the bound only
-    /// ever moves outward, so an observed `lo <= addr` can never later become
-    /// `lo > addr`.
+    /// Two unconditional atomic read-modify-writes, deliberately with no
+    /// "already covered?" pre-check in front of them. Registration is rare —
+    /// `claude-code --help` calls this 10 times for buffers and 42 times for
+    /// typed arrays across a 6.9-billion-instruction run — so a fast path here
+    /// buys nothing measurable and costs the one thing this type cannot spend:
+    /// certainty. Two earlier drafts of exactly this function were wrong.
+    ///
+    /// 1. `load` then `store` is a read-modify-write with a hole in it. Two
+    ///    threads registering at once both read the old bound, and the
+    ///    *narrower* of the two stores can land last — dropping the other
+    ///    thread's address out of the window while its entry is live in that
+    ///    thread's registry. `fetch_min`/`fetch_max` are single RMWs, so no
+    ///    update can be lost no matter how the two interleave.
+    ///
+    /// 2. A `Relaxed` "skip if already covered" pre-check reintroduces the same
+    ///    bug one level up, in the memory model rather than in the interleaving.
+    ///    If this thread skips the RMW because it *observed* another thread's
+    ///    widening, it performs no acquire, so that other thread's widening
+    ///    never enters this thread's happens-before graph — and a reader that
+    ///    synchronises only with THIS thread's subsequent publish is not
+    ///    guaranteed to see the bound that actually covers the address. It
+    ///    would answer "not registered" for a registered pointer.
+    ///
+    /// `AcqRel` closes that: an RMW reads the latest value in the location's
+    /// modification order, and the acquire half joins every prior widening into
+    /// this thread's happens-before graph before the caller publishes.
     #[inline]
     pub fn admit(&self, addr: usize) {
-        if self.lo.load(Ordering::Relaxed) > addr {
-            self.lo.fetch_min(addr, Ordering::Release);
-        }
-        if self.hi.load(Ordering::Relaxed) < addr {
-            self.hi.fetch_max(addr, Ordering::Release);
-        }
+        self.lo.fetch_min(addr, Ordering::AcqRel);
+        self.hi.fetch_max(addr, Ordering::AcqRel);
     }
 
     /// Test hook: the current `[lo, hi]` pair, or `None` while empty.
