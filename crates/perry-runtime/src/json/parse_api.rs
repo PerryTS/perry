@@ -237,6 +237,41 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
 ///
 /// Uses a direct recursive-descent parser that constructs Perry JSValues
 /// without any intermediate representation.
+/// One tape-eligibility gate for BOTH parse entries.
+///
+/// This predicate used to live inline in `js_json_parse`, and the typed entry
+/// (`js_json_parse_typed_array`) had no gate at all — it was written against
+/// the pre-tape `DirectParser` (#179 Step 1b) and never learned that Step 2
+/// made the tape the generic default. The result: the "schema-directed fast
+/// path" ran 4x slower than the generic parser it claims to specialize, and
+/// its eagerly materialized output re-stringified 8x slower than the tape's
+/// lazy values. Sharing the gate is what keeps the two entries from drifting
+/// again.
+///
+/// Tape laziness currently pays off only for top-level arrays: object/scalar
+/// roots materialize eagerly after building the tape, so they do two parses'
+/// worth of work. Peek the first meaningful byte and keep object-root API
+/// payloads on the direct parser. The size window: lazy fires at 1 KB and
+/// above (tiny parses don't pay the tape build) and below 16 MB (very large
+/// blobs are dominated by the iterate-all idiom, where the direct parser's
+/// tree-build is faster end-to-end).
+pub(crate) fn tape_route_eligible(len: usize, bytes: &[u8]) -> bool {
+    const LAZY_MIN_BLOB_BYTES: usize = 1024;
+    const LAZY_MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
+    match tape_mode_from_env() {
+        TapeMode::ForceOn => true,
+        TapeMode::ForceOff => false,
+        TapeMode::Auto => {
+            (LAZY_MIN_BLOB_BYTES..=LAZY_MAX_BLOB_BYTES).contains(&len)
+                && bytes
+                    .iter()
+                    .copied()
+                    .find(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+                    == Some(b'[')
+        }
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue {
     if text_ptr.is_null() {
@@ -309,25 +344,7 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     // Escape hatch via PERRY_JSON_TAPE=1 (force lazy regardless
     // of size, useful for testing) / =0 (force direct, useful as
     // a correctness fallback).
-    const LAZY_MIN_BLOB_BYTES: usize = 1024;
-    const LAZY_MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
-    let tape_mode = tape_mode_from_env();
-    let use_tape = match tape_mode {
-        TapeMode::ForceOn => true,
-        TapeMode::ForceOff => false,
-        TapeMode::Auto => {
-            // Tape laziness currently pays off only for top-level arrays:
-            // object/scalar roots materialize eagerly after building the tape,
-            // so they do two parses' worth of work. Peek the first meaningful
-            // byte and keep object-root API payloads on the direct parser.
-            (LAZY_MIN_BLOB_BYTES..=LAZY_MAX_BLOB_BYTES).contains(&len)
-                && bytes
-                    .iter()
-                    .copied()
-                    .find(|b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
-                    == Some(b'[')
-        }
-    };
+    let use_tape = tape_route_eligible(len, bytes);
     if use_tape {
         if let Some(result) = try_parse_via_tape(text_ptr, bytes) {
             return result;
@@ -550,6 +567,20 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     }
     let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
+
+    // #179 Step 2 made the tape-based lazy parse the generic default for
+    // exactly the payloads this specialization targets (>= 1 KB top-level
+    // arrays). The tape both parses faster than the shape-hinted
+    // `DirectParser` and produces lazy values whose re-stringify serializes
+    // from the tape — measured on the typed-roundtrip benchmark, the shape
+    // path was 589ms parse + 580ms stringify against the tape's 144 + 72.
+    // This entry's own contract ("no user-visible difference from
+    // `JSON.parse(blob) as T[]`") licenses full delegation; the shape hint
+    // keeps earning its keep only in the window the tape declines (sub-1 KB,
+    // > 16 MB, or a non-array root).
+    if tape_route_eligible(len, bytes) {
+        return js_json_parse(text_ptr);
+    }
 
     // Deep input uses the generic entry's heap-stack fallback. The shape fast
     // path is deliberately retained for ordinary payloads only.
