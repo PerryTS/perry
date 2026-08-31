@@ -2791,7 +2791,16 @@ jobs:
         # the precompile fixtures that link the archives directly could not
         # pass — masked for weeks by continue-on-error. Name the wrapper
         # crates explicitly (same set the parity harness builds).
-        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+        # The ext wrappers must build in the SAME cargo invocation as the
+        # stdlib archive. Separate invocations let cargo unify tokio
+        # differently for each, and the link is then refused: "the wrapper
+        # archive(s) below bundle a DIFFERENT tokio compilation than the
+        # stdlib archive" (#507, #7629). The refusal is correct -- two tokio
+        # compilations mean two `runtime::context::CONTEXT` thread-locals and
+        # a "no reactor running" panic. `test_issue_414_mysql_query_params`
+        # was the single compile-smoke failure this caused. Same set the
+        # doc-tests job already builds together.
+        run: cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ext-ioredis -p perry-ext-mongodb -p perry-ext-mysql2 -p perry-ext-pg -p perry-ext-nodemailer
 
       - name: Issue #945 scalar method IR guard
         run: |
