@@ -13,9 +13,8 @@ pub use keyed::{
     js_array_set_index_or_string_strict, js_array_set_string_key,
 };
 use proto_chain::array_oob_prototype_get;
-pub(crate) use proto_chain::{
-    array_custom_prototype, array_spec_get, array_spec_has_index, array_spec_set,
-};
+pub(crate) use proto_chain::{array_custom_prototype, array_spec_get, array_spec_has_index};
+use proto_chain::{array_object_proto_index_owner, ArrayCustomProto};
 
 const MAX_DENSE_ARRAY_GROW_LENGTH: u32 = 1_000_000;
 
