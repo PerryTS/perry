@@ -276,6 +276,25 @@
       "why": "The class side tables are declared in state.rs and scanned from gc_roots.rs. Both twins visit it — #7239 diffed all eight budgeted (FULL, STEP) pairs and found no drift."
     },
     {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_STATIC_PROTOTYPES",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::class_registry::gc_roots::scan_class_side_table_roots_mut and its budgeted step twin (class_side_table_root_snapshot enumerates ClassSideTableRootSlot::StaticPrototype; scan_class_side_table_root_slot visits that slot)",
+      "why": "Constructor-side [[Prototype]] recorded by Object.setPrototypeOf(Ctor, obj) on a declared class. Holds a real heap ObjectHeader address as usize, so it is visited with visit_usize_slot in BOTH the full and budgeted class-side-table walks, exactly like the CLASS_DECL_PROTOTYPE_OBJECTS entries beside it, and class_static_prototype_root_store fires runtime_write_barrier_root_raw_ptr on the stored pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_STATIC_PROTOTYPE_NULLED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Set of class ids whose constructor [[Prototype]] was explicitly set to null, so Object.getPrototypeOf answers null rather than the default Function.prototype. Stores u32 class ids only — no heap address, nothing to trace or forward."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_SYMBOL_MEMBER_ORDERS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Source order for Symbol-keyed class members: HashMap<(class_id, SymbolHeader::id, is_static), u32>. The u64 is the symbol's stable id (read once at registration in record_class_symbol_member_order), NOT its address, so the table needs no re-key when a Symbol is evacuated; the value is an order index. The member values themselves live in CLASS_SYMBOL_METHODS/CLASS_SYMBOL_ACCESSORS, which scan_class_symbol_member_keys_mut visits and rewrite_class_symbol_method_key_if_forwarded re-keys."
+    },
+    {
       "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
       "name": "TEST_COLLECT_BEFORE_GLOBAL_THIS_ALLOC",
       "verdict": "test_only",
@@ -294,6 +313,12 @@
       "verdict": "covered_elsewhere",
       "scanner": "gc::roots GLOBAL_ROOTS — the cell's address is registered with js_gc_register_global_root (fetch_globals.rs, js_module_top_this)",
       "why": "Same shape as THREAD_GLOBAL_THIS: a NaN-boxed cache slot registered as a mutable global root at first population."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/mod.rs",
+      "name": "CLASS_DYNAMIC_PROP_ORDER",
+      "verdict": "not_a_gc_pointer",
+      "why": "First-insertion order for CLASS_DYNAMIC_PROPS: HashMap<class_id, Vec<String>> of owned Rust strings, needed because the value table is a HashMap while [[OwnPropertyKeys]] needs order. Holds no JSValues; the f64 values live in CLASS_DYNAMIC_PROPS, which is already a scanned root."
     },
     {
       "file": "crates/perry-runtime/src/object/native_module.rs",
@@ -1832,19 +1857,6 @@
       "name": "WINDOW_ROOTS",
       "verdict": "not_a_gc_pointer",
       "why": "Window-root registry maps numeric window handles to numeric root-widget handles; neither value is a JavaScript heap pointer."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_STATIC_PROTOTYPES",
-      "verdict": "covered_elsewhere",
-      "scanner": "object::class_registry::gc_roots::scan_class_side_table_roots_mut and its budgeted step twin (class_side_table_root_snapshot enumerates ClassSideTableRootSlot::StaticPrototype; scan_class_side_table_root_slot visits that slot)",
-      "why": "Constructor-side [[Prototype]] recorded by Object.setPrototypeOf(Ctor, obj) on a declared class. Holds a real heap ObjectHeader address as usize, so it is visited with visit_usize_slot in BOTH the full and budgeted class-side-table walks, exactly like the CLASS_DECL_PROTOTYPE_OBJECTS entries beside it, and class_static_prototype_root_store fires runtime_write_barrier_root_raw_ptr on the stored pointer."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_STATIC_PROTOTYPE_NULLED",
-      "verdict": "not_a_gc_pointer",
-      "why": "Set of class ids whose constructor [[Prototype]] was explicitly set to null, so Object.getPrototypeOf answers null rather than the default Function.prototype. Stores u32 class ids only \u2014 no heap address, nothing to trace or forward."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core perry_thread_local! declarations (see the census docstring, “The identity-pinned frontier”). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
