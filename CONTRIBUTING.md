@@ -162,10 +162,16 @@ Separately, #9215, #9230 and #9235 each merged with `lint` **cancelled** — all
 three touched `crates/`, none carried a fragment, and the work is consequently
 absent from its release notes.
 
-If you are reviewing status before a merge, note that "no failing checks" is
-not "all checks ran": `CANCELLED` is neither, and tooling that filters for
-`FAILURE` will report a clean bill of health for a PR whose gate never
-executed.
+**Before merging, check that `pr-gate` is present and passing — not that
+nothing is red.** Those are different assertions, and only the first one is
+worth anything. `CANCELLED` is neither a pass nor a failure, and a gate that
+never ran is *absent from the status list altogether*, so both states read as
+clean under any check that looks for failures. `pr-gate: pass` is a positive
+statement that the fan-in ran and every dependency was `success` or `skipped`;
+"0 failing" is satisfied just as well by a PR whose gate never executed. The
+same hole exists one level up for release automation: require the gate's
+conclusion to be `success`, since a skipped or absent required context also
+satisfies "not failing".
 
 UI doc-tests launch real windows. On headless hosts, wrap in `xvfb-run -a` (Linux) or rely on `PERRY_UI_TEST_MODE=1` which auto-exits after one frame.
 
