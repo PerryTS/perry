@@ -140,6 +140,7 @@ pub use self::immutable::{
 pub(crate) use self::indexing::{
     array_has_own_index, array_iteration_is_exotic, array_iteration_is_exotic_resolved,
     array_prototype_has_index_flag, array_spec_get, array_spec_has_index, array_spec_set,
+    note_array_index_write,
 };
 pub use self::indexing::{
     js_array_get_element, js_array_get_element_f64, js_array_get_f64, js_array_get_f64_unchecked,
