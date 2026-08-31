@@ -554,6 +554,215 @@ fn lower_numeric_range_add_loop(
     Ok(true)
 }
 
+struct StridedTaggedFill {
+    counter_id: u32,
+    array_id: u32,
+    bound: perry_hir::Expr,
+    step: perry_hir::Expr,
+    /// NaN-box bits of the stored constant, as an i64 literal string.
+    value_bits: String,
+}
+
+/// Match `for (...; j < B; j = j + S) arr[j] = C;` where `C` is a boolean,
+/// `null`, or `undefined` literal, `B`/`S` are integer literals or
+/// loop-invariant plain locals, and nothing in the body writes any
+/// participant. The kernel (`js_array_fill_range_strided_tagged`) validates
+/// the actual receiver at run time — plain dense boxed array, no integrity
+/// flags, no raw-f64 layout, no active incremental mark — and declines to
+/// the ordinary loop otherwise with nothing stored.
+///
+/// Numbers are deliberately not matched: a numeric constant fill targets a
+/// raw-f64-layout array in practice, and the kernel declines those (tag bits
+/// stored into unboxed-double storage would be read back as doubles), so the
+/// call would be a per-loop toll with no fast path behind it.
+fn match_strided_tagged_fill_loop(
+    ctx: &FnCtx<'_>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Option<StridedTaggedFill> {
+    use perry_hir::{BinaryOp, CompareOp, Expr};
+    if !ctx.pending_labels.is_empty() {
+        return None;
+    }
+
+    let Some(Expr::Compare {
+        op: CompareOp::Lt,
+        left,
+        right,
+    }) = condition
+    else {
+        return None;
+    };
+    let Expr::LocalGet(counter_id) = left.as_ref() else {
+        return None;
+    };
+    let counter_id = *counter_id;
+    if ctx.boxed_vars.contains(&counter_id) || ctx.closure_captures.contains_key(&counter_id) {
+        return None;
+    }
+
+    // An operand the kernel can take as an f64 argument: an i32-range integer
+    // literal, or a plain loop-invariant local the body never writes.
+    let invariant_operand = |e: &Expr| -> Option<Expr> {
+        match e {
+            Expr::Integer(v) if i32::try_from(*v).is_ok() => Some(e.clone()),
+            Expr::LocalGet(id)
+                if *id != counter_id
+                    && !ctx.boxed_vars.contains(id)
+                    && !ctx.closure_captures.contains_key(id)
+                    && !stmts_mutate_local(body, *id) =>
+            {
+                Some(e.clone())
+            }
+            _ => None,
+        }
+    };
+    let bound = invariant_operand(right)?;
+
+    // Update: `j = j + S` (either operand order).
+    let step = match update? {
+        Expr::LocalSet(id, value) if *id == counter_id => match value.as_ref() {
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left,
+                right,
+            } => match (left.as_ref(), right.as_ref()) {
+                (Expr::LocalGet(l), other) if *l == counter_id => invariant_operand(other)?,
+                (other, Expr::LocalGet(r)) if *r == counter_id => invariant_operand(other)?,
+                _ => return None,
+            },
+            _ => return None,
+        },
+        _ => return None,
+    };
+    if let Expr::Integer(v) = &step {
+        if *v <= 0 {
+            return None;
+        }
+    }
+
+    // Body: exactly one store of a non-pointer constant at the counter.
+    let [Stmt::Expr(store)] = body else {
+        return None;
+    };
+    let (object, index, value) = match store {
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+        } => (object.as_ref(), index.as_ref(), value.as_ref()),
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } if matches!(
+            (target.as_ref(), receiver.as_ref()),
+            (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b
+        ) =>
+        {
+            (target.as_ref(), key.as_ref(), value.as_ref())
+        }
+        _ => return None,
+    };
+    let Expr::LocalGet(array_id) = object else {
+        return None;
+    };
+    let array_id = *array_id;
+    if array_id == counter_id
+        || ctx.boxed_vars.contains(&array_id)
+        || ctx.closure_captures.contains_key(&array_id)
+        || stmts_mutate_local(body, array_id)
+    {
+        return None;
+    }
+    if !matches!(index, Expr::LocalGet(id) if *id == counter_id) {
+        return None;
+    }
+    let value_bits = match value {
+        Expr::Bool(true) => crate::nanbox::TAG_TRUE_I64.to_string(),
+        Expr::Bool(false) => crate::nanbox::TAG_FALSE_I64.to_string(),
+        Expr::Null => crate::nanbox::TAG_NULL_I64.to_string(),
+        Expr::Undefined => crate::nanbox::TAG_UNDEFINED_I64.to_string(),
+        _ => return None,
+    };
+
+    Some(StridedTaggedFill {
+        counter_id,
+        array_id,
+        bound,
+        step,
+        value_bits,
+    })
+}
+
+/// Mirror of `lower_numeric_range_add_loop`'s two-outcome contract, without
+/// the partial arm: a fill stores one constant everywhere, so the kernel
+/// either completes the window (`>= 0`, the counter's exit value) or declines
+/// with nothing stored (`-1`) and the ordinary loop runs from the counter's
+/// current (start) value.
+fn lower_strided_tagged_fill_loop(
+    ctx: &mut FnCtx<'_>,
+    matched: StridedTaggedFill,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<bool> {
+    let arr_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.array_id))?;
+    let start_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.counter_id))?;
+    let end_box = lower_expr(ctx, &matched.bound)?;
+    let step_box = lower_expr(ctx, &matched.step)?;
+    let result = ctx.block().call(
+        I64,
+        "js_array_fill_range_strided_tagged",
+        &[
+            (DOUBLE, &arr_box),
+            (DOUBLE, &start_box),
+            (DOUBLE, &end_box),
+            (DOUBLE, &step_box),
+            (I64, &matched.value_bits),
+        ],
+    );
+    let succeeded = ctx.block().icmp_sge(I64, &result, "0");
+    let success_idx = ctx.new_block("strided_fill.success");
+    let fallback_idx = ctx.new_block("strided_fill.fallback");
+    let merge_idx = ctx.new_block("strided_fill.merge");
+    let success_label = ctx.block_label(success_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block()
+        .cond_br(&succeeded, &success_label, &fallback_label);
+
+    ctx.current_block = success_idx;
+    let final_counter = ctx.block().sitofp(I64, &result, DOUBLE);
+    if let Some(slot) = ctx.locals.get(&matched.counter_id).cloned() {
+        ctx.block().store(DOUBLE, &final_counter, &slot);
+    }
+    if let Some(slot) = ctx.i32_counter_slots.get(&matched.counter_id).cloned() {
+        let final_i32 = ctx.block().trunc(I64, &result, I32);
+        ctx.block().store(I32, &final_i32, &slot);
+    }
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = fallback_idx;
+    lower_for_after_init(
+        ctx,
+        init,
+        condition,
+        update,
+        body,
+        "for.strided_fill_fallback",
+    )?;
+    if !ctx.block().is_terminated() {
+        ctx.block().br(&merge_label);
+    }
+    ctx.current_block = merge_idx;
+    Ok(true)
+}
+
 /// Collect the body's numeric reduce accumulators for a packed fast clone
 /// and emit one Number tag test each in the current (fast preheader) block,
 /// branching to the slow preheader when any holds a non-Number — the
@@ -6285,6 +6494,18 @@ pub(crate) fn lower_for(
 
     if let Some(matched) = match_numeric_range_add_loop(ctx, init, condition, update, body) {
         if lower_numeric_range_add_loop(ctx, matched, init, condition, update, body)? {
+            return Ok(());
+        }
+    }
+
+    // The sieve idiom: `for (j = <anything>; j < B; j += S) arr[j] = <const>`.
+    // One bulk-kernel call replaces a per-element inline guard chain over a
+    // receiver that cannot change mid-loop. Init shape is irrelevant — it was
+    // lowered above, so the counter local already holds the start value and
+    // the kernel reads it from there (the same trick `numeric_range_add`
+    // uses for `j = i * i`).
+    if let Some(matched) = match_strided_tagged_fill_loop(ctx, condition, update, body) {
+        if lower_strided_tagged_fill_loop(ctx, matched, init, condition, update, body)? {
             return Ok(());
         }
     }

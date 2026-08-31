@@ -176,7 +176,9 @@ pub use self::iterator::{
     js_array_spread_append, js_for_of_to_array, js_get_async_iterator, js_iterator_to_array,
 };
 pub use self::join::{js_array_join, js_array_join_value};
-pub use self::numeric_range::{js_array_numeric_range_add, js_array_numeric_range_add_len};
+pub use self::numeric_range::{
+    js_array_fill_range_strided_tagged, js_array_numeric_range_add, js_array_numeric_range_add_len,
+};
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
     array_prototype_addr, object_prototype_addr, object_prototype_addr_matches,

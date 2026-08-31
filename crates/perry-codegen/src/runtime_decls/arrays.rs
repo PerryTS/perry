@@ -77,6 +77,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
         I64,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_array_fill_range_strided_tagged",
+        I64,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE, I64],
+    );
     module.declare_function("js_array_set_string_key", I64, &[I64, I64, DOUBLE]);
     module.declare_function("js_array_set_index_or_string", I64, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_array_mark_arguments_object", I64, &[I64]);

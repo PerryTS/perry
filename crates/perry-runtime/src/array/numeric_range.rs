@@ -134,3 +134,114 @@ static KEEP_ARRAY_NUMERIC_RANGE_ADD: extern "C" fn(f64, f64, f64, f64) -> i64 =
 #[used]
 static KEEP_ARRAY_NUMERIC_RANGE_ADD_LEN: extern "C" fn(f64, f64, f64) -> i64 =
     js_array_numeric_range_add_len;
+
+/// Strided constant fill: `for (let j = start; j < end; j += step) arr[j] = C`
+/// where `C` is a compile-time non-pointer constant (boolean, null,
+/// undefined, or a number), passed as its NaN-box bits.
+///
+/// The sieve idiom. Per-element, the source loop pays the inline dense-store
+/// guard chain (~10 header/flag/bounds checks) for a receiver that cannot
+/// change mid-loop; this validates the receiver once and stores in a tight
+/// native loop.
+///
+/// Same result contract as `array_numeric_range_add_impl`:
+///   * `>= 0`  -- whole strided window stored; value is the counter on exit
+///     (the first `j >= end`).
+///   * `-1`    -- receiver-level decline; nothing stored. Declines: non-array
+///     receivers, frozen/sealed/descriptor arrays, raw-f64-layout arrays
+///     (writing tag bits into unboxed-double storage would corrupt it),
+///     an active incremental-mark phase (overwriting pointer slots then
+///     needs the deletion barrier the generic store path emits), and
+///     out-of-range windows.
+///
+/// There is no partial return: every slot in the window is overwritten with
+/// the same constant, so there is no per-slot failure mode once the receiver
+/// qualifies.
+#[no_mangle]
+pub unsafe extern "C" fn js_array_fill_range_strided_tagged(
+    receiver: f64,
+    start: f64,
+    end: f64,
+    step: f64,
+    value_bits: u64,
+) -> i64 {
+    let receiver_value = crate::value::JSValue::from_bits(receiver.to_bits());
+    if !receiver_value.is_pointer() {
+        return -1;
+    }
+    let raw = receiver_value.as_pointer::<ArrayHeader>() as usize;
+    let Some(header) = (crate::value::addr_class::try_read_gc_header(raw)) else {
+        return -1;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+        return -1;
+    }
+    let arr = clean_arr_ptr_mut(raw as *mut ArrayHeader);
+    if arr.is_null() {
+        return -1;
+    }
+
+    let to_u32 = |v: f64| -> Option<u32> {
+        let n = value_bits_to_number(v.to_bits())?;
+        if !n.is_finite() || n.fract() != 0.0 || !(0.0..=i32::MAX as f64).contains(&n) {
+            return None;
+        }
+        Some(n as u32)
+    };
+    let (Some(start), Some(end), Some(step)) = (to_u32(start), to_u32(end), to_u32(step)) else {
+        return -1;
+    };
+    if step == 0 {
+        return -1;
+    }
+
+    let flags = array_object_flags(arr);
+    if flags
+        & (crate::gc::OBJ_FLAG_FROZEN
+            | crate::gc::OBJ_FLAG_SEALED
+            | crate::gc::OBJ_FLAG_NO_EXTEND
+            | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS)
+        != 0
+    {
+        return -1;
+    }
+    // Tag bits stored into raw-f64 storage would be read back as doubles.
+    // The generic store path downgrades the layout properly; decline here.
+    if crate::array::js_array_is_numeric_f64_layout(arr as *const ArrayHeader) != 0 {
+        return -1;
+    }
+    // Overwriting a slot that holds a heap pointer during an active
+    // incremental mark requires the deletion barrier the generic per-element
+    // store emits. Rare phase; take the ordinary loop there.
+    if crate::gc::PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT
+        .load(std::sync::atomic::Ordering::Relaxed)
+        != 0
+    {
+        return -1;
+    }
+
+    unsafe {
+        if end > (*arr).length || end > (*arr).capacity {
+            return -1;
+        }
+        if start >= end {
+            return i64::from(start);
+        }
+        let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut u64;
+        let mut index = start;
+        // GC_STORE_AUDIT(POINTER_FREE): the stored constant is a non-pointer
+        // NaN-box (boolean/null/undefined/number bits), the receiver's layout
+        // is boxed (raw-f64 declined above), and the incremental-mark phase
+        // was excluded, so no barrier or addref applies.
+        while index < end {
+            ptr::write(elements.add(index as usize), value_bits);
+            index += step;
+        }
+        i64::from(index)
+    }
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_ARRAY_FILL_RANGE_STRIDED_TAGGED: unsafe extern "C" fn(f64, f64, f64, f64, u64) -> i64 =
+    js_array_fill_range_strided_tagged;
