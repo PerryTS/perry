@@ -283,6 +283,23 @@ pub(crate) fn build_and_run_link(
     let mut source_well_known_libs = well_known_libs.to_vec();
     let mut seen_well_known = std::collections::HashSet::new();
     source_well_known_libs.retain(|path| seen_well_known.insert(path.clone()));
+    // #9276: replacement evidence includes final-link reachability, not just
+    // archive-index membership. ELF links are grouped to a fixed point
+    // (#8930), Mach-O's linker already revisits archives, and COFF registers
+    // lazy archive symbols globally. An unknown future linker stays
+    // conservative and keeps the wrapper-local provider.
+    let is_macos =
+        matches!(target, Some("macos")) || (target.is_none() && cfg!(target_os = "macos"));
+    let stdlib_resolves_retained_wrapper_refs = (ctx.needs_stdlib || is_windows)
+        && (is_linux
+            || is_android
+            || is_harmonyos
+            || is_macos
+            || is_ios
+            || is_visionos
+            || is_watchos
+            || is_tvos
+            || is_windows);
     let prepare_well_known = || {
         let cacheable = std::cell::Cell::new(true);
         let paths = source_well_known_libs
@@ -328,15 +345,19 @@ pub(crate) fn build_and_run_link(
                 // (tokio, hyper_util, h2, rustls, reqwest, ring, std, core,
                 // …) — apply the general, fixed-point-safe dedup for those.
                 let wk = match stdlib_lib {
-                    Some(stdlib) => strip_bundled_shared_deps_from_well_known_lib(&wk, stdlib)
-                        .unwrap_or_else(|e| {
-                            cacheable.set(false);
-                            eprintln!(
-                                "[strip-dedup] shared-deps drop skipped for {} (non-fatal): {e}",
-                                wk.display()
-                            );
-                            wk.clone()
-                        }),
+                    Some(stdlib) => strip_bundled_shared_deps_from_well_known_lib(
+                        &wk,
+                        stdlib,
+                        stdlib_resolves_retained_wrapper_refs,
+                    )
+                    .unwrap_or_else(|e| {
+                        cacheable.set(false);
+                        eprintln!(
+                            "[strip-dedup] shared-deps drop skipped for {} (non-fatal): {e}",
+                            wk.display()
+                        );
+                        wk.clone()
+                    }),
                     None => wk.clone(),
                 };
                 strip_duplicate_objects_from_well_known_lib(&wk).unwrap_or_else(|error| {

@@ -1609,9 +1609,15 @@ pub(super) fn dedup_ui_lib_against_linked_libs(
 /// itself can't be removed. Fully eliminates duplicates for simpler
 /// well-known libraries (e.g. `ioredis`, `net`, `ws`) whose bundled
 /// dependency graphs are smaller.
+///
+/// `replacement_is_link_reachable` records a final-link property, not an
+/// archive property (#9276). When false, a matching stdlib armap entry cannot
+/// satisfy references opened by retained wrapper members, so their local
+/// provider must survive regardless of the indexed replacement surface.
 pub(super) fn strip_bundled_shared_deps_from_well_known_lib(
     lib_path: &PathBuf,
     stdlib_lib: &Path,
+    replacement_is_link_reachable: bool,
 ) -> Result<PathBuf> {
     let lib_name = lib_path.file_name().and_then(|f| f.to_str()).unwrap_or("?");
 
@@ -1713,6 +1719,7 @@ pub(super) fn strip_bundled_shared_deps_from_well_known_lib(
         &defined_by_member,
         &undefined_by_member,
         &replacement_defined_by_candidate,
+        replacement_is_link_reachable,
     );
     if to_remove.is_empty() {
         return Ok(lib_path.clone());
@@ -1776,7 +1783,16 @@ fn shared_dep_members_to_remove(
         String,
         std::collections::HashSet<String>,
     >,
+    replacement_is_link_reachable: bool,
 ) -> std::collections::BTreeSet<String> {
+    // If the final link cannot reach the replacement archive after a retained
+    // wrapper opens a reference, its armap proves nothing about substituting
+    // any candidate. Keep the wrapper intact; external user-object references
+    // are not part of `undefined_by_member`, so per-symbol pruning would not be
+    // conservative in this link shape (#9276).
+    if !replacement_is_link_reachable {
+        return std::collections::BTreeSet::new();
+    }
     let empty = std::collections::HashSet::new();
     let mut to_remove = candidates.clone();
     loop {
@@ -1791,7 +1807,7 @@ fn shared_dep_members_to_remove(
             let replacement_defined = replacement_defined_by_candidate.get(c).unwrap_or(&empty);
             let still_needed = kept_undefined.iter().any(|s| {
                 defined.contains(*s)
-                    && (!replacement_defined.contains(*s) || requires_bundled_wrapper_provider(s))
+                    && (!replacement_defined.contains(*s) || requires_bundled_native_companion(s))
             });
             if still_needed {
                 to_remove.remove(c);
@@ -1815,22 +1831,6 @@ fn shared_dep_members_to_remove(
 /// links fail with hundreds of undefined `ring_core_*` references.
 fn requires_bundled_native_companion(symbol: &str) -> bool {
     symbol.trim_start_matches('_').starts_with("ring_core_")
-}
-
-/// Symbols whose same-named stdlib archive-index entry is not sufficient
-/// replacement evidence for a wrapper-first link.
-///
-/// `futures_channel::mpsc::SenderTask::notify` can appear in the matching
-/// stdlib member's archive index while remaining unavailable to retained
-/// `perry-ext-http` receiver CGUs in the final link (#9121). Keep the wrapper's
-/// provider whenever one of those retained CGUs references it. Rust v0
-/// mangling preserves identifier text, so the predicate works on the raw
-/// symbol spelling used by `llvm-nm` as well as on demangled test fixtures.
-fn requires_bundled_wrapper_provider(symbol: &str) -> bool {
-    requires_bundled_native_companion(symbol)
-        || (symbol.contains("futures_channel")
-            && symbol.contains("SenderTask")
-            && symbol.contains("notify"))
 }
 
 mod object_format;
