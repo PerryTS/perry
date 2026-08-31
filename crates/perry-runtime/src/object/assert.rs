@@ -259,19 +259,18 @@ fn expected_error_matches(thrown: f64, expected: f64) -> bool {
     if is_null_or_undefined(expected) {
         return true;
     }
+    // A RegExp matcher is a complete, terminal matcher category: Node tests it
+    // against `String(thrown)` and nothing else, and a non-match is an
+    // AssertionError — never a fallthrough to the instanceof /
+    // constructor-name / validation-function checks below (`instanceof`
+    // against a RegExp throws a TypeError). Retrying the pattern against
+    // `thrown.message` was a second, non-Node chance that wrongly accepted
+    // anchored patterns: `/^nope/` matched `new Error("nope")` even though
+    // `String(err)` is `"Error: nope"`. A RegExp *value on a validator key*
+    // (`{ message: /bad/ }`) is a different thing and is still tested against
+    // that property in `object_matcher_matches`.
     if let Some(matches_thrown) = regex_test_value(expected, thrown) {
-        if matches_thrown {
-            return true;
-        }
-        let message = read_property(thrown, "message");
-        if !is_null_or_undefined(message) && regex_test_value(expected, message).unwrap_or(false) {
-            return true;
-        }
-        // A RegExp is a complete matcher category. Falling through would
-        // incorrectly pass the RegExp object to `instanceof`, which throws a
-        // TypeError instead of letting assert.throws/assert.rejects report an
-        // AssertionError for a non-matching pattern.
-        return false;
+        return matches_thrown;
     }
     // A plain object validator (e.g. `{ code: "ERR_X" }`) is a property-bag
     // matcher, never a constructor — its own enumerable keys must each equal
@@ -1310,45 +1309,60 @@ pub extern "C" fn js_assert_if_error(value: f64) -> f64 {
     throw_assertion(if_error_message(value), value, null_f64(), "ifError", false)
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(all(test, feature = "regex-engine"))]
+mod regexp_matcher_tests {
     use super::*;
 
-    extern "C" fn throw_nope(_closure: *const crate::closure::ClosureHeader) -> f64 {
-        let message = crate::string::js_string_from_bytes(b"nope".as_ptr(), 4);
-        let error = crate::error::js_error_new_with_message(message);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    fn jsstr(bytes: &[u8]) -> *mut crate::StringHeader {
+        crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
     }
 
+    fn error_value(message: &[u8]) -> f64 {
+        let err = crate::error::js_error_new_with_message(jsstr(message));
+        crate::value::js_nanbox_pointer(err as i64)
+    }
+
+    fn regexp_value(pattern: &[u8]) -> f64 {
+        let re = crate::regex::js_regexp_new(jsstr(pattern), jsstr(b""));
+        crate::value::js_nanbox_pointer(re as i64)
+    }
+
+    /// Node tests a RegExp matcher against `String(thrown)` only. An anchored
+    /// pattern that matches the bare message must NOT match, because
+    /// `String(new Error("nope"))` is `"Error: nope"`.
     #[test]
-    fn throws_non_matching_regexp_reports_assertion_error() {
-        let block = crate::closure::js_closure_alloc(throw_nope as *const u8, 0);
-        crate::closure::js_register_closure_arity(throw_nope as *const u8, 0);
-        let pattern = crate::string::js_string_from_bytes(b"will-not-match".as_ptr(), 14);
-        let flags = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
-        let regexp = crate::regex::js_regexp_new(pattern, flags);
+    fn regexp_matcher_tests_the_stringified_error_not_the_message() {
+        let thrown = error_value(b"nope");
+        assert!(!expected_error_matches(thrown, regexp_value(b"^nope")));
+        assert!(expected_error_matches(
+            thrown,
+            regexp_value(b"^Error: nope$")
+        ));
+    }
 
-        let trap = crate::exception::js_try_push();
-        let jumped = unsafe { crate::ffi::setjmp::setjmp(trap as *mut c_int) };
-        if jumped == 0 {
-            js_assert_throws(
-                crate::value::js_nanbox_pointer(block as i64),
-                crate::value::js_nanbox_pointer(regexp as i64),
-                undefined_f64(),
-            );
-            panic!("a non-matching RegExp must throw");
-        }
+    /// A RegExp is a terminal matcher category: a non-match returns `false` so
+    /// the caller reports an `AssertionError`, instead of falling through to
+    /// `js_instanceof_dynamic(thrown, regexp)`, which throws a `TypeError`.
+    #[test]
+    fn non_matching_regexp_is_terminal() {
+        assert!(!expected_error_matches(
+            error_value(b"nope"),
+            regexp_value(b"will-not-match")
+        ));
+    }
 
-        crate::exception::js_try_end();
-        let error = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        assert_eq!(
-            value_to_string(read_property(error, "name")),
-            "AssertionError"
+    /// A RegExp *value on a validator key* is a different matcher and is still
+    /// tested against that property, not against the stringified error.
+    #[test]
+    fn validator_key_regexp_still_tests_the_property() {
+        let thrown = error_value(b"bad value");
+        let validator = crate::object::js_object_alloc(0, 1);
+        crate::object::js_object_set_field_by_name(
+            validator,
+            jsstr(b"message"),
+            regexp_value(b"^bad"),
         );
-        assert_eq!(
-            value_to_string(read_property(error, "code")),
-            "ERR_ASSERTION"
-        );
+        let validator = crate::value::js_nanbox_pointer(validator as i64);
+        assert!(expected_error_matches(thrown, validator));
     }
 }
