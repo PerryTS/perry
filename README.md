@@ -38,13 +38,17 @@ Ahead-of-time machine code means no engine boot and no JIT warmup — and on mea
 | Image convolution (4K, 5×5 Gaussian) | **354 ms** | 1,207 ms — *3.4× slower* | 915 ms — *2.6× slower* | 392 ms |
 | Fibonacci (recursive calls) | **309 ms** | 987 ms — *3.2× slower* | 518 ms — *1.7× slower* | 316 ms |
 | JSON pipeline (100 records) | **39 ms** | 144 ms — *3.7× slower* | 51 ms — *1.3× slower* | 34 ms |
+| JSON pipeline (500k records, 108 MB) | **1,649 ms** | 1,010 ms — *1.6× faster* | 647 ms — *2.5× faster* | 604 ms |
 | Object allocation (1M objects) | **2 ms** | 8 ms — *4× slower* | 6 ms — *3× slower* | <1 ms |
 | Array write (10M elements) | **3 ms** | 9 ms — *3× slower* | 6 ms — *2× slower* | 7 ms |
 | Peak memory (JSON pipeline) | **3.5 MB** | 36 MB — *10× more* | 11 MB — *3× more* | 1.2 MB |
 
 Look at the Rust column again: on convolution, fibonacci, and the array-write loop, TypeScript compiled with Perry **runs even with — or ahead of — Rust**. And Electron isn't in the table because it doesn't compete here: it ships a whole browser engine per app, where a comparable Perry app is a single-digit-MB native binary.
 
-<sub>Sources: convolution & JSON from the [systems-language report](benchmarks/honest_bench/REPORT.md); fibonacci, object allocation & array write from the [polyglot sweep](benchmarks/polyglot/RESULTS.md) (Perry default mode, no fast-math).</sub>
+<sub>Sources: convolution & JSON from the [systems-language report](https://github.com/PerryTS/perry/blob/7beb3a50ca/benchmarks/honest_bench/REPORT.md)
+— pinned to `7beb3a50ca`, the last revision whose artifact contains these values; the copy at HEAD was regenerated in #7641 on a host
+where the harness clock was invalid and now reads 0.0 ms in every timing cell (see this PR). Re-pin to `main` once it is regenerated.
+Fibonacci, object allocation & array write from the [polyglot sweep](benchmarks/polyglot/RESULTS.md) (Perry default mode, no fast-math).</sub>
 
 We publish *everything*, including the workloads where V8's JIT still beats us — no cherry-picked table can survive an open harness. Run it yourself: `./benchmarks/run_public_baseline.sh` ([methodology](benchmarks/README.md)).
 
