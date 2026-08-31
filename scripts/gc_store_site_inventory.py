@@ -1429,9 +1429,13 @@ def run_self_tests() -> int:
         )
         return {
             "crates/perry-codegen/src/expr/write_barrier.rs": (
+                # Three, matching CODEGEN_BARRIERED_BINDINGS since #9246 added
+                # `emit_scalar_aware_store_gated_on_pointerness`. The baseline has
+                # to track the binding or V-P1 goes red and V-P9 stops firing.
                 "fn a() {\n"
                 "    // GC_STORE_AUDIT(BARRIERED): planted one\n"
                 "    // GC_STORE_AUDIT(BARRIERED): planted two\n"
+                "    // GC_STORE_AUDIT(BARRIERED): planted three\n"
                 "}\n"
             ),
             "crates/perry-codegen/src/expr/array_push.rs": (
@@ -1522,7 +1526,7 @@ def run_self_tests() -> int:
 
     t = dict(base)
     t["crates/perry-codegen/src/expr/write_barrier.rs"] += (
-        "fn b() {\n    // GC_STORE_AUDIT(BARRIERED): planted third\n}\n"
+        "fn b() {\n    // GC_STORE_AUDIT(BARRIERED): planted fourth\n}\n"
     )
     expect_verify("V-P9 bound-file count drift", t, "the binding pins")
 
