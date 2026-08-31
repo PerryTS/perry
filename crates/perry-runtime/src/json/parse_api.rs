@@ -131,8 +131,8 @@ unsafe fn try_parse_deep_iterative(
         let bytes = {
             let moved = parse_root_get(text_root);
             let hdr = moved.as_string_ptr();
-            let data_ptr = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
-            std::slice::from_raw_parts(data_ptr, len)
+            // Canonical payload accessor, not an open-coded header offset.
+            std::slice::from_raw_parts(crate::string::string_data(hdr), len)
         };
         let result = crate::json_tape::materialize_iterative(tape_entries, bytes);
         if let Some(value) = result {
@@ -205,8 +205,8 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
     let bytes = {
         let moved = crate::json::parse_root_get(text_root);
         let hdr = moved.as_string_ptr();
-        let data_ptr = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
-        std::slice::from_raw_parts(data_ptr, len)
+        // Canonical payload accessor, not an open-coded header offset.
+        std::slice::from_raw_parts(crate::string::string_data(hdr), len)
     };
     let mut parser = DirectParser::new(bytes);
     let result = parser.parse_value();
@@ -378,8 +378,8 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     let bytes = {
         let moved = crate::json::parse_root_get(text_root);
         let hdr = moved.as_string_ptr();
-        let data_ptr = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
-        std::slice::from_raw_parts(data_ptr, len)
+        // Canonical payload accessor, not an open-coded header offset.
+        std::slice::from_raw_parts(crate::string::string_data(hdr), len)
     };
 
     let mut parser = DirectParser::new(bytes);
@@ -575,8 +575,8 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     let bytes = {
         let moved = crate::json::parse_root_get(text_root);
         let hdr = moved.as_string_ptr();
-        let data_ptr = (hdr as *const u8).add(std::mem::size_of::<StringHeader>());
-        std::slice::from_raw_parts(data_ptr, len)
+        // Canonical payload accessor, not an open-coded header offset.
+        std::slice::from_raw_parts(crate::string::string_data(hdr), len)
     };
 
     let mut parser = DirectParser::with_shape(bytes, shape);
