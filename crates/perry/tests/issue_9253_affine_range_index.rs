@@ -114,7 +114,11 @@ fn an_affine_index_admits_the_range_clone_and_agrees_with_the_generic_path() {
          the receiver guard re-executes per access"
     );
     for moving_gc in [false, true] {
-        assert_stdout(&run(&bin, dir.path(), moving_gc), "matmul:2983\n", moving_gc);
+        assert_stdout(
+            &run(&bin, dir.path(), moving_gc),
+            "matmul:2983\n",
+            moving_gc,
+        );
     }
 }
 
@@ -138,7 +142,11 @@ console.log("overrun:" + overrun(a, 40));
     let dir = tempfile::tempdir().expect("tempdir");
     let (bin, _) = compile(dir.path(), source);
     for moving_gc in [false, true] {
-        assert_stdout(&run(&bin, dir.path(), moving_gc), "overrun:NaN\n", moving_gc);
+        assert_stdout(
+            &run(&bin, dir.path(), moving_gc),
+            "overrun:NaN\n",
+            moving_gc,
+        );
     }
 }
 

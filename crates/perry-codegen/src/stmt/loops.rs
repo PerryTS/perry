@@ -872,7 +872,11 @@ fn emit_packed_numeric_accumulator_admission(
     offset_reads_inlined: bool,
 ) -> PackedAccumulatorScope {
     let accumulators = super::stable_packed_accumulator::collect_numeric_accumulators(
-        ctx, body, array_id, counter_id, offset_reads_inlined,
+        ctx,
+        body,
+        array_id,
+        counter_id,
+        offset_reads_inlined,
     );
     // Integer (`c++`) accumulators admit independently of the float set —
     // a pure count loop has no float accumulator at all.
