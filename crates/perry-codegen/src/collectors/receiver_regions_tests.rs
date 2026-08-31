@@ -769,6 +769,12 @@ fn the_inventory_flags_exactly_the_tables_whose_unwind_safety_is_external() {
         .map(|row| row.table)
         .collect();
 
+    let with_reasons: Vec<String> = inventory()
+        .iter()
+        .filter(|row| flagged.contains(&row.table))
+        .map(|row| format!("{} <- {}", row.table, row.unwind_safe_by))
+        .collect();
+
     assert_eq!(
         flagged,
         vec![
@@ -788,8 +794,32 @@ fn the_inventory_flags_exactly_the_tables_whose_unwind_safety_is_external() {
         ],
         "the set of tables relying on out-of-band unwind safety changed; if a tier \
          gained or lost a structural guarantee, update the row AND its unwind_safe_by \
-         note with the code that changed"
+         note with the code that changed.\nCurrent reasons:\n  {}",
+        with_reasons.join("\n  ")
     );
+}
+
+/// Every row must say how its unwind safety is obtained, and a flagged row's
+/// note is the whole point of the flag — it names the mechanism that lives
+/// outside the boundary vocabulary. An empty note would make the inventory a
+/// list of names instead of an argument.
+#[test]
+fn every_inventory_row_explains_how_its_unwind_safety_is_obtained() {
+    for row in inventory() {
+        assert!(
+            !row.unwind_safe_by.trim().is_empty(),
+            "{} has no unwind_safe_by note",
+            row.table
+        );
+        // A claim that names no mechanism cannot be checked against the code
+        // later, which is how these notes go stale without anyone noticing.
+        assert!(
+            row.unwind_safe_by.len() > 20,
+            "{}'s note is too terse to check against the code: {:?}",
+            row.table,
+            row.unwind_safe_by
+        );
+    }
 }
 
 /// Every scalar-relation table must be clean under every ender — if one is
