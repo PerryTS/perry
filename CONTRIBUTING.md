@@ -135,6 +135,38 @@ on Node 22 while the suite grew Node 24/26 features and hid 14 tests that way.
 Any PR touching `crates/` also needs a `changelog.d/<PR-number>-<slug>.md`
 fragment; see [changelog.d/README.md](changelog.d/README.md).
 
+**Never cancel the CI run of the PR you are about to merge.** Cancelling other
+runs to free capacity is fine and expected on a 20-slot org. Cancelling the run
+of the PR being merged is not, because a cancelled job is neither a pass nor a
+failure, and two separate protections go quiet at once:
+
+* **`pr-gate` never reports**, so the single required context is absent rather
+  than red. That is what invites the admin bypass, and the bypass is what lands
+  the change.
+* **The changelog fragment stops being required.** That check is a step inside
+  the `lint` job, conditioned on `github.event_name == 'pull_request'`, so a
+  cancelled `lint` skips it silently — the PR merges with no fragment, and the
+  omission is invisible until the release notes are cut weeks later and the
+  change simply is not in them.
+
+The gate logic itself is correct and does not need changing: `gate` in
+`.github/workflows/test.yml` runs `if: always()` and treats `failure` **and**
+`cancelled` as failures, precisely so a cancelled dependency cannot read as
+green. Every incident here has been a bypass of a working gate, so resist the
+urge to "fix" the gate.
+
+Both failure modes were observed on the same day. #9169 merged with `lint`
+failing and five jobs cancelled; its gap shards never ran and it broke method
+dispatch and property lookup on `main` for four and a half hours (#9247).
+Separately, #9215, #9230 and #9235 each merged with `lint` **cancelled** — all
+three touched `crates/`, none carried a fragment, and the work is consequently
+absent from its release notes.
+
+If you are reviewing status before a merge, note that "no failing checks" is
+not "all checks ran": `CANCELLED` is neither, and tooling that filters for
+`FAILURE` will report a clean bill of health for a PR whose gate never
+executed.
+
 UI doc-tests launch real windows. On headless hosts, wrap in `xvfb-run -a` (Linux) or rely on `PERRY_UI_TEST_MODE=1` which auto-exits after one frame.
 
 ## Asking questions
