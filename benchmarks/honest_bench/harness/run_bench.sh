@@ -81,6 +81,24 @@ PYTHON
 
   local wall_ns=$((end_ns - start_ns))
 
+  # A measured wall time must be strictly positive: `start_ns` and `end_ns`
+  # bracket a child process that actually ran. A non-positive delta means the
+  # clock pair is not comparable (e.g. the two `python3` samples did not share
+  # a reference point), so the sample carries no timing information at all.
+  #
+  # Without this gate such a sample is written to results.json, survives
+  # report.py's `exit_code == 0` filter, and is published as a median. That is
+  # how the 2026-08-08 regeneration (#7641) shipped 150 negative wall_ms rows
+  # and a REPORT.md whose every timing cell reads 0.0 ms.
+  if (( wall_ns <= 0 )); then
+    echo "run_bench.sh: implausible wall time for ${WORKLOAD}/${LANGUAGE} run ${run}:" >&2
+    echo "  start_ns=${start_ns} end_ns=${end_ns} delta=${wall_ns} ns" >&2
+    echo "  The monotonic clock samples are not comparable across processes on" >&2
+    echo "  this host. Refusing to record a timing-free sample." >&2
+    rm -f "$tmp_out" "$tmp_err"
+    exit 3
+  fi
+
   local stdout_first stdout_last
   stdout_first=$(head -1 "$tmp_out" 2>/dev/null | head -c 200 || true)
   stdout_last=$(tail -1  "$tmp_out" 2>/dev/null | head -c 200 || true)

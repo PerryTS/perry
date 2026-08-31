@@ -111,6 +111,23 @@ def stats_for(rows):
     wall = [r["wall_ms"]    for r in rows if r["exit_code"] == 0]
     rss  = [r["max_rss_kb"] for r in rows if r["exit_code"] == 0]
     failures = sum(1 for r in rows if r["exit_code"] != 0)
+
+    # `exit_code == 0` alone is not enough to make a sample meaningful: a run
+    # can succeed (correct stdout, correct checksum) and still carry a wall
+    # time that is physically impossible. Report those loudly instead of
+    # taking their median -- a median of zeros renders as a confident "0.0 ms"
+    # table cell and reads exactly like a real result.
+    implausible = [w for w in wall if w <= 0]
+    if implausible:
+        raise SystemExit(
+            f"report.py: {len(implausible)} of {len(wall)} successful runs have a "
+            f"non-positive wall_ms (min {min(implausible)}).\n"
+            "  results.json carries no usable timing data; a report generated from "
+            "it would be fiction.\n"
+            "  Re-run ./run.sh on this host and check that run_bench.sh's monotonic "
+            "clock samples are comparable across processes."
+        )
+
     if not wall:
         return None, None, None, None, failures
     return (
