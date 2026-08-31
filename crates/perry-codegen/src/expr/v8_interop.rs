@@ -1,6 +1,8 @@
 //! V8-fallback-module interop helpers + static-class-name resolution
 //! (extracted from `expr.rs`, issue #1098). Pure move — no logic changes.
 
+use std::borrow::Cow;
+
 use perry_hir::Expr;
 
 use super::FnCtx;
@@ -272,10 +274,10 @@ pub(crate) fn emit_v8_member_method_call(
 ///     `ns_id` is a namespace import local (`import * as ns from 'm';
 ///     new ns.Foo()`). The local id is mapped to its name via
 ///     `ctx.local_id_to_name`, then checked against
-///     `ctx.namespace_imports`. The property name is returned as the
-///     class name; the rest of the lower_new path resolves it via the
-///     usual `ctx.classes` lookup, which contains imported classes
-///     under their original (un-namespaced) names.
+///     `ctx.namespace_imports`. Namespace classes are returned under their
+///     collision-free `(namespace, member)` registry key; the rest of the
+///     lower_new path resolves that key through the usual `ctx.classes`
+///     lookup.
 fn is_global_object_expr(expr: &Expr) -> bool {
     match expr {
         Expr::GlobalGet(_) => true,
@@ -286,9 +288,9 @@ fn is_global_object_expr(expr: &Expr) -> bool {
     }
 }
 
-pub(crate) fn try_static_class_name<'a>(callee: &'a Expr, ctx: &FnCtx<'_>) -> Option<&'a str> {
+pub(crate) fn try_static_class_name<'a>(callee: &'a Expr, ctx: &FnCtx<'_>) -> Option<Cow<'a, str>> {
     match callee {
-        Expr::ClassRef(name) => Some(name.as_str()),
+        Expr::ClassRef(name) => Some(Cow::Borrowed(name.as_str())),
         // Refs #486: `new _X()` where `_X` is the inner self-binding name of
         // a class expression (e.g. `var X = class _X { ... new _X() ... }`)
         // lowers to `NewDynamic { callee: ExternFuncRef("_X") }` because the
@@ -299,12 +301,14 @@ pub(crate) fn try_static_class_name<'a>(callee: &'a Expr, ctx: &FnCtx<'_>) -> Op
         // compile_module entry. Without this, the call falls through to the
         // empty-object placeholder path with class_id=0 and method dispatch
         // breaks on the resulting instance.
-        Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name) => Some(name.as_str()),
+        Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name) => {
+            Some(Cow::Borrowed(name.as_str()))
+        }
         Expr::PropertyGet {
             object, property, ..
         } => {
             if is_global_object_expr(object.as_ref()) {
-                return Some(property.as_str());
+                return Some(Cow::Borrowed(property.as_str()));
             }
             // Namespace import: `import * as ns from 'm'; new ns.Foo()`.
             // The namespace object surfaces either as `LocalGet(id)` (mapped to
@@ -325,16 +329,22 @@ pub(crate) fn try_static_class_name<'a>(callee: &'a Expr, ctx: &FnCtx<'_>) -> Op
             // member as a closure value and run it via
             // `js_new_function_construct` (which also intercepts the builtin
             // global thunks, so re-exported builtins keep working).
-            let object_is_namespace = match object.as_ref() {
+            let namespace = match object.as_ref() {
                 Expr::LocalGet(id) => ctx
                     .local_id_to_name
                     .get(id)
-                    .is_some_and(|name| ctx.namespace_imports.contains(name)),
-                Expr::ExternFuncRef { name, .. } => ctx.namespace_imports.contains(name),
-                _ => false,
+                    .filter(|name| ctx.namespace_imports.contains(*name))
+                    .map(String::as_str),
+                Expr::ExternFuncRef { name, .. } if ctx.namespace_imports.contains(name) => {
+                    Some(name.as_str())
+                }
+                _ => None,
             };
-            if object_is_namespace && ctx.classes.contains_key(property.as_str()) {
-                return Some(property.as_str());
+            if let Some(namespace) = namespace {
+                let class_name = crate::namespace_member_class_key(namespace, property);
+                if ctx.classes.contains_key(&class_name) {
+                    return Some(Cow::Owned(class_name));
+                }
             }
             None
         }

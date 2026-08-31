@@ -232,7 +232,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // params from the decl-site snapshot. No-op for non-capturing
             // classes (no cap params to fill).
             if let Some(name) = try_static_class_name(callee.as_ref(), ctx) {
-                return crate::lower_call::lower_new_member_captured(ctx, name, args);
+                return crate::lower_call::lower_new_member_captured(ctx, name.as_ref(), args);
             }
 
             // date-fns `constructFrom(date, value)`:

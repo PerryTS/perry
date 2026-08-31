@@ -3826,7 +3826,20 @@ pub fn run_with_parse_cache(
                                         export_name,
                                     ));
                                 }
-                                if let Some(class) = exported_classes.get(&key) {
+                                // #9285: re-export renames keep the class
+                                // metadata under its origin name (`Child`), not
+                                // the namespace-visible alias (`PublicChild`).
+                                // The var path above already consults this
+                                // origin key; class registration must do the
+                                // same or `new ns.PublicChild(arg)` falls
+                                // through to a function wrapper and never runs
+                                // the class constructor.
+                                let imported_class = exported_classes.get(&key).or_else(|| {
+                                    origin_key_under_origin_name
+                                        .as_ref()
+                                        .and_then(|origin_key| exported_classes.get(origin_key))
+                                });
+                                if let Some(class) = imported_class {
                                     let class_prefix = canonical_class_source_prefix(
                                         class,
                                         &class_canonical_path,
@@ -4310,7 +4323,19 @@ pub fn run_with_parse_cache(
                                             ),
                                         );
                                     }
-                                    if let Some(class) = exported_classes.get(&key) {
+                                    // #9285: a renamed class re-export is
+                                    // indexed under its origin name, while this
+                                    // namespace exposes `export_name`. Resolve
+                                    // through the same origin key used for the
+                                    // var classification above so the scoped
+                                    // ImportedClass retains both identities.
+                                    let imported_class =
+                                        exported_classes.get(&key).or_else(|| {
+                                            origin_key_under_origin_name.as_ref().and_then(
+                                                |origin_key| exported_classes.get(origin_key),
+                                            )
+                                        });
+                                    if let Some(class) = imported_class {
                                         let class_prefix = canonical_class_source_prefix(
                                             class,
                                             &class_canonical_path,

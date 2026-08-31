@@ -578,7 +578,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
                 return Some(HirType::String);
             }
             if let Some(static_method_ty) = crate::expr::try_static_class_name(object, ctx)
-                .and_then(|class_name| ctx.classes.get(class_name))
+                .and_then(|class_name| ctx.classes.get(class_name.as_ref()))
                 .and_then(|class| {
                     class
                         .static_methods
