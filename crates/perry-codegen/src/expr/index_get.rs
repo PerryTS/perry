@@ -42,7 +42,10 @@ use super::{
 
 mod foreign_counter;
 mod guarded_array;
-pub(crate) use foreign_counter::{affine_index_fits_i64, packed_f64_loop_index_parts};
+pub(crate) use foreign_counter::{
+    affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
+    packed_f64_loop_index_parts,
+};
 use foreign_counter::{
     affine_packed_loop_read, emit_affine_index_i64, foreign_packed_loop_read,
     packed_f64_loop_offset_read,
@@ -787,6 +790,18 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
         if let Some(fact) = affine_packed_loop_read(ctx, *arr_id, index.as_ref()) {
             let arr_box = lower_expr(ctx, object)?;
             if let Some(idx64) = emit_affine_index_i64(ctx, index.as_ref(), fact.index_local_id) {
+                // Window proven at the loop's endpoints by the entry guard: a
+                // linear tree's value stays between its endpoint evaluations,
+                // both checked `< length <= 16M < 2^31`, so the clamp and the
+                // per-read bounds check are both implied — the read is a bare
+                // trunc + raw load, which is what lets LLVM strength-reduce
+                // and vectorize the loop.
+                if fact.window_validated {
+                    let idx_i32 = ctx.block().trunc(I64, &idx64, I32);
+                    return Ok(Some(lower_packed_f64_loop_index_get(
+                        ctx, *arr_id, &arr_box, &idx_i32, &fact, false,
+                    )));
+                }
                 // Unsigned: a negative index reads as a huge unsigned value and
                 // takes the side exit, so no static non-negativity proof is
                 // needed. The i32 ceiling keeps the truncation below exact.

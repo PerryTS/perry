@@ -36,10 +36,11 @@ pub(super) fn packed_loop_numeric_accumulators_enabled() -> bool {
 fn accumulator_rhs_is_numeric(
     ctx: &FnCtx<'_>,
     expr: &Expr,
-    array_id: u32,
+    array_ids: &std::collections::BTreeSet<u32>,
     counter_id: u32,
     offset_reads_inlined: bool,
     masked_reads_validated: bool,
+    affine_reads: bool,
     candidates: &std::collections::BTreeSet<u32>,
 ) -> bool {
     match expr {
@@ -48,7 +49,7 @@ fn accumulator_rhs_is_numeric(
             let Expr::LocalGet(a) = object.as_ref() else {
                 return false;
             };
-            if *a != array_id {
+            if !array_ids.contains(a) {
                 return false;
             }
             match index.as_ref() {
@@ -82,6 +83,13 @@ fn accumulator_rhs_is_numeric(
                         // in-window read is a genuine Number.
                         || (masked_reads_validated
                             && crate::collectors::static_index_window(index).is_some())
+                        // Classic affine mode (#9253 family): the read is
+                        // either a window-proven raw load or a checked load
+                        // that side-exits before producing a value — numeric
+                        // either way. Admission must mirror the matcher's,
+                        // via the shared predicate.
+                        || (affine_reads
+                            && super::loops::affine_leaf_admissible(ctx, index, counter_id))
                 }
             }
         }
@@ -92,28 +100,31 @@ fn accumulator_rhs_is_numeric(
             accumulator_rhs_is_numeric(
                 ctx,
                 left,
-                array_id,
+                array_ids,
                 counter_id,
                 offset_reads_inlined,
                 masked_reads_validated,
+                affine_reads,
                 candidates,
             ) && accumulator_rhs_is_numeric(
                 ctx,
                 right,
-                array_id,
+                array_ids,
                 counter_id,
                 offset_reads_inlined,
                 masked_reads_validated,
+                affine_reads,
                 candidates,
             )
         }
         Expr::NumberCoerce(operand) => accumulator_rhs_is_numeric(
             ctx,
             operand,
-            array_id,
+            array_ids,
             counter_id,
             offset_reads_inlined,
             masked_reads_validated,
+            affine_reads,
             candidates,
         ),
         Expr::Unary { op, operand } => {
@@ -123,10 +134,11 @@ fn accumulator_rhs_is_numeric(
             ) && accumulator_rhs_is_numeric(
                 ctx,
                 operand,
-                array_id,
+                array_ids,
                 counter_id,
                 offset_reads_inlined,
                 masked_reads_validated,
+                affine_reads,
                 candidates,
             )
         }
@@ -140,28 +152,31 @@ fn accumulator_rhs_is_numeric(
         | Expr::MathFround(v) => accumulator_rhs_is_numeric(
             ctx,
             v,
-            array_id,
+            array_ids,
             counter_id,
             offset_reads_inlined,
             masked_reads_validated,
+            affine_reads,
             candidates,
         ),
         Expr::MathImul(l, r) | Expr::MathPow(l, r) => {
             accumulator_rhs_is_numeric(
                 ctx,
                 l,
-                array_id,
+                array_ids,
                 counter_id,
                 offset_reads_inlined,
                 masked_reads_validated,
+                affine_reads,
                 candidates,
             ) && accumulator_rhs_is_numeric(
                 ctx,
                 r,
-                array_id,
+                array_ids,
                 counter_id,
                 offset_reads_inlined,
                 masked_reads_validated,
+                affine_reads,
                 candidates,
             )
         }
@@ -169,10 +184,11 @@ fn accumulator_rhs_is_numeric(
             accumulator_rhs_is_numeric(
                 ctx,
                 v,
-                array_id,
+                array_ids,
                 counter_id,
                 offset_reads_inlined,
                 masked_reads_validated,
+                affine_reads,
                 candidates,
             )
         }),
@@ -323,10 +339,16 @@ pub(super) fn collect_local_writes<'a>(
 pub(super) fn collect_numeric_accumulators(
     ctx: &FnCtx<'_>,
     body: &[Stmt],
-    array_id: u32,
+    array_ids: &std::collections::BTreeSet<u32>,
     counter_id: u32,
     offset_reads_inlined: bool,
     masked_reads_validated: bool,
+    // Reads with an affine index over the counter qualify as numeric leaves:
+    // inside the clone they are either window-proven raw loads or checked
+    // loads whose failure side-exits before producing a value. The predicate
+    // must match the matcher's admission exactly (the #9259 drift rule) —
+    // `affine_leaf_admissible` is shared for that reason.
+    affine_reads: bool,
 ) -> Vec<u32> {
     if !packed_loop_numeric_accumulators_enabled() {
         return Vec::new();
@@ -337,7 +359,7 @@ pub(super) fn collect_numeric_accumulators(
         .keys()
         .copied()
         .filter(|id| {
-            *id != array_id
+            !array_ids.contains(id)
                 && *id != counter_id
                 && ctx.locals.contains_key(id)
                 && !ctx.boxed_vars.contains(id)
@@ -356,10 +378,11 @@ pub(super) fn collect_numeric_accumulators(
                     Some(rhs) => accumulator_rhs_is_numeric(
                         ctx,
                         rhs,
-                        array_id,
+                        array_ids,
                         counter_id,
                         offset_reads_inlined,
                         masked_reads_validated,
+                        affine_reads,
                         &candidates,
                     ),
                     // `Update` (++/--): ToNumeric(Number) ± 1 is a Number.

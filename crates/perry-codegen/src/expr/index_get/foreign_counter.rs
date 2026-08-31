@@ -117,6 +117,24 @@ pub(crate) fn packed_f64_loop_offset_read(
 /// computed in i128 at match time, so admission costs nothing at run time:
 /// a tree whose worst case fits i63 cannot wrap, and anything else declines
 /// to the generic path.
+
+/// How many times the counter appears in an affine tree. A tree LINEAR in
+/// the counter (exactly one occurrence, and only under Add/Sub/Mul with
+/// invariant co-factors) takes its extreme values at the loop's endpoints,
+/// which is what licenses the endpoint window proof in the entry guard. A
+/// tree where the counter appears twice (`k * k`) is not monotone and keeps
+/// its per-read bounds check.
+pub(crate) fn affine_counter_occurrences(index: &Expr, counter_id: u32) -> u32 {
+    match index {
+        Expr::LocalGet(id) if *id == counter_id => 1,
+        Expr::Binary { left, right, .. } => {
+            affine_counter_occurrences(left, counter_id)
+                + affine_counter_occurrences(right, counter_id)
+        }
+        _ => 0,
+    }
+}
+
 pub(crate) fn affine_index_magnitude_bound(index: &Expr) -> Option<i128> {
     match index {
         Expr::Integer(v) => Some((*v as i128).unsigned_abs().min(1 << 31) as i128),
@@ -197,21 +215,36 @@ pub(crate) fn emit_affine_index_i64(
     index: &Expr,
     counter_id: u32,
 ) -> Option<String> {
+    emit_affine_index_i64_with(ctx, index, counter_id, None)
+}
+
+/// Like [`emit_affine_index_i64`], with the counter's value optionally
+/// substituted by a caller-provided i64 SSA value instead of its slot load.
+/// The entry guard uses this to evaluate an affine tree at the loop's
+/// endpoints (counter = start, counter = bound - 1) while every other leaf
+/// still reads its live, loop-invariant slot.
+pub(crate) fn emit_affine_index_i64_with(
+    ctx: &mut FnCtx<'_>,
+    index: &Expr,
+    counter_id: u32,
+    counter_override: Option<&str>,
+) -> Option<String> {
     match index {
         Expr::Integer(v) => Some(v.to_string()),
         Expr::Number(n) => Some(format!("{}", *n as i64)),
         Expr::LocalGet(id) => {
-            let slot = if *id == counter_id {
-                ctx.i32_counter_slots.get(id)?.clone()
-            } else {
-                ctx.i32_counter_slots.get(id)?.clone()
-            };
+            if *id == counter_id {
+                if let Some(value) = counter_override {
+                    return Some(value.to_string());
+                }
+            }
+            let slot = ctx.i32_counter_slots.get(id)?.clone();
             let narrow = ctx.block().load(I32, &slot);
             Some(ctx.block().sext(I32, &narrow, I64))
         }
         Expr::Binary { op, left, right } => {
-            let l = emit_affine_index_i64(ctx, left, counter_id)?;
-            let r = emit_affine_index_i64(ctx, right, counter_id)?;
+            let l = emit_affine_index_i64_with(ctx, left, counter_id, counter_override)?;
+            let r = emit_affine_index_i64_with(ctx, right, counter_id, counter_override)?;
             Some(match op {
                 perry_hir::BinaryOp::Add => ctx.block().add(I64, &l, &r),
                 perry_hir::BinaryOp::Sub => ctx.block().sub(I64, &l, &r),

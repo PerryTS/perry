@@ -108,9 +108,16 @@ fn an_affine_index_admits_the_range_clone_and_agrees_with_the_generic_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (bin, stderr) = compile(dir.path(), MATMUL);
     let text = ir(&stderr);
+    // The admission signal: the 2-arg receiver-only guard is emitted only by
+    // the affine arm (the versioned tier also uses this symbol, but it cannot
+    // fire here — the bound is a parameter, not `arr.length`). The old
+    // detector looked for the per-read `packed_f64_affine.index_fits` block,
+    // which the window-hoist legitimately removed: a window proven at the
+    // loop's endpoints leaves the read as a bare trunc + raw load with no
+    // named block at all.
     assert!(
-        text.contains("packed_f64_affine"),
-        "#9253: `a[i * size + k]` must reach the affine read lowering; without it \
+        text.contains("js_typed_feedback_packed_f64_array_loop_guard"),
+        "#9253: `a[i * size + k]` must reach the affine tier; without it \
          the receiver guard re-executes per access"
     );
     for moving_gc in [false, true] {
@@ -169,5 +176,34 @@ console.log("negative:" + negative(a, 20));
     let (bin, _) = compile(dir.path(), source);
     for moving_gc in [false, true] {
         assert_stdout(&run(&bin, dir.path(), moving_gc), "negative:3\n", moving_gc);
+    }
+}
+
+/// The #9294 guard arm took its receiver-only `continue` for arrays with
+/// BOTH counter-offset and affine accesses, skipping the windowed guard while
+/// the counter fact still said `window_validated: true` — `a[k + 1]` then
+/// read one raw slot past the loop's window at the boundary. Mixed arrays
+/// now fall through to the windowed guard. Node's answer: the last
+/// iteration's `a[k + 1]` is `a[size]`, out of bounds, `undefined`, NaN.
+#[test]
+fn a_mixed_offset_and_affine_array_validates_its_counter_window() {
+    let source = r#"
+function run(a: number[], size: number): number {
+  let s = 0.0;
+  for (let i = 0; i < 1; i++) {
+    for (let k = 0; k < size; k++) {
+      s = s * 1.0 + a[k + 1] + a[i * size + k];
+    }
+  }
+  return s;
+}
+const a: number[] = [];
+for (let i = 0; i < 64; i++) a.push(1.0);
+console.log("s:" + run(a, 64));
+"#;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (bin, _) = compile(dir.path(), source);
+    for moving_gc in [false, true] {
+        assert_stdout(&run(&bin, dir.path(), moving_gc), "s:NaN\n", moving_gc);
     }
 }
