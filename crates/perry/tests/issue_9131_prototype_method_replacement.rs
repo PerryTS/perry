@@ -101,3 +101,39 @@ console.log("swap-after:", readA(a));
         "replace: 3 300\nmid: 153\ncounter-before: 2\ncounter-after: 777\nswap-before: a\nswap-after: b\n"
     );
 }
+
+/// #9244: the per-instance prototype-override fast path in
+/// `js_native_call_method` resolves the method by ordinary property lookup.
+/// A generator carries the override flag but has no own or inherited `map` —
+/// Perry synthesizes the iterator helpers (#2874) further down the dispatch
+/// tower. Returning on the lookup MISS called `undefined`, so
+/// `[...gen().map(f)]` threw `TypeError: undefined is not iterable`. Only a
+/// resolved callable may take the fast path; a miss must fall through.
+#[test]
+fn overridden_receiver_miss_falls_through_to_synthesized_helpers() {
+    let stdout = compile_and_run(
+        r#"
+function* gen() {
+  yield 1;
+  yield 2;
+  yield 3;
+}
+console.log("map:", [...gen().map((x: number) => x * 2)].join(","));
+console.log("filter:", [...gen().filter((x: number) => x > 1)].join(","));
+console.log("take:", Iterator.from([1, 2, 3, 4]).take(2).toArray().join(","));
+
+// A genuine override that DOES resolve still wins over the class vtable.
+class Counter {
+  inc() { return 2; }
+}
+const counter = new Counter();
+Object.setPrototypeOf(counter, { inc: () => 777 });
+console.log("override:", (counter as any).inc());
+"#,
+    );
+
+    assert_eq!(
+        stdout,
+        "map: 2,4,6\nfilter: 2,3\ntake: 1,2\noverride: 777\n"
+    );
+}

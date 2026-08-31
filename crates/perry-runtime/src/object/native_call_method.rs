@@ -1150,6 +1150,29 @@ pub unsafe extern "C-unwind" fn js_native_call_method_nullsafe(
     js_native_call_method(object, method_name_ptr, method_name_len, args_ptr, args_len)
 }
 
+/// Bind `IMPLICIT_THIS` for the duration of one call and restore the previous
+/// value on the way out — including when the callee unwinds, which this
+/// `extern "C-unwind"` dispatch surface makes an ordinary outcome rather than an
+/// exotic one. A plain set/restore pair would leak the receiver into every later
+/// implicit-`this` read once a method throws. #9244.
+struct ImplicitThisScope {
+    previous: f64,
+}
+
+impl ImplicitThisScope {
+    fn bind(receiver: f64) -> Self {
+        Self {
+            previous: crate::object::js_implicit_this_set(receiver),
+        }
+    }
+}
+
+impl Drop for ImplicitThisScope {
+    fn drop(&mut self) {
+        crate::object::js_implicit_this_set(self.previous);
+    }
+}
+
 #[no_mangle]
 // Dynamic native calls may synchronously throw from the selected module
 // implementation. Keep this bridge unwind-capable so a generated caller's JS
@@ -1268,18 +1291,46 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
                 let receiver_ptr =
                     JSValue::from_bits(receiver.to_bits()).as_pointer::<ObjectHeader>();
                 let method = super::js_object_get_field_by_name(receiver_ptr, method_key);
-                let method_handle = root_scope.root_nanbox_f64(f64::from_bits(method.bits()));
-                let receiver = object();
-                let bound = crate::closure::clone_closure_rebind_this(
-                    method_handle.get_nanbox_f64().to_bits(),
-                    receiver,
-                );
-                let args = refreshed_args();
-                return crate::closure::js_native_call_value(
-                    f64::from_bits(bound),
-                    args.as_ptr(),
-                    args.len(),
-                );
+                // Only the RESOLVED case is authoritative. A miss means the
+                // overridden chain simply does not carry this name, and the
+                // dispatch tower below still has arms that legitimately answer
+                // it — notably the #2874 iterator-helper interception, which
+                // resolves `map`/`filter`/`take`/... on a raw iterator that has
+                // no such own or inherited property. Returning here on a miss
+                // called `undefined` and turned `[...gen().map(f)]` into
+                // `TypeError: undefined is not iterable` (#9244). Falling
+                // through costs an ordinary lookup on a path that was already
+                // taking one.
+                let resolved = !method.is_undefined()
+                    && crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(
+                        f64::from_bits(method.bits()),
+                    ) as usize);
+                if resolved {
+                    let method_handle = root_scope.root_nanbox_f64(f64::from_bits(method.bits()));
+                    let receiver = object();
+                    let bound = crate::closure::clone_closure_rebind_this(
+                        method_handle.get_nanbox_f64().to_bits(),
+                        receiver,
+                    );
+                    let args = refreshed_args();
+                    // `clone_closure_rebind_this` only rewrites a closure that
+                    // carries CAPTURES_THIS_FLAG; it returns a native builtin
+                    // (and an arrow, and a generator step) UNCHANGED. Native
+                    // method bodies read their receiver from
+                    // `js_implicit_this_get()` — the same #7576 property that
+                    // made the `%IteratorPrototype%.next` THUNK throw — so
+                    // without binding it here `Object.prototype.isPrototypeOf`
+                    // saw no `this` ("called on null or undefined") and
+                    // `Object(true).valueOf()` saw the wrong one ("called on
+                    // incompatible receiver"). #9244. Restored on the way out,
+                    // including when the callee throws.
+                    let _this_scope = ImplicitThisScope::bind(receiver);
+                    return crate::closure::js_native_call_value(
+                        f64::from_bits(bound),
+                        args.as_ptr(),
+                        args.len(),
+                    );
+                }
             }
         }
     }

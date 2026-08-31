@@ -8,14 +8,27 @@ use crate::object::ObjectHeader;
 use crate::value::JSValue;
 
 /// An explicit per-instance `[[Prototype]]` REPLACES the class's declaration
-/// prototype; it is not an extra link in front of the original vtable. So when
-/// the own-key scan misses, walk that authoritative chain before exposing class
-/// getters or methods, and do not resurrect the old class surface when the
-/// custom chain also misses — hence `Some(undefined)` rather than `None` once
-/// an override is present.
+/// prototype, so when the own-key scan misses, that chain is what decides —
+/// `Some(value)` here is authoritative and the caller must not fall back to the
+/// class vtable.
 ///
-/// `None` means no override was installed and the caller keeps its existing
-/// class-vtable fallback.
+/// A miss on the custom chain returns `None`, NOT `Some(undefined)`. #9131
+/// originally returned `Some(undefined)` to avoid resurrecting the old class
+/// surface, but the arms BELOW both call sites are not only the class vtable:
+/// they are also everything Perry *synthesizes* rather than stores on a real
+/// prototype — a plain-function `.prototype`, the boxed-wrapper builtins, the
+/// iterator helpers. Swallowing the miss made those unreachable for every
+/// flagged receiver, which is #9244 (`Object(true).valueOf()` →
+/// `called on incompatible receiver`, `FooObj.prototype` → `undefined`).
+///
+/// This is the same polarity `canonical_shape_excludes_own_property` uses: a
+/// question we cannot answer here defers to the tail rather than fabricating a
+/// verdict. The flag is also set by ~20 runtime prototype-wiring sites that are
+/// not user `setPrototypeOf` calls at all, so "flagged" is far weaker evidence
+/// than the original code assumed.
+///
+/// `None` therefore means either no override, or an override that does not
+/// carry this key — in both cases the caller keeps its existing fallback.
 pub(super) fn inherited_field_if_overridden(
     obj: *const ObjectHeader,
     key: *const crate::string::StringHeader,
@@ -26,8 +39,5 @@ pub(super) fn inherited_field_if_overridden(
     if !crate::object::prototype_chain::object_has_prototype_override(obj as usize) {
         return None;
     }
-    Some(
-        crate::object::prototype_chain::resolve_inherited_field(obj as usize, key)
-            .unwrap_or_else(JSValue::undefined),
-    )
+    crate::object::prototype_chain::resolve_inherited_field(obj as usize, key)
 }

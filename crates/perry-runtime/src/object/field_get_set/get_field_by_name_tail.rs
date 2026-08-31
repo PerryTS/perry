@@ -1350,6 +1350,8 @@ pub(crate) fn get_field_by_name_object_tail(
 
         if keys.is_null() {
             // #9131; see `prototype_override::inherited_field_if_overridden`.
+            // A miss returns None so the synthesized arms below stay reachable
+            // (#9244).
             if let Some(v) = super::prototype_override::inherited_field_if_overridden(obj, key) {
                 return v;
             }
