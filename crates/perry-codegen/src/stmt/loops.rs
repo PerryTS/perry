@@ -1634,8 +1634,36 @@ fn packed_f64_range_loop_dense_body_collect(
     bound_local: Option<u32>,
     accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
 ) -> bool {
-    use perry_hir::Expr;
     let mut written: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    packed_f64_range_loop_dense_stmts_collect(
+        ctx,
+        body,
+        counter_id,
+        bound_local,
+        accesses,
+        &mut written,
+    )
+        // Written arrays are allowed (masked stores above); a scalar `let`/set
+        // shadowing a tracked array id still rejects.
+        && !accesses.is_empty()
+        && accesses.keys().all(|arr_id| !written.contains(arr_id))
+}
+
+/// The statement walk behind [`packed_f64_range_loop_dense_body_collect`],
+/// split out so a conditional's branches can recurse into it.
+///
+/// `written` is threaded rather than rebuilt per branch: a scalar assigned
+/// inside an `if` still shadows a tracked array id for the caller's
+/// disjointness check, and rebuilding it per branch would lose that.
+fn packed_f64_range_loop_dense_stmts_collect(
+    ctx: &FnCtx<'_>,
+    body: &[Stmt],
+    counter_id: u32,
+    bound_local: Option<u32>,
+    accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
+    written: &mut std::collections::HashSet<u32>,
+) -> bool {
+    use perry_hir::Expr;
     for stmt in body {
         match stmt {
             Stmt::Let {
@@ -1711,12 +1739,70 @@ fn packed_f64_range_loop_dense_body_collect(
                     return false;
                 }
             }
+            // #9275: a conditional whose branches are themselves admitted
+            // scalar statements. The versioned tier already accepts this shape
+            // (`expr_is_packed_f64_loop_safe` recurses through `Expr::Compare`,
+            // and integer `c++` accumulators admit independently), so
+            // `for (k = 1; k < N; k++) if (a[k] > a[k-1]) c++` got a packed
+            // clone when its bound was written `arr.length` and none when it
+            // was written as a literal — 4ms against 31ms for identical work.
+            //
+            // Dense mode is where this belongs, and its own safety argument
+            // carries over unchanged: the fast loop's loads have no side
+            // exits, so an iteration runs entirely in the fast copy or
+            // entirely in the slow one, and a branch cannot leave a
+            // half-applied iteration behind. The classic mode above cannot
+            // take this — it permits a hole-read side exit that re-executes
+            // the iteration, which is why it insists on a single statement
+            // whose one side effect happens last.
+            //
+            // Reads from BOTH branches are recorded, so the entry guard
+            // validates the union of the windows rather than the taken path's.
+            // That is the conservative direction: a window only reachable on
+            // the untaken branch can make the guard decline a loop it would
+            // have run correctly, costing the clone and never correctness.
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                if !masked_window_expression_is_non_collecting(ctx, condition)
+                    || !packed_f64_range_loop_pure_expr_collect(
+                        condition, counter_id, true, accesses,
+                    )
+                {
+                    return false;
+                }
+                if !packed_f64_range_loop_dense_stmts_collect(
+                    ctx,
+                    then_branch,
+                    counter_id,
+                    bound_local,
+                    accesses,
+                    written,
+                ) {
+                    return false;
+                }
+                if let Some(else_branch) = else_branch {
+                    if !packed_f64_range_loop_dense_stmts_collect(
+                        ctx,
+                        else_branch,
+                        counter_id,
+                        bound_local,
+                        accesses,
+                        written,
+                    ) {
+                        return false;
+                    }
+                }
+            }
+            // `break` / `continue` stay rejected here: dense mode's guarantee
+            // is that the whole iteration runs in one copy, and an early exit
+            // out of a branch is a shape this walk has not reasoned about.
             _ => return false,
         }
     }
-    // Written arrays are allowed (masked stores above); a scalar `let`/set
-    // shadowing a tracked array id still rejects.
-    !accesses.is_empty() && accesses.keys().all(|arr_id| !written.contains(arr_id))
+    true
 }
 
 /// Match-time twin of `masked_window::masked_store_rhs_is_genuine_f64`: at
