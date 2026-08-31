@@ -178,6 +178,17 @@ pub(crate) fn object_set_field_by_name_transition_only_fast(
     object_set_field_by_name_transition_fast_impl(obj, key, value, false)
 }
 
+/// Value-returning transition-only entry (#9287) — callable with unrooted
+/// operands; see `object_set_field_by_name_transition_fast_impl_value`.
+pub(crate) fn object_set_field_by_name_transition_only_fast_value(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+    refresh: &mut Option<(f64, f64, f64)>,
+) -> Option<f64> {
+    object_set_field_by_name_transition_fast_impl_value(obj, key, value, false, refresh)
+}
+
 /// Re-add a deleted property on a receiver whose ShapeId deliberately stayed
 /// stable across the tombstone delete (#9064).
 ///
@@ -441,8 +452,25 @@ fn object_set_field_by_name_transition_fast_impl(
     value: f64,
     try_overwrite: bool,
 ) -> i32 {
+    object_set_field_by_name_transition_fast_impl_value(obj, key, value, try_overwrite, &mut None)
+        .is_some() as i32
+}
+
+/// Value-returning form (#9287): the returned f64 is re-read from this
+/// function's OWN root after every internal allocation point (key interning,
+/// spill growth), so a caller may invoke it with UNROOTED operands. The
+/// pre-scope shortcut in `js_put_value_set_dyn_ic_miss` relies on that,
+/// saving a RuntimeHandleScope + three roots on the hot
+/// fresh-object-construction lane.
+fn object_set_field_by_name_transition_fast_impl_value(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+    try_overwrite: bool,
+    refresh: &mut Option<(f64, f64, f64)>,
+) -> Option<f64> {
     if key.is_null() || (key as usize) < 0x10000 {
-        return 0;
+        return None;
     }
 
     let obj = {
@@ -457,11 +485,11 @@ fn object_set_field_by_name_transition_fast_impl(
                 // GcHeader read below deref'd unmapped memory (write-side
                 // #5429 twin, 2026-07-02 audit). Return 0 = defer to the
                 // full dynamic path, which triages by tag.
-                return 0;
+                return None;
             }
             let raw = (bits & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader;
             if raw.is_null() || crate::value::addr_class::is_small_handle(raw as usize) {
-                return 0;
+                return None;
             }
             raw
         } else {
@@ -470,11 +498,13 @@ fn object_set_field_by_name_transition_fast_impl(
     };
 
     if obj.is_null() || (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return 0;
+        return None;
     }
 
     if try_overwrite && unsafe { try_existing_own_data_overwrite(obj, key, value) } {
-        return 1;
+        // The overwrite scan allocates nothing, so the caller's value bits
+        // are still live exactly as passed.
+        return Some(value);
     }
 
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -491,12 +521,12 @@ fn object_set_field_by_name_transition_fast_impl(
         // of the bare floor + raw deref.
         let gc_header = match crate::value::addr_class::try_read_gc_header(obj as usize) {
             Some(h) => h as *const crate::gc::GcHeader,
-            None => return 0,
+            None => return None,
         };
         if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT
             || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
-            return 0;
+            return None;
         }
         let object_flags = (*gc_header)._reserved;
         if object_flags
@@ -509,10 +539,10 @@ fn object_set_field_by_name_transition_fast_impl(
                 | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
             != 0
         {
-            return 0;
+            return None;
         }
         if !crate::object::object_is_regular(obj) || (*obj).class_id == NATIVE_MODULE_CLASS_ID {
-            return 0;
+            return None;
         }
 
         let key_gc =
@@ -528,7 +558,7 @@ fn object_set_field_by_name_transition_fast_impl(
         // retain the full inherited-setter/prototype walk.
         let class_id = (*obj).class_id;
         if class_id != 0 && !crate::object::is_anon_shape_class_id(class_id) {
-            return 0;
+            return None;
         }
 
         // #6084 item 6: this used to be a `GLOBAL_DESCRIPTORS_IN_USE` check at
@@ -540,11 +570,11 @@ fn object_set_field_by_name_transition_fast_impl(
         // whose vtable/prototype chain can carry instance accessors.
         let key_f64 = f64::from_bits(JSValue::string_ptr(key as *mut _).bits());
         if super::plain_data_write_may_intercept(obj as usize, 0, key_f64) {
-            return 0;
+            return None;
         }
 
         if (*key_gc).obj_type != crate::gc::GC_TYPE_STRING {
-            return 0;
+            return None;
         }
         let interned_key = if (*key_gc).gc_flags & crate::gc::GC_FLAG_INTERNED != 0 {
             key
@@ -553,20 +583,32 @@ fn object_set_field_by_name_transition_fast_impl(
             crate::string::js_string_intern(key, hash)
         };
         if interned_key.is_null() {
-            return 0;
+            return None;
         }
 
         obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+        // #9287: interning above is the one allocation point a MISS can
+        // still follow. A pre-scope caller's raw f64 operands may be stale
+        // after it, so hand back re-rooted copies for the caller's fallback
+        // ladder — set unconditionally, so the caller's use is uniform.
+        {
+            let key_now = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+            *refresh = Some((
+                crate::value::js_nanbox_pointer(obj as i64),
+                crate::value::js_nanbox_string(key_now as i64),
+                value_handle.get_nanbox_f64(),
+            ));
+        }
         let value = value_handle.get_nanbox_f64();
 
         let prev_shape_id = super::shapes::object_shape_stamp(obj);
         let Some((next_keys, slot_idx, target_shape_id)) =
             transition_cache_lookup(prev_shape_id, interned_key)
         else {
-            return 0;
+            return None;
         };
         if next_keys == 0 {
-            return 0;
+            return None;
         }
 
         // `Object.prototype[<index>]` must reach the ordinary setter so it can
@@ -578,7 +620,7 @@ fn object_set_field_by_name_transition_fast_impl(
         let key_starts_with_digit =
             (*key).byte_len != 0 && (*crate::string::string_data(key)).is_ascii_digit();
         if key_starts_with_digit && crate::array::object_prototype_addr_matches(obj as usize) {
-            return 0;
+            return None;
         }
 
         if !super::shapes::install_cached_object_shape_transition(
@@ -613,9 +655,14 @@ fn object_set_field_by_name_transition_fast_impl(
 
         #[cfg(test)]
         TEST_TRANSITION_FAST_HITS.with(|hits| hits.set(hits.get() + 1));
+        // Success: value may be a heap pointer that moved during interning or
+        // spill growth; re-read it through this function's own root so the
+        // caller needs none.
+        return Some(value_handle.get_nanbox_f64());
     }
 
-    1
+    #[allow(unreachable_code)]
+    None
 }
 
 #[cfg(test)]

@@ -888,36 +888,54 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         }
     }
 
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let target_handle = scope.root_nanbox_f64(target);
-    let key_handle = scope.root_nanbox_f64(key);
-    let value_handle = scope.root_nanbox_f64(value);
-
     // A computed write site that constructs the same plain-object shape over
     // and over changes receiver shape after every append, so the per-site
     // overwrite IC above cannot hit. Reuse the runtime's global transition
     // lattice before entering the full `[[Set]]` walk: the helper accepts
     // only a previously learned transition on a class-id-zero ordinary object
     // and rejects every receiver with exotic, descriptor, frozen/sealed, or
-    // prototype-interceptor semantics. It roots internally while interning
-    // the key, and these outer handles preserve all three operands across
-    // that nested allocation/collection point.
-    let target_now = target_handle.get_nanbox_f64();
-    let key_now = key_handle.get_nanbox_f64();
-    if (target_now.to_bits() & !POINTER_MASK) == POINTER_TAG {
-        let obj = (target_now.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
-        if (key_now.to_bits() & !POINTER_MASK) == crate::value::STRING_TAG {
-            let key_ptr = (key_now.to_bits() & POINTER_MASK) as *const crate::StringHeader;
-            if crate::object::object_set_field_by_name_transition_only_fast(
+    // prototype-interceptor semantics.
+    //
+    // #9287: this try sits BEFORE the handle scope. The value-returning form
+    // roots all three operands itself and re-reads the stored value through
+    // its own root after every internal allocation point, so the operands
+    // need no rooting here — and the fresh-object-construction lane (the
+    // dominant taker of this entry) no longer pays a scope + three roots it
+    // never uses. On a miss, nothing has allocated: `..._fast_impl_value`
+    // opens its scope only after its pre-checks pass, and every pre-check
+    // failure returns before any allocation, so the raw f64 params below are
+    // still valid for the rooted ladder.
+    let mut refreshed: Option<(f64, f64, f64)> = None;
+    let mut target = target;
+    let mut key = key;
+    let mut value = value;
+    if (target_bits & !POINTER_MASK) == POINTER_TAG {
+        let obj = (target_bits & POINTER_MASK) as *mut crate::ObjectHeader;
+        let kb = key.to_bits();
+        if (kb & !POINTER_MASK) == crate::value::STRING_TAG {
+            let key_ptr = (kb & POINTER_MASK) as *const crate::StringHeader;
+            if let Some(stored) = crate::object::object_set_field_by_name_transition_only_fast_value(
                 obj,
                 key_ptr,
-                value_handle.get_nanbox_f64(),
-            ) != 0
-            {
-                return value_handle.get_nanbox_f64();
+                value,
+                &mut refreshed,
+            ) {
+                return stored;
+            }
+            // A miss AFTER the helper interned the key may have moved the
+            // operands; it hands back re-rooted copies exactly when so.
+            if let Some((t, k, v)) = refreshed {
+                target = t;
+                key = k;
+                value = v;
             }
         }
     }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_handle = scope.root_nanbox_f64(target);
+    let key_handle = scope.root_nanbox_f64(key);
+    let value_handle = scope.root_nanbox_f64(value);
 
     let result = js_put_value_set(
         target_handle.get_nanbox_f64(),
