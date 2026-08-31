@@ -216,15 +216,23 @@ fn perf_constructor_prototype(class_name: &str) -> f64 {
     crate::closure::closure_get_dynamic_prop(ptr, "prototype")
 }
 
+/// Link runtime-created perf objects through their built-in class hierarchy.
+///
+/// This is class-default wiring, not a user `Object.setPrototypeOf` override.
+/// The loud setter marks the receiver with `OBJECT_META_FLAG_PROTO_OVERRIDE`;
+/// method dispatch then treats the chain as user-replaced and re-dispatches an
+/// already bound prototype method back through `js_native_call_method`,
+/// recursing until the process exhausts its stack (#9281).
+fn link_perf_class_default_prototype(obj: usize, proto_bits: u64) {
+    crate::object::prototype_chain::object_link_class_default_prototype(obj, proto_bits);
+}
+
 pub(super) fn link_perf_prototype(value: f64, class_name: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let prototype = scope.root_nanbox_f64(perf_constructor_prototype(class_name));
     let obj = crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize;
-    crate::object::prototype_chain::object_set_static_prototype(
-        obj,
-        prototype.get_nanbox_f64().to_bits(),
-    );
+    link_perf_class_default_prototype(obj, prototype.get_nanbox_f64().to_bits());
     value.get_nanbox_f64()
 }
 
@@ -290,10 +298,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
         }
         "PerformanceMark" | "PerformanceMeasure" => {
             let base = perf_constructor_prototype("PerformanceEntry");
-            crate::object::prototype_chain::object_set_static_prototype(
-                proto as usize,
-                base.to_bits(),
-            );
+            link_perf_class_default_prototype(proto as usize, base.to_bits());
             let getter = perf_field_getter("detail");
             install_perf_getter(proto, "detail", getter, true);
             let to_json = perf_method_value(perf_entry_to_json_thunk as *const u8, "toJSON", 0);
@@ -356,10 +361,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
         }
         "PerformanceResourceTiming" => {
             let base = perf_constructor_prototype("PerformanceEntry");
-            crate::object::prototype_chain::object_set_static_prototype(
-                proto as usize,
-                base.to_bits(),
-            );
+            link_perf_class_default_prototype(proto as usize, base.to_bits());
             for field in [
                 "initiatorType",
                 "workerStart",
