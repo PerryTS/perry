@@ -734,9 +734,40 @@ fn encode_slots(stream: &mut Vec<u8>, slots: impl Iterator<Item = (u16, i32)>) {
     }
 }
 
-fn encode_stream(functions: &[FunctionMap]) -> Vec<u8> {
+/// The varint root stream, plus where each function's records start in it.
+///
+/// `function_offsets[i]` is not derived from anything: it is `bytes.len()` at
+/// the moment `encode_stream` begins function `i`, so it IS that function's
+/// position by construction. Nothing recomputes it, and a wrong value is not
+/// expressible without changing the one line that records it.
+///
+/// It exists because a decoder that wants one function's records has no other
+/// way to find them — the stream is varint-chained, so reaching function `i`
+/// means decoding functions `0..i` first. `verify_roundtrip` proves the
+/// offsets against the sequential decode on every compile, for every function.
+#[derive(Clone)]
+struct CompactStream {
+    bytes: Vec<u8>,
+    /// One entry per function, in `functions` order.
+    function_offsets: Vec<u32>,
+}
+
+fn encode_stream(functions: &[FunctionMap]) -> Result<CompactStream, String> {
     let mut stream = Vec::new();
+    let mut function_offsets = Vec::with_capacity(functions.len());
     for function in functions {
+        // Recorded BEFORE any of this function's bytes are pushed. `u32`
+        // because that is the width a map format can afford to spend on it
+        // per function; a blob that outgrows it must say so here rather than
+        // silently wrap and point a decoder at another function's records.
+        function_offsets.push(u32::try_from(stream.len()).map_err(|_| {
+            format!(
+                "{}: the compact stream reached {} bytes, past the u32 a per-function offset can \
+                 hold. A wrapped offset would point a decoder at another function's records.",
+                function.symbol,
+                stream.len()
+            )
+        })?);
         let mut previous_record: Option<(&Vec<(u16, i32)>, &Vec<(u32, u16, i32)>)> = None;
         for record in &function.records {
             if previous_record == Some((&record.roots, &record.derived)) {
@@ -783,7 +814,10 @@ fn encode_stream(functions: &[FunctionMap]) -> Vec<u8> {
             previous_record = Some((&record.roots, &record.derived));
         }
     }
-    stream
+    Ok(CompactStream {
+        bytes: stream,
+        function_offsets,
+    })
 }
 
 fn read_varint(bytes: &[u8], mut at: usize) -> Option<(u64, usize)> {
@@ -862,9 +896,37 @@ fn decode_slots(
     Ok((slots, cursor))
 }
 
-fn verify_roundtrip(functions: &[FunctionMap], stream: &[u8]) -> Result<(), String> {
+fn verify_roundtrip(functions: &[FunctionMap], compact: &CompactStream) -> Result<(), String> {
+    let stream = &compact.bytes[..];
     let mut cursor = 0usize;
-    for function in functions {
+    for (function_index, function) in functions.iter().enumerate() {
+        // The per-function offset must BE the position the sequential decode
+        // reaches. Checked here rather than in a test because this runs on
+        // every compile over every function of the binary being produced —
+        // 72,669 of them for claude-code — so an offset that is ever wrong
+        // fails the compile instead of pointing a decoder at another
+        // function's live set. It cannot fire while nothing emits or reads
+        // these offsets, which is the point of checking it now.
+        let recorded = compact
+            .function_offsets
+            .get(function_index)
+            .copied()
+            .ok_or_else(|| {
+                format!(
+                    "{}: the encoder recorded {} function offsets for {} functions",
+                    function.symbol,
+                    compact.function_offsets.len(),
+                    functions.len()
+                )
+            })?;
+        if recorded as usize != cursor {
+            return Err(format!(
+                "{}: the encoder recorded this function's records starting at stream offset \
+                 {recorded}, but decoding every earlier function reaches {cursor}. A decoder \
+                 that trusted the recorded offset would read another function's live set.",
+                function.symbol
+            ));
+        }
         let mut previous: Option<(Vec<(u16, i32)>, Vec<(u32, u16, i32)>)> = None;
         for (index, record) in function.records.iter().enumerate() {
             let where_ = || format!("{} record {index}", function.symbol);
@@ -1058,7 +1120,7 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
     let ptr64 = !target.starts_with("arm64_32");
     let block = parse_block(&lines, word_width_for(target))?;
     let functions = decode_v3(&block)?;
-    let stream = encode_stream(&functions);
+    let stream = encode_stream(&functions)?;
     verify_roundtrip(&functions, &stream)?;
 
     let stats = GcMapStats {
@@ -1066,7 +1128,7 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
         compact_bytes: 16
             + functions.len() * (if ptr64 { 16 } else { 12 })
             + functions.iter().map(|f| f.records.len()).sum::<usize>() * 4
-            + stream.len(),
+            + stream.bytes.len(),
         functions: functions.len(),
         records: functions.iter().map(|f| f.records.len()).sum(),
         roots: functions
@@ -1076,7 +1138,7 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
             .sum(),
     };
 
-    let replacement = emit_asm(&functions, &stream, format_for(target), ptr64);
+    let replacement = emit_asm(&functions, &stream.bytes, format_for(target), ptr64);
     let mut out = String::with_capacity(asm.len());
     for line in &lines[..block.start_line] {
         // `.no_dead_strip` names the block's label from outside it. It is also
@@ -1135,7 +1197,7 @@ pub(crate) fn decode_stack_map_roots(
     }
     let block = parse_block(&lines, word_width_for(target))?;
     let functions = decode_v3(&block)?;
-    let stream = encode_stream(&functions);
+    let stream = encode_stream(&functions)?;
     verify_roundtrip(&functions, &stream)?;
     Ok(functions
         .into_iter()

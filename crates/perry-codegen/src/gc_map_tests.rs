@@ -555,8 +555,8 @@ fn repeated_live_sets_cost_one_byte() {
     // stream the two extra records cost exactly one repeat byte each,
     // regardless of how many roots the shared live set holds.
     assert_eq!(
-        encode_stream(&functions).len(),
-        encode_stream(&one_record).len() + 2
+        encode_stream(&functions).expect("encodes").bytes.len(),
+        encode_stream(&one_record).expect("encodes").bytes.len() + 2
     );
 }
 
@@ -595,7 +595,7 @@ fn derived_slots_roundtrip_and_share_the_repeat_flag() {
             record("16", vec![(1, 31, 24)]),
         ],
     }];
-    let stream = encode_stream(&repeated);
+    let stream = encode_stream(&repeated).expect("encodes");
     verify_roundtrip(&repeated, &stream).expect("derived records must round-trip");
     let single = vec![FunctionMap {
         symbol: "probe".to_string(),
@@ -603,8 +603,8 @@ fn derived_slots_roundtrip_and_share_the_repeat_flag() {
         records: vec![record("0", vec![(1, 31, 24)])],
     }];
     assert_eq!(
-        stream.len(),
-        encode_stream(&single).len() + 1,
+        stream.bytes.len(),
+        encode_stream(&single).expect("encodes").bytes.len() + 1,
         "an identical (roots, derived) pair must cost one repeat byte"
     );
 
@@ -616,11 +616,11 @@ fn derived_slots_roundtrip_and_share_the_repeat_flag() {
             record("16", vec![(0, 31, 24)]),
         ],
     }];
-    let stream = encode_stream(&differing);
+    let stream = encode_stream(&differing).expect("encodes");
     verify_roundtrip(&differing, &stream)
         .expect("a differing derived set must re-encode, not repeat");
     assert!(
-        stream.len() > encode_stream(&single).len() + 1,
+        stream.bytes.len() > encode_stream(&single).expect("encodes").bytes.len() + 1,
         "a record whose derived set differs must not take the repeat flag"
     );
 }
@@ -649,12 +649,12 @@ fn roundtrip_check_catches_a_corrupted_stream() {
             },
         ],
     }];
-    let stream = encode_stream(&functions);
+    let stream = encode_stream(&functions).expect("encodes");
     verify_roundtrip(&functions, &stream).expect("a clean stream must verify");
 
     // A dropped root: the header's count is the first byte of the stream.
     let mut short = stream.clone();
-    short[0] = 2 << 2;
+    short.bytes[0] = 2 << 2;
     assert!(
         verify_roundtrip(&functions, &short).is_err(),
         "a stream claiming fewer roots than the map recorded must be rejected"
@@ -663,25 +663,86 @@ fn roundtrip_check_catches_a_corrupted_stream() {
     // A moved root: perturbing a delta keeps the count but relocates the
     // slot, which is the shape that makes the collector scan wrong words.
     let mut moved = stream.clone();
-    moved[1] = moved[1].wrapping_add(4);
+    moved.bytes[1] = moved.bytes[1].wrapping_add(4);
     assert!(
         verify_roundtrip(&functions, &moved).is_err(),
         "a stream that relocates a root must be rejected"
     );
 
     // Truncation.
+    let mut truncated = stream.clone();
+    truncated.bytes.pop();
     assert!(
-        verify_roundtrip(&functions, &stream[..stream.len() - 1]).is_err(),
+        verify_roundtrip(&functions, &truncated).is_err(),
         "a truncated stream must be rejected"
     );
 
     // Trailing bytes: decodes cleanly and still means the two sides
     // disagree about the layout.
     let mut trailing = stream.clone();
-    trailing.push(0);
+    trailing.bytes.push(0);
     assert!(
         verify_roundtrip(&functions, &trailing).is_err(),
         "a stream with unconsumed trailing bytes must be rejected"
+    );
+}
+
+/// The per-function stream offsets must be checked, not merely recorded.
+///
+/// Nothing emits or reads them yet, so the only thing standing between "these
+/// are right" and "these are assumed right" is that `verify_roundtrip` rejects
+/// a wrong one — on every compile, over every function. Plant each way an
+/// offset can be wrong and assert it is caught, the same way the stream's own
+/// corruptions are.
+#[test]
+fn roundtrip_check_catches_a_wrong_per_function_stream_offset() {
+    let probe = |symbol: &str, offsets: &[&str]| FunctionMap {
+        symbol: symbol.to_string(),
+        stack_size: 96,
+        records: offsets
+            .iter()
+            .map(|off| Record {
+                instruction_offset: (*off).to_string(),
+                roots: vec![(7, 8), (7, 24)],
+                derived: Vec::new(),
+            })
+            .collect(),
+    };
+    // Two functions, so the second has a non-zero offset to get wrong.
+    let functions = vec![probe("first", &["0", "16"]), probe("second", &["0", "16"])];
+    let stream = encode_stream(&functions).expect("encodes");
+    verify_roundtrip(&functions, &stream).expect("clean offsets must verify");
+    assert_eq!(
+        stream.function_offsets.len(),
+        2,
+        "one offset per function, in order"
+    );
+    assert_eq!(stream.function_offsets[0], 0, "the first starts the stream");
+    assert!(
+        stream.function_offsets[1] > 0,
+        "the second must start after the first"
+    );
+
+    for delta in [1i64, -1, 4] {
+        let mut wrong = stream.clone();
+        wrong.function_offsets[1] = (i64::from(wrong.function_offsets[1]) + delta)
+            .try_into()
+            .expect("in range");
+        let error = verify_roundtrip(&functions, &wrong)
+            .expect_err("an offset that is not where the decode lands must be rejected");
+        assert!(
+            error.contains("second") && error.contains("another function's live set"),
+            "unhelpful reason for delta {delta}: {error}"
+        );
+    }
+
+    // Too few offsets is the same defect wearing a different hat: the last
+    // function would have no recorded start at all.
+    let mut missing = stream.clone();
+    missing.function_offsets.pop();
+    assert!(
+        verify_roundtrip(&functions, &missing).is_err(),
+        "one offset per function, or the map cannot be read per function"
     );
 }
 
