@@ -1659,7 +1659,14 @@ pub(super) fn lower(
     let numeric_accumulators = if candidate.numeric_elements {
         // The stable-packed tier is left as it was; widening it needs its own
         // proof that an offset read lowers inline here.
-        collect_numeric_accumulators(ctx, body, candidate.array_id, candidate.counter_id, false)
+        collect_numeric_accumulators(
+            ctx,
+            body,
+            candidate.array_id,
+            candidate.counter_id,
+            false,
+            false,
+        )
     } else {
         Vec::new()
     };

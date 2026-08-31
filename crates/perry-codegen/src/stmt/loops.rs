@@ -535,17 +535,17 @@ fn emit_range_loop_accumulator_admission(
     slow_pre_label: &str,
     block_prefix: &str,
 ) -> PackedAccumulatorScope {
-    let mut counter_arrays = matched
-        .arrays
-        .iter()
-        .filter(|access| access.counter.is_some())
-        .map(|access| access.array_id);
-    let Some(array_id) = counter_arrays.next() else {
-        return PackedAccumulatorScope::empty();
+    // One array may carry the accumulator proof: with several, no single
+    // admitted leaf spans them all. Counter-bearing arrays keep priority;
+    // a masked-only array (dense mode) now qualifies too, because the dense
+    // entry guard validates its whole window hole-free, making every
+    // in-window read a Number the accumulator walk may lean on.
+    let mut single = matched.arrays.iter().filter(|a| a.counter.is_some());
+    let (array_id, masked_reads_validated) = match (single.next(), single.next()) {
+        (Some(access), None) => (access.array_id, access.stat.is_some()),
+        (None, _) if matched.arrays.len() == 1 => (matched.arrays[0].array_id, true),
+        _ => return PackedAccumulatorScope::empty(),
     };
-    if counter_arrays.next().is_some() {
-        return PackedAccumulatorScope::empty();
-    }
     emit_packed_numeric_accumulator_admission(
         ctx,
         body,
@@ -557,6 +557,7 @@ fn emit_range_loop_accumulator_admission(
         // hole-checked, so an `a[i +/- c]` read is lowered inline and yields a
         // Number. See `accumulator_rhs_is_numeric`.
         true,
+        masked_reads_validated,
     )
 }
 
@@ -870,6 +871,7 @@ fn emit_packed_numeric_accumulator_admission(
     slow_pre_label: &str,
     block_prefix: &str,
     offset_reads_inlined: bool,
+    masked_reads_validated: bool,
 ) -> PackedAccumulatorScope {
     let accumulators = super::stable_packed_accumulator::collect_numeric_accumulators(
         ctx,
@@ -877,6 +879,7 @@ fn emit_packed_numeric_accumulator_admission(
         array_id,
         counter_id,
         offset_reads_inlined,
+        masked_reads_validated,
     );
     // Integer (`c++`) accumulators admit independently of the float set —
     // a pure count loop has no float accumulator at all.
@@ -1061,6 +1064,9 @@ fn lower_packed_f64_versioned_for(
         // `packed_f64_loop_fact_for_index` declines a non-zero offset and the
         // read takes the generic path — which can produce `undefined`. #9259
         // is the work that would make an offset read inline here.
+        false,
+        // No masked windows either: this tier's guard proves the receiver and
+        // the length bound, not a hole-free window.
         false,
     );
     acc_scope.hoist_receivers(ctx, &[matched.array_id]);
@@ -1336,14 +1342,34 @@ fn match_packed_f64_range_loop(
         // read-only DENSE mode: several scalar statements, masked
         // statically-windowed indices, no stores, no side exits.
         accesses.clear();
+        let mut pending_accumulators = std::collections::BTreeSet::new();
         if !packed_f64_range_loop_dense_body_collect(
             ctx,
             body,
             counter_id,
             bound_local,
             &mut accesses,
+            &mut pending_accumulators,
         ) {
             return range_loop_reject("body_not_admissible");
+        }
+        if !pending_accumulators.is_empty() {
+            // The peel above assumed each pending local numeric; that holds
+            // only if the lowering will actually admit it (entry tag check +
+            // numeric-preserving writes). Verify with the SAME collector and
+            // the SAME array selection `emit_range_loop_accumulator_admission`
+            // uses -- if the two disagree, the clone would contain a dynamic
+            // `+` (a collecting call) under facts that forbid one.
+            if accesses.len() != 1 {
+                return range_loop_reject("accumulator_needs_single_array");
+            }
+            let array_id = *accesses.keys().next().expect("len checked");
+            let admitted = super::stable_packed_accumulator::collect_numeric_accumulators(
+                ctx, body, array_id, counter_id, true, true,
+            );
+            if !pending_accumulators.iter().all(|id| admitted.contains(id)) {
+                return range_loop_reject("accumulator_not_provable");
+            }
         }
         true
     };
@@ -1781,6 +1807,7 @@ fn packed_f64_range_loop_dense_body_collect(
     counter_id: u32,
     bound_local: Option<u32>,
     accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
+    pending_accumulators: &mut std::collections::BTreeSet<u32>,
 ) -> bool {
     let mut written: std::collections::HashSet<u32> = std::collections::HashSet::new();
     packed_f64_range_loop_dense_stmts_collect(
@@ -1790,6 +1817,7 @@ fn packed_f64_range_loop_dense_body_collect(
         bound_local,
         accesses,
         &mut written,
+        pending_accumulators,
     )
         // Written arrays are allowed (masked stores above); a scalar `let`/set
         // shadowing a tracked array id still rejects.
@@ -1810,6 +1838,7 @@ fn packed_f64_range_loop_dense_stmts_collect(
     bound_local: Option<u32>,
     accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
     written: &mut std::collections::HashSet<u32>,
+    pending_accumulators: &mut std::collections::BTreeSet<u32>,
 ) -> bool {
     use perry_hir::Expr;
     for stmt in body {
@@ -1835,10 +1864,20 @@ fn packed_f64_range_loop_dense_stmts_collect(
                 if *id == counter_id || Some(*id) == bound_local {
                     return false;
                 }
-                if !masked_window_expression_is_non_collecting(ctx, value)
-                    || !packed_f64_range_loop_pure_expr_collect(
-                        value, counter_id, true, accesses, None,
-                    )
+                // First try the plain proof; a self-accumulating write whose
+                // only unprovable leaf is the target itself retries with the
+                // target treated as numeric and records it as PENDING. The
+                // caller then verifies every pending id against
+                // `collect_numeric_accumulators` -- the same walk the lowering
+                // runs -- and rejects the whole dense match otherwise, so the
+                // clone never contains a write this assumption cannot cover.
+                if masked_window_expression_proof(ctx, value, None).is_none() {
+                    if masked_window_expression_proof(ctx, value, Some(*id)).is_none() {
+                        return false;
+                    }
+                    pending_accumulators.insert(*id);
+                }
+                if !packed_f64_range_loop_pure_expr_collect(value, counter_id, true, accesses, None)
                 {
                     return false;
                 }
@@ -1934,6 +1973,7 @@ fn packed_f64_range_loop_dense_stmts_collect(
                     bound_local,
                     accesses,
                     written,
+                    pending_accumulators,
                 ) {
                     return false;
                 }
@@ -1945,6 +1985,7 @@ fn packed_f64_range_loop_dense_stmts_collect(
                         bound_local,
                         accesses,
                         written,
+                        pending_accumulators,
                     ) {
                         return false;
                     }
@@ -2015,7 +2056,7 @@ pub(super) fn masked_window_expression_is_non_collecting(
     ctx: &FnCtx<'_>,
     expr: &perry_hir::Expr,
 ) -> bool {
-    masked_window_expression_proof(ctx, expr).is_some()
+    masked_window_expression_proof(ctx, expr, None).is_some()
 }
 
 /// Facts about a value whose evaluation has also been proved non-collecting.
@@ -2034,6 +2075,7 @@ struct MaskedWindowExpressionProof {
 fn masked_window_expression_proof(
     ctx: &FnCtx<'_>,
     expr: &perry_hir::Expr,
+    accumulator: Option<u32>,
 ) -> Option<MaskedWindowExpressionProof> {
     use perry_hir::{BinaryOp, CompareOp, Expr, UnaryOp};
     let proof = |inert, numeric| MaskedWindowExpressionProof { inert, numeric };
@@ -2046,12 +2088,22 @@ fn masked_window_expression_proof(
             if !matches!(object.as_ref(), Expr::LocalGet(_)) {
                 return None;
             }
-            masked_window_expression_proof(ctx, index)?;
+            masked_window_expression_proof(ctx, index, accumulator)?;
             Some(proof(true, true))
         }
         Expr::Number(_) | Expr::Integer(_) => Some(proof(true, true)),
         Expr::Bool(_) | Expr::Null | Expr::Undefined => Some(proof(true, false)),
-        Expr::LocalGet(_) => {
+        Expr::LocalGet(id) => {
+            // A pending accumulator is numeric BY CONTRACT, not by static
+            // proof: the clone's entry emits a genuine-double tag check on it
+            // and branches to the slow copy otherwise, and the caller verifies
+            // (with the same collector the lowering runs) that every in-clone
+            // write keeps it numeric. Static analysis cannot see this because
+            // the accumulator's own writes read the guarded array, whose
+            // element proof only exists once the guard has run.
+            if accumulator == Some(*id) {
+                return Some(proof(true, true));
+            }
             let inert = crate::rooting::expr_is_inert_primitive(ctx, expr);
             Some(proof(
                 inert,
@@ -2065,8 +2117,8 @@ fn masked_window_expression_proof(
             crate::rooting::expr_is_inert_primitive(ctx, expr).then(|| proof(true, true))
         }
         Expr::Binary { op, left, right } => {
-            let left = masked_window_expression_proof(ctx, left)?;
-            let right = masked_window_expression_proof(ctx, right)?;
+            let left = masked_window_expression_proof(ctx, left, accumulator)?;
+            let right = masked_window_expression_proof(ctx, right, accumulator)?;
             if matches!(op, BinaryOp::Add) {
                 if !left.numeric || !right.numeric {
                     return None;
@@ -2077,23 +2129,23 @@ fn masked_window_expression_proof(
             Some(proof(true, true))
         }
         Expr::Compare { op, left, right } => {
-            let left = masked_window_expression_proof(ctx, left)?;
-            let right = masked_window_expression_proof(ctx, right)?;
+            let left = masked_window_expression_proof(ctx, left, accumulator)?;
+            let right = masked_window_expression_proof(ctx, right, accumulator)?;
             if !matches!(op, CompareOp::Eq | CompareOp::Ne) && (!left.inert || !right.inert) {
                 return None;
             }
             Some(proof(true, false))
         }
         Expr::Unary { op, operand } => {
-            let operand = masked_window_expression_proof(ctx, operand)?;
+            let operand = masked_window_expression_proof(ctx, operand, accumulator)?;
             if !matches!(op, UnaryOp::Not) && !operand.inert {
                 return None;
             }
             Some(proof(true, !matches!(op, UnaryOp::Not)))
         }
         Expr::Logical { left, right, .. } => {
-            let left = masked_window_expression_proof(ctx, left)?;
-            let right = masked_window_expression_proof(ctx, right)?;
+            let left = masked_window_expression_proof(ctx, left, accumulator)?;
+            let right = masked_window_expression_proof(ctx, right, accumulator)?;
             Some(proof(
                 left.inert && right.inert,
                 left.numeric && right.numeric,
@@ -2104,25 +2156,25 @@ fn masked_window_expression_proof(
             then_expr,
             else_expr,
         } => {
-            masked_window_expression_proof(ctx, condition)?;
-            let then_expr = masked_window_expression_proof(ctx, then_expr)?;
-            let else_expr = masked_window_expression_proof(ctx, else_expr)?;
+            masked_window_expression_proof(ctx, condition, accumulator)?;
+            let then_expr = masked_window_expression_proof(ctx, then_expr, accumulator)?;
+            let else_expr = masked_window_expression_proof(ctx, else_expr, accumulator)?;
             Some(proof(
                 then_expr.inert && else_expr.inert,
                 then_expr.numeric && else_expr.numeric,
             ))
         }
         Expr::Void(value) | Expr::TypeOf(value) | Expr::BooleanCoerce(value) => {
-            masked_window_expression_proof(ctx, value)?;
+            masked_window_expression_proof(ctx, value, accumulator)?;
             Some(proof(true, false))
         }
         Expr::NumberCoerce(value) => {
-            let value = masked_window_expression_proof(ctx, value)?;
+            let value = masked_window_expression_proof(ctx, value, accumulator)?;
             value.inert.then(|| proof(true, true))
         }
         Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
             for value in [left.as_ref(), right.as_ref()] {
-                if !masked_window_expression_proof(ctx, value)?.inert {
+                if !masked_window_expression_proof(ctx, value, accumulator)?.inert {
                     return None;
                 }
             }
@@ -2130,7 +2182,7 @@ fn masked_window_expression_proof(
         }
         Expr::MathMin(values) | Expr::MathMax(values) => {
             for value in values {
-                if !masked_window_expression_proof(ctx, value)?.inert {
+                if !masked_window_expression_proof(ctx, value, accumulator)?.inert {
                     return None;
                 }
             }
@@ -2144,7 +2196,7 @@ fn masked_window_expression_proof(
         | Expr::MathTrunc(value)
         | Expr::MathSign(value)
         | Expr::MathF16round(value) => {
-            let value = masked_window_expression_proof(ctx, value)?;
+            let value = masked_window_expression_proof(ctx, value, accumulator)?;
             if !value.inert {
                 return None;
             }
@@ -2460,6 +2512,7 @@ fn push_packed_f64_range_facts(
                     values_i32,
                     elem: crate::expr::MaskedWindowElem::PlainF64,
                     allows_stores: allow_masked_stores,
+                    numeric_accumulators: numeric_accumulators.to_vec(),
                 });
         }
     }
@@ -2562,6 +2615,7 @@ fn lower_masked_window_ta_tier(
                 values_i32,
                 elem,
                 allows_stores: false,
+                numeric_accumulators: Vec::new(),
             });
     }
     lower_for_after_init_with_i32_bound(

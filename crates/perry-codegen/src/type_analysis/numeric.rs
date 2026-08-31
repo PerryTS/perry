@@ -189,6 +189,13 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 // after an entry tag check, and its sole write adds a proven
                 // string length. The fact exists only while lowering that
                 // clone, so the slow copy retains dynamic `+` semantics.
+                // The dense masked-window clone's twin: same entry tag
+                // check, same numeric-preserving write proof.
+                || ctx
+                    .masked_window_array_facts
+                    .iter()
+                    .rev()
+                    .any(|fact| fact.numeric_accumulators.contains(id))
                 || ctx
                     .string_window_array_facts
                     .iter()

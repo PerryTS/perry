@@ -39,6 +39,7 @@ fn accumulator_rhs_is_numeric(
     array_id: u32,
     counter_id: u32,
     offset_reads_inlined: bool,
+    masked_reads_validated: bool,
     candidates: &std::collections::BTreeSet<u32>,
 ) -> bool {
     match expr {
@@ -67,8 +68,21 @@ fn accumulator_rhs_is_numeric(
                 // expression lowers to a tag-test diamond over
                 // `js_dynamic_string_or_number_add` — the same cost #9060 and
                 // #9091 removed for the bare-counter form.
-                _ if offset_reads_inlined => crate::expr::packed_f64_loop_index_parts(index)
-                    .is_some_and(|(i, _)| i == counter_id),
+                // `_ if offset_reads_inlined` used to sit above the masked
+                // arm as its own guarded catch-all — which swallowed every
+                // non-offset index whenever the flag was set, so the masked
+                // test below it was unreachable. One combined catch-all keeps
+                // both reachable.
+                _ => {
+                    (offset_reads_inlined
+                        && crate::expr::packed_f64_loop_index_parts(index)
+                            .is_some_and(|(i, _)| i == counter_id))
+                        // Dense masked mode: the entry guard validated the
+                        // union of every static window hole-free, so an
+                        // in-window read is a genuine Number.
+                        || (masked_reads_validated
+                            && crate::collectors::static_index_window(index).is_some())
+                }
                 _ => false,
             }
         }
@@ -82,6 +96,7 @@ fn accumulator_rhs_is_numeric(
                 array_id,
                 counter_id,
                 offset_reads_inlined,
+                masked_reads_validated,
                 candidates,
             ) && accumulator_rhs_is_numeric(
                 ctx,
@@ -89,6 +104,7 @@ fn accumulator_rhs_is_numeric(
                 array_id,
                 counter_id,
                 offset_reads_inlined,
+                masked_reads_validated,
                 candidates,
             )
         }
@@ -98,6 +114,7 @@ fn accumulator_rhs_is_numeric(
             array_id,
             counter_id,
             offset_reads_inlined,
+            masked_reads_validated,
             candidates,
         ),
         Expr::Unary { op, operand } => {
@@ -110,6 +127,7 @@ fn accumulator_rhs_is_numeric(
                 array_id,
                 counter_id,
                 offset_reads_inlined,
+                masked_reads_validated,
                 candidates,
             )
         }
@@ -126,6 +144,7 @@ fn accumulator_rhs_is_numeric(
             array_id,
             counter_id,
             offset_reads_inlined,
+            masked_reads_validated,
             candidates,
         ),
         Expr::MathImul(l, r) | Expr::MathPow(l, r) => {
@@ -135,6 +154,7 @@ fn accumulator_rhs_is_numeric(
                 array_id,
                 counter_id,
                 offset_reads_inlined,
+                masked_reads_validated,
                 candidates,
             ) && accumulator_rhs_is_numeric(
                 ctx,
@@ -142,6 +162,7 @@ fn accumulator_rhs_is_numeric(
                 array_id,
                 counter_id,
                 offset_reads_inlined,
+                masked_reads_validated,
                 candidates,
             )
         }
@@ -152,6 +173,7 @@ fn accumulator_rhs_is_numeric(
                 array_id,
                 counter_id,
                 offset_reads_inlined,
+                masked_reads_validated,
                 candidates,
             )
         }),
@@ -305,6 +327,7 @@ pub(super) fn collect_numeric_accumulators(
     array_id: u32,
     counter_id: u32,
     offset_reads_inlined: bool,
+    masked_reads_validated: bool,
 ) -> Vec<u32> {
     if !packed_loop_numeric_accumulators_enabled() {
         return Vec::new();
@@ -337,6 +360,7 @@ pub(super) fn collect_numeric_accumulators(
                         array_id,
                         counter_id,
                         offset_reads_inlined,
+                        masked_reads_validated,
                         &candidates,
                     ),
                     // `Update` (++/--): ToNumeric(Number) ± 1 is a Number.
