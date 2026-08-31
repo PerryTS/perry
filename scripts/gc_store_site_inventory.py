@@ -553,7 +553,13 @@ MIN_STEMS = 4
 # looked at, not walked past. "*" covers the shared emitter file, whose
 # barrier arm every census stem exercises.
 CODEGEN_BARRIERED_BINDINGS = {
-    "crates/perry-codegen/src/expr/write_barrier.rs": ("*", 2),
+    # Three markers since #9237: the two shared slot-store emitters, and
+    # `emit_scalar_aware_store_gated_on_pointerness`, whose unconditional slot
+    # write is discharged by its caller's stem-labelled barrier — for its only
+    # caller (`lower_index_set_fast`) that is `idxset.inbounds`, a stem already
+    # registered in `VERIFIED_BARRIER_STEMS` with a live IR witness, so the new
+    # claim brings no new obligation of its own.
+    "crates/perry-codegen/src/expr/write_barrier.rs": ("*", 3),
     # Two markers: the original generation-tested push store and, since #8872,
     # the unconditional element store inside `emit_dynamic_pointer_push_store`,
     # which the same `apush`-stem caller barriers after its layout bookkeeping.

@@ -817,9 +817,26 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
     let ir = ir_for(module);
     let inbounds_ir = block_between(&ir, "\nidxset.inbounds.", "\nidxset.check_cap.");
 
+    // #9237: the layout note took the same treatment #7715 gave the barrier
+    // below — it now sits behind a live test of the stored value (and of the
+    // slot's previous value, since a pointer overwritten by a scalar is still a
+    // transition the runtime must see), rather than inline in `idxset.inbounds`.
+    // So this follows the EDGE too: the arm must branch into the gate, and the
+    // gate must still hold the note. Asserting only that the call exists
+    // somewhere would pass even if this arm stopped reaching it.
     assert!(
-        inbounds_ir.contains("call void @js_gc_note_slot_layout"),
-        "pointer stores into statically numeric arrays must update slot layout"
+        inbounds_ir.contains("label %idxset.inbounds.gc_bookkeeping."),
+        "the in-bounds arm no longer branches into the #9237 pointer gate, so a \
+         pointer store here reaches no layout note at all:\n{inbounds_ir}"
+    );
+    let note_gate_ir = block_between(
+        &ir,
+        "\nidxset.inbounds.gc_bookkeeping.",
+        "\nidxset.inbounds.gc_bookkeeping.done.",
+    );
+    assert!(
+        note_gate_ir.contains("call void @js_gc_note_slot_layout"),
+        "pointer stores into statically numeric arrays must update slot layout:\n{note_gate_ir}"
     );
     // #7715: the barrier still exists and is still reached from this arm, but
     // it now sits in its own block behind a live test of the stored value (and
@@ -828,10 +845,18 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
     // gate, and the block the gate leads to must still hold the call. Asserting
     // only that the call exists somewhere in the module would pass even if this
     // arm stopped reaching it.
+    // The edge is asserted on the whole module rather than on the text between
+    // `idxset.inbounds.` and `idxset.check_cap.`: #9237 inserted the pointer and
+    // raw-f64 gates into this arm's chain, and their blocks are emitted after
+    // `check_cap`, so a region-slice of the IR no longer contains the branch even
+    // though the arm still reaches it (`inbounds` → `gc_bookkeeping` →
+    // `numnote` → `barrier.maybe` → `barrier`). The label is named for this arm
+    // and no other arm emits it, so a branch to it is still evidence that THIS
+    // arm reaches the barrier — which is what the assertion is for.
     assert!(
-        inbounds_ir.contains("label %idxset.inbounds.barrier.maybe."),
+        ir.contains("label %idxset.inbounds.barrier.maybe."),
         "the in-bounds arm no longer branches into the #7715 value gate, so a \
-         pointer store here reaches no barrier at all:\n{inbounds_ir}"
+         pointer store here reaches no barrier at all:\n{ir}"
     );
     let gate_ir = block_between(
         &ir,
