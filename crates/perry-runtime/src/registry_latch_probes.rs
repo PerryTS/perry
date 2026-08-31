@@ -330,36 +330,74 @@ fn uint8array_probe_rejects_an_out_of_window_address_without_touching_the_regist
     );
 }
 
-/// The symbol window. `is_registered_symbol` is asked about arbitrary
+/// The symbol address FILTER. `is_registered_symbol` is asked about arbitrary
 /// pointer-shaped values on the generic property, coercion and iteration paths,
 /// and the answer is essentially always "no" — but a symbol the collector has
 /// EVACUATED must keep answering "yes" from its new address, which is what the
-/// forwarding rewrite's widening is for (see
+/// forwarding rewrite's admission is for (see
 /// `gc::tests::copying_side_tables::test_copying_minor_keeps_moved_symbol_visible_to_the_range_filter`).
+///
+/// A Bloom filter has false positives, so "the filter rejected this particular
+/// address" is not by itself a proof that it can reject: the probe counter is,
+/// and the second half — an address the filter must ADMIT — is what makes the
+/// first half able to fail.
 #[test]
-fn symbol_probe_rejects_an_out_of_window_address_without_touching_the_registry() {
+fn symbol_probe_rejects_a_filtered_address_without_touching_the_registry() {
     let sym = unsafe { crate::symbol::alloc_symbol(std::ptr::null_mut(), false) } as usize;
     assert!(sym != 0, "test premise: the symbol allocated");
-    let (lo, hi) = crate::symbol::test_symbol_addr_range();
-    assert!(
-        lo <= sym && sym <= hi,
-        "registering a symbol must widen the window to cover it: \
-             {sym:#x} outside [{lo:#x}, {hi:#x}]"
-    );
 
     let before = crate::symbol::test_symbol_registry_probe_count();
     assert!(!crate::symbol::is_registered_symbol(FAR_OUTSIDE_ANY_WINDOW));
     assert_eq!(
         crate::symbol::test_symbol_registry_probe_count(),
         before,
-        "the address window must answer without reaching SYMBOL_POINTERS"
+        "the address filter must answer without reaching SYMBOL_POINTERS"
     );
 
     assert!(
         crate::symbol::is_registered_symbol(sym),
-        "the window must not hide a registered symbol"
+        "the filter must not hide a registered symbol"
     );
-    assert!(crate::symbol::test_symbol_registry_probe_count() > before);
+    assert!(
+        crate::symbol::test_symbol_registry_probe_count() > before,
+        "a filter-admitted address must reach SYMBOL_POINTERS"
+    );
+}
+
+/// The class-prototype address filter. The probe behind it is a LINEAR SCAN
+/// (#9225) reached through a thread-local and an `RwLock`, and its one caller —
+/// `descriptor_state::disable_inline_guards_for_descriptor_target` — runs on
+/// every `Object.defineProperty`, so the rejection is what keeps a bundle's
+/// `__export(exports, { … })` init off the scan entirely.
+#[test]
+fn class_prototype_probe_rejects_a_filtered_address_without_scanning() {
+    use crate::object as class_registry;
+
+    // A registered prototype, seeded through the real store so the filter is
+    // admitted exactly as production admits it.
+    let proto = crate::object::js_object_alloc(0, 2) as usize;
+    assert!(proto != 0, "test premise: the prototype object allocated");
+    class_registry::test_seed_class_prototype_object_root(0x7f00_0001, proto);
+
+    let before = class_registry::test_class_prototype_scan_count();
+    assert!(
+        !class_registry::is_registered_class_prototype_object(FAR_OUTSIDE_ANY_WINDOW),
+        "an address no registration admitted is not a class prototype"
+    );
+    assert_eq!(
+        class_registry::test_class_prototype_scan_count(),
+        before,
+        "the address filter must answer without reaching the scan"
+    );
+
+    assert!(
+        class_registry::is_registered_class_prototype_object(proto),
+        "the filter must not hide a registered class prototype"
+    );
+    assert!(
+        class_registry::test_class_prototype_scan_count() > before,
+        "a filter-admitted address must reach the scan"
+    );
 }
 
 /// `alloc_shared_sab` publishes a backing that `is_registered_buffer` reports

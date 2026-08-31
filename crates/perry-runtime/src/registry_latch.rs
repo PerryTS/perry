@@ -61,7 +61,7 @@
 //! publishes a heap address through a lock-free path, so the stronger ordering
 //! is what ships.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 /// A one-way "this feature has been registered at least once" flag.
 ///
@@ -232,46 +232,210 @@ impl RegistryAddrWindow {
         let hi = self.hi.load(Ordering::Acquire);
         (lo <= hi).then_some((lo, hi))
     }
+}
 
-    /// Test hook: the raw `(lo, hi)` pair, empty window included, for a test
-    /// that needs to compare the bounds themselves rather than ask whether the
-    /// window is open.
-    #[cfg(test)]
-    pub(crate) fn raw_bounds_for_tests(&self) -> (usize, usize) {
+/// A monotone "which addresses have ever been registered?" **set filter** —
+/// a Bloom filter over the registered addresses, for the probes a
+/// [`RegistryAddrWindow`] cannot discriminate.
+///
+/// # Why a second shape was needed
+///
+/// The window works when the registered addresses sit in a narrow band. Two of
+/// the probes measured after #9272 do not: their entries are ordinary GC-heap
+/// objects, interleaved with everything else the program allocates, so `[lo,
+/// hi]` grows to cover most of the heap and stops rejecting. Measured on
+/// `claude-code --help` by replaying each probe's real argument stream against
+/// the window the registrations would have built:
+///
+/// | probe | calls | a window rejects | this filter rejects |
+/// |---|---|---|---|
+/// | `is_registered_symbol` | 378,163 | 38.3% | **99.58%** |
+/// | `is_registered_class_prototype_object` | 26,290 | 54.0% | **99.05%** |
+///
+/// (`is_uint8array_buffer`, whose entries are `BufferHeader`s, is the opposite
+/// case: a window rejects **100%** of its 540,328 calls, so it keeps the
+/// cheaper shape. Both are in the tree on purpose; pick by measurement.)
+///
+/// # The contract, which is the window's contract
+///
+/// `may_contain` returning `false` means "definitively not registered". A Bloom
+/// filter has false positives and no false negatives, which is exactly the
+/// asymmetry the probes need: a false positive costs the ordinary lookup that
+/// was already there, and a false negative — the one dangerous answer — cannot
+/// occur while every registration sets its bits before it publishes.
+///
+/// Bits are only ever SET, never cleared, so unregistration (death pruning, the
+/// GC's dead-buffer sweep) leaves the filter a weaker approximation, never a
+/// wrong one. There is deliberately no `clear`.
+///
+/// # Sizing
+///
+/// 1,024 bits (16 `AtomicU64`, two cache lines) and three probes per address.
+/// `claude-code --help` registers **100** symbols and **160** class prototypes,
+/// so at 160 entries the theoretical false-positive rate is
+/// `(1 - e^(-3·160/1024))³ ≈ 1.6%`; the measured rates on the real address
+/// streams were 0.26% and 0.49%. A table that grows far past that degrades
+/// gracefully — towards the behaviour that exists today, which is the lookup
+/// itself.
+///
+/// # The ordering rule (binding, and identical to [`RegistryAddrWindow`]'s)
+///
+/// **[`admit`](Self::admit) must run BEFORE the registry mutation it
+/// advertises.** Setting the bits after the insert opens a window in which an
+/// address is registered but the filter denies it.
+///
+/// The three words are separate atomics, so a racing reader can observe a mix
+/// of old and new. That is harmless for the same reason it is harmless for the
+/// window: each word only ever gains bits, so once `may_contain` holds for an
+/// address it holds forever, and a partially-observed filter is only ever a
+/// weaker filter — never one that rejects something it used to accept.
+///
+/// Cross-thread visibility rests on `admit`'s `AcqRel` read-modify-writes, and
+/// on `may_contain`'s `Acquire` loads, exactly as for the window. As there,
+/// `admit` performs its RMWs unconditionally: a `Relaxed` "already set?"
+/// pre-check would let a thread publish an address without ever acquiring
+/// another thread's bit-setting, so a reader synchronising only with this
+/// thread could miss it.
+pub struct RegistryAddrFilter {
+    words: [AtomicU64; Self::WORDS],
+}
+
+impl Default for RegistryAddrFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for RegistryAddrFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegistryAddrFilter")
+            .field("bits_set", &self.bits_set())
+            .finish()
+    }
+}
+
+impl RegistryAddrFilter {
+    const WORDS: usize = 16;
+    const BITS: u64 = (Self::WORDS as u64) * 64;
+
+    /// An empty filter: contains no address at all.
+    pub const fn new() -> Self {
+        Self {
+            words: [const { AtomicU64::new(0) }; Self::WORDS],
+        }
+    }
+
+    /// The three bit positions for `addr`.
+    ///
+    /// Registered addresses are allocator results, so the low three bits carry
+    /// no information and are shifted out; the multiply then spreads what is
+    /// left across the whole word, and the three slices are taken from the top,
+    /// where a 64-bit multiply mixes best. Deliberately branch-free and
+    /// division-free — this runs inline at every call site of the probes it
+    /// guards.
+    #[inline(always)]
+    const fn bit_positions(addr: usize) -> (u64, u64, u64) {
+        let h = ((addr as u64) >> 3).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         (
-            self.lo.load(Ordering::Acquire),
-            self.hi.load(Ordering::Acquire),
+            (h >> 54) % Self::BITS,
+            (h >> 44) % Self::BITS,
+            (h >> 34) % Self::BITS,
         )
     }
 
-    /// Test hook: empty the window, returning the bounds that were there.
+    #[inline(always)]
+    fn bit_is_set(&self, bit: u64) -> bool {
+        let word = self.words[(bit / 64) as usize].load(Ordering::Acquire);
+        word & (1u64 << (bit % 64)) != 0
+    }
+
+    /// `false` ⟹ `addr` is definitively absent from every table this filter
+    /// covers, so the caller can answer "not found" without touching one.
     ///
-    /// Only a test wants this, and only a test may have it: the whole soundness
-    /// argument is that the window never narrows, so a production narrowing
-    /// would make a live registered address read as unregistered. A test that
-    /// calls this MUST put back at least what it took (see
-    /// `symbol::SymbolAddrRangeGuard`), or a later test in the same binary
-    /// inherits a window too narrow for addresses registered before it ran.
+    /// This is the hot side, and `inline(always)` for the same reason the
+    /// window's is: the point is that the common negative answer costs a load
+    /// and a test at the call site rather than a call into the registry probe.
+    /// The `&&` chain short-circuits, so most rejections read one word.
+    #[inline(always)]
+    pub fn may_contain(&self, addr: usize) -> bool {
+        let (a, b, c) = Self::bit_positions(addr);
+        self.bit_is_set(a) && self.bit_is_set(b) && self.bit_is_set(c)
+    }
+
+    /// Add `addr` to the filter.
+    ///
+    /// MUST run **before** the guarded table is mutated — see the type docs.
+    #[inline]
+    pub fn admit(&self, addr: usize) {
+        let (a, b, c) = Self::bit_positions(addr);
+        for bit in [a, b, c] {
+            self.words[(bit / 64) as usize].fetch_or(1u64 << (bit % 64), Ordering::AcqRel);
+        }
+    }
+
+    /// How many bits are set. Diagnostics and tests only: a filter whose bits
+    /// are nearly all set has stopped discriminating, and a test that wants to
+    /// prove the fast path RAN needs to know the filter is not saturated.
+    pub fn bits_set(&self) -> u32 {
+        self.words
+            .iter()
+            .map(|w| w.load(Ordering::Acquire).count_ones())
+            .sum()
+    }
+
+    /// Test hook: empty the filter, so a test can establish a state in which
+    /// only what it registers is admitted.
+    ///
+    /// Only a test may have this: the soundness argument is that bits are never
+    /// cleared, so a production clear would make live registered addresses read
+    /// as unregistered. A test that calls this must restore what it cleared —
+    /// see [`Self::restore_for_tests`].
     #[cfg(test)]
-    pub(crate) fn take_bounds_for_tests(&self) -> (usize, usize) {
-        let previous = self.raw_bounds_for_tests();
-        self.lo.store(usize::MAX, Ordering::Release);
-        self.hi.store(0, Ordering::Release);
+    pub(crate) fn take_for_tests(&self) -> [u64; Self::WORDS] {
+        let mut previous = [0u64; Self::WORDS];
+        for (slot, word) in previous.iter_mut().zip(self.words.iter()) {
+            *slot = word.swap(0, Ordering::AcqRel);
+        }
         previous
     }
 
-    /// Test hook: widen back to at least the pair
-    /// [`take_bounds_for_tests`](Self::take_bounds_for_tests) returned.
-    ///
-    /// Deliberately not `admit(lo); admit(hi)`: `admit` moves BOTH bounds, so
-    /// restoring the empty window `(usize::MAX, 0)` that way would push `hi` to
-    /// `usize::MAX` and leave the window covering the entire address space —
-    /// sound, but it would silently disable the fast path for the rest of the
-    /// test binary and every "the window rejected it" assertion after it.
+    /// Test hook: OR the saved bits back in.
     #[cfg(test)]
-    pub(crate) fn restore_bounds_for_tests(&self, lo: usize, hi: usize) {
-        self.lo.fetch_min(lo, Ordering::AcqRel);
-        self.hi.fetch_max(hi, Ordering::AcqRel);
+    pub(crate) fn restore_for_tests(&self, saved: [u64; Self::WORDS]) {
+        for (word, bits) in self.words.iter().zip(saved.iter()) {
+            word.fetch_or(*bits, Ordering::AcqRel);
+        }
+    }
+
+    /// Test hook: the current bit words, as a plain value.
+    #[cfg(test)]
+    pub(crate) fn snapshot_for_tests(&self) -> [u64; Self::WORDS] {
+        let mut words = [0u64; Self::WORDS];
+        for (slot, word) in words.iter_mut().zip(self.words.iter()) {
+            *slot = word.load(Ordering::Acquire);
+        }
+        words
+    }
+
+    /// Test hook: what [`may_contain`](Self::may_contain) WOULD have answered
+    /// for `addr` against a snapshot taken earlier.
+    ///
+    /// This is what lets a test prove a widening was load-bearing rather than
+    /// lucky: "the address the collector moved this symbol to is not one the
+    /// filter already happened to accept" is only checkable against the filter
+    /// as it stood BEFORE the move.
+    #[cfg(test)]
+    pub(crate) fn snapshot_may_contain(words: &[u64; Self::WORDS], addr: usize) -> bool {
+        let (a, b, c) = Self::bit_positions(addr);
+        [a, b, c]
+            .into_iter()
+            .all(|bit| words[(bit / 64) as usize] & (1u64 << (bit % 64)) != 0)
+    }
+
+    /// The word count, so a caller can name the snapshot type.
+    #[cfg(test)]
+    pub(crate) const fn words() -> usize {
+        Self::WORDS
     }
 }
 
@@ -371,6 +535,102 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn empty_filter_contains_nothing() {
+        let f = RegistryAddrFilter::new();
+        assert_eq!(f.bits_set(), 0);
+        for addr in [0usize, 8, 0x1000, 0x7fff_ffff_f000, usize::MAX] {
+            assert!(
+                !f.may_contain(addr),
+                "an empty filter must contain nothing, but accepted {addr:#x}"
+            );
+        }
+    }
+
+    /// The one direction that must never fail: an admitted address is always
+    /// accepted afterwards. A Bloom filter is allowed to accept addresses it
+    /// was never given; it is never allowed to reject one it was.
+    #[test]
+    fn filter_never_rejects_an_admitted_address() {
+        let f = RegistryAddrFilter::new();
+        let mut admitted = Vec::new();
+        // A realistic spread: 8-byte-aligned addresses across a wide heap.
+        for i in 0..256usize {
+            let addr = 0x1_0000_0000usize + i * 0x2a8;
+            f.admit(addr);
+            admitted.push(addr);
+            for &a in &admitted {
+                assert!(
+                    f.may_contain(a),
+                    "{a:#x} was admitted and must stay accepted after {i} \
+                     further admissions"
+                );
+            }
+        }
+        assert!(f.bits_set() > 0);
+    }
+
+    /// A filter that accepted everything would satisfy the test above without
+    /// doing anything, so this is the half that makes it able to fail: with a
+    /// realistic population the filter must still reject the overwhelming
+    /// majority of addresses it was never given.
+    #[test]
+    fn filter_rejects_almost_everything_it_was_never_given() {
+        let f = RegistryAddrFilter::new();
+        // 160 entries — the number of class prototypes `claude-code --help`
+        // registers, i.e. the population this size was chosen for.
+        for i in 0..160usize {
+            f.admit(0x2_0000_0000usize + i * 0x330);
+        }
+        let probes = 20_000usize;
+        let accepted = (0..probes)
+            .filter(|i| f.may_contain(0x3_0000_0000usize + i * 8))
+            .count();
+        assert!(
+            accepted * 20 < probes,
+            "at 160 entries the filter must reject far more than 95% of \
+             unregistered addresses; it accepted {accepted} of {probes}"
+        );
+    }
+
+    #[test]
+    fn concurrent_filter_admits_never_drop_an_address() {
+        static FILTER: RegistryAddrFilter = RegistryAddrFilter::new();
+        const PER_THREAD: usize = 512;
+        let handles: Vec<_> = (0..4usize)
+            .map(|t| {
+                std::thread::spawn(move || {
+                    for i in 0..PER_THREAD {
+                        FILTER.admit(0x5_0000_0000usize + (t * PER_THREAD + i) * 8);
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        for t in 0..4usize {
+            for i in 0..PER_THREAD {
+                let addr = 0x5_0000_0000usize + (t * PER_THREAD + i) * 8;
+                assert!(
+                    FILTER.may_contain(addr),
+                    "{addr:#x} was admitted by thread {t} and must be visible \
+                     here — a lost `fetch_or` is a misclassified pointer"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn filter_admit_is_visible_to_another_thread() {
+        static FILTER: RegistryAddrFilter = RegistryAddrFilter::new();
+        assert!(!FILTER.may_contain(0x9_0000_1000));
+        std::thread::spawn(|| FILTER.admit(0x9_0000_1000))
+            .join()
+            .unwrap();
+        assert!(FILTER.may_contain(0x9_0000_1000));
     }
 
     #[test]

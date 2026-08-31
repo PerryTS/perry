@@ -1776,6 +1776,41 @@ pub fn is_registered_class_prototype_object(ptr: usize) -> bool {
     if crate::value::addr_class::is_handle_band(ptr) {
         return false;
     }
+    // An address no registration ever admitted cannot be in the map, so reject
+    // it here — inline, and in particular before the `map.values().any(…)`
+    // linear scan below, which is what this probe actually costs (#9225).
+    // 99.05% of the calls on `claude-code --help` end here.
+    if !crate::object::class_registry::CLASS_PROTOTYPE_ADDR_FILTER.may_contain(ptr) {
+        // Machine-check the writer set rather than enumerate it. The filter is
+        // sound only if EVERY route that stores an address into
+        // `CLASS_PROTOTYPE_OBJECTS` admits it first — the insert, both GC root
+        // scanners, the per-slot GC step and the test seeds — and a route added
+        // without admitting would not crash: it would silently report a live
+        // prototype as "not a prototype". In a debug build every rejection is
+        // therefore re-derived from the map itself, which turns that into a
+        // panic in the first test that exercises the route. Compiled out
+        // entirely in release.
+        #[cfg(debug_assertions)]
+        {
+            let present = CLASS_PROTOTYPE_OBJECTS.with(|table| {
+                table.read().is_ok_and(|guard| {
+                    guard
+                        .as_ref()
+                        .is_some_and(|map| map.values().any(|&p| p == ptr))
+                })
+            });
+            assert!(
+                !present,
+                "CLASS_PROTOTYPE_ADDR_FILTER rejected {ptr:#x}, but it IS a \
+                 registered class prototype. Some route stored it into \
+                 CLASS_PROTOTYPE_OBJECTS without calling \
+                 `note_class_prototype_object_registered` first."
+            );
+        }
+        return false;
+    }
+    #[cfg(test)]
+    TEST_CLASS_PROTOTYPE_SCANS.with(|c| c.set(c.get().wrapping_add(1)));
     CLASS_PROTOTYPE_OBJECTS.with(|table| {
         if let Ok(guard) = table.read() {
             if let Some(map) = guard.as_ref() {
@@ -1784,6 +1819,20 @@ pub fn is_registered_class_prototype_object(ptr: usize) -> bool {
         }
         false
     })
+}
+
+#[cfg(test)]
+thread_local! {
+/// Test-only count of `is_registered_class_prototype_object` calls that got
+/// past `CLASS_PROTOTYPE_ADDR_FILTER` and reached the linear scan. The filter
+/// is a fast path, and a fast path nobody can prove ran is not a fast path
+/// (same contract as `buffer::header::TEST_BUFFER_REGISTRY_PROBES`).
+    static TEST_CLASS_PROTOTYPE_SCANS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_class_prototype_scan_count() -> u64 {
+    TEST_CLASS_PROTOTYPE_SCANS.with(|c| c.get())
 }
 
 /// Walk the prototype chain of `class_id` and return the id of the class that

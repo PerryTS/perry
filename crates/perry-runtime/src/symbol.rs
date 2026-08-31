@@ -464,22 +464,29 @@ pub(crate) fn test_disable_symbol_magic_screen(disabled: bool) -> bool {
 /// Death pruning removes entries without narrowing the range, which is
 /// harmless: those pointers reach the lookup, which correctly says no.
 ///
-/// # Why this is a [`RegistryAddrWindow`] and why the probe checks it INLINE
+/// # Why this is a filter and not the `[lo, hi]` range #9177 shipped
 ///
-/// #9177 put this filter *inside* `is_registered_symbol_slow`, so a probe that
-/// the range rejects still paid the out-of-line call, a `OnceLock` load for the
-/// env kill switch, and only then the two bound loads. Measured on
-/// `claude-code --help` that residue is 0.60% of the whole run. The window is
-/// two adjacent static loads and two compares, so hoisting it into
-/// `is_registered_symbol` — where it inlines into every call site — makes the
-/// common negative answer cost no call at all.
+/// #9177 put a monotone address RANGE in front of the registry mutex, inside
+/// `is_registered_symbol_slow`. Symbols are `gc_malloc`'d, so they are spread
+/// through the object heap rather than clustered: replaying this probe's real
+/// argument stream from a `claude-code --help` run against the range those
+/// registrations build, **only 38.3% of 378,163 calls fall outside it** — the
+/// other 61.7% were admitted and paid the process-global mutex and the hash
+/// anyway. That is where the probe's 0.65% of the run lives.
 ///
-/// The env kill switch went with the move. It guarded an enumeration ("every
+/// A Bloom filter over the same addresses rejects **99.58%** of them (measured
+/// the same way, by simulating the filter bit-for-bit against the real address
+/// stream: 376,555 of 378,163, with all 622 genuine `true` answers preserved
+/// and 985 false positives). It also inlines: the range check sat behind an
+/// out-of-line call and a `OnceLock` load for an env kill switch, and the
+/// filter replaces both with a load and a test at the call site.
+///
+/// The env kill switch went with it. It guarded an enumeration ("every
 /// inserter widens"), and this file no longer relies on one: `debug_assertions`
 /// builds re-derive every rejection from `SYMBOL_POINTERS` itself, so an
-/// inserter added without widening panics in the first test that touches it.
-static SYMBOL_ADDR_WINDOW: crate::registry_latch::RegistryAddrWindow =
-    crate::registry_latch::RegistryAddrWindow::new();
+/// inserter added without admitting panics in the first test that touches it.
+static SYMBOL_ADDR_FILTER: crate::registry_latch::RegistryAddrFilter =
+    crate::registry_latch::RegistryAddrFilter::new();
 
 /// Widen the address range to admit `ptr`.
 ///
@@ -495,7 +502,7 @@ static SYMBOL_ADDR_WINDOW: crate::registry_latch::RegistryAddrWindow =
 /// otherwise stop answering to `typeof`, symbol-keyed property lookup and
 /// `Symbol.iterator` dispatch — while still being perfectly alive.
 pub(crate) fn widen_symbol_addr_range(ptr: usize) {
-    SYMBOL_ADDR_WINDOW.admit(ptr);
+    SYMBOL_ADDR_FILTER.admit(ptr);
 }
 
 /// The ONLY way to put a pointer into `SYMBOL_POINTERS`. Widening and
@@ -508,20 +515,23 @@ pub(crate) fn insert_symbol_pointer_in_set(set: &mut PtrHashSet<usize>, ptr: usi
     set.insert(ptr);
 }
 
-/// Save/restore the range filter's bounds around a test that needs to observe
+/// Width of the symbol filter's bit array, for tests that snapshot it.
+#[cfg(test)]
+pub(crate) const SYMBOL_FILTER_WORDS: usize = crate::registry_latch::RegistryAddrFilter::words();
+
+/// Save/restore the address filter around a test that needs to observe
 /// a NARROW range. The bounds are process-global and only ever widen in
 /// production, so a test that resets them must put back at least what it
 /// found — otherwise a later test in the same binary gets a range too narrow
 /// for symbols registered before it ran, and fails for no reason of its own.
 #[cfg(test)]
-pub(crate) struct SymbolAddrRangeGuard(usize, usize);
+pub(crate) struct SymbolAddrRangeGuard([u64; SYMBOL_FILTER_WORDS]);
 
 #[cfg(test)]
 impl SymbolAddrRangeGuard {
     /// Reset to the empty range, so only what the test registers is admitted.
     pub(crate) fn reset() -> Self {
-        let (lo, hi) = SYMBOL_ADDR_WINDOW.take_bounds_for_tests();
-        SymbolAddrRangeGuard(lo, hi)
+        SymbolAddrRangeGuard(SYMBOL_ADDR_FILTER.take_for_tests())
     }
 }
 
@@ -530,13 +540,31 @@ impl Drop for SymbolAddrRangeGuard {
     fn drop(&mut self) {
         // Union of what we saved and what the test widened to, so neither the
         // pre-existing members nor the test's own survive outside the range.
-        SYMBOL_ADDR_WINDOW.restore_bounds_for_tests(self.0, self.1);
+        SYMBOL_ADDR_FILTER.restore_for_tests(self.0);
     }
 }
 
 #[cfg(test)]
-pub(crate) fn test_symbol_addr_range() -> (usize, usize) {
-    SYMBOL_ADDR_WINDOW.raw_bounds_for_tests()
+pub(crate) fn test_symbol_filter_snapshot() -> [u64; SYMBOL_FILTER_WORDS] {
+    SYMBOL_ADDR_FILTER.snapshot_for_tests()
+}
+
+/// What the filter WOULD have answered for `ptr` against a snapshot taken
+/// earlier. A test that moves a symbol uses this to show the forwarding
+/// rewrite's admission was load-bearing rather than a lucky collision.
+#[cfg(test)]
+pub(crate) fn test_symbol_filter_snapshot_may_contain(
+    words: &[u64; SYMBOL_FILTER_WORDS],
+    ptr: usize,
+) -> bool {
+    crate::registry_latch::RegistryAddrFilter::snapshot_may_contain(words, ptr)
+}
+
+/// How many bits the symbol filter has set — the discrimination it still has
+/// left. Tests use it to assert a fixture starts from a nearly-empty filter.
+#[cfg(test)]
+pub(crate) fn test_symbol_filter_bits_set() -> u32 {
+    SYMBOL_ADDR_FILTER.bits_set()
 }
 
 pub(crate) fn register_symbol_pointer(ptr: usize) {
@@ -617,10 +645,10 @@ pub fn is_registered_symbol(ptr: usize) -> bool {
     }
     // Armed says only that SOME symbol exists — which is true of every program
     // that touches a well-known symbol, i.e. essentially all of them. An
-    // address outside the registered window is not one of them, and rejecting
-    // it here keeps the negative answer inline: no call, no bound loads behind
-    // a call, no mutex. See `SYMBOL_ADDR_WINDOW`.
-    if !SYMBOL_ADDR_WINDOW.may_contain(ptr) {
+    // address the filter rejects is not one of them, and rejecting it here
+    // keeps the negative answer inline: no call, no mutex, no hash. This is
+    // 99.58% of the calls on `claude-code --help`. See `SYMBOL_ADDR_FILTER`.
+    if !SYMBOL_ADDR_FILTER.may_contain(ptr) {
         // Machine-check the writer set rather than enumerate it. Every route
         // into `SYMBOL_POINTERS` goes through `insert_symbol_pointer_in_set`,
         // which widens first — but that is a property of today's code, and a
@@ -638,10 +666,10 @@ pub fn is_registered_symbol(ptr: usize) -> bool {
                 .is_some_and(|g| g.as_ref().is_some_and(|s| s.contains(&ptr)));
             assert!(
                 !present,
-                "SYMBOL_ADDR_WINDOW rejected {ptr:#x}, but it IS in \
+                "SYMBOL_ADDR_FILTER rejected {ptr:#x}, but it IS in \
                  SYMBOL_POINTERS. Some route reached the set without going \
-                 through `insert_symbol_pointer_in_set` (which widens the \
-                 window) first."
+                 through `insert_symbol_pointer_in_set` (which admits into the \
+                 filter) first."
             );
         }
         return false;

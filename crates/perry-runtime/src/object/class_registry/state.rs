@@ -320,6 +320,56 @@ crate::perry_thread_local! {
     pub static CLASS_PROTOTYPE_OBJECTS: RwLock<Option<HashMap<u32, usize>>> = RwLock::new(None);
 }
 
+/// Monotone address filter over the values of [`CLASS_PROTOTYPE_OBJECTS`].
+///
+/// `is_registered_class_prototype_object` answers "is this heap object some
+/// class's registered prototype?" with `map.values().any(…)` — a LINEAR SCAN,
+/// #9225 — and the caller that asks it is
+/// `descriptor_state::disable_inline_guards_for_descriptor_target`, which runs
+/// on every `Object.defineProperty`. esbuild's `__export(exports, { … })` makes
+/// that thousands of calls per bundle: on `claude-code --help` the probe is
+/// called 26,290 times, answers `true` **122** times, and costs **0.46%** of
+/// the run — roughly 1,200 instructions per call, which is the scan.
+///
+/// A monotone `[lo, hi]` window cannot help here: prototypes are ordinary
+/// GC-heap objects interleaved with everything else, and replaying the real
+/// argument stream against the window the registrations build rejects only
+/// 54.0%. The same replay against this filter rejects **99.05%** (26,041 of
+/// 26,290; 122 genuine `true` answers preserved, 127 false positives), and it
+/// rejects them before the thread-local resolution, the `RwLock` and the scan.
+///
+/// Rejecting is sound because every route that puts an address into the map
+/// admits it here first — see [`note_class_prototype_object_registered`] — and
+/// removals never clear bits, which only makes the filter weaker, never wrong.
+/// The completeness of that writer set is machine-checked rather than
+/// enumerated: see the probe.
+///
+/// This does not close #9225. A false positive still pays the scan, so the
+/// table's O(n) slope survives at ~1% of its strength; the O(1) inverse index
+/// #9225 asks for is still the right structural fix, and this filter sits in
+/// front of it either way.
+pub(crate) static CLASS_PROTOTYPE_ADDR_FILTER: crate::registry_latch::RegistryAddrFilter =
+    crate::registry_latch::RegistryAddrFilter::new();
+
+/// Admit `addr` into [`CLASS_PROTOTYPE_ADDR_FILTER`].
+///
+/// EVERY route that stores an address into [`CLASS_PROTOTYPE_OBJECTS`] must
+/// call this **before** the address becomes findable — the insert below, the
+/// two GC root scanners and the per-slot GC step (all of which rewrite stored
+/// addresses through `visit_usize_slot`), and the test seeds. A route that
+/// forgets does not crash: the probe reports a live prototype as "not a
+/// prototype", so `getOwnPropertyDescriptor(C.prototype, …)` and the
+/// descriptor-guard disable silently change behaviour. The debug-build audit in
+/// the probe exists to turn that into a test failure.
+///
+/// The GC scanners admit AFTER the visitor rewrites the slot, which is still
+/// "before it is findable": they hold the table's write guard across both, so
+/// no reader can observe the new address until the guard drops.
+#[inline]
+pub(crate) fn note_class_prototype_object_registered(addr: usize) {
+    CLASS_PROTOTYPE_ADDR_FILTER.admit(addr);
+}
+
 crate::perry_thread_local! {
     /// The CONSTRUCTOR's `[[Prototype]]`, set by `Object.setPrototypeOf(Ctor, obj)`
     /// on a declared class (perry represents those as INT32 ClassRefs, not heap
@@ -492,6 +542,9 @@ pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut O
     if class_id == 0 || proto_ptr.is_null() {
         return;
     }
+    // Admit before the insert, so the address is never in the map while the
+    // filter still rejects it. See `note_class_prototype_object_registered`.
+    note_class_prototype_object_registered(proto_ptr as usize);
     CLASS_PROTOTYPE_OBJECTS.with(|table| {
         let mut guard = table.write().unwrap();
         if guard.is_none() {

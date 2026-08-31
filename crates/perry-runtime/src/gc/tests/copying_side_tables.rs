@@ -184,12 +184,11 @@ fn test_copying_minor_keeps_moved_symbol_visible_to_the_range_filter() {
     crate::symbol::test_seed_symbol_pointer_root(sym_key);
     js_shadow_slot_set(0, ptr_bits(sym_key));
 
-    let (lo_before, hi_before) = crate::symbol::test_symbol_addr_range();
-    assert_eq!(
-        (lo_before, hi_before),
-        (sym_key, sym_key),
-        "fixture must start with a single-point range, or the move below \
-         cannot land outside it and the assertion is vacuous"
+    let filter_before = crate::symbol::test_symbol_filter_snapshot();
+    assert!(
+        crate::symbol::test_symbol_filter_bits_set() <= 3,
+        "fixture must start from a filter holding exactly this one symbol \
+         (at most its three bits), or the assertion below is vacuous"
     );
 
     let _ = gc_collect_minor();
@@ -203,11 +202,16 @@ fn test_copying_minor_keeps_moved_symbol_visible_to_the_range_filter() {
         sym_key_after
     ));
     assert!(
+        !crate::symbol::test_symbol_filter_snapshot_may_contain(&filter_before, sym_key_after),
+        "fixture must move the symbol to an address the filter its own \
+         allocation built does NOT already accept ({sym_key_after:#x}), or the \
+         assertion below passes without the forwarding rewrite doing anything"
+    );
+    assert!(
         crate::symbol::is_registered_symbol(sym_key_after),
-        "a symbol evacuated to {sym_key_after:#x}, outside the \
-         [{lo_before:#x}, {hi_before:#x}] range its allocation established, is \
-         still live and registered — the range filter must have been widened \
-         by the forwarding rewrite"
+        "a symbol evacuated to {sym_key_after:#x}, which the filter its \
+         allocation established rejects, is still live and registered — the \
+         forwarding rewrite must have admitted the new address"
     );
 }
 
