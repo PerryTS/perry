@@ -149,11 +149,10 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
     password_ptr: i64,
     salt_ptr: i64,
     keylen: f64,
+    options_bits: f64,
     callback_bits: f64,
 ) -> f64 {
-    // Routes to the 4-arg scryptSync (defined below) with no options
-    // object — same default cost parameters as Node.
-    let buf = js_crypto_scrypt_bytes(password_ptr, salt_ptr, keylen, 0);
+    let buf = js_crypto_scrypt_bytes(password_ptr, salt_ptr, keylen, options_bits);
     let value = if buf.is_null() {
         f64::from_bits(JSValue::undefined().bits())
     } else {
@@ -883,72 +882,209 @@ pub unsafe extern "C" fn js_crypto_scrypt_custom(
     js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
 }
 
+const SCRYPT_DEFAULT_N: u64 = 16_384;
+const SCRYPT_DEFAULT_R: u32 = 8;
+const SCRYPT_DEFAULT_P: u32 = 1;
+const SCRYPT_DEFAULT_MAXMEM: u64 = 32 << 20;
+const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScryptParamError {
+    Invalid,
+    MemoryLimit,
+}
+
+fn scrypt_numeric_value(value: JSValue, name: &str, max: u64) -> u64 {
+    let bits = f64::from_bits(value.bits());
+    if !perry_runtime::fs::validate::is_numeric(value) {
+        let message = format!(
+            "The \"{name}\" argument must be of type number. Received {}",
+            perry_runtime::fs::validate::describe_received(bits)
+        );
+        perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+    }
+    let number = if value.is_int32() {
+        value.as_int32() as f64
+    } else {
+        value.as_number()
+    };
+    if !number.is_finite() || number.fract() != 0.0 {
+        let message = format!(
+            "The value of \"{name}\" is out of range. It must be an integer. Received {}",
+            perry_runtime::fs::validate::format_received_number(number)
+        );
+        perry_runtime::fs::validate::throw_range_error_with_code(&message);
+    }
+    if number < 0.0 || number > max as f64 {
+        let message = format!(
+            "The value of \"{name}\" is out of range. It must be >= 0 && <= {max}. Received {}",
+            perry_runtime::fs::validate::format_received_number(number)
+        );
+        perry_runtime::fs::validate::throw_range_error_with_code(&message);
+    }
+    number as u64
+}
+
+unsafe fn scrypt_options_object(options_bits: f64) -> Option<*const ObjectHeader> {
+    let value = JSValue::from_bits(options_bits.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    let ptr = value.as_pointer::<u8>();
+    if ptr.is_null() || (ptr as usize) < perry_runtime::gc::GC_HEADER_SIZE + 0x1000 {
+        return None;
+    }
+    let header =
+        &*(ptr.sub(perry_runtime::gc::GC_HEADER_SIZE) as *const perry_runtime::gc::GcHeader);
+    if header.obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    Some(ptr as *const ObjectHeader)
+}
+
+unsafe fn read_scrypt_option(obj: *const ObjectHeader, name: &str) -> Option<JSValue> {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = js_object_get_field_by_name(obj, key);
+    (!value.is_undefined()).then_some(value)
+}
+
+fn throw_incompatible_scrypt_options(primary: &str, alias: &str) -> ! {
+    let message =
+        format!("Option \"{primary}\" cannot be used in combination with option \"{alias}\"");
+    perry_runtime::fs::validate::throw_type_error_with_code(
+        &message,
+        "ERR_INCOMPATIBLE_OPTION_PAIR",
+    )
+}
+
+unsafe fn read_scrypt_options(options_bits: f64) -> (u64, u32, u32, u64) {
+    let Some(obj) = scrypt_options_object(options_bits) else {
+        return (
+            SCRYPT_DEFAULT_N,
+            SCRYPT_DEFAULT_R,
+            SCRYPT_DEFAULT_P,
+            SCRYPT_DEFAULT_MAXMEM,
+        );
+    };
+
+    let n = read_scrypt_option(obj, "N");
+    let cost = read_scrypt_option(obj, "cost");
+    if n.is_some() && cost.is_some() {
+        throw_incompatible_scrypt_options("N", "cost");
+    }
+    let r = read_scrypt_option(obj, "r");
+    let block_size = read_scrypt_option(obj, "blockSize");
+    if r.is_some() && block_size.is_some() {
+        throw_incompatible_scrypt_options("r", "blockSize");
+    }
+    let p = read_scrypt_option(obj, "p");
+    let parallelization = read_scrypt_option(obj, "parallelization");
+    if p.is_some() && parallelization.is_some() {
+        throw_incompatible_scrypt_options("p", "parallelization");
+    }
+    let maxmem = read_scrypt_option(obj, "maxmem");
+
+    let n_name = if n.is_some() { "N" } else { "cost" };
+    let r_name = if r.is_some() { "r" } else { "blockSize" };
+    let p_name = if p.is_some() { "p" } else { "parallelization" };
+    let mut n = n
+        .or(cost)
+        .map(|value| scrypt_numeric_value(value, n_name, u32::MAX as u64))
+        .unwrap_or(SCRYPT_DEFAULT_N);
+    let mut r = r
+        .or(block_size)
+        .map(|value| scrypt_numeric_value(value, r_name, u32::MAX as u64) as u32)
+        .unwrap_or(SCRYPT_DEFAULT_R);
+    let mut p = p
+        .or(parallelization)
+        .map(|value| scrypt_numeric_value(value, p_name, u32::MAX as u64) as u32)
+        .unwrap_or(SCRYPT_DEFAULT_P);
+    let mut maxmem = maxmem
+        .map(|value| scrypt_numeric_value(value, "maxmem", MAX_SAFE_INTEGER))
+        .unwrap_or(SCRYPT_DEFAULT_MAXMEM);
+
+    // Node treats explicit zeroes as requests for the corresponding default.
+    if n == 0 {
+        n = SCRYPT_DEFAULT_N;
+    }
+    if r == 0 {
+        r = SCRYPT_DEFAULT_R;
+    }
+    if p == 0 {
+        p = SCRYPT_DEFAULT_P;
+    }
+    if maxmem == 0 {
+        maxmem = SCRYPT_DEFAULT_MAXMEM;
+    }
+    (n, r, p, maxmem)
+}
+
+fn checked_scrypt_params(
+    n: u64,
+    r: u32,
+    p: u32,
+    maxmem: u64,
+) -> Result<scrypt::Params, ScryptParamError> {
+    if n <= 1 || !n.is_power_of_two() {
+        return Err(ScryptParamError::Invalid);
+    }
+    let log_n = n.trailing_zeros() as u8;
+    // Params::len belongs to the crate's PHC-string facade, not its low-level
+    // `scrypt` function. Keep it valid independently of Node's requested
+    // output length, which may be any int32-sized byte count.
+    let params = scrypt::Params::new(log_n, r, p, 32).map_err(|_| ScryptParamError::Invalid)?;
+
+    // OpenSSL's SCRYPT_MAX_MEM check includes B, V, and XY:
+    // 128 * r * (N + p + 2). This is stricter than the dominant 128*N*r
+    // term and matches Node at the exact acceptance boundary.
+    let workspace = 128u64
+        .checked_mul(r as u64)
+        .and_then(|block| n.checked_add(p as u64)?.checked_add(2)?.checked_mul(block))
+        .ok_or(ScryptParamError::Invalid)?;
+    if workspace > maxmem {
+        return Err(ScryptParamError::MemoryLimit);
+    }
+    Ok(params)
+}
+
+fn throw_scrypt_param_error(error: ScryptParamError) -> ! {
+    let message = match error {
+        ScryptParamError::Invalid => "Invalid scrypt params",
+        ScryptParamError::MemoryLimit => {
+            "Invalid scrypt params: error:030000AC:digital envelope routines::memory limit exceeded"
+        }
+    };
+    perry_runtime::fs::validate::throw_range_error_named(
+        message,
+        "ERR_CRYPTO_INVALID_SCRYPT_PARAMS",
+    )
+}
+
 /// `crypto.scryptSync(password, salt, keylen[, options])` → Buffer.
 ///
-/// Unlike `js_crypto_scrypt` (which returns a hex string), this returns a
-/// Buffer to match Node's `scryptSync`, and reads password/salt via
-/// `bytes_from_ptr` so Buffer inputs hash correctly. Optional cost
-/// parameters are read from `options_ptr` (a NaN-unboxed object pointer, or
-/// a null/sentinel for none): `N`/`cost`, `r`/`blockSize`, `p`/
-/// `parallelization`. Defaults match Node: N=16384, r=8, p=1.
+/// The same helper backs the callback form. It receives the full NaN-boxed
+/// options value, validates Node's primary/alias names, and never substitutes
+/// defaults for an invalid or unsupported parameter combination.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_scrypt_bytes(
     password_ptr: i64,
     salt_ptr: i64,
     key_length: f64,
-    options_ptr: i64,
+    options_bits: f64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
-    use perry_runtime::{js_object_get_field_by_name, ObjectHeader};
     let password = bytes_from_ptr(password_ptr);
     let salt = bytes_from_ptr(salt_ptr);
-    let klen = key_length as usize;
-    if klen == 0 || klen > 1024 {
+    let keylen_value = JSValue::from_bits(key_length.to_bits());
+    let klen = scrypt_numeric_value(keylen_value, "keylen", i32::MAX as u64) as usize;
+    let (n, r, p, maxmem) = read_scrypt_options(options_bits);
+    let params = checked_scrypt_params(n, r, p, maxmem)
+        .unwrap_or_else(|error| throw_scrypt_param_error(error));
+    if klen == 0 {
         return alloc_buffer_from_slice(&[]);
     }
-    // Node defaults: N=16384 (cost), r=8 (blockSize), p=1 (parallelization).
-    let (mut n, mut r, mut p) = (16384u64, 8u32, 1u32);
-    if (options_ptr as usize) >= 0x1000 {
-        let obj = options_ptr as *const ObjectHeader;
-        // Read a numeric option by primary or alias name; None if absent.
-        let read = |primary: &str, alias: &str| -> Option<f64> {
-            let pk = js_string_from_bytes(primary.as_ptr(), primary.len() as u32);
-            let v = js_object_get_field_by_name(obj, pk);
-            if !v.is_undefined() {
-                return Some(v.to_number());
-            }
-            let ak = js_string_from_bytes(alias.as_ptr(), alias.len() as u32);
-            let v = js_object_get_field_by_name(obj, ak);
-            if v.is_undefined() {
-                None
-            } else {
-                Some(v.to_number())
-            }
-        };
-        if let Some(x) = read("N", "cost") {
-            if x >= 1.0 {
-                n = x as u64;
-            }
-        }
-        if let Some(x) = read("r", "blockSize") {
-            if x >= 1.0 {
-                r = x as u32;
-            }
-        }
-        if let Some(x) = read("p", "parallelization") {
-            if x >= 1.0 {
-                p = x as u32;
-            }
-        }
-    }
-    // `scrypt::Params` takes log2(N); Node requires N to be a power of two,
-    // so trailing_zeros gives the exact exponent. A non-power-of-two or an
-    // otherwise-invalid combo falls back to the Node defaults.
-    let log_n = n.trailing_zeros() as u8;
-    let params = scrypt::Params::new(log_n, r, p, klen)
-        .unwrap_or_else(|_| scrypt::Params::new(14, 8, 1, klen).unwrap());
     let mut out = vec![0u8; klen];
     if scrypt::scrypt(&password, &salt, &params, &mut out).is_err() {
-        return alloc_buffer_from_slice(&[]);
+        throw_scrypt_param_error(ScryptParamError::Invalid);
     }
     alloc_buffer_from_slice(&out)
 }
@@ -1099,4 +1235,84 @@ pub(super) unsafe fn build_key_pair_object(pub_pem: &str, priv_pem: &str) -> f64
     js_object_set_field(obj, 1, JSValue::string_ptr(priv_s));
     js_object_set_keys(obj, keys);
     nanbox_pointer_f64(obj as usize)
+}
+
+#[cfg(test)]
+mod scrypt_tests {
+    use super::*;
+
+    const TEST_MAXMEM: u64 = 512 * 1024 * 1024;
+
+    fn digest(n: u64, r: u32, p: u32, keylen: usize) -> String {
+        let password = b"correct horse battery staple";
+        let salt = hex::decode("0123456789abcdef0123456789abcdef").unwrap();
+        let params = checked_scrypt_params(n, r, p, TEST_MAXMEM).unwrap();
+        let mut output = vec![0; keylen];
+        scrypt::scrypt(password, &salt, &params, &mut output).unwrap();
+        hex::encode(output)
+    }
+
+    #[test]
+    fn scrypt_cost_parameters_produce_exact_node_digests() {
+        let vectors = [
+            (
+                1 << 12,
+                "05f47c22e65fc21d3e11a92222323c577271be35cea9b34b4a6970e2fa3ebf48",
+            ),
+            (
+                1 << 13,
+                "a2d6acfcc30e33aa067080845b9f4790427da3d8f992e651765c095abb7cd276",
+            ),
+            (
+                1 << 14,
+                "33e39503baad99447708713ceec3f39bb876329254d4f5cd93da92a65d983f01",
+            ),
+            (
+                1 << 15,
+                "cb18e56f62485654eba440e7cc2fcaff9f92102d944dab86b13642272dfeb1f4",
+            ),
+            (
+                1 << 16,
+                "9d12077809f9271ef0dd063bff62817d49d53c7f1acb8e42c67516c5b0287cf1",
+            ),
+            (
+                1 << 17,
+                "e5581239883361913bc8cd281ef2a9d7e5bf2171f4b6c8eb0292e99077483208",
+            ),
+        ];
+        for (n, expected) in vectors {
+            assert_eq!(digest(n, 8, 1, 32), expected, "N={n}");
+        }
+        assert_eq!(
+            digest(1 << 14, 4, 1, 32),
+            "cd4b3b2db0af02f65f71c999901e07abba66fd088d65268928a7e971a50651f0"
+        );
+        assert_eq!(
+            digest(1 << 14, 8, 2, 32),
+            "77636ab3d38dd67285438f5694c64bfa9fe81144034a49e7599511136bcfb071"
+        );
+        assert_eq!(
+            digest(1 << 12, 8, 1, 64),
+            "05f47c22e65fc21d3e11a92222323c577271be35cea9b34b4a6970e2fa3ebf48\
+             1399c1db6db41b7c49fcc677fbe03319ec8e9c37a73734dd9eec71bd1d9ed212"
+                .replace(' ', "")
+        );
+    }
+
+    #[test]
+    fn scrypt_rejects_invalid_parameters_and_enforces_exact_memory_boundary() {
+        assert_eq!(
+            checked_scrypt_params(3, 8, 1, TEST_MAXMEM).unwrap_err(),
+            ScryptParamError::Invalid
+        );
+        assert_eq!(
+            checked_scrypt_params(1, 8, 1, TEST_MAXMEM).unwrap_err(),
+            ScryptParamError::Invalid
+        );
+        assert_eq!(
+            checked_scrypt_params(4096, 8, 1, 4_197_375).unwrap_err(),
+            ScryptParamError::MemoryLimit
+        );
+        assert!(checked_scrypt_params(4096, 8, 1, 4_197_376).is_ok());
+    }
 }
