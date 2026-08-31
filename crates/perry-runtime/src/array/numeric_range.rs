@@ -170,7 +170,7 @@ pub unsafe extern "C" fn js_array_fill_range_strided_tagged(
         return -1;
     }
     let raw = receiver_value.as_pointer::<ArrayHeader>() as usize;
-    let Some(header) = (crate::value::addr_class::try_read_gc_header(raw)) else {
+    let Some(header) = crate::value::addr_class::try_read_gc_header(raw) else {
         return -1;
     };
     if header.obj_type != crate::gc::GC_TYPE_ARRAY {
