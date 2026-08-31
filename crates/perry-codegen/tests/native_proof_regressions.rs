@@ -13896,6 +13896,16 @@ fn scalar_method_boolean_predicate_rejects_mutation_call_accessor_and_dynamic_pr
                 ),
                 "mutation must dispatch directly to the resolved method on the heap receiver:\n{ir}"
             );
+        } else if case == "inherited_field_shadow" {
+            // A declared field on the base class is an own property on the
+            // constructed child. The safe fallback therefore probes the own
+            // slot and invokes its value, rather than entering the prototype
+            // method dispatcher that would skip the shadow.
+            assert!(
+                ir.contains("call double @js_object_get_own_field_or_undef")
+                    && ir.contains("call double @js_native_call_value"),
+                "inherited field shadow must probe and dispatch the own method value:\n{ir}"
+            );
         } else {
             assert!(
                 ir.contains("call double @js_native_call_method"),
