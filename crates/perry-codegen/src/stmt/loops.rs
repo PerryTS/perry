@@ -1922,7 +1922,7 @@ fn packed_f64_range_loop_dense_stmts_collect(
             } => {
                 if !masked_window_expression_is_non_collecting(ctx, condition)
                     || !packed_f64_range_loop_pure_expr_collect(
-                        condition, counter_id, true, accesses,
+                        condition, counter_id, true, accesses, None,
                     )
                 {
                     return false;
