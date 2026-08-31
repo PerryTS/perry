@@ -60,6 +60,14 @@
   is attacked again, the target is the cost of the **hit** — the direct-mapped
   positive cache in `tls_hot` — not a rejection filter.
 
+  The filter is 1,024 bits with three probes per address, sized for the ~160
+  entries this corpus registers. A much larger bundle can saturate it —
+  `CLASS_PROTOTYPE_OBJECTS` grows by one entry per ES5-transpiled constructor —
+  and that is a *win* cliff, not a correctness one: a saturated filter is
+  exactly the code that ran before it existed. Raising the constant is a
+  one-line change; it is deliberately not raised on speculation, because 1,024
+  bits is the size every number above was measured at.
+
 #### Why it cannot misclassify
 
 These probes classify pointers, so a wrong answer is type confusion rather than

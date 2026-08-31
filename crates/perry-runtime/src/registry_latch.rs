@@ -274,9 +274,20 @@ impl RegistryAddrWindow {
 /// `claude-code --help` registers **100** symbols and **160** class prototypes,
 /// so at 160 entries the theoretical false-positive rate is
 /// `(1 - e^(-3·160/1024))³ ≈ 1.6%`; the measured rates on the real address
-/// streams were 0.26% and 0.49%. A table that grows far past that degrades
-/// gracefully — towards the behaviour that exists today, which is the lookup
-/// itself.
+/// streams were 0.26% and 0.49%.
+///
+/// **The saturation regime is deliberate, and it is the reason `WORDS` is the
+/// only knob.** `CLASS_PROTOTYPE_OBJECTS` grows by one entry per ES5-transpiled
+/// constructor (#9225), so a bundle much larger than claude-code's can push it
+/// past ~700 entries, where 1,024 bits saturate and `may_contain` starts
+/// answering `true` for almost everything. That is not a correctness cliff and
+/// not a regression: a saturated filter is exactly the code that ran before it
+/// existed — the probe falls through to the lookup it always did. It is a
+/// *win* cliff. If a corpus is found sitting on the wrong side of it, raise
+/// `WORDS`: 64 words (4,096 bits, 512 B) holds ~640 entries at the same
+/// false-positive rate and is still trivially L1-resident. The value shipped
+/// here is the one the measurements above were taken at, and is deliberately
+/// not raised on speculation.
 ///
 /// # The ordering rule (binding, and identical to [`RegistryAddrWindow`]'s)
 ///
