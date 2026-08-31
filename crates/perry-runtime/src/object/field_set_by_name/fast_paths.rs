@@ -170,6 +170,9 @@ pub extern "C" fn js_object_set_field_by_name_transition_fast(
 /// `(current_keys, key)`, so the lookup returns 0 and the caller performs the
 /// ordinary write. Skipping the up-front linear overwrite scan is important
 /// for repeated computed-key object construction.
+// #9287 moved the production caller to the value-returning form; this i32
+// wrapper survives only as the shape the transition tests assert against.
+#[cfg(test)]
 pub(crate) fn object_set_field_by_name_transition_only_fast(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
