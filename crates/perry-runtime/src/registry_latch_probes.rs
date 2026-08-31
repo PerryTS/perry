@@ -49,6 +49,7 @@ fn unregistered_address_misses_every_probe() {
     assert!(!crate::regex::is_registered_regex(addr));
     assert!(!crate::map::is_registered_map(addr));
     assert!(!crate::set::is_registered_set(addr));
+    assert!(!crate::object::is_registered_class_prototype_object(addr));
 }
 
 /// #7474-shape regression: constructing a typed array AFTER the idle fast path
