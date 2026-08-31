@@ -127,5 +127,12 @@ fn strict_dense_number_store_fast_lane_matches_the_general_path() {
         let out = js_array_set_f64_extend_strict(boxed, 3, 3.0);
         assert_eq!((*out).length, 4);
         assert_eq!(js_array_get_f64(out, 3), 3.0);
+
+        // #9220: an in-bounds hole is not an own property. The number lane
+        // must decline it so the strict entry can consult an inherited index
+        // setter / non-writable data descriptor before creating an element.
+        js_array_set_length(out, 5.0);
+        assert!(!lane(out, 4, 8.0), "hole slot requires the [[Set]] walk");
+        assert!(!array_has_own_index(out, 4));
     }
 }

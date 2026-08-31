@@ -535,10 +535,11 @@ pub(crate) fn array_spec_set(arr: *mut ArrayHeader, index: u32, value: f64) -> *
 
     unsafe {
         if array_has_own_index(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), index) {
-            return js_array_set_f64_extend_strict(
+            return js_array_set_f64_extend_strict_impl(
                 arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
                 index,
                 value_handle.get_nanbox_f64(),
+                true,
             );
         }
 
@@ -598,10 +599,11 @@ pub(crate) fn array_spec_set(arr: *mut ArrayHeader, index: u32, value: f64) -> *
             }
         }
 
-        js_array_set_f64_extend_strict(
+        js_array_set_f64_extend_strict_impl(
             arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
             index,
             value_handle.get_nanbox_f64(),
+            true,
         )
     }
 }
@@ -1502,12 +1504,20 @@ pub(crate) unsafe fn try_strict_dense_number_store(
         } else {
             value_bits
         };
+    let slot = super::header::array_elements_ptr(arr).add(index as usize);
+    // #9220: this lane used to fill a hole directly. A hole is not an own
+    // property, so an inherited setter / non-writable data descriptor must be
+    // consulted before an own element can be created. A raw-f64 DENSE layout
+    // proves there are no holes and keeps its bit-for-bit old hot path; every
+    // other admitted layout proves ownership with the slot Perry is about to
+    // overwrite.
+    if flags & crate::gc::GC_ARRAY_RAW_F64_LAYOUT == 0 && ptr::read(slot) == crate::value::TAG_HOLE
+    {
+        return None;
+    }
     // GC_STORE_AUDIT(POINTER_FREE): a number never holds a heap pointer, and
     // the receiver's layout was proved pointer-free or tag-scanned above.
-    ptr::write(
-        super::header::array_elements_ptr(arr).add(index as usize),
-        store_bits,
-    );
+    ptr::write(slot, store_bits);
     Some(arr)
 }
 
@@ -1615,6 +1625,20 @@ pub extern "C" fn js_array_set_f64_extend_strict(
     index: u32,
     value: f64,
 ) -> *mut ArrayHeader {
+    js_array_set_f64_extend_strict_impl(arr, index, value, false)
+}
+
+/// Strict indexed assignment after optionally completing the inherited
+/// descriptor walk. `prototype_already_checked` is true only for the callback
+/// from [`array_spec_set`]; it prevents a writable inherited data property
+/// from recursing when the spec walk proceeds to create the receiver's own
+/// element.
+fn js_array_set_f64_extend_strict_impl(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+    prototype_already_checked: bool,
+) -> *mut ArrayHeader {
     // Two exact fast lanes, each storing only what the general path below
     // would store and declining every shape it cannot prove. The plain-number
     // lane (#8885) resolves the head itself, so a hit returns that head; the
@@ -1642,6 +1666,20 @@ pub extern "C" fn js_array_set_f64_extend_strict(
         // resolved-header contract below.
         array_strict_index_write_guard(arr, index);
         return js_array_set_f64_extend(arr, index, value);
+    }
+
+    // #9220: only a retargeted array with no own index pays the inherited
+    // [[Set]] walk. `array_custom_prototype` is the #9219 classification shared
+    // with reads/HasProperty and deliberately returns None for a Proxy
+    // prototype, whose dedicated dispatch must remain single-shot. Existing
+    // own elements have already had every applicable dense lane above; the
+    // fallback still needs the ownership check for descriptor/restricted
+    // shapes that correctly declined those lanes.
+    if !prototype_already_checked
+        && unsafe { array_custom_prototype(clean).is_some() }
+        && unsafe { !array_has_own_index(clean, index) }
+    {
+        return array_spec_set(clean, index, value);
     }
 
     // SAFETY: the clean above resolved this exact live plain-array head. The
