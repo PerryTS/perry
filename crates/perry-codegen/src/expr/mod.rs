@@ -2064,6 +2064,12 @@ pub(crate) struct MaskedWindowArrayFact {
     /// element type is exactly i32 (Int32Array tier), so loads may
     /// materialize elements as native `i32`.
     pub values_i32: bool,
+    /// Accumulator locals admitted by the entry tag check for THIS clone:
+    /// every in-clone write is numeric-preserving (verified by the
+    /// accumulator walk), so `is_numeric_expr` may treat them as Numbers
+    /// while the fact is live. Mirrors `StringWindowArrayFact`'s
+    /// `numeric_accumulator` (#9160) and `PackedF64LoopFact`'s vec.
+    pub numeric_accumulators: Vec<u32>,
     /// Storage layout the guard proved — selects the inline load shape.
     pub elem: MaskedWindowElem,
     /// True only in a dense fast-loop scope whose matcher admitted masked
