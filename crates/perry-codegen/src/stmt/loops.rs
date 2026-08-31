@@ -5147,9 +5147,24 @@ fn stmt_is_packed_f64_loop_safe(
         // way `Stmt::Return` checks its value; #9185 admitted any throw at all
         // and leaned on `stmt_array_length_effect` to reject the constructing
         // ones, which is a weaker guarantee than stating the requirement here.
+        // The thrown operand is deliberately NOT required to be
+        // `expr_is_packed_f64_loop_safe`. That predicate asks "can the clone
+        // keep running after this", and after a throw it cannot: control
+        // leaves the loop for a landing pad and never returns, so no later
+        // iteration can observe a value the operand disturbed.
+        //
+        // What the operand still must not do is change `arr.length` before the
+        // hoisted bound is used, and that IS checked — `stmt_preserves_array_length`
+        // walks `Stmt::Throw(e)` into `e`, so `throw arr.pop()` is rejected
+        // there. Keeping the two questions in their own predicates is what lets
+        // a constructed operand (`new Error(…)`, `"bad " + i`) stay on the fast
+        // path; requiring loop-safety here costs 8.4x for no correctness gain.
+        //
+        // The accumulator writeback this needs is emitted at the throw site by
+        // `flush_packed_accumulator_locals`; without it this admission is the
+        // #9185 wrong answer.
         Stmt::Throw(value) => {
-            packed_loop_abrupt_enabled()
-                && expr_is_packed_f64_loop_safe(ctx, value, arr_id, counter_id)
+            packed_loop_abrupt_enabled() && throw_operand_cannot_unwind(ctx, value, arr_id, counter_id)
         }
         Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
@@ -5285,6 +5300,99 @@ fn local_is_int32_value(ctx: &FnCtx<'_>, local_id: u32) -> bool {
             ctx.stable_local_type_proof(&local_id),
             Some(perry_hir::types::Type::Int32)
         )
+}
+
+/// Can evaluating `expr` as a thrown operand UNWIND before the throw itself?
+///
+/// This is the guard on `flush_packed_accumulator_locals`. That flush is
+/// emitted at the throw site, after the operand is lowered — so an operand that
+/// unwinds on its own leaves the loop-carried accumulators stale, reproducing
+/// #9185 one level deeper. `expr_is_packed_f64_loop_safe` is NOT sufficient
+/// here: it accepts a bare `Expr::Binary` over locals, and `+` on an object
+/// dispatches to a user `valueOf`/`toString` that can throw.
+///
+/// Throwing a value coerces nothing, so a bare local is fine. Anything that
+/// COERCES — arithmetic, concatenation, an Error message being stringified —
+/// must be provably free of user dispatch.
+fn throw_operand_cannot_unwind(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+    arr_id: u32,
+    counter_id: u32,
+) -> bool {
+    use perry_hir::Expr;
+    match expr {
+        // Thrown as-is: no conversion, so no user code, whatever it holds.
+        Expr::LocalGet(_)
+        | Expr::String(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined => true,
+        Expr::ErrorNew(message) => message
+            .as_ref()
+            .is_none_or(|m| expr_is_coercion_free_primitive(ctx, m, arr_id, counter_id)),
+        Expr::TypeErrorNew(message)
+        | Expr::RangeErrorNew(message)
+        | Expr::ReferenceErrorNew(message)
+        | Expr::SyntaxErrorNew(message) => {
+            expr_is_coercion_free_primitive(ctx, message, arr_id, counter_id)
+        }
+        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
+            expr_is_coercion_free_primitive(ctx, left, arr_id, counter_id)
+                && expr_is_coercion_free_primitive(ctx, right, arr_id, counter_id)
+        }
+        Expr::Unary { operand, .. } => {
+            expr_is_coercion_free_primitive(ctx, operand, arr_id, counter_id)
+        }
+        _ => false,
+    }
+}
+
+/// Can `expr` be stringified WITHOUT running user code?
+///
+/// Deliberately syntactic and much narrower than `expr_is_packed_f64_loop_safe`:
+/// that predicate accepts a bare `Expr::LocalGet`, which is right for a value
+/// that is merely thrown (throwing coerces nothing) but wrong for one that is
+/// about to be stringified by an Error constructor, since the local may hold an
+/// object with a user `toString`.
+///
+/// Admitted: literals, the loop counter, a read of the packed array being
+/// iterated (both are numbers by the loop's own guards), and arithmetic or
+/// concatenation over those. Anything else — including any other local — is
+/// rejected, because proving it is not an object is not this predicate's job.
+fn expr_is_coercion_free_primitive(
+    ctx: &FnCtx<'_>,
+    expr: &perry_hir::Expr,
+    arr_id: u32,
+    counter_id: u32,
+) -> bool {
+    use perry_hir::Expr;
+    match expr {
+        Expr::String(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::Bool(_)
+        | Expr::Null
+        | Expr::Undefined => true,
+        // The counter is the loop's own i32 induction variable.
+        Expr::LocalGet(id) => *id == counter_id,
+        // An element of the packed f64 array is a genuine double: the versioned
+        // loop only entered the fast clone after proving that layout.
+        Expr::IndexGet { object, index } => {
+            matches!(object.as_ref(), Expr::LocalGet(id) if *id == arr_id)
+                && expr_is_coercion_free_primitive(ctx, index, arr_id, counter_id)
+        }
+        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
+            expr_is_coercion_free_primitive(ctx, left, arr_id, counter_id)
+                && expr_is_coercion_free_primitive(ctx, right, arr_id, counter_id)
+        }
+        Expr::Unary { operand, .. } | Expr::NumberCoerce(operand) => {
+            expr_is_coercion_free_primitive(ctx, operand, arr_id, counter_id)
+        }
+        _ => false,
+    }
 }
 
 fn expr_is_packed_f64_loop_safe(
@@ -8203,6 +8311,28 @@ pub(crate) fn expr_preserves_array_length(
                 && walk(object)
                 && args.iter().all(&walk)
         }
+        // The Error-family construction nodes allocate an error object and
+        // store their own message; none of them can reach an unrelated local
+        // array, so they preserve `arr.length`. Together with the `Stmt::Throw`
+        // admission above this is what keeps `if (bad) throw new Error(…)` —
+        // the #9151 shape — on the packed fast path.
+        //
+        // Identity is not in question at this layer: HIR emits these nodes only
+        // for the INTRINSIC constructor (`lower_new` gates them on
+        // `!shadowed_by_user_binding`). A user `class Error { … }`, or any other
+        // shadowing binding, lowers to `Expr::New`/`NewDynamic` instead and is
+        // still rejected by the fallback below — checking the NAME here would be
+        // a wrong-answer bug rather than a missed optimisation. The message and
+        // options operands are arbitrary expressions and are still walked.
+        Expr::ErrorNew(message) => message.as_ref().is_none_or(|m| walk(m)),
+        Expr::TypeErrorNew(message)
+        | Expr::RangeErrorNew(message)
+        | Expr::ReferenceErrorNew(message)
+        | Expr::SyntaxErrorNew(message) => walk(message),
+        Expr::ErrorNewWithCause { message, cause } => walk(message) && walk(cause),
+        Expr::ErrorNewWithOptions {
+            message, options, ..
+        } => walk(message) && walk(options),
         Expr::NativeMethodCall { .. } | Expr::CallSpread { .. } => false,
         Expr::Closure { .. } => false,
         Expr::Binary { left, right, .. }
