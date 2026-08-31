@@ -46,6 +46,7 @@ use super::{
 
 mod archive_cache;
 mod build_and_run;
+mod harmonyos_objects;
 mod link_cache;
 mod linux_dylib_libs;
 mod linux_ui_libs;
