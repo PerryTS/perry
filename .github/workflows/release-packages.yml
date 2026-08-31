@@ -902,16 +902,27 @@ jobs:
           # `<install-dir>/<triple>/release/<libname>.a` so we mirror that
           # layout inside the zip — the `aarch64-linux-android/release/`
           # subdir lives alongside `perry.exe`.
-          $androidLibDir = "staging/aarch64-linux-android/release"
-          New-Item -ItemType Directory -Force -Path $androidLibDir | Out-Null
-          $androidLibs = @("libperry_runtime.a", "libperry_stdlib.a", "libperry_ui_android.a")
-          foreach ($lib in $androidLibs) {
-            $src = "target/aarch64-linux-android/dist/$lib"
-            if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
-              Write-Error "Required Android library missing from ${{ matrix.artifact }}: $src"
-              exit 1
+          # Only the x86_64 Windows runner builds these: the NDK ships no
+          # Windows-arm64 host toolchain (the step resolves its compiler under
+          # `prebuilt/windows-x86_64`) and the ARM runner has no NDK at all.
+          # Requiring them unconditionally made the ARM leg fail in packaging
+          # once the build step was correctly skipped. `perry-windows-aarch64`
+          # has never shipped -- v0.5.1220 carries only `perry-windows-x86_64`
+          # -- so this does not remove anything users have; it makes the leg
+          # internally consistent. Android cross-compilation from a Windows
+          # ARM host needs an NDK that supports that host.
+          if ($env:RUNNER_ARCH -eq "X64") {
+            $androidLibDir = "staging/aarch64-linux-android/release"
+            New-Item -ItemType Directory -Force -Path $androidLibDir | Out-Null
+            $androidLibs = @("libperry_runtime.a", "libperry_stdlib.a", "libperry_ui_android.a")
+            foreach ($lib in $androidLibs) {
+              $src = "target/aarch64-linux-android/dist/$lib"
+              if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
+                Write-Error "Required Android library missing from ${{ matrix.artifact }}: $src"
+                exit 1
+              }
+              Copy-Item $src $androidLibDir
             }
-            Copy-Item $src $androidLibDir
           }
           Compress-Archive -Path staging/* -DestinationPath "${{ matrix.artifact }}.zip"
 
