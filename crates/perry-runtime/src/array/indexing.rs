@@ -1704,7 +1704,12 @@ fn js_array_set_f64_extend_strict_impl(
     // own elements have already had every applicable dense lane above; the
     // fallback still needs the ownership check for descriptor/restricted
     // shapes that correctly declined those lanes.
+    // The process latch leads for the same reason it does in the read/HasProperty
+    // twin (`generic::real_array_uses_recorded_spec_path`): recording a
+    // prototype on ANY array sets it, so a clear latch proves this array cannot
+    // have one and the side-table probe is skipped entirely.
     if !prototype_already_checked
+        && crate::object::prototype_chain::array_static_proto_recorded()
         && unsafe { array_custom_prototype(clean).is_some() }
         && unsafe { !array_has_own_index(clean, index) }
     {
