@@ -522,8 +522,7 @@ pub fn is_closure_ptr(ptr: usize) -> bool {
     // no arena this process knows about" — the LEAST known case, not the most.
     // Arena ownership was never what made the load safe; it is what
     // disambiguates a coincidental "CLOS", which is why it stays below.
-    let type_tag =
-        unsafe { *((ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32) };
+    let type_tag = unsafe { *((ptr as *const u8).add(CLOSURE_TYPE_TAG_OFFSET) as *const u32) };
     if type_tag != CLOSURE_MAGIC {
         return false;
     }
