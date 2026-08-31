@@ -83,7 +83,6 @@ fn accumulator_rhs_is_numeric(
                         || (masked_reads_validated
                             && crate::collectors::static_index_window(index).is_some())
                 }
-                _ => false,
             }
         }
         Expr::LocalGet(id) => {
