@@ -111,6 +111,17 @@ test_gap_repsel_proven_this_frozen
 # have a receiver to move rather than reporting the file inert.
 test_gap_repsel_pshape_tower_delete
 
+# #9200: the tombstone-delete x evacuating-GC interaction, minimized out of
+# the tower. A tombstone publish onto a PROMOTED receiver must arm the
+# old-carrier gate at the stamp (`stamp_object_shape_id_with_carrier_note`),
+# or the receiver's nursery-young owned keys array has no root a minor can
+# see: the record is walked metadata-only, the keys array is swept while
+# live, and `prune_dead_shape_keys` leaves the receiver shapeless —
+# `Object.keys()` empty, fixed-slot reads undefined, exit 0. Live only with
+# `PERRY_OBJECT_TOMBSTONES=1` while #9212's opt-in mitigation stands; it is
+# the witness that must stay green when the default flips back on.
+test_gap_repsel_pshape_tombstone_oldgen_delete
+
 # --- Typed-array constructor source rooting (#6981) --------------------------
 # Not a representation file, so the UNREGISTERED gate does not auto-detect it:
 # registered explicitly per the header rule above. Gates the runtime-side half

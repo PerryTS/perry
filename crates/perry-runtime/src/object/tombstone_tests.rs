@@ -346,3 +346,90 @@ fn small_churn_first_delete_forks_owned_tombstone() {
         );
     }
 }
+
+/// #9200 pin: a flag-on tombstone publish onto a receiver a minor will not
+/// enumerate must arm the successor descriptor's old-carrier gate in the same
+/// breath as the stamp.
+///
+/// The failure this pins, traced on the gap fixture
+/// (`test_gap_repsel_pshape_tower_delete.ts` under `PERRY_OBJECT_TOMBSTONES=1
+/// PERRY_GC_HEAP_LIMIT=8 PERRY_GC_FORCE_EVACUATE=1`):
+/// `publish_object_shape_holes` minted a fresh (`old_carrier = false`)
+/// descriptor for an already-promoted receiver, stamped it, and then retired
+/// the ARMED predecessor in its keys-address sweep. The receiver is invisible
+/// to a minor, and a non-carrier record is walked metadata-only
+/// (`scan_shape_table_rekey_mut`), so the nursery-young owned keys array had
+/// no root at all: the next evacuating minor swept it while live,
+/// `prune_dead_shape_keys` dropped the descriptor, and the receiver came back
+/// shapeless — `Object.keys()` empty, fixed-slot reads `undefined`, silently.
+///
+/// A LARGE allocation is born outside the nursery through the public
+/// allocator — the same "no minor ever enumerates me" population the gap
+/// fixture reaches by churn-promotion, with no synthetic promotion machinery.
+#[test]
+fn tombstone_publish_on_untraced_receiver_arms_old_carrier() {
+    super::delete_rest::test_set_tombstone_deletes(Some(true));
+    let _restore = scopeguard_tombstone_flag();
+    let _global = crate::gc::global_side_table_test_lock();
+    unsafe {
+        // Born OLD through the arena's old-gen allocator — the same "no minor
+        // ever enumerates me" population the gap fixture reaches by
+        // churn-promotion. (`js_object_alloc` routes through the nursery, so
+        // the public allocator cannot produce this receiver in a unit test.)
+        // Initialization mirrors `js_object_alloc_with_parent` exactly.
+        let slots = 24usize;
+        let header_size = std::mem::size_of::<crate::object::ObjectHeader>();
+        let obj = crate::arena::arena_alloc_gc_old(
+            header_size + slots * std::mem::size_of::<u64>(),
+            8,
+            crate::gc::GC_TYPE_OBJECT,
+        ) as *mut crate::object::ObjectHeader;
+        (*obj).class_id = 0;
+        (*obj).parent_class_id = 0;
+        (*obj).meta = std::ptr::null_mut();
+        let fields = (obj as *mut u8).add(header_size) as *mut u64;
+        for i in 0..slots {
+            // GC_STORE_AUDIT(INIT): fresh unpublished storage, pointer-free.
+            std::ptr::write(fields.add(i), crate::value::TAG_UNDEFINED);
+        }
+        crate::gc::layout_init_pointer_free(obj as *mut u8);
+        super::shapes::birth_publish_object_shape(obj, slots as u32);
+        assert!(
+            !crate::arena::pointer_in_nursery(obj as usize),
+            "precondition: the receiver must be born outside the nursery"
+        );
+        for i in 0..20 {
+            let name = format!("key_number_{i:02}");
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            js_object_set_field_by_name(obj, key, i as f64);
+        }
+        // First delete: the keys array is transition-cache-shared and 20 keys
+        // wide, so this clones + compacts (ownership transfer, no tombstone).
+        let first = crate::string::js_string_from_bytes(b"key_number_11".as_ptr(), 13)
+            as *const crate::StringHeader;
+        assert_eq!(super::delete_rest::js_object_delete_field(obj, first), 1);
+        assert_eq!(super::shapes::object_shape_hole_count(obj), 0);
+        // Second delete: owned keys array, 19 >= 16 keys, holes below the
+        // squeeze threshold — the O(1) tombstone lane and its
+        // `publish_object_shape_holes` mint-and-retire publish.
+        let second = crate::string::js_string_from_bytes(b"key_number_03".as_ptr(), 13)
+            as *const crate::StringHeader;
+        assert_eq!(
+            super::delete_rest::js_object_delete_field(obj, second),
+            1
+        );
+        let descriptor = super::shapes::object_shape_descriptor(obj)
+            .expect("the tombstone publish must leave a resolvable descriptor");
+        assert_eq!(
+            descriptor.hole_count, 1,
+            "the second delete must take the tombstone lane"
+        );
+        assert!(
+            descriptor.old_carrier,
+            "#9200: the tombstone publish stamped a fresh descriptor onto a \
+             receiver no minor enumerates without arming the old-carrier \
+             gate; its young keys array has no root the shape-table scan can \
+             see, and the next evacuating minor sweeps it while live"
+        );
+    }
+}

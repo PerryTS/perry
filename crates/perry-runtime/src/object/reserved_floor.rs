@@ -122,7 +122,7 @@ unsafe fn stamp_reserved_floor_shape(
     let id = shapes::publish_shape_result(shapes::shape_descriptor_ensure_with_holes(
         keys, floor, live, generation, kind, floor,
     ));
-    (*obj).parent_class_id = id;
+    shapes::stamp_object_shape_id_with_carrier_note(obj, id);
     shapes::debug_assert_object_shape_parity_for_keys(obj, keys as *mut ArrayHeader);
     id
 }

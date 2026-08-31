@@ -420,7 +420,11 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
     inner.descriptors.insert(new_id, record);
     drop(inner);
 
-    (*obj).parent_class_id = new_id;
+    // #9200: the funnel re-arms the preserved record for a non-nursery
+    // receiver. The record kept its flags across the id move, but a receiver
+    // promoted since the last trace has no other arming opportunity before
+    // the next minor.
+    super::stamp_object_shape_id_with_carrier_note(obj, new_id);
     super::debug_assert_object_shape_parity(obj);
     Some(new_id)
 }
@@ -464,7 +468,15 @@ pub(crate) unsafe fn publish_object_shape_holes(
         current.object_kind,
         hole_count,
     ));
-    (*obj).parent_class_id = id;
+    // #9200 THE FIX: stamp through the carrier-note funnel. This publish is
+    // the one that minted a fresh (old_carrier=false) descriptor for an
+    // already-promoted receiver and then RETIRED the armed predecessor in the
+    // keys-address sweep below — leaving the receiver's nursery-young keys
+    // array with no root a minor can see. The evacuating minor then swept the
+    // keys array while live, `prune_dead_shape_keys` dropped this descriptor,
+    // and the receiver came back shapeless (`Object.keys()` empty, fixed-slot
+    // reads undefined — the #9200 gap fixture's exact wrong answer).
+    super::stamp_object_shape_id_with_carrier_note(obj, id);
     // Retire the predecessor. Its keys array is OWNED (the tombstone path is
     // gated on that), so this object is the only carrier of the old stamp and
     // the id becomes unreachable the moment the header word above is written:
