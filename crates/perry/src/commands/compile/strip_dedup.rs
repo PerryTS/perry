@@ -1791,7 +1791,7 @@ fn shared_dep_members_to_remove(
             let replacement_defined = replacement_defined_by_candidate.get(c).unwrap_or(&empty);
             let still_needed = kept_undefined.iter().any(|s| {
                 defined.contains(*s)
-                    && (!replacement_defined.contains(*s) || requires_bundled_native_companion(s))
+                    && (!replacement_defined.contains(*s) || requires_bundled_wrapper_provider(s))
             });
             if still_needed {
                 to_remove.remove(c);
@@ -1815,6 +1815,22 @@ fn shared_dep_members_to_remove(
 /// links fail with hundreds of undefined `ring_core_*` references.
 fn requires_bundled_native_companion(symbol: &str) -> bool {
     symbol.trim_start_matches('_').starts_with("ring_core_")
+}
+
+/// Symbols whose same-named stdlib archive-index entry is not sufficient
+/// replacement evidence for a wrapper-first link.
+///
+/// `futures_channel::mpsc::SenderTask::notify` can appear in the matching
+/// stdlib member's archive index while remaining unavailable to retained
+/// `perry-ext-http` receiver CGUs in the final link (#9121). Keep the wrapper's
+/// provider whenever one of those retained CGUs references it. Rust v0
+/// mangling preserves identifier text, so the predicate works on the raw
+/// symbol spelling used by `llvm-nm` as well as on demangled test fixtures.
+fn requires_bundled_wrapper_provider(symbol: &str) -> bool {
+    requires_bundled_native_companion(symbol)
+        || (symbol.contains("futures_channel")
+            && symbol.contains("SenderTask")
+            && symbol.contains("notify"))
 }
 
 mod object_format;

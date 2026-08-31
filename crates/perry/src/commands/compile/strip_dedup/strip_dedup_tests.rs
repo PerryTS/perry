@@ -5,7 +5,8 @@
 
 use super::{
     force_localize_symbol, is_panic_unwind_symbol, parse_nm_archive_map, parse_nm_archive_output,
-    requires_bundled_native_companion, shared_dep_members_to_remove,
+    requires_bundled_native_companion, requires_bundled_wrapper_provider,
+    shared_dep_members_to_remove,
 };
 
 #[test]
@@ -166,6 +167,15 @@ fn ring_core_symbols_require_the_bundled_native_companion() {
 }
 
 #[test]
+fn futures_channel_sender_notify_requires_the_bundled_provider() {
+    let notify = "_RNvNtCs9W6CGWSfoiL_15futures_channel4mpscNtB5_10SenderTask6notify";
+    assert!(requires_bundled_wrapper_provider(notify));
+    assert!(!requires_bundled_wrapper_provider(
+        "_RNvNtCs9W6CGWSfoiL_15futures_channel4mpsc12next_message"
+    ));
+}
+
+#[test]
 fn shared_dep_fixed_point_keeps_ring_native_half_with_kept_rust_half() {
     use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -286,6 +296,41 @@ fn issue_8930_requires_needed_symbol_in_matching_stdlib_member() {
         &present_in_match,
     );
     assert!(removed.contains("futures_channel.o"));
+}
+
+#[test]
+fn issue_9121_keeps_indexed_sender_notify_provider() {
+    use std::collections::{BTreeSet, HashMap, HashSet};
+
+    let notify = "_RNvNtCs9W6CGWSfoiL_15futures_channel4mpscNtB5_10SenderTask6notify";
+    let candidates: BTreeSet<String> = ["futures_channel.o".to_string()].into_iter().collect();
+    let defined_by_member: HashMap<String, HashSet<String>> = [(
+        "futures_channel.o".to_string(),
+        [notify.to_string()].into_iter().collect(),
+    )]
+    .into_iter()
+    .collect();
+    let undefined_by_member: HashMap<String, HashSet<String>> = [(
+        "perry_ext_http_receiver.o".to_string(),
+        [notify.to_string()].into_iter().collect(),
+    )]
+    .into_iter()
+    .collect();
+    let replacement_defined_by_candidate: HashMap<String, HashSet<String>> = [(
+        "futures_channel.o".to_string(),
+        [notify.to_string()].into_iter().collect(),
+    )]
+    .into_iter()
+    .collect();
+
+    let removed = shared_dep_members_to_remove(
+        &candidates,
+        &defined_by_member,
+        &undefined_by_member,
+        &replacement_defined_by_candidate,
+    );
+
+    assert!(!removed.contains("futures_channel.o"));
 }
 
 #[cfg(target_os = "windows")]
