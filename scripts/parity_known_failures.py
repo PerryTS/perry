@@ -42,6 +42,11 @@ Two extra teeth, both cheap:
     `lint`, which is a required context. It would have flagged the diagchannel
     entry on the day it was added.
 
+  * The same audit checks the reverse relationship: every accepted entry in
+    gap_snapshot.json must carry provenance and have a Linux-applicable record
+    here. A snapshot refresh can no longer turn a new red test into an
+    anonymous expected failure with no issue or explanation (#9273).
+
   * the report path prints how many entries it actually ADJUDICATED. A gate
     must assert its subject was live, not merely that nothing threw.
 """
@@ -266,7 +271,9 @@ def audit(
 ) -> tuple[list[str], list[str]]:
     """Offline half: provenance + cross-check against the gap snapshot.
 
-    Returns (schema_problems, stale_problems). Needs no parity run, so it can
+    The cross-check is bidirectional: known gap entries must remain in the
+    snapshot, and snapshot failures must be triaged here. Returns
+    (schema_problems, stale_problems). Needs no parity run, so it can
     live on a required per-PR job while the suite that consumes this file is
     tag-gated.
     """
@@ -294,6 +301,22 @@ def audit(
                 f"{test_id}: test-parity/gap_snapshot.json (the generated "
                 f"{GAP_SNAPSHOT_PLATFORM} baseline) says this test PASSES"
             )
+    if snapshot_tests is not None:
+        for test_id, record in sorted(snapshot_tests.items()):
+            entry_problems, _ = validate_entry(test_id, record)
+            schema_problems.extend(
+                f"gap_snapshot.json {problem}" for problem in entry_problems
+            )
+            known_record = known.get(test_id)
+            if known_record is None or not entry_applies(
+                known_record, GAP_SNAPSHOT_PLATFORM
+            ):
+                schema_problems.append(
+                    f"{test_id}: gap_snapshot.json accepts this Linux failure, "
+                    "but known_failures.json has no Linux-applicable entry. Add "
+                    "one with its GitHub issue, date, category, and reason."
+                )
+
     return schema_problems, stale
 
 
@@ -415,7 +438,9 @@ def self_test() -> int:
         "test_gap_linux_scoped_elsewhere": entry(platforms=["windows"]),
         "test_parity_other_suite": entry(),
     }
-    snapshot = {"test_gap_still_broken": {"status": "parity_fail"}}
+    snapshot = {
+        "test_gap_still_broken": entry(status="parity_fail"),
+    }
     problems, stale = audit(gap_known, snapshot, test_exists=lambda _t: True)
     assert problems == [], problems
     assert len(stale) == 1 and stale[0].startswith("test_gap_fixed:"), stale
@@ -427,6 +452,23 @@ def self_test() -> int:
     # No snapshot -> the file-existence half still runs, the cross-check does not.
     _, stale = audit(gap_known, None, test_exists=lambda _t: True)
     assert stale == [], stale
+
+    # The reverse direction: a snapshot entry cannot accept a failure without
+    # the issue-backed known-failure record that explains it.
+    orphan_snapshot = dict(snapshot)
+    orphan_snapshot["test_gap_orphan"] = entry(status="parity_fail")
+    problems, _ = audit(gap_known, orphan_snapshot, test_exists=lambda _t: True)
+    assert (
+        len(problems) == 1 and "no Linux-applicable entry" in problems[0]
+    ), problems
+
+    # Nor can a matching known entry launder null provenance stored in the
+    # snapshot itself.
+    anonymous_snapshot = {
+        "test_gap_still_broken": entry(status="parity_fail", issue=None),
+    }
+    problems, _ = audit(gap_known, anonymous_snapshot, test_exists=lambda _t: True)
+    assert len(problems) == 1 and "issue must be" in problems[0], problems
 
     print("parity_known_failures self-test OK")
     return 0
@@ -444,7 +486,7 @@ def run_audit(args: argparse.Namespace) -> int:
         return 2
 
     if problems:
-        print("Malformed known_failures.json entries:", file=sys.stderr)
+        print("Malformed or untriaged failure metadata:", file=sys.stderr)
         for problem in problems:
             print(f"  - {problem}", file=sys.stderr)
         return 2
@@ -459,7 +501,15 @@ def run_audit(args: argparse.Namespace) -> int:
         if snapshot_tests is not None
         else " (no gap snapshot found — cross-check skipped)"
     )
-    print(f"known_failures.json audit OK — {entries} entries carry provenance{scope}.")
+    snapshot_scope = (
+        f"; {len(snapshot_tests)} snapshot entries carry provenance"
+        if snapshot_tests is not None
+        else ""
+    )
+    print(
+        f"known_failures.json audit OK — {entries} entries carry provenance"
+        f"{scope}{snapshot_scope}."
+    )
     return 0
 
 

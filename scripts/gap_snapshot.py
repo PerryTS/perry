@@ -49,6 +49,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_REPORT = ROOT / "test-parity/reports/latest.json"
 DEFAULT_SNAPSHOT = ROOT / "test-parity/gap_snapshot.json"
+DEFAULT_KNOWN_FAILURES = ROOT / "test-parity/known_failures.json"
 TEST_DIR = ROOT / "test-files"
 
 PASS = "pass"
@@ -67,7 +68,11 @@ SCHEMA_DOC = {
     ),
     "fields": {
         "status": "parity_fail | compile_fail | crash | node_fail | skipped",
-        "issue": "GitHub issue tracking this failure, or null when untriaged.",
+        "issue": (
+            "REQUIRED before commit. GitHub issue tracking this failure. "
+            "Snapshot update copies it from known_failures.json when available; "
+            "the offline audit rejects a null placeholder."
+        ),
         "added": "ISO date (YYYY-MM-DD) the test first entered the snapshot.",
         "category": (
             "ci-env | module-inventory | bug-open | bug-stale | gap-categorical | "
@@ -103,6 +108,13 @@ def load_snapshot(path: Path) -> dict[str, dict]:
     return json.loads(path.read_text(encoding="utf-8")).get("tests", {})
 
 
+def load_known_failures(path: Path) -> dict[str, dict]:
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {key: value for key, value in data.items() if key != "_schema"}
+
+
 def write_snapshot(path: Path, tests: dict[str, dict]) -> None:
     payload = {"_schema": SCHEMA_DOC, "tests": dict(sorted(tests.items()))}
     path.write_text(
@@ -136,9 +148,11 @@ def merge(
     tests: dict[str, dict],
     today: str,
     exists=test_file_exists,
+    known: dict[str, dict] | None = None,
 ) -> dict[str, dict]:
-    """Fold this run's statuses in, preserving triage metadata."""
+    """Fold this run's statuses in, preserving/backfilling triage metadata."""
     merged = dict(tests)
+    known = known or {}
     for test_id, status in report.items():
         if status == PASS:
             # Fixed — drop the entry so it can't outlive the bug it tracked.
@@ -146,14 +160,21 @@ def merge(
             continue
         previous = merged.get(test_id, {})
         entry: dict[str, object] = {"status": status}
-        if previous:
-            # Carry triage across a status change: parity_fail -> crash is
-            # still the same open bug.
-            entry.update({f: previous[f] for f in TRIAGE_FIELDS if f in previous})
-        else:
-            entry.update(
-                {"issue": None, "added": today, "category": "untriaged", "reason": ""}
-            )
+        triage = known.get(test_id, {})
+        # Carry triage across a status change: parity_fail -> crash is still
+        # the same open bug. Fill missing/null legacy fields from the
+        # provenance-enforced known-failure record instead of generating a
+        # second, contradictory explanation of the same accepted failure.
+        for field in TRIAGE_FIELDS:
+            value = previous.get(field) if isinstance(previous, dict) else None
+            if value in (None, "") and isinstance(triage, dict):
+                value = triage.get(field)
+            if value not in (None, ""):
+                entry[field] = value
+        entry.setdefault("issue", None)
+        entry.setdefault("added", today)
+        entry.setdefault("category", "untriaged")
+        entry.setdefault("reason", "")
         merged[test_id] = entry
     # A test file that no longer exists cannot be run by any shard, so pruning
     # it is safe even from a partial report.
@@ -226,6 +247,35 @@ def self_test() -> int:
     assert merge({}, snapshot, "2026-07-22", lambda _t: False) == {}
     assert merge({}, snapshot, "2026-07-22", live) == snapshot
 
+    # Snapshot update backfills missing provenance from known_failures.json but
+    # preserves the snapshot's existing, more-specific explanation.
+    missing_issue = {
+        "test_gap_b": {
+            "status": "parity_fail",
+            "issue": None,
+            "added": "2026-01-01",
+            "category": "bug-open",
+            "reason": "specific reason",
+        }
+    }
+    known = {
+        "test_gap_b": {
+            "issue": "43",
+            "added": "2026-02-02",
+            "category": "gap-bisect",
+            "reason": "generic reason",
+        }
+    }
+    merged = merge(
+        {"test_gap_b": "parity_fail"},
+        missing_issue,
+        "2026-07-22",
+        live,
+        known,
+    )
+    assert merged["test_gap_b"]["issue"] == "43", merged
+    assert merged["test_gap_b"]["reason"] == "specific reason", merged
+
     print("gap_snapshot self-test OK")
     return 0
 
@@ -235,6 +285,7 @@ def main() -> int:
     parser.add_argument("mode", nargs="?", choices=("check", "update"), default="check")
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
     parser.add_argument("--snapshot", type=Path, default=DEFAULT_SNAPSHOT)
+    parser.add_argument("--known", type=Path, default=DEFAULT_KNOWN_FAILURES)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
@@ -249,7 +300,8 @@ def main() -> int:
     tests = load_snapshot(args.snapshot)
 
     if args.mode == "update":
-        merged = merge(report, tests, date.today().isoformat())
+        known = load_known_failures(args.known)
+        merged = merge(report, tests, date.today().isoformat(), known=known)
         write_snapshot(args.snapshot, merged)
         print(
             f"Snapshot updated from {len(report)} run tests: "

@@ -40,11 +40,21 @@ revalidate (#797).
 Never hand-edit statuses. To accept the current state:
 
 ```bash
+npm ci --ignore-scripts --no-audit --no-fund
 UPDATE_SNAPSHOT=1 ./scripts/run_gap_tests.sh
 ```
 
-then commit the diff. New entries land as `category: untriaged` with a null
-issue — fill those in, that is the triage step the gate is asking for.
+The wrapper refuses to run unless `node --version` exactly matches
+`.node-version` and the root npm dependency set is installed. Both are oracle
+inputs: a missing package makes Node print `ERR_MODULE_NOT_FOUND` while Perry
+can still compile its compatibility implementation, manufacturing a
+"regression" that no compiler change caused (#9273).
+
+Then commit the diff. Snapshot update copies existing triage from
+`known_failures.json`. A genuinely new entry lands as an untriaged placeholder;
+add its issue, date, category, and reason to both files before committing. The
+required lint audit checks this relationship in both directions, so an
+anonymous expected failure cannot enter through a snapshot refresh.
 
 The required CI baseline remains `gap_snapshot.json` on Linux. The gap wrapper
 selects `gap_snapshot.windows.json`, `gap_snapshot.macos.json`, or

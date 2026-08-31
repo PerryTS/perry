@@ -26,6 +26,7 @@
 # Requirements:
 #   - a Rust toolchain (the wrapped run_parity_tests.sh builds target/release/perry)
 #   - node with --experimental-strip-types, at the .node-version pin
+#   - root npm dependencies installed with npm ci (package-backed Node oracles)
 #   - jq, Python 3 (`python3` or `python`)
 #
 # Usage: scripts/run_gap_tests.sh [--shard N/M]
@@ -35,6 +36,46 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
+
+# #9273: the gap snapshot is meaningful only for one exact oracle environment.
+# A local run used Node 26.8.1 instead of the 26.5.1 pin and had not run
+# `npm ci`. Five package-backed fixtures therefore compared Node's
+# ERR_MODULE_NOT_FOUND with valid Perry output and were labelled regressions.
+# Refuse that experiment before spending minutes building/running the suite.
+if ! command -v node >/dev/null 2>&1; then
+  echo "ERROR: node is required by the gap suite." >&2
+  exit 2
+fi
+pinned_node="$(tr -d '[:space:]' < .node-version)"
+running_node="$(node --version 2>/dev/null | sed 's/^v//')"
+if [[ -z "$pinned_node" || -z "$running_node" ]]; then
+  echo "ERROR: could not determine the Node oracle version." >&2
+  exit 2
+fi
+if [[ "$running_node" != "$pinned_node" ]]; then
+  echo "ERROR: Node oracle mismatch: running v$running_node, but .node-version pins v$pinned_node." >&2
+  echo "       Gap output is compared byte-for-byte, so even a patch release is a" >&2
+  echo "       different correctness input. Install/select the pinned version." >&2
+  exit 2
+fi
+
+# package.json is the manifest for package-backed gap oracles. Checking the
+# whole top-level install avoids a second hand-maintained package list that
+# would go stale when a new fixture starts importing a dependency. npm ls
+# catches both a missing node_modules tree and versions that do not satisfy the
+# committed manifest; CI establishes the same state with npm ci.
+if ! command -v npm >/dev/null 2>&1; then
+  echo "ERROR: npm is required to verify the gap suite's Node oracle dependencies." >&2
+  echo "       Install npm, then run: npm ci --ignore-scripts --no-audit --no-fund" >&2
+  exit 2
+fi
+if ! npm ls --depth=0 --silent >/dev/null 2>&1; then
+  echo "ERROR: root npm dependencies are missing or do not match package.json." >&2
+  echo "       The Node oracle must be able to import package-backed gap fixtures;" >&2
+  echo "       otherwise ERR_MODULE_NOT_FOUND is misreported as a Perry regression." >&2
+  echo "       Run: npm ci --ignore-scripts --no-audit --no-fund" >&2
+  exit 2
+fi
 
 if [[ -n "${PERRY_HOST_PLATFORM:-}" ]]; then
   host_platform="$PERRY_HOST_PLATFORM"
