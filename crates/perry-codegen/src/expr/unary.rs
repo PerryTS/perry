@@ -32,7 +32,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Everything else may be a BigInt at runtime — notably an indexed
             // read from a plain array — and routing it through ToNumber would
             // silently round large BigInts before `fneg` (#9142).
-            let dynamic_neg = matches!(op, UnaryOp::Neg)
+            let _dynamic_neg = matches!(op, UnaryOp::Neg)
                 && !statically_numeric
                 && !is_provably_not_bigint(ctx, operand);
             let (v, precomputed_truthy) = if matches!(op, UnaryOp::Not) {
@@ -44,13 +44,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let blk = ctx.block();
             match op {
                 UnaryOp::Neg => {
-                    if dynamic_neg {
-                        Ok(blk.call(DOUBLE, "js_dynamic_neg", &[(DOUBLE, &v)]))
-                    } else if numeric {
+                    if numeric {
                         Ok(blk.fneg(&v))
                     } else {
-                        let coerced = blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &v)]);
-                        Ok(blk.fneg(&coerced))
+                        // Mirrors `Pos` below: anything not statically numeric
+                        // goes through the dynamic helper, which performs a real
+                        // ToNumeric. The old `js_number_coerce` + `fneg` fallback
+                        // answered NaN when the operand's `valueOf` THREW, so
+                        // `-{ valueOf() { throw … } }` silently produced NaN
+                        // where every other operator (`+x`, `~x`, `x * 2`)
+                        // propagated. `js_dynamic_neg` also keeps a BigInt a
+                        // BigInt, which is why `dynamic_neg` folded in here.
+                        Ok(blk.call(DOUBLE, "js_dynamic_neg", &[(DOUBLE, &v)]))
                     }
                 }
                 UnaryOp::Pos => {

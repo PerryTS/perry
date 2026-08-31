@@ -5164,7 +5164,8 @@ fn stmt_is_packed_f64_loop_safe(
         // `flush_packed_accumulator_locals`; without it this admission is the
         // #9185 wrong answer.
         Stmt::Throw(value) => {
-            packed_loop_abrupt_enabled() && throw_operand_cannot_unwind(ctx, value, arr_id, counter_id)
+            packed_loop_abrupt_enabled()
+                && throw_operand_cannot_unwind(ctx, value, arr_id, counter_id)
         }
         Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)

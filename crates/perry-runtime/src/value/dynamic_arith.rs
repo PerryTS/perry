@@ -714,6 +714,13 @@ pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
 /// Dynamic negate: -BigInt if operand is BigInt, else -f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_neg(a: f64) -> f64 {
+    // Unary minus performs ToNumeric on its operand, exactly as `js_dynamic_pos`
+    // below does. Negating the raw NaN-boxed bits skipped that entirely, so an
+    // object operand never had `valueOf` called: `-{ valueOf() { throw … } }`
+    // answered NaN instead of propagating, while `+x`, `~x` and `x * 2` on the
+    // same object all threw. ToNumeric is a no-op for a number and returns the
+    // BigInt unchanged for a BigInt, so the two arms below are unaffected.
+    let a = to_numeric(a);
     let a_val = JSValue::from_bits(a.to_bits());
     if a_val.is_bigint() {
         let scope = crate::gc::RuntimeHandleScope::new();
