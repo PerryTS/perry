@@ -867,6 +867,37 @@ pub(super) struct SubclassDispatchArm {
     pub target_fn: String,
 }
 
+/// A declared instance field is an own property on every constructed object,
+/// so it wins over a same-named prototype method. The direct-method guards
+/// prove the receiver's class/shape and prototype stability, but that is not
+/// enough to skip ordinary own-property lookup when the expected shape itself
+/// contains the method name. Computed fields are conservatively treated as a
+/// possible shadow because their runtime key is not available here.
+fn class_chain_may_declare_method_field(ctx: &FnCtx<'_>, class_name: &str, property: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..64 {
+        let Some(name) = current else {
+            return false;
+        };
+        if !seen.insert(name.clone()) {
+            return true;
+        }
+        let Some(class) = ctx.classes.get(&name).copied() else {
+            return true;
+        };
+        if class
+            .fields
+            .iter()
+            .any(|field| field.key_expr.is_some() || (!field.is_private && field.name == property))
+        {
+            return true;
+        }
+        current = class.extends_name.clone();
+    }
+    true
+}
+
 /// Emit a typed-feedback runtime guard before a known class-method direct call.
 ///
 /// The guard validates that the receiver still has the expected class shape,
@@ -892,6 +923,13 @@ pub(super) fn emit_guarded_direct_method_call(
     shape_only_guard: bool,
     subclass_arms: &[SubclassDispatchArm],
 ) -> Option<String> {
+    // `class C { m = fn; m() {} }` and an inherited field with the same name
+    // both require ordinary own-property lookup. Falling back here reaches
+    // `emit_own_method_override_check` / dynamic dispatch in the caller.
+    if class_chain_may_declare_method_field(ctx, receiver_class_name, property) {
+        return None;
+    }
+
     let truthy_result_kind = ctx
         .truthy_call_result_requested
         .then(|| constructive_method_truthiness(ctx, direct_fn))
