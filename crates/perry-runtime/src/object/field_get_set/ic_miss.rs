@@ -326,7 +326,16 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
         c[PIC_WAY_STATE] = state + 1;
         return;
     }
-    let cascade = prev_tok != 0 && prev_tok != token;
+    // #9287: an overflow-encoded slot (IC_SLOT_OVERFLOW_BIT) may live in the
+    // MRU entry — the emitted MRU hit path tests the bit and routes through
+    // `js_object_get_field_ic_overflow_load`. The emitted WAY path does not:
+    // it computes `obj + header + slot*8` directly, and an encoded slot there
+    // would be a wild load. Keep encoded slots out of the ways entirely; a
+    // polymorphic site rotating overflow shapes re-primes the MRU per shape,
+    // which is exactly the pre-#7753 behaviour.
+    let prev_is_overflow =
+        (prev_slot as u64) & u64::from(crate::proxy::IC_SLOT_OVERFLOW_BIT) != 0;
+    let cascade = prev_tok != 0 && prev_tok != token && !prev_is_overflow;
     // One pass over the ways does three things:
     //   * evicts `token` from a way if it has one — it now lives in the MRU
     //     entry, and leaving the stale copy behind would permanently cost a way
@@ -413,6 +422,33 @@ unsafe fn key_bytes_are(key: *const crate::StringHeader, want: &[u8]) -> bool {
     let p = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
     std::slice::from_raw_parts(p, want.len()) == want
 }
+/// #9287: MRU-hit load for a get-IC slot word carrying
+/// `IC_SLOT_OVERFLOW_BIT` — the field lives past the inline region. The
+/// emitted guards already matched the receiver's shape token in the same
+/// straight-line region, so the slot is the one the prime validated; the load
+/// still goes through `overflow_get` (spill buffer first, side table behind
+/// the kill switch), and a hole — the field was tombstoned since priming —
+/// falls back to the full miss handler, which honours deletion and the
+/// prototype chain.
+#[no_mangle]
+pub extern "C" fn js_object_get_field_ic_overflow_load(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+    slot: i32,
+    cache: *mut PicCache,
+) -> f64 {
+    let idx = (slot as u32 & !crate::proxy::IC_SLOT_OVERFLOW_BIT) as usize;
+    if !obj.is_null() {
+        if let Some(bits) = crate::object::overflow_get(obj as usize, idx) {
+            if bits != crate::value::TAG_HOLE {
+                return f64::from_bits(bits);
+            }
+        }
+    }
+    js_object_get_field_ic_miss(obj, key, cache)
+}
+
+
 
 /// Monomorphic inline cache miss handler (issue #51).
 ///
@@ -741,6 +777,40 @@ pub extern "C" fn js_object_get_field_ic_miss(
                 let k_ptr = (k_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
                 if !k_ptr.is_null() && crate::string::js_string_equals(k_ptr, key) != 0 {
                     if i >= alloc_limit {
+                        // #9287: a field past the inline region primes too,
+                        // with IC_SLOT_OVERFLOW_BIT — the emitted MRU hit path
+                        // tests the bit and routes through
+                        // `js_object_get_field_ic_overflow_load`. Before this,
+                        // the break below meant an overflow field missed this
+                        // cache on EVERY read. Descriptor-bearing receivers
+                        // keep falling through (the slow path honours
+                        // accessors), and the value must be readable through
+                        // `overflow_get` right now — if it is not, priming
+                        // would cache a lie.
+                        if !has_own_descriptors
+                            && (i as u32) < crate::proxy::IC_SLOT_OVERFLOW_BIT
+                        {
+                            if let Some(bits) = crate::object::overflow_get(obj as usize, i) {
+                                if bits != crate::value::TAG_HOLE {
+                                    let stamp = crate::object::shapes::object_shape_stamp(obj);
+                                    let token = (stamp as u64
+                                        | crate::object::shapes::PIC_ID_TOKEN_BIT)
+                                        as i64;
+                                    // Word 2 (named-prefix identity) stays 0:
+                                    // the prefix paths compute inline
+                                    // addresses and must never fire from an
+                                    // overflow-primed entry.
+                                    (*cache)[2] = 0;
+                                    pic_prime_get(
+                                        cache,
+                                        token,
+                                        (i as u32 | crate::proxy::IC_SLOT_OVERFLOW_BIT)
+                                            as i64,
+                                    );
+                                    return f64::from_bits(bits);
+                                }
+                            }
+                        }
                         // Field is in the overflow map — fall through to the
                         // slow path which handles overflow correctly.
                         break;

@@ -710,6 +710,40 @@ fn lower_put_value_static_write_ic(
         ],
     );
 
+    // #9287: a primed slot word may carry IC_SLOT_OVERFLOW_BIT (1 << 30) —
+    // the property lives past the inline region, in the object's spill
+    // buffer. The inline address arithmetic below is inline-region-only, so
+    // such hits route through `js_put_value_set_ic_overflow_store`, which is
+    // the dynamic-key IC's audited validate-and-store (spill store,
+    // stable-tombstone hole check, barriers). One branch that predicts
+    // perfectly for sites whose property is inline: their slot words never
+    // have the bit. Helper failure (revoked between prime and hit) falls back
+    // to the full miss call, which re-primes way 1.
+    let ovf_idx = ctx.new_block("put.pic.hit.overflow");
+    let inline_hit_idx = ctx.new_block("put.pic.hit.inline");
+    let ovf_label = ctx.block_label(ovf_idx);
+    let inline_hit_label = ctx.block_label(inline_hit_idx);
+    let ovf_bits = ctx.block().and(I64, &selected_slot, "1073741824"); // 1 << 30
+    let is_ovf = ctx.block().icmp_ne(I64, &ovf_bits, "0");
+    ctx.block().cond_br(&is_ovf, &ovf_label, &inline_hit_label);
+
+    ctx.current_block = ovf_idx;
+    let ovf_slot_i32 = ctx.block().trunc(I64, &selected_slot, I32);
+    let ovf_ok = ctx.block().call(
+        I32,
+        "js_put_value_set_ic_overflow_store",
+        &[
+            (DOUBLE, &target_value),
+            (I64, &shape_token),
+            (I32, &ovf_slot_i32),
+            (DOUBLE, &stored_value),
+        ],
+    );
+    let ovf_hit = ctx.block().icmp_ne(I32, &ovf_ok, "0");
+    let ovf_end_label = ctx.block().label.clone();
+    ctx.block().cond_br(&ovf_hit, &merge_label, &miss_label);
+
+    ctx.current_block = inline_hit_idx;
     // `pointer_possible` is a COMPILE-TIME claim about the RHS, so it is true
     // for every `o.x = v` whose RHS is an untyped local — which is most of
     // them. Before #8184 that arm paid three unconditional `gc-leaf` calls
@@ -906,6 +940,7 @@ fn lower_put_value_static_write_ic(
         DOUBLE,
         &[
             (&stored_value, &hit_end_label),
+            (&stored_value, &ovf_end_label),
             (&deleted_value, &deleted_end_label),
             (&miss_value, &miss_end_label),
             (&miss2_value, &miss2_end_label),

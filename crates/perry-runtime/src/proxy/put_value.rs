@@ -328,16 +328,6 @@ pub extern "C" fn js_put_value_set(
     }
     value_handle.get_nanbox_f64()
 }
-
-/// Miss path for one way of the codegen-emitted polymorphic PutValue cache.
-///
-/// The full strict/sloppy `[[Set]]` semantics run first. Only a successful
-/// ordinary class-instance own-data overwrite may prime `[shape_token, slot]`;
-/// every exotic, descriptor-bearing, frozen, class-object, plain-class-zero,
-/// overflow, or typed-layout-intact receiver remains permanently on the miss
-/// path. The token mirrors the read PIC: a stamped runtime ShapeId is lifted
-/// above the pointer range with bit 62; otherwise the shared keys pointer is
-/// used. The generated hit path repeats all mutable per-object guards.
 #[no_mangle]
 pub extern "C" fn js_put_value_set_ic_miss(
     target: f64,
@@ -446,10 +436,26 @@ pub extern "C" fn js_put_value_set_ic_miss(
         let Some(idx) = own_idx else {
             return result;
         };
+        // #9287: a slot past the inline region primes too, carrying
+        // IC_SLOT_OVERFLOW_BIT exactly like the dynamic-key IC's stub entries.
+        // The emitted hit path routes such slots through
+        // `js_put_value_set_ic_overflow_store`, which is `dyn_ic_try_store` —
+        // the same validate-and-store the dynamic IC has always used for
+        // overflow properties (spill store, tombstone check, barriers). Before
+        // this, `idx >= alloc_limit` returned without priming, so a property
+        // in overflow storage missed this cache on EVERY access: 3 ms vs
+        // 27 ms for the identical loop with the identical object, decided by
+        // whether the property sat at index 1 or index 2.
         let alloc_limit = shape.live_inline_slot_count as usize;
-        if idx as usize >= alloc_limit {
+        let slot_word: u32 = if (idx as usize) < alloc_limit {
+            idx
+        } else if (idx as usize) < shape.logical_key_count as usize
+            && idx < IC_SLOT_OVERFLOW_BIT
+        {
+            idx | IC_SLOT_OVERFLOW_BIT
+        } else {
             return result;
-        }
+        };
 
         // The descriptor above already proves this stamp is live, so the
         // token comes from the header word rather than from a second full
@@ -460,7 +466,7 @@ pub extern "C" fn js_put_value_set_ic_miss(
         // Publish the token last conceptually: a zero-initialized or stale
         // token cannot hit this slot until it matches this receiver's current
         // discriminated shape token. Perry's read PIC uses the same format.
-        (*cache)[1] = idx as i64;
+        (*cache)[1] = slot_word as i64;
         (*cache)[0] = shape_token as i64;
         // Rotating-key sites overflow the single-slot site cache immediately;
         // the global stub is what lets them hit. Key bits from the rooted key.
@@ -474,7 +480,7 @@ pub extern "C" fn js_put_value_set_ic_miss(
                 let boxed =
                     f64::from_bits(crate::value::js_nanbox_string(key_now as i64).to_bits());
                 if let Some(kb) = stub_key_bits(boxed) {
-                    write_stub_insert(shape_token, kb, idx);
+                    write_stub_insert(shape_token, kb, slot_word);
                 }
             }
         });
@@ -738,6 +744,30 @@ fn write_stub_insert(token: u64, key_bits: u64, slot: u32) {
 /// and bounds. What remains mutable per object is the GC header — type,
 /// forwarded, and the blocking flags `Object.freeze`-family operations set —
 /// and the hit still checks those on every store.
+/// #9287: validate-and-store for a constant-key IC hit whose slot word
+/// carries [`IC_SLOT_OVERFLOW_BIT`]. The emitted inline path has already
+/// matched the receiver's shape token against the cache, but this helper
+/// re-validates everything through [`dyn_ic_try_store`] anyway — the checks
+/// are ~10 instructions, and reusing the dynamic IC's audited path means the
+/// overflow store (spill buffer, stable-tombstone hole check, barriers,
+/// layout notes) has exactly one implementation. Returns 1 and performs the
+/// store on success; returns 0 without side effects when validation fails,
+/// and the caller falls back to `js_put_value_set_ic_miss`.
+#[no_mangle]
+pub extern "C" fn js_put_value_set_ic_overflow_store(
+    target: f64,
+    token: i64,
+    slot: i32,
+    value: f64,
+) -> i32 {
+    unsafe {
+        match dyn_ic_try_store(target, token as u64, slot as u32, value) {
+            Some(_) => 1,
+            None => 0,
+        }
+    }
+}
+
 pub(crate) const IC_SLOT_OVERFLOW_BIT: u32 = 1 << 30;
 
 /// Validated fast store for a cached `(token, slot)` hit. Header checks and

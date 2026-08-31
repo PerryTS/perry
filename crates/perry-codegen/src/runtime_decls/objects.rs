@@ -520,6 +520,19 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, I64, DOUBLE, I32, PTR],
     );
+    // #9287: validate-and-store for a constant-key IC hit whose slot word
+    // carries the overflow bit (property lives in the spill buffer).
+    module.declare_function(
+        "js_put_value_set_ic_overflow_store",
+        I32,
+        &[DOUBLE, I64, I32, DOUBLE],
+    );
+    // #9287: MRU-hit load for a get-IC slot word carrying the overflow bit.
+    module.declare_function(
+        "js_object_get_field_ic_overflow_load",
+        DOUBLE,
+        &[I64, I64, I32, PTR],
+    );
     module.declare_function(
         "js_put_value_set_ic_poly_tail",
         DOUBLE,

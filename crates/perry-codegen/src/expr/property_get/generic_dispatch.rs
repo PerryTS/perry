@@ -550,6 +550,41 @@ pub(crate) fn lower_generic_property_get(
     ctx.current_block = hit_idx;
     let cache_slot_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
     let slot = ctx.block().load(I64, &cache_slot_ptr);
+
+    // #9287: the primed slot word may carry IC_SLOT_OVERFLOW_BIT (1 << 30) —
+    // the field lives past the inline region, in the object's spill buffer,
+    // and the inline `obj + header + slot*8` arithmetic below must not run on
+    // it. Such hits route through `js_object_get_field_ic_overflow_load`,
+    // which loads through `overflow_get` and falls back to the full miss
+    // handler on a tombstoned slot. Sites whose field is inline never see the
+    // bit, so this branch predicts perfectly for them. The polymorphic WAYS
+    // never hold an encoded slot (`pic_prime_get` refuses to cascade one), so
+    // only this MRU path needs the check.
+    let ovf_idx = ctx.new_block("pic.hit.overflow");
+    let inline_hit_idx = ctx.new_block("pic.hit.inline");
+    let ovf_label = ctx.block_label(ovf_idx);
+    let inline_hit_label = ctx.block_label(inline_hit_idx);
+    let ovf_bits = ctx.block().and(I64, &slot, "1073741824"); // 1 << 30
+    let is_ovf = ctx.block().icmp_ne(I64, &ovf_bits, "0");
+    ctx.block().cond_br(&is_ovf, &ovf_label, &inline_hit_label);
+
+    ctx.current_block = ovf_idx;
+    let ovf_key_handle = emit_key_handle(ctx, &key_handle_global);
+    let ovf_slot_i32 = ctx.block().trunc(I64, &slot, I32);
+    let val_ovf = ctx.block().call(
+        DOUBLE,
+        "js_object_get_field_ic_overflow_load",
+        &[
+            (I64, &obj_handle),
+            (I64, &ovf_key_handle),
+            (I32, &ovf_slot_i32),
+            (PTR, &cache_ref),
+        ],
+    );
+    let ovf_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = inline_hit_idx;
     let offset = ctx.block().shl(I64, &slot, "3");
     // arm64_32 watchOS: the object fields region begins at
     // `size_of::<ObjectHeader>()` past the user pointer — 16 on LP64 and
@@ -908,6 +943,7 @@ pub(crate) fn lower_generic_property_get(
         DOUBLE,
         &[
             (&val_hit, &hit_end_label),
+            (&val_ovf, &ovf_end_label),
             (&val_prefix, &prefix_end_label),
             (&val_desc_prefix, &desc_prefix_end_label),
             (&val_way, &way_end_label),
