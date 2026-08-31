@@ -928,6 +928,24 @@ pub(super) struct GcCycleState {
 
 impl GcCycleState {
     pub(super) fn new_full(trigger: GcTriggerSnapshot) -> Self {
+        // Build the lazy stack-map index HERE, not only at the entry points.
+        //
+        // #9191 made the index lazy and wired the four collection entries by
+        // hand; #9231 then found that budgeted cycles construct this state
+        // directly and bypass all four, so the first root-scan step hit
+        // #9182's fail-closed guard and aborted. #9233 wired those two sites
+        // too — by hand again. That is five hand-wired sites for one
+        // invariant, and the file next door already records where that leads:
+        // `arena_growth_full_escalation_due` carries a note that #7726 wired
+        // two sites and missed the third, "which is the site the shipped
+        // safepoint path actually takes."
+        //
+        // Every cycle passes through this constructor, so doing it here makes
+        // a future entry point correct by construction. `ensure_built` is an
+        // Acquire load and a return once the index exists, so the entries that
+        // still call it earlier — while allocation is unambiguously legal —
+        // keep their ordering and pay nothing for the overlap.
+        super::roots::ensure_stack_maps_built();
         let trigger_kind = trigger.kind;
         let trace = GcCycleTrace::new(GcCollectionKind::Full, trigger);
         let start = Instant::now();
@@ -986,6 +1004,8 @@ impl GcCycleState {
         old_page_selection: OldPageDefragSelection,
         old_page_source_blocks: crate::arena::OldArenaSourceBlockSelection,
     ) -> Self {
+        // Same invariant as `new_full`; see the note there.
+        super::roots::ensure_stack_maps_built();
         let malloc_sweep_due = copied_minor_malloc_sweep_due(trigger.kind);
         let trigger_kind = trigger.kind;
         // Allocate-black for the WHOLE cycle — see `new_full` above for why the
