@@ -4,6 +4,21 @@
 
 use super::*;
 
+/// Keeps the tests that exercise the process-global request registry from
+/// racing each other. In particular, the guard-release probe below must not
+/// mistake a sibling test's legitimate access for a leaked mutex guard.
+static REQUEST_HANDLES_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn isolate_request_handles() -> std::sync::MutexGuard<'static, ()> {
+    REQUEST_HANDLES_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+// Every test that calls a `js_request_*`, `request_body_*`, or `store_request`
+// helper must hold `isolate_request_handles()` for its full lifetime. Those
+// helpers all reach the shared `REQUEST_HANDLES` table.
+
 #[test]
 fn response_count_starts_at_zero() {
     let initial = js_fetch_response_count();
@@ -66,6 +81,8 @@ fn blob_slice_basic() {
 
 #[test]
 fn request_round_trip() {
+    let _request_handles_guard = isolate_request_handles();
+
     let url = alloc_string("https://example.com");
     let method = alloc_string("POST");
     let body = alloc_string(r#"{"x":1}"#);
@@ -117,6 +134,8 @@ fn response_static_json() {
 // None (→ the FFI rejects).
 #[test]
 fn request_body_data_path() {
+    let _request_handles_guard = isolate_request_handles();
+
     let url = alloc_string("https://example.com");
     let method = alloc_string("POST");
     let body = alloc_string(r#"{"x":1}"#);
@@ -275,6 +294,8 @@ fn text_decode_preserves_utf8_and_bytes_round_trip() {
 // match the payload exactly, including bytes no UTF-8 string can hold.
 #[test]
 fn request_binary_body_round_trips_byte_exact() {
+    let _request_handles_guard = isolate_request_handles();
+
     // 0x00..0xFF in reverse — invalid UTF-8 (lone 0xFF/0xFE, 0x80-continuation
     // bytes with no lead). A `String` round-trip would empty or mojibake this.
     let payload: Vec<u8> = (0u16..=255).rev().map(|b| b as u8).collect();
@@ -333,11 +354,14 @@ fn request_binary_body_round_trips_byte_exact() {
 /// is not a panic: under this repo's panic=abort + invoke-EH transport an
 /// unwind does not run `Drop`, so a guard alive at the wrong moment means
 /// the mutex is NEVER released and the next scan or reader BLOCKS — a hang,
-/// which a hanging test cannot report. This probes with `try_lock` after
-/// every reader instead, so a re-introduced held guard turns into a
-/// FAILURE.
+/// which a hanging test cannot report. The separate test-isolation guard
+/// excludes sibling registry users, so `try_lock` below reports only this
+/// test's state. It probes after every reader so a re-introduced held guard
+/// turns into a FAILURE.
 #[test]
 fn request_reads_release_the_registry_guard() {
+    let _request_handles_guard = isolate_request_handles();
+
     let id = store_request(RequestData {
         url: "https://guard.test/x".to_string(),
         method: "GET".to_string(),
@@ -357,12 +381,15 @@ fn request_reads_release_the_registry_guard() {
     });
     let handle = id as f64;
 
-    let probe = |label: &str| {
-        let free = REQUEST_HANDLES.try_lock().is_ok();
-        assert!(
-            free,
-            "{label} left REQUEST_HANDLES locked — the fetch root scanner would hang"
-        );
+    let probe = |label: &str| match REQUEST_HANDLES.try_lock() {
+        Ok(_guard) => {}
+        Err(std::sync::TryLockError::WouldBlock) => panic!(
+            "REQUEST_HANDLES remained locked after {label} returned in an isolated request \
+                 test — the fetch root scanner would hang"
+        ),
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            panic!("REQUEST_HANDLES was poisoned while checking registry state after {label}")
+        }
     };
 
     let url = js_request_get_url(handle);
