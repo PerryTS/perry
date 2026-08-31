@@ -1500,13 +1500,19 @@ fn object_tombstone_deletes_enabled() -> bool {
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        // #9200: keep tombstones opt-in until an evacuating-GC interaction
-        // with class dispatch is fixed. The default-on route can restore a
-        // deleted receiver to its canonical class shape after relocation,
-        // making Object.keys() empty and fixed-slot reads return wrong data.
-        matches!(
+        // DEFAULT-ON again (#9038's 6.5x populated-delete win). #9212 made
+        // this opt-in because of #9200 — an unarmed successor descriptor let
+        // an evacuating minor sweep a deleted receiver's live keys array —
+        // and #9317 fixed that structurally: every post-birth ShapeId publish
+        // now routes through `stamp_object_shape_id_with_carrier_note`, which
+        // arms `old_carrier` for any non-nursery receiver, so the descriptor
+        // (and the keys array only it reaches) is rooted by construction.
+        // `PERRY_OBJECT_TOMBSTONES=0` remains the kill switch for A/B and
+        // attribution — the same switch that isolated #9108, #9110 and #9200
+        // each in one command.
+        !matches!(
             std::env::var("PERRY_OBJECT_TOMBSTONES").as_deref(),
-            Ok("1") | Ok("on") | Ok("true")
+            Ok("0") | Ok("off") | Ok("false")
         )
     })
 }
