@@ -151,6 +151,16 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
     match gc_type_rewrite_descriptor_kind((*header).obj_type) {
         GcRewriteDescriptorKind::Array => {
             visit_gc_layout_slot_descriptors(header, &mut visit);
+            // #9304: unlike shaped objects, real arrays keep an explicit
+            // [[Prototype]] in the residual side table. Treat that value as
+            // the array's child edge so collection retains and rewrites a
+            // movable custom prototype after layout_transfer rekeys its owner.
+            crate::object::prototype_chain::visit_object_static_prototype_slot_mut(
+                user_ptr as usize,
+                |slot| {
+                    visit(fixed_slot(slot));
+                },
+            );
         }
         GcRewriteDescriptorKind::Object => {
             // #6759 Phase B / #6812: the per-object meta record is a raw-

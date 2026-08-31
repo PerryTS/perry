@@ -1278,6 +1278,13 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
         // record is address-keyed and has to follow the move — same split,
         // and same call site, as `TYPED_LAYOUTS` below.
         crate::array::transfer_element_shape(old_user as usize, new_user as usize);
+        // #9304: real arrays keep explicit [[Prototype]] values in the
+        // residual address-keyed registry. Array growth and moving GC both
+        // replace the owner allocation through this transfer hook.
+        crate::object::prototype_chain::object_static_prototype_owner_moved(
+            old_user as usize,
+            new_user as usize,
+        );
     } else {
         crate::array::clear_array_numeric_layout_ptr(new_user as usize);
         crate::array::clear_element_shape_ptr(new_user as usize);

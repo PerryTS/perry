@@ -446,6 +446,10 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
     //    form here too.
     if top16 == 0x7FFD {
         let raw_addr = bits & 0x0000_FFFF_FFFF_FFFF;
+        // #9304: ArrayHeader growth leaves aliases pointing at a forwarding
+        // stub while the address-keyed [[Prototype]] entry follows the live
+        // allocation. Canonicalize before any registry lookup.
+        let raw_addr = crate::value::resolve_forwarding(raw_addr as usize) as u64;
         if raw_addr != 0 && raw_addr >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
             if let Some(proto) = typed_array_instance_prototype(raw_addr as usize) {
                 return proto;
@@ -649,6 +653,8 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
         }
     }
     if top16 == 0 && bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
+        // Module-level arrays use raw pointers and need the same canonical key.
+        let bits = crate::value::resolve_forwarding(bits as usize) as u64;
         if let Some(proto) = typed_array_instance_prototype(bits as usize) {
             return proto;
         }
