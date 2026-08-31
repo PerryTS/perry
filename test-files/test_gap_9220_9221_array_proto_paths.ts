@@ -123,6 +123,97 @@ console.log(
   lockedTarget.length,
 );
 
+// The inherited descriptor may be further up the chain. `Object.create(p)`
+// models the link with a synthetic class id rather than a recorded prototype,
+// so the [[Set]] owner walk has to take the same hop the [[Get]] walk takes.
+const deepCalls: any[] = [];
+const deepGrand: any = {};
+Object.defineProperty(deepGrand, "4", {
+  configurable: true,
+  get() {
+    return "deep4";
+  },
+  set(value: any) {
+    deepCalls.push(value);
+  },
+});
+const deepTarget: any = [1];
+Object.setPrototypeOf(deepTarget, Object.create(deepGrand));
+deepTarget[4] = 3;
+console.log(
+  "write deep create:",
+  deepCalls.join(","),
+  hasOwn(deepTarget, 4),
+  deepTarget[4],
+  deepTarget.length,
+);
+
+// The same shape with every link installed by setPrototypeOf.
+const deepSetCalls: any[] = [];
+const deepSetGrand: any = {};
+Object.defineProperty(deepSetGrand, "4", {
+  configurable: true,
+  get() {
+    return "deepSet4";
+  },
+  set(value: any) {
+    deepSetCalls.push(value);
+  },
+});
+const deepSetMid: any = {};
+Object.setPrototypeOf(deepSetMid, deepSetGrand);
+const deepSetTarget: any = [1];
+Object.setPrototypeOf(deepSetTarget, deepSetMid);
+deepSetTarget[4] = 6;
+console.log(
+  "write deep setproto:",
+  deepSetCalls.join(","),
+  hasOwn(deepSetTarget, 4),
+  deepSetTarget[4],
+  deepSetTarget.length,
+);
+
+// A non-extensible or frozen receiver does not stop an inherited setter:
+// OrdinarySet finds the prototype accessor before it ever reaches the
+// receiver's own-property create.
+const frozenCalls: any[] = [];
+const frozenProto: any = {};
+Object.defineProperty(frozenProto, "4", {
+  configurable: true,
+  get() {
+    return "frozen4";
+  },
+  set(value: any) {
+    frozenCalls.push(value);
+  },
+});
+const frozenTarget: any = [1];
+Object.setPrototypeOf(frozenTarget, frozenProto);
+Object.freeze(frozenTarget);
+frozenTarget[4] = 8;
+console.log(
+  "write frozen receiver:",
+  frozenCalls.join(","),
+  hasOwn(frozenTarget, 4),
+  frozenTarget.length,
+);
+
+// Control: the default chain keeps its strict rejection on a frozen array.
+const frozenDefault: any = [1, 2, 3];
+Object.freeze(frozenDefault);
+let frozenDefaultThrew = false;
+try {
+  frozenDefault[0] = 9;
+} catch {
+  frozenDefaultThrew = true;
+}
+console.log(
+  "write frozen default:",
+  frozenDefaultThrew,
+  frozenDefault[0],
+  frozenDefault.length,
+);
+
 // --- #9221: borrowed Array.prototype methods over a real Array ------------
 
 const genericProto: any = { 1: "holeFill" };
