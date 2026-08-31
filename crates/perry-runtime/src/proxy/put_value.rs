@@ -449,9 +449,7 @@ pub extern "C" fn js_put_value_set_ic_miss(
         let alloc_limit = shape.live_inline_slot_count as usize;
         let slot_word: u32 = if (idx as usize) < alloc_limit {
             idx
-        } else if (idx as usize) < shape.logical_key_count as usize
-            && idx < IC_SLOT_OVERFLOW_BIT
-        {
+        } else if (idx as usize) < shape.logical_key_count as usize && idx < IC_SLOT_OVERFLOW_BIT {
             idx | IC_SLOT_OVERFLOW_BIT
         } else {
             return result;

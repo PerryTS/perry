@@ -185,7 +185,10 @@ for (let i = 0; i < 5000; i++) {{
 console.log(o["f5"] + " " + o["f0"]);
 "#
         ),
-        &[("PERRY_GC_HEAP_LIMIT", "8"), ("PERRY_GC_FORCE_EVACUATE", "1")],
+        &[
+            ("PERRY_GC_HEAP_LIMIT", "8"),
+            ("PERRY_GC_FORCE_EVACUATE", "1"),
+        ],
     );
     assert_eq!(out, "str_1 0");
 }

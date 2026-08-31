@@ -333,8 +333,7 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
     // would be a wild load. Keep encoded slots out of the ways entirely; a
     // polymorphic site rotating overflow shapes re-primes the MRU per shape,
     // which is exactly the pre-#7753 behaviour.
-    let prev_is_overflow =
-        (prev_slot as u64) & u64::from(crate::proxy::IC_SLOT_OVERFLOW_BIT) != 0;
+    let prev_is_overflow = (prev_slot as u64) & u64::from(crate::proxy::IC_SLOT_OVERFLOW_BIT) != 0;
     let cascade = prev_tok != 0 && prev_tok != token && !prev_is_overflow;
     // One pass over the ways does three things:
     //   * evicts `token` from a way if it has one — it now lives in the MRU
@@ -447,8 +446,6 @@ pub extern "C" fn js_object_get_field_ic_overflow_load(
     }
     js_object_get_field_ic_miss(obj, key, cache)
 }
-
-
 
 /// Monomorphic inline cache miss handler (issue #51).
 ///
@@ -787,9 +784,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
                         // accessors), and the value must be readable through
                         // `overflow_get` right now — if it is not, priming
                         // would cache a lie.
-                        if !has_own_descriptors
-                            && (i as u32) < crate::proxy::IC_SLOT_OVERFLOW_BIT
-                        {
+                        if !has_own_descriptors && (i as u32) < crate::proxy::IC_SLOT_OVERFLOW_BIT {
                             if let Some(bits) = crate::object::overflow_get(obj as usize, i) {
                                 if bits != crate::value::TAG_HOLE {
                                     let stamp = crate::object::shapes::object_shape_stamp(obj);
@@ -804,8 +799,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
                                     pic_prime_get(
                                         cache,
                                         token,
-                                        (i as u32 | crate::proxy::IC_SLOT_OVERFLOW_BIT)
-                                            as i64,
+                                        (i as u32 | crate::proxy::IC_SLOT_OVERFLOW_BIT) as i64,
                                     );
                                     return f64::from_bits(bits);
                                 }
